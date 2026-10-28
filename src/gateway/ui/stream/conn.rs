@@ -27,6 +27,10 @@ pub(super) const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// A stream ends cleanly after this; it bounds a half-open peer.
 pub(super) const MAX_LIFETIME: Duration = Duration::from_secs(3600);
 
+/// One credential check may take this long; OIDC discovery or a key-server
+/// fetch can stall. A miss ends the stream and the reconnect is judged afresh.
+pub(super) const ENTITLEMENT_DEADLINE: Duration = Duration::from_secs(2);
+
 pub(super) type Tx = mpsc::Sender<Result<Bytes, Infallible>>;
 
 /// What the connection was admitted with.
@@ -48,6 +52,7 @@ pub(super) enum End {
     ClientGone,
     WriteStalled,
     CredentialChanged,
+    ValidationTimeout,
     Lifetime,
 }
 
@@ -91,10 +96,10 @@ impl Conn {
     }
 
     async fn require_entitled(&self) -> Result<(), End> {
-        if self.still_entitled().await {
-            Ok(())
-        } else {
-            Err(End::CredentialChanged)
+        match tokio::time::timeout(ENTITLEMENT_DEADLINE, self.still_entitled()).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(End::CredentialChanged),
+            Err(_) => Err(End::ValidationTimeout),
         }
     }
 
@@ -150,7 +155,7 @@ async fn drive(
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
-                if !conn.still_entitled().await { return Ok(End::CredentialChanged); }
+                if let Err(end) = conn.require_entitled().await { return Ok(end); }
             }
             _ = keep.tick() => conn.send(Bytes::from_static(b": keep-alive\n\n")).await?,
             changed = rx.changed() => {
