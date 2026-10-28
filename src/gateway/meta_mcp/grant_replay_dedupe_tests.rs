@@ -219,6 +219,7 @@ async fn each_caller_field_keeps_callers_apart() {
 /// Only a written record reaches a log reader: a poll whose decision is
 /// suppressed as a repeat publishes nothing, so a reader (the decision set)
 /// counts one refusal however often a finished task is polled.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_suppressed_repeat_note_is_not_published() {
     use std::sync::{Arc, Mutex};
