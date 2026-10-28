@@ -468,8 +468,11 @@ impl CapabilityExecutor {
         let params = effective_params.as_ref();
 
         let url = self.build_url(config, params)?;
-        super::require_tls_for_rest(&url, &capability.auth, config)?;
-        validate_capability_url_for_context(&url, context)?;
+        // Each refusal here is the call's answer: its record says so.
+        super::require_tls_for_rest(&url, &capability.auth, config)
+            .map_err(crate::gateway::delivery_facts::refused)?;
+        validate_capability_url_for_context(&url, context)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         tracing::debug!(url = %url, method = %config.method, "Executing REST request");
 
         let method = config.method.parse::<Method>().map_err(|e| {

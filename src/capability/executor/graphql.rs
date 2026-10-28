@@ -209,7 +209,8 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
             &graphql_config.endpoint,
             &ctx.capability.auth,
             graphql_config.headers.values().map(String::as_str),
-        )?;
+        )
+        .map_err(crate::gateway::delivery_facts::refused)?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;

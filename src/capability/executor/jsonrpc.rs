@@ -159,7 +159,8 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
             &jsonrpc_config.endpoint,
             &ctx.capability.auth,
             jsonrpc_config.headers.values().map(String::as_str),
-        )?;
+        )
+        .map_err(crate::gateway::delivery_facts::refused)?;
 
         // Build the JSON-RPC 2.0 request body
         let body = Self::build_request(jsonrpc_config, &params)?;

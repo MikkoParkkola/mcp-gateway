@@ -414,8 +414,10 @@ impl CapabilityExecutor {
         // The refresh token and client secret go only where the capability's
         // own request may go (#2113): the same destination check, before any
         // byte is sent.
-        super::super::require_tls_for_credentials(token_endpoint)?;
-        super::super::validate_capability_url_for_context(token_endpoint, context)?;
+        super::super::require_tls_for_credentials(token_endpoint)
+            .map_err(crate::gateway::delivery_facts::refused)?;
+        super::super::validate_capability_url_for_context(token_endpoint, context)
+            .map_err(crate::gateway::delivery_facts::refused)?;
         // Read before the flight: the keychain lookup may block, and the
         // secret does not depend on the token.
         let keychain_key = format!("{provider}-client-secret");
