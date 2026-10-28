@@ -125,6 +125,15 @@ impl StreamHub {
         self.shared.lock().watcher.is_some()
     }
 
+    /// End the watcher task as a crash would, leaving the refcount alone.
+    /// The handle lets a test wait until the task has finished.
+    #[cfg(test)]
+    pub(crate) fn kill_watcher_for_test(&self) -> Option<AbortHandle> {
+        let watcher = self.shared.lock().watcher.clone()?;
+        watcher.abort();
+        Some(watcher)
+    }
+
     /// Take a slot for `credential`, starting the watcher with `start` if
     /// this is the first stream.
     pub(super) fn admit(

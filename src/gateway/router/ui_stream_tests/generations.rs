@@ -54,3 +54,30 @@ async fn a_counts_only_stream_does_not_see_an_admin_only_change() {
     let low2 = head_part(&again.until("hello").await, 's');
     assert_eq!(low2, low1, "counts did not change, so neither did its id");
 }
+
+/// The generation in a `reload` frame.
+fn generation(frame: &Frame) -> u64 {
+    frame.json()["generation"].as_u64().expect("a generation")
+}
+
+#[tokio::test]
+async fn a_watcher_that_died_under_open_streams_is_replaced_at_the_next_admission() {
+    let (state, _dir) = fixture().await;
+    let hub = state.dashboard_bootstrap.stream_hub();
+    let mut a = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let a0 = generation(&a.until("reload").await);
+    let dead = hub.kill_watcher_for_test().expect("a watcher is running");
+    assert!(yield_until(|| dead.is_finished()).await);
+    let mut b = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let b0 = generation(&b.until("reload").await);
+    let began = tokio::time::Instant::now();
+    state
+        .live_config
+        .edit(|c| c.auth.public_paths.push("/revived".to_owned()));
+    assert!(generation(&a.until("reload").await) > a0);
+    assert!(generation(&b.until("reload").await) > b0);
+    assert!(
+        began.elapsed() <= Duration::from_secs(3),
+        "within the bound"
+    );
+}
