@@ -499,6 +499,34 @@ test.describe('budgets', () => {
   });
 });
 
+test('F20 a screen sets its header through its context, and a kept one changes nothing after navigation', async ({ page }) => {
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const plate = page.locator('.head .plate');
+  const sub = page.locator('.head .sub');
+  await expect(sub).toHaveText('24 of 28 servers ready.');
+  await page.evaluate(() => window.overviewHeader({ title: 'Counted', subtitle: '40 tools from 4 servers' }));
+  await expect(plate).toHaveText('Counted');
+  await expect(sub).toHaveText('40 tools from 4 servers');
+  await expect(sub).toBeVisible();
+  expect(await page.title()).toBe('Counted · MCP Gateway');
+  // A field left out stays; a null subtitle hides the line.
+  await page.evaluate(() => window.overviewHeader({ subtitle: null }));
+  await expect(plate).toHaveText('Counted');
+  await expect(sub).toBeHidden();
+  // Text, never markup.
+  await page.evaluate(() => window.overviewHeader({ title: '<b>x</b>' }));
+  await expect(plate).toHaveText('<b>x</b>');
+  await expect(plate.locator('b')).toHaveCount(0);
+  // Kept past an in-page navigation: the next page's header is left alone.
+  await page.click('nav.route-nav a[data-page="tools"]');
+  await expect(plate).toHaveText('Tools');
+  await page.evaluate(() => window.overviewHeader({ title: 'Stale', subtitle: 'stale' }));
+  await expect(plate).toHaveText('Tools');
+  expect(await page.title()).toBe('Tools · MCP Gateway');
+});
+
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
   await page.goto('/ui/overview/status');
   await shellReady(page);

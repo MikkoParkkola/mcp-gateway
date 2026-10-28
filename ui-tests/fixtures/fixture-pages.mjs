@@ -44,6 +44,11 @@ const probed = {
     // A render that has written part of the page and then faults.
     if (fault) null.call();
   },
+  // F20 (shell-frame.spec.mjs): a screen sets its own header through its context.
+  overview: (el, ctx) => {
+    el.textContent = `overview ${ctx.object ?? '-'} status`;
+    window.overviewHeader = ctx.header;
+  },
   // L7 (shell-live.spec.mjs): a screen announces through its render context.
   gateway: (el, ctx) => {
     el.textContent = 'gateway - status';
