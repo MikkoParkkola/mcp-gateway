@@ -240,6 +240,55 @@ test('C13: filtering, no match, an outside click and a reopened form each leave 
   await expect(page.locator('#reg-name-override')).toBeHidden();
 });
 
+test('C14: after a query with no match, ArrowDown and Enter pick nothing', async ({ page }) => {
+  const seen = await addServerForm(page);
+  await search(page);
+  await box(page).fill('no-such-server');
+  await expect(box(page)).toHaveAttribute('aria-expanded', 'false');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(box(page)).not.toHaveAttribute('aria-activedescendant', /./);
+  await expect(list(page).getByRole('option')).toHaveCount(0);
+  await expect(page.locator('#reg-name-override')).toBeHidden();
+  await add(page);
+  expect(seen.adds).toEqual([]);
+});
+
+test('C15: the pointer and the keyboard share one active option', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await page.keyboard.press('ArrowDown');
+  const third = list(page).getByRole('option').nth(2);
+  await third.hover();
+  await expect(box(page)).toHaveAttribute('aria-activedescendant', await third.getAttribute('id'));
+  await expect(list(page).locator('[aria-selected="true"]')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect(box(page)).toHaveValue('server-03');
+});
+
+test('C16: clearing a pick also clears its name override', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await page.locator('#reg-name-override').fill('my-name');
+  await box(page).focus();
+  await page.keyboard.type('x');
+  await expect(page.locator('#reg-name-override')).toBeHidden();
+  await expect(page.locator('#reg-name-override')).toHaveValue('');
+});
+
+test('C17: moving through the list scrolls only the list, never the page', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 520 });
+  await addServerForm(page);
+  await box(page).scrollIntoViewIfNeeded();
+  await search(page);
+  const before = await page.evaluate(() => window.scrollY);
+  for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
+  await expect.poll(() => list(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => window.scrollY)).toBe(before);
+});
+
 for (const width of WIDTHS) {
   test(`C7: axe finds no blocking violation with the list open and an option active at ${width} px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
