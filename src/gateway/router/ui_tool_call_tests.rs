@@ -405,18 +405,25 @@ async fn t9_a_non_admin_is_refused_before_anything_runs() {
     assert_eq!(sent(&fx), 0);
 }
 
-/// T10: a server that is not registered is a 404 and nothing is sent: the
-/// gateway's own pre-dispatch judgement clears the send mark its failure
-/// came after. (A tool missing on a registered server is answered as a
-/// forbidden one is: T28.)
-/// Mutant: the send mark kept on a pre-dispatch failure.
+/// T10: a server that is not registered is refused as a denied tool is,
+/// not run and nothing sent: its failure comes after the send mark, and the
+/// gateway's own pre-dispatch judgement clears it. /mcp answers a server it
+/// does not have, a missing tool and a denied one alike (T28), so the route
+/// does too.
+/// Mutant: the send mark kept on a pre-dispatch failure (then "may have run").
 #[tokio::test]
-async fn t10_no_such_server_is_404() {
+async fn t10_no_such_server_is_not_run() {
     let fx = fixture().await;
     let ghost = json!({"server": "ghost", "tool": "read", "arguments": {}, "confirm_write": true});
-    let (status, body) = post(&fx, ADMIN, ghost).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body} {:#?}", records(&fx));
-    assert_eq!(body["disposition"], "not_run", "{body}");
+    let (status, body) = post(&fx, ADMIN_DENIED, ghost).await;
+    assert_eq!(body["disposition"], "not_run", "{body} {:#?}", records(&fx));
+    let (denied_status, denied) = post(&fx, ADMIN_DENIED, call("write", true)).await;
+    assert_eq!(
+        (status, &body),
+        (denied_status, &denied),
+        "as a denied tool"
+    );
+    assert!(status.is_client_error(), "{status}");
     assert_eq!(sent(&fx), 0);
 }
 
