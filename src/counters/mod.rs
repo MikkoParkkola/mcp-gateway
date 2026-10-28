@@ -537,6 +537,10 @@ impl CounterStore {
 mod store_tests;
 
 #[cfg(test)]
+#[path = "pairs_tests.rs"]
+mod pairs_tests;
+
+#[cfg(test)]
 #[path = "persist_tests.rs"]
 mod persist_tests;
 

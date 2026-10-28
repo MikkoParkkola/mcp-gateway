@@ -23,29 +23,29 @@ use crate::security::audit::{AuditEnvelope, AuditWho};
 use crate::security::transparency_log::TransparencyLogConfig;
 
 const OVERVIEW: &str = "/ui/api/overview";
-const ADMIN_KEY: &str = "overview-admin-key";
+pub(super) const ADMIN_KEY: &str = "overview-admin-key";
 const STANDARD_KEY: &str = "overview-standard-key";
 /// The handler's caps (`ui/overview.rs`), repeated so a changed cap is a
 /// deliberate edit in both places.
-const SERVER_ROWS: usize = 24;
-const NEEDS_YOU_ROWS: usize = 20;
-const ACTION_ROWS: usize = 5;
+pub(super) const SERVER_ROWS: usize = 24;
+pub(super) const NEEDS_YOU_ROWS: usize = 20;
+pub(super) const ACTION_ROWS: usize = 5;
 /// The longest a clipped text field serializes to: 256 bytes, each a control
 /// character JSON writes as a six-byte `\u00XX` escape, plus its quotes.
-const FIELD: usize = 2 + 6 * 256;
+pub(super) const FIELD: usize = 2 + 6 * 256;
 /// The body's byte ceiling from the caps alone. Each row is its clipped text
 /// fields at [`FIELD`] plus a margin for keys and numbers: a server row has one
 /// text field, a needs-you row two (subject, name), an action row seven (at,
 /// route, method, outcome, authority, subject, account). The rest of the body
 /// (KPIs, `more`, `complete`, `degraded`) fits in 4 KiB.
-const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
+pub(super) const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
     + NEEDS_YOU_ROWS * (2 * FIELD + 256)
     + ACTION_ROWS * (7 * FIELD + 256)
     + 4096;
 /// A fixed instant for the budget tests: the enforcer's day must not roll
 /// over between recording spend and reading the overview.
 #[cfg(feature = "cost-governance")]
-const BUDGET_NOW: u64 = 1_800_000_000;
+pub(super) const BUDGET_NOW: u64 = 1_800_000_000;
 
 fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -65,7 +65,7 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on, one admin and one standard key, and `servers` registered
 /// backends named `name-NNN` (`long` pads each name to 200 characters).
-async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDir) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -88,7 +88,7 @@ async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDi
     (state, dir)
 }
 
-async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String) {
+pub(super) async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String) {
     let mut builder = Request::builder().method("GET").uri(OVERVIEW);
     if let Some(credential) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {credential}"));
@@ -108,7 +108,7 @@ async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-async fn overview(state: &Arc<AppState>) -> Value {
+pub(super) async fn overview(state: &Arc<AppState>) -> Value {
     let (status, body) = get(state, Some(ADMIN_KEY)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     serde_json::from_str(&body).expect("a JSON body")
@@ -309,13 +309,14 @@ async fn o3d_the_fold_sorts_on_the_full_name() {
     assert_eq!(body["servers"]["more"]["down"], 0, "{body}");
 }
 
-/// O3e (API16.2, worst case): every capped list full and every text field at
-/// its clip, written as control characters so JSON escapes each byte six-fold.
-/// The body stays under [`WORST_BODY`], and over three quarters of it, so the
-/// fixture really is the worst case the ceiling is computed for.
+/// The O3e fixture: every list at its cap with escape-heavy text. The clock
+/// stays pinned at [`BUDGET_NOW`] while the returned guard lives.
 #[cfg(feature = "cost-governance")]
-#[tokio::test]
-async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
+pub(super) async fn worst_case() -> (
+    Arc<AppState>,
+    tempfile::TempDir,
+    crate::clock::test_clock::Forced,
+) {
     use crate::cost_accounting::config::CostGovernanceConfig;
     use crate::cost_accounting::enforcer::BudgetEnforcer;
     use crate::cost_accounting::registry::CostRegistry;
@@ -351,7 +352,7 @@ async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
     for tool in &tools {
         cfg.budgets.per_tool.insert(tool.clone(), 1.0);
     }
-    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
+    let clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
     let enforcer = Arc::new(BudgetEnforcer::new(
         cfg.clone(),
         Arc::new(CostRegistry::new(&cfg)),
@@ -363,7 +364,17 @@ async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
     meta.budget_enforcer = Some(enforcer);
     inner.meta_mcp = Arc::new(meta);
+    (state, dir, clock)
+}
 
+/// O3e (API16.2, worst case): every capped list full and every text field at
+/// its clip, written as control characters so JSON escapes each byte six-fold.
+/// The body stays under [`WORST_BODY`], and over three quarters of it, so the
+/// fixture really is the worst case the ceiling is computed for.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
+    let (state, _dir, _clock) = worst_case().await;
     let (status, raw) = get(&state, Some(ADMIN_KEY)).await;
     assert_eq!(status, StatusCode::OK, "{raw}");
     let body: Value = serde_json::from_str(&raw).expect("a JSON body");

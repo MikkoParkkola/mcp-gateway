@@ -28,6 +28,36 @@ pub(crate) struct WindowSums {
     pub counts: Vec<CallWindows>,
 }
 
+/// One caller x server pair's calls and blocks in the last 24 hours.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairRow {
+    pub caller: String,
+    pub server: String,
+    pub calls: u64,
+    pub blocks: u64,
+}
+
+/// What [`CounterStore::top_pairs`] read.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
+)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TopPairs {
+    /// The top pairs by calls, ties by caller then server.
+    pub rows: Vec<PairRow>,
+    /// Pairs with activity in the window that are not in `rows`.
+    pub more_count: usize,
+    /// Their calls.
+    pub more_calls: u64,
+    /// Calls in the window that the pair dimension's overflow holds.
+    pub overflow_calls: u64,
+}
+
 impl CounterStore {
     /// The store's lock, taken by a reader. Counted in tests, per store.
     pub(super) fn read_lock(&self) -> parking_lot::MutexGuard<'_, Inner> {
@@ -40,6 +70,16 @@ impl CounterStore {
     #[cfg(test)]
     pub(crate) fn reads_for_test(&self) -> usize {
         self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The top `n` caller x server pairs by calls in the 24-hour window ending
+    /// at `now`, under one lock.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a stub: the Overview reads it in the next commit")
+    )]
+    pub(crate) fn top_pairs<Tz: TimeZone>(&self, _now: u64, _zone: &Tz, _n: usize) -> TopPairs {
+        TopPairs::default()
     }
 
     /// Calls in the 24-hour window ending at unix second `now` (the 48

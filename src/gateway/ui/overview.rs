@@ -138,6 +138,20 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
     (kpi, servers)
 }
 
+/// Servers with their calls in the last 24 hours (`None` when the count may
+/// be low), best first: positive counts by calls descending, then `None`,
+/// then zeros; ties by name.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "a stub: the handler ranks with it in the next commit"
+    )
+)]
+fn rank_servers(rows: Vec<(String, Option<u64>)>) -> Vec<(String, Option<u64>)> {
+    rows
+}
+
 /// What needs the operator, highest priority first, capped with `more`.
 fn needs_you(state: &AppState) -> Value {
     let mut rows = limit_rows(state);
@@ -268,4 +282,22 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
     // skip makes the list incomplete, even with all five rows.
     let complete = !skipped && (rows.len() == ACTION_ROWS || (end == 0 && !rotated));
     Ok(json!({ "rows": rows, "complete": complete }))
+}
+
+#[cfg(test)]
+mod rank_tests {
+    use super::rank_servers;
+
+    /// S2b: a count that may be low ranks after every positive count and
+    /// before a zero; ties go by name.
+    #[test]
+    fn s2b_a_count_that_may_be_low_ranks_between_positive_and_zero() {
+        let rows = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .zip([Some(5), None, Some(9), Some(5), Some(0)])
+            .map(|(name, calls)| (name.to_owned(), calls))
+            .collect();
+        let names: Vec<String> = rank_servers(rows).into_iter().map(|row| row.0).collect();
+        assert_eq!(names, ["c", "a", "d", "b", "e"]);
+    }
 }
