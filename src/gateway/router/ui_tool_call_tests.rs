@@ -30,10 +30,13 @@ pub(super) const SERVER: &str = "alpha";
 
 /// A backend whose `tools/list` declares `read`, `fail` and `iserr`
 /// read-only and leaves `write` and `get_x` undeclared, counting every call.
-struct Stub {
-    calls: Arc<AtomicUsize>,
+pub(super) struct Stub {
+    pub(super) calls: Arc<AtomicUsize>,
     /// Declare `read` read-only (false: a replacement that does not).
-    declares_read: bool,
+    pub(super) declares_read: bool,
+    /// `tools/list` waits for this, when set: a cold catalogue is filled
+    /// before the gate, so a test holds a call there for as long as it likes.
+    pub(super) list_gate: Option<Arc<tokio::sync::Notify>>,
 }
 
 #[async_trait::async_trait]
@@ -41,6 +44,9 @@ impl Transport for Stub {
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
+            if let Some(gate) = &self.list_gate {
+                gate.notified().await;
+            }
             let ro = json!({"readOnlyHint": true});
             let read = if self.declares_read {
                 ro.clone()
@@ -259,6 +265,7 @@ async fn register_as(
     backend.set_transport_for_test(Arc::new(Stub {
         calls: Arc::clone(calls),
         declares_read,
+        list_gate: None,
     }));
     assert!(
         state.backends.register(Arc::clone(&backend)),
