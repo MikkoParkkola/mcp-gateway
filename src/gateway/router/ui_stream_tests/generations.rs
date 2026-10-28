@@ -33,7 +33,8 @@ async fn a_reload_with_no_stream_open_still_advances_the_generation() {
 
 #[tokio::test]
 async fn a_counts_only_stream_does_not_see_an_admin_only_change() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let _ = state
         .backends
         .register(http_backend_at("gen-probe", "http://127.0.0.1:9/mcp"));
@@ -62,7 +63,8 @@ fn generation(frame: &Frame) -> u64 {
 
 #[tokio::test]
 async fn a_watcher_that_died_under_open_streams_is_replaced_at_the_next_admission() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let hub = state.dashboard_bootstrap.stream_hub();
     let mut a = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     let a0 = generation(&a.until("reload").await);
@@ -84,7 +86,8 @@ async fn a_watcher_that_died_under_open_streams_is_replaced_at_the_next_admissio
 
 #[tokio::test]
 async fn an_open_stream_restarts_a_dead_watcher_without_a_new_admission() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let hub = state.dashboard_bootstrap.stream_hub();
     let mut a = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     let a0 = generation(&a.until("reload").await);

@@ -38,7 +38,8 @@ async fn serve(state: &Arc<AppState>) -> SocketAddr {
 
 #[tokio::test]
 async fn a_client_that_stops_reading_a_real_socket_is_closed_and_its_slot_returns() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let busy = big_gateway(&state);
     let addr = serve(&state).await;
     let socket = TcpSocket::new_v4().expect("socket");
@@ -79,7 +80,8 @@ const BLOCKING_CHANGES: usize = 40;
 
 #[tokio::test]
 async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let busy = big_gateway(&state);
     let cookie = issue(&state);
     let addr = serve(&state).await;
