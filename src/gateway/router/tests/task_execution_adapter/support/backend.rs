@@ -34,6 +34,10 @@ pub(crate) enum Answer {
     Sequence(Vec<Value>),
     /// A JSON-RPC error from the backend itself, after the call was received.
     Failure,
+    /// [`Self::Failure`] with this code: a backend's own error that shares a
+    /// code with a gateway refusal.
+    #[cfg(feature = "firewall")]
+    FailureCode(i32),
     /// [`Self::Failure`] carrying this message on the first call; every later
     /// call answers a plain `ok` text, so only that first call delivers it.
     #[cfg(feature = "firewall")]
@@ -195,6 +199,14 @@ impl MockBackend {
                 return JsonRpcResponse::error(
                     Some(RequestId::Number(1)),
                     -32000,
+                    "mock-backend-failed",
+                );
+            }
+            #[cfg(feature = "firewall")]
+            Answer::FailureCode(code) => {
+                return JsonRpcResponse::error(
+                    Some(RequestId::Number(1)),
+                    *code,
                     "mock-backend-failed",
                 );
             }

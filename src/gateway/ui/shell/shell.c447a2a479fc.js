@@ -26,6 +26,7 @@ const pages = new Map();
 /**
  * Register a page: `{title, subtitle, tabs: {status, actions, settings}, entries}`.
  * A null tab is hidden. The subtitle is the one line under the plate.
+ * A tab can set either later, as text, through `header({title, subtitle})` in its context.
  */
 export function register(id, spec) {
   if (!PAGE_IDS.has(id)) throw new Error(`register: no sidebar page ${id}`);
@@ -67,20 +68,143 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/**
+ * The one word for each state, used across every screen (UI1.24). Server
+ * states are keyed by the gateway's ServerState wire values. A dropped live
+ * stream has its own words below, never the paused server state's.
+ */
+export const GLOSSARY = {
+  server: {
+    running: 'Running',
+    slow: 'Slow',
+    paused: 'Paused',
+    dormant: 'Dormant',
+    unhealthy: 'Unhealthy',
+    refused: 'Refused',
+    needs_sign_in: 'Needs sign-in',
+    unmanaged: 'Unmanaged',
+  },
+  stream: { stopped: 'Updates stopped', resumed: 'Updates resumed' },
+};
+
+const unlistedStates = new Set();
+
+/** A server state's word; one the glossary lacks reads "Unknown state", never its code. */
+export function stateWord(value) {
+  if (typeof value === 'string' && Object.hasOwn(GLOSSARY.server, value)) return GLOSSARY.server[value];
+  if (!unlistedStates.has(value)) {
+    unlistedStates.add(value);
+    console.warn('A server state this page does not recognise'); // never the raw value
+  }
+  return 'Unknown state';
+}
+
+/**
+ * One table for every server state the gateway reports (UI1.22): the badge's
+ * glyph and tone, and the banner and next step, which may read the row's own
+ * fields (`circuit_state`, `running`, `next_retry_at`). The gateway's `reason`
+ * is never shown: a Refused reason carries raw policy codes.
+ */
+export const SERVER_STATES = {
+  running: { glyph: '✓', tone: 'success', banner: () => null, next: () => null },
+  // Calls still work, but its recent ones are far slower than its own usual.
+  slow: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => `${s.name} still works, but far slower than its usual.`,
+    next: () => 'Open Activity and filter by this server.',
+  },
+  paused: {
+    glyph: '⏸',
+    tone: 'neutral',
+    // Only what the fields establish: when calls may try again, not that a retry is under way.
+    banner: (s) => (s.circuit_state === 'half_open'
+      ? `The gateway is letting calls through to ${s.name} to see if it has recovered.`
+      : `Calls to ${s.name} are held back after failures. ${validDate(s.next_retry_at)
+        ? `The gateway lets calls try it again from ${stamp(new Date(s.next_retry_at))}.`
+        : 'The gateway lets calls try it again after a short wait.'}`),
+    next: (s) => (s.circuit_state === 'half_open' ? null : 'To retry now, use the Actions tab.'),
+  },
+  dormant: { glyph: 'ⓘ', tone: 'neutral', banner: () => null, next: () => null },
+  unhealthy: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => (s.running ? `${s.name} is failing; calls still go through.` : `${s.name} is failing; the next call tries to start it again.`),
+    next: () => 'Open Activity and filter by this server.',
+  },
+  refused: {
+    glyph: '⊘',
+    tone: 'danger',
+    // The policy, an unavailable runtime or a missing image: the field does not say which.
+    banner: (s) => `The gateway cannot start ${s.name} with its current runtime configuration.`,
+    next: () => "Check this server's runtime profile and the runtime policy.",
+  },
+  needs_sign_in: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => `${s.name} is waiting for someone to sign in.`,
+    next: () => 'Sign in from its Actions tab.',
+  },
+  unmanaged: {
+    glyph: 'ⓘ',
+    tone: 'neutral',
+    banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
+    next: () => 'Add it from the Servers Actions tab.',
+  },
+};
+
+/** A state the table lacks is not shown as harmless. */
+const UNLISTED_STATE = {
+  glyph: '⚠',
+  tone: 'warning',
+  banner: (s) => `${s.name} is in a state this page does not recognise.`,
+  next: () => 'Open Activity and filter by this server.',
+};
+
+/** A time the API sent that reads as a real date. */
+const validDate = (value) => typeof value === 'string' && !Number.isNaN(new Date(value).getTime());
+
+const stateRow = (state) => (typeof state === 'string' && Object.hasOwn(SERVER_STATES, state) ? SERVER_STATES[state] : UNLISTED_STATE);
+
+/** A server's line badge: glyph, word, tone; `plain` drops the frame for lists. */
+export function serverBadge(state, { plain = false } = {}) {
+  const row = stateRow(state);
+  return el('span', { class: `lb ${row.tone}${plain ? ' plain' : ''}` },
+    el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', stateWord(state));
+}
+
+/** A server's banner and next step, or null when there is nothing to know. */
+export function serverBanner(server) {
+  const row = stateRow(server.state);
+  const text = row.banner(server);
+  if (!text) return null;
+  const next = row.next(server);
+  const node = el('section', { class: `state banner ${row.tone}`, 'data-state': 'server' }, el('h2', {}, text));
+  if (next) node.append(el('p', {}, next));
+  return node;
+}
+
+/** The stale banner's title: when updates stopped, and that it reconnects. */
+export function staleTitle(since) {
+  return since instanceof Date && !Number.isNaN(since.getTime())
+    ? `${GLOSSARY.stream.stopped} at ${stamp(since)} · reconnecting`
+    : `${GLOSSARY.stream.stopped} · reconnecting`;
+}
+
 const STATE_COPY = {
   loading: ['Loading', 'Reading the gateway.'],
   empty: ['Nothing here yet', ''],
   error: ['Something went wrong', 'Try again.'],
   forbidden: ['Not available to this key', 'Ask an admin for access.'],
-  stale: ['Updates stopped', 'Reconnecting.'],
+  stale: [GLOSSARY.stream.stopped, 'Reconnecting.'],
   'not-built': ['Not built yet', 'This page is not in the new UI yet.'],
 };
 
 /** A page state (loading, empty, error, forbidden, stale, not-built). */
 export function state(kind, { title, body, action } = {}) {
   const [defTitle, defBody] = STATE_COPY[kind] ?? STATE_COPY.error;
-  const role = kind === 'loading' || kind === 'stale' ? 'status' : kind === 'error' || kind === 'forbidden' ? 'alert' : null;
-  const node = el('section', { class: 'state', 'data-state': kind, role }, el('h2', {}, title ?? defTitle));
+  // No role: the one live region says transitions (UI1.18); a state is plain content.
+  const node = el('section', { class: 'state', 'data-state': kind }, el('h2', {}, title ?? defTitle));
   const text = body ?? defBody;
   if (text) node.append(el('p', { class: 'muted' }, text));
   if (kind === 'not-built') node.append(el('p', {}, el('a', { class: 'lnk', href: '/ui/classic' }, 'Open the classic page')));
@@ -132,6 +256,88 @@ export async function api(path, init = {}) {
     if (err?.name === 'AbortError') throw err; // the caller cancelled the read
     throw new ApiError(reply.status, path, { unreadable: true });
   }
+}
+
+// ---------------------------------------------------------------- announcer
+
+/**
+ * dwellMs: the pause between writes, so a screen reader takes each entry on its
+ * own. Exported so a test can lengthen it and pin a race regardless of the
+ * host's load.
+ */
+export const announcerTiming = { dwellMs: 500 };
+/** How long an entry stays in the region; removing it is not announced. */
+const ENTRY_MS = 10_000;
+/** Messages waiting for the next write, in arrival order. */
+const pending = [];
+let pumpTimer = null;
+let lastWrite = 0;
+const idleWaiters = [];
+
+/**
+ * Say `text` through the one live region (UI1.18). For state transitions only,
+ * never a counter or a chart. A `count` message keeps only its latest value;
+ * every other message is said, in order. A message about a page (`page`, or a
+ * screen's own) is dropped once the user moves to another page, and every
+ * message once the signed-in identity changes.
+ */
+export function announce(text, { subject = 'page', guard: given = null } = {}) {
+  const pageBound = subject === 'page' || subject.startsWith('screen:');
+  const guard = given ?? { epoch: authEpoch, seq: pageBound ? renderSeq : null };
+  if (!guardHolds(guard)) return; // asked for by a page or identity already gone
+  if (subject === 'count') {
+    const i = pending.findIndex((m) => m.subject === 'count');
+    if (i >= 0) pending.splice(i, 1);
+  }
+  const item = { text, subject, guard };
+  pending.push(item);
+  if (!pumpTimer) pumpTimer = setTimeout(pump, Math.max(0, lastWrite + announcerTiming.dwellMs - Date.now()));
+  // Withdraw it, if it has not been written yet.
+  return () => {
+    const i = pending.indexOf(item);
+    if (i >= 0) pending.splice(i, 1);
+  };
+}
+
+/** Append everything still current as one entry; queue the rest for the next dwell. */
+function pump() {
+  pumpTimer = null;
+  const signedOut = document.body.classList.contains('signed-out');
+  // While sign-in shows, only its own messages still describe what the user sees.
+  const current = pending.splice(0).filter(({ subject, guard }) =>
+    guardHolds(guard) && (!signedOut || subject.startsWith('signin')));
+  if (current.length) {
+    const entry = el('p', {}, current.map((m) => sentence(m.text)).join(' '));
+    document.getElementById('announcer').append(entry);
+    setTimeout(() => entry.remove(), ENTRY_MS);
+    lastWrite = Date.now();
+  }
+  if (pending.length) pumpTimer = setTimeout(pump, announcerTiming.dwellMs);
+  else for (const done of idleWaiters.splice(0)) done();
+}
+
+/** Whether the page and identity a message was asked for are still the ones shown. */
+const guardHolds = (guard) => guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq);
+
+/** `text` ending as a sentence, so a batch reads as separate sentences. */
+const sentence = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
+
+/**
+ * Move the live region to `parent` empty: a region re-parented with an entry
+ * in it may be read again.
+ */
+function moveAnnouncer(parent) {
+  const region = document.getElementById('announcer');
+  region.replaceChildren();
+  parent.append(region);
+}
+
+/** Resolves once everything queued has been written. */
+export function announcerIdle() {
+  return new Promise((done) => {
+    if (!pending.length && !pumpTimer) done();
+    else idleWaiters.push(done);
+  });
 }
 
 /** What a page error says it was: the cause, its banner copy, and for a server answer its code. */
@@ -236,6 +442,7 @@ export function openPalette() {
     }
   });
   paletteEl.addEventListener('close', () => {
+    moveAnnouncer(document.body); // before the dialog goes
     paletteEl.remove();
     paletteEl = null;
     search?.setAttribute('aria-expanded', 'false');
@@ -247,6 +454,8 @@ export function openPalette() {
   draw();
   search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
+  // A modal makes the rest of the page inert, the live region with it: it rides along.
+  moveAnnouncer(paletteEl);
   input.focus();
 }
 
@@ -369,7 +578,7 @@ function failure(err, key, onRetry) {
   const retry = el('button', { type: 'button', class: 'btn' }, 'Retry');
   retry.addEventListener('click', () => onRetry(retry));
   const text = last ? `${body} The data below is from ${stamp(last.at)}, before the error.` : body;
-  const banner = state('error', { title, body: text, action: retry });
+  const banner = bannerState('error', { title, body: text, action: retry });
   banner.dataset.cause = cause;
   const node = el('div', { class: 'failure' }, banner);
   if (last) {
@@ -379,8 +588,90 @@ function failure(err, key, onRetry) {
 }
 
 /** Run a page's tab into `into`; a fault thrown synchronously becomes a rejection. */
-const runTab = (spec, route, into) =>
-  Promise.resolve().then(() => spec.tabs[route.tab](into, { object: route.object, tab: route.tab, api, state }));
+const runTab = (spec, route, into) => {
+  // Taken when the context is made: a screen holding on to it after the user moved
+  // on, or after another identity signed in, announces nothing.
+  const guard = { epoch: authEpoch, seq: renderSeq };
+  return Promise.resolve().then(() => spec.tabs[route.tab](into, {
+    object: route.object, tab: route.tab, api, state,
+    show: screenBanner(into, route.page, guard),
+    // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
+    // later: Retry reuses the render, so a failed attempt is told apart by its container.
+    header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
+    refreshCounts,
+    announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
+  }));
+};
+
+/**
+ * A banner state (error, forbidden, stale) for showBanner() or failure() only:
+ * every banner is inserted through showBanner(), which says it.
+ */
+function bannerState(kind, opts) {
+  return state(kind, opts);
+}
+
+/** Put a banner node in `container`, and say its heading for the page shown now. */
+function showBanner(container, node) {
+  container.replaceChildren(mark(node));
+  announce(node.querySelector('.state h2, h2').textContent, { subject: 'page' });
+}
+
+/**
+ * A screen's banner: show(kind, opts) puts one at the top of its content and
+ * says its title; show(null) takes it away, saying "Updates resumed." when it
+ * was stale.
+ */
+function screenBanner(into, page, guard) {
+  // show(kind, opts) for a page state, show(node) for a built banner such as
+  // serverBanner()'s, show(null) to take it away. Either way the shell owns its
+  // insertion, its announcement and its removal.
+  return (kind, opts = {}) => {
+    if (!guardHolds(guard)) return; // a screen the user has left
+    const old = into.querySelector(':scope > .state[data-banner]');
+    if (kind instanceof Node) {
+      kind.dataset.banner = '';
+      if (old?.isEqualNode(kind)) return; // the same banner again is no transition
+      old?.remove();
+      into.removeAttribute('data-stale');
+      into.prepend(kind);
+      announce(kind.querySelector('h2').textContent, { subject: `screen:${page}`, guard });
+      return;
+    }
+    // The same banner again is no transition: leave it, say nothing.
+    if (kind && old?.dataset.state === kind && !opts.title) return;
+    old?.remove();
+    // While stale, the tab's numbers are dimmed (CSS, [data-stale]).
+    into.toggleAttribute('data-stale', kind === 'stale');
+    const subject = `screen:${page}`;
+    if (!kind) {
+      if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
+      return;
+    }
+    const built = kind === 'stale' ? { ...opts, title: staleTitle(opts.since) } : opts;
+    const node = bannerState(kind, built);
+    node.dataset.banner = '';
+    into.prepend(node);
+    announce(node.querySelector('h2').textContent, { subject, guard });
+  };
+}
+
+/**
+ * Set the header title and subtitle as text. A title left out or empty stays; a
+ * subtitle left out stays, and a null or empty one hides the line. Nothing is
+ * announced, so it suits a count read on load, not a value that keeps changing.
+ */
+function setHeader({ title, subtitle } = {}) {
+  if (title) {
+    document.querySelector('.head .plate').textContent = title;
+    document.title = `${title} · MCP Gateway`;
+  }
+  if (subtitle !== undefined) {
+    const sub = document.querySelector('.head .sub');
+    sub.textContent = subtitle ?? '';
+    sub.hidden = !subtitle;
+  }
+}
 
 /** Render the current address. */
 export function render() {
@@ -391,24 +682,18 @@ export function render() {
   const label = NAV.find(([id]) => id === route.page)?.[1];
   drawNav(route.page);
   const content = document.getElementById('content');
-  const plate = document.querySelector('.head .plate');
   const tabsNav = document.querySelector('nav.tabs');
   tabsNav.replaceChildren();
 
   const tabNamed = route.tab === null || TABS.some(([t]) => t === route.tab);
   if (!label || !tabNamed) {
-    plate.textContent = 'Not found';
-    document.title = 'Not found · MCP Gateway';
-    document.querySelector('.head .sub').hidden = true;
+    setHeader({ title: 'Not found', subtitle: null });
     content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
   const spec = pages.get(route.page);
-  plate.textContent = spec?.title ?? label;
-  const sub = document.querySelector('.head .sub');
-  sub.textContent = spec?.subtitle ?? '';
-  sub.hidden = !spec?.subtitle;
-  document.title = `${spec?.title ?? label} · MCP Gateway`;
+  const ownHeader = { title: spec?.title ?? label, subtitle: spec?.subtitle ?? null };
+  setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
     content.replaceChildren(mark(state('not-built')));
@@ -432,10 +717,11 @@ export function render() {
   const settle = (err) => {
     const status = err instanceof ApiError ? err.status : null;
     if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
+    setHeader(ownHeader); // a failed attempt's own header goes with its content
     if (status === 403) {
       snapshotsNow().delete(key); // this identity may no longer see it
-      content.replaceChildren(mark(state('forbidden')));
-    } else content.replaceChildren(mark(failure(err, key, retry)));
+      showBanner(content, bannerState('forbidden'));
+    } else showBanner(content, failure(err, key, retry));
   };
 
   // Retry runs the tab again into a staging container laid out under the banner, so the
@@ -448,30 +734,93 @@ export function render() {
     content.setAttribute('aria-busy', 'true');
     const stage = el('div', { class: 'body staging' });
     content.append(stage);
+    const loading = watchLoading(content, stage, label, current);
+    const teardown = () => {
+      if (stage.classList.contains('staging')) stage.remove();
+      if (current()) content.removeAttribute('aria-busy');
+    };
     runTab(spec, route, stage)
-      .then(() => {
-        if (!current()) return;
-        stage.classList.remove('staging');
-        content.replaceChildren(mark(stage));
-        saveSnapshot(key, stage);
-        content.focus({ preventScroll: true });
-      })
-      .catch((err) => {
-        if (!current()) return;
-        settle(err);
-        const again = content.querySelector('[data-state="error"] button');
-        if (again) again.focus();
-        else content.focus({ preventScroll: true });
-      })
-      .finally(() => {
-        if (stage.classList.contains('staging')) stage.remove();
-        if (current()) content.removeAttribute('aria-busy');
-      });
+      .then(() => loading.after(() => {
+        if (current()) {
+          stage.classList.remove('staging');
+          content.replaceChildren(mark(stage));
+          saveSnapshot(key, stage);
+          content.focus({ preventScroll: true });
+        }
+        teardown();
+      }))
+      .catch((err) => loading.after(() => {
+        if (current()) {
+          settle(err);
+          const again = content.querySelector('[data-state="error"] button');
+          if (again) again.focus();
+          else content.focus({ preventScroll: true });
+        }
+        teardown();
+      }));
   };
 
+  const loading = watchLoading(content, body, label, current);
   runTab(spec, route, body)
-    .then(() => { if (current()) saveSnapshot(key, body); })
-    .catch((err) => { if (current()) settle(err); });
+    .then(() => {
+      // The data is already in the body, under the loading state: let it go after its minimum.
+      loading.release();
+      if (current()) saveSnapshot(key, body);
+    })
+    .catch((err) => loading.after(() => { if (current()) settle(err); }));
+}
+
+/** How long a page may wait for its data before the shell says it is loading (UI1.17). */
+const LOADING_MS = 300;
+/** Once shown, the loading state stays this long, so it never flickers. */
+const LOADING_MIN_MS = 400;
+
+/**
+ * Show the loading state above `body`, and say it once, if this attempt has
+ * nothing to show after LOADING_MS. When the attempt settles:
+ * - after(swap) waits out the rest of LOADING_MIN_MS if the state is up, takes
+ *   it away, then runs `swap` (an error, a 403, a Retry's result), so a state
+ *   shown at 300 ms is never replaced 10 ms later;
+ * - release() is for data already drawn under it: it goes after its minimum.
+ * Either withdraws a loading message not yet said.
+ */
+function watchLoading(content, body, label, current) {
+  let node = null;
+  let shownAt = 0;
+  let withdraw = null;
+  const guard = { epoch: authEpoch, seq: renderSeq };
+  const timer = setTimeout(() => {
+    // A screen that drew anything, even its own loading state, has said enough.
+    if (!current() || body.hasChildNodes() || !body.isConnected) return;
+    node = state('loading');
+    content.insertBefore(node, body);
+    shownAt = Date.now();
+    withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
+  }, LOADING_MS);
+  const stop = () => {
+    clearTimeout(timer);
+    withdraw?.();
+  };
+  const left = () => (node ? Math.max(0, LOADING_MIN_MS - (Date.now() - shownAt)) : 0);
+  return {
+    after(swap) {
+      stop();
+      const finish = () => {
+        node?.remove();
+        swap();
+      };
+      const wait = left();
+      if (wait > 0) setTimeout(finish, wait);
+      else finish();
+    },
+    release() {
+      stop();
+      const wait = left();
+      if (!node) return;
+      if (wait > 0) setTimeout(() => node.remove(), wait);
+      else node.remove();
+    },
+  };
 }
 
 /** Mark a node as the rendered content (tests and screens wait on it). */
@@ -497,23 +846,54 @@ function drawNav(current) {
   const decide = nav.querySelector(`[data-page="${NAV[1][0]}"]`);
   let badge = decide.querySelector('.count');
   const n = DECISIONS.count;
-  if (Number.isInteger(n) && n > 0) {
-    if (!badge) decide.append(badge = el('span', { class: 'count' }));
-    badge.textContent = String(n);
-    badge.setAttribute('aria-label', `${n} to decide`);
+  // A count that failed reads "?", never a missing badge that looks like zero (UI1.22).
+  const unavailable = n === 'unavailable';
+  if (unavailable || (Number.isInteger(n) && n > 0)) {
+    if (!badge) decide.append(badge = el('span', { class: 'count' }), el('span', { class: 'sr-only count-words' }));
+    badge.textContent = unavailable ? '?' : String(n);
+    // The link's name comes from its text: the words sit beside the number, unseen.
+    decide.querySelector('.count-words').textContent = unavailable ? ' count unavailable' : ' to decide';
   } else {
     badge?.remove();
+    decide.querySelector('.count-words')?.remove();
   }
 }
 
-async function loadCounts() {
+/** The last count this identity saw, kept through stretches where none is known. */
+const COUNT_SEEN = { epoch: -1, value: null };
+/** Orders count requests: an answer to an older one is dropped. */
+let countSeq = 0;
+
+/**
+ * Read the To do count and draw it; say it when a value this identity already
+ * knew changes (UI1.18). Its callers: start-up, sign-in, and, through the
+ * render context, the screens and the live stream that change it.
+ */
+export async function refreshCounts() {
+  const epoch = authEpoch;
+  const seq = ++countSeq;
+  let next = null;
   try {
-    const { count } = await api('/ui/api/decisions/count');
-    DECISIONS.count = Number.isInteger(count) ? count : null;
-  } catch {
-    DECISIONS.count = null; // the count route ships with the To do queue; until then no badge
+    const reply = await api('/ui/api/decisions/count');
+    next = Number.isInteger(reply?.count) && reply.count >= 0 ? reply.count : 'unavailable';
+  } catch (err) {
+    // A 404: the route ships with the To do queue, so until then no badge.
+    // Anything else failed and reads "?".
+    next = err instanceof ApiError && err.status === 404 ? null : 'unavailable';
   }
+  if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
+  DECISIONS.count = next;
   drawNav(parse(location.pathname).page);
+  if (COUNT_SEEN.epoch !== epoch) {
+    COUNT_SEEN.epoch = epoch; // a new identity's first count is not news
+    COUNT_SEEN.value = Number.isInteger(next) ? next : null;
+    return;
+  }
+  if (!Number.isInteger(next)) return; // not a value: nothing to say, and the last one is kept
+  if (Number.isInteger(COUNT_SEEN.value) && COUNT_SEEN.value !== next) {
+    announce(next === 0 ? 'Nothing to decide.' : `${next} to decide.`, { subject: 'count' });
+  }
+  COUNT_SEEN.value = next;
 }
 
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
@@ -555,6 +935,29 @@ function showWho(auth) {
  * not answer within the key check's deadline, says this browser may still be
  * signed in. An answer arriving after a newer sign-in changes nothing.
  */
+/**
+ * Show a sign-in message and say it through the one live region. Only a key
+ * the gateway refused marks the key field invalid; any other outcome clears it.
+ */
+function signinMessage(node, text, { subject, refusedKey = false }) {
+  node.textContent = text;
+  node.hidden = false;
+  announce(text, { subject });
+  if (node.classList.contains('signin-error')) markKey(refusedKey);
+}
+
+/** Tie the key field to the error line while a refused key shows, and only then. */
+function markKey(refused) {
+  const input = document.getElementById('signin-key');
+  if (refused) {
+    input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-describedby', 'signin-error');
+  } else {
+    input.removeAttribute('aria-invalid');
+    input.removeAttribute('aria-describedby');
+  }
+}
+
 async function signOut() {
   bearer = null;
   const epoch = ++authEpoch;
@@ -563,8 +966,7 @@ async function signOut() {
   // the logout is pending must not hide this, nor this overwrite its answer.
   const notice = document.querySelector('.signin-notice');
   showSignIn();
-  notice.textContent = 'Ending the session on the gateway…';
-  notice.hidden = false;
+  signinMessage(notice, 'Ending the session on the gateway…', { subject: 'signin-session' });
   let ended = false;
   try {
     const reply = await fetch('/dashboard/logout', {
@@ -582,7 +984,10 @@ async function signOut() {
   if (ended) {
     notice.hidden = true;
     notice.textContent = '';
-  } else notice.textContent = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
+    announce('Signed out.', { subject: 'signin-session' });
+  } else {
+    signinMessage(notice, "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.", { subject: 'signin-session' });
+  }
 }
 
 /**
@@ -632,9 +1037,9 @@ async function signIn(ev) {
   const button = document.querySelector('#signin button[type="submit"]');
   const key = input.value.trim();
   error.hidden = true;
+  markKey(false);
   if (!key) {
-    error.textContent = 'Paste an API key, or use the sign-in link.';
-    error.hidden = false;
+    signinMessage(error, 'Paste an API key, or use the sign-in link.', { subject: 'signin-key', refusedKey: true });
     return;
   }
   const form = document.getElementById('signin-form');
@@ -644,6 +1049,7 @@ async function signIn(ev) {
   form.setAttribute('aria-busy', 'true');
   let auth = null;
   let message = '';
+  let refused = false;
   try {
     // A gateway that takes the connection but never answers must not leave
     // the button disabled: give up after the check's own deadline.
@@ -656,6 +1062,8 @@ async function signIn(ev) {
     else if (reply.status === 403) message = 'That key is valid, but it is not allowed into the web UI. Ask an admin for access.';
     else if (reply.status === 429) message = rateLimited(reply.headers.get('retry-after'));
     else if (reply.status !== 401) message = 'Could not reach the gateway. Try again.';
+    // The gateway judged the key itself (a network failure or a rate limit did not).
+    refused = reply.ok || reply.status === 401 || reply.status === 403;
   } catch {
     message = 'Could not reach the gateway. Try again.';
   } finally {
@@ -665,11 +1073,11 @@ async function signIn(ev) {
     form.removeAttribute('aria-busy');
   }
   if (!auth?.signed_in) {
-    error.textContent = message || 'That key was not accepted.';
-    error.hidden = false;
+    signinMessage(error, message || 'That key was not accepted.', { subject: 'signin-key', refusedKey: refused });
     input.select();
     return;
   }
+  markKey(false);
   bearer = key;
   // A newer sign-in supersedes a pending or unconfirmed sign-out's notice.
   const notice = document.querySelector('.signin-notice');
@@ -681,7 +1089,7 @@ async function signIn(ev) {
   document.body.classList.remove('signed-out');
   showWho(auth);
   render();
-  loadCounts();
+  refreshCounts();
   document.getElementById('content').focus({ preventScroll: true });
 }
 
@@ -753,15 +1161,14 @@ function boot() {
     document.getElementById('content').focus();
   });
   render();
-  loadCounts();
+  refreshCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.
     // A key check the user has started owns the error line; a late startup
     // answer must not write over it.
     if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
     const error = document.querySelector('.signin-error');
-    error.textContent = 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.';
-    error.hidden = false;
+    signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
   });
 }
 

@@ -17,6 +17,7 @@ const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
 const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
+const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -41,6 +42,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         "/ui/api/capabilities/{name}",
         Method::DELETE,
         &[(CAPABILITIES, "test_capability_create_read_delete_lifecycle")],
+    ),
+    // The table's body names no find, so its admin answer is 422; this test
+    // adopts real finds from a client file and pins the served 201.
+    (
+        "/ui/api/discovery/adopt",
+        Method::POST,
+        &[(
+            ADOPT_ROUTE,
+            "an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store",
+        )],
     ),
     (
         "/ui/api/reload",

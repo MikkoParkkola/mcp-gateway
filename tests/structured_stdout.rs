@@ -107,7 +107,7 @@ fn cases(format: &'static str) -> Vec<Case> {
             found: true,
             expect: None,
             stdout_has: Some("probe"),
-            stderr_has: "Config written to",
+            stderr_has: "Wrote 1 server(s) to",
             writes: Some("discovered.yaml"),
         },
         Case {
