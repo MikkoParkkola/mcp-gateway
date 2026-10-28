@@ -587,8 +587,9 @@ const runTab = (spec, route, into) => {
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
     show: screenBanner(into, route.page, guard),
-    // The title or subtitle a screen sets itself, e.g. a count; a kept one changes nothing later.
-    header: (fields) => { if (guardHolds(guard)) setHeader(fields); },
+    // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
+    // later: Retry reuses the render, so a failed attempt is told apart by its container.
+    header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
   }));
