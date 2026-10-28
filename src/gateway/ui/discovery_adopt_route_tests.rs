@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use futures::future::BoxFuture;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::*;
 use crate::config::{AuthConfig, Config, FailsafeConfig, TransportConfig};
@@ -129,7 +129,7 @@ impl Route {
 
     /// The files store's entries beside the config.
     fn entries(&self) -> usize {
-        std::fs::read_dir(self.dir.path().join("secrets")).map_or(0, |dir| dir.count())
+        std::fs::read_dir(self.dir.path().join("secrets")).map_or(0, Iterator::count)
     }
 
     /// The listed find id of `name`, and the current file revision.
