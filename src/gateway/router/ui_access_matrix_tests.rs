@@ -321,6 +321,7 @@ fn paths() -> Vec<&'static str> {
 /// Routes whose successful answer is scoped to the caller: their body is
 /// pinned too, so a widened scope moves a cell.
 const SCOPED: &[&str] = &[
+    routes::UI_STATUS,
     routes::UI_ACTIVITY,
     routes::UI_ACTIVITY_EXPORT,
     routes::UI_ACTIVITY_RECEIPT,
@@ -335,6 +336,39 @@ const STORE_WRITES: &[&str] = &[
     routes::UI_CONTROL_PLANE_POLICIES,
     routes::UI_CONTROL_PLANE_DECISIONS,
 ];
+
+/// Control-plane reads of the store, probed with and without one; with one,
+/// the store holds rows owned by different subjects, so a widened view or
+/// decision queue moves a cell. Export status reads no store.
+const STORE_READS: &[&str] = &[routes::UI_CONTROL_PLANE];
+
+/// Store rows for [`STORE_READS`]: a requested grant for [`DEV`], an approved
+/// one for [`OTHER_DEV`], and a policy that is not enforced.
+fn seed_store(state: &AppState) {
+    use crate::control_plane::{ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy};
+    let store = state.control_plane_store.as_ref().expect("a store");
+    for (id, subject, status) in [
+        ("grant-dev", DEV, ControlPlaneGrantStatus::Requested),
+        ("grant-other", OTHER_DEV, ControlPlaneGrantStatus::Approved),
+    ] {
+        store
+            .put_grant(ControlPlaneGrant {
+                grant_id: id.to_string(),
+                subject_id: subject.to_string(),
+                server_id: "matrix-server".to_string(),
+                tool_id: None,
+                status,
+            })
+            .expect("the grant is stored");
+    }
+    store
+        .put_policy(ControlPlanePolicy {
+            policy_id: "policy-off".to_string(),
+            name: "matrix policy".to_string(),
+            enforced: false,
+        })
+        .expect("the policy is stored");
+}
 
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
@@ -499,6 +533,13 @@ fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
     if status.is_success() && SCOPED.contains(&path) && !body.is_empty() {
         let canonical = if let Ok(mut v) = serde_json::from_slice::<Value>(body) {
             strip(&mut v);
+            if path == routes::UI_STATUS
+                && let Some(answer) = v.as_object_mut()
+            {
+                // The `access` report is new in this change and has its own
+                // test against the matrix; every other member is pinned.
+                answer.remove("access");
+            }
             v.to_string()
         } else {
             let mut lines: Vec<&str> = std::str::from_utf8(body)
@@ -531,7 +572,7 @@ type Matrix = BTreeMap<String, String>;
 async fn compute() -> Matrix {
     let mut matrix = Matrix::new();
     for path in paths() {
-        let stores: &[bool] = if STORE_WRITES.contains(&path) {
+        let stores: &[bool] = if STORE_WRITES.contains(&path) || STORE_READS.contains(&path) {
             &[false, true]
         } else {
             &[false]
@@ -539,6 +580,9 @@ async fn compute() -> Matrix {
         for &store in stores {
             for gateway in [Gateway::On, Gateway::OnPublicStatus, Gateway::Off] {
                 let fx = fixture(gateway, store).await;
+                if store && STORE_READS.contains(&path) {
+                    seed_store(&fx.state);
+                }
                 let router = create_router(Arc::clone(&fx.state));
                 let cookie = session(&fx.state);
                 for &caller in CALLERS.iter().filter(|c| c.gateway() == gateway) {
@@ -717,6 +761,18 @@ fn the_expectation_holds_known_answers() {
             "{path}"
         );
     }
+    // The seeded store reaches every role's snapshot, and the roles still
+    // see different answers: a widened view moves these cells.
+    let seeded = |caller: &str| get(routes::UI_CONTROL_PLANE, "plain+store", caller);
+    for caller in ["AdminKey", "OidcAuditor", "OidcReviewer", "OidcDeveloper"] {
+        assert_ne!(
+            seeded(caller),
+            get(routes::UI_CONTROL_PLANE, "plain", caller),
+            "{caller}"
+        );
+    }
+    assert_ne!(seeded("OidcAdmin"), seeded("OidcDeveloper"));
+    assert_ne!(seeded("OidcAuditor"), seeded("OidcDeveloper"));
     for path in STORE_WRITES {
         assert!(
             post(path, "valid+store", "OidcAuditor").starts_with("403"),
