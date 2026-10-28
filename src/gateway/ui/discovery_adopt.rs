@@ -188,16 +188,19 @@ fn store_for(
     configured: SecretStoreChoice,
     dir: &std::path::Path,
     reasons: &mut Vec<(&'static str, String)>,
-) -> Result<Option<Arc<dyn SecretStore + Send + Sync>>, Response> {
+) -> Result<Option<Arc<dyn SecretStore + Send + Sync>>, Box<Response>> {
     if adoption.literals.is_empty() {
         return Ok(None);
     }
     let chosen = match choose_store(configured, dir) {
         Ok(chosen) => chosen,
         Err(StoreError::Unavailable(_)) => {
-            return Err(fixed(StatusCode::UNPROCESSABLE_ENTITY, STORE_UNAVAILABLE));
+            return Err(Box::new(fixed(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                STORE_UNAVAILABLE,
+            )));
         }
-        Err(_) => return Err(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED)),
+        Err(_) => return Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED))),
     };
     let limit = chosen.store.limit();
     for literal in &adoption.literals {
@@ -216,9 +219,9 @@ pub(super) fn secret_step(
     literals: Vec<Literal>,
     store: Arc<dyn SecretStore + Send + Sync>,
     vault: Result<Vault, StoreError>,
-) -> Result<SecretStep, Response> {
+) -> Result<SecretStep, Box<Response>> {
     let Ok(vault) = vault else {
-        return Err(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED));
+        return Err(Box::new(fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED)));
     };
     let values = literals
         .into_iter()
@@ -238,16 +241,16 @@ pub(super) fn secret_step(
 /// since the listing (409), or the scan timed out (503).
 pub(super) fn found(
     resolved: Result<Option<DiscoveredServer>, ScanTimedOut>,
-) -> Result<DiscoveredServer, Response> {
+) -> Result<DiscoveredServer, Box<Response>> {
     match resolved {
         Ok(Some(server)) => Ok(server),
-        Ok(None) => {
-            Err((StatusCode::CONFLICT, Json(json!({"error": "find_changed"}))).into_response())
-        }
-        Err(ScanTimedOut) => Err(fixed(
+        Ok(None) => Err(Box::new(
+            (StatusCode::CONFLICT, Json(json!({"error": "find_changed"}))).into_response(),
+        )),
+        Err(ScanTimedOut) => Err(Box::new(fixed(
             StatusCode::SERVICE_UNAVAILABLE,
             "discovery scan timed out",
-        )),
+        ))),
     }
 }
 
@@ -301,7 +304,7 @@ pub(super) async fn adopt_discovery(
     };
     let server = match found(cache.resolve(&body.find_id).await) {
         Ok(server) => server,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
 
     let mut reasons: Vec<(&'static str, String)> = refusals(&server)
@@ -318,7 +321,7 @@ pub(super) async fn adopt_discovery(
         .to_path_buf();
     let store = match store_for(&adoption, config.secrets.store, &dir, &mut reasons) {
         Ok(store) => store,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     if !reasons.is_empty() {
         reasons.sort_by(|a, b| a.1.cmp(&b.1));
@@ -337,7 +340,7 @@ pub(super) async fn adopt_discovery(
             let vault = Vault::for_config_dir(&dir);
             match secret_step(&name, adoption.literals, store, vault) {
                 Ok(step) => Some(step),
-                Err(refused) => return refused,
+                Err(refused) => return *refused,
             }
         }
     };

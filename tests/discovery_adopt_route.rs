@@ -151,30 +151,52 @@ fn find_id(listing: &Value, name: &str) -> String {
         .to_owned()
 }
 
+/// The value the `file:` reference on the `key:` line of `written` names.
+fn stored_at(written: &str, key: &str) -> String {
+    let reference = written
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(key))
+        .unwrap_or_else(|| panic!("no {key} line: {written}"))
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
+    let stored = reference.strip_prefix("file:").expect("a files reference");
+    std::fs::read_to_string(stored)
+        .expect("secret file")
+        .trim_end()
+        .to_owned()
+}
+
 /// d4, d9, d19: an adopted find is a disabled backend; its literal header
-/// value is in the files store and only the reference is in gateway.yaml; a
-/// template header is copied as written; comments are kept. A second adopt
-/// is refused as managed.
+/// (a URL server) and env value (a stdio server) are in the files store and
+/// only their references are in gateway.yaml; a template header is copied as
+/// written; comments are kept. A second adopt is refused as managed.
 #[tokio::test]
 async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
     let home = tempfile::tempdir().expect("home");
     let home = home.path();
     client_file(
         home,
-        &json!({"tool": {"url": "https://tool.example.test/mcp",
-            "headers": {"Authorization": "Bearer ${TOOL_TOKEN}", "X-Key": HEADER_SECRET},
-            "env": {"API_KEY": SECRET}}}),
+        &json!({
+            "tool": {"url": "https://tool.example.test/mcp",
+                "headers": {"Authorization": "Bearer ${TOOL_TOKEN}", "X-Key": HEADER_SECRET}},
+            "local": {"command": "npx", "args": ["-y", "local-server"],
+                "env": {"API_KEY": SECRET}},
+        }),
     );
     let config = gateway_config(home);
     let gateway = Gateway::spawn(home, &config).await;
     let listing = gateway.list().await;
-    let body = json!({"find_id": find_id(&listing, "tool"), "revision": listing["revision"]});
-
-    let (status, answer) = gateway.adopt(&body).await;
-    assert_eq!(status, 201, "{answer}\n{}", gateway.logs());
-    let answer: Value = serde_json::from_str(&answer).expect("json");
-    assert_eq!(answer["enabled"], false);
-    assert_eq!(answer["args_copied_verbatim"], true);
+    let mut revision = listing["revision"].clone();
+    for name in ["tool", "local"] {
+        let body = json!({"find_id": find_id(&listing, name), "revision": revision});
+        let (status, answer) = gateway.adopt(&body).await;
+        assert_eq!(status, 201, "{name}: {answer}\n{}", gateway.logs());
+        let answer: Value = serde_json::from_str(&answer).expect("json");
+        assert_eq!(answer["name"], name);
+        assert_eq!(answer["enabled"], false);
+        assert_eq!(answer["args_copied_verbatim"], true);
+        revision = answer["revision"].clone();
+    }
 
     let written = std::fs::read_to_string(&config).expect("config");
     assert!(written.starts_with("# operator note: keep\n"), "{written}");
@@ -182,22 +204,11 @@ async fn an_adopted_find_is_a_disabled_backend_with_its_secret_in_the_store() {
         assert!(!written.contains(leak), "{leak} in {written}");
     }
     assert!(written.contains("Bearer ${TOOL_TOKEN}"), "{written}");
-    assert!(written.contains("enabled: false"), "{written}");
-    let reference = written
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("X-Key:"))
-        .unwrap_or_else(|| panic!("no X-Key line: {written}"))
-        .trim()
-        .trim_matches(|c| c == '\'' || c == '"');
-    let stored = reference.strip_prefix("file:").expect("a files reference");
-    assert_eq!(
-        std::fs::read_to_string(stored)
-            .expect("secret file")
-            .trim_end(),
-        HEADER_SECRET
-    );
+    assert_eq!(written.matches("enabled: false").count(), 2, "{written}");
+    assert_eq!(stored_at(&written, "X-Key:"), HEADER_SECRET);
+    assert_eq!(stored_at(&written, "API_KEY:"), SECRET);
 
-    let again = json!({"find_id": body["find_id"], "revision": answer["revision"]});
+    let again = json!({"find_id": find_id(&listing, "tool"), "revision": revision});
     let (status, refused) = gateway.adopt(&again).await;
     assert_eq!(status, 409, "{refused}");
     assert!(refused.contains("\"managed\""), "{refused}");
@@ -253,7 +264,7 @@ async fn stale_changed_and_malformed_requests_are_refused_without_echo() {
 }
 
 /// A literal larger than the store can hold refuses the adopt, naming its
-/// field and never its value, and writes nothing (muse PR4 r3 L2).
+/// field and never its value, and writes nothing.
 #[tokio::test]
 async fn a_value_the_store_cannot_hold_is_refused_by_field() {
     let home = tempfile::tempdir().expect("home");

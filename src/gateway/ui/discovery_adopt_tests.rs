@@ -21,13 +21,14 @@ async fn body_of(response: Response) -> (StatusCode, Value) {
 
 /// One row per writer outcome: the result, its status, and the `error` code
 /// when the answer names one. Every `Refused` and `Secrets` split has its own
-/// row, so the mapping test pins each branch (muse PR4 r3 M1).
+/// row, so the mapping test pins each branch.
 fn writer_outcomes() -> Vec<(
     Result<ReplaceOutcome, ReplaceError>,
     StatusCode,
     &'static str,
 )> {
     let current = FileRevision::of(b"current");
+    let failed = |error| (Err(error), StatusCode::INTERNAL_SERVER_ERROR, "");
     vec![
         (
             Err(ReplaceError::Stale { current }),
@@ -63,16 +64,8 @@ fn writer_outcomes() -> Vec<(
             StatusCode::CONFLICT,
             "not_in_place",
         ),
-        (
-            Err(ReplaceError::Refused(REFERENCES.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Refused(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
+        failed(ReplaceError::Refused(REFERENCES.to_owned())),
+        failed(ReplaceError::Refused(CANARY.to_owned())),
         (
             Err(ReplaceError::Secrets(SaveError::Refused(
                 StoreError::Unavailable(CANARY.to_owned()),
@@ -80,54 +73,22 @@ fn writer_outcomes() -> Vec<(
             StatusCode::UNPROCESSABLE_ENTITY,
             "",
         ),
-        (
-            Err(ReplaceError::Secrets(SaveError::Store(StoreError::Failed(
-                CANARY.to_owned(),
-            )))),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::ReloadRefused(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Unsupported(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Stage(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Write(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::RollbackFailed {
-                journal: CANARY.into(),
-                error: CANARY.to_owned(),
-            }),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Unconfirmed {
-                journal: CANARY.into(),
-                error: CANARY.to_owned(),
-            }),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
-        (
-            Err(ReplaceError::Failed(CANARY.to_owned())),
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "",
-        ),
+        failed(ReplaceError::Secrets(SaveError::Store(StoreError::Failed(
+            CANARY.to_owned(),
+        )))),
+        failed(ReplaceError::ReloadRefused(CANARY.to_owned())),
+        failed(ReplaceError::Unsupported(CANARY.to_owned())),
+        failed(ReplaceError::Stage(CANARY.to_owned())),
+        failed(ReplaceError::Write(CANARY.to_owned())),
+        failed(ReplaceError::RollbackFailed {
+            journal: CANARY.into(),
+            error: CANARY.to_owned(),
+        }),
+        failed(ReplaceError::Unconfirmed {
+            journal: CANARY.into(),
+            error: CANARY.to_owned(),
+        }),
+        failed(ReplaceError::Failed(CANARY.to_owned())),
     ]
 }
 
@@ -293,17 +254,17 @@ fn adoption_takes_out_literals_in_a_fixed_order() {
     assert_eq!(backend.headers["X-Plain"], "${H}");
 }
 
-/// muse PR4 r3 L1, L3: the two answers the end-to-end test has no cheap
+/// The two answers the end-to-end test has no cheap
 /// fixture for, pinned where the typed error becomes a status. A scan that
 /// timed out is a 503, a changed find a 409, and a vault that cannot be
 /// opened a 500 whose body never carries the store's own message.
 #[test]
 fn a_timed_out_scan_and_a_missing_vault_have_fixed_answers() {
     use crate::discovery::listing::ScanTimedOut;
-    let timed_out = found(Err(ScanTimedOut)).expect_err("a timeout is refused");
+    let timed_out = *found(Err(ScanTimedOut)).expect_err("a timeout is refused");
     let (status, json) = futures::executor::block_on(body_of(timed_out));
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
-    let changed = found(Ok(None)).expect_err("a changed find is refused");
+    let changed = *found(Ok(None)).expect_err("a changed find is refused");
     let (status, json) = futures::executor::block_on(body_of(changed));
     assert_eq!(status, StatusCode::CONFLICT, "{json}");
     assert_eq!(json["error"], "find_changed");
@@ -320,7 +281,7 @@ fn a_timed_out_scan_and_a_missing_vault_have_fixed_answers() {
     )
     .err()
     .expect("no vault is refused");
-    let (status, json) = futures::executor::block_on(body_of(refused));
+    let (status, json) = futures::executor::block_on(body_of(*refused));
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     assert!(!json.to_string().contains(CANARY), "{json}");
 }
