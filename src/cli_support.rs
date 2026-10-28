@@ -43,9 +43,10 @@ pub fn is_hidden_char(c: char) -> bool {
 }
 
 /// Text from a client config, escaped for a terminal. Only [`shown`] makes
-/// one, and it can only be printed: `shown` takes text, not a `Shown`, so a
-/// value cannot be escaped twice through it, and a renderer whose line
-/// helper takes a `Shown` cannot be handed raw text.
+/// one, and it can only be printed. The type guides single escaping: a
+/// renderer whose line helper takes a `Shown` cannot be handed raw text. It
+/// does not forbid `shown(&x.to_string())`, which would escape twice, so a
+/// caller passes raw text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shown(String);
 
@@ -56,23 +57,32 @@ impl std::fmt::Display for Shown {
 }
 
 /// `text` with every hidden character (see [`is_hidden_char`]) written as
-/// `\u{..}`, and a backslash that begins the text `\u{` doubled, so every
-/// `\u{..}` on screen is one this wrote: a name spelling `\u{1b}` out reads
-/// `\\u{1b}`. Every other backslash is kept, so a Windows path reads as it
-/// is. The last step before printing: summarize, redact or parse first.
+/// `\u{..}`, and every backslash of a run that ends right before `u{` or a
+/// hidden character doubled, so every `\u{..}` on screen is one this wrote:
+/// a name spelling `\u{1b}` out reads `\\u{1b}`. Every other backslash is
+/// kept, so a Windows path reads as it is. The last step before printing: summarize, redact or parse first.
 #[must_use]
 pub fn shown(text: &str) -> Shown {
     let mut out = String::with_capacity(text.len());
     for (at, c) in text.char_indices() {
         if is_hidden_char(c) {
             out.extend(c.escape_unicode());
-        } else if c == '\\' && text[at + 1..].starts_with("u{") {
+        } else if c == '\\' && ends_in_escape(&text[at..]) {
             out.push_str("\\\\");
         } else {
             out.push(c);
         }
     }
     Shown(out)
+}
+
+/// Whether the backslash run starting `rest` ends right before `u{` or a
+/// hidden character. Every backslash of such a run is doubled, so on screen
+/// an odd run before `u{` is always an escape `shown` wrote and an even run
+/// is literal text: no two texts print alike.
+fn ends_in_escape(rest: &str) -> bool {
+    let after = rest.trim_start_matches('\\');
+    after.starts_with("u{") || after.chars().next().is_some_and(is_hidden_char)
 }
 
 /// Whether [`shown`] would print `text` unchanged: a runnable command that

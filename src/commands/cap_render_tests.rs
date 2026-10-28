@@ -96,11 +96,6 @@ fn every_listing_field_is_escaped() {
             stdio("tool", &format!("np{PAYLOAD}x tool")),
             stdio("tool", "npx tool"),
         ),
-        (
-            "url",
-            http("tool", &format!("https://example.test/mcp{PAYLOAD}")),
-            http("tool", "https://example.test/mcp"),
-        ),
         ("config path", path, plain_path),
     ];
     for (field, hostile, plain) in rows {
@@ -178,6 +173,17 @@ fn a_command_escaping_would_alter_is_withheld() {
     assert_clean("apply command", &hostile);
     assert!(hostile.contains("withheld"), "{hostile}");
     assert!(!hostile.contains("'x/gw.yaml"), "{hostile}");
+}
+
+/// A listed URL is reduced to its origin before it is shown, so a path
+/// carrying hidden characters never reaches the terminal at all: this pins
+/// the redaction, which is what protects this field.
+#[test]
+fn a_listed_url_shows_only_its_origin() {
+    let text = render_server_entry(&http("tool", &format!("https://example.test/mcp{PAYLOAD}")));
+    assert!(text.contains("   URL: https://example.test"), "{text}");
+    assert!(!text.contains("/mcp"), "{text}");
+    assert_clean("url", &text);
 }
 
 /// Machine output keeps the data: `--format json` and `--format yaml` carry a

@@ -174,3 +174,20 @@ fn a_result_prints_client_text_escaped() {
         "{lines}"
     );
 }
+
+/// A detail's own line breaks (the `--show-stderr` section) stay, and each
+/// line's text, captured stderr included, is escaped.
+#[test]
+fn a_multi_line_detail_keeps_its_lines_escaped() {
+    let result = CheckResult::warn(
+        "Backend tool",
+        "exited 1\n  stderr tail:\n    \u{1b}[31mpanic\u{202e}",
+    );
+    let lines = human_lines("[WARN]", &result);
+    assert_eq!(lines.lines().count(), 3, "{lines:?}");
+    assert!(
+        !lines.contains('\u{1b}') && !lines.contains('\u{202e}'),
+        "{lines:?}"
+    );
+    assert!(lines.contains("    \\u{1b}[31mpanic"), "{lines}");
+}

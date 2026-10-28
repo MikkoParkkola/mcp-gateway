@@ -398,6 +398,26 @@ fn a_spelled_out_escape_is_told_apart_from_a_real_one() {
     assert_ne!(real, spelled);
 }
 
+/// Backslash runs before an escape are doubled whole, so no two names print
+/// alike: an odd run before `u{` is an escape `shown` wrote, an even one is
+/// literal text.
+#[test]
+fn backslash_runs_never_make_two_names_print_alike() {
+    let names = [
+        "a\u{1b}",    // a real ESC
+        "a\\u{1b}",   // the text \u{1b}
+        "a\\\u{1b}",  // a backslash, then a real ESC
+        "a\\\\u{1b}", // the text \\u{1b}
+    ];
+    let printed: Vec<String> = names.iter().map(|n| shown(n).to_string()).collect();
+    assert_eq!(
+        printed,
+        ["a\\u{1b}", "a\\\\u{1b}", "a\\\\\\u{1b}", "a\\\\\\\\u{1b}"]
+    );
+    // A path's lone backslashes stay single.
+    assert_eq!(shown("C:\\Users\\me").to_string(), "C:\\Users\\me");
+}
+
 /// The skip warning keeps its quotes around an escaped name.
 #[test]
 fn a_skip_warning_quotes_the_escaped_name() {

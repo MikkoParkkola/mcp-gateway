@@ -632,11 +632,18 @@ fn human_lines(badge: &str, result: &CheckResult) -> String {
     use std::fmt::Write as _;
 
     let mut lines = String::new();
+    // Line by line: a detail's own breaks (the `--show-stderr` section)
+    // stay, and every line's text is escaped, captured stderr included.
+    let detail: Vec<String> = result
+        .detail
+        .split('\n')
+        .map(|line| shown(line).to_string())
+        .collect();
     let _ = writeln!(
         lines,
         "{badge} {}: {}",
         shown(&result.label),
-        shown(&result.detail)
+        detail.join("\n")
     );
     if let Some(hint) = &result.hint {
         let _ = writeln!(lines, "       Hint: {}", shown(hint));
