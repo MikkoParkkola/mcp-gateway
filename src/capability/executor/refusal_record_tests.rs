@@ -87,39 +87,54 @@ async fn call(service: &str, target: &str, auth_required: bool) -> (String, Opti
     }
 }
 
+/// Notes a case whose error does not say `says` or whose delivery does not
+/// record `refused`. Each test asserts once over every case, so one run shows
+/// every site that fails, not only the first.
+fn check(fails: &mut Vec<String>, case: &str, error: &str, says: &str, effect: Option<Value>) {
+    if !error.contains(says) {
+        fails.push(format!("{case}: error does not say {says:?}: {error}"));
+    }
+    if effect != Some("refused".into()) {
+        fails.push(format!("{case}: response_effect {effect:?}, not refused"));
+    }
+}
+
 /// A private destination, refused before anything is sent.
 #[tokio::test]
 async fn a_private_destination_records_refused_for_each_protocol() {
+    let mut fails = Vec::new();
     for (service, target) in [
         ("rest", "http://10.0.0.5"),
         ("graphql", "http://10.0.0.5/rpc"),
         ("jsonrpc", "http://10.0.0.5/rpc"),
     ] {
         let (error, effect) = call(service, target, false).await;
-        assert!(error.contains("SSRF blocked"), "{service}: {error}");
-        assert_eq!(effect, Some("refused".into()), "{service}");
+        check(&mut fails, service, &error, "SSRF blocked", effect);
     }
+    assert!(fails.is_empty(), "{fails:#?}");
 }
 
 /// A credential bound for cleartext off this machine, refused before the
 /// secret is read.
 #[tokio::test]
 async fn a_cleartext_credential_records_refused_for_each_protocol() {
+    let mut fails = Vec::new();
     for (service, target) in [
         ("rest", "http://93.184.215.14"),
         ("graphql", "http://93.184.215.14/rpc"),
         ("jsonrpc", "http://93.184.215.14/rpc"),
     ] {
         let (error, effect) = call(service, target, true).await;
-        assert!(error.contains("cleartext"), "{service}: {error}");
-        assert_eq!(effect, Some("refused".into()), "{service}");
+        check(&mut fails, service, &error, "cleartext", effect);
     }
+    assert!(fails.is_empty(), "{fails:#?}");
 }
 
 /// The token endpoint's checks before the refresh flight: cleartext, then
 /// a private destination.
 #[tokio::test]
 async fn a_refused_token_endpoint_records_refused() {
+    let mut fails = Vec::new();
     for (endpoint, says) in [
         ("http://off-machine.invalid/token", "cleartext"),
         ("https://10.0.0.5/token", "SSRF blocked"),
@@ -134,7 +149,7 @@ async fn a_refused_token_endpoint_records_refused() {
             &CapabilityExecutionContext::default(),
         ))
         .await;
-        assert!(error.contains(says), "{endpoint}: {error}");
-        assert_eq!(effect, Some("refused".into()), "{endpoint}");
+        check(&mut fails, endpoint, &error, says, effect);
     }
+    assert!(fails.is_empty(), "{fails:#?}");
 }
