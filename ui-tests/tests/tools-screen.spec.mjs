@@ -126,6 +126,8 @@ test('T5: Open goes to the tool page, and an unknown tool says so', async ({ pag
   await expect(page.locator('#content')).toContainText(t.server);
   await expect(page.locator('#content')).toContainText(t.description);
   await expect(page.getByRole('region', { name: `Input schema of ${t.name}` })).toBeVisible();
+  const word = `${t.class} (${t.class_source === 'declared' ? 'declared' : 'guessed from the name'})`;
+  await expect(page.locator('.tool-facts')).toContainText(word);
   await page.getByRole('link', { name: 'Back to all tools' }).click();
   await expect(page).toHaveURL('/ui/tools/status');
   await page.goto(`/ui/tools/${encodeURIComponent('alpha:no_such_tool')}/status`);
@@ -149,6 +151,32 @@ test('T6: markup in a tool description renders as text', async ({ page }) => {
   const nullRow = rows(page).filter({ has: page.getByRole('button', { name: TOOLS[2].name, exact: true }) });
   await expect(nullRow.locator('td:nth-child(3)')).toHaveText('');
   await expect(page.locator('#content')).not.toContainText('null');
+});
+
+test('T6b: markup in a tool name and a server name stays text, in labels and links too', async ({ page }) => {
+  const name = 'x"><img src=x onerror="window.__pwned=1">';
+  const server = 'srv<img src=x onerror="window.__pwned=2">';
+  await toolsScreen(page, { tools: [{ name, server, description: 'Hostile names', schema: {}, class: 'read', class_source: 'declared' }] });
+  await page.goto('/ui/tools/status');
+  const toggle = page.getByRole('button', { name, exact: true });
+  await expect(toggle).toBeVisible();
+  await expect(page.locator('#content img')).toHaveCount(0);
+  await toggle.click();
+  await page.getByRole('link', { name: `Open ${name}` }).click();
+  await expect(page).toHaveURL(`/ui/tools/${encodeURIComponent(`${server}:${name}`)}/status`);
+  await expect(page.getByRole('heading', { level: 2, name, exact: true })).toBeVisible();
+  await expect(page.locator('#content img, .head img')).toHaveCount(0);
+  expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
+});
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+  test('T18: a tool name is a full touch target', async ({ page }) => {
+    await toolsScreen(page);
+    await page.goto('/ui/tools/status');
+    const box = await page.getByRole('button', { name: sorted[0].name, exact: true }).boundingBox();
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  });
 });
 
 test('T11: Enter and Space each toggle a tool once', async ({ page }) => {
