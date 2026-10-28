@@ -527,6 +527,45 @@ impl CommittedTask {
             )
     }
 
+    /// The stored task as a delivery serves it: every serve site
+    /// (`tasks/get`, a repeat, a notification) sends this, never
+    /// `task.wire()` alone, and before any egress scan reads it.
+    ///
+    /// Each gateway-only member the row's write record does not claim is
+    /// removed from the result, `error.data` and every parked input request.
+    /// Since ingress strips a backend's copy before store, a claimed member is
+    /// the gateway's own, even sealed or redacted after its note; a row stored
+    /// before the rename notes the plain names, so a `_` member planted in it
+    /// is claimed by nothing. A removal the result's provenance seal covered
+    /// drops that seal (its receipt stays): the bytes it signed are gone.
+    pub(crate) fn delivered_wire(&self) -> serde_json::Value {
+        use crate::protocol::reserved_members::strip_unnoted;
+        let mut wire = serde_json::to_value(self.task.wire()).unwrap_or(serde_json::Value::Null);
+        let writes = &self.gateway_writes;
+        if let Some(result) = wire.get_mut("result")
+            && strip_unnoted(result, |member| writes.claims(member.path, member.class))
+            && let Some(provenance) = result
+                .pointer_mut("/_meta/provenance")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            provenance.remove("public_signature");
+        }
+        // A Failed row's record is always empty, and the gateway never writes
+        // a noted member into a stored error or an input request.
+        if let Some(data) = wire.pointer_mut("/error/data") {
+            strip_unnoted(data, |_| false);
+        }
+        if let Some(requests) = wire
+            .get_mut("inputRequests")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for request in requests.values_mut() {
+                strip_unnoted(request, |_| false);
+            }
+        }
+        wire
+    }
+
     /// The committed view of `record`, read in one piece so a caller that
     /// authorizes delivery checks the snapshot it returns.
     pub(super) fn of(task: Task, record: &Record) -> Self {
@@ -592,7 +631,7 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
     // A row older than the descriptor cannot have captured one; a descriptor
     // found there is forged or downgraded (the loader and store.rs agree).
     if record.version < UPSTREAM_VERSION
-        || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+        || crate::gateway::meta_mcp::is_composite_meta_tool(task.tool())
     {
         return Vec::new();
     }
@@ -610,6 +649,10 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
 #[cfg(test)]
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
+
+#[cfg(test)]
+#[path = "record_delivery_tests.rs"]
+mod delivery_tests;
 
 /// `Target::pairs` keeps the recorded order, duplicates included, and the
 /// names exactly as recorded: every stored-result walk reads it (MIK-8498).

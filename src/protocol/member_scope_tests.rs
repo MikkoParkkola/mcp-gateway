@@ -159,18 +159,12 @@ fn the_scope_warn_names_member_never_value() {
 /// deliberately unscoped, and every scoped or unscoped name has a row.
 #[test]
 fn the_scope_table_and_the_member_table_agree() {
-    // The plain names a backend may use for its own data are not protocol
-    // members.
+    // `structuredContent` is the tool's own output, not a protocol directive.
     let mut protocol: Vec<&str> = MEMBERS
         .iter()
         .filter(|m| m.origin == Origin::BackendMayCarry && m.path.len() == 1)
         .map(|m| m.path[0])
-        .filter(|name| {
-            !matches!(
-                *name,
-                "recovery" | "predicted_next" | "trace_id" | "structuredContent"
-            )
-        })
+        .filter(|name| *name != "structuredContent")
         .collect();
     let mut listed: Vec<&str> = SCOPED.iter().map(|scope| scope.member).collect();
     listed.extend(PROTOCOL_UNSCOPED);

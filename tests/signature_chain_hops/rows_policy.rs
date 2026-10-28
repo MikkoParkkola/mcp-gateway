@@ -196,11 +196,10 @@ fn assert_undeclared_task_refused(response: &Value) {
         .filter(|inner| inner.get("isError").is_some());
     let tool = nested.as_ref().unwrap_or(result);
     assert_eq!(tool["isError"], true, "{response}");
-    // The hint is `_recovery` once the underscore rename lands on this line;
-    // until then it is `recovery`. Read whichever is present, then drop the
-    // unprefixed form.
-    let hint = tool.get("_recovery").unwrap_or(&tool["recovery"]);
-    assert_eq!(hint["error_code"], "INVALID_PARAM", "{response}");
+    assert_eq!(
+        tool["_recovery"]["error_code"], "INVALID_PARAM",
+        "{response}"
+    );
     assert_eq!(tool["content"][0]["text"], UNDECLARED_TASK, "{response}");
     let text = response.to_string();
     assert!(!text.contains(oracle::CHAIN_KEY), "{response}");
