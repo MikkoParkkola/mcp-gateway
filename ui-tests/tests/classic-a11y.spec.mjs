@@ -44,7 +44,19 @@ async function classicPage(page) {
   await expect(page.locator('#d-version')).toHaveText('vtest');
 }
 
-const TABS = ['dashboard', 'tools', 'servers', 'control-plane', 'capabilities', 'config', 'costs'];
+// Read from the page itself: a new tab gets an axe row below on its own, and a
+// new dialog fails here until it has one, instead of shipping unscanned.
+const ids = (pattern) => [...INDEX.matchAll(pattern)].map((m) => m[1]).sort();
+const TABS = ids(/id="page-([a-z-]+)"/g);
+const DIALOGS = ids(/id="([a-z-]+)"[^>]*role="dialog"/g);
+
+test('every classic tab and dialog in the page has an axe row', () => {
+  // A reader that silently finds nothing would scan nothing.
+  expect(TABS).toEqual(expect.arrayContaining(['capabilities', 'config', 'control-plane', 'costs', 'dashboard', 'servers', 'tools']));
+  // Each dialog named here has its own axe test below; a new one needs a test, then a name.
+  expect(DIALOGS).toEqual(['import-modal']);
+  expect(INDEX.match(/role="dialog"/g)).toHaveLength(DIALOGS.length);
+});
 
 for (const width of WIDTHS) {
   test.describe(`at ${width} px`, () => {
