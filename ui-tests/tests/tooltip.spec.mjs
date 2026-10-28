@@ -27,12 +27,11 @@ async function serveCopy(page, { copy = COPY, status = 200, hold, count } = {}) 
 
 /**
  * Draw triggers for `ids` into the content area through the module's tip().
- * With `settle` (the default) it waits for the copy first, so the triggers are finished.
+ * With `settle` (the default) it then waits for the copy, so the triggers are finished.
  */
 async function mount(page, ids, { layout = 'inline', settle = true } = {}) {
   await page.evaluate(async ({ url, ids, layout, settle }) => {
     const tips = await import(url);
-    if (settle) await tips.tipsSettled();
     const box = document.createElement('div');
     box.className = `fixture-tips ${layout}`;
     if (layout !== 'inline') {
@@ -53,6 +52,7 @@ async function mount(page, ids, { layout = 'inline', settle = true } = {}) {
       box.append(row);
     }
     document.getElementById('content').append(box);
+    if (settle) await tips.tipsSettled();
   }, { url: tooltipModuleUrl(), ids, layout, settle });
 }
 
@@ -503,6 +503,7 @@ test.describe('CSS fallback and the failure latch', () => {
     await ready(page);
     const built = await page.evaluate(async (url) => {
       const tips = await import(url);
+      tips.tip('fixture.status.paused'); // the first call starts the copy fetch
       await tips.tipsSettled();
       const t = tips.tip('fixture.status.paused');
       const id = t.querySelector('[role="tooltip"]').id;

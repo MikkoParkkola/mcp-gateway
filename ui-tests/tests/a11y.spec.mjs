@@ -13,6 +13,10 @@ import { PAGES, TABS, withFixturePages, shellReady, tooltipModuleUrl } from './s
 import { readScreens, scanScreens } from './copy-check.mjs';
 
 const THEMES = ['dark', 'light'];
+const TOOLS = [
+  { name: 'list_dir', server: 'filesystem', description: 'List a folder inside the allowed paths' },
+  { name: 'search', server: 'web', description: 'Search the web' },
+];
 // Built page and tab -> the first tooltip id its screen draws, from the same static scan as C1 and C9.
 const FIRST_TIP = {};
 for (const id of scanScreens(readScreens()).drawn) {
@@ -34,6 +38,8 @@ for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 900 });
         await page.emulateMedia({ colorScheme: theme });
         if (fixtures) await withFixturePages(page);
+        // The fixture server has no tool list, so the built Tools screen gets one here and draws its toolbar.
+        await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
         const found = [];
         for (const [id] of PAGES) {
           for (const tab of TABS) {
