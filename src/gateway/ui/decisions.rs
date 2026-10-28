@@ -125,14 +125,14 @@ pub(in crate::gateway) fn start(
     tokio::spawn(async move {
         let mut ticks = 0_u32;
         loop {
-            tokio::select! {
-                _ = shutdown.recv() => return,
-                () = tokio::time::sleep(TICK) => {}
-            }
             let (meta, shared) = (Arc::clone(&meta), Arc::clone(&shared));
             let read_edge = ticks % EDGE_EVERY == 0;
             ticks = ticks.wrapping_add(1);
             let _ = tokio::task::spawn_blocking(move || tick(&meta, &shared, read_edge)).await;
+            tokio::select! {
+                _ = shutdown.recv() => return,
+                () = tokio::time::sleep(TICK) => {}
+            }
         }
     })
 }
@@ -235,3 +235,7 @@ fn retention_edge(path: &Path) -> Option<DateTime<Utc>> {
     let opened = first.get("segment_opened_at")?.as_u64()?;
     DateTime::from_timestamp(i64::try_from(opened).ok()?, 0)
 }
+
+#[cfg(test)]
+#[path = "decisions_tests.rs"]
+mod tests;

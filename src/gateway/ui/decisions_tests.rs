@@ -1,0 +1,212 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The decisions route over a real transparency log: the replay of notes
+//! already kept, a note written live, the admin rule, and eviction at the
+//! log's retention edge.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::to_bytes;
+use axum::extract::{Extension, State};
+use axum::http::StatusCode;
+use chrono::{DateTime, Utc};
+use serde_json::{Map, Value, json};
+
+use super::*;
+use crate::config::AuthConfig;
+use crate::security::audit::AuditEnvelope;
+use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
+use crate::security::{TransparencyLogConfig, TransparencyLogger};
+
+fn log_in(dir: &tempfile::TempDir, max_segment_bytes: u64, retain: u32) -> Arc<TransparencyLogger> {
+    let config = TransparencyLogConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("transparency.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "test".into(),
+        shared_secret: String::new(),
+        rotation: RotationConfig {
+            max_segment_bytes,
+            max_segment_age_secs: 0,
+            retain_segments: retain,
+            on_disk_full: OnDiskFull::ExpireOldest,
+        },
+    };
+    Arc::new(TransparencyLogger::open(Arc::new(config)).expect("the log opens"))
+}
+
+/// A missing-grant note for Alice's agent on `capability`, as the dispatch
+/// writes one.
+fn note(capability: &str, at: DateTime<Utc>) -> Map<String, Value> {
+    let Value::Object(fields) = json!({
+        "kind": GRANT_DECISION_KIND,
+        "timestamp": at.to_rfc3339(),
+        "reason": "missing_grant",
+        "capability": capability,
+        "scope": "execute",
+        "agent_id": "mtls:runner",
+        "subject": {"authority": "https://idp.example", "subject": "alice"},
+    }) else {
+        unreachable!("a JSON object literal")
+    };
+    fields
+}
+
+fn write(log: &TransparencyLogger, fields: Map<String, Value>) {
+    log.append_event(fields, &AuditEnvelope::gateway())
+        .expect("the record is written");
+}
+
+/// A gateway state whose MetaMcp writes `log`, and the store dir it keeps.
+async fn state_with(log: &Arc<TransparencyLogger>) -> (Arc<AppState>, tempfile::TempDir) {
+    let log = Arc::clone(log);
+    crate::gateway::router::tests::audience_state(
+        &AuthConfig::default(),
+        (None, None),
+        move |mut meta| {
+            meta.transparency_logger = Some(log);
+            meta
+        },
+    )
+    .await
+}
+
+fn client(admin: bool) -> AuthenticatedClient {
+    AuthenticatedClient {
+        name: "decisions-route".to_owned(),
+        rate_limit: 0,
+        backends: vec!["*".to_owned()],
+        allowed_tools: None,
+        denied_tools: None,
+        admin,
+        principal: crate::gateway::auth::principal_of("decisions-route-secret"),
+        quota_principal: None,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+    }
+}
+
+async fn get(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
+    let response = list_decisions(State(Arc::clone(state)), Some(Extension(client(admin)))).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// The admin's answer once `ready` holds, waiting for the replay and the
+/// first tick; fails after a generous bound, never on a slow machine first.
+async fn served_when(state: &Arc<AppState>, ready: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let (status, body) = get(state, true).await;
+        if status == StatusCode::OK && ready(&body) {
+            return body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "never served: {status} {body}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+fn scope_len(body: &Value) -> usize {
+    body["decisions"][0]["scope"].as_array().map_or(0, Vec::len)
+}
+
+#[tokio::test]
+async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let (state, _store) = state_with(&log).await;
+
+    let (status, body) = get(&state, true).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "before start: {body}"
+    );
+    assert_eq!(body["error"], "decisions_unavailable", "{body}");
+
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, shutdown);
+
+    // The note kept before start is replayed.
+    let body = served_when(&state, |body| scope_len(body) == 1).await;
+    assert_eq!(body["decisions"][0]["kind"], "access_request", "{body}");
+    assert_eq!(body["missing_kinds"], json!(["adopt"]), "{body}");
+    assert_eq!(
+        body["partial_kinds"],
+        json!(["capability_changed"]),
+        "{body}"
+    );
+    let revision = body["revision"].as_u64().expect("a revision");
+
+    let (status, _) = get(&state, false).await;
+    assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
+
+    // A note written now arrives live, and the revision rises.
+    write(&log, note("stripe.refunds", now));
+    let body = served_when(&state, |body| scope_len(body) == 2).await;
+    assert!(body["revision"].as_u64() > Some(revision), "{body}");
+}
+
+#[tokio::test]
+async fn a_request_whose_refusals_left_the_log_is_closed() {
+    let dir = tempfile::tempdir().expect("dir");
+    // Small segments, one kept: the fillers below expire the first one.
+    let log = log_in(&dir, 2048, 1);
+    let (state, _store) = state_with(&log).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, shutdown);
+    let now = crate::clock::utc_now().expect("a readable clock");
+
+    write(
+        &log,
+        note(
+            "stripe.charges",
+            now - crate::duration_bound::delta!(seconds, 120),
+        ),
+    );
+    served_when(&state, |body| scope_len(body) == 1).await;
+    for n in 0..64 {
+        let Value::Object(filler) = json!({"kind": "filler", "n": n, "pad": "x".repeat(200)})
+        else {
+            unreachable!("a JSON object literal")
+        };
+        write(&log, filler);
+    }
+    let edge = retention_edge(&log.path()).expect("an oldest kept segment");
+    assert!(
+        edge > now - crate::duration_bound::delta!(seconds, 120),
+        "the first refusal is past the edge"
+    );
+    // A refusal at or after the edge stays.
+    write(
+        &log,
+        note(
+            "stripe.refunds",
+            edge + crate::duration_bound::delta!(seconds, 60),
+        ),
+    );
+
+    let decisions = state.meta_mcp.decisions().expect("attached");
+    tick(&state.meta_mcp, decisions, true);
+
+    let body = served_when(&state, |_| true).await;
+    let scope = body["decisions"][0]["scope"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(scope.len(), 1, "{body}");
+    assert_eq!(scope[0]["capability"], "stripe.refunds", "{body}");
+}

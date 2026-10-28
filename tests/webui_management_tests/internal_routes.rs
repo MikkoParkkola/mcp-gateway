@@ -541,6 +541,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/decisions.rs (list_decisions; this fixture never starts
+    // the decision set, so the admin's answer is the 503 naming no source)
+    row(
+        "/ui/api/decisions",
+        Method::GET,
+        "/ui/api/decisions",
+        Payload::None,
+        [401, 403, 403, 503],
+    ),
     // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
     // so the admin's answer is the fixed invalid_body refusal)
     row(
