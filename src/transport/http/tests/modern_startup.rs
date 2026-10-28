@@ -84,8 +84,14 @@ fn answer(peer: Peer, request: &Value) -> Value {
                 "serverInfo": { "name": "fixture", "version": "0" }
             }
         }),
+        // A legacy peer was never asked for tasks, so it answers plainly: a
+        // task handle to an undeclared call is refused at ingress.
+        (Peer::Legacy, "tools/call") => json!({
+            "jsonrpc": "2.0", "id": id,
+            "result": { "content": [], "isError": false }
+        }),
         // The upstream-tasks answer, in the pinned SDK's vocabulary.
-        (_, "tools/call") => json!({
+        (Peer::ModernOnly, "tools/call") => json!({
             "jsonrpc": "2.0", "id": id,
             "result": {
                 "resultType": "task",
