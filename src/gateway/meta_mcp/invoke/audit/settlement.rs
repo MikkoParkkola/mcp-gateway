@@ -23,9 +23,12 @@ impl DispatchNotes {
             (AuditOutcome::Denied(code) | AuditOutcome::Invalid(code), None) => {
                 AuditOutcome::Error(code)
             }
-            (AuditOutcome::Error(code), Some(AuditOutcome::Denied(_))) => {
-                AuditOutcome::Denied(code)
-            }
+            // A refusal keeps the committed code, which may be a peer's
+            // `-32602`: the class is the refusal's, not the code's.
+            (
+                AuditOutcome::Error(code) | AuditOutcome::Invalid(code),
+                Some(AuditOutcome::Denied(_)),
+            ) => AuditOutcome::Denied(code),
             (AuditOutcome::Error(code), Some(AuditOutcome::Invalid(_))) => {
                 AuditOutcome::Invalid(code)
             }

@@ -47,10 +47,12 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
 ) -> crate::protocol::JsonRpcResponse {
     crate::gateway::delivery_facts::scope(async move {
         let trace = response.invocation_trace.clone();
-        let interim = response.result.as_ref().is_some_and(|result| {
+        let (settled, decided) = inspect_settled(state, call, id, response);
+        // Read after the inspection: an input request it refused is replaced
+        // by an error, which ends the task, so that refusal is recorded.
+        let interim = settled.result.as_ref().is_some_and(|result| {
             crate::protocol::mrtr::InputRequired::claims_input_required(result)
         });
-        let (settled, decided) = inspect_settled(state, call, id, response);
         let Some(decided) = decided.filter(|_| !interim) else {
             return settled;
         };
