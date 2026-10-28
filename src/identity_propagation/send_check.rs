@@ -75,10 +75,12 @@ pub(crate) fn expiry_check(
         Box::pin(async move {
             // A clock that cannot be read judges nothing about the credential.
             let now = now().ok_or(Refusal::Transient)?;
-            if matches!(expiry, Expiry::At(at) | Expiry::AtSynthetic(at) if now >= at) {
+            if matches!(expiry, Expiry::At(at) if now >= at) {
                 return Err(Refusal::Definitive);
             }
-            if jwt_exp.is_some_and(|exp| now >= exp) {
+            if matches!(expiry, Expiry::AtSynthetic(at) if now >= at)
+                || jwt_exp.is_some_and(|exp| now >= exp)
+            {
                 return Err(Refusal::ThisLoan);
             }
             Ok(())
