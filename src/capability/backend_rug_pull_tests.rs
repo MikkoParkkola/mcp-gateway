@@ -264,6 +264,37 @@ async fn a_never_admitted_file_sharing_a_name_is_not_trusted() {
     assert!(backend.has_capability("rugtest"));
 }
 
+/// A refused file's earlier record keeps its name for display only: once
+/// another file is admitted under that name, a further change to the refused
+/// file leaves the newcomer loaded.
+#[tokio::test]
+async fn a_refused_files_old_name_never_unloads_its_successor() {
+    let (dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+    let successor = BODY.replace("Initially legit", "The successor");
+    std::fs::write(
+        dir.path().join("successor.yaml"),
+        rewrite_with_pin(&successor, &compute_capability_hash(&successor)),
+    )
+    .unwrap();
+    backend.reload().await.unwrap();
+    assert!(
+        backend.has_capability("rugtest"),
+        "the successor is admitted"
+    );
+
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed again")).unwrap();
+    let detected = backend.detect_rug_pulls().await;
+
+    assert_eq!(detected.len(), 1, "{detected:?}");
+    assert_eq!(detected[0].loaded_as.as_deref(), Some("rugtest"));
+    assert!(
+        backend.has_capability("rugtest"),
+        "the successor stays loaded"
+    );
+}
+
 /// Garbled bytes, or a pin that is not a string, resolve nothing: the record
 /// stays and the reconcile is incomplete.
 #[tokio::test]

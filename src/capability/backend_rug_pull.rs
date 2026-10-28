@@ -27,11 +27,14 @@ impl CapabilityBackend {
         // The name each file was trusted as comes from its path, which the
         // changed bytes cannot choose: never from the pin they still declare.
         // A reload drops a refused file from the map, so a later change to
-        // it keeps the name its earlier record took from the same path.
+        // it keeps the name its earlier record took from the same path, for
+        // display only: another file may have been admitted under it since.
+        let mut admitted = Vec::with_capacity(detected.len());
         for record in &mut detected {
             // Only an admitted file is recorded: its path, not a name some
             // other file may also hold, is what is trusted.
             let loaded = self.loaded_from.read().get(&record.file).cloned();
+            admitted.push(loaded.clone());
             record.loaded_as = loaded.or_else(|| {
                 let state = self.rug_pull_state.read();
                 state
@@ -39,7 +42,7 @@ impl CapabilityBackend {
                     .and_then(|old| old.loaded_as.clone())
             });
         }
-        for record in &detected {
+        for (record, admitted) in detected.iter().zip(&admitted) {
             // The changed bytes chose `capability` and `expected`, so neither
             // is logged. The trusted name passed the loader's name rule; the
             // path is escaped; `actual` is the gateway's own hash.
@@ -50,10 +53,10 @@ impl CapabilityBackend {
                 actual = %record.actual,
                 "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
             );
-            // Only the capability this file was trusted as is unloaded: a file
-            // never loaded holds nothing, and its declared name could be any
-            // other capability's.
-            if let Some(trusted) = record.loaded_as.as_deref() {
+            // Only the capability this file is admitted as now is unloaded: a
+            // file not admitted holds nothing, and its declared name, or the
+            // name an earlier record kept, could be another file's now.
+            if let Some(trusted) = admitted.as_deref() {
                 self.unload_capability(trusted);
             }
             self.mark_rug_pull(record.clone());
