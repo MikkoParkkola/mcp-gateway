@@ -196,6 +196,13 @@ def macos_train_errors(jobs: dict) -> list[str]:
         for job, ran in (("macos-shards", shards_ran), ("macos-check", runs(check, after))):
             if ran != want:
                 errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
+    # On a train, the aggregate runs whatever its shards did, so a failed or
+    # cancelled shard turns it red rather than leaving it skipped.
+    for result in ("failure", "cancelled"):
+        c = as_train(ctx("pull_request", "success", "false"))
+        c = dict(c, needs=dict(c["needs"], **{"macos-shards": {"result": result, "outputs": {}}}))
+        if not runs(check, c):
+            errors.append(f"macos-check: a train with a {result} shard skips")
     return errors
 
 
@@ -311,12 +318,15 @@ def main() -> int:
         for job in MACOS_TRAIN:
             j[job]["if"] = str(j[job]["if"]).replace(
                 " && github.event.pull_request.head.repo.full_name == github.repository))", "))")
+    def check_loses_always(j: dict) -> None:
+        j["macos-check"]["if"] = str(j["macos-check"]["if"]).replace("${{ always() && ", "${{ ")
     macos_mutants = {
         "macos-shards loses its train gate": (lambda j: ungate(j, "macos-shards"), "macos-shards: code PR runs"),
         "macos-check loses its train gate": (lambda j: ungate(j, "macos-check"), "macos-check: code PR runs"),
         "macOS waits on the scope job": (waits_on_scope, "macos-shards: scope failed on a train skips"),
         "macOS skips a docs-only change": (skips_docs_only, "macos-shards: docs-only train skips"),
         "a fork's train branch gets macOS": (fork_trains_too, "macos-shards: train branch from a fork runs"),
+        "macos-check loses always()": (check_loses_always, "macos-check: a train with a failure shard skips"),
     }
     for label, (mutate, expected) in macos_mutants.items():
         mutated = copy.deepcopy(jobs)
