@@ -524,11 +524,22 @@ test('F20 a screen sets its header through its context, and a kept one changes n
   await expect(plate).toHaveText('Tools');
   await page.evaluate(() => window.overviewHeader({ title: 'Stale', subtitle: 'stale' }));
   await expect(plate).toHaveText('Tools');
+  await expect(sub).toBeHidden();
   expect(await page.title()).toBe('Tools · MCP Gateway');
+  // An empty title leaves the header as it is.
+  await page.click('nav.route-nav a[data-page="overview"]');
+  await expect(sub).toHaveText('24 of 28 servers ready.');
+  await page.evaluate(() => window.overviewHeader({ title: '', subtitle: 'kept' }));
+  await expect(plate).toHaveText('Overview');
+  await expect(sub).toHaveText('kept');
+  // A not-found render clears a subtitle a screen set, not only hides it.
+  await page.evaluate(() => { history.pushState(null, '', '/ui/nowhere'); dispatchEvent(new PopStateEvent('popstate')); });
+  await expect(plate).toHaveText('Not found');
+  await expect(sub).toHaveText('');
 });
 
 test('F20b a setter kept from a failed attempt changes nothing after a Retry succeeds', async ({ page }) => {
-  await page.addInitScript(() => { window.__failOnce = true; });
+  await page.addInitScript(() => { window.__fails = 1; });
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/overview/status');
   await page.locator('#content').getByRole('button', { name: /Retry/ }).click();
@@ -537,6 +548,22 @@ test('F20b a setter kept from a failed attempt changes nothing after a Retry suc
   await page.evaluate(() => window.failedHeader({ title: 'First', subtitle: 'first' }));
   await expect(page.locator('.head .plate')).toHaveText('Second');
   await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+});
+
+test('F20c a Retry that sets its header and then fails leaves the header as it was', async ({ page }) => {
+  await page.addInitScript(() => { window.__fails = 2; window.__headerThenFail = true; });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  const retry = page.locator('#content').getByRole('button', { name: /Retry/ });
+  await retry.click();
+  await expect(retry).toBeEnabled();
+  await expect(page.locator('.head .plate')).toHaveText('Overview');
+  await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
+  // The next Retry succeeds and its own header applies once its content shows.
+  await retry.click();
+  await expect(page.locator('#content')).toContainText('overview - status');
+  await page.evaluate(() => window.overviewHeader({ title: 'Shown' }));
+  await expect(page.locator('.head .plate')).toHaveText('Shown');
 });
 
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
