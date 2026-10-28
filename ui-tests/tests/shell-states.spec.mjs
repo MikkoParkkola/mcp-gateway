@@ -48,7 +48,7 @@ test('T1 the table has exactly the gateway\'s server states, each with a word, g
 const ROWS = [
   { server: { state: 'running', running: true }, tone: 'success', glyph: '✓', banner: null, next: null },
   { server: { state: 'slow', running: true }, tone: 'warning', glyph: '⚠',
-    banner: 'github is answering, but far slower than its usual.', next: 'Open Activity and filter by this server.' },
+    banner: 'github still works, but far slower than its usual.', next: 'Open Activity and filter by this server.' },
   { server: { state: 'paused', circuit_state: 'open', next_retry_at: 'SOON' }, tone: 'neutral', glyph: '⏸',
     banner: 'Calls to github are held back after failures. The gateway lets calls try it again from HHMM.', next: 'To retry now, use the Actions tab.' },
   { server: { state: 'paused', circuit_state: 'open', next_retry_at: null }, tone: 'neutral', glyph: '⏸',
