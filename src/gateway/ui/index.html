@@ -162,6 +162,7 @@ tr:hover td { background: var(--bg3); }
 .reg-dropdown .reg-opt { padding: 0.5rem 0.75rem; font-size: 0.875rem; cursor: pointer; border-bottom: 1px solid var(--border); }
 .reg-dropdown .reg-opt:last-child { border-bottom: none; }
 .reg-dropdown .reg-opt:hover { background: var(--bg3); }
+.reg-dropdown .reg-opt[aria-selected="true"] { background: var(--bg3); box-shadow: inset 0 0 0 2px var(--accent); }
 .reg-dropdown .reg-opt .reg-desc { font-size: 0.75rem; color: var(--fg2); }
 
 /* Responsive */
@@ -362,8 +363,9 @@ tr:hover td { background: var(--bg3); }
             <label for="reg-search-input">Search Registry</label>
             <div class="reg-search-wrap">
               <input type="text" id="reg-search-input" placeholder="Search 48+ built-in servers..."
+                role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="reg-dropdown"
                 autocomplete="off" oninput="onRegSearch(this.value)" onfocus="onRegSearch(this.value)">
-              <div id="reg-dropdown" class="reg-dropdown" style="display:none"></div>
+              <div id="reg-dropdown" class="reg-dropdown" role="listbox" aria-label="Registry servers" style="display:none"></div>
             </div>
           </div>
           <div id="reg-selected-info" style="display:none;margin-bottom:0.75rem">
@@ -1097,7 +1099,7 @@ function resetAddServerForm() {
   document.getElementById('server-registry-fields').style.display = '';
   document.getElementById('server-custom-fields').style.display = 'none';
   document.getElementById('reg-search-input').value = '';
-  document.getElementById('reg-dropdown').style.display = 'none';
+  setRegistryListOpen(false);
   document.getElementById('reg-selected-info').style.display = 'none';
   document.getElementById('reg-name-override').value = '';
   document.getElementById('custom-name').value = '';
@@ -1139,7 +1141,40 @@ async function loadRegistry() {
   }
 }
 
+// The registry search is a WAI-ARIA APG combobox with a listbox popup. Focus
+// stays in the box; `regActive` is the index of the active option, -1 for
+// none, and `aria-activedescendant` names it.
+let regActive = -1;
+
+function regBox() { return document.getElementById('reg-search-input'); }
+
+// Open or close the list. Closing also clears the active option.
+function setRegistryListOpen(open) {
+  document.getElementById('reg-dropdown').style.display = open ? 'block' : 'none';
+  regBox().setAttribute('aria-expanded', String(open));
+  if (!open) setRegistryActive(-1);
+}
+
+// Make option `i` the active one and keep it in view; -1 (or an index with
+// no option) clears it.
+function setRegistryActive(i) {
+  const prev = document.querySelector('#reg-dropdown [aria-selected="true"]');
+  if (prev) prev.setAttribute('aria-selected', 'false');
+  const opt = i >= 0 ? document.getElementById('reg-opt-' + i) : null;
+  regActive = opt ? i : -1;
+  if (!opt) { regBox().removeAttribute('aria-activedescendant'); return; }
+  opt.setAttribute('aria-selected', 'true');
+  regBox().setAttribute('aria-activedescendant', opt.id);
+  opt.scrollIntoView({ block: 'nearest' });
+}
+
 function onRegSearch(q) {
+  // An edit after a pick drops the pick, so Add never adds an entry the box
+  // no longer names.
+  if (regSelected && q !== regSelected.name) {
+    regSelected = null;
+    document.getElementById('reg-selected-info').style.display = 'none';
+  }
   const dd = document.getElementById('reg-dropdown');
   const lower = q.toLowerCase();
   const matches = q.length === 0
@@ -1149,30 +1184,78 @@ function onRegSearch(q) {
         (s.description || '').toLowerCase().includes(lower)
       ).slice(0, 30);
 
-  if (matches.length === 0) { dd.style.display = 'none'; return; }
   regMatches = matches;
+  if (matches.length === 0) { setRegistryListOpen(false); return; }
   dd.innerHTML = matches.map((s, i) => `
-    <div class="reg-opt" data-action="select-reg" data-value="${i}">
+    <div class="reg-opt" role="option" id="reg-opt-${i}" aria-selected="false" data-action="select-reg" data-value="${i}">
       <div>${esc(s.name)}</div>
       <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
       <div class="reg-desc">login: ${esc(s.login || 'none')}${s.reach_reason ? ' - added disabled: can reach any address' : ''}${s.setup ? ' - needs ' + esc(s.setup) : ''}</div>
     </div>`).join('');
-  dd.style.display = 'block';
+  // A new list starts with no option active.
+  setRegistryListOpen(true);
+  setRegistryActive(-1);
 }
 
-function selectRegServer(s) {
+// Pick option `i`, from Enter or a click.
+function pickRegistryEntry(i) {
+  const s = regMatches[i];
+  if (!s) return;
   // A copy, as before: editing the form never changes the listed entry.
   regSelected = JSON.parse(JSON.stringify(s));
-  document.getElementById('reg-search-input').value = regSelected.name;
-  document.getElementById('reg-dropdown').style.display = 'none';
+  regBox().value = regSelected.name;
+  setRegistryListOpen(false);
   document.getElementById('reg-selected-info').style.display = '';
 }
 
-// Hide registry dropdown when clicking outside
-document.addEventListener('click', e => {
-  if (!e.target.closest('.reg-search-wrap')) {
-    document.getElementById('reg-dropdown').style.display = 'none';
+regBox().addEventListener('keydown', (e) => {
+  // Keys that belong to an input method composition are the IME's.
+  if (e.isComposing || e.keyCode === 229) return;
+  const open = document.getElementById('reg-dropdown').style.display !== 'none';
+  switch (e.key) {
+    case 'ArrowDown':
+    case 'ArrowUp': {
+      e.preventDefault();
+      const down = e.key === 'ArrowDown';
+      if (!open) {
+        onRegSearch(regBox().value);
+        // Alt+ArrowDown only opens the list.
+        if (!e.altKey) setRegistryActive(down ? 0 : regMatches.length - 1);
+        return;
+      }
+      if (e.altKey) return;
+      const last = regMatches.length - 1;
+      if (down) setRegistryActive(regActive < 0 || regActive >= last ? 0 : regActive + 1);
+      else setRegistryActive(regActive <= 0 ? last : regActive - 1);
+      return;
+    }
+    case 'Enter':
+      if (open && regActive >= 0) { e.preventDefault(); pickRegistryEntry(regActive); }
+      return;
+    case 'Escape':
+      if (open) { e.preventDefault(); setRegistryListOpen(false); }
+      return;
+    case 'Tab':
+      // Never cancelled: focus moves on, and the list closes behind it.
+      if (open) setRegistryListOpen(false);
+      return;
+    case 'ArrowLeft':
+    case 'ArrowRight':
+    case 'Home':
+    case 'End':
+      // The caret moves as usual; the active option no longer applies.
+      if (regActive >= 0) setRegistryActive(-1);
+      return;
   }
+});
+
+// A click on an option must not take focus from the box: the box's focus
+// handler would reopen the list after the pick.
+document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => e.preventDefault());
+
+// Close the list on a click outside the search.
+document.addEventListener('click', e => {
+  if (!e.target.closest('.reg-search-wrap')) setRegistryListOpen(false);
 });
 
 function addEnvRow(k = '', v = '') {
@@ -1791,7 +1874,7 @@ document.addEventListener('click', e => {
   const value = el.dataset.value;
   switch (el.dataset.action) {
     case 'remove-server': removeServer(value); break;
-    case 'select-reg': selectRegServer(regMatches[Number(value)]); break;
+    case 'select-reg': pickRegistryEntry(Number(value)); break;
     case 'toggle-cap': toggleCap(value); break;
     case 'save-cap': saveCap(value); break;
     case 'revert-cap': revertCap(value); break;
