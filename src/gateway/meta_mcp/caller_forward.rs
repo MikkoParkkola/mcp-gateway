@@ -22,7 +22,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's credential for one backend: minted headers and the cache
 /// binding that selects its pool slot. Empty for an identity-free caller.
-pub(super) type ForwardCredential = (Vec<(String, String)>, Option<String>);
+pub(super) type ForwardCredential = (crate::transport::LentCredential, Option<String>);
 
 impl MetaMcp {
     /// What a protocol-level handler's caller proved: its verified identity,
@@ -112,7 +112,7 @@ impl MetaMcp {
                     ))
                 })?
         } else {
-            (Vec::new(), None)
+            (crate::transport::LentCredential::default(), None)
         };
         isolation(credential.1.as_deref())?;
         Ok(credential)

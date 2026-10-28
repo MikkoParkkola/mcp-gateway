@@ -143,7 +143,7 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
-            .map(|(headers, cache_binding, _)| (headers, cache_binding))
+            .map(|(lent, cache_binding, _)| (lent.headers, cache_binding))
     }
 
     /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
@@ -189,7 +189,11 @@ impl MetaMcp {
     ) -> Result<(DispatchCredential, bool, Option<Error>)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok(((Vec::new(), None, None), false, None));
+            return Ok((
+                (crate::transport::LentCredential::default(), None, None),
+                false,
+                None,
+            ));
         };
         let cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
@@ -199,7 +203,7 @@ impl MetaMcp {
             .is_none()
             .then(|| super::stored_proof::unminted_refusal(server));
         Ok((
-            (cred.headers, cred.cache_binding, cred.managed),
+            (cred.lent(), cred.cache_binding, cred.managed),
             cred.attempted,
             unproven,
         ))
@@ -385,11 +389,19 @@ impl MetaMcp {
                         )
                         .await?;
                     }
+                    let expiry = account_mint::expiry_of(&cred);
+                    let check = account_mint::send_check_for(
+                        &self.account_strategies,
+                        (descriptor_id.as_deref(), managed.as_ref()),
+                        (expiry, &cred.headers),
+                    );
                     Ok(CallerCredential {
                         headers: cred.headers,
                         cache_binding: Some(cred.cache_binding),
                         managed,
                         attempted: false,
+                        expiry: Some(expiry),
+                        check: Some(check),
                     })
                 }
                 // A busy custody at the mint released nothing (MIK-8428):

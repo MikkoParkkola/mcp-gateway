@@ -94,7 +94,7 @@ impl MetaMcp {
         // whose account boundary is inside the executor, and the credential
         // owner key that names an MCP child (MIK-7825). Pass-through only.
         (caller_proof, credential_owner): (CallerProof<'_>, Option<&str>),
-        propagated_headers: &[(String, String)],
+        propagated_headers: &crate::transport::LentCredential,
         cache_binding: Option<&str>,
         // The capability route's account credential, resolved once above the
         // response cache and carried down unchanged. `None` for every MCP
@@ -226,7 +226,7 @@ impl MetaMcp {
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
-        propagated_headers: &[(String, String)],
+        propagated_headers: &crate::transport::LentCredential,
         // Caller's stable identity binding (MIK-6784). Transport uses it to
         // partition upstream `MCP-Session-Id` state; the capability executor
         // copies the same already-resolved string into the inner cache key.
@@ -425,7 +425,7 @@ impl MetaMcp {
                     )
                     .await?
             }
-            None if propagated_headers.is_empty() && identity_key.is_none() => {
+            None if propagated_headers.headers.is_empty() && identity_key.is_none() => {
                 backend.request("tools/call", Some(params)).await?
             }
             None => {

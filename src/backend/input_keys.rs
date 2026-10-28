@@ -12,6 +12,7 @@ use super::fill_check::{
 };
 use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
+use crate::transport::LentCredential;
 use crate::trust::closed_keys::count;
 
 /// How the check reads the caller's catalogue (MIK-8361).
@@ -163,7 +164,7 @@ impl Backend {
     pub(crate) fn undeclared_key_refusal<'a>(
         &'a self,
         identity_key: Option<&'a str>,
-        headers: &'a [(String, String)],
+        headers: impl Into<LentCredential>,
         tool: &'a str,
         arguments: &'a Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
@@ -185,7 +186,7 @@ impl Backend {
     /// `RateLimited`, and under `closed` the fill's transport error.
     pub(crate) fn catalogue_refusal<'a>(
         &'a self,
-        (identity_key, headers): (Option<&'a str>, &'a [(String, String)]),
+        (identity_key, headers): (Option<&'a str>, impl Into<LentCredential>),
         tool: &'a str,
         arguments: &'a Value,
         lens: Lens,
@@ -194,7 +195,12 @@ impl Backend {
         {
             return Box::pin(std::future::ready(answer));
         }
-        Box::pin(self.undeclared_key_refusal_inner((identity_key, headers), tool, arguments, lens))
+        Box::pin(self.undeclared_key_refusal_inner(
+            (identity_key, headers.into()),
+            tool,
+            arguments,
+            lens,
+        ))
     }
 
     /// The answer `undeclared_key_refusal_inner` reaches without a fetch.
@@ -243,7 +249,7 @@ impl Backend {
 
     async fn undeclared_key_refusal_inner(
         &self,
-        (identity_key, headers): (Option<&str>, &[(String, String)]),
+        (identity_key, headers): (Option<&str>, LentCredential),
         tool: &str,
         arguments: &Value,
         lens: Lens,
@@ -276,7 +282,7 @@ impl Backend {
         {
             return held(cached);
         }
-        if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+        if !self.fetch_carries_caller_identity(identity_key) && !headers.headers.is_empty() {
             if let Some(cached) = &cached {
                 return held(cached);
             }

@@ -17,7 +17,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's slot binding and the headers it propagates upstream; a cold
 /// slot is listed with exactly these, so the list is fetched as the caller.
-pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
+pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a crate::transport::LentCredential);
 
 /// The gateway's answer to a name the caller's catalogue lacks, on the
 /// direct route: -32601 under its preserved status (MIK-8356, MIK-8361).
@@ -88,8 +88,11 @@ pub(super) async fn key_refusal(
     // A shared catalogue's withheld entry (descriptor, schema) takes the
     // lacked name's path too; a policy-withheld name is judged without the
     // caller's credential, which is not resolved for it.
+    // The gateway's own static headers, for the shared slot's gate: no
+    // caller's credential, so nothing to check.
+    let gate = crate::transport::LentCredential::from(backend.gate_headers());
     let (slot, lens) = match lens {
-        Lens::Withheld => ((None, backend.gate_headers()), Lens::Withheld),
+        Lens::Withheld => ((None, &gate), Lens::Withheld),
         Lens::Catalogue => {
             // Under `off` no call lists the catalogue: judged from what is held.
             let verdict = if backend.checks_membership() {

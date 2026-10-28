@@ -190,7 +190,12 @@ impl NativeUpstreamTasks {
             // its own `tools/call` will, and `query`/`cancel` run this under
             // `non_interactive`. A non-interactive discovery is refused while a
             // start holds the backend, which would silently disarm recovery.
-            backend.request_with_headers("server/discover", None, &[], None),
+            backend.request_with_headers(
+                "server/discover",
+                None,
+                crate::transport::LentCredential::default(),
+                None,
+            ),
         )
         .await;
         // Silence, a transport failure and a JSON-RPC REFUSAL are all "the peer
@@ -244,7 +249,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 backend.request_with_task_capability(
                     "tasks/get",
                     Some(json!({ "taskId": handle.handle })),
-                    &[],
+                    crate::transport::LentCredential::default(),
                     None,
                 ),
             )
@@ -301,7 +306,7 @@ impl UpstreamRecovery for NativeUpstreamTasks {
                 backend.request_with_task_capability(
                     "tasks/cancel",
                     Some(json!({ "taskId": handle.handle })),
-                    &[],
+                    crate::transport::LentCredential::default(),
                     None,
                 ),
             )

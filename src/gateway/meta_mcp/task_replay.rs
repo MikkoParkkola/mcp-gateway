@@ -320,7 +320,9 @@ impl MetaMcp {
         if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
             return;
         }
-        let _ = backend.tools_for_check(None, &[], true).await;
+        let _ = backend
+            .tools_for_check(None, crate::transport::LentCredential::default(), true)
+            .await;
     }
 
     /// [`Self::refused_without_catalogue`] for any stored target, a

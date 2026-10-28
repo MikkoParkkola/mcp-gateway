@@ -107,6 +107,7 @@ async fn guard_and_sanitize(
     // MIK-7597: the shared dispatch controls, S1 and G7 before the reservation.
     // (`DirectRouteGuards::run` needs the signing scope, so the caller runs it.)
     if envelope.method == "tools/call" {
+        let lent = propagation.lent();
         admitted.sanitized = super::apply_backend_tool_call_security(
             scope.state,
             scope.name,
@@ -114,7 +115,7 @@ async fn guard_and_sanitize(
             scope.id,
             &scope.route.backend,
             (
-                (propagation.identity_key.as_deref(), &propagation.headers),
+                (propagation.identity_key.as_deref(), &lent),
                 &admitted.failed,
             ),
         )

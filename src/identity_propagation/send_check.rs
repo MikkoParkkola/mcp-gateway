@@ -8,7 +8,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 
-use crate::transport::{Refusal, SendCheck};
+use crate::transport::{LentCredential, Refusal, SendCheck};
 
 /// When a non-managed credential stops being sendable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -24,6 +24,22 @@ pub(crate) enum Expiry {
     /// No expiry was published; the credential is valid for the dispatch
     /// that lent it.
     Unpublished,
+}
+
+/// The clock as unix seconds, for the expiry check; `None` when unreadable.
+pub(crate) fn unix_now() -> Option<i64> {
+    crate::clock::unix_secs()
+        .ok()
+        .and_then(|secs| i64::try_from(secs).ok())
+}
+
+/// A credential that is valid for the dispatch that carries it and no longer
+/// (a caller's own forwarded bearer): checked only against its own JWT `exp`.
+pub(crate) fn dispatch_scoped(headers: Vec<(String, String)>) -> LentCredential {
+    LentCredential {
+        check: Some(expiry_check(Expiry::Unpublished, &headers, unix_now)),
+        headers,
+    }
 }
 
 /// The `exp` claim of `token` if it is a JWT, read WITHOUT verifying its
