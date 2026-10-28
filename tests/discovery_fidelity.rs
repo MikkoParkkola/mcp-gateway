@@ -155,7 +155,7 @@ fn commented_zed_settings_are_discovered_with_env_headers_and_args() {
     home.write_zed_settings(&zed_settings());
     let out = write_config(&home);
 
-    // `--write` moves each literal into the secret store (MIK-8859): the
+    // `--write` moves each literal into the secret store: the
     // config carries only a `file:` reference, and the value never reaches it.
     let written = std::fs::read_to_string(&out).expect("the config reads");
     assert!(
