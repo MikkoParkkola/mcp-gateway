@@ -270,13 +270,14 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     served_when(&state, |body| scope_len(body) == 5).await;
 }
 
-/// The replay's cost over one full default segment (64 MiB, one record in
-/// twenty a grant decision): run by hand with `--ignored --nocapture`; the
-/// PR states its numbers. The reader parses lines only, so the segment is
+/// The replay's cost over a log at the default retention cap (twelve sealed
+/// 64 MiB segments and the active one, 832 MiB; one record in twenty a grant
+/// decision, from 500 subjects): run by hand, in a release build, with
+/// `--ignored --nocapture`; the PR states its numbers. The reader parses lines only, so the segment is
 /// written directly rather than through the chained logger.
 #[test]
 #[ignore = "a measurement, run by hand"]
-fn measure_the_replay_of_a_full_segment() {
+fn measure_the_replay_at_the_retention_cap() {
     use std::io::Write as _;
 
     let dir = tempfile::tempdir().expect("dir");
@@ -287,14 +288,14 @@ fn measure_the_replay_of_a_full_segment() {
         .expect("a readable clock")
         .to_rfc3339();
     let mut n = 0_u64;
-    while bytes < 64 * 1024 * 1024 {
+    while bytes < 13 * 64 * 1024 * 1024 {
         let line = if n % 20 == 0 {
             notes += 1;
             json!({
                 "kind": GRANT_DECISION_KIND, "timestamp": at, "reason": "missing_grant",
                 "capability": format!("cap.{}", n % 50), "scope": "execute",
                 "agent_id": "mtls:runner",
-                "subject": {"authority": "https://idp.example", "subject": format!("user-{}", n % 500)},
+                "subject": {"authority": "https://idp.example", "subject": format!("user-{}", notes % 500)},
                 "counter": n, "entry_hash": format!("h{n}"),
             })
         } else {
