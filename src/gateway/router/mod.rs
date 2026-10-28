@@ -232,6 +232,9 @@ mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
 #[cfg(all(test, feature = "webui"))]
 mod reload_status_tests;
+/// A UI write's admin record outlives a client cancel with its handler.
+#[cfg(all(test, feature = "webui"))]
+mod ui_audit_cancel_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
