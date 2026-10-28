@@ -203,14 +203,15 @@ async fn a_per_user_slots_own_start_carries_the_subscribers_credential() {
     );
 }
 
-/// `gateway_invoke` of `x` as `bearer`: its first call opens the caller's
-/// own per-user slot.
-async fn invoke_as(gw: &gateway::Gateway, bearer: &str) {
+/// `gateway_invoke` of `user`'s own tool on `x` (the peer lists `tool_<user>`
+/// to each user): its first call opens the caller's own per-user slot and
+/// reaches the backend as a `tools/call`.
+async fn invoke_as(gw: &gateway::Gateway, bearer: &str, user: &str) {
     gw.rpc(
         Some(bearer),
         "tools/call",
         json!({"name": "gateway_invoke", "arguments": {
-            "server": "x", "tool": "any", "arguments": {}
+            "server": "x", "tool": format!("tool_{user}"), "arguments": {}
         }}),
     )
     .await;
@@ -233,7 +234,7 @@ async fn two_subscribers_each_reach_a_per_user_backend_only_as_themselves() {
     )
     .await;
     for user in ["u1", "u2"] {
-        invoke_as(&gw, &issuer.mint(user, &oidc_gateway::email(user))).await;
+        invoke_as(&gw, &issuer.mint(user, &oidc_gateway::email(user)), user).await;
     }
     let seen = peer.seen();
     for user in ["u1", "u2"] {
@@ -273,7 +274,7 @@ async fn a_static_header_never_reaches_a_per_user_send() {
     // A placeholder value, built at run time: the header is what is tested.
     backend["headers"][subject_peer::STATIC_HEADER] = json!(format!("static-{}", "marker"));
     let gw = oidc_gateway::start(root.path(), &rx, &issuer, backend, &[]).await;
-    invoke_as(&gw, &issuer.mint("u1", &oidc_gateway::email("u1"))).await;
+    invoke_as(&gw, &issuer.mint("u1", &oidc_gateway::email("u1")), "u1").await;
     let seen = peer.seen();
     assert!(
         seen.iter()
