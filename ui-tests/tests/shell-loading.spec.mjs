@@ -281,16 +281,55 @@ test('G7 an error just after the loading state appears waits out its minimum, th
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.includes('The gateway answered with an error'))).toHaveLength(1);
 });
 
-test('G8 a slow first render is aria-busy while it loads, and not after it settles', async ({ page }) => {
+const content = (page) => page.locator('#content');
+
+/** A paused clock, so busy is read between the render's start and the 300 ms onset. */
+async function pausedClock(page) {
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(1000);
+}
+
+test('G8 a first render is aria-busy from its start, before the onset, and not after it settles', async ({ page }) => {
+  await pausedClock(page);
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true');
+  await expect(loading(page)).toHaveCount(0); // before the onset
+  await page.clock.runFor(300);
   await expect(loading(page)).toBeVisible();
-  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true');
   probe.release();
-  await expect(page.locator('#content')).toContainText('value 1');
-  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(content(page)).toContainText('value 1');
+  await expect(content(page), 'busy stays while the loading state still covers the data').toHaveAttribute('aria-busy', 'true');
+  await page.clock.runFor(400);
+  await expect(loading(page)).toHaveCount(0);
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+});
+
+test('G8c busy clears after a first-load error, after an empty completion and after leaving mid-load', async ({ page }) => {
+  await pausedClock(page);
+  const answers = [{ status: 500, json: {} }, { json: { value: 'empty' } }];
+  const probe = heldProbe();
+  await page.route(PROBE, async (r) => {
+    const next = answers.shift();
+    if (!next) return probe.answer(r);
+    return r.fulfill(next);
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(page.locator('#content [data-state="error"]')).toBeVisible();
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await page.evaluate(async (u) => (await import(u)).render(), await shellModuleUrl(page));
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(page.locator('#content .body[data-rendered]')).toBeAttached();
+  await page.evaluate(async (u) => (await import(u)).render(), await shellModuleUrl(page));
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true'); // third read is held
+  await page.evaluate(() => { history.pushState(null, '', '/ui/servers/status'); dispatchEvent(new PopStateEvent('popstate')); });
+  await expect(content(page)).toContainText('servers - status');
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  probe.release();
 });
 
 const retryButton = (page) => page.locator('#content [data-state="error"]').getByRole('button', { name: /Retry/ });
