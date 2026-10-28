@@ -138,16 +138,20 @@ fn outbox_stamps(f: &Fixture) -> Vec<Option<String>> {
         .unwrap_or_default()
 }
 
-/// Wait until `f`'s outbox holds `count` records, or the hang guard runs out.
-async fn outbox_reaches(f: &Fixture, count: usize) -> Vec<Option<String>> {
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        let stamps = outbox_stamps(f);
-        if stamps.len() >= count || tokio::time::Instant::now() >= deadline {
-            return stamps;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+/// Fan out the next occurrence the listener queued, as the hub's dispatcher
+/// does (the fixture starts none): `false` once the hang guard runs out.
+async fn fan_out_next(
+    f: &Fixture,
+    intake: &mut tokio::sync::mpsc::Receiver<crate::events::fanout::SourceEvent>,
+) -> bool {
+    let Ok(Some(event)) =
+        tokio::time::timeout(std::time::Duration::from_secs(30), intake.recv()).await
+    else {
+        return false;
+    };
+    let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
+    f.hub.fan_out(&services, &event).await;
+    true
 }
 
 /// `p`'s current lease generation on `pt`, as a record stamps it.
@@ -223,15 +227,20 @@ async fn lease_t2b_a_notice_read_under_the_old_token_is_never_stamped_with_the_n
     assert_ne!(*wide, *narrow, "premise: two different tokens");
     let mut peer = two_token_peer([wide.to_string(), narrow.to_string()]).await;
     let (f, handle, _listening) = leased_listener(&mut peer, wide).await;
-    // Premise: a notice on this stream produces a record, stamped with the
+    let mut intake = f.hub.take_intake();
+    // Premise: a notice on this stream becomes one record, stamped with the
     // lease it was read under.
     let wide_stamp = stamp_now(&f);
     assert!(
         peer.push_tools_changed(0),
         "premise: the wide stream is open"
     );
+    assert!(
+        fan_out_next(&f, &mut intake).await,
+        "premise: the notice was queued"
+    );
     assert_eq!(
-        outbox_reaches(&f, 1).await,
+        outbox_stamps(&f),
         [Some(wide_stamp.clone())],
         "premise: the notice became one record, stamped as read"
     );
@@ -241,13 +250,14 @@ async fn lease_t2b_a_notice_read_under_the_old_token_is_never_stamped_with_the_n
         narrow_stamp, wide_stamp,
         "premise: the replace moved the generation"
     );
+    // Whatever the old stream still yields must not carry the narrow token's
+    // generation. A replace that closed it leaves nothing to read.
     if peer.push_tools_changed(0) {
-        // The old stream is still open: whatever it now yields must not
-        // carry the narrow token's generation.
-        let stamps = outbox_reaches(&f, 2).await;
-        assert!(
-            !stamps.contains(&Some(narrow_stamp)),
-            "a notice read under the wide token was stamped with the narrow one: {stamps:?}"
-        );
+        fan_out_next(&f, &mut intake).await;
     }
+    let stamps = outbox_stamps(&f);
+    assert!(
+        !stamps.contains(&Some(narrow_stamp)),
+        "a notice read under the wide token was stamped with the narrow one: {stamps:?}"
+    );
 }
