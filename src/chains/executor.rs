@@ -318,6 +318,10 @@ impl ChainExecutor {
 // ============================================================================
 
 #[cfg(test)]
+#[path = "step_retry_tests.rs"]
+mod step_retry_tests;
+
+#[cfg(test)]
 mod tests {
     #![allow(
         clippy::disallowed_methods,
