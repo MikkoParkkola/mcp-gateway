@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use super::admin_audit::{AuditDetail, record_admin_action};
+use super::admin_audit::{AuditDetail, record_admin_action_as};
 use super::errors::admin_auth_required;
 use super::{AppState, AuthenticatedClient, is_admin};
 use crate::gateway::ui_call::{Confirm, Outcome, UiCall};
@@ -88,7 +88,13 @@ impl Disposition {
 pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -> Response {
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
     if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+        let mut detail = Map::new();
+        detail.insert(
+            "via".into(),
+            via_label(&state, client.as_ref(), request.extensions()).into(),
+        );
+        let refused = admin_auth_required().into_response();
+        return finish(refused, detail, Disposition::NotRun, None);
     }
     let (parts, body) = request.into_parts();
     // A JSON body only: a cross-site form post cannot send this type without
@@ -102,21 +108,25 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
                 .next()
                 .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
         });
+    // Every exit from here on names the caller on its admin_action record.
+    let mut detail = Map::new();
+    detail.insert(
+        "via".into(),
+        via_label(&state, client.as_ref(), &parts.extensions).into(),
+    );
     if !json {
-        return refusal(
+        let refused = refusal(
             StatusCode::BAD_REQUEST,
             "bad_request",
             "the body must be application/json",
             Disposition::NotRun,
         );
+        return finish(refused, detail, Disposition::NotRun, None);
     }
     let ask = match parse(body).await {
         Ok(ask) => ask,
-        Err(refused) => return *refused,
+        Err(refused) => return finish(*refused, detail, Disposition::NotRun, None),
     };
-    let via = via_label(&state, client.as_ref(), &parts.extensions);
-    let mut detail = Map::new();
-    detail.insert("via".into(), via.into());
     detail.insert("server".into(), ask.server.clone().into());
     detail.insert("tool".into(), ask.tool.clone().into());
     detail.insert("confirm_write".into(), ask.confirm_write.into());
@@ -226,26 +236,32 @@ fn admit(
     }
 }
 
-/// The 504. A call not yet sent is stopped; one sent runs on. Either way
-/// the answer is "may have run": a stop takes effect at the task's next
-/// await, so a send can still begin after any read of its state.
+/// The 504. The deadline and the send race through one atomic claim: when
+/// the deadline wins nothing is ever sent and the task is stopped (not run);
+/// when the send won first it runs on (may have run).
 fn past_deadline(
     ui_call: &UiCall,
     abort: &tokio::task::AbortHandle,
     detail: Map<String, Value>,
 ) -> Response {
-    if !ui_call.outcome().dispatched {
+    let (disposition, message) = if ui_call.cancel() {
         abort.abort();
-    }
+        (Disposition::NotRun, "no answer in time; nothing was run")
+    } else {
+        (
+            Disposition::MayHaveRun,
+            "no answer in time; the tool may still be running",
+        )
+    };
     finish(
         refusal(
             StatusCode::GATEWAY_TIMEOUT,
             "deadline",
-            "no answer in time; the tool may still be running",
-            Disposition::MayHaveRun,
+            message,
+            disposition,
         ),
         detail,
-        Disposition::MayHaveRun,
+        disposition,
         ui_call.outcome().trace,
     )
 }
@@ -310,19 +326,19 @@ fn spawn_call(
             fields.insert("route".into(), crate::gateway::routes::UI_TOOLS_CALL.into());
             fields.insert("method".into(), "POST".into());
             fields.insert("completion".into(), true.into());
-            fields.insert(
-                "disposition".into(),
-                classify(&outcome, answer.as_ref()).1.as_str().into(),
-            );
+            let (status, disposition) = classify(&outcome, answer.as_ref());
+            fields.insert("disposition".into(), disposition.as_str().into());
+            fields.insert("http_status".into(), status.as_u16().into());
             if let Some(trace) = outcome.trace {
                 fields.insert("invocation_trace".into(), trace.as_ref().into());
             }
-            let _ = record_admin_action(
+            // Its outcome is how the call ended, not "ok".
+            let _ = record_admin_action_as(
                 &state,
                 "admin_ui",
-                follow_up.client.as_ref(),
-                follow_up.identity.as_ref(),
+                (follow_up.client.as_ref(), follow_up.identity.as_ref()),
                 fields,
+                status,
             );
         }
     });

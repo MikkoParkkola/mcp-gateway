@@ -329,3 +329,43 @@ async fn t29_the_send_point_admits_only_the_gated_call() {
     })
     .await;
 }
+
+/// T32 (code review): when the route's deadline claims a call before its
+/// send does, nothing is ever sent and the route says so: 504, not run.
+/// A zero deadline on the test's single-thread runtime fires before the
+/// spawned call is first polled.
+/// Mutant: the deadline never claims the call (it answers "may have run").
+#[tokio::test]
+async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+    let fx = fixture().await;
+    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(Some(std::time::Duration::ZERO)));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/ui/api/tools/call")
+        .header("authorization", format!("Bearer {ADMIN}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            json!({"server": SERVER, "tool": "read", "arguments": {}}).to_string(),
+        ))
+        .expect("request");
+    let response = super::create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    crate::gateway::ui::DEADLINE_FOR_TEST.with(|d| d.set(None));
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    assert_eq!(status, StatusCode::GATEWAY_TIMEOUT, "{body}");
+    assert_eq!(body["disposition"], "not_run", "{body}");
+    // Let anything still scheduled run; a call that escaped would send now.
+    for _ in 0..64 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(sent(&fx), 0, "the cancelled call was never sent");
+}

@@ -202,3 +202,26 @@ async fn t16_a_proxied_subject_reaches_the_invocation() {
     assert_eq!(from_ui, from_mcp, "one subject on both routes");
     assert_eq!(sent(&fx), 2);
 }
+
+/// T31 (code review): a body that is not `application/json` is refused
+/// before anything runs, so a cross-site form post cannot start a call.
+/// Mutant: the content-type check removed.
+#[tokio::test]
+async fn t31_a_non_json_body_is_refused() {
+    let fx = fixture_with(Setup::Plain).await;
+    let request = Request::builder()
+        .method("POST")
+        .uri(ROUTE)
+        .header("authorization", "Bearer k-admin")
+        .header("content-type", "text/plain")
+        .body(Body::from(
+            json!({"server": "alpha", "tool": "read", "arguments": {}}).to_string(),
+        ))
+        .expect("request");
+    let response = super::create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(sent(&fx), 0);
+}

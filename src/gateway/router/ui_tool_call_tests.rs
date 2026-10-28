@@ -620,6 +620,10 @@ async fn t12_a_deadline_answers_504_and_the_records_still_land() {
     .expect("a completion record");
     assert_eq!(sent(&fx), 1);
     assert_eq!(completion["disposition"], "ran", "{completion}");
+    assert_eq!(
+        completion["outcome"], "ok",
+        "how the call ended: {completion}"
+    );
     let trace = completion["invocation_trace"].as_str().expect("its trace");
     assert!(
         records(&fx)
@@ -728,28 +732,6 @@ async fn t30_a_retry_ending_unreachable_may_have_run() {
     assert!(status.is_server_error(), "{status} {body}");
     assert_eq!(body["disposition"], "may_have_run", "{body}");
 }
-
-/// T31 (code review): a body that is not `application/json` is refused
-/// before anything runs, so a cross-site form post cannot start a call.
-/// Mutant: the content-type check removed.
-#[tokio::test]
-async fn t31_a_non_json_body_is_refused() {
-    let fx = fixture().await;
-    let request = Request::builder()
-        .method("POST")
-        .uri(ROUTE)
-        .header("authorization", format!("Bearer {ADMIN}"))
-        .header("content-type", "text/plain")
-        .body(Body::from(call("read", false).to_string()))
-        .expect("request");
-    let response = create_router(Arc::clone(&fx.state))
-        .oneshot(request)
-        .await
-        .expect("response");
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(sent(&fx), 0);
-}
-
 /// T7b (code review): a dashboard-session caller, whose principal reaches
 /// the gate as the cookie names it: the call runs, its `admin_action` names
 /// `ui:session:`, and its invocation names the same principal.

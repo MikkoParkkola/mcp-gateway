@@ -267,12 +267,8 @@ impl MetaMcp {
             return Err(refusal);
         }
         // A web UI call runs the tool itself: a stored answer is not a run.
-        #[cfg(feature = "webui")]
-        let live_only = crate::gateway::ui_call::in_scope();
-        #[cfg(not(feature = "webui"))]
-        let live_only = false;
         if read_only
-            && !live_only
+            && !crate::gateway::ui_call_runs_live()
             && let Some(cached) = self.serve_cached_response(
                 caller,
                 session_id,
