@@ -76,7 +76,7 @@ fn stdio(name: &str, command: &str, env: &[(&str, &str)]) -> DiscoveredServer {
 /// A gateway over `text` in a temp dir, adopting from `finds`.
 struct Route {
     dir: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     state: Arc<AppState>,
     cache: Arc<DiscoveryCache>,
     clients: Arc<Clients>,
