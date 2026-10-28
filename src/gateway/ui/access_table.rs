@@ -331,6 +331,13 @@ pub(super) static ROWS: &[Row] = &[
         false,
     ),
     row(
+        routes::UI_DISCOVERY,
+        Get,
+        Admin(AdminRequired),
+        &[(Page::Servers, Tab::Actions)],
+        false,
+    ),
+    row(
         routes::UI_REGISTRY,
         Get,
         Admin(AdminRequired),

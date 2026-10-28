@@ -300,6 +300,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_BACKEND,
         routes::UI_BACKEND_REVIVE,
         routes::UI_REGISTRY,
+        routes::UI_DISCOVERY,
         routes::UI_REGISTRY_SEARCH,
         routes::UI_DEAD_LETTERS,
         routes::UI_DEAD_LETTERS_REPLAY,
