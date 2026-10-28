@@ -392,6 +392,10 @@ pub(crate) struct CounterStore {
     /// takes one, whatever the label count. Per store, never global.
     #[cfg(test)]
     reads: std::sync::atomic::AtomicUsize,
+    /// Label windows a batch read walked bucket by bucket, so a row can prove
+    /// that labels the store does not hold share one walk.
+    #[cfg(test)]
+    window_walks: std::sync::atomic::AtomicUsize,
 }
 
 impl CounterStore {
@@ -405,6 +409,8 @@ impl CounterStore {
             inner: Mutex::new(inner),
             #[cfg(test)]
             reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            window_walks: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 

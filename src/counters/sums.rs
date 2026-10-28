@@ -58,6 +58,12 @@ impl CounterStore {
         self.inner.lock()
     }
 
+    /// How many label windows a batch read walked.
+    #[cfg(test)]
+    pub(crate) fn window_walks_for_test(&self) -> usize {
+        self.window_walks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// How many times a reader took this store's lock.
     #[cfg(test)]
     pub(crate) fn reads_for_test(&self) -> usize {
@@ -141,6 +147,9 @@ impl CounterStore {
                 let Some(read) = Read::of(&inner, label) else {
                     return (None, None);
                 };
+                #[cfg(test)]
+                self.window_walks
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let current_known = read.holds_all(&current, now_bucket);
                 let prev_known = mapped && read.holds_all(&previous, now_bucket);
                 (
