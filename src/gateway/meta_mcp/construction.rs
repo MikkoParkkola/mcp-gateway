@@ -32,6 +32,8 @@ impl MetaMcp {
             change_feed: std::sync::OnceLock::new(),
             events: std::sync::OnceLock::new(),
             counters: std::sync::OnceLock::new(),
+            #[cfg(feature = "webui")]
+            decisions: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,

@@ -12,7 +12,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::identity_grants::{
     GrantScope, GrantSubject, IdentityGrant, IdentityGrantAuditEvent, IdentityGrantDecisionReason,
@@ -46,17 +46,14 @@ pub(crate) enum Health {
     Unavailable,
 }
 
-/// Where an event sits in its log: the replay reads up to a cut-off and live
-/// delivery covers the rest, so an event can arrive by both; its position
-/// makes the second arrival a repeat.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Which record an event is: the replay and live delivery can both hand
+/// over one record, and its entry hash makes the second arrival a repeat.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct LogPos {
     /// The log the event is in.
     pub(crate) log: Source,
-    /// The segment number.
-    pub(crate) segment: u64,
-    /// The record's offset in its segment.
-    pub(crate) offset: u64,
+    /// The record's `entry_hash`, unique in its log's chain.
+    pub(crate) entry: String,
 }
 
 /// A UI decision on one capability for a subject and agent: a decline, or a
@@ -181,10 +178,10 @@ impl DecisionSet {
         self.refresh();
     }
 
-    /// Fold one event read by a source's startup replay.
+    /// Fold one event read by a source's startup replay. Nothing is shown
+    /// until the replay ends, so the items are rebuilt once, at its end.
     pub(crate) fn replayed(&mut self, pos: LogPos, event: Fold) {
         self.fold(pos, event);
-        self.refresh();
     }
 
     /// Fold one live event; held while any replay runs, applied after.
@@ -328,6 +325,23 @@ impl DecisionSet {
         Some((view.decisions.len(), view.revision))
     }
 
+    /// Each source not yet readable, and why: `replaying` before it first
+    /// reported, `unreadable` when it reported it cannot be read.
+    pub(crate) fn unavailable(&self) -> Vec<(&'static str, &'static str)> {
+        [
+            (Source::Access, "grant_decisions"),
+            (Source::ControlPlane, "ui_decisions"),
+            (Source::Capability, "capability_changes"),
+        ]
+        .into_iter()
+        .filter_map(|(source, name)| match self.health.get(&source) {
+            None => Some((name, "replaying")),
+            Some(Health::Unavailable) => Some((name, "unreadable")),
+            Some(Health::Ready | Health::Absent) => None,
+        })
+        .collect()
+    }
+
     /// Whether every source has been read: none is `Unavailable` or unset.
     fn readable(&self) -> bool {
         [Source::Access, Source::ControlPlane, Source::Capability]
@@ -353,6 +367,65 @@ impl DecisionSet {
     /// The open items in display order.
     pub(crate) fn list(&self) -> Vec<Value> {
         self.items.clone()
+    }
+}
+
+/// The kind a grant decision is written as.
+pub(crate) const GRANT_DECISION_KIND: &str = "identity_grant_decision";
+
+/// A written grant-decision record read back into the event it was noted
+/// from, live or replayed alike; `None` for a record that names no subject.
+pub(crate) fn denial_from_record(record: &Map<String, Value>) -> Option<IdentityGrantAuditEvent> {
+    let text = |key: &str| record.get(key).and_then(Value::as_str);
+    let reason: IdentityGrantDecisionReason =
+        serde_json::from_value(record.get("reason")?.clone()).ok()?;
+    let subject = record.get("subject")?;
+    let timestamp = DateTime::parse_from_rfc3339(text("timestamp")?).ok()?;
+    Some(IdentityGrantAuditEvent {
+        event: GRANT_DECISION_KIND.to_string(),
+        timestamp: timestamp.with_timezone(&Utc),
+        // Public and shared capabilities are never recorded; of the rest only
+        // a matched grant allowed the call.
+        allowed: reason == IdentityGrantDecisionReason::GrantMatched,
+        reason,
+        subject: Some(GrantSubject::new(
+            subject.get("authority")?.as_str()?,
+            subject.get("subject")?.as_str()?,
+            None,
+        )),
+        agent_id: text("agent_id").map(str::to_string),
+        capability: text("capability")?.to_string(),
+        tool: text("tool").map(str::to_string),
+        scope: serde_json::from_value(record.get("scope")?.clone()).ok()?,
+        grant_id: text("grant_id").map(str::to_string),
+    })
+}
+
+/// The set as the gateway holds it: one lock, read by the list route and the
+/// stream's snapshot, written by the producers.
+pub(crate) struct Shared(parking_lot::RwLock<DecisionSet>);
+
+impl Shared {
+    /// A handle over a set keyed by `key`.
+    pub(crate) fn with_key(key: [u8; 32]) -> Self {
+        Self(parking_lot::RwLock::new(DecisionSet::with_key(key)))
+    }
+
+    /// Apply `change` under the write lock.
+    pub(crate) fn update(&self, change: impl FnOnce(&mut DecisionSet)) {
+        change(&mut self.0.write());
+    }
+
+    /// [`DecisionSet::snapshot`] under the read lock.
+    pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
+        self.0.read().snapshot(admin)
+    }
+
+    /// [`DecisionSet::view`] under the read lock, or the sources not yet
+    /// readable.
+    pub(crate) fn view(&self) -> Result<View, Vec<(&'static str, &'static str)>> {
+        let set = self.0.read();
+        set.view().ok_or_else(|| set.unavailable())
     }
 }
 

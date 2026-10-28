@@ -10,6 +10,8 @@ mod cursor;
 mod export;
 mod reader;
 mod receipt;
+/// The decision set's startup read of one record kind.
+pub(super) mod replay;
 mod rows;
 mod seek;
 

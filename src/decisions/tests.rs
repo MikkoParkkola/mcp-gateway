@@ -76,8 +76,7 @@ fn grant(capability: &str, scope: GrantScope) -> IdentityGrant {
 fn pos(log: Source, offset: u64) -> LogPos {
     LogPos {
         log,
-        segment: 1,
-        offset,
+        entry: format!("hash-{offset}"),
     }
 }
 
