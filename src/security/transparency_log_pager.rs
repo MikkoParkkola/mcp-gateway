@@ -342,44 +342,5 @@ pub(crate) fn lines_newest_first(body: &[u8], body_start: u64) -> Vec<(u64, &[u8
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{open_segment, position, sealed_path};
-
-    /// Every sealed segment expired (retention or the disk-full path): the
-    /// active file is numbered by its open record, not by counting siblings.
-    #[test]
-    fn the_active_segment_is_numbered_by_its_open_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("audit.jsonl");
-        let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": 7});
-        std::fs::write(&log, format!("{opened}\n")).unwrap();
-        assert_eq!(position(&log, None).unwrap().segment, 7);
-        // A cursor into that segment resolves to the active file.
-        let at = position(&log, Some((3, Some(7)))).unwrap();
-        assert!(!at.reset);
-    }
-
-    /// Retention deletes a sealed segment after `position` resolved a cursor
-    /// into it. Opening that segment then finds it under neither name, and
-    /// must not hand back the active file, which is a different segment.
-    #[test]
-    fn a_segment_removed_after_resolving_is_not_replaced_by_the_active_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("audit.jsonl");
-        let sealed = sealed_path(&log, 3);
-        let opened =
-            |seq: u64| serde_json::json!({"event": "audit_segment_opened", "segment_seq": seq});
-        std::fs::write(&sealed, format!("{}\n{{\"a\":1}}\n", opened(3))).unwrap();
-        std::fs::write(&log, format!("{}\n", opened(4))).unwrap();
-        let at = position(&log, Some((10, Some(3)))).unwrap();
-        assert_eq!(at.segment, 3);
-        assert!(!at.reset);
-        // Retention, between resolving the cursor and opening its file.
-        std::fs::remove_file(&sealed).unwrap();
-        let file = open_segment(&log, 3, || {}).unwrap();
-        assert!(
-            file.is_none(),
-            "segment 3 is gone; the active file is segment 4"
-        );
-    }
-}
+#[path = "transparency_log_pager_tests.rs"]
+mod tests;

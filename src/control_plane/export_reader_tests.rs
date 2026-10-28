@@ -192,3 +192,30 @@ fn export_does_not_rescan_for_growth() {
     assert!(out.forwarded >= 3);
     assert_eq!(passes(), 1, "growth is not a rotation");
 }
+
+/// A rotation between the listing and the open: the segment listed as live
+/// is opened under its sealed name, so its records are exported, none lost
+/// and none read twice.
+#[test]
+fn export_reads_a_segment_sealed_after_the_listing() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("gov.jsonl");
+    let l = logger(&log);
+    (0..3).for_each(|i| event(&l, &format!("a{i}")));
+    let mut exp = exporter(dir.path(), &log);
+    let (l1, p1) = (Arc::clone(&l), log.clone());
+    set(&EXPORT_LISTED, move || rotate(&l1, &p1));
+    let sink = CollectingSink::new();
+    exp.poll(&sink).unwrap();
+    let delivered = sink.delivered();
+    let hashes: std::collections::HashSet<&str> =
+        delivered.iter().map(|e| e.entry_hash.as_str()).collect();
+    assert_eq!(hashes.len(), delivered.len(), "a record read twice");
+    let ids: Vec<&str> = delivered
+        .iter()
+        .filter_map(|e| e.raw.get("event_id")?.as_str())
+        .collect();
+    for want in ["a0", "a1", "a2"] {
+        assert!(ids.contains(&want), "{want} lost: {ids:?}");
+    }
+}

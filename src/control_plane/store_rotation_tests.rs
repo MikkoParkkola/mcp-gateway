@@ -149,6 +149,113 @@ fn a_rotation_while_resolving_an_active_cursor_skips_nothing() {
     assert_eq!(seen, want, "every event below the cursor once");
 }
 
+/// An offset-only cursor from before any rotation, resolved while the log
+/// rotates: the page starts at the cursor in segment 0, now sealed.
+#[test]
+fn a_rotation_while_resolving_an_offset_only_cursor_skips_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(rotating_store(dir.path()));
+    for i in 0..4 {
+        store.append_audit(&audit_event(&format!("e{i}"))).unwrap();
+    }
+    assert_eq!(sealed_count(dir.path()), 0, "the fixture is one segment");
+    let first = store.read_audit(&AuditFilter::new(1)).unwrap();
+    let offset = first.next_cursor.expect("older events remain").offset;
+    rotate_inside_resolve(&store, dir.path());
+
+    let seen = drain_events(&store, AuditFilter::new(1).resume(AuditCursor::at(offset)));
+
+    let want: Vec<String> = (0..3).rev().map(|i| format!("e{i}")).collect();
+    assert_eq!(seen, want, "every event below the cursor once");
+}
+
+fn sealed_file(dir: &Path, seq: u64) -> std::path::PathBuf {
+    crate::security::transparency_log::segments::sealed_path(&dir.join("audit.jsonl"), seq)
+}
+
+/// A cursor into a segment no longer kept restarts at the newest record,
+/// flagged, rather than reading as the end of the log.
+#[test]
+fn a_cursor_into_a_removed_oldest_segment_restarts_newest() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = rotating_store(dir.path());
+    fill_until_rotated(&store, dir.path(), 2);
+    std::fs::remove_file(sealed_file(dir.path(), 0)).unwrap();
+    let cursor = AuditCursor {
+        offset: 10,
+        segment: Some(0),
+    };
+
+    let page = store
+        .read_audit(&AuditFilter::new(3).resume(cursor))
+        .unwrap();
+
+    assert!(page.cursor_reset);
+    assert!(!page.events.is_empty(), "the newest page");
+}
+
+/// A segment removed between kept ones is a hole the pages never step over.
+#[test]
+fn a_missing_segment_between_kept_ones_fails_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = rotating_store(dir.path());
+    fill_until_rotated(&store, dir.path(), 3);
+    std::fs::remove_file(sealed_file(dir.path(), 1)).unwrap();
+    let mut filter = AuditFilter::new(1_000);
+    let err = loop {
+        match store.read_audit(&filter) {
+            Ok(page) => match page.next_cursor {
+                Some(c) => filter = filter.resume(c),
+                None => panic!("paged over the missing segment"),
+            },
+            Err(e) => break e,
+        }
+    };
+    assert!(err.to_string().contains("segment 1"), "{err}");
+}
+
+/// The only file of a log goes after the newest page has resolved it: the
+/// page fails, rather than read as a log never written.
+#[test]
+fn a_newest_segment_removed_while_resolving_fails_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = rotating_store(dir.path());
+    store.append_audit(&audit_event("e0")).unwrap();
+    let log = dir.path().join("audit.jsonl");
+    crate::security::transparency_log::pager::seam::after_active_seq(move || {
+        std::fs::remove_file(&log).unwrap();
+    });
+
+    assert!(store.read_audit(&AuditFilter::new(3)).is_err());
+}
+
+/// Retention takes a cursor's segment between resolving and opening: the
+/// request fails, and the same cursor retried restarts at the newest record,
+/// flagged. Nothing passes silently as complete.
+#[test]
+fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = rotating_store(dir.path());
+    fill_until_rotated(&store, dir.path(), 2);
+    let cursor = AuditCursor {
+        offset: 10,
+        segment: Some(0),
+    };
+    let doomed = sealed_file(dir.path(), 0);
+    crate::security::transparency_log::pager::seam::after_active_seq(move || {
+        std::fs::remove_file(&doomed).unwrap();
+    });
+    let filter = AuditFilter::new(3).resume(cursor);
+
+    assert!(
+        store.read_audit(&filter).is_err(),
+        "the race fails the page"
+    );
+    let retried = store.read_audit(&filter).unwrap();
+    assert!(retried.cursor_reset);
+    assert!(!retried.events.is_empty(), "the newest page");
+}
+
 #[test]
 fn legacy_read_audit_cursor_after_rotation_resets() {
     let dir = tempfile::tempdir().unwrap();

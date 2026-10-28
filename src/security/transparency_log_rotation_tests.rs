@@ -471,6 +471,47 @@ fn signed_entry_only_in_sealed_segment_refuses_hash_only_verify() {
     assert!(log_contains_signed_entry(&path).unwrap());
 }
 
+/// The live file is sealed while the signed-entry scan reads: its signed
+/// records move to the sealed name, and the scan still finds them rather
+/// than reading the new, unsigned live file and passing a hash-only verify.
+#[test]
+fn a_rotation_during_the_signed_entry_scan_still_finds_the_signature() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
+    append(&l, 3);
+    drop(l);
+    assert!(list_segments(&path).unwrap().is_empty(), "one segment");
+    let live = path.clone();
+    verify::LISTED.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            std::fs::rename(&live, sealed_path(&live, 0)).unwrap();
+            let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": 1});
+            std::fs::write(&live, format!("{opened}\n")).unwrap();
+        }));
+    });
+    assert!(log_contains_signed_entry(&path).unwrap());
+}
+
+/// A listed sealed segment goes while the scan reads: the scan lists again
+/// and reads what is left, rather than failing `audit verify`.
+#[test]
+fn a_segment_removed_during_the_signed_entry_scan_is_read_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    let sealed = sealed_path(&path, list_segments(&path).unwrap()[0].seq);
+    verify::LISTED.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || std::fs::remove_file(&sealed).unwrap()));
+    });
+    assert!(
+        log_contains_signed_entry(&path).unwrap(),
+        "the live file is signed"
+    );
+}
+
 #[test]
 fn caller_cannot_append_segment_event() {
     let dir = tempfile::tempdir().unwrap();

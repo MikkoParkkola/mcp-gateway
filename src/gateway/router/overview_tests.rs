@@ -443,6 +443,55 @@ fn admin_action(log: &TransparencyLogger, route: &str) {
         .expect("admin action appended");
 }
 
+/// O5c: the log rotates between two windows of one read. Every window comes
+/// from the handle opened first, so the older window still holds the
+/// actions, never another file's bytes at the same offsets.
+#[tokio::test]
+async fn o5c_a_rotation_between_windows_reads_the_opened_segment() {
+    use crate::security::transparency_log::segments::sealed_path;
+    let (mut state, _dir) = fixture(1, false).await;
+    let logs = tempfile::tempdir().expect("log dir");
+    let log = with_log(&mut state, &logs);
+    for i in 0..3 {
+        admin_action(&log, &format!("/ui/api/route-{i}"));
+    }
+    // More than one window of newer records, so the actions are in the
+    // second window read.
+    for _ in 0..400 {
+        let mut fields = Map::new();
+        fields.insert("event".into(), "invocation_note".into());
+        fields.insert("pad".into(), "x".repeat(1024).into());
+        let envelope = AuditEnvelope::ok(AuditWho::from_actor_id("caller"));
+        log.append_event(fields, &envelope)
+            .expect("invocation appended");
+    }
+    let path = logs.path().join("overview-audit.jsonl");
+    let sealed = sealed_path(&path, 0);
+    // What rotation does: the live file takes its sealed name, and a new,
+    // shorter one starts under the live name.
+    crate::security::transparency_log::pager::seam::after_window(move || {
+        std::fs::rename(&path, sealed_path(&path, 0)).expect("seal");
+        let opened = json!({"event": "audit_segment_opened", "segment_seq": 1});
+        std::fs::write(&path, format!("{opened}\n")).expect("new live file");
+    });
+
+    let body = overview(&state).await;
+
+    assert!(sealed.exists(), "the rotation ran between the windows");
+    assert!(body.get("degraded").is_none(), "{body}");
+    let routes: Vec<&str> = body["last_actions"]["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .filter_map(|r| r["route"].as_str())
+        .collect();
+    assert_eq!(
+        routes,
+        ["/ui/api/route-2", "/ui/api/route-1", "/ui/api/route-0"],
+        "{body}"
+    );
+}
+
 /// O5: no log configured, `last_actions` is absent and not degraded. With a
 /// log, seven admin actions and invocation records after them: the five
 /// newest actions, newest first. A log that cannot be read: absent, and

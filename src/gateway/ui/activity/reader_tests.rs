@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{Cursor, Limits, Line, Which, read_page};
+use super::{Cursor, Limits, Line, LogPos, Which, read_page};
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 use crate::security::transparency_log::segments::{list_segments, sealed_path};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -238,6 +238,53 @@ fn a_rotation_while_resolving_the_newest_page_skips_nothing() {
     }
 
     assert_eq!(seen, (0..8).rev().collect::<Vec<_>>());
+}
+
+/// The only file of the log goes after the newest page has resolved it: the
+/// page fails rather than read as a log never written.
+#[test]
+fn a_newest_segment_removed_while_resolving_fails_the_page() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let l = logger(&path, 1000);
+    call(&l, 0);
+    let gone = path.clone();
+    crate::security::transparency_log::pager::seam::after_active_seq(move || {
+        std::fs::remove_file(&gone).unwrap();
+    });
+
+    assert!(read_page(&path, None, None, ALL, is_call).is_err());
+}
+
+/// Retention takes a cursor's segment between resolving and opening: the
+/// page fails, and the same cursor retried restarts at the newest record,
+/// flagged.
+#[test]
+fn a_cursor_expiring_while_resolving_fails_then_restarts_on_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir, "inv.jsonl");
+    let l = logger(&path, 1000);
+    for i in 0..250 {
+        call(&l, i);
+    }
+    let oldest = list_segments(&path).unwrap()[0].seq;
+    let cursor = Cursor {
+        inv: Some(LogPos {
+            segment: oldest,
+            offset: 10,
+        }),
+        gov: None,
+        gov_bound: None,
+    };
+    let doomed = sealed_path(&path, oldest);
+    crate::security::transparency_log::pager::seam::after_active_seq(move || {
+        std::fs::remove_file(&doomed).unwrap();
+    });
+
+    assert!(read_page(&path, None, Some(&cursor), ALL, is_call).is_err());
+    let retried = read_page(&path, None, Some(&cursor), ALL, is_call).unwrap();
+    assert!(retried.cursor_reset);
+    assert_eq!(retried.lines.first().and_then(call_index), Some(249));
 }
 
 /// Retention removes the segment a cursor names after the page resolved it:
