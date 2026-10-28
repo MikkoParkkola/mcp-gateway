@@ -98,6 +98,12 @@ fn required_backend_at(url: String) -> Arc<Backend> {
 
 /// [`required_backend_at`] with request timeout `timeout`.
 fn required_backend_with_timeout(url: String, timeout: Duration) -> Arc<Backend> {
+    backend_with(url, timeout, true)
+}
+
+/// An HTTP backend at `url` with a per-user identity binding, `required` or
+/// optional, and request timeout `timeout`.
+fn backend_with(url: String, timeout: Duration, required: bool) -> Arc<Backend> {
     Arc::new(Backend::new(
         "era-lent-reprobe",
         BackendConfig {
@@ -110,7 +116,7 @@ fn required_backend_with_timeout(url: String, timeout: Duration) -> Arc<Backend>
             identity_propagation: Some(IdentityPropagationConfig {
                 strategy: PropagationStrategyKind::SignedAssertion,
                 audience: AUDIENCE.to_string(),
-                required: true,
+                required,
                 session_mode: SessionMode::PerUser,
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
@@ -227,5 +233,39 @@ async fn a_stalled_reprobe_holds_the_caller_no_longer_than_the_probe_cap() {
     assert!(
         held < Duration::from_secs(10),
         "the stalled re-probe held the caller {held:?}, past the probe cap"
+    );
+}
+
+/// An optional binding's slot is not lent-only, so its contradicted era is
+/// re-probed detached, after the call returned: that probe carries no
+/// caller's credential, as it never did.
+#[tokio::test(flavor = "current_thread")]
+async fn a_detached_reprobe_of_an_optional_slot_carries_no_callers_credential() {
+    let (url, seen) = peer_that_turns_legacy().await;
+    let backend = backend_with(url, Duration::from_secs(10), false);
+    let credential = subscriber_credential(USER);
+
+    let _ = backend
+        .request_with_headers("server/discover", None, &credential, Some(USER))
+        .await;
+    let discovers = || -> Vec<(String, String)> {
+        seen.lock()
+            .unwrap()
+            .iter()
+            .filter(|(method, _)| method == "server/discover")
+            .cloned()
+            .collect()
+    };
+    crate::test_pause::within("the detached re-probe", async {
+        while discovers().len() < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+
+    let reprobe = discovers()[2].clone();
+    assert_eq!(
+        reprobe.1, "",
+        "a detached re-probe carried the caller's credential: {reprobe:?}"
     );
 }

@@ -385,10 +385,19 @@ impl Backend {
             return;
         }
 
+        // A lent-only slot sends only while a dispatch lends its credential,
+        // and the answer that contradicted the era came to the dispatch now
+        // running: its probe runs here, before that dispatch returns and its
+        // loan ends. Detached, it would have no subscriber to send as.
+        let lent_only = matches!(key, super::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly;
         let era = Arc::clone(&entry.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
-        let call = call.to_vec();
+        // Only the inline probe sends as the call. A detached probe of any
+        // other slot sends with the slot's own credential, as it always has:
+        // a caller's headers must not ride a probe that outlives its call.
+        let call = if lent_only { call.to_vec() } else { Vec::new() };
         let reprobe = async move {
             era.reprobe_with(
                 || probe(&transport, timeout, &call),
@@ -396,12 +405,6 @@ impl Backend {
             )
             .await;
         };
-        // A lent-only slot sends only while a dispatch lends its credential,
-        // and the answer that contradicted the era came to the dispatch now
-        // running: its probe runs here, before that dispatch returns and its
-        // loan ends. Detached, it would have no subscriber to send as.
-        let lent_only = matches!(key, super::PoolKey::PerUser { .. })
-            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly;
         if lent_only {
             reprobe.await;
         } else {
