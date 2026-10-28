@@ -331,11 +331,7 @@ impl Backend {
         // `Option`, and both sites where a `None` binding arises return empty
         // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
         // if this is deleted, because every other cell would still pass.
-        let fetch = if identity_key.is_some() {
-            extra_headers
-        } else {
-            LentCredential::default()
-        };
+        let fetch = identity_key.map_or_else(LentCredential::default, |_| extra_headers);
         let fetch_headers: &[(String, String)] = &fetch.headers;
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
@@ -378,15 +374,10 @@ impl Backend {
                     let drained = run_bounded(&entry, &self.name, bound, async {
                         // A cold fill on the dispatch path has sent no tools/call
                         // yet, so a failed start is a pre-send refusal (MIK-7979).
-                        // The start sends no call's headers: a lent-only slot
-                        // sends it as this fill's loan.
-                        let transport = {
-                            let _starting =
-                                loan.as_ref().map(|held| entry.lender.starting(held.id()));
-                            self.ensure_entry_started(&key).await.map_err(|e| {
-                                super::lifecycle::pre_send_start_error(&self.name, e)
-                            })?
-                        };
+                        let transport = self
+                            .start_lent(&key, &entry, loan.as_ref())
+                            .await
+                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
                         Provenance::mark_started();
                         let (merged, truncated) = drain_list_pages(
                             transport.as_ref(),
@@ -462,6 +453,18 @@ impl Backend {
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
         self.get_tools_for_binding(None, LentCredential::default())
             .await
+    }
+
+    /// Start `key`'s slot as `loan`'s dispatch: the start sends no call's
+    /// headers, so a lent-only slot sends it under that loan.
+    async fn start_lent(
+        &self,
+        key: &PoolKey,
+        entry: &super::pool::PooledEntry,
+        loan: Option<&crate::transport::Loan>,
+    ) -> Result<Arc<dyn crate::transport::Transport>> {
+        let _starting = loan.map(|held| entry.lender.starting(held.id()));
+        self.ensure_entry_started(key).await
     }
 
     /// Startup warm-up's fill: recorded on the breaker, never admitted or

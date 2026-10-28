@@ -274,6 +274,31 @@ impl MetaMcp {
         }
     }
 
+    /// A minted credential as a dispatch carries it, with the per-send check
+    /// every lent-only send of it runs first: the managed lease's recheck,
+    /// else its expiry.
+    fn minted_credential(
+        &self,
+        cred: crate::identity_propagation::PropagatedCredential,
+        managed: Option<crate::personal_accounts::ManagedLease>,
+        descriptor_id: Option<&str>,
+    ) -> CallerCredential {
+        let expiry = account_mint::expiry_of(&cred);
+        let check = account_mint::send_check_for(
+            &self.account_strategies,
+            (descriptor_id, managed.as_ref()),
+            (expiry, &cred.headers),
+        );
+        CallerCredential {
+            headers: cred.headers,
+            cache_binding: Some(cred.cache_binding),
+            managed,
+            attempted: false,
+            expiry: Some(expiry),
+            check: Some(check),
+        }
+    }
+
     /// With the caller's provenance, so the sole operator can be served (#1961).
     pub(super) async fn resolve_caller_credential_as(
         &self,
@@ -389,20 +414,7 @@ impl MetaMcp {
                         )
                         .await?;
                     }
-                    let expiry = account_mint::expiry_of(&cred);
-                    let check = account_mint::send_check_for(
-                        &self.account_strategies,
-                        (descriptor_id.as_deref(), managed.as_ref()),
-                        (expiry, &cred.headers),
-                    );
-                    Ok(CallerCredential {
-                        headers: cred.headers,
-                        cache_binding: Some(cred.cache_binding),
-                        managed,
-                        attempted: false,
-                        expiry: Some(expiry),
-                        check: Some(check),
-                    })
+                    Ok(self.minted_credential(cred, managed, descriptor_id.as_deref()))
                 }
                 // A busy custody at the mint released nothing (MIK-8428):
                 // the one transient record and sealed retryable answer
