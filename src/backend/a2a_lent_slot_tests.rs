@@ -309,6 +309,65 @@ async fn a_refused_deferred_cancel_is_counted() {
     );
 }
 
+/// One user's slot is one pooled A2A transport: two of that user's calls in
+/// flight at once, each lending a different credential (a refresh mid-task),
+/// each send carrying its own call's credential, never the newer loan.
+#[tokio::test]
+async fn two_calls_on_one_pooled_slot_each_send_their_own_credential() {
+    let (base, log) = agent(Script::Works, None).await;
+    let backend = required_a2a_backend(&base);
+    let (old, new) = (
+        vec![("Authorization".to_owned(), "Bearer old-token".to_owned())],
+        vec![("Authorization".to_owned(), "Bearer new-token".to_owned())],
+    );
+    let polls = || -> Vec<String> {
+        log.lock()
+            .unwrap()
+            .iter()
+            .filter(|s| s.method == "GetTask")
+            .map(|s| s.authorization.clone())
+            .collect()
+    };
+    let first = backend.request_with_headers_lent(
+        "tools/call",
+        Some(delegate_params()),
+        checked(&old),
+        Some(USER),
+    );
+    let second = backend.request_with_headers_lent(
+        "tools/call",
+        Some(delegate_params()),
+        checked(&new),
+        Some(USER),
+    );
+    let both_polled = async {
+        loop {
+            let seen = polls();
+            if seen.iter().any(|a| a == "Bearer old-token")
+                && seen.iter().any(|a| a == "Bearer new-token")
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::select! {
+        result = first => panic!("premise: the first call was still running: {result:?}"),
+        result = second => panic!("premise: the second call was still running: {result:?}"),
+        () = crate::test_pause::within("each call polling as itself", both_polled) => {}
+    }
+
+    let log = log.lock().unwrap().clone();
+    let foreign: Vec<_> = log
+        .iter()
+        .filter(|s| s.authorization != "Bearer old-token" && s.authorization != "Bearer new-token")
+        .collect();
+    assert!(
+        foreign.is_empty(),
+        "a send carried neither call's credential: {foreign:?}"
+    );
+}
+
 /// A call whose credential's check refuses sends nothing: neither the card
 /// fetch nor any rpc carries it.
 #[tokio::test]
