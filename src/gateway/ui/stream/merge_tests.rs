@@ -35,6 +35,7 @@ struct Fake {
     tx: broadcast::Sender<Appended>,
     biggest_page: Mutex<usize>,
     reads: Mutex<usize>,
+    heads: Mutex<usize>,
     append_on_read: Mutex<bool>,
 }
 
@@ -46,6 +47,7 @@ impl Fake {
             tx,
             biggest_page: Mutex::new(0),
             reads: Mutex::new(0),
+            heads: Mutex::new(0),
             append_on_read: Mutex::new(false),
         })
     }
@@ -85,6 +87,7 @@ impl LogSource for Fake {
     }
 
     fn head(&self, (): &()) -> impl Future<Output = LogCursor> + Send {
+        *self.heads.lock().unwrap() += 1;
         let n = self.rows.lock().unwrap().len() as u64;
         std::future::ready(LogCursor {
             inv: (n > 0).then(|| part(n)),
@@ -352,4 +355,22 @@ async fn the_fourth_lag_recovery_inside_a_minute_closes_the_view() {
     }
     assert!(merge.is_too_slow());
     assert_eq!(merge.lag_recoveries(), 4);
+}
+
+#[tokio::test(start_paused = true)]
+#[ignore = "needs `Appended` to carry its position so hidden rows advance a seen counter"]
+async fn rows_hidden_from_the_viewer_do_not_cost_a_scan_per_visible_row() {
+    let fake = Fake::new(0, 1_024);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    let (mut visible, mut got) = (Vec::new(), Vec::new());
+    for i in 0..400 {
+        let n = fake.append(i % 2 == 0);
+        if i % 2 == 1 {
+            visible.push(n);
+            got.extend(ids(&collect(&mut merge, 1).await));
+        }
+    }
+    assert_eq!(got, visible, "exactly the visible rows, in order");
+    let scans = *fake.reads.lock().unwrap() + *fake.heads.lock().unwrap() - 1;
+    assert!(scans <= 400_usize.div_ceil(PAGE) + 1, "{scans} scans");
 }
