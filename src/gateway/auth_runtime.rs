@@ -25,7 +25,7 @@ use crate::failsafe::CircuitBreaker;
 const MINUTE_NS: u128 = 60_000_000_000;
 
 /// The shared per-client store, keyed by the credential's state key, never by
-/// a display name (MIK-8489).
+/// a display name.
 #[derive(Debug, Default)]
 pub(crate) struct AuthRuntime {
     buckets: DashMap<String, Arc<ClientBucket>>,
