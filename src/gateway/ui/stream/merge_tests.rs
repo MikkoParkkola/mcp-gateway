@@ -184,7 +184,7 @@ fn from(n: u64) -> LogCursor {
     }
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn resume_across_the_subscribe_then_read_race_has_no_gap_or_duplicate() {
     let fake = Fake::new(5, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(from(2))).await;
@@ -195,7 +195,7 @@ async fn resume_across_the_subscribe_then_read_race_has_no_gap_or_duplicate() {
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![7]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_fresh_connect_starts_at_the_head() {
     let fake = Fake::new(5, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
@@ -203,7 +203,7 @@ async fn a_fresh_connect_starts_at_the_head() {
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![6]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
     let fake = Fake::new(3, 64);
     let stale = LogCursor {
@@ -219,7 +219,7 @@ async fn a_cursor_whose_row_is_gone_resets_then_replays_from_the_oldest() {
     assert_eq!(ids(&out), vec![1, 2, 3]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_long_backlog_pages_through_in_chunks_and_loses_nothing() {
     let fake = Fake::new(2_450, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
@@ -232,7 +232,7 @@ async fn a_long_backlog_pages_through_in_chunks_and_loses_nothing() {
     assert_eq!(*fake.biggest_page.lock().unwrap(), PAGE);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_lagged_receiver_catches_up_from_its_own_cursor() {
     let fake = Fake::new(0, 4);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
@@ -246,7 +246,7 @@ async fn a_lagged_receiver_catches_up_from_its_own_cursor() {
     assert!(merge.lag_recoveries() >= 1);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_page_of_only_invisible_rows_moves_forward_and_ends() {
     let fake = Fake::new(0, 64);
     for _ in 0..450 {
@@ -257,7 +257,7 @@ async fn a_page_of_only_invisible_rows_moves_forward_and_ends() {
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![451]);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_slow_client_closed_and_resumed_over_cycles_loses_no_row() {
     let fake = Fake::new(0, 8);
     let mut cursor = Some(LogCursor::default());
@@ -300,7 +300,7 @@ fn recoveries_older_than_the_window_do_not_count() {
     assert!(!w.record(t0 + LAG_WINDOW + std::time::Duration::from_secs(5)));
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_disconnect_partway_through_a_page_loses_and_repeats_no_row() {
     let fake = Fake::new(450, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
@@ -316,7 +316,7 @@ async fn a_disconnect_partway_through_a_page_loses_and_repeats_no_row() {
     assert_eq!(ids(&rest), (4..=450).collect::<Vec<_>>());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_replaced_log_under_a_live_stream_resets_then_sends_the_new_rows() {
     let fake = Fake::new(5, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
@@ -327,15 +327,14 @@ async fn a_replaced_log_under_a_live_stream_resets_then_sends_the_new_rows() {
     assert_eq!(ids(&out), (1..=9).collect::<Vec<_>>());
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn catch_up_stops_at_the_head_captured_when_it_began() {
     let fake = Fake::new(400, 1_024);
     *fake.append_on_read.lock().unwrap() = true;
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
-    let out = collect(&mut merge, 400).await;
+    let out = collect(&mut merge, 402).await;
+    assert_eq!(ids(&out), (1..=402).collect::<Vec<_>>());
     assert_eq!(*fake.reads.lock().unwrap(), 2, "two pages reach the head");
-    assert_eq!(ids(&out), (1..=400).collect::<Vec<_>>());
-    assert_eq!(ids(&collect(&mut merge, 2).await), vec![401, 402]);
 }
 
 #[tokio::test(start_paused = true)]
