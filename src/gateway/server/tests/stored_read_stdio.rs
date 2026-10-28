@@ -339,3 +339,39 @@ async fn a_stdio_task_read_states_no_effect() {
         assert!(row.get(field).is_none(), "{field}: {row}");
     }
 }
+
+/// The delivery record of the one `gateway_invoke` call in the log at `log`.
+fn only_invoke_delivery(log: &std::path::Path) -> Value {
+    let rows = invoke_deliveries(log);
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    row.clone()
+}
+
+/// Response inspection read this clean answer and found nothing,
+/// so with no firewall the record says scanned clean (`[]`), not unscanned.
+#[tokio::test]
+async fn an_inspected_clean_answer_records_no_findings() {
+    let (mut session, log) = logged_session().await;
+    let answer = session.ask(&invoke(5), 5).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let row = only_invoke_delivery(&log);
+    assert_eq!(row["response_findings"], json!([]), "{row}");
+    assert_eq!(row["response_effect"], "delivered", "{row}");
+}
+
+/// With response inspection disabled and the firewall's response scan off,
+/// no scanner reads the answer, so the record says no scan ran (`null`),
+/// never "scanned clean". (With the firewall's scan on, `[]` is correct: the
+/// firewall read it.)
+#[tokio::test]
+async fn a_disabled_inspection_records_no_scan() {
+    let disabled =
+        "  response_inspection:\n    enabled: false\n  firewall:\n    scan_responses: false\n";
+    let (mut session, log) = logged_session_with(disabled).await;
+    let answer = session.ask(&invoke(6), 6).await;
+    assert!(answer.get("error").is_none(), "premise: answered: {answer}");
+    let row = only_invoke_delivery(&log);
+    assert_eq!(row["response_findings"], json!(null), "{row}");
+}
