@@ -306,7 +306,9 @@ impl TransparencyLogger {
 #[cfg(test)]
 impl TransparencyLogger {
     /// Instance-local one-shot I/O fault for the next append whose `kind`
-    /// field equals `kind`; other appends pass (D3-a R4).
+    /// field equals `kind`; other appends pass (D3-a R4). A record without a
+    /// `kind` is named by its `event`, and a routed record by its `route` (a
+    /// `task_settlement`).
     pub(crate) fn fail_next_append_of_kind_for_test(&self, kind: &str) {
         *self.bound.fail_next_kind.lock().expect("fault lock") = Some(kind.to_string());
     }
@@ -331,10 +333,12 @@ impl TransparencyLogger {
         &self,
         fields: &serde_json::Map<String, serde_json::Value>,
     ) -> bool {
-        // A record without a `kind` is named by its `event` (a `tenant_read`).
+        // A record without a `kind` is named by its `event` (a `tenant_read`),
+        // and a routed record without either by its `route`.
         let kind = fields
             .get("kind")
             .or_else(|| fields.get("event"))
+            .or_else(|| fields.get("route"))
             .and_then(serde_json::Value::as_str);
         let mut armed = self.bound.fail_next_kind.lock().expect("fault lock");
         let kind_hit = kind.is_some() && armed.as_deref() == kind && armed.take().is_some();
