@@ -106,17 +106,17 @@ fn delivered(body: &Value) -> &Value {
 
 /// Whether the response carries prediction hints at all.
 fn has_hints(body: &Value) -> bool {
-    body.to_string().contains("predicted_next")
+    body.to_string().contains("_predicted_next")
 }
 
-/// The `predicted_next` hints anywhere in the response, as text: the tool
+/// The `_predicted_next` hints anywhere in the response, as text: the tool
 /// result travels as JSON inside a text block, so string leaves are parsed too.
 fn hints(body: &Value) -> String {
     match body {
         Value::Object(map) => map
             .iter()
             .map(|(k, v)| {
-                if k == "predicted_next" {
+                if k == "_predicted_next" {
                     v.to_string()
                 } else {
                     hints(v)
