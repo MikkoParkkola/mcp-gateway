@@ -195,3 +195,50 @@ async fn a_never_loaded_file_cannot_unload_the_capability_it_names() {
         "the capability the stranger names stays loaded"
     );
 }
+
+/// An admin re-pinning the changed bytes resolves the change, though the
+/// pin recorded at detection was the old one.
+#[tokio::test]
+async fn a_re_pinned_change_clears_its_record() {
+    let (_dir, backend, path, _pinned) = loaded().await;
+    let changed = BODY.replace("Initially legit", "Changed and reviewed");
+    std::fs::write(
+        &path,
+        rewrite_with_pin(&changed, &compute_capability_hash(BODY)),
+    )
+    .unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+
+    std::fs::write(
+        &path,
+        rewrite_with_pin(&changed, &compute_capability_hash(&changed)),
+    )
+    .unwrap();
+    let mismatches = backend.current_mismatches();
+
+    assert!(mismatches.changes.is_empty(), "{:?}", mismatches.changes);
+    assert!(!mismatches.incomplete);
+    assert!(
+        backend.rug_pull_records().is_empty(),
+        "the record is cleared"
+    );
+}
+
+/// A changed file that cannot be read is not resolved: its record stays and
+/// the reconcile says it is incomplete.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_change_keeps_its_record() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let (_dir, backend, path, pinned) = loaded().await;
+    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+    assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mismatches = backend.current_mismatches();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert!(mismatches.incomplete);
+    assert_eq!(backend.rug_pull_records().len(), 1, "the record stays");
+}

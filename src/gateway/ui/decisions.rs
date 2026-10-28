@@ -250,7 +250,9 @@ fn tick(meta: &MetaMcp, shared: &Shared, read_edge: bool) {
     shared.update(|set| {
         set.set_grants(grants, now);
         match changes {
-            Some((backend, changes)) => set.set_capability_changes(&backend, changes, now),
+            Some((backend, Some(changes))) => set.set_capability_changes(&backend, changes, now),
+            // A recorded file could not be read: never a list missing it.
+            Some((_, None)) => set.set_health(Source::Capability, Health::Unavailable),
             None => set.set_health(Source::Capability, Health::Absent),
         }
         if let Some(edge) = edge {
@@ -259,10 +261,15 @@ fn tick(meta: &MetaMcp, shared: &Shared, read_edge: bool) {
     });
 }
 
-/// The backend's pin mismatches as decisions, each from one read of its bytes.
-fn capability_changes(backend: &CapabilityBackend) -> Vec<CapabilityChange> {
-    backend
-        .current_mismatches()
+/// The backend's pin mismatches as decisions, each from one read of its
+/// bytes, or `None` when a recorded file could not be read.
+fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChange>> {
+    let mismatches = backend.current_mismatches();
+    if mismatches.incomplete {
+        return None;
+    }
+    let changes = mismatches
+        .changes
         .into_iter()
         .map(|(record, content, actual)| CapabilityChange {
             file: record.file,
@@ -270,7 +277,8 @@ fn capability_changes(backend: &CapabilityBackend) -> Vec<CapabilityChange> {
             loaded_as: record.loaded_as,
             content,
         })
-        .collect()
+        .collect();
+    Some(changes)
 }
 
 /// When the oldest kept segment of the log at `path` was opened: no record

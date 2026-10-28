@@ -78,19 +78,32 @@ impl CapabilityBackend {
     /// hash. A file that is gone, or whose bytes match their pin again, has
     /// its record cleared (only while that record is the one read) and is
     /// left out. Blocking: call it off the async workers.
-    pub(crate) fn current_mismatches(&self) -> Vec<(RugPullRecord, String, String)> {
-        let mut mismatches = Vec::new();
+    pub(crate) fn current_mismatches(&self) -> Mismatches {
+        let mut mismatches = Mismatches::default();
         for record in self.rug_pull_records() {
-            let Ok(content) = std::fs::read_to_string(&record.file) else {
-                self.clear_rug_pull_if(&record.file, &record.actual);
-                continue;
+            let content = match std::fs::read_to_string(&record.file) {
+                Ok(content) => content,
+                // Gone: nothing is left to decide about.
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    self.clear_rug_pull_if(&record.file, &record.actual);
+                    continue;
+                }
+                // Unreadable is not resolved: the record stays, and the
+                // list is incomplete until the file reads again.
+                Err(_) => {
+                    mismatches.incomplete = true;
+                    continue;
+                }
             };
             let actual = compute_capability_hash(&content);
-            if actual.eq_ignore_ascii_case(&record.expected) {
+            // Matching the pin these bytes declare (restored, or re-pinned
+            // by an admin) or declaring none resolves it; the pin recorded
+            // at detection is the changed bytes' own and decides nothing.
+            if declared_pin(&content).is_none_or(|pin| pin.eq_ignore_ascii_case(&actual)) {
                 self.clear_rug_pull_if(&record.file, &record.actual);
                 continue;
             }
-            mismatches.push((record, content, actual));
+            mismatches.changes.push((record, content, actual));
         }
         mismatches
     }
@@ -123,6 +136,24 @@ mod tests;
 
 use std::path::Path;
 
+/// What reconciling the pin mismatches found.
+#[derive(Debug, Default)]
+pub(crate) struct Mismatches {
+    /// Each mismatch still on disk: its record, the bytes read and their hash.
+    pub(crate) changes: Vec<(RugPullRecord, String, String)>,
+    /// A recorded file could not be read: the list is missing it.
+    pub(crate) incomplete: bool,
+}
+
+/// The `sha256:` pin a capability file declares, if any.
+fn declared_pin(content: &str) -> Option<String> {
+    crate::yaml::from_str::<crate::yaml::Value>(content)
+        .ok()?
+        .get("sha256")
+        .and_then(crate::yaml::Value::as_str)
+        .map(str::to_string)
+}
+
 /// Recursively walk a directory and report any YAML file whose embedded
 /// `sha256:` pin does not match the file's current content.
 async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
@@ -150,14 +181,9 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
         // Extract embedded pin via lightweight deserialisation. A parse error
         // here is not a rug-pull (the loader will surface it); we only care
         // about files that self-declare a pin that no longer matches.
-        let pinned: Option<String> = crate::yaml::from_str::<crate::yaml::Value>(&content)
-            .ok()
-            .and_then(|v| {
-                v.get("sha256")
-                    .and_then(crate::yaml::Value::as_str)
-                    .map(str::to_string)
-            });
-        let Some(expected) = pinned else { continue };
+        let Some(expected) = declared_pin(&content) else {
+            continue;
+        };
         let actual = compute_capability_hash(&content);
         if !expected.eq_ignore_ascii_case(&actual) {
             // Recover the capability name the same way parse_capability_file does.
