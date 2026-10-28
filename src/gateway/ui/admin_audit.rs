@@ -21,12 +21,34 @@ use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::audit::{AuditEnvelope, AuditOutcome, AuditWho};
 
+/// Fields a handler adds to its own `admin_action` record, carried on its
+/// response. Names and values the record may hold (never a secret): bodies
+/// are otherwise never logged.
+#[derive(Clone)]
+pub(super) struct AuditDetail(pub(super) serde_json::Map<String, serde_json::Value>);
+
 /// Routes that only read, whatever their method, so the layer neither
 /// admits nor records them: keyed by the matched route template, never by a
 /// handler, so a handler bug cannot make a write skip the audit.
 /// `POST .../validate` writes nothing by construction (its handler has no
 /// writer).
 const UNRECORDED_ROUTES: &[&str] = &[crate::gateway::routes::UI_CAPABILITY_VALIDATE];
+
+/// Record a change of `name`'s `allowed_tools` on its `admin_action` record:
+/// the backend and the list before and after (`null`: every tool).
+pub(super) fn attach_selection(
+    response: &mut Response,
+    name: &str,
+    before: Option<&[String]>,
+    after: Option<&[String]>,
+) {
+    let mut detail = serde_json::Map::new();
+    detail.insert(
+        "allowed_tools".into(),
+        serde_json::json!({"backend": name, "before": before, "after": after}),
+    );
+    response.extensions_mut().insert(AuditDetail(detail));
+}
 
 /// [`super::api_router`] with the layer on every route in it (E1-f).
 pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
@@ -96,6 +118,9 @@ async fn admin_action_layer(
 
     let status = response.status();
     fields.insert("http_status".into(), status.as_u16().into());
+    if let Some(AuditDetail(detail)) = response.extensions().get::<AuditDetail>() {
+        fields.extend(detail.clone());
+    }
     let envelope = AuditEnvelope {
         outcome: AuditOutcome::from_http_status(status, None),
         ..AuditEnvelope::ok(AuditWho::from_request(
