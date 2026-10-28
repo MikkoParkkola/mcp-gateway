@@ -121,8 +121,8 @@ async fn two_token_peer(tokens: [String; 2]) -> TwoTokenPeer {
     TwoTokenPeer { url, ..pushes }
 }
 
-/// The lease stamp of every record in `f`'s outbox.
-fn outbox_stamps(f: &Fixture) -> Vec<Option<String>> {
+/// The subscription and lease stamp of every record in `f`'s outbox.
+fn outbox_rows(f: &Fixture) -> Vec<(String, Option<String>)> {
     std::fs::read_dir(f.dir.path().join("outbox"))
         .map(|entries| {
             entries
@@ -131,11 +131,22 @@ fn outbox_stamps(f: &Fixture) -> Vec<Option<String>> {
                     let record: serde_json::Value =
                         serde_json::from_slice(&std::fs::read(e.path()).expect("read"))
                             .expect("record");
-                    record["observed"]["lease"].as_str().map(str::to_owned)
+                    (
+                        record["subscription_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                        record["observed"]["lease"].as_str().map(str::to_owned),
+                    )
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The lease stamp of every record in `f`'s outbox.
+fn outbox_stamps(f: &Fixture) -> Vec<Option<String>> {
+    outbox_rows(f).into_iter().map(|(_, stamp)| stamp).collect()
 }
 
 /// Fan out the next occurrence the listener queued, as the hub's dispatcher
@@ -502,5 +513,55 @@ async fn lease_t2_another_principals_call_leaves_a_held_lease_untouched() {
         f.hub.leases.held_generation(&key),
         Some(before),
         "p's lease is untouched: same generation"
+    );
+}
+
+/// LEASE-T2, listener half: two principals lease their own tokens on one
+/// backend. Each listener presents only its own principal's token (the peer
+/// tells the streams apart by the token they carry), and a notice read on
+/// Q's stream reaches Q's row alone, stamped with Q's lease.
+#[tokio::test]
+async fn lease_t2_each_principals_listener_reads_with_its_own_token_only() {
+    let (p_token, q_token) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
+    let mut peer = two_token_peer([p_token.to_string(), q_token.to_string()]).await;
+    let (f, _p_handle, _listening) = leased_listener(&mut peer, p_token).await;
+    let q_handle = subscribe(&f, "q", "pt", "q");
+    let q_key = lease_key(&f, "q");
+    let name = "backend.pt.tools_changed";
+    let lifecycle = crate::events::backend_source::backend_key(Some(&q_key.obs), name, &json!({}))
+        .expect("key");
+    f.hub
+        .source(crate::events::types::SourceKind::BackendNotification)
+        .expect("registered")
+        .on_first_subscriber(&lifecycle, "q", name, &json!({}))
+        .await
+        .expect("parked");
+    f.hub
+        .lease(
+            Some("q"),
+            "pt",
+            Some(&json!({ "subscription": q_handle })),
+            Some(q_token),
+        )
+        .await
+        .expect("leased");
+    assert_eq!(
+        peer.next().await,
+        Some(Stream::Opened(1)),
+        "q's listener opened under q's token, never p's"
+    );
+    let mut intake = f.hub.take_intake();
+    assert!(peer.push_tools_changed(1), "premise: q's stream is open");
+    assert!(fan_out_next(&f, &mut intake).await, "q's notice was read");
+    let q_stamp = crate::events::observation::lease_stamp(
+        f.hub
+            .leases
+            .held_generation(&q_key)
+            .expect("q holds a lease"),
+    );
+    assert_eq!(
+        outbox_rows(&f),
+        [("sub_q_pt".to_owned(), Some(q_stamp))],
+        "q's notice reached q's row alone, under q's lease"
     );
 }
