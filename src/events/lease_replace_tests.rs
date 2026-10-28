@@ -209,11 +209,14 @@ async fn lease_t2b_a_replace_reopens_the_session_under_the_new_token() {
     let mut peer = two_token_peer([first.to_string(), second.to_string()]).await;
     let (f, handle, _listening) = leased_listener(&mut peer, first).await;
     lease_as(&f, &handle, second).await;
-    let after = [peer.next().await, peer.next().await];
+    // Two connections, so the peer may see the close and the open in either
+    // order; the listener ends the old session before it opens the new.
+    let mut after = vec![peer.next().await, peer.next().await];
+    after.sort_by_key(|s| format!("{s:?}"));
     assert_eq!(
         after,
         [Some(Stream::Closed(0)), Some(Stream::Opened(1))],
-        "the replace closes the old session, then reopens under the new token"
+        "the replace closes the old session and reopens under the new token"
     );
 }
 
@@ -259,5 +262,79 @@ async fn lease_t2b_a_notice_read_under_the_old_token_is_never_stamped_with_the_n
     assert!(
         !stamps.contains(&Some(narrow_stamp)),
         "a notice read under the wide token was stamped with the narrow one: {stamps:?}"
+    );
+}
+
+/// LEASE-T2b, the stamp at fan-out: a notice read under the wide token and
+/// still queued when the lease is replaced keeps the wide token's stamp, so
+/// delivery, which reads the narrow lease, never sends it as the narrow's.
+/// Independent of when the old stream closes.
+#[tokio::test]
+async fn lease_t2b_a_queued_notice_keeps_the_stamp_it_was_read_under() {
+    let (wide, narrow) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
+    let mut peer = two_token_peer([wide.to_string(), narrow.to_string()]).await;
+    let (f, handle, _listening) = leased_listener(&mut peer, wide).await;
+    let mut intake = f.hub.take_intake();
+    let wide_stamp = stamp_now(&f);
+    assert!(
+        peer.push_tools_changed(0),
+        "premise: the wide stream is open"
+    );
+    let read = tokio::time::timeout(std::time::Duration::from_secs(30), intake.recv())
+        .await
+        .ok()
+        .flatten()
+        .expect("premise: the notice was queued");
+    lease_as(&f, &handle, narrow).await;
+    assert_ne!(
+        stamp_now(&f),
+        wide_stamp,
+        "premise: the replace moved the generation"
+    );
+    let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
+    f.hub.fan_out(&services, &read).await;
+    assert_eq!(
+        outbox_stamps(&f),
+        [Some(wide_stamp)],
+        "stamped as read, never as the narrow lease"
+    );
+}
+
+/// A passthrough row's stamp at fan-out comes only from a fence marked as a
+/// leased run's; any other fence stamps no lease, so delivery buries it. Only
+/// no fence (delivery, replay) reads the lease held now.
+#[tokio::test]
+async fn a_passthrough_stamp_comes_only_from_a_leased_runs_fence() {
+    let f = fixture();
+    let handle = subscribe(&f, "p", "pt", "p");
+    lease_as(&f, &handle, token(Some(in_an_hour()))).await;
+    let row = f
+        .hub
+        .store
+        .subscriptions()
+        .into_iter()
+        .find(|s| s.name.starts_with("backend.pt."))
+        .expect("row");
+    let lease_of = |fence: Option<&str>| {
+        f.hub
+            .observed_now(&row, &f.config, fence)
+            .expect("observable")
+            .expect("per-user")
+            .lease
+    };
+    assert_eq!(
+        lease_of(None),
+        Some(stamp_now(&f)),
+        "no fence: the lease held now"
+    );
+    assert_eq!(
+        lease_of(Some("lease:00ab")),
+        Some("00ab".to_owned()),
+        "a leased run's own generation"
+    );
+    assert_eq!(
+        lease_of(Some("binding-7")),
+        None,
+        "an unmarked fence names no lease"
     );
 }

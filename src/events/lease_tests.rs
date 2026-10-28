@@ -301,11 +301,12 @@ async fn lease_t7_a_replace_bumps_the_generation_before_it_drains() {
     assert_eq!(s.held_generation(&key("p")), Some(new));
 }
 
-/// LEASE-T7 for a wipe (revocation, expiry, rejection): the generation is
-/// retired before the drain, so no new handoff begins under a lease that is
-/// being wiped.
-#[tokio::test]
-async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
+/// LEASE-T7 for a wipe: `wipe_by` wipes the lease of generation `g` while a
+/// send still holds its token, and the generation must already be retired,
+/// so no new handoff begins under a lease that is being wiped.
+async fn retired_before_the_drain(
+    wipe_by: impl FnOnce(Arc<LeaseStore>, u128) -> tokio::task::JoinHandle<()>,
+) {
     let s = Arc::new(store());
     let old = s
         .install(key("p"), token_until(now() + 3600), FAR, 0)
@@ -317,10 +318,7 @@ async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
         (Arc::clone(&h.token), h.cancel.clone())
     };
     let in_flight = token.read_owned().await;
-    let wiping = {
-        let s = s.clone();
-        tokio::spawn(async move { s.wipe(&key("p"), WipeReason::Released).await })
-    };
+    let wiping = wipe_by(s.clone(), old);
     let mut turns = 0;
     while !old_cancel.is_cancelled() {
         assert!(turns < 10_000, "the wipe never reached the drain");
@@ -335,7 +333,32 @@ async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
     );
     drop(in_flight);
     wiping.await.unwrap();
-    assert_eq!(s.state(&key("p")).await, LeaseState::CredentialNeeded);
+    assert_eq!(s.held_generation(&key("p")), None);
+}
+
+/// Revocation, the last row gone or a config change.
+#[tokio::test]
+async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, _| {
+        tokio::spawn(async move { s.wipe(&key("p"), WipeReason::Released).await })
+    })
+    .await;
+}
+
+/// A backend that refused the token.
+#[tokio::test]
+async fn lease_t7_a_rejection_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, g| {
+        tokio::spawn(async move { s.on_rejection(&key("p"), g).await })
+    })
+    .await;
+}
+
+/// A lease past its deadline.
+#[tokio::test]
+async fn lease_t7_an_expiry_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, _| tokio::spawn(async move { s.wipe_expired(u64::MAX).await }))
+        .await;
 }
 
 #[test]
