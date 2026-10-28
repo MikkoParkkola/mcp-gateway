@@ -58,12 +58,28 @@ pub(super) fn frame(event: &str, id: Option<&StreamId>, data: &Value) -> Bytes {
 }
 
 impl Conn {
-    /// Send one frame, giving up after [`WRITE_TIMEOUT`].
+    /// Send one frame, giving up after [`WRITE_TIMEOUT`]. The credential is
+    /// checked just before the write and again every [`RECHECK`] while the
+    /// write is blocked, so a stalled client cannot outlive a revocation.
     pub(super) async fn send(&self, bytes: Bytes) -> Result<(), End> {
-        match tokio::time::timeout(WRITE_TIMEOUT, self.tx.send(Ok(bytes))).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(End::ClientGone),
-            Err(_) => Err(End::WriteStalled),
+        if !self.still_entitled().await {
+            return Err(End::CredentialChanged);
+        }
+        let write = tokio::time::timeout(WRITE_TIMEOUT, self.tx.send(Ok(bytes)));
+        tokio::pin!(write);
+        loop {
+            tokio::select! {
+                done = &mut write => return match done {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(_)) => Err(End::ClientGone),
+                    Err(_) => Err(End::WriteStalled),
+                },
+                () = tokio::time::sleep(RECHECK) => {
+                    if !self.still_entitled().await {
+                        return Err(End::CredentialChanged);
+                    }
+                }
+            }
         }
     }
 
