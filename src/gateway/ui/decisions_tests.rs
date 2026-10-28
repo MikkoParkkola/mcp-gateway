@@ -174,7 +174,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
         &log,
         note(
             "stripe.charges",
-            now - crate::duration_bound::delta!(seconds, 120),
+            now - crate::duration_bound::delta!(seconds, 1200),
         ),
     );
     served_when(&state, |body| scope_len(body) == 1).await;
@@ -187,10 +187,11 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     }
     let edge = retention_edge(&log.path()).expect("an oldest kept segment");
     assert!(
-        edge > now - crate::duration_bound::delta!(seconds, 120),
+        edge > now - crate::duration_bound::delta!(seconds, 1200),
         "the first refusal is past the edge"
     );
-    // A refusal at or after the edge stays.
+    // A refusal after the edge stays, though it is timed before the oldest
+    // kept segment opened (inside the margin, as a slow append would be).
     write(
         &log,
         note(

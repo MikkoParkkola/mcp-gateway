@@ -319,8 +319,15 @@ fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChang
     Some(changes)
 }
 
-/// When the oldest kept segment of the log at `path` was opened: no record
-/// older than this is kept.
+/// A refusal is timed when it is evaluated and written a moment later, so
+/// one written just after a rotation can be timed before its segment opened.
+/// The edge allows for that with a margin far wider than any append wait:
+/// keeping an expired refusal a few minutes longer costs nothing, evicting a
+/// kept one loses a request.
+const EDGE_MARGIN_SECS: u64 = 600;
+
+/// When the oldest kept segment of the log at `path` was opened, less
+/// [`EDGE_MARGIN_SECS`]: no refusal timed before this is kept.
 fn retention_edge(path: &Path) -> Option<DateTime<Utc>> {
     use crate::security::transparency_log::segments::{list_segments, read_first_line};
     let oldest = list_segments(path)
@@ -329,7 +336,10 @@ fn retention_edge(path: &Path) -> Option<DateTime<Utc>> {
         .min_by_key(|s| s.seq)?;
     let first: Value = serde_json::from_str(&read_first_line(&oldest.path).ok()??).ok()?;
     let opened = first.get("segment_opened_at")?.as_u64()?;
-    DateTime::from_timestamp(i64::try_from(opened).ok()?, 0)
+    DateTime::from_timestamp(
+        i64::try_from(opened.saturating_sub(EDGE_MARGIN_SECS)).ok()?,
+        0,
+    )
 }
 
 #[cfg(test)]
