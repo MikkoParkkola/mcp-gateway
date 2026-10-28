@@ -29,6 +29,9 @@ use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
 pub(crate) mod live;
+
+#[path = "auth_runtime.rs"]
+pub(crate) mod runtime;
 use live::key_server_credential;
 #[path = "auth_quota.rs"]
 mod quota;

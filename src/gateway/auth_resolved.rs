@@ -138,6 +138,13 @@ impl ResolvedAuthConfig {
         })
     }
 
+    /// This config with its per-client buckets and breakers in `runtime`, the
+    /// store shared by every config built over it (stub: not yet used).
+    #[must_use]
+    pub(crate) fn with_runtime(self, _runtime: Arc<super::runtime::AuthRuntime>) -> Self {
+        self
+    }
+
     /// Create resolved config from `AuthConfig`.
     ///
     /// Panics if a configured environment-backed secret is missing, or if
