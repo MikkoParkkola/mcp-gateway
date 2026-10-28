@@ -565,3 +565,27 @@ async fn lease_t2_each_principals_listener_reads_with_its_own_token_only() {
         "q's notice reached q's row alone, under q's lease"
     );
 }
+
+/// ISO-T6 end to end: a subscriber who loses access is revoked by the sweep's
+/// admission pass, and its listener's session on the backend closes though
+/// the backend never sends a byte; nothing is read for it after.
+#[tokio::test]
+async fn iso_t6_a_revoked_subscribers_listener_closes_on_a_silent_backend() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    let p_token = token(Some(in_an_hour()));
+    let mut peer =
+        two_token_peer([p_token.to_string(), token(Some(in_an_hour())).to_string()]).await;
+    let (f, _handle, _listening) = leased_listener(&mut peer, p_token).await;
+    let mut intake = f.hub.take_intake();
+    let _refused = forced_verdict::answer(AccessVerdict::Refuses);
+    f.hub.revoke_inadmissible(None).await;
+    assert!(f.hub.store.subscriptions().is_empty(), "premise: revoked");
+    assert_eq!(
+        peer.next().await,
+        Some(Stream::Closed(0)),
+        "the silent backend's session closed"
+    );
+    assert!(!peer.push_tools_changed(0), "no stream is left to read on");
+    assert!(intake.try_recv().is_err(), "nothing was read for p");
+    assert!(outbox_rows(&f).is_empty(), "nothing queued for p");
+}
