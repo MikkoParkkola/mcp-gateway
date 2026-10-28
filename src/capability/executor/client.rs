@@ -53,15 +53,40 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
-                    attempt.error(
-                        "refusing a capability redirect to cleartext http:// off this machine",
-                    )
+                    attempt.error(RedirectRefused(
+                        "refusing a capability redirect to cleartext http:// off this machine"
+                            .to_owned(),
+                    ))
                 }
                 RedirectDecision::Follow => attempt.follow(),
             }
         }))
         .build()
         .expect("Failed to create HTTP client")
+}
+
+/// A redirect hop the policy refused: typed, so the send can tell the
+/// gateway's refusal from a backend's transport failure.
+#[derive(Debug)]
+struct RedirectRefused(String);
+
+impl std::fmt::Display for RedirectRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for RedirectRefused {}
+
+/// Records a refused redirect hop on the call's delivery. The caller still
+/// receives the same transport error, health mark included: the redirect is
+/// the backend's own answer.
+fn note_redirect_refusal(error: &reqwest::Error) {
+    if crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+    }
 }
 
 /// The route of every capability call: pinned and direct, or through
@@ -168,6 +193,7 @@ pub(super) async fn send_with_retry(
                 }
                 Err(e) => Err(
                     crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
+                        note_redirect_refusal(&e);
                         health.record_failure();
                         Error::Transport(format!("{label} failed: {}", redact_url(e)))
                     }),
@@ -184,6 +210,7 @@ pub(super) async fn send_with_retry(
                 if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
                     return Err(refused);
                 }
+                note_redirect_refusal(&e);
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
                 let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
