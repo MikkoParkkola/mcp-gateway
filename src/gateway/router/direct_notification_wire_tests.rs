@@ -106,7 +106,7 @@ async fn upstream() -> (String, Wire) {
 struct Gateway {
     router: axum::Router,
     wire: Wire,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     audit: [crate::security::transparency_log::temp::TempLog; 2],
 }
 

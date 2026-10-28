@@ -447,7 +447,11 @@ async fn a_plan_step_refused_after_dispatch_is_recorded_and_reauthorized() {
 async fn state_with_record_budget(
     mock: &Arc<MockBackend>,
     record_bytes: usize,
-) -> (Arc<AppState>, tempfile::TempDir, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    tempfile::TempDir,
+) {
     let (state, first) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let dir = tempfile::tempdir().expect("a private task-store directory");

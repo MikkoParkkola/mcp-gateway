@@ -524,7 +524,7 @@ async fn tracked_gateway(
     axum::Router,
     Arc<crate::gateway::session_lifecycle::SessionLifecycle>,
     Arc<std::sync::Mutex<Vec<String>>>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     use crate::gateway::session_lifecycle::SessionLifecycle;
     let lifecycle = Arc::new(SessionLifecycle::new());

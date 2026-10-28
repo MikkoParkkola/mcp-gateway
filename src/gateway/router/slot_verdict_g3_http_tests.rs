@@ -34,7 +34,7 @@ pub(super) struct Gateway {
     pub(super) mints: Arc<AtomicUsize>,
     #[cfg(feature = "firewall")]
     firewall_audit: std::path::PathBuf,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _files: [TempLog; 3],
 }
 

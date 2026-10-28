@@ -60,7 +60,7 @@ struct Fx {
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// The router's state (its task store, MIK-8439 R7).
     state: Arc<super::AppState>,
-    dirs: (tempfile::TempDir, tempfile::TempDir),
+    dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
     /// Last: it owns the Meta-MCP's audit log, which must outlive every
     /// field above that holds the logger.
     gateway: DirectAccountGateway,

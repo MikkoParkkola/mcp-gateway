@@ -157,7 +157,7 @@ fn transparency_logger(file: &TempLog) -> Arc<TransparencyLogger> {
 struct Gateway {
     router: axum::Router,
     seen: Transcript,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: [TempLog; 2],
 }
 

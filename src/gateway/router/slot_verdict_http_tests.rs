@@ -34,7 +34,7 @@ pub(super) struct Gateway {
     pub(super) shared: Arc<Asked>,
     /// Every credential resolution the gateway made.
     pub(super) mints: Arc<AtomicUsize>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: [TempLog; 2],
 }
 

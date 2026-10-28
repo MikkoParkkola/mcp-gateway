@@ -28,7 +28,7 @@ struct Direct {
     router: axum::Router,
     custody: Custody,
     dispatches: Arc<Dispatches>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: crate::security::transparency_log::temp::TempLog,
     /// The Meta-MCP's own audit log, behind `router`.
     _meta_log: crate::security::transparency_log::temp::TempLog,

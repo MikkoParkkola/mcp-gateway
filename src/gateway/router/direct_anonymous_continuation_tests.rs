@@ -77,7 +77,7 @@ impl crate::transport::Transport for Asker {
 struct Gateway {
     router: axum::Router,
     calls: Calls,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: crate::security::transparency_log::temp::TempLog,
 }
 

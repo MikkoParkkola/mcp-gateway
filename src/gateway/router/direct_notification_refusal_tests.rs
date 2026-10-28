@@ -106,7 +106,7 @@ struct Gateway {
     router: axum::Router,
     auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
     seen: Seen,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     /// The route's own transparency log (the one the direct route writes its
     /// mint and refusal rows to), so a cell can fail its next append.
     route_log: Arc<TransparencyLogger>,

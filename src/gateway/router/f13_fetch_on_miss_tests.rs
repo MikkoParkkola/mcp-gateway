@@ -182,7 +182,7 @@ pub(super) struct Fx {
     pub(super) router: axum::Router,
     pub(super) rec: Arc<Rec>,
     backend: Arc<Backend>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// Knobs of the single-tenant fixture. `unwired` leaves the slot with no
@@ -237,7 +237,7 @@ struct PerUser {
     router: axum::Router,
     slots: Vec<Arc<Rec>>,
     shared: Arc<Rec>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: [TempLog; 2],
 }
 

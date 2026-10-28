@@ -22,7 +22,7 @@ struct Fixture {
     router: axum::Router,
     log: Arc<TransparencyLogger>,
     audit_path: std::path::PathBuf,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 async fn fixture(policy: AuditFailurePolicy) -> Fixture {

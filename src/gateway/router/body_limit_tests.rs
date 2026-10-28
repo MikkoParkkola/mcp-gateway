@@ -18,7 +18,9 @@ use super::{AppState, create_router_with};
 use crate::gateway::webhooks::WebhookRegistry;
 
 /// The shared fixture with `server.max_body_size` set to `cap`.
-async fn state_with_cap(cap: Option<usize>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_with_cap(
+    cap: Option<usize>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = test_router_app_state().await;
     if let Some(cap) = cap {
         let mut config = (*state.live_config.get()).clone();

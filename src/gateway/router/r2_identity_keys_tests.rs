@@ -115,7 +115,7 @@ struct Gateway {
     router: axum::Router,
     alpha: Seen,
     shared: Seen,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: [TempLog; 2],
 }
 

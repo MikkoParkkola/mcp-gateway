@@ -17,7 +17,11 @@ use pretty_assertions::assert_eq;
 const URI_A: &str = "file:///a";
 const URI_B: &str = "file:///b";
 
-async fn enforced() -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
+async fn enforced() -> (
+    axum::Router,
+    Arc<RecordingTransport>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     router_with(Some(AttestationMode::Enforce), false).await
 }
 

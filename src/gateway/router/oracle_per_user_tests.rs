@@ -34,7 +34,7 @@ struct Gateway {
     caller: Arc<Asked>,
     shared: Arc<Asked>,
     mints: Arc<AtomicUsize>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _audit: [TempLog; 2],
 }
 
@@ -82,7 +82,10 @@ async fn gateway_authed(
 /// warmth, the active profile denying `denied`, the firewall when asked,
 /// and `configure` run on the Meta-MCP before it is mounted.
 fn gateway_on(
-    (mut state, store): (Arc<super::AppState>, tempfile::TempDir),
+    (mut state, store): (
+        Arc<super::AppState>,
+        crate::gateway::router::tests::FixtureDir,
+    ),
     (slot, shared, warmth): (CallerSlot, &Value, Warmth),
     (denied, firewalled): (&str, bool),
     configure: impl FnOnce(&crate::gateway::test_helpers::MetaMcp),

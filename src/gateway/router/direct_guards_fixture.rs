@@ -132,7 +132,7 @@ pub(crate) struct Fx {
     pub calls: Arc<AtomicUsize>,
     /// The params every `tools/call` reached the backend with.
     pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     /// The meta layer's audit log, when a builder gives it one; last, so it
     /// drops after the router and state that hold the logger.
     _audit: Option<crate::security::transparency_log::temp::TempLog>,
@@ -645,7 +645,10 @@ fn fixture_auth() -> AuthConfig {
 }
 
 /// The router state the per-thread knobs ask for.
-async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
+async fn fixture_state() -> (
+    Arc<super::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let auth = fixture_auth();
     let hardened = HARDENED.with(std::cell::Cell::get);
     let modern_off = MODERN_OFF.with(std::cell::Cell::get);

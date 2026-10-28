@@ -20,7 +20,7 @@ async fn tracked(
     Arc<AppState>,
     Arc<SessionLifecycle>,
     Reclaimed,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let (mut state, store) = fixture_state(&two_principal_auth()).await;
     let lifecycle = Arc::new(SessionLifecycle::new());

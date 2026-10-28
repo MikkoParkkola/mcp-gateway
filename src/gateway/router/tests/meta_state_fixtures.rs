@@ -15,7 +15,7 @@ use super::{
 pub(super) async fn test_router_app_state_with_meta(
     backend: Arc<Backend>,
     configure: impl FnOnce(&mut MetaMcp),
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
@@ -89,7 +89,7 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
 ) -> (
     crate::security::transparency_log::temp::TempLog,
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     use crate::identity_propagation::SignedAssertionStrategy;
     use crate::security::TransparencyLogger;
