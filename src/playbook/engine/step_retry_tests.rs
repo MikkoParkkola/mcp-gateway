@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A playbook step under `on_error: retry` is re-sent only after an error
 //! raised before its request was sent. A step whose request may have reached
-//! the backend runs once, and its recorded reason says it may have run
-//! (MIK-9042).
+//! the backend runs once, and its recorded reason says it may have run.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

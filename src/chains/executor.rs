@@ -318,7 +318,7 @@ impl ChainExecutor {
 // ============================================================================
 
 /// A failed step's error text; a step that may have run says so, since a
-/// chain caller holds only this text, not the typed error (MIK-9042).
+/// chain caller holds only this text, not the typed error.
 fn step_error_text(error: &crate::Error) -> String {
     crate::error::step_failure_text(error, error.to_string())
 }

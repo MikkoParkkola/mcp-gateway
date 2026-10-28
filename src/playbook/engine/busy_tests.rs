@@ -26,8 +26,7 @@ enum Answer {
     ToolError,
     /// A tool error whose text is 10,000 characters long (D3).
     LongToolError,
-    /// A connection never made on the first call (the one failure re-sent,
-    /// MIK-9042), [`Self::Busy`] after it.
+    /// A connection never made on the first call (the one failure re-sent), [`Self::Busy`] after it.
     TransportThenBusy,
     /// A connection never made on the first call, [`Self::Served`] after it.
     TransportThenServed,
@@ -225,7 +224,7 @@ async fn a_busy_step_after_a_completed_one_ends_the_plan_as_possibly_sent() {
 /// text and `retryable` data without the gateway's seal, is an ordinary
 /// error and keeps its policy: `continue` null-fills it and runs the
 /// successor, `retry` records it after one call (a backend's error answer
-/// follows a send, so it is not re-sent: MIK-9042) and runs the successor,
+/// follows a send, so it is not re-sent) and runs the successor,
 /// `abort` returns it unchanged. Red if Busy is recognised from its text.
 #[tokio::test]
 async fn an_ordinary_step_error_keeps_its_policy() {
@@ -464,7 +463,7 @@ async fn a_busy_retry_after_a_transport_failure_ends_the_plan_as_possibly_sent()
     );
 }
 
-/// D1 control: a failure before the send is still retried (MIK-9042), and the
+/// D1 control: a failure before the send is still retried, and the
 /// served retry is the step's result.
 #[tokio::test]
 async fn a_transport_failure_then_a_served_retry_completes_the_step() {

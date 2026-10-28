@@ -292,10 +292,10 @@ impl crate::transport::Transport for Unsigned {
     }
 }
 
-/// ADR12, after MIK-9042: a run whose one step's backend ran and then failed (a
+/// ADR12, now that a step is re-sent only after a failure before its send: a run whose one step's backend ran and then failed (a
 /// required chain receipt is missing) is not re-sent under `on_error: retry`,
 /// keyed or not: the failure follows a send, so the side effect may be done.
-/// One backend call either way. Before MIK-9042 the engine re-sent it, and only
+/// One backend call either way. Before that rule the engine re-sent it, and only
 /// the key's stored failure kept a keyed run to one call (unkeyed: two).
 #[tokio::test]
 async fn a_step_that_ran_and_failed_is_sent_once_keyed_or_not() {

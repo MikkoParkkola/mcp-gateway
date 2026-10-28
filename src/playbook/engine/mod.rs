@@ -353,7 +353,7 @@ async fn dispatch(
                 warn!(step = %step.name, error = %e, refused, "Step failed");
                 // Re-sent only when the error was raised before the request
                 // was sent: anything later may have acted, and a second send
-                // would repeat it (MIK-9042).
+                // would repeat it.
                 if refused || !e.is_pre_dispatch() {
                     return Err(e);
                 }
@@ -416,7 +416,7 @@ fn step_reason(error: &crate::Error) -> String {
         _ => error.to_string(),
     };
     // A null-filled step returns success, so no outer settlement sees this
-    // error: the reason itself says the step may have run (MIK-9042).
+    // error: the reason itself says the step may have run.
     crate::error::step_failure_text(error, reason)
 }
 

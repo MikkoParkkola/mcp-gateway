@@ -12,7 +12,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Appended to a chain or playbook step's error when
 /// [`Error::outcome_undetermined`] holds, so a caller reading the text knows
-/// the step was not re-sent because it may already have acted (MIK-9042).
+/// the step was not re-sent because it may already have acted.
 pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have reached the \
      backend, so it was not re-sent; reconcile at the backend before running it again";
 
@@ -469,7 +469,7 @@ impl Error {
     /// running such a call again.
     ///
     /// Conservative by design: an error that in fact did nothing may still
-    /// read `true`; one that may have run never reads `false` (MIK-9042).
+    /// read `true`; one that may have run never reads `false`.
     #[must_use]
     pub fn outcome_undetermined(&self) -> bool {
         !self.is_pre_dispatch()
@@ -600,7 +600,7 @@ mod rpc_code_tests {
         assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
     }
 
-    /// MIK-9042: `outcome_undetermined` is exactly "not pre-dispatch", so a
+    /// `outcome_undetermined` is exactly "not pre-dispatch", so a
     /// backend's answer at any status, a plain JSON-RPC error, a refusal and a
     /// local error all read as "may have run"; a lost round always does, and
     /// only the pre-dispatch allowlist reads as never sent.

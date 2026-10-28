@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A chain step is re-sent only after an error raised before its request was
 //! sent. A step whose request may have reached the backend runs once, and its
-//! result says it may have run (MIK-9042).
+//! result says it may have run.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

@@ -160,7 +160,7 @@ where
 /// Whether a failed step is re-sent.
 ///
 /// Only an error raised before the request was sent is, so a re-send cannot
-/// repeat an effect (MIK-9042): `TransportConnect` (the connection was never
+/// repeat an effect: `TransportConnect` (the connection was never
 /// made) and `BackendUnavailable` (refused before the send: a start, a closed
 /// concurrency limit, a cold tools/list timeout; MIK-7979). Both are on
 /// [`Error::is_pre_dispatch`], which is checked as well, so the list can
@@ -207,7 +207,7 @@ mod tests {
             "bad command".to_string()
         )));
         // A plain `Transport` failure may follow a send, so it is final too
-        // (MIK-9042); a connection never made is retried.
+        // a connection never made is retried.
         assert!(!is_retryable(&Error::Transport(
             "connection reset".to_string()
         )));
@@ -400,7 +400,7 @@ mod tests {
     }
 
     /// No HTTP status is re-sent: a 401 or 403 repeats with the same
-    /// credential (A11-g), and a 429 or 5xx can follow a send (MIK-9042).
+    /// credential (A11-g), and a 429 or 5xx can follow a send.
     #[test]
     fn no_typed_http_status_is_retried() {
         for status in [401, 403, 408, 429, 500, 503] {
@@ -408,7 +408,7 @@ mod tests {
         }
     }
 
-    /// MIK-9042: only an error raised before the send is re-sent.
+    /// Only an error raised before the send is re-sent.
     #[test]
     fn is_retryable_classifies_correctly() {
         assert!(is_retryable(&Error::TransportConnect("x".into())));

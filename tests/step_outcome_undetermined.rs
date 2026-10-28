@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A library caller can tell a call that may have run from one refused before
-//! its send, with the public `Error::outcome_undetermined` (MIK-9042). A
+//! its send, with the public `Error::outcome_undetermined`. A
 //! playbook under `on_error: abort` returns the step's error unchanged, so this
 //! is the caller's one way to know whether to reconcile before running it
 //! again.

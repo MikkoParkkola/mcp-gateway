@@ -141,7 +141,7 @@ steps:
 }
 
 /// A failure that is not proven raised before the send is attempted once, like
-/// a denial (MIK-9042). An invalid tool name is refused before the send, but
+/// a denial. An invalid tool name is refused before the send, but
 /// is not on `Error::is_pre_dispatch`'s allowlist, so the engine does not
 /// re-send it. The retried case, a failure raised before the send, is pinned at
 /// the engine (`playbook::engine::step_retry_tests`).
