@@ -55,13 +55,19 @@ fn cached_stripping() -> MetaMcp {
 /// `response_effect` the cell records.
 async fn search(meta: &MetaMcp) -> (Value, Option<Value>) {
     let (answer, facts) = delivery_facts::scope(async {
-        let answer = Box::pin(meta.invoke_tool(
+        // The single-call path `gateway_invoke` takes: `invoke_tool` is a
+        // composite's step, which leaves the caller's cell unvouched.
+        let sourced = Box::pin(meta.invoke_tool_sourced(
             &json!({"server": "remote_docs", "tool": "search", "arguments": {}}),
             Some("session-1"),
             &allow_all_ctx_named(Some("alice"), None),
+            crate::gateway::trace::generate(),
         ))
         .await
         .expect("answered");
+        let crate::gateway::meta_mcp::invoke::SourcedOutcome::Live((answer, _, _)) = sourced else {
+            panic!("a live answer");
+        };
         (answer, delivery_facts::snapshot())
     })
     .await;
