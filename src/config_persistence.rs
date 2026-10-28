@@ -63,6 +63,8 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 
 #[path = "config_persistence_splice.rs"]
 mod splice;
+#[cfg(feature = "webui")]
+pub(crate) use splice::{INVALID, NOT_IN_PLACE, UNREADABLE, edit_text};
 #[path = "config_persistence_url.rs"]
 mod url_spelling;
 
