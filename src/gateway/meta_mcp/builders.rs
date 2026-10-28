@@ -226,7 +226,14 @@ impl MetaMcp {
     /// When called, responses with HIGH/CRITICAL inspection findings are
     /// blocked with a security error rather than only logged.
     pub fn enable_response_inspection_action_mode(&mut self) {
-        self.response_inspection_action_mode = true;
+        self.response_inspection =
+            crate::security::response_inspect::ResponseInspectionMode::Action;
+    }
+
+    /// Turn response-side anomaly screening off (`enabled: false`): no
+    /// answer is inspected, annotated or blocked by it.
+    pub fn disable_response_inspection(&mut self) {
+        self.response_inspection = crate::security::response_inspect::ResponseInspectionMode::Off;
     }
 
     /// Attach a per-tool response contract config (issue #133, D1).
