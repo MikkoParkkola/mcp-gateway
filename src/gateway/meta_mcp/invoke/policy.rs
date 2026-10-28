@@ -671,3 +671,7 @@ fn note_response_gate() {
         None,
     );
 }
+
+#[cfg(test)]
+#[path = "ci_rewrite_gate_tests.rs"]
+mod ci_rewrite_gate_tests;
