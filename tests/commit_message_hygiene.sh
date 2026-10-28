@@ -185,6 +185,17 @@ run_case private_name_in_coauthor fail 'fix(router): reject a credential-bearing
 Co-Authored-By: Hebb Agent <agent@example.com>'
 
 # The pull-request body check reads $PR_BODY.
+# A reviewer model named in a message, in any spelling; the attribution
+# trailer names the authoring tool and stays allowed.
+run_case reviewer_gpt_seat fail 'fix(config): apply the gpt-review finding'
+run_case reviewer_muse fail 'fix(config): what muse asked for'
+run_case reviewer_glm fail 'test(config): the GLM row'
+run_case reviewer_review_model fail 'docs: both review models agreed'
+run_case attribution_trailer_only pass 'fix(router): refuse a credentialed http URL
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
+run_case word_containing_a_name pass 'docs: the amused operator ran glmark'
+
 pr_body_case() {
   local name="$1" expectation="$2" body="$3" status=0
   PR_BODY="$body" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" >/dev/null 2>&1 || status=$?
@@ -255,6 +266,46 @@ pr_body_args_case two_files fail '' "$body_dir/clean.md" "$body_dir/ticket.md"
 pr_body_args_case file_and_env_both_given fail 'Fine body.' "$body_dir/clean.md"
 pr_body_case acceptance_criterion_id pass 'Covers MIK-9999.HANDLE.1 and MIK-9999.HANDLE.2a.'
 pr_body_case acceptance_id_beside_a_citation fail 'Covers MIK-9999.HANDLE.1, see MIK-9999.'
+
+# Reviewer models are internal process: a public body or title never names
+# one. The attribution footer names the authoring tool and stays allowed.
+pr_body_case attribution_footer pass '🤖 Generated with [Claude Code](https://claude.com/claude-code)'
+pr_body_case gpt_seat fail 'Reviews: gpt-review SHIP at the head.'
+pr_body_case gpt_version fail 'Reviewed by gpt-5.5.'
+pr_body_case muse fail 'The second seat (muse) said SHIP.'
+pr_body_case glm fail 'GLM-5.3 asked for one more row.'
+pr_body_case grok fail 'grok found nothing.'
+pr_body_case kimi fail 'Kimi raised a LOW finding.'
+pr_body_case codex fail 'A codex run returned no verdict.'
+pr_body_case review_model fail 'Two review models agreed.'
+pr_body_case word_containing_a_name pass 'The amused operator ran glmark and gptables.'
+
+# The refusal names the matched word, never the rest of the line.
+pr_body_echo_case() {
+  local output status=0
+  output="$(PR_BODY="$1" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" 2>&1)" || status=$?
+  if [[ "$status" -eq 0 || "$output" == *"$2"* ]]; then
+    printf 'FAIL pr_body_no_echo: exit %d, output: %s\n' "$status" "$output" >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_body_echo_case 'codex said token-S3CRET-VALUE is fine' 'token-S3CRET-VALUE'
+
+# The title is held to the same rule (PR_TITLE beside PR_BODY, as CI passes it).
+pr_title_case() {
+  local name="$1" expectation="$2" title="$3" status=0
+  PR_BODY='A clean body.' PR_TITLE="$title" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" >/dev/null 2>&1 || status=$?
+  if [[ "$expectation" == "pass" && "$status" -ne 0 ]]; then
+    printf 'FAIL pr_title_%s: expected a clean title to pass, exit %d\n' "$name" "$status" >&2
+    failures=$((failures + 1))
+  elif [[ "$expectation" == "fail" && "$status" -eq 0 ]]; then
+    printf 'FAIL pr_title_%s: expected the checker to reject this title\n' "$name" >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_title_case names_a_model fail 'fix(config): apply the muse review'
+pr_title_case clean pass 'fix(config): refuse a write it cannot make in place'
+pr_title_case ticket_id fail 'fix(config): close MIK-1234'
 
 
 if (( failures > 0 )); then
