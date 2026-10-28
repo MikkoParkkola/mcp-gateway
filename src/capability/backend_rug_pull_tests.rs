@@ -198,6 +198,7 @@ async fn a_never_loaded_file_cannot_unload_the_capability_it_names() {
 
 /// An admin re-pinning the changed bytes resolves the change, though the
 /// pin recorded at detection was the old one.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_re_pinned_change_clears_its_record() {
     let (_dir, backend, path, _pinned) = loaded().await;
@@ -226,7 +227,7 @@ async fn a_re_pinned_change_clears_its_record() {
 
 /// A changed file that cannot be read is not resolved: its record stays and
 /// the reconcile says it is incomplete.
-#[cfg(unix)]
+#[cfg(all(unix, feature = "webui"))]
 #[tokio::test]
 async fn an_unreadable_change_keeps_its_record() {
     use std::os::unix::fs::PermissionsExt as _;
@@ -297,6 +298,7 @@ async fn a_refused_files_old_name_never_unloads_its_successor() {
 
 /// Garbled bytes, or a pin that is not a string, resolve nothing: the record
 /// stays and the reconcile is incomplete.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn garbled_bytes_keep_the_record() {
     for garbled in ["name: [unclosed\n", "name: rugtest\nsha256: [1, 2]\n"] {
@@ -314,6 +316,7 @@ async fn garbled_bytes_keep_the_record() {
 
 /// A pin key spelled with a tag reads as no key, but names a pin: the
 /// record stays.
+#[cfg(feature = "webui")]
 #[tokio::test]
 async fn a_tagged_pin_key_keeps_the_record() {
     let (_dir, backend, path, pinned) = loaded().await;

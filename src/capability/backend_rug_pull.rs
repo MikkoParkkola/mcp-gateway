@@ -83,6 +83,7 @@ impl CapabilityBackend {
     /// hash. A file that is gone, or whose bytes match their pin again, has
     /// its record cleared (only while that record is the one read) and is
     /// left out. Blocking: call it off the async workers.
+    #[cfg(feature = "webui")]
     pub(crate) fn current_mismatches(&self) -> Mismatches {
         let mut mismatches = Mismatches::default();
         for record in self.rug_pull_records() {
@@ -157,6 +158,7 @@ mod tests;
 use std::path::Path;
 
 /// What reconciling the pin mismatches found.
+#[cfg(feature = "webui")]
 #[derive(Debug, Default)]
 pub(crate) struct Mismatches {
     /// Each mismatch still on disk: its record, the bytes read and their hash.

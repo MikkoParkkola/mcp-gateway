@@ -370,6 +370,7 @@ impl IdentityGrant {
     /// Whether this row would have allowed a call a grant-decision note
     /// refused for a missing grant, read from the note's fields: the agent is
     /// its `source:id` spelling, as the note writes it.
+    #[cfg(feature = "webui")]
     pub(crate) fn covers_noted(
         &self,
         subject: &GrantSubject,

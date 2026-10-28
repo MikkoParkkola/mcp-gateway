@@ -52,6 +52,7 @@ impl GrantAgent {
 
     /// [`Self::matches`] for an agent spelled `source:id`, as a grant-decision
     /// note records it (`OwnedProvenAgentId::qualified`).
+    #[cfg(feature = "webui")]
     pub(super) fn matches_qualified(&self, agent: &str) -> bool {
         match self {
             Self::Any => true,

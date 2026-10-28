@@ -72,6 +72,7 @@ impl Subscribers {
 
 impl TransparencyLogger {
     /// Tell `reader` of every record of `kind` written from now on.
+    #[cfg(feature = "webui")]
     pub(crate) fn subscribe(&self, kind: &str, reader: Subscriber) {
         if let Ok(mut readers) = self.subscribers.0.write() {
             readers.push((kind.to_string(), reader));
@@ -501,6 +502,6 @@ impl TransparencyLogger {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 #[path = "transparency_log_subscribe_tests.rs"]
 mod subscribe_tests;

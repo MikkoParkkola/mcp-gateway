@@ -290,6 +290,7 @@ pub(crate) mod lookup_probe {
         CALLS.with(|calls| calls.set(calls.get() + 1));
     }
 
+    #[cfg(feature = "webui")]
     pub(crate) fn calls() -> usize {
         CALLS.with(Cell::get)
     }
