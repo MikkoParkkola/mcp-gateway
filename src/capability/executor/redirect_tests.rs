@@ -287,3 +287,78 @@ async fn a_single_attempt_rejected_redirect_keeps_the_health_mark() {
         "three refused redirects mark the backend"
     );
 }
+
+/// The `response_effect` a delivery cell holds after one send of `request`
+/// through `client`, and whether the send succeeded.
+async fn effect_of_send(request: reqwest::RequestBuilder) -> (bool, Option<serde_json::Value>) {
+    use crate::gateway::delivery_facts;
+    let health = crate::failsafe::HealthTracker::new("test");
+    let (ok, facts) = delivery_facts::scope(async {
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::send_with_retry(request, "test", true, &health),
+        )
+        .await
+        .expect("bounded");
+        (outcome.is_ok(), delivery_facts::snapshot())
+    })
+    .await;
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    (ok, fields.get("response_effect").cloned())
+}
+
+/// Negative control: a redirect the policy allows is followed, and nothing
+/// is recorded as refused. A host name passes the hop check, and with an
+/// egress proxy configured no pin is installed and `localhost` goes direct.
+#[tokio::test]
+async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let app = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(move || async move {
+                (
+                    axum::http::StatusCode::FOUND,
+                    [(
+                        axum::http::header::LOCATION,
+                        format!("http://localhost:{port}/ok"),
+                    )],
+                )
+            }),
+        )
+        .route("/ok", axum::routing::get(|| async { "ok" }));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    // Never reached: loopback and `localhost` bypass the proxy.
+    let proxy = url::Url::parse("http://127.0.0.1:9/").expect("proxy url");
+    let client = super::client::build(Some(&proxy));
+    let (ok, effect) = Box::pin(effect_of_send(
+        client.get(format!("http://127.0.0.1:{port}/")),
+    ))
+    .await;
+    assert!(ok, "premise: the redirect is followed");
+    assert_ne!(effect, Some("refused".into()));
+}
+
+/// Negative control: an ordinary transport failure (nothing listening) is
+/// the backend's, not a gateway refusal, and records no refusal.
+#[tokio::test]
+async fn an_ordinary_transport_failure_records_no_refusal() {
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let port = closed.local_addr().expect("addr").port();
+    drop(closed);
+    let client = super::client::build(None);
+    let (ok, effect) = Box::pin(effect_of_send(
+        client.get(format!("http://127.0.0.1:{port}/")),
+    ))
+    .await;
+    assert!(!ok, "premise: the send fails");
+    assert_ne!(effect, Some("refused".into()));
+}
