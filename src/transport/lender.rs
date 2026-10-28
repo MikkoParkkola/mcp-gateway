@@ -230,43 +230,53 @@ impl Lender {
         &self,
         call: &[(String, String)],
     ) -> Result<Vec<(String, String)>> {
-        let loans = if matches!(call, [(name, _)] if name == START_MARKER) {
-            self.starter().into_iter().collect()
-        } else {
-            self.matching_all(call)
-        };
-        let Some(first) = loans.first() else {
-            return Err(counted_refusal(
-                "unlent",
-                "the call's credential is not lent on this slot",
-            ));
-        };
-        for loan in &loans {
-            if loan.refused.is_some() {
-                return Err(counted_refusal("marked", "this credential was refused"));
-            }
-            let Some(check) = loan.check.as_ref() else {
+        let start = matches!(call, [(name, _)] if name == START_MARKER);
+        // A start's starter can end while its check runs; the start then
+        // sends as the next dispatch still waiting, never as the ended one.
+        // Each pass follows a loan that has ended, which `starter` skips,
+        // so the passes end.
+        loop {
+            let loans = if start {
+                self.starter().into_iter().collect()
+            } else {
+                self.matching_all(call)
+            };
+            let Some(first) = loans.first() else {
                 return Err(counted_refusal(
-                    "unchecked",
-                    "no recheck is attached to this credential",
+                    "unlent",
+                    "the call's credential is not lent on this slot",
                 ));
             };
-            if let Err(refusal) = check().await {
-                self.refuse(loan.id, refusal);
-                // No credential and no backend text: the refusal kind only.
-                tracing::warn!(?refusal, "a per-user send's credential recheck refused it");
-                let reason = match refusal {
-                    Refusal::Definitive => "recheck_definitive",
-                    Refusal::ThisLoan => "recheck_this_loan",
-                    Refusal::Transient => "recheck_transient",
+            for loan in &loans {
+                if loan.refused.is_some() {
+                    return Err(counted_refusal("marked", "this credential was refused"));
+                }
+                let Some(check) = loan.check.as_ref() else {
+                    return Err(counted_refusal(
+                        "unchecked",
+                        "no recheck is attached to this credential",
+                    ));
                 };
-                return Err(counted_refusal(
-                    reason,
-                    "this credential's recheck refused it",
-                ));
+                if let Err(refusal) = check().await {
+                    self.refuse(loan.id, refusal);
+                    // No credential and no backend text: the refusal kind only.
+                    tracing::warn!(?refusal, "a per-user send's credential recheck refused it");
+                    let reason = match refusal {
+                        Refusal::Definitive => "recheck_definitive",
+                        Refusal::ThisLoan => "recheck_this_loan",
+                        Refusal::Transient => "recheck_transient",
+                    };
+                    return Err(counted_refusal(
+                        reason,
+                        "this credential's recheck refused it",
+                    ));
+                }
             }
+            if start && self.loan(first.id).is_none() {
+                continue;
+            }
+            return Ok(first.headers.to_vec());
         }
-        Ok(first.headers.to_vec())
     }
 
     fn snapshot(lent: &Lent) -> Snapshot {
@@ -515,6 +525,54 @@ mod tests {
             Some(headers("two")),
             "the start sent as the next waiter"
         );
+    }
+
+    /// A start send whose starter's dispatch ends while that loan's check
+    /// runs is sent as the next dispatch still waiting, not as the ended one.
+    /// With no waiter left, the captured start call is refused.
+    #[test]
+    fn a_start_send_whose_starter_ends_during_its_check_sends_as_the_next() {
+        let lender = Arc::new(Lender::default());
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let (in_check, resume) = (Arc::clone(&entered), Arc::clone(&release));
+        let first = lender.lend(LentCredential {
+            headers: headers("one"),
+            check: Some(Arc::new(move || {
+                let (in_check, resume) = (Arc::clone(&in_check), Arc::clone(&resume));
+                Box::pin(async move {
+                    in_check.notify_one();
+                    resume.notified().await;
+                    Ok(())
+                })
+            })),
+        });
+        let second = lender.lend(LentCredential {
+            headers: headers("two"),
+            check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
+        });
+        let first_waits = lender.starting(first.id());
+        let second_waits = lender.starting(second.id());
+        let call = lender.start_call();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+
+        let sent = runtime.block_on(async {
+            let cancel = async move {
+                entered.notified().await;
+                drop(first_waits);
+                drop(first);
+                release.notify_one();
+            };
+            tokio::join!(lender.lent_for(&call), cancel).0
+        });
+        assert_eq!(sent.ok(), Some(headers("two")), "sent as the next waiter");
+
+        drop(second_waits);
+        drop(second);
+        let after = runtime.block_on(lender.lent_for(&call));
+        assert!(after.is_err(), "a start call with no waiter left was sent");
     }
 
     /// A refusal mark only escalates: ThisLoan then Definitive evicts once, and
