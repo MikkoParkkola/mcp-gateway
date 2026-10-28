@@ -338,37 +338,57 @@ const STORE_WRITES: &[&str] = &[
     routes::UI_CONTROL_PLANE_DECISIONS,
 ];
 
-/// Control-plane reads of the store, probed with and without one; with one,
-/// the store holds rows owned by different subjects, so a widened view or
-/// decision queue moves a cell. Export status reads no store.
+/// Control-plane reads of the store, probed with and without one. The
+/// snapshot reads only the store's audit log (its grant and policy rows are
+/// never shown), so the store holds audit events by two different actors and
+/// a widened view moves a cell. Export status reads no store.
 const STORE_READS: &[&str] = &[routes::UI_CONTROL_PLANE];
 
-/// Store rows for [`STORE_READS`]: a requested grant for [`DEV`], an approved
-/// one for [`OTHER_DEV`], and a policy that is not enforced.
+/// The audit events [`seed_store`] writes, one per actor.
+const SEEDED_EVENTS: [(&str, &str); 2] =
+    [("matrix-event-dev", DEV), ("matrix-event-other", OTHER_DEV)];
+
+/// Audit events for [`STORE_READS`]: one by [`DEV`], one by [`OTHER_DEV`].
 fn seed_store(state: &AppState) {
-    use crate::control_plane::{ControlPlaneGrant, ControlPlaneGrantStatus, ControlPlanePolicy};
+    use crate::control_plane::{
+        ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRollbackPlan,
+    };
     let store = state.control_plane_store.as_ref().expect("a store");
-    for (id, subject, status) in [
-        ("grant-dev", DEV, ControlPlaneGrantStatus::Requested),
-        ("grant-other", OTHER_DEV, ControlPlaneGrantStatus::Approved),
-    ] {
+    for (event_id, actor) in SEEDED_EVENTS {
         store
-            .put_grant(ControlPlaneGrant {
-                grant_id: id.to_string(),
-                subject_id: subject.to_string(),
-                server_id: "matrix-server".to_string(),
-                tool_id: None,
-                status,
+            .append_audit(&ControlPlaneAuditEvent {
+                grant_change: None,
+                event_id: event_id.to_string(),
+                actor_id: actor.to_string(),
+                action: ControlPlaneAction::MutateGrant,
+                target_id: "matrix-target".to_string(),
+                reason: "matrix seed".to_string(),
+                rollback: ControlPlaneRollbackPlan {
+                    summary: "revert".to_string(),
+                    step: "none".to_string(),
+                },
             })
-            .expect("the grant is stored");
+            .expect("the event is stored");
     }
-    store
-        .put_policy(ControlPlanePolicy {
-            policy_id: "policy-off".to_string(),
-            name: "matrix policy".to_string(),
-            enforced: false,
-        })
-        .expect("the policy is stored");
+}
+
+/// The seeded events reach an admin's snapshot, so the "+store" cells pin
+/// who is shown which store rows (not only that a store is attached).
+#[tokio::test]
+async fn the_seeded_store_reaches_the_snapshot() {
+    let fx = fixture(Gateway::On, true).await;
+    seed_store(&fx.state);
+    let router = create_router(Arc::clone(&fx.state));
+    let req = ("GET", routes::UI_CONTROL_PLANE, "plain");
+    let (status, body) = send(&router, request(Caller::AdminKey, req, &fx, None)).await;
+    assert_eq!(status, StatusCode::OK);
+    let body = String::from_utf8_lossy(&body);
+    for (event_id, _) in SEEDED_EVENTS {
+        assert!(
+            body.contains(event_id),
+            "{event_id} is not in the snapshot: {body}"
+        );
+    }
 }
 
 const METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
@@ -768,16 +788,8 @@ fn the_expectation_holds_known_answers() {
             "{path}"
         );
     }
-    // The seeded store reaches every role's snapshot, and the roles still
-    // see different answers: a widened view moves these cells.
+    // With the seeded store, the roles still see different snapshots.
     let seeded = |caller: &str| get(routes::UI_CONTROL_PLANE, "plain+store", caller);
-    for caller in ["AdminKey", "OidcAuditor", "OidcReviewer", "OidcDeveloper"] {
-        assert_ne!(
-            seeded(caller),
-            get(routes::UI_CONTROL_PLANE, "plain", caller),
-            "{caller}"
-        );
-    }
     assert_ne!(seeded("OidcAdmin"), seeded("OidcDeveloper"));
     assert_ne!(seeded("OidcAuditor"), seeded("OidcDeveloper"));
     for path in STORE_WRITES {
