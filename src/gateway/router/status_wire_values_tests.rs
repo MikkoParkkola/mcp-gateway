@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The wire values the web shell branches on, read from the real
-//! `GET /ui/api/status` serialization, never from source text: the server
-//! `state` words its glossary table keys on, `circuit_state` (including
-//! `half_open`), `running` and `next_retry_at`.
+//! `GET /ui/api/status` serialization, never from source text: `circuit_state`
+//! (closed, open, `half_open`), the `state` each of them gives, `running` and
+//! `next_retry_at`. Every `state` word is serialized through the row type in
+//! `gateway::ui::tests`. `running: true` has no route-level test: a running
+//! backend needs a connected transport, which no router fixture builds.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,7 +17,6 @@ use tower::ServiceExt;
 
 use super::{http_backend_at, scoped_auth_config, test_router_app_state_with_auth_and_config};
 use crate::backend::Backend;
-use crate::backend::server_state::ServerState;
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 use crate::failsafe::CircuitState;
 use crate::gateway::router::create_router;
@@ -46,9 +47,9 @@ async fn row_of(backend: Arc<Backend>, act: impl FnOnce(&Backend)) -> Value {
     body["servers"][0].clone()
 }
 
-fn quick_reset_backend() -> Arc<Backend> {
+fn instant_reset_backend() -> Arc<Backend> {
     let mut failsafe = FailsafeConfig::default();
-    failsafe.circuit_breaker.reset_timeout = Duration::from_millis(200);
+    failsafe.circuit_breaker.reset_timeout = Duration::ZERO;
     Arc::new(Backend::new(
         "wire",
         BackendConfig {
@@ -88,12 +89,11 @@ async fn an_open_breaker_reads_open_paused_with_an_rfc3339_retry_time() {
     chrono::DateTime::parse_from_rfc3339(at).expect("an RFC 3339 time");
 }
 
-/// After the reset timeout the breaker lets a probe through: `half_open`, still `paused`.
+/// With no reset timeout the breaker lets a probe through at once: `half_open`, still `paused`.
 #[tokio::test]
 async fn a_half_open_breaker_reads_half_open_paused_with_a_retry_time() {
-    let row = row_of(quick_reset_backend(), |b| {
+    let row = row_of(instant_reset_backend(), |b| {
         b.trip_circuit_breaker_for_test();
-        std::thread::sleep(Duration::from_millis(300));
         let breaker = Arc::clone(&b.shared_entry_for_test().failsafe.circuit_breaker);
         assert!(breaker.can_proceed(), "the probe is let through");
         assert_eq!(breaker.state(), CircuitState::HalfOpen);
@@ -103,29 +103,4 @@ async fn a_half_open_breaker_reads_half_open_paused_with_a_retry_time() {
     assert_eq!(row["state"], "paused", "{row}");
     let at = row["next_retry_at"].as_str().expect("a string");
     chrono::DateTime::parse_from_rfc3339(at).expect("an RFC 3339 time");
-}
-
-/// Every word the shell's glossary keys on, and every breaker word it reads.
-#[test]
-fn every_state_and_breaker_word_the_shell_reads_is_what_the_server_sends() {
-    let states = [
-        (ServerState::Running, "running"),
-        (ServerState::Slow, "slow"),
-        (ServerState::Paused, "paused"),
-        (ServerState::Dormant, "dormant"),
-        (ServerState::Unhealthy, "unhealthy"),
-        (ServerState::Refused, "refused"),
-        (ServerState::NeedsSignIn, "needs_sign_in"),
-        (ServerState::Unmanaged, "unmanaged"),
-    ];
-    for (state, word) in states {
-        assert_eq!(serde_json::to_value(state).unwrap(), word);
-    }
-    for (state, word) in [
-        (CircuitState::Closed, "closed"),
-        (CircuitState::Open, "open"),
-        (CircuitState::HalfOpen, "half_open"),
-    ] {
-        assert_eq!(state.as_str(), word);
-    }
 }
