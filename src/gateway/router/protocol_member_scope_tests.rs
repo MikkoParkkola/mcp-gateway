@@ -15,7 +15,17 @@ use super::direct_guards_fixture::{Answer, Fx, fixture};
 const BACKENDS: [&str; 2] = ["alpha", "alpha-pt"];
 
 /// One modern (2026-07-28) request to `/mcp/{backend}`: the answer's `result`.
-async fn modern(fx: &Fx, backend: &str, method: &str, mut params: Value) -> Value {
+async fn modern(fx: &Fx, backend: &str, method: &str, params: Value) -> Value {
+    let answer = modern_answer(fx, backend, method, params).await;
+    assert!(
+        answer.get("error").is_none(),
+        "{backend} {method}: premise: {answer}"
+    );
+    answer["result"].clone()
+}
+
+/// One modern request to `/mcp/{backend}`: the whole JSON-RPC answer.
+async fn modern_answer(fx: &Fx, backend: &str, method: &str, mut params: Value) -> Value {
     params["_meta"] = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {},
@@ -39,12 +49,7 @@ async fn modern(fx: &Fx, backend: &str, method: &str, mut params: Value) -> Valu
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let answer: Value = serde_json::from_slice(&bytes).unwrap();
-    assert!(
-        answer.get("error").is_none(),
-        "{backend} {method}: premise: {answer}"
-    );
-    answer["result"].clone()
+    serde_json::from_slice(&bytes).unwrap()
 }
 
 /// A complete `tools/call` answer carrying a task handle and a continuation.
@@ -134,5 +139,58 @@ async fn an_interim_resource_read_delivers_no_cache_hint() {
                 "{backend}: an interim resources/read delivered {member}: {result}"
             );
         }
+    }
+}
+
+/// An interim `tools/call` answer: its continuation is where it belongs.
+fn interim_call() -> Value {
+    json!({"resultType": "input_required", "requestState": "state-1", "inputRequests": {}})
+}
+
+/// A complete `resources/read` answer with its cache hints.
+fn final_read_with_cache_hints() -> Value {
+    json!({"contents": [], "resultType": "complete", "cacheScope": "private", "ttlMs": 1_000})
+}
+
+/// A task handle, to a send that declared no tasks.
+fn undeclared_task_handle() -> Value {
+    json!({"resultType": "task", "taskId": "t-1", "ttlMs": 1_000})
+}
+
+#[tokio::test]
+async fn allowed_placements_arrive() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::Built(interim_call), |_| {}).await;
+        let params = json!({"name": "read", "arguments": {}});
+        let result = modern(&fx, backend, "tools/call", params).await;
+        assert_eq!(
+            result.get("requestState"),
+            Some(&json!("state-1")),
+            "{backend}: an interim tools/call lost its continuation: {result}"
+        );
+        let fx = fixture(Answer::Built(final_read_with_cache_hints), |_| {}).await;
+        let params = json!({"uri": "file:///notes.txt"});
+        let result = modern(&fx, backend, "resources/read", params).await;
+        for member in ["cacheScope", "ttlMs"] {
+            assert!(
+                result.get(member).is_some(),
+                "{backend}: a complete resources/read lost {member}: {result}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn an_undeclared_task_handle_is_refused() {
+    for backend in BACKENDS {
+        let fx = fixture(Answer::Built(undeclared_task_handle), |_| {}).await;
+        let params = json!({"name": "read", "arguments": {}});
+        let answer = modern_answer(&fx, backend, "tools/call", params).await;
+        assert!(
+            answer.get("result").is_none(),
+            "{backend}: a task handle with no declaration was delivered: {answer}"
+        );
+        let error = answer["error"].to_string();
+        assert!(!error.contains("t-1"), "{backend}: {error}");
     }
 }

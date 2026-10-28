@@ -41,6 +41,21 @@ impl CacheScope {
     }
 }
 
+/// The methods whose results carry `ttlMs` and `cacheScope`.
+///
+/// Five from the `CacheableResult` interface, and `server/discover`, which
+/// requires the fields too. The gateway's own discovery document already
+/// carries them (`discover_document`), and shaping leaves them as written; a
+/// discover relayed to a backend gains them here.
+pub(crate) const CACHEABLE_METHODS: &[&str] = &[
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "resources/templates/list",
+    "server/discover",
+];
+
 /// The methods this gateway has assessed, and what each one warrants.
 ///
 /// Every row is private and the default below is private too, so the table

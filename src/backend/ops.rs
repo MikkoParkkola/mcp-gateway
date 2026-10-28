@@ -371,11 +371,31 @@ impl Backend {
             })
             .await
         };
-        // Every backend answer enters here, so this is the one
-        // place a backend's copy of a gateway-only member is removed, before
-        // any gate, cache or store reads the answer.
+        // Every backend answer enters here, so this is the one place a
+        // backend's copy of a gateway-only member, and a protocol member it
+        // sent where the protocol does not let it, is removed, before any
+        // gate, cache or store reads the answer. Only the task-augmented send
+        // declares the tasks extension upstream, so only it may be answered
+        // with a task handle; any other such answer is refused.
+        let declared = match attempts {
+            Attempts::TaskCapabilityOnce => crate::protocol::member_scope::Declared::Tasks,
+            Attempts::WithRetry => crate::protocol::member_scope::Declared::Nothing,
+        };
+        if let Ok(response) = &result
+            && let Some(refusal) = response.result.as_ref().and_then(|answer| {
+                crate::protocol::member_scope::undeclared_task(method, answer, declared)
+            })
+        {
+            tracing::warn!(backend = %self.name, method, "{refusal}");
+            result = Err(Error::Protocol(format!(
+                "backend '{}': {refusal}",
+                self.name
+            )));
+        }
         if let Ok(response) = &mut result {
-            crate::protocol::reserved_members::strip_ingress(&self.name, method, response);
+            crate::protocol::reserved_members::strip_ingress(
+                &self.name, method, declared, response,
+            );
         }
 
         // Calculate latency
