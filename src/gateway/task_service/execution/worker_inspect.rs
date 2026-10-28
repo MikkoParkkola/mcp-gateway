@@ -56,11 +56,8 @@ pub(in crate::gateway::task_service::execution) async fn inspect_and_record(
         let Some(decided) = decided.filter(|_| !interim) else {
             return settled;
         };
-        if !decided.refused {
-            crate::gateway::delivery_facts::raise(
-                crate::gateway::delivery_facts::ResponseEffect::Rewritten,
-            );
-        }
+        // A redaction raised `rewritten` in this cell already, where the
+        // firewall decided it (`egress::firewall_result`); it is not raised twice.
         let task = crate::gateway::meta_mcp::invoke::audit::SettledTask {
             server: &decided.server,
             tool: &decided.tool,
