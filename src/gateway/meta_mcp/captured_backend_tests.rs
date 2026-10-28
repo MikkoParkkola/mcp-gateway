@@ -101,7 +101,7 @@ async fn a_catalogue_read_mints_what_the_captured_backend_asks_for() {
 
     let control = meta.catalogue_credential_for(&replacement, caller).await;
     assert!(
-        control.is_some_and(|(headers, binding)| !headers.is_empty() && binding.is_some()),
+        control.is_some_and(|(headers, binding)| !headers.headers.is_empty() && binding.is_some()),
         "control: the replacement mints a per-user credential"
     );
     let served = meta.catalogue_credential_for(&captured, caller).await;

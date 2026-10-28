@@ -42,13 +42,6 @@ pub(crate) struct LentCredential {
     pub(crate) check: Option<SendCheck>,
 }
 
-impl LentCredential {
-    /// Whether this credential carries no header at all.
-    pub(crate) fn is_empty(&self) -> bool {
-        self.headers.is_empty()
-    }
-}
-
 /// Header names only: a value is the subscriber's credential and is never
 /// printed.
 impl std::fmt::Debug for LentCredential {
@@ -219,10 +212,11 @@ impl Lender {
                 .find(|lent| lent.id == id)
                 .is_some_and(|lent| lent.refused.replace(refusal).is_none())
         };
-        if first && refusal == Refusal::Definitive {
-            if let Some(evict) = self.evict.lock().as_ref() {
-                evict();
-            }
+        if first
+            && refusal == Refusal::Definitive
+            && let Some(evict) = self.evict.lock().as_ref()
+        {
+            evict();
         }
     }
 

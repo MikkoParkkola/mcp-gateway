@@ -326,12 +326,7 @@ impl HttpTransport {
         }
     }
 
-    /// Send a raw request to the message endpoint
-    pub(super) async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
-        self.send_request_as(request, &[]).await
-    }
-
-    /// [`Self::send_request`] inside a call: `call` is that call's headers, so
+    /// Send a raw request to the message endpoint inside a call: `call` is that call's headers, so
     /// a lent-only slot picks the loan the call carries.
     pub(super) async fn send_request_as(
         &self,

@@ -565,7 +565,14 @@ async fn backend_handler_inner(
         Ok(admitted) => admitted,
         Err(response) => return response,
     };
-    direct_dispatch::dispatch(scope, &envelope, (&preflight, &propagation), admitted).await
+    // Boxed: the dispatch future is too large to inline into this one.
+    Box::pin(direct_dispatch::dispatch(
+        scope,
+        &envelope,
+        (&preflight, &propagation),
+        admitted,
+    ))
+    .await
 }
 
 /// Sign when `nonce` is `Some`, then stage what is delivered: a refusal stages nothing.
