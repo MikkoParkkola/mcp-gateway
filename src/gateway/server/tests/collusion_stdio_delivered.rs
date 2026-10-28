@@ -1,11 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7887.RECEIPT.4 over stdio: a surfaced tool's answer has its
-//! `cacheScope` removed at ingress (a `tools/call` answer may not carry it),
-//! so backend text stuffed there never reaches the operator. The receipt is
-//! built from the answer delivered.
+//! credential redacted on the way out, after ingress, so the backend's own
+//! text around it never reaches the operator. The receipt is built from the
+//! answer delivered, never from the one the backend sent.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -25,16 +24,23 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     August, and which crew pruned the older trees after the second frost. It closes with the \
     count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
 
-/// Backend text long enough to fill a receipt's cap by itself.
-fn stuffing() -> String {
-    (0..400).fold(String::new(), |mut text, n| {
-        let _ = write!(
-            text,
-            "The quarry inventory line {n} lists crate {} of pressed cider. ",
-            n * 7 + 3
-        );
-        text
-    })
+/// Backend text around a credential, under 48 characters (the relay
+/// detector's window) on each side, so every window it fingerprints holds
+/// part of the credential that the egress firewall redacts.
+fn leaked_line() -> String {
+    format!(
+        "Ledger key for the depot: {} - filed in March.",
+        crate::gateway::egress_fixture::secret()
+    )
+}
+
+/// Whether the egress firewall redacts credentials in an answer.
+#[derive(Clone, Copy)]
+enum Egress {
+    /// Allow everything; nothing is redacted.
+    Plain,
+    /// Warn on every tool and redact a credential, still delivering.
+    Redacting,
 }
 
 /// Backend `alpha`: `read` answers this result.
@@ -82,6 +88,11 @@ fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
 /// A meta with `alpha` answering `answer`, `read` surfaced, and a `block`
 /// relay detector over `alpha:*`; and that detector's firewall.
 fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
+    stdio_meta_with(answer, Egress::Plain)
+}
+
+/// [`stdio_meta`] with the egress firewall set to `egress`.
+fn stdio_meta_with(answer: Value, egress: Egress) -> (Arc<MetaMcp>, Arc<Firewall>) {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -100,7 +111,11 @@ fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
-                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                rules: crate::yaml::from_str(match egress {
+                    Egress::Plain => "[{match: \"*\", action: allow}]",
+                    Egress::Redacting => "[{match: \"*\", action: warn}]",
+                })
+                .unwrap(),
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,
                     sources: vec!["alpha:*".to_string()],
@@ -129,9 +144,11 @@ async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
 
 #[tokio::test]
 async fn a_stdio_answer_is_receipted_as_delivered() {
-    let stuffing = stuffing();
-    let (meta, firewall) = stdio_meta(
-        json!({"content": [{"type": "text", "text": PROSE}], "isError": false, "cacheScope": stuffing}),
+    let leaked = leaked_line();
+    let (meta, firewall) = stdio_meta_with(
+        json!({"content": [{"type": "text", "text": PROSE}, {"type": "text", "text": leaked}],
+               "isError": false}),
+        Egress::Redacting,
     );
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
                          "params": {"name": "read", "arguments": {}}});
@@ -140,19 +157,21 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
         read.get("error").is_none(),
         "base: the read is delivered: {read}"
     );
+    let delivered = read["result"]["content"][1]["text"]
+        .as_str()
+        .unwrap_or_default();
     assert!(
-        read["result"].get("cacheScope").is_none(),
-        "base: ingress removed the scope: {read}"
+        delivered.contains("[REDACTED:credential]") && !delivered.contains(&leaked),
+        "base: the egress firewall redacted the credential: {read}"
     );
 
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "the delivered text lost its receipt"
     );
-    let piece: String = stuffing.chars().take(400).collect();
     assert!(
-        !relayed_by_bob(&firewall, &piece),
-        "undelivered cacheScope text was receipted"
+        !relayed_by_bob(&firewall, &leaked),
+        "the backend's undelivered text was receipted"
     );
 }
 

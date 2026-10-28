@@ -448,7 +448,7 @@ pub(crate) async fn fixture_signed_relayed(answer: Answer) -> Fx {
 
 /// [`fixture_signed_relayed`] with `log` as the state's transparency log,
 /// `build` arming the signed `MetaMcp` (MIK-8689: a delivery-record failure
-/// meets the relay commit).
+/// meets the relay commit), under a Warn rule so a credential is redacted.
 #[cfg(feature = "firewall")]
 pub(crate) async fn fixture_signed_relayed_logged(
     answer: Answer,
@@ -457,10 +457,12 @@ pub(crate) async fn fixture_signed_relayed_logged(
 ) -> Fx {
     HARDENED.with(|h| h.set(true));
     RELAY.with(|r| r.set(true));
+    FIREWALL_RULE.with(|r| r.set(Some(crate::security::firewall::FirewallAction::Warn)));
     STATE_LOG.with(|l| *l.borrow_mut() = Some(log));
     let fx = fixture_inner(answer, true, |meta| build(signing(meta, false))).await;
     HARDENED.with(|h| h.set(false));
     RELAY.with(|r| r.set(false));
+    FIREWALL_RULE.with(|r| r.set(None));
     STATE_LOG.with(|l| *l.borrow_mut() = None);
     fx
 }

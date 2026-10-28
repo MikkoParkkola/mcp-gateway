@@ -337,16 +337,21 @@ pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> R
 pub(crate) const DELIVERED_PROSE: &str =
     "Harbour dues for the winter quarter rise by four percent across every berth class.";
 
-/// Backend text stuffed into the top-level `cacheScope`, which the scope
-/// clamp overwrites, so the client never receives it.
-pub(crate) const STUFFED_SCOPE: &str =
-    "Undelivered stuffing: the backend hid this sentence in a member the gateway rewrites.";
+/// Backend text around a credential, under 48 characters (the relay
+/// detector's window) on each side, so every window it fingerprints holds
+/// part of the credential the egress firewall redacts: the client never
+/// receives it as sent.
+pub(crate) const LEAKED_LINE: &str = concat!(
+    "Ledger key for the depot: ghp_",
+    "abcdefghijklmnopqrstuvwxyz1234567890",
+    " - filed in March."
+);
 
-/// A Native result carrying [`DELIVERED_PROSE`] as its text and
-/// [`STUFFED_SCOPE`] as its `cacheScope`.
-fn stuffed_scope() -> Value {
-    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
-           "cacheScope": STUFFED_SCOPE})
+/// A Native result carrying [`DELIVERED_PROSE`] and [`LEAKED_LINE`] as its
+/// two texts.
+fn leaked_line() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE},
+                       {"type": "text", "text": LEAKED_LINE}], "isError": false})
 }
 
 /// Backend text in a top-level `_signature` member, which the gateway's
@@ -372,13 +377,13 @@ pub(crate) struct Rebuilt {
 }
 
 /// On the signed, relayed fixture with `alpha`'s `read` surfaced, the backend
-/// answering [`stuffed_scope`]: `k-std` reads on `route` (a modern call, as
+/// answering [`leaked_line`]: `k-std` reads on `route` (a modern call, as
 /// the hardened posture requires; on `/mcp` by the surfaced name, so the
 /// backend envelope is the result), then `k-budget`
 /// sends the delivered prose and the stuffing on the same route. The relay
 /// receipt is rebuilt from the delivered bytes, so only the prose is caught.
 pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, stuffed_scope, STUFFED_SCOPE).await
+    read_then_relay_stuffed(route, leaked_line, LEAKED_LINE).await
 }
 
 /// [`read_then_relay_rebuilt`] with the backend answering
@@ -448,22 +453,33 @@ async fn read_then_relay_stuffed(
 /// The chain nonce the R-LINK calls carry.
 pub(crate) const CHAIN_NONCE: &str = "resp-nonce";
 
-/// One legacy `read` on `route` with the chain signer emitting on request
-/// and the call carrying [`CHAIN_NONCE`], the backend claiming
-/// `cacheScope: "public"` (`/mcp` by the surfaced name, so the backend
-/// envelope is the result the link covers).
-pub(crate) async fn chained_public_scope(route: HttpRoute) -> Value {
+/// A final `resources/read` answer claiming `cacheScope: "public"`: the one
+/// kind of answer a backend may still send the member on, so the clamp has
+/// something to change.
+fn public_read() -> Value {
+    json!({"contents": [{"uri": "file:///notes.txt", "text": "notes"}], "cacheScope": "public"})
+}
+
+/// One legacy `resources/read` on the direct route with the chain signer
+/// emitting on request and the read carrying [`CHAIN_NONCE`].
+pub(crate) async fn chained_public_read() -> Value {
     use crate::gateway::chain_test_support::{NONCE_KEY, signer};
-    let fx = fixture::fixture_built(Answer::PublicScope, |meta| {
-        let mut meta = surfacing(meta);
+    let fx = fixture::fixture_built(Answer::Built(public_read), |mut meta| {
         meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
         meta
     })
     .await;
-    let params = json!({ "name": "read", "arguments": {}, "_meta": { NONCE_KEY: CHAIN_NONCE } });
-    fixture::send(&fx, route.uri(), "k-std", "tools/call", params, None)
-        .await
-        .1
+    let params = json!({ "uri": "file:///notes.txt", "_meta": { NONCE_KEY: CHAIN_NONCE } });
+    fixture::send(
+        &fx,
+        HttpRoute::Direct.uri(),
+        "k-std",
+        "resources/read",
+        params,
+        None,
+    )
+    .await
+    .1
 }
 
 /// The reviewed Node verifier's verdict on a delivered, message-signed body

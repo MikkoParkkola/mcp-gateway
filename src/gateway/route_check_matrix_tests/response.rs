@@ -157,6 +157,12 @@ pub(crate) enum RespNa {
     /// The stored task tail is the clamp and the seal over the worker's mint;
     /// the delivery stages run on the `tasks/get` route that reads it.
     TaskTailIsClampAndSeal,
+    /// The matrix drives `tools/call`, whose answer may not carry
+    /// `cacheScope`: ingress removes a backend's copy, so the clamp has
+    /// nothing to change there. Where a backend may still send it, a final
+    /// `resources/read`, `rows::r_link_read_scope_clamp_precedes_origin_link`
+    /// orders the clamp against the link.
+    IngressRemovesToolCallScope,
 }
 
 /// What a cell asserts.
@@ -318,7 +324,11 @@ pub(crate) const fn expect(
             ShapeSeal | FirewallSeal | SealSign | SignRecord | JudgeRecord | RecordCommit
             | JudgeCommit | SignRebuild | FirewallStamp | JudgeRebuild | StampShape | SignJudge,
         ) => NotApplicable(RespNa::TaskTailIsClampAndSeal),
+        (Task, TaskCase, _, ClampSeal) => NotApplicable(RespNa::IngressRemovesToolCallScope),
         (Direct, CacheHit, _, _) => NotApplicable(RespNa::NoCacheOnDirect),
+        (Mcp | Stdio | Direct, Fresh | CacheHit, _, ClampLink | ClampSeal) => {
+            NotApplicable(RespNa::IngressRemovesToolCallScope)
+        }
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
         // On /mcp and stdio a replay runs the tail on the stored, already
         // sealed bytes: no mint, so nothing is sealed anew; it does mint a
