@@ -83,7 +83,7 @@ where
 ///
 /// Returns the last error from `f` if all retry attempts are exhausted, the
 /// error is not retryable, or `stop` ended the retries.
-pub async fn with_retry_unless<F, Fut, T>(
+pub(crate) async fn with_retry_unless<F, Fut, T>(
     policy: &RetryPolicy,
     name: &str,
     stop: impl Fn() -> bool,

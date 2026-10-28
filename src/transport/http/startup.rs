@@ -55,7 +55,7 @@ impl HttpTransport {
     /// # Errors
     ///
     /// As [`Self::initialize`].
-    pub async fn initialize_as(&self, call: &[(String, String)]) -> Result<()> {
+    pub(crate) async fn initialize_as(&self, call: &[(String, String)]) -> Result<()> {
         self.connect().await?;
         self.handshake(call).await
     }
