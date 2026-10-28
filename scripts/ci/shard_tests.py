@@ -175,6 +175,20 @@ def unexpected(names: list[str], known: list[tuple[str, int, str]] = KNOWN_LEFTO
     return bad
 
 
+def contents(path: str, most: int = 3) -> str:
+    """The first few files under a leftover entry, with sizes, so a guard failure
+    names the writer instead of a random folder name."""
+    try:
+        if not os.path.isdir(path):
+            return f"{os.lstat(path).st_size}B"
+        files = [os.path.join(root, f) for root, _dirs, fs in os.walk(path) for f in fs]
+        found = sorted(f"{os.path.relpath(f, path)} {os.lstat(f).st_size}B" for f in files)
+    except OSError as error:
+        return f"unreadable: {error}"
+    shown = ", ".join(found[:most]) or "empty"
+    return shown + (f", +{len(found) - most} more" if len(found) > most else "")
+
+
 def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
     failed = run_steps(os_kind, shard, program)
     for f in failed:
@@ -206,7 +220,14 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
     if tmp:
-        failed += [f"left in TMPDIR: {name}" for name in unexpected(os.listdir(tmp))]
+        names = os.listdir(tmp)
+        bad = unexpected(names)
+        # Tolerated entries are printed too: which ones count against the
+        # allowance is only sort order, so the cause can sit in either list.
+        for name in sorted(set(names) - set(bad)):
+            print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
+                  f"({contents(os.path.join(tmp, name))})")
+        failed += [f"left in TMPDIR: {name} ({contents(os.path.join(tmp, name))})" for name in bad]
         shutil.rmtree(tmp, ignore_errors=True)
     return failed
 
@@ -270,7 +291,16 @@ def self_test() -> int:
         planted = run_steps("linux", "lib-a", fake)
     finally:
         del os.environ["PLANT_LEAK"]
-    assert planted == ["left in TMPDIR: .tmpAbC123.hwm"], planted
+    assert planted == ["left in TMPDIR: .tmpAbC123.hwm (0B)"], planted
+    with tempfile.TemporaryDirectory() as leftover:
+        os.makedirs(os.path.join(leftover, "tasks"))
+        for name in ("task-a.json", "task-b.json", "task-c.json", "task-d.json"):
+            with open(os.path.join(leftover, "tasks", name), "w") as f:
+                f.write("{}")
+        shown = contents(leftover)
+        assert shown == (f"{os.path.join('tasks', 'task-a.json')} 2B, "
+                         f"{os.path.join('tasks', 'task-b.json')} 2B, "
+                         f"{os.path.join('tasks', 'task-c.json')} 2B, +1 more"), shown
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
     assert unexpected(["a", "b"], [("[ab]", 1, "one allowed")]) == ["b"], "the count bounds a pattern"
     assert all(n <= LEFTOVER_CEILING.get(p, 0) for p, n, _ in KNOWN_LEFTOVERS), \
