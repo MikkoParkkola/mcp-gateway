@@ -163,7 +163,10 @@ fn every_shadow_field_is_escaped() {
 #[test]
 fn a_command_escaping_would_alter_is_withheld() {
     let server = stdio("tool", "npx tool");
-    let plain = render_shadow_report(&report(&[server.clone()], Path::new("/home/me/gw.yaml")));
+    let plain = render_shadow_report(&report(
+        std::slice::from_ref(&server),
+        Path::new("/home/me/gw.yaml"),
+    ));
     assert!(plain.contains("Apply after review: "), "{plain}");
     assert!(!plain.contains("withheld"), "{plain}");
     let hostile = render_shadow_report(&report(
