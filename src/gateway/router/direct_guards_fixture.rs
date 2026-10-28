@@ -592,6 +592,11 @@ fn fixture_auth() -> AuthConfig {
         api_keys: vec![
             key("k-std"),
             key("k-other"),
+            // The web UI's tool route (U12) runs only for an admin.
+            ApiKeyConfig {
+                admin: true,
+                ..key("k-admin")
+            },
             key("k-budget"),
             ApiKeyConfig {
                 rate_limit: 1,

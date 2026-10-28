@@ -330,6 +330,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/tool_call.rs (call; admin-only, and an empty body is
+    // refused before anything runs)
+    row(
+        "/ui/api/tools/call",
+        Method::POST,
+        "/ui/api/tools/call",
+        Payload::None,
+        [401, 403, 403, 400],
+    ),
     // src/gateway/ui/refusals.rs:24 (refusals; admin-only read, the codes the
     // design requires: the auth layer refuses an unauthenticated caller, the
     // handler refuses any non-admin, an admin reads the list)

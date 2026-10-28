@@ -22,9 +22,9 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
 const ROUTE: &str = "/ui/api/tools/call";
-const ADMIN: &str = "k-admin";
+pub(super) const ADMIN: &str = "k-admin";
 const USER: &str = "k-user";
-const SERVER: &str = "alpha";
+pub(super) const SERVER: &str = "alpha";
 
 /// A backend whose `tools/list` declares `read`, `fail` and `iserr`
 /// read-only and leaves `write` and `get_x` undeclared, counting every call.
@@ -104,9 +104,9 @@ fn key(name: &str, admin: bool) -> ApiKeyConfig {
     }
 }
 
-struct Fx {
-    state: Arc<AppState>,
-    calls: Arc<AtomicUsize>,
+pub(super) struct Fx {
+    pub(super) state: Arc<AppState>,
+    pub(super) calls: Arc<AtomicUsize>,
     audit_path: std::path::PathBuf,
     _audit: tempfile::TempDir,
     _store: tempfile::TempDir,
@@ -114,26 +114,34 @@ struct Fx {
 
 /// A backend `alpha` answered by [`Stub`], its tool list filled, and both
 /// audit logs on.
-async fn fixture() -> Fx {
+pub(super) async fn fixture() -> Fx {
     fixture_with(Setup::Plain).await
 }
 
 /// What the fixture's `MetaMcp` has on beyond the audit logs.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Setup {
+pub(super) enum Setup {
     Plain,
     /// The response cache, as a server builds it.
     Cached,
     /// Message signing that requires a nonce on every call.
     SignedNonce,
+    /// Caller identity from a trusted proxy at [`PROXY`].
+    TrustedProxy,
 }
+
+/// The trusted proxy the `TrustedProxy` rows' requests arrive from.
+pub(super) const PROXY: std::net::SocketAddr = std::net::SocketAddr::new(
+    std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 7)),
+    40_000,
+);
 
 /// [`fixture`] with the response cache on, as a server builds it.
 async fn fixture_cached() -> Fx {
     fixture_with(Setup::Cached).await
 }
 
-async fn fixture_with(setup: Setup) -> Fx {
+pub(super) async fn fixture_with(setup: Setup) -> Fx {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![key(ADMIN, true), key(USER, false)],
@@ -177,6 +185,14 @@ async fn fixture_with(setup: Setup) -> Fx {
             Duration::from_secs(300),
             true,
         );
+    }
+    if setup == Setup::TrustedProxy {
+        meta = meta.with_caller_identity(crate::security::caller_identity::CallerIdentityConfig {
+            mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
+            trusted_proxies: vec![PROXY.ip()],
+            authority: "corp-sso".to_string(),
+            ..Default::default()
+        });
     }
     meta.enable_transparency_log(Arc::clone(&log));
     state_mut.meta_mcp = Arc::new(meta);
@@ -252,11 +268,11 @@ fn call(tool: &str, confirm_write: bool) -> Value {
     json!({"server": SERVER, "tool": tool, "arguments": {}, "confirm_write": confirm_write})
 }
 
-fn sent(fx: &Fx) -> usize {
+pub(super) fn sent(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)
 }
 
-fn records(fx: &Fx) -> Vec<Value> {
+pub(super) fn records(fx: &Fx) -> Vec<Value> {
     std::fs::read_to_string(&fx.audit_path)
         .unwrap_or_default()
         .lines()
@@ -265,7 +281,7 @@ fn records(fx: &Fx) -> Vec<Value> {
 }
 
 /// The route's `admin_action` records.
-fn admin_actions(fx: &Fx) -> Vec<Value> {
+pub(super) fn admin_actions(fx: &Fx) -> Vec<Value> {
     records(fx)
         .into_iter()
         .filter(|r| r["event"] == "admin_action" && r.to_string().contains(ROUTE))
@@ -436,14 +452,9 @@ async fn c1_bad_bodies_are_refused_before_dispatch() {
     assert_eq!(sent(&fx), 0);
 }
 
-/// `key`'s principal as the auth layer derives it from the secret.
-fn principal_of(key: &str) -> String {
-    crate::hashing::sha256_hex(key.as_bytes())[..12].to_owned()
-}
-
 /// POST `params` as a modern `tools/call` to `/mcp` as `key`, inside `scope`
 /// when given; the raw answer bytes.
-async fn post_mcp(
+pub(super) async fn post_mcp(
     fx: &Fx,
     key: &str,
     params: Value,
@@ -478,81 +489,8 @@ async fn post_mcp(
         .to_vec()
 }
 
-fn invoke(tool: &str) -> Value {
+pub(super) fn invoke(tool: &str) -> Value {
     json!({"name": "gateway_invoke", "arguments": {"server": SERVER, "tool": tool, "arguments": {}}})
-}
-
-fn ui_call(
-    tool: &str,
-    principal: &str,
-    confirm: crate::gateway::ui_call::Confirm,
-) -> Arc<crate::gateway::ui_call::UiCall> {
-    crate::gateway::ui_call::UiCall::new(SERVER, tool, principal, confirm)
-}
-
-/// T21: a UI call whose dispatch runs as another principal than the admin
-/// the route checked is refused before the send.
-/// Mutant: the principal comparison removed.
-#[tokio::test]
-async fn t21_a_principal_mismatch_is_refused_before_the_send() {
-    let fx = fixture().await;
-    let call = ui_call(
-        "read",
-        "someone-else",
-        crate::gateway::ui_call::Confirm::Confirmed,
-    );
-    let body = post_mcp(&fx, ADMIN, invoke("read"), Some(Arc::clone(&call))).await;
-    let body: Value = serde_json::from_slice(&body).expect("json");
-    assert!(body.get("error").is_some(), "{body}");
-    assert_eq!(sent(&fx), 0);
-    assert!(!call.outcome().dispatched);
-}
-
-/// T22: a UI call confirmed for one tool cannot send another.
-/// Mutant: the target comparison removed.
-#[tokio::test]
-async fn t22_a_call_for_another_target_is_refused() {
-    let fx = fixture().await;
-    let principal = principal_of(ADMIN);
-    // Control: the matching target is sent.
-    let ok = ui_call(
-        "write",
-        &principal,
-        crate::gateway::ui_call::Confirm::Confirmed,
-    );
-    let _ = post_mcp(&fx, ADMIN, invoke("write"), Some(Arc::clone(&ok))).await;
-    assert_eq!(sent(&fx), 1, "the premise: a matching call runs");
-    let other = ui_call(
-        "read",
-        &principal,
-        crate::gateway::ui_call::Confirm::Confirmed,
-    );
-    let body = post_mcp(&fx, ADMIN, invoke("write"), Some(Arc::clone(&other))).await;
-    let body: Value = serde_json::from_slice(&body).expect("json");
-    assert!(body.get("error").is_some(), "{body}");
-    assert_eq!(sent(&fx), 1, "the foreign target was never sent");
-}
-
-/// T18: a task-augmented call under a UI call is refused before any task
-/// exists: its worker would run outside the UI call.
-/// Mutant: the task refusal removed.
-#[tokio::test]
-async fn t18_a_ui_call_never_runs_as_a_task() {
-    let fx = fixture().await;
-    let call = ui_call(
-        "read",
-        &principal_of(ADMIN),
-        crate::gateway::ui_call::Confirm::Confirmed,
-    );
-    let mut params = invoke("read");
-    params["task"] = json!({});
-    params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18"});
-    let body = post_mcp(&fx, ADMIN, params, Some(call)).await;
-    let body: Value = serde_json::from_slice(&body).expect("json");
-    assert!(body.get("error").is_some(), "{body}");
-    // No task was made, so no worker exists to send it later.
-    assert!(body.pointer("/result/taskId").is_none(), "{body}");
-    assert_eq!(sent(&fx), 0);
 }
 
 /// T23: a UI call bypasses the response cache: two calls of a declared
@@ -633,203 +571,6 @@ async fn t19_a_stdio_server_is_gated_and_recorded_alike() {
     assert_eq!(body["disposition"], "ran", "{body}");
     assert!(body["receipt"].is_string(), "{body}");
     assert_eq!(sent(&fx), 1);
-}
-
-/// A result carrying a credential the response firewall withholds.
-#[cfg(feature = "firewall")]
-const WITH_SECRET: &str = concat!("token=", "gh", "p_", "0123456789abcdefghij0123456789abcdef");
-
-/// T13b: the /mcp answer for a firewall-withheld result is byte-identical
-/// with and without a UI call in scope: the cell never reaches the wire.
-/// Mutant: the gate refuses every call in scope (the target check inverted).
-#[cfg(feature = "firewall")]
-#[tokio::test]
-async fn t13b_mcp_bytes_are_unchanged_by_a_ui_call_in_scope() {
-    use super::direct_guards_fixture::{Answer, fixture_firewalled_with};
-    let fx = fixture_firewalled_with(Answer::Text(WITH_SECRET), None, false).await;
-    let send = |scope: Option<Arc<crate::gateway::ui_call::UiCall>>| {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/mcp")
-            .header("authorization", "Bearer k-std")
-            .header("content-type", "application/json")
-            .body(Body::from(
-                json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
-                    "name": "gateway_invoke",
-                    "arguments": {"server": "alpha", "tool": "read", "arguments": {}},
-                }})
-                .to_string(),
-            ))
-            .expect("request");
-        let router = fx.router.clone();
-        async move {
-            let response = match scope {
-                Some(call) => call.scope(router.oneshot(request)).await,
-                None => router.oneshot(request).await,
-            }
-            .expect("response");
-            axum::body::to_bytes(response.into_body(), usize::MAX)
-                .await
-                .expect("body")
-        }
-    };
-    let plain = send(None).await;
-    let call = crate::gateway::ui_call::UiCall::new(
-        "alpha",
-        "read",
-        &principal_of("k-std"),
-        crate::gateway::ui_call::Confirm::Confirmed,
-    );
-    let scoped = send(Some(Arc::clone(&call))).await;
-    let body: Value = serde_json::from_slice(&plain).expect("json");
-    assert_eq!(
-        body["error"]["message"], "Response blocked by security firewall",
-        "the premise: the answer is withheld: {body}"
-    );
-    assert_eq!(plain, scoped, "the same bytes with a UI call in scope");
-    assert_eq!(fx.calls.load(Ordering::SeqCst), 2, "both were sent");
-    assert!(call.outcome().dispatched, "the scoped one was recorded");
-}
-
-/// Spawns on the path that are not the send: (file, line text, why).
-const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
-    (
-        "src/gateway/meta_mcp/grant_audit.rs",
-        "handle.spawn(async move {",
-        "spawn_write: a bounded write of grant records, after the call",
-    ),
-    (
-        "src/gateway/meta_mcp/grant_audit.rs",
-        "let flush = tokio::spawn(async move { write_records(&writer, &notes).await });",
-        "the slot's record flush, after the call",
-    ),
-    (
-        "src/gateway/meta_mcp/grant_audit.rs",
-        "let writer = tokio::spawn(async move {",
-        "the record writer for a refused call",
-    ),
-];
-
-/// T20 (design C0b): a web UI call's cell is a task-local, which does not
-/// cross a spawn. Nothing between the MCP handler and the send spawns, so
-/// the cell reaches the gate and the send record; a spawn added there fails
-/// this row, and whoever adds it must carry the cell across.
-#[test]
-fn t20_no_spawn_wraps_the_send() {
-    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    let handlers = root.join("src/gateway/router/handlers");
-    for entry in std::fs::read_dir(&handlers).expect("handlers") {
-        let path = entry.expect("entry").path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        if name == "meta_handler.rs" || name.starts_with("dispatch_") {
-            files.push(path);
-        }
-    }
-    let mut dirs = vec![
-        root.join("src/gateway/meta_mcp/call_dispatch"),
-        root.join("src/gateway/meta_mcp/invoke"),
-    ];
-    files.push(root.join("src/gateway/meta_mcp/call_dispatch.rs"));
-    files.push(root.join("src/gateway/meta_mcp/grant_audit.rs"));
-    while let Some(dir) = dirs.pop() {
-        for entry in std::fs::read_dir(&dir).expect("a scanned directory") {
-            let path = entry.expect("entry").path();
-            if path.is_dir() {
-                dirs.push(path);
-            } else if path.extension().is_some_and(|e| e == "rs") {
-                files.push(path);
-            }
-        }
-    }
-    let mut found = Vec::new();
-    let mut used = vec![false; SPAWN_ALLOWED.len()];
-    for path in files {
-        let rel = path
-            .strip_prefix(root)
-            .expect("under the root")
-            .to_string_lossy()
-            .replace('\\', "/");
-        if rel.contains("_tests") || rel.contains("/tests/") || rel.ends_with("fixture.rs") {
-            continue;
-        }
-        let text = std::fs::read_to_string(&path).expect("readable");
-        for (n, line) in text.lines().enumerate() {
-            let code = line.trim();
-            if code.starts_with("//") {
-                continue;
-            }
-            let spawns = ["tokio::spawn(", "spawn_blocking(", "JoinSet", ".spawn("]
-                .iter()
-                .any(|p| code.contains(p));
-            if !spawns {
-                continue;
-            }
-            match SPAWN_ALLOWED
-                .iter()
-                .position(|(f, l, _)| *f == rel && code == *l)
-            {
-                Some(i) => used[i] = true,
-                None => found.push(format!("{rel}:{}: {code}", n + 1)),
-            }
-        }
-    }
-    assert!(found.is_empty(), "a spawn on the dispatch path: {found:#?}");
-    let stale: Vec<_> = SPAWN_ALLOWED
-        .iter()
-        .zip(&used)
-        .filter(|(_, u)| !**u)
-        .map(|(r, _)| r.1)
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "allowlist rows that match nothing: {stale:?}"
-    );
-}
-
-fn capability(read_only: bool) -> crate::capability::CapabilityDefinition {
-    let yaml = format!(
-        r"
-name: probe
-description: Test capability
-metadata:
-  read_only: {read_only}
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.invalid
-      path: /probe
-"
-    );
-    crate::capability::parse_capability(&yaml).expect("capability")
-}
-
-/// T24: the capability executor judges the definition it is about to run,
-/// so a reload after the dispatch gate cannot run a write unconfirmed.
-/// Mutant: the UI arm in the capability executor removed.
-#[tokio::test]
-async fn t24_a_capability_is_judged_by_the_definition_it_runs() {
-    use crate::capability::{CapabilityBackend, CapabilityExecutor};
-    use crate::gateway::ui_call::{Confirm, UiCall};
-    for (read_only, refused) in [(false, true), (true, false)] {
-        let backend = CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()));
-        backend
-            .register_capability(capability(read_only))
-            .expect("registered");
-        let call = UiCall::new("caps", "probe", "p", Confirm::DeclaredReadOnlyOnly);
-        // The REST provider is unreachable, so a call the gate lets through
-        // fails later, for another reason.
-        let _ = call.scope(backend.call_tool("probe", json!({}))).await;
-        assert_eq!(
-            call.outcome().confirm_refused,
-            refused,
-            "read_only: {read_only}"
-        );
-    }
 }
 
 /// T25 (lead): under signing that requires a nonce, the route mints none
