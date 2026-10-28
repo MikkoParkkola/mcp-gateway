@@ -3,6 +3,11 @@
 //! A capability that shares a backend's name never receives that backend's
 //! secrets: its REST call is not a send to the backend, so no rule of the
 //! backend's applies to it.
+//!
+//! Defence in depth, not a user-facing case: config load already refuses a
+//! backend named like the capabilities source (`Config::validate`,
+//! src/config/validation.rs), so only a gateway assembled in code, as here,
+//! can pair the two.
 
 use std::sync::Mutex;
 

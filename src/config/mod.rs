@@ -711,6 +711,10 @@ mod cwe532_debug_redaction;
 mod cleartext_credential_guard;
 
 #[cfg(test)]
+#[path = "a2a_secrets_tests.rs"]
+mod a2a_secrets;
+
+#[cfg(test)]
 #[path = "account_custody_tests.rs"]
 mod account_custody_tests;
 
