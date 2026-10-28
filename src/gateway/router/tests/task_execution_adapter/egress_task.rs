@@ -442,12 +442,95 @@ async fn a_clean_task_answer_writes_no_settlement_record() {
     use crate::security::firewall::FirewallAction;
     let (task, settled, entries) = settled_task_log(FirewallAction::Block, Answer::ok()).await;
     assert!(
-        settled.get("error").is_none(),
+        status_of(&settled) == "completed",
         "premise: the clean task completes: {settled}"
     );
     assert!(
         settlement_records(&entries, &task).is_empty(),
         "a clean settlement wrote a record:\n{}",
+        dump(&entries)
+    );
+}
+
+/// Under fail-closed audit, a settlement record that cannot be written
+/// withholds the answer: the task settles on `-32005` with no content. Only
+/// the settlement append fails; the worker's dispatch record is written.
+#[tokio::test]
+async fn a_failed_settlement_write_under_fail_closed_withholds_the_answer() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let (_dir, log) = temp_log(Some(AuditFailurePolicy::FailClosed));
+    let (state, _store) = ruled_state(FirewallAction::Warn, Arc::clone(&log)).await;
+    let mock = MockBackend::answering(Answer::Result(
+        json!({"content": [{"type": "text", "text": leak}], "isError": false}),
+    ));
+    register(&state, BACKEND, &mock);
+    log.fail_next_append_of_kind_for_test("task_settlement");
+
+    let created = post(&state, "key-a", task_invoke(2, "settle-task", json!({}))).await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert!(mock.calls() > 0, "premise: the worker reached the backend");
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    assert!(
+        entries.iter().any(|entry| entry["route"] == "meta"),
+        "premise: the dispatch record was written:\n{}",
+        dump(&entries)
+    );
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "premise: the settlement append failed:\n{}",
+        dump(&entries)
+    );
+    assert!(
+        settled.to_string().contains("-32005"),
+        "a failed settlement write withholds the answer: {settled}"
+    );
+    assert!(
+        !settled.to_string().contains(&leak) && !settled.to_string().contains("[REDACTED"),
+        "no content of the answer, redacted or not: {settled}"
+    );
+}
+
+/// An input request the inspection rewrote but did not refuse is still an
+/// interim answer: the task waits for input and no settlement record is written.
+#[tokio::test]
+async fn a_rewritten_input_request_writes_no_settlement_record() {
+    use super::input_round::{STATE_1, ask, create, wait_input_required};
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let mut asked = ask("k1", STATE_1);
+    asked["content"] = json!([{"type": "text", "text": leak}]);
+    let (_dir, log) = temp_log(None);
+    let (state, _store) = ruled_state(FirewallAction::Warn, Arc::clone(&log)).await;
+    let mock = MockBackend::answering(Answer::Result(asked));
+    register(&state, BACKEND, &mock);
+
+    let created = post(&state, "key-a", create(2, "settle-task")).await;
+    let task = task_id(&created);
+    let parked = wait_input_required(&state, &task).await;
+    assert!(
+        !parked.to_string().contains(&leak),
+        "premise: the input request was redacted: {parked}"
+    );
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "an interim answer wrote a settlement record:\n{}",
         dump(&entries)
     );
 }
