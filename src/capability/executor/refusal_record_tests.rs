@@ -177,3 +177,76 @@ async fn a_refused_step_of_a_composite_records_no_refusal() {
     delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
     assert_eq!(fields.get("response_effect"), None, "{fields:?}");
 }
+
+/// A process capability of `service` whose parameter names a network
+/// destination: refused before anything is spawned.
+fn egress_capability(service: &str) -> CapabilityDefinition {
+    let config = if service == "cli" {
+        "command: 'true'".to_owned()
+    } else {
+        "command: 'true'\n      transport: stdio\n      tool_selector:\n        param: operation\n        \
+         tools:\n          op: { tool: echo }"
+            .to_owned()
+    };
+    parse_capability(&format!(
+        "
+name: egress_{service}
+description: probe
+schema:
+  input:
+    type: object
+    properties:
+      url:
+        type: string
+        format: uri
+        egress: true
+providers:
+  primary:
+    service: {service}
+    config:
+      {config}
+"
+    ))
+    .expect("parses")
+}
+
+/// A network-destination parameter, refused for CLI and MCP alike.
+#[tokio::test]
+async fn an_egress_parameter_records_refused_for_each_process_service() {
+    use crate::capability::definition::ProcessConfig;
+    let mut fails = Vec::new();
+    for service in ["cli", "mcp"] {
+        let cap = egress_capability(service);
+        let executor = CapabilityExecutor::new();
+        let context = CapabilityExecutionContext::default();
+        let (error, effect) = match cap.providers.process.get("primary") {
+            Some(ProcessConfig::Cli(config)) => {
+                Box::pin(recorded(executor.execute_cli(
+                    &cap,
+                    config,
+                    &json!({}),
+                    &context,
+                )))
+                .await
+            }
+            Some(ProcessConfig::Mcp(config)) => {
+                Box::pin(recorded(executor.execute_mcp(
+                    &cap,
+                    config,
+                    &json!({}),
+                    &context,
+                )))
+                .await
+            }
+            None => panic!("{service}: no process provider"),
+        };
+        check(
+            &mut fails,
+            service,
+            &error,
+            "network destination",
+            effect.as_ref(),
+        );
+    }
+    assert!(fails.is_empty(), "{fails:#?}");
+}
