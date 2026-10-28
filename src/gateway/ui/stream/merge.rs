@@ -107,8 +107,13 @@ pub(super) struct LogMerge<S: LogSource> {
     rx: broadcast::Receiver<Appended>,
     delivered: LogCursor,
     lag_recoveries: usize,
-    /// `Some` while paging: where the next page starts. Never cut short.
+    lag: LagWindow,
+    too_slow: bool,
+    /// `Some` while paging: where the next page starts.
     scan: Option<LogCursor>,
+    /// The head captured when the current scan began; rows past it arrive
+    /// through the live receiver, so a scan never chases a moving boundary.
+    stop: LogCursor,
 }
 
 impl<S: LogSource> LogMerge<S> {
@@ -121,17 +126,18 @@ impl<S: LogSource> LogMerge<S> {
         resume: Option<LogCursor>,
     ) -> Self {
         let rx = source.subscribe();
-        let delivered = match &resume {
-            Some(from) => from.clone(),
-            None => source.head(&access).await,
-        };
+        let head = source.head(&access).await;
+        let delivered = resume.clone().unwrap_or_else(|| head.clone());
         Self {
             source,
             access,
             rx,
             delivered,
             lag_recoveries: 0,
+            lag: LagWindow::default(),
+            too_slow: false,
             scan: resume,
+            stop: head,
         }
     }
 
@@ -142,11 +148,23 @@ impl<S: LogSource> LogMerge<S> {
 
     /// Record that `out` was written to the client: only now does the
     /// delivered position move.
-    pub(super) fn ack(&mut self, _out: &Out) {}
+    pub(super) fn ack(&mut self, out: &Out) {
+        match out {
+            Out::Reset => self.delivered = LogCursor::default(),
+            Out::Row(row) => *self.slot(row.log) = Some(row.part.clone()),
+        }
+    }
 
     /// Whether the slow-consumer rule has closed this view.
     pub(super) fn is_too_slow(&self) -> bool {
-        false
+        self.too_slow
+    }
+
+    fn slot(&mut self, log: LogName) -> &mut Option<LogPart> {
+        match log {
+            LogName::Invocation => &mut self.delivered.inv,
+            LogName::Governance => &mut self.delivered.gov,
+        }
     }
 
     /// `Lagged` recoveries so far.
@@ -155,9 +173,10 @@ impl<S: LogSource> LogMerge<S> {
     }
 
     /// The next batch, in order: catch-up pages first, then live rows. Empty
-    /// only when the source is closed.
+    /// only when the source is closed or the view is too slow. The caller
+    /// must `ack` every row it wrote before asking again.
     pub(super) async fn next(&mut self) -> Vec<Out> {
-        loop {
+        while !self.too_slow {
             if let Some(from) = self.scan.clone() {
                 let out = self.page(&from).await;
                 if !out.is_empty() {
@@ -167,21 +186,32 @@ impl<S: LogSource> LogMerge<S> {
             }
             match self.rx.recv().await {
                 Ok(appended) => {
-                    if let Some(row) = self.live(&appended) {
+                    if let Some(row) = self.live(&appended).await {
                         return vec![Out::Row(row)];
                     }
                 }
-                Err(broadcast::error::RecvError::Lagged(missed)) => {
-                    self.lag_recoveries += 1;
-                    tracing::debug!(
-                        missed,
-                        "ui stream: lagged, catching up from its own position"
-                    );
-                    self.scan = Some(self.delivered.clone());
-                }
+                Err(broadcast::error::RecvError::Lagged(missed)) => self.lagged(missed).await,
                 Err(broadcast::error::RecvError::Closed) => return Vec::new(),
             }
         }
+        Vec::new()
+    }
+
+    /// Count a `Lagged` recovery and page again from the delivered position.
+    async fn lagged(&mut self, missed: u64) {
+        self.lag_recoveries += 1;
+        self.too_slow = self.lag.record(Instant::now());
+        tracing::debug!(
+            missed,
+            "ui stream: lagged, catching up from its own position"
+        );
+        self.begin_scan().await;
+    }
+
+    /// Start paging from the delivered position up to the head as of now.
+    async fn begin_scan(&mut self) {
+        self.stop = self.source.head(&self.access).await;
+        self.scan = Some(self.delivered.clone());
     }
 
     /// One catch-up page from `from`, after yielding to the runtime.
@@ -191,40 +221,56 @@ impl<S: LogSource> LogMerge<S> {
         let mut out = Vec::with_capacity(page.rows.len() + 1);
         if page.reset {
             tracing::debug!("ui stream: the position's row is gone, resetting");
-            self.delivered = LogCursor::default();
             out.push(Out::Reset);
         }
+        let mut past = false;
         for row in page.rows {
-            if self.advance(&row) {
+            if self.past_head(&row) {
+                past = true;
+            } else {
                 out.push(Out::Row(row));
             }
         }
-        tracing::debug!(
-            rows = out.len(),
-            more = page.more,
-            "ui stream: catch-up page"
-        );
-        self.scan = page.more.then_some(page.next);
+        let done = past || !page.more || self.reached_head(&page.next);
+        self.scan = (!done).then_some(page.next);
         out
     }
 
-    /// A live row for the caller, unless already delivered.
-    fn live(&mut self, appended: &Appended) -> Option<Row> {
-        let row = self.source.frame(&self.access, appended)?;
-        self.advance(&row).then_some(row)
+    /// Whether `row` lies beyond the head this scan stops at.
+    fn past_head(&self, row: &Row) -> bool {
+        let head = match row.log {
+            LogName::Invocation => &self.stop.inv,
+            LogName::Governance => &self.stop.gov,
+        };
+        head.as_ref().is_none_or(|h| row.part.n > h.n)
     }
 
-    /// Move the delivered position to `row`; `false` when it is at or below
-    /// what was already delivered.
-    fn advance(&mut self, row: &Row) -> bool {
-        let slot = match row.log {
-            LogName::Invocation => &mut self.delivered.inv,
-            LogName::Governance => &mut self.delivered.gov,
+    /// Whether a scan cursor has caught up with the captured head in both logs.
+    fn reached_head(&self, next: &LogCursor) -> bool {
+        let at = |head: &Option<LogPart>, pos: &Option<LogPart>| {
+            head.as_ref()
+                .is_none_or(|h| pos.as_ref().is_some_and(|p| p.n >= h.n))
         };
-        if slot.as_ref().is_some_and(|d| row.part.n <= d.n) {
-            return false;
+        at(&self.stop.inv, &next.inv) && at(&self.stop.gov, &next.gov)
+    }
+
+    /// A live row for the caller. One that does not follow the delivered
+    /// position exactly sends the view back to the source to be checked.
+    async fn live(&mut self, appended: &Appended) -> Option<Row> {
+        let row = self.source.frame(&self.access, appended)?;
+        let delivered = match row.log {
+            LogName::Invocation => &self.delivered.inv,
+            LogName::Governance => &self.delivered.gov,
+        };
+        match delivered {
+            Some(d) if row.part.n < d.n => None,
+            Some(d) if row.part.n == d.n && row.part.hash == d.hash => None,
+            Some(d) if row.part.n == d.n + 1 => Some(row),
+            None if row.part.n == 1 => Some(row),
+            _ => {
+                self.begin_scan().await;
+                None
+            }
         }
-        *slot = Some(row.part.clone());
-        true
     }
 }
