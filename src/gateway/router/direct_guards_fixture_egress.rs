@@ -102,6 +102,20 @@ pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
     fx
 }
 
+/// `transport` behind no firewall, with response inspection turned off
+/// (`enabled: false`): nothing screens what it answers.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_inspection_off_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |mut meta| {
+        meta.disable_response_inspection();
+        meta
+    })
+    .await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// The firewall the last firewalled fixture on this thread gave its Meta-MCP
 /// (the router holds its own, on `state.firewall`).
 #[cfg(feature = "firewall")]

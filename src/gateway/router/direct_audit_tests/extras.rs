@@ -31,6 +31,9 @@ pub(super) enum Extra {
     /// Message signing on, scoped by the posture (`gateway_invoke` only,
     /// every `tools/call` under [`Extra::Hardened`]).
     Signing,
+    /// Context integrity enforces and strips every finding, so an answer
+    /// carrying an injected instruction is rebuilt without it.
+    ContextIntegrityStrips,
 }
 
 impl Setup {
@@ -96,6 +99,9 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
     if extras.contains(&Extra::Attestation) {
         meta = attested(meta);
     }
+    if extras.contains(&Extra::ContextIntegrityStrips) {
+        meta = meta.with_context_integrity_kernel(stripping_kernel());
+    }
     if extras.contains(&Extra::Signing) {
         let posture = if extras.contains(&Extra::Hardened) {
             crate::security::SecurityPosture::Hardened
@@ -105,6 +111,26 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
         signed(&mut meta, posture);
     }
     meta
+}
+
+/// A context-integrity kernel that enforces and strips every finding kind.
+fn stripping_kernel() -> crate::context_integrity::ContextIntegrityKernel {
+    use crate::context_integrity::{
+        ContextIntegrityDecisionKind, ContextIntegrityKernel, ContextIntegrityPolicy,
+        ContextIntegrityPolicyMode,
+    };
+    let strip = ContextIntegrityDecisionKind::Strip;
+    ContextIntegrityKernel::new(ContextIntegrityPolicy {
+        mode: ContextIntegrityPolicyMode::Enforce,
+        untrusted_instruction_decision: strip,
+        guarded_material_decision: strip,
+        personal_data_decision: strip,
+        destructive_instruction_decision: strip,
+        tool_poisoning_decision: strip,
+        high_risk_action_decision: strip,
+        allow_benign_read_only: true,
+        non_bypassable: false,
+    })
 }
 
 /// Whether both routes have a transparency log (T21).

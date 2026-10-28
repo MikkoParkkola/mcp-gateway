@@ -179,6 +179,14 @@ impl Transport for CountingUpstream {
     }
 }
 
+/// The credential a required binding's subscriber dispatches with. A
+/// per-user slot of such a backend sends only what a dispatch lends, and a
+/// dispatch lending nothing is refused, so every fixture call made as a
+/// subscriber carries this; only a row about that refusal sends none.
+pub(super) fn subscriber_credential(binding: &str) -> Vec<(String, String)> {
+    vec![("Authorization".to_owned(), format!("Bearer {binding}"))]
+}
+
 pub(super) fn per_user_backend(name: &str) -> Arc<Backend> {
     Arc::new(Backend::new(
         name,
@@ -254,7 +262,7 @@ pub(super) async fn fill_slot(backend: &Backend, binding: &str) -> Arc<CountingU
     backend
         .set_pooled_transport_for_test(&slot(binding), Arc::clone(&upstream) as Arc<dyn Transport>);
     backend
-        .get_tools_for_binding(Some(binding), &[])
+        .get_tools_for_binding(Some(binding), &subscriber_credential(binding))
         .await
         .expect("the fixture upstream answers tools/list");
     upstream
@@ -309,7 +317,7 @@ async fn c1_a_revoked_callers_populated_slot_does_not_survive() {
     rearm(&backend, &binding, &upstream);
 
     let served = backend
-        .get_tools_for_binding(Some(&binding), &[])
+        .get_tools_for_binding(Some(&binding), &subscriber_credential(&binding))
         .await
         .expect("the post-revocation read is served");
     assert!(
@@ -406,7 +414,7 @@ async fn c3_eviction_does_not_decline_against_a_busy_slot() {
     rearm(&backend, &binding, &upstream);
 
     let served = backend
-        .get_tools_for_binding(Some(&binding), &[])
+        .get_tools_for_binding(Some(&binding), &subscriber_credential(&binding))
         .await
         .expect("the post-revocation read is served");
     assert!(
@@ -502,11 +510,11 @@ async fn c9_every_backend_holding_the_subject_is_evicted() {
     rearm(&second, &binding_b, &upstream_b);
 
     first
-        .get_tools_for_binding(Some(&binding_a), &[])
+        .get_tools_for_binding(Some(&binding_a), &subscriber_credential(&binding_a))
         .await
         .expect("served");
     second
-        .get_tools_for_binding(Some(&binding_b), &[])
+        .get_tools_for_binding(Some(&binding_b), &subscriber_credential(&binding_b))
         .await
         .expect("served");
     assert!(
