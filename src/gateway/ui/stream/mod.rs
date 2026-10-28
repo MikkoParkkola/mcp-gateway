@@ -41,8 +41,8 @@ pub(crate) use self::guard::{MAX_PER_CREDENTIAL, MAX_UI_STREAMS};
 use self::id::StreamId;
 use super::errors::{auth_required, flat_error};
 use super::{auth_facts, is_admin};
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::auth::live::{HeldCredential, current_caller, held_credential};
-use crate::gateway::auth::{AuthState, AuthenticatedClient};
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 
@@ -61,18 +61,6 @@ pub(super) fn kinds_for(client: &AuthenticatedClient) -> Vec<&'static str> {
         kinds.push("reload");
     }
     kinds
-}
-
-/// The `AuthState` the middleware judges with, built from the same parts.
-fn auth_state(state: &AppState) -> AuthState {
-    AuthState {
-        auth_config: Arc::clone(&state.auth_config),
-        key_server: state.key_server.clone(),
-        live_config: Arc::clone(&state.live_config),
-        dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
-        tls_enabled: state.live_config.running().mtls.enabled,
-        agent_auth: state.agent_auth.clone(),
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,7 +100,7 @@ async fn stream(
     headers: HeaderMap,
     Query(query): Query<StreamQuery>,
 ) -> Response {
-    let auth = auth_state(&state);
+    let auth = crate::gateway::router::build_auth_state(&state);
     let held = held_credential(&headers);
     // Judged against the live config now, as every later re-check is.
     let Some(caller) = current_caller(&auth, held.as_ref()).await else {

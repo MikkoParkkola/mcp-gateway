@@ -481,10 +481,11 @@ async fn readyz(
     }
 }
 
-/// The `AuthState` needed by [`auth_middleware`], split out of
-/// [`create_router_with`] purely to keep that function under the line
-/// budget — logic and ordering are unchanged.
-fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+/// The one `AuthState` builder: ingress ([`auth_middleware`], wired in
+/// [`create_router_with`]) and the UI stream's per-second credential
+/// re-check both judge with it, so a stream can never decide differently
+/// from the request that opened it.
+pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
