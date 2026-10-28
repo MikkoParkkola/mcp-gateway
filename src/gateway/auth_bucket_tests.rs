@@ -151,3 +151,60 @@ fn concurrent_callers_never_exceed_the_bucket() {
     });
     assert_eq!(admitted, 50);
 }
+
+/// Cost against `governor`, run once in release (`--release -- --ignored`):
+/// 1M checks per limiter, uncontended and from 8 threads on one bucket. It
+/// prints the four figures and asserts nothing about time.
+#[test]
+#[ignore = "a timing comparison, run once in release; it asserts nothing about time"]
+fn cost_against_governor() {
+    const CHECKS: u32 = 1_000_000;
+    const THREADS: u32 = 8;
+    let max = NonZeroU32::MAX;
+    let ns_per = |elapsed: Duration| elapsed.as_nanos() / u128::from(CHECKS);
+
+    let theirs = RateLimiter::direct(Quota::per_minute(max));
+    let start = std::time::Instant::now();
+    let admitted = (0..CHECKS).filter(|_| theirs.check().is_ok()).count();
+    let governor_alone = ns_per(start.elapsed());
+    assert_eq!(admitted, CHECKS as usize, "premise: nothing denied");
+
+    let ours = ClientBucket::new(max);
+    let start = std::time::Instant::now();
+    let admitted = (0..CHECKS)
+        .filter(|_| ours.check_at(max, super::now_ns()))
+        .count();
+    let bucket_alone = ns_per(start.elapsed());
+    assert_eq!(admitted, CHECKS as usize, "premise: nothing denied");
+
+    let theirs = RateLimiter::direct(Quota::per_minute(max));
+    let start = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            scope.spawn(|| {
+                (0..CHECKS / THREADS).for_each(|_| {
+                    let _ = theirs.check();
+                })
+            });
+        }
+    });
+    let governor_shared = ns_per(start.elapsed());
+
+    let ours = ClientBucket::new(max);
+    let start = std::time::Instant::now();
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            scope.spawn(|| {
+                (0..CHECKS / THREADS).for_each(|_| {
+                    let _ = ours.check_at(max, super::now_ns());
+                })
+            });
+        }
+    });
+    let bucket_shared = ns_per(start.elapsed());
+
+    println!(
+        "ns per check: governor {governor_alone} alone, {governor_shared} from {THREADS} threads; \
+         bucket {bucket_alone} alone, {bucket_shared} from {THREADS} threads"
+    );
+}
