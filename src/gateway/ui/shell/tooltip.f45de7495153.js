@@ -14,6 +14,16 @@
 // and goes on after that.
 
 const COPY_URL = '/ui/assets/tips.7c43dc6560cf.json';
+
+// The stylesheet comes with the module, not with the document: only pages that draw a
+// tooltip need it, and a render-blocking link would hold up every page's first paint.
+if (!document.querySelector('link[data-tooltip-css]')) {
+  const css = document.createElement('link');
+  css.rel = 'stylesheet';
+  css.href = '/ui/assets/tooltip.5251c22696fd.css';
+  css.dataset.tooltipCss = '';
+  document.head.append(css);
+}
 const OPEN_MS = 300;
 const CLOSE_MS = 150;
 /** The popup keeps this far from the viewport's sides. */
@@ -44,7 +54,7 @@ function trip(err) {
   failed = true;
   for (const t of timers) clearTimeout(t);
   timers.clear();
-  for (const pop of document.querySelectorAll('.has-tip[data-tip] .tip.open')) pop.classList.remove('open', 'flip-y');
+  for (const pop of document.querySelectorAll('.has-tip[data-tip] .tip')) clearPlacement(pop);
   openWrap = null;
   document.documentElement.removeAttribute('data-tips');
   console.warn(`tooltip controller stopped (${err?.message ?? err}); tooltips fall back to hover and focus`);
@@ -172,13 +182,26 @@ function show(wrap) {
   if (openWrap && openWrap !== wrap) hide(openWrap);
   openWrap = wrap;
   const pop = wrap.querySelector('.tip');
+  pop.classList.remove('closing');
   pop.classList.add('open');
   place(wrap, pop);
 }
 
+/** The popup's exit fade: anchored by its trigger until it ends, then back to its closed place. */
+const FADE_MS = 200;
+
+function clearPlacement(pop) {
+  pop.classList.remove('open', 'closing', 'flip-y');
+  pop.style.left = '';
+  pop.style.maxHeight = '';
+}
+
 function hide(wrap) {
-  wrap.querySelector('.tip')?.classList.remove('open', 'flip-y');
+  const pop = wrap.querySelector('.tip');
   if (openWrap === wrap) openWrap = null;
+  if (!pop?.classList.contains('open')) return;
+  pop.classList.replace('open', 'closing');
+  later(() => { if (!pop.classList.contains('open')) clearPlacement(pop); }, FADE_MS);
 }
 
 /** Below the trigger, left edges aligned; slide left and flip up to stay inside the viewport, never over the trigger. */
@@ -202,6 +225,14 @@ function place(wrap, pop) {
 }
 
 let hoverTimer = 0;
+const SCROLL_KEYS = {
+  ArrowDown: () => 40,
+  ArrowUp: () => -40,
+  PageDown: (p) => p.clientHeight,
+  PageUp: (p) => -p.clientHeight,
+  Home: (p) => -p.scrollHeight,
+  End: (p) => p.scrollHeight,
+};
 let tapWasOpen = false;
 const wrapOf = (t) => t?.closest?.('.has-tip[data-tip]') ?? null;
 
@@ -232,9 +263,14 @@ const HANDLERS = [
   }],
   ['keydown', (ev) => {
     if (!openWrap) return;
+    const pop = openWrap.querySelector('.tip.open');
     if (ev.key === 'Escape') {
       hide(openWrap);
       ev.stopPropagation();
+    } else if (SCROLL_KEYS[ev.key] && pop && wrapOf(ev.target) === openWrap && pop.scrollHeight > pop.clientHeight) {
+      // A popup cut short by the viewport scrolls from its trigger, which keeps focus.
+      ev.preventDefault();
+      pop.scrollBy({ top: SCROLL_KEYS[ev.key](pop) });
     } else if ((ev.key === 'Enter' || ev.key === ' ') && wrapOf(ev.target)) {
       ev.preventDefault();
       show(wrapOf(ev.target));
@@ -261,5 +297,9 @@ function start() {
   guard(() => {
     document.documentElement.dataset.tips = 'js';
     for (const [type, fn] of HANDLERS) document.addEventListener(type, guard(fn), true);
+    // The page moved under an open popup: place it again by its trigger.
+    const replace = guard(() => { if (openWrap?.isConnected) place(openWrap, openWrap.querySelector('.tip')); });
+    addEventListener('resize', replace);
+    document.addEventListener('scroll', replace, true);
   })();
 }

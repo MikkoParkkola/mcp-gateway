@@ -3,7 +3,9 @@
 //
 // The accessibility gate (rows A1-A4): axe at WCAG 2.2 AA on every page and
 // tab, with and without the fixture pages, at 390 and 1440 px, dark and light.
-// On a built page and tab whose screen draws a tooltip, one is opened first.
+// On a built page and tab whose screen draws a tooltip, one is opened first. In the
+// fixture runs every page is a fixture screen that draws none, so those runs check
+// the pages bare; A2 covers a tooltip open on a fixture page.
 // Also: a tooltip open on a fixture page (A2), a planted violation (A3), and a
 // keyboard walk that reaches every focusable control (A4).
 // blockingViolations() fails on serious or critical, and on any contrast, name
@@ -108,4 +110,20 @@ test('A4 Tab reaches every focusable control on every page and tab', async ({ pa
     }
   }
   expect(missed).toEqual([]);
+});
+
+test('A4b Tab reaches every focusable control on the real Tools screen, its tooltip included', async ({ page }) => {
+  await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
+  await page.goto('/ui/tools/status');
+  await shellReady(page);
+  await expect(page.locator('.tools-load .tip-i')).toBeVisible();
+  const sel = 'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"]), summary';
+  const total = await page.evaluate((sel) => [...document.querySelectorAll(sel)].filter((e) => e.checkVisibility() && !e.disabled).length, sel);
+  for (let i = 0; i < total + 3; i++) {
+    await page.keyboard.press('Tab');
+    await page.evaluate(() => { const e = document.activeElement; if (e && e !== document.body) e.dataset.walk = '1'; });
+  }
+  const unreached = await page.evaluate((sel) => [...document.querySelectorAll(sel)]
+    .filter((e) => e.checkVisibility() && !e.disabled && !e.dataset.walk).map((e) => e.outerHTML.slice(0, 60)), sel);
+  expect(unreached).toEqual([]);
 });

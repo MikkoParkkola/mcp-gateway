@@ -72,9 +72,6 @@ function matching(list, query, server) {
 const filters = { query: '', server: '' };
 
 async function statusTab(body, ctx) {
-  // Loaded here, not at the top: a static import would put the tooltip module's
-  // bytes in front of the first paint of every page, Tools or not.
-  const { tip } = await import('/ui/assets/tooltip.a14cbbab7c53.js');
   const { list, servers } = await readTools(ctx.api);
   ctx.header({ subtitle: `${plural(list.length, 'tool', 'tools')} from ${plural(servers.length, 'server', 'servers')}. Agents find them through search and invoke.` });
   if (list.length === 0) {
@@ -96,7 +93,11 @@ async function statusTab(body, ctx) {
     h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Tool list' }, table),
     none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   // Frame 48s: how agents reach this catalogue, beside the search (copy D11).
-  const load = h('p', { class: 't3 tools-load' }, 'Agents load 11 tools and reach the rest through search and invoke ', tip('tools.status.load-11-tools-and-reach'));
+  const load = h('p', { class: 't3 tools-load' }, 'Agents load 11 tools and reach the rest through search and invoke ');
+  // The tooltip module loads after the catalogue is drawn and never holds it up: a static
+  // import would put its bytes before every page's first paint, and if it fails to load
+  // the sentence simply stands without its (i).
+  import('/ui/assets/tooltip.f45de7495153.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
   body.append(h('div', { class: 'tools-bar' }, search, pick, load), card);
   search.value = filters.query;
   pick.value = servers.includes(filters.server) ? filters.server : '';

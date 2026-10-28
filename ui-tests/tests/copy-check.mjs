@@ -11,6 +11,39 @@ export const SHELL_DIR = fileURLToPath(new URL('../../src/gateway/ui/shell/', im
 const TABS = ['status', 'actions', 'settings'];
 const ID = /^[a-z0-9-]+\.(status|actions|settings)\.[a-z0-9-]+$/;
 
+/** The text inside `tabs: { … }` of the register() call at `from`, braces balanced; null when absent. */
+function tabsBlock(src, from) {
+  const at = src.slice(from).search(/\btabs\s*:\s*\{/);
+  if (at < 0) return null;
+  let i = src.indexOf('{', from + at);
+  const start = i + 1;
+  for (let depth = 0; i < src.length; i++) {
+    if (src[i] === '{') depth++;
+    else if (src[i] === '}' && --depth === 0) return src.slice(start, i);
+  }
+  return null;
+}
+
+/** `key: value` pairs at the top level of an object literal's body, values trimmed. */
+function topLevelEntries(body) {
+  const out = new Map();
+  let depth = 0;
+  let part = '';
+  const flush = () => {
+    const m = /^\s*([a-z]+)\s*:\s*([\s\S]*?)\s*$/.exec(part);
+    if (m) out.set(m[1], m[2]);
+    part = '';
+  };
+  for (const ch of body) {
+    if ('({['.includes(ch)) depth++;
+    else if (')}]'.includes(ch)) depth--;
+    if (ch === ',' && depth === 0) flush();
+    else part += ch;
+  }
+  flush();
+  return out;
+}
+
 /** The copy asset, parsed. */
 export function readCopy(dir = SHELL_DIR) {
   const name = readdirSync(dir).find((f) => /^tips\.[0-9a-f]{12}\.json$/.test(f));
@@ -40,11 +73,12 @@ export function scanScreens(sources) {
       if (lit) drawn.add(lit[1] ?? lit[2]);
       else nonLiteral += 1;
     }
-    for (const m of src.matchAll(/register\(\s*'([a-z0-9-]+)'\s*,[\s\S]*?tabs\s*:\s*\{([^}]*)\}/g)) {
-      tabs[m[1]] = Object.fromEntries(TABS.map((t) => {
-        const spec = new RegExp(`\\b${t}\\s*:\\s*([^,}]+)`).exec(m[2]);
-        return [t, spec ? spec[1].trim() !== 'null' : false];
-      }));
+    for (const m of src.matchAll(/register\(\s*'([a-z0-9-]+)'/g)) {
+      const block = tabsBlock(src, m.index);
+      if (block === null) continue;
+      // Comments go first: their commas and colons are not entries. A // inside a string needs no space before it.
+      const specs = topLevelEntries(block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/g, '$1'));
+      tabs[m[1]] = Object.fromEntries(TABS.map((t) => [t, specs.has(t) && specs.get(t) !== 'null']));
     }
   }
   return { drawn, nonLiteral, tabs };

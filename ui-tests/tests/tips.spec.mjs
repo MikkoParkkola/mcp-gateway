@@ -59,6 +59,15 @@ test.describe('C2 planted faults', () => {
     const copy = { ...OK, 'servers.extras.x': { title: 'X', text: 'x' }, _pending: { servers: ['servers.actions.add', 'servers.extras.x'] } };
     expect(pair(copy, "tip('servers.status.paused');")).toContain('servers.extras.x: not <page>.<tab>.<subject>');
   });
+  test('comments with commas and colons inside tabs do not hide a tab', () => {
+    const src = "register('servers', { tabs: {\n // One renderer, two routes: a note\n status: (b) => b,\n /* later: a, b */ actions: null,\n settings: null } });";
+    expect(scanScreens([src]).tabs.servers).toEqual({ status: true, actions: false, settings: false });
+  });
+  test('a tab function with braces in it is still read as built', () => {
+    const src = "register('servers', { title: 'S', tabs: { status: (b) => { if (b) { b.x = 1; } }, actions: null, settings: null } });\ntip('servers.status.paused');";
+    expect(pairingProblems(OK, scanScreens([src]))).toEqual([]);
+    expect(scanScreens([src]).tabs.servers).toEqual({ status: true, actions: false, settings: false });
+  });
   test('a non-literal id fails', () => {
     expect(pair(OK, "tip('servers.status.paused'); tip(someId);")).toContain('1 tip() call(s) with a non-literal id');
   });

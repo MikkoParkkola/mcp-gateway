@@ -5,7 +5,7 @@
 // served per test through page.route, so each test controls what the module
 // loads; triggers come from the module's own tip() on a fixture page.
 import { test, expect } from './base.mjs';
-import { shellReady, shellModuleUrl, withFixturePages, tooltipCoversNothing, tooltipModuleUrl } from './shell.mjs';
+import { shellReady, shellModuleUrl, withFixturePages, tooltipCoversNothing, tooltipModuleUrl, tooltipCssUrl } from './shell.mjs';
 
 const COPY = {
   _pending: {},
@@ -301,16 +301,25 @@ test.describe('placement and motion', () => {
     expect(await page.evaluate(() => window.pwned)).toBeUndefined();
   });
 
-  test('T17 leaving the screen with a tooltip open or a hover pending leaves nothing open', async ({ page }) => {
+  test('T17 leaving the screen with a hover pending, or a tooltip open, leaves nothing open', async ({ page }) => {
     await page.clock.install();
     await serveCopy(page);
     await ready(page);
-    await mount(page, ['fixture.status.paused', 'fixture.status.calls']);
-    await page.getByRole('button', { name: 'About Paused' }).focus();
-    await page.getByRole('button', { name: 'About Calls today' }).hover();
-    await page.evaluate(async (url) => (await import(url)).go('/ui/servers/status'), await shellModuleUrl(page));
+    const shell = await shellModuleUrl(page);
+    await mount(page, ['fixture.status.paused']);
+    await page.getByRole('button', { name: 'About Paused' }).hover(); // nothing open: the 300 ms timer is armed
+    await page.clock.runFor(100);
+    await page.evaluate(async (url) => (await import(url)).go('/ui/servers/status'), shell);
     await shellReady(page);
-    await page.clock.runFor(400); // past the 300 ms hover delay
+    await page.clock.runFor(400);
+    await expect(page.locator('.tip.open')).toHaveCount(0);
+    await page.evaluate(async (url) => (await import(url)).go('/ui/overview/status'), shell);
+    await shellReady(page);
+    await mount(page, ['fixture.status.calls']);
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+    await expect(page.locator('.tip.open')).toHaveCount(1);
+    await page.evaluate(async (url) => (await import(url)).go('/ui/servers/status'), shell);
+    await shellReady(page);
     await expect(page.locator('.tip.open')).toHaveCount(0);
   });
 });
@@ -488,7 +497,14 @@ async function expectHandedBack(page, id) {
 test.describe('CSS fallback and the failure latch', () => {
   test('T10 with no controller, the markup shows its text on hover and on keyboard focus', async ({ page }) => {
     await ready(page);
-    await page.evaluate((html) => document.getElementById('content').insertAdjacentHTML('beforeend', `<p>${html}</p>`), STATIC_PAUSED);
+    // The state of a page where the module's stylesheet arrived but its controller never ran.
+    await page.evaluate(async ({ html, css }) => {
+      const link = Object.assign(document.createElement('link'), { rel: 'stylesheet', href: css });
+      const loaded = new Promise((r) => { link.onload = r; });
+      document.head.append(link);
+      await loaded;
+      document.getElementById('content').insertAdjacentHTML('beforeend', `<p>${html}</p>`);
+    }, { html: STATIC_PAUSED, css: tooltipCssUrl() });
     const opacity = () => page.evaluate(() => getComputedStyle(document.querySelector('.has-tip .tip')).opacity);
     expect(await opacity()).toBe('0');
     await page.getByRole('button', { name: 'About Paused' }).hover();
@@ -512,24 +528,40 @@ test.describe('CSS fallback and the failure latch', () => {
     expect(built).toBe(STATIC_PAUSED);
   });
 
-  test('T10c a failure inside a handler trips the latch: timers cancelled, nothing open, CSS takes over', async ({ page }) => {
-    await page.clock.install();
+  test('T10c a failure inside a handler trips the latch: the open popup closes and CSS takes over', async ({ page }) => {
     const warned = warnings(page);
     await serveCopy(page);
     await ready(page);
-    await mount(page, ['fixture.status.paused', 'fixture.status.calls', 'fixture.status.markup']);
+    await mount(page, ['fixture.status.paused', 'fixture.status.calls']);
     await page.getByRole('button', { name: 'About Paused' }).focus();
     await expect(tipOf(page, 'fixture.status.paused')).toHaveClass(/open/);
-    await page.getByRole('button', { name: 'About Calls today' }).hover(); // B's 300 ms timer starts
     await page.evaluate(() => {
       window.__rect = Element.prototype.getBoundingClientRect;
       Element.prototype.getBoundingClientRect = () => { throw new Error('planted placement fault'); };
     });
-    await page.locator('[data-tip="fixture.status.markup"] button').focus(); // opening on focus is synchronous
+    await page.getByRole('button', { name: 'About Calls today' }).focus(); // opening on focus is synchronous; placement throws
     await page.evaluate(() => { Element.prototype.getBoundingClientRect = window.__rect; });
-    await page.clock.runFor(400); // B's timer would have fired by now
     expect(warned.filter((w) => /tooltip/.test(w))).toHaveLength(1);
     await expectHandedBack(page, 'fixture.status.paused');
+  });
+
+  test('T10g the latch cancels a pending hover timer: that popup never opens', async ({ page }) => {
+    await page.clock.install();
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.paused', 'fixture.status.calls']);
+    await expect(page.locator('.tip.open')).toHaveCount(0);
+    await page.getByRole('button', { name: 'About Paused' }).hover(); // nothing open, so the 300 ms timer is armed
+    await page.clock.runFor(100);
+    await page.evaluate(() => {
+      window.__rect = Element.prototype.getBoundingClientRect;
+      Element.prototype.getBoundingClientRect = () => { throw new Error('planted placement fault'); };
+    });
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+    await page.evaluate(() => { Element.prototype.getBoundingClientRect = window.__rect; });
+    await page.clock.runFor(400); // the armed timer would have fired by now
+    await expect(page.locator('.tip.open')).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.hasAttribute('data-tips'))).toBe(false);
   });
 
   test('T10d a one-shot fault while filling: every placeholder still fills, and CSS takes over', async ({ page }) => {
@@ -606,5 +638,137 @@ test.describe('CSS fallback and the failure latch', () => {
     expect(after.cls).toBe(before.cls);
     expect(after.attrs).toBe(before.attrs);
     await expect(page.locator('.has-tip.bare .tip.open')).toHaveCount(0);
+  });
+});
+
+const TOOLS = [
+  { name: 'list_dir', server: 'filesystem', description: 'List a folder inside the allowed paths' },
+  { name: 'search', server: 'web', description: 'Search the web' },
+];
+
+async function toolsScreen(page) {
+  await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: TOOLS } }));
+  await page.goto('/ui/tools/status');
+  await shellReady(page);
+}
+
+/** Place an element fixed over the open popup: `at` maps the popup's box to {left, top, width, height}. */
+async function plantOver(page, html, at) {
+  await page.evaluate(({ html, at }) => {
+    const pop = document.querySelector('.has-tip .tip.open').getBoundingClientRect();
+    const box = new Function('p', `return (${at})(p)`)(pop);
+    const holder = document.createElement('div');
+    holder.innerHTML = html;
+    const el = holder.firstElementChild;
+    Object.assign(el.style, { position: 'fixed', left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` });
+    document.getElementById('content').append(el);
+  }, { html, at });
+}
+
+test.describe('the covers-nothing rule (lead ruling 2026-10-28)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls']);
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+  });
+
+  test('T12b a region whose centre the popup hides is covered', async ({ page }) => {
+    await plantOver(page, '<div role="region" tabindex="0" aria-label="Middle">m</div>', '(p) => ({ left: p.left + p.width / 4, top: p.top + p.height / 4, width: p.width / 2, height: p.height / 2 })');
+    expect(await tooltipCoversNothing(page, 'fixture.status.calls')).toEqual(['div "Middle"']);
+  });
+
+  test('T12c a large region with only its corner under the popup is not covered', async ({ page }) => {
+    await plantOver(page, '<div role="region" tabindex="0" aria-label="Table"></div>', '(p) => ({ left: p.right - 20, top: p.bottom - 20, width: 900, height: 500 })');
+    expect(await tooltipCoversNothing(page, 'fixture.status.calls')).toEqual([]);
+  });
+
+  test('T12d a button inside that region, under the popup, is still covered', async ({ page }) => {
+    await plantOver(page, '<div role="region" tabindex="0" aria-label="Table"><button type="button" aria-label="Row action"></button></div>',
+      '(p) => ({ left: p.right - 20, top: p.bottom - 20, width: 900, height: 500 })');
+    // CSSOM, not a style attribute: the CSP refuses inline style in markup. The button sits in the region's covered corner.
+    await page.evaluate(() => Object.assign(document.querySelector('[aria-label="Row action"]').style, { position: 'absolute', left: '0px', top: '0px', width: '16px', height: '16px' }));
+    expect(await page.evaluate(() => {
+      const b = document.querySelector('[aria-label="Row action"]').getBoundingClientRect();
+      const p = document.querySelector('.has-tip .tip.open').getBoundingClientRect();
+      return b.left < p.right && b.top < p.bottom;
+    })).toBe(true);
+    expect(await tooltipCoversNothing(page, 'fixture.status.calls')).toEqual(['button "Row action"']);
+  });
+});
+
+test('T27 a tooltip opened by hover closes on Escape with the pointer still on it, and stays closed', async ({ page }) => {
+  await page.clock.install();
+  await serveCopy(page);
+  await ready(page);
+  await mount(page, ['fixture.status.paused']);
+  const tip = tipOf(page, 'fixture.status.paused');
+  await page.getByRole('button', { name: 'About Paused' }).hover();
+  await page.clock.runFor(350);
+  await expect(tip).toHaveClass(/open/);
+  await page.keyboard.press('Escape');
+  await expect(tip).not.toHaveClass(/open/);
+  await page.clock.runFor(400); // the pointer has not moved: nothing reopens it
+  await expect(tip).not.toHaveClass(/open/);
+});
+
+test.describe('review round 1', () => {
+  for (const width of [390, 1440]) {
+    test(`T21 on the real Tools screen at ${width} px the tooltip covers nothing`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await toolsScreen(page);
+      await expect(page.locator('.has-tip[data-tip="tools.status.load-11-tools-and-reach"] .tip-i')).toBeVisible();
+      expect(await tooltipCoversNothing(page, 'tools.status.load-11-tools-and-reach')).toEqual([]);
+    });
+  }
+
+  test('T22 Tools draws its catalogue when the tooltip module fails to load, and the sentence stands alone', async ({ page }) => {
+    await page.route('**/ui/assets/tooltip.*.js', (r) => r.abort());
+    await toolsScreen(page);
+    await expect(page.locator('.tool-toggle')).toHaveCount(2);
+    await expect(page.locator('.tools-load')).toContainText('Agents load 11 tools');
+    await expect(page.locator('.tools-load .tip-i')).toHaveCount(0);
+  });
+
+  test('T23 a popup cut short by the viewport scrolls from its focused trigger', async ({ page }) => {
+    await page.setViewportSize({ width: 800, height: 160 });
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls'], { layout: 'top-left' });
+    await page.evaluate(() => { document.querySelector('.fixture-tips').style.top = '70px'; });
+    const button = page.getByRole('button', { name: 'About Calls today' });
+    await button.focus();
+    const tip = tipOf(page, 'fixture.status.calls');
+    expect(await tip.evaluate((t) => t.scrollHeight > t.clientHeight)).toBe(true);
+    await page.keyboard.press('ArrowDown');
+    expect(await tip.evaluate((t) => t.scrollTop)).toBeGreaterThan(0);
+    await expect(button).toBeFocused();
+  });
+
+  test('T24 an open popup is placed again when the viewport narrows', async ({ page }) => {
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls'], { layout: 'top-right' });
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+    await page.setViewportSize({ width: 390, height: 800 });
+    const b = await restingBoxes(page);
+    expect(b.tip.left).toBeGreaterThanOrEqual(0);
+    expect(b.tip.right).toBeLessThanOrEqual(390);
+  });
+
+  test('T25 T26 a closing popup stays by its trigger while it fades, then drops its placement', async ({ page }) => {
+    await page.clock.install();
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls'], { layout: 'top-right' });
+    await page.getByRole('button', { name: 'About Calls today' }).focus();
+    const tip = tipOf(page, 'fixture.status.calls');
+    expect(await tip.evaluate((t) => t.style.left)).not.toBe('');
+    await page.keyboard.press('Escape');
+    expect(await tip.evaluate((t) => getComputedStyle(t).position)).toBe('absolute');
+    await page.clock.runFor(250);
+    expect(await tip.evaluate((t) => [getComputedStyle(t).position, t.style.left, t.style.maxHeight])).toEqual(['fixed', '', '']);
   });
 });
