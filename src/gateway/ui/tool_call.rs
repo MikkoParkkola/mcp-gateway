@@ -17,8 +17,9 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use axum::body::Body;
-use axum::extract::{MatchedPath, Request, State};
+use axum::body::{Body, Bytes};
+use axum::extract::{FromRequest, MatchedPath, Request, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -29,13 +30,6 @@ use super::errors::admin_auth_required;
 use super::{AppState, AuthenticatedClient, is_admin};
 use crate::gateway::ui_call::{Confirm, Outcome, UiCall};
 use crate::key_server::oidc::VerifiedIdentity;
-
-/// The largest request body read: a tool's arguments typed into a form.
-const MAX_BODY: usize = 1 << 20;
-
-/// The largest MCP answer read back. A larger one is not shown: the call
-/// may have run, and the route says so.
-const MAX_ANSWER: usize = 32 << 20;
 
 /// How long the route waits for the tool before answering 504. Under the
 /// shell's own 30 s, so the shell hears "may still be running" from us.
@@ -123,7 +117,7 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
         );
         return finish(refused, detail, Disposition::NotRun, None);
     }
-    let ask = match parse(body).await {
+    let ask = match parse(&parts, body).await {
         Ok(ask) => ask,
         Err(refused) => return finish(*refused, detail, Disposition::NotRun, None),
     };
@@ -171,16 +165,28 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     finish(response, detail, disposition, outcome.trace)
 }
 
-/// The request body, read under its own cap: `DefaultBodyLimit` binds
-/// extractors only.
-async fn parse(body: Body) -> Result<CallRequest, Box<Response>> {
-    let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
-        return Err(Box::new(refusal(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "the body could not be read",
-            Disposition::NotRun,
-        )));
+/// The request body, read through the `Bytes` extractor so the gateway's one
+/// configured body limit applies (`DefaultBodyLimit` binds extractors only).
+async fn parse(parts: &Parts, body: Body) -> Result<CallRequest, Box<Response>> {
+    let request = Request::from_parts(parts.clone(), body);
+    let bytes = match Bytes::from_request(request, &()).await {
+        Ok(bytes) => bytes,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return Err(Box::new(refusal(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "too_large",
+                "the body is over the gateway's size limit",
+                Disposition::NotRun,
+            )));
+        }
+        Err(_) => {
+            return Err(Box::new(refusal(
+                StatusCode::BAD_REQUEST,
+                "bad_request",
+                "the body could not be read",
+                Disposition::NotRun,
+            )));
+        }
     };
     let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&bytes) else {
         return Err(Box::new(refusal(
@@ -450,7 +456,9 @@ fn internal_request(parts: &axum::http::request::Parts, ask: &CallRequest) -> Re
 
 /// The MCP answer's JSON-RPC body. Reading it commits its delivery record.
 async fn read_answer(reply: Response) -> Option<Value> {
-    let bytes = axum::body::to_bytes(reply.into_body(), MAX_ANSWER)
+    // The gateway built this answer itself: the `/mcp` route sends the same
+    // bytes to an MCP client.
+    let bytes = axum::body::to_bytes(reply.into_body(), usize::MAX)
         .await
         .ok()?;
     serde_json::from_slice(&bytes).ok()
