@@ -89,7 +89,7 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     let (parts, body) = request.into_parts();
     let ask = match parse(body).await {
         Ok(ask) => ask,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     let via = via_label(&state, client.as_ref(), &parts.extensions);
     let mut detail = Map::new();
@@ -100,7 +100,7 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
 
     let permit = match admit(&state) {
         Ok(permit) => permit,
-        Err(refused) => return finish(refused, detail, Disposition::NotRun, None),
+        Err(refused) => return finish(*refused, detail, Disposition::NotRun, None),
     };
     let principal = client
         .as_ref()
@@ -140,30 +140,30 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
 
 /// The request body, read under its own cap: `DefaultBodyLimit` binds
 /// extractors only.
-async fn parse(body: Body) -> Result<CallRequest, Response> {
+async fn parse(body: Body) -> Result<CallRequest, Box<Response>> {
     let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
-        return Err(refusal(
+        return Err(Box::new(refusal(
             StatusCode::BAD_REQUEST,
             "bad_request",
             "the body could not be read",
             Disposition::NotRun,
-        ));
+        )));
     };
     let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&bytes) else {
-        return Err(refusal(
+        return Err(Box::new(refusal(
             StatusCode::BAD_REQUEST,
             "bad_request",
             "the body is not a JSON object",
             Disposition::NotRun,
-        ));
+        )));
     };
     serde_json::from_value::<CallRequest>(Value::Object(object)).map_err(|_| {
-        refusal(
+        Box::new(refusal(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid",
             "expected server, tool, arguments (an object) and confirm_write only",
             Disposition::NotRun,
-        )
+        ))
     })
 }
 
@@ -175,18 +175,18 @@ fn admit(
         tokio::sync::OwnedSemaphorePermit,
         tokio::sync::OwnedSemaphorePermit,
     ),
-    Response,
+    Box<Response>,
 > {
     // Under required signing every call carries the caller's nonce; the
     // route mints none on its behalf. Refused here: unsigned, dispatch would
     // answer with the code a missing tool also uses.
     if state.meta_mcp.requires_call_nonce() {
-        return Err(refusal(
+        return Err(Box::new(refusal(
             StatusCode::FORBIDDEN,
             "signing_required",
             "this gateway requires signed calls; use a signing client",
             Disposition::NotRun,
-        ));
+        )));
     }
     // One of the few UI calls that may run at once, and the drain tracker's
     // permit, so shutdown waits for a call that runs on past its answer.
@@ -194,12 +194,12 @@ fn admit(
     let drain = Arc::clone(&state.inflight).try_acquire_owned();
     match (pool, drain) {
         (Ok(pool), Ok(drain)) => Ok((pool, drain)),
-        _ => Err(refusal(
+        _ => Err(Box::new(refusal(
             StatusCode::FORBIDDEN,
             "busy",
             "too many tool calls are running from the web UI; nothing was run",
             Disposition::NotRun,
-        )),
+        ))),
     }
 }
 
@@ -290,6 +290,9 @@ fn spawn_call(
         if let Err(answer) = answered.send(answer) {
             let outcome = ui_call.outcome();
             let mut fields = follow_up.detail;
+            // Named as the layer names the route's own record.
+            fields.insert("route".into(), crate::gateway::routes::UI_TOOLS_CALL.into());
+            fields.insert("method".into(), "POST".into());
             fields.insert("completion".into(), true.into());
             fields.insert(
                 "disposition".into(),

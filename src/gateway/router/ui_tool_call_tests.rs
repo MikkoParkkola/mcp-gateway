@@ -402,7 +402,7 @@ async fn t10_no_such_server_or_tool_is_404() {
     let fx = fixture().await;
     let ghost = json!({"server": "ghost", "tool": "read", "arguments": {}, "confirm_write": true});
     let (status, body) = post(&fx, ADMIN, ghost).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body} {:#?}", records(&fx));
     let (status, body) = post(&fx, ADMIN, call("missing", true)).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
@@ -438,7 +438,7 @@ async fn t17_refusals_are_audited_with_their_target() {
     let (status, _) = post(&fx, ADMIN, call("write", false)).await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = post(&fx, ADMIN, call("missing", true)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::NOT_FOUND, "{:#?}", records(&fx));
     let actions = admin_actions(&fx);
     assert_eq!(actions.len(), 2, "{actions:?}");
     assert_eq!(actions[0]["tool"], "write", "{}", actions[0]);
