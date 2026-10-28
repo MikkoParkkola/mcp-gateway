@@ -322,6 +322,8 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 

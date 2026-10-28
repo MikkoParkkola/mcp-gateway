@@ -1,0 +1,378 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Try a tool from the web UI (U12): `POST /ui/api/tools/call` runs through
+//! the one MCP dispatch, asks for `confirm_write` unless the server declared
+//! the tool read-only, and answers a status that tells "did not run" (4xx)
+//! from "ran" (200) and "may have run" (5xx).
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use serde_json::{Value, json};
+use tower::ServiceExt;
+
+use super::tests::test_router_app_state_with_auth_and_config;
+use crate::backend::Backend;
+use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
+use crate::gateway::router::{AppState, create_router};
+use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::transport::Transport;
+
+const ROUTE: &str = "/ui/api/tools/call";
+const ADMIN: &str = "k-admin";
+const USER: &str = "k-user";
+const SERVER: &str = "alpha";
+
+/// A backend whose `tools/list` declares `read`, `fail` and `iserr`
+/// read-only and leaves `write` and `get_x` undeclared, counting every call.
+struct Stub {
+    calls: Arc<AtomicUsize>,
+    /// Declare `read` read-only (false: a replacement that does not).
+    declares_read: bool,
+}
+
+#[async_trait::async_trait]
+impl Transport for Stub {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        if method == "tools/list" {
+            let ro = json!({"readOnlyHint": true});
+            let read = if self.declares_read {
+                ro.clone()
+            } else {
+                json!({})
+            };
+            let tool = |name: &str, annotations: &Value| json!({"name": name, "inputSchema": {"type": "object"}, "annotations": annotations});
+            return Ok(JsonRpcResponse::success(
+                id,
+                json!({"tools": [
+                    tool("read", &read),
+                    tool("fail", &ro),
+                    tool("iserr", &ro),
+                    tool("write", &json!({})),
+                    tool("get_x", &json!({})),
+                ]}),
+            ));
+        }
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let name = params
+            .as_ref()
+            .and_then(|p| p["name"].as_str())
+            .unwrap_or_default()
+            .to_owned();
+        match name.as_str() {
+            "fail" => Err(crate::Error::BackendTimeout("stub timed out".into())),
+            "iserr" => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "no"}], "isError": true}),
+            )),
+            _ => Ok(JsonRpcResponse::success(
+                id,
+                json!({"content": [{"type": "text", "text": "done"}], "isError": false}),
+            )),
+        }
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+fn key(name: &str, admin: bool) -> ApiKeyConfig {
+    ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(name.as_bytes())),
+        name: name.to_string(),
+        backends: vec!["*".to_string()],
+        admin,
+        ..Default::default()
+    }
+}
+
+struct Fx {
+    state: Arc<AppState>,
+    calls: Arc<AtomicUsize>,
+    audit_path: std::path::PathBuf,
+    _audit: tempfile::TempDir,
+    _store: tempfile::TempDir,
+}
+
+/// A backend `alpha` answered by [`Stub`], its tool list filled, and both
+/// audit logs on.
+async fn fixture() -> Fx {
+    let auth = AuthConfig {
+        enabled: true,
+        api_keys: vec![key(ADMIN, true), key(USER, false)],
+        ..Default::default()
+    };
+    let (mut state, store) =
+        test_router_app_state_with_auth_and_config(&auth, crate::config::Config::default()).await;
+    let audit = tempfile::tempdir().expect("a log directory");
+    let audit_path = audit.path().join("audit.jsonl");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: audit_path.to_string_lossy().into_owned(),
+                key_id: "8865".to_string(),
+                ..crate::security::transparency_log::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::MetaMcp::new(Arc::clone(&state_mut.backends));
+    meta.enable_transparency_log(Arc::clone(&log));
+    state_mut.meta_mcp = Arc::new(meta);
+    state_mut.transparency_log = Some(log);
+    let calls = Arc::new(AtomicUsize::new(0));
+    register(&state, &calls, true).await;
+    Fx {
+        state,
+        calls,
+        audit_path,
+        _audit: audit,
+        _store: store,
+    }
+}
+
+/// Register `alpha` (replacing any earlier one) answered by a [`Stub`]
+/// counting into `calls`, and fill its tool list.
+async fn register(state: &Arc<AppState>, calls: &Arc<AtomicUsize>, declares_read: bool) {
+    let backend = Arc::new(Backend::new(
+        SERVER,
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(Stub {
+        calls: Arc::clone(calls),
+        declares_read,
+    }));
+    assert!(
+        state.backends.register(Arc::clone(&backend)),
+        "registration"
+    );
+    backend
+        .get_tools_shared()
+        .await
+        .expect("the tool list fills");
+}
+
+/// POST `body` to the route as `key`; the status and the JSON answer.
+async fn post(fx: &Fx, key: &str, body: Value) -> (StatusCode, Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri(ROUTE)
+        .header("authorization", format!("Bearer {key}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("request");
+    let response = create_router(Arc::clone(&fx.state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+fn call(tool: &str, confirm_write: bool) -> Value {
+    json!({"server": SERVER, "tool": tool, "arguments": {}, "confirm_write": confirm_write})
+}
+
+fn sent(fx: &Fx) -> usize {
+    fx.calls.load(Ordering::SeqCst)
+}
+
+fn records(fx: &Fx) -> Vec<Value> {
+    std::fs::read_to_string(&fx.audit_path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str(l).ok())
+        .collect()
+}
+
+/// The route's `admin_action` records.
+fn admin_actions(fx: &Fx) -> Vec<Value> {
+    records(fx)
+        .into_iter()
+        .filter(|r| r["event"] == "admin_action" && r.to_string().contains(ROUTE))
+        .collect()
+}
+
+/// T1 (API12.1): a declared read-only tool runs through dispatch: 200, the
+/// backend's result, a latency, and a receipt that is the invocation's trace.
+#[tokio::test]
+async fn t1_a_declared_read_runs_and_returns_its_receipt() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(sent(&fx), 1);
+    assert_eq!(body["disposition"], "ran", "{body}");
+    assert_eq!(body["is_error"], false, "{body}");
+    assert_eq!(body["result"]["content"][0]["text"], "done", "{body}");
+    assert!(body["latency_ms"].is_u64(), "{body}");
+    let receipt = body["receipt"].as_str().expect("a receipt");
+    assert!(
+        records(&fx)
+            .iter()
+            .any(|r| r["trace_id"] == receipt && r["event"] != "admin_action"),
+        "the receipt names the invocation's records"
+    );
+}
+
+/// T4 (API12.2): a tool with no readOnlyHint is refused 409 without
+/// confirm_write and never sent; with it, it runs once.
+#[tokio::test]
+async fn t4_an_undeclared_tool_asks_for_confirm_write() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("write", false)).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(sent(&fx), 0, "nothing reached the backend");
+    let (status, body) = post(&fx, ADMIN, call("write", true)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(sent(&fx), 1);
+}
+
+/// T5 (API12.2): a `get_*` name with no declared hint still asks.
+#[tokio::test]
+async fn t5_an_inferred_read_still_asks() {
+    let fx = fixture().await;
+    let (status, _) = post(&fx, ADMIN, call("get_x", false)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T6b (API12.2): `alpha` replaced by an instance that does not declare
+/// `read`: the declaration judged is the replacement's, so `read` asks.
+#[tokio::test]
+async fn t6b_a_replaced_backend_is_judged_by_its_own_list() {
+    let fx = fixture().await;
+    register(&fx.state, &fx.calls, false).await;
+    let (status, _) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T7 (API12.2): the admin_action record names `ui:key:<name>` and the
+/// receipt; the invocation under that trace names the same principal, not
+/// a `ui:` one.
+#[tokio::test]
+async fn t7_audited_as_ui_principal_and_linked_to_the_invocation() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let receipt = body["receipt"].as_str().expect("a receipt").to_owned();
+    let actions = admin_actions(&fx);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    let action = &actions[0];
+    assert_eq!(action["via"], format!("ui:key:{ADMIN}"), "{action}");
+    assert_eq!(action["invocation_trace"], receipt.as_str(), "{action}");
+    assert_eq!(action["server"], SERVER, "{action}");
+    assert_eq!(action["tool"], "read", "{action}");
+    let invocation: Vec<Value> = records(&fx)
+        .into_iter()
+        .filter(|r| r["trace_id"] == receipt.as_str() && r["event"] != "admin_action")
+        .collect();
+    assert!(!invocation.is_empty(), "the invocation's records");
+    for record in &invocation {
+        assert_eq!(
+            record["who"]["principal"], action["who"]["principal"],
+            "{record}"
+        );
+        assert!(!record.to_string().contains("ui:key:"), "{record}");
+    }
+}
+
+/// T9 (API12.3): a non-admin key is refused 403 and nothing is sent.
+#[tokio::test]
+async fn t9_a_non_admin_is_refused_before_anything_runs() {
+    let fx = fixture().await;
+    let (status, _) = post(&fx, USER, call("read", false)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T10: no such server, no such tool: 404, nothing sent.
+#[tokio::test]
+async fn t10_no_such_server_or_tool_is_404() {
+    let fx = fixture().await;
+    let ghost = json!({"server": "ghost", "tool": "read", "arguments": {}, "confirm_write": true});
+    let (status, body) = post(&fx, ADMIN, ghost).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, body) = post(&fx, ADMIN, call("missing", true)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T11: the tool's own `isError` answer is a result: 200, `is_error: true`.
+#[tokio::test]
+async fn t11_a_tool_error_is_a_result() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("iserr", false)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["is_error"], true, "{body}");
+    assert_eq!(body["disposition"], "ran", "{body}");
+}
+
+/// T15: a backend timeout after the send is "may have run" (5xx), never a
+/// 4xx: -32000 is also the rate refusal's code, so no code is read.
+#[tokio::test]
+async fn t15_a_failure_after_the_send_is_never_4xx() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("fail", false)).await;
+    assert!(status.is_server_error(), "{status} {body}");
+    assert_eq!(body["disposition"], "may_have_run", "{body}");
+    assert!(sent(&fx) >= 1, "the call was sent");
+}
+
+/// T17: a 409 and a 404 each still write an admin_action naming server
+/// and tool.
+#[tokio::test]
+async fn t17_refusals_are_audited_with_their_target() {
+    let fx = fixture().await;
+    let (status, _) = post(&fx, ADMIN, call("write", false)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = post(&fx, ADMIN, call("missing", true)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let actions = admin_actions(&fx);
+    assert_eq!(actions.len(), 2, "{actions:?}");
+    assert_eq!(actions[0]["tool"], "write", "{}", actions[0]);
+    assert_eq!(actions[0]["confirm_write"], false, "{}", actions[0]);
+    assert_eq!(actions[0]["disposition"], "not_run", "{}", actions[0]);
+    assert_eq!(actions[1]["tool"], "missing", "{}", actions[1]);
+    assert_eq!(actions[1]["server"], SERVER, "{}", actions[1]);
+}
+
+/// C1: a body that is not the request shape answers 400 or 422 before
+/// anything runs; extra fields are refused, not ignored.
+#[tokio::test]
+async fn c1_bad_bodies_are_refused_before_dispatch() {
+    let fx = fixture().await;
+    let (status, _) = post(&fx, ADMIN, json!("not an object")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let mut extra = call("read", false);
+    extra["also"] = json!(1);
+    let (status, _) = post(&fx, ADMIN, extra).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let mut scalar = call("read", false);
+    scalar["arguments"] = json!([1]);
+    let (status, _) = post(&fx, ADMIN, scalar).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(sent(&fx), 0);
+}
