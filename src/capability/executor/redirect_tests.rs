@@ -132,6 +132,15 @@ async fn serve(app: axum::Router) -> u16 {
 /// One capability send to a loopback listener that redirects to `location`,
 /// in its own delivery cell: the error and the `response_effect` it records.
 async fn redirected(location: &'static str) -> (crate::Error, Option<serde_json::Value>) {
+    redirected_in(location, || {}).await
+}
+
+/// [`redirected`], with `before` run inside the delivery cell first (to make
+/// it a composite step's cell, say).
+async fn redirected_in(
+    location: &'static str,
+    before: impl FnOnce(),
+) -> (crate::Error, Option<serde_json::Value>) {
     use crate::gateway::delivery_facts;
     let app = axum::Router::new().route(
         "/",
@@ -147,6 +156,7 @@ async fn redirected(location: &'static str) -> (crate::Error, Option<serde_json:
     let health = crate::failsafe::HealthTracker::new("test");
     let url = format!("http://127.0.0.1:{port}/");
     let (outcome, facts) = delivery_facts::scope(async {
+        before();
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
             super::send_with_retry(client.get(&url), "test", true, &health),
@@ -178,21 +188,38 @@ async fn a_redirect_to_cleartext_off_machine_records_refused() {
     assert_eq!(effect, Some("refused".into()), "{error}");
 }
 
-/// The answer the caller receives is unchanged by recording the refusal: the
-/// same transport error, word for word, for both refused hops.
+/// Recording the refusal does not change what the caller receives: a hop the
+/// destination policy refuses answers the SSRF refusal, and a cleartext
+/// downgrade answers the same transport error as before, word for word.
 #[tokio::test]
-async fn a_refused_redirect_answers_the_same_transport_error() {
+async fn a_refused_redirect_answers_as_its_kind_does() {
+    let (refused, _) = Box::pin(redirected("http://10.255.255.1/")).await;
+    assert!(
+        crate::security::ssrf::is_ssrf_refusal(&refused),
+        "{refused:?}"
+    );
+    let (downgrade, _) = Box::pin(redirected("http://93.184.215.14/")).await;
+    assert!(
+        matches!(downgrade, crate::Error::Transport(_)),
+        "{downgrade:?}"
+    );
+    assert_eq!(
+        downgrade.to_string(),
+        "Transport error: test failed: error following redirect"
+    );
+}
+
+/// A composite's step runs in an unvouched cell: a refused redirect there
+/// leaves the plan's record unrefused, for both refused hops.
+#[tokio::test]
+async fn a_refused_redirect_in_an_unvouched_cell_records_no_refusal() {
     for location in ["http://10.255.255.1/", "http://93.184.215.14/"] {
-        let (error, _) = Box::pin(redirected(location)).await;
-        assert!(
-            matches!(error, crate::Error::Transport(_)),
-            "{location}: {error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            "Transport error: test failed: error following redirect",
-            "{location}"
-        );
+        let (error, effect) = Box::pin(redirected_in(
+            location,
+            crate::gateway::delivery_facts::unvouched,
+        ))
+        .await;
+        assert_ne!(effect, Some("refused".into()), "{location}: {error}");
     }
 }
 
@@ -233,7 +260,7 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
     })
     .await;
     let error = outcome.expect_err("the redirect is refused");
-    assert!(matches!(error, crate::Error::Transport(_)), "{error:?}");
+    assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error:?}");
     let mut fields = serde_json::Map::new();
     delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
     assert_eq!(
@@ -243,10 +270,10 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
     );
 }
 
-/// The single-attempt path keeps the health mark a refused redirect has
-/// always carried: three refusals mark the backend, as on the retry path.
+/// The single-attempt path treats a refused redirect as the retry path does:
+/// a policy refusal, so three of them leave the capability healthy.
 #[tokio::test]
-async fn a_single_attempt_rejected_redirect_keeps_the_health_mark() {
+async fn a_single_attempt_rejected_redirect_leaves_health_alone() {
     let app = axum::Router::new().route(
         "/",
         axum::routing::post(|| async {
@@ -273,8 +300,8 @@ async fn a_single_attempt_rejected_redirect_keeps_the_health_mark() {
         outcome.expect_err("the redirect is refused");
     }
     assert!(
-        !health.is_healthy(),
-        "three refused redirects mark the backend"
+        health.is_healthy(),
+        "three refused redirects marked the capability unhealthy"
     );
 }
 
