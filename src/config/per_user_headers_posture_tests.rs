@@ -72,7 +72,11 @@ fn each_backend_gets_its_own_warning_in_name_order() {
 #[test]
 fn a_managed_account_backend_names_its_static_headers() {
     let config: Config = crate::yaml::from_str(
-        "accounts:\n  descriptors:\n    work:\n      mode: personal_managed\n      \
+        "accounts:\n  schema_version: accounts.v1\n  enabled: true\n  \
+         deployment: single_process\n  instance_id: gateway-test\n  \
+         store_dir: /nonexistent/store\n  authority_dir: /nonexistent/authority\n  \
+         current_key_id: current\n  keys:\n    current: env:UNSET_TEST_KEY\n  \
+         descriptors:\n    work:\n      mode: personal_managed\n      \
          provider: gmail\n      resource: https://api.example.invalid/\n      \
          issuer: https://issuer.example.invalid\n      \
          authorization_endpoint: https://issuer.example.invalid/authorize\n      \
