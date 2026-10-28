@@ -490,10 +490,11 @@ fn access_key(event: &IdentityGrantAuditEvent) -> Option<(AccessKey, String)> {
     if event.allowed || event.reason != IdentityGrantDecisionReason::MissingGrant {
         return None;
     }
+    // The checked constructor's rule: a subject that names no one is none.
     let subject = event
         .subject
         .as_ref()
-        .filter(|s| !s.authority.is_empty() && !s.subject.is_empty())?;
+        .filter(|s| GrantSubject::checked(&s.authority, &s.subject, None).is_some())?;
     let agent = event.agent_id.clone().filter(|agent| !agent.is_empty())?;
     let key = AccessKey {
         authority: subject.authority.clone(),

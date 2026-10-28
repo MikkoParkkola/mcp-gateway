@@ -789,3 +789,11 @@ pub(crate) use seal::seal_open_slot;
 #[cfg(test)]
 #[path = "grant_audit_seams.rs"]
 pub(crate) mod seams;
+
+/// The decision set reads grant decisions back by this kind: one rename here
+/// would silently stop its delivery.
+#[cfg(all(test, feature = "webui"))]
+#[test]
+fn the_decision_set_reads_the_kind_written_here() {
+    assert_eq!(DECISION_KIND, crate::decisions::GRANT_DECISION_KIND);
+}
