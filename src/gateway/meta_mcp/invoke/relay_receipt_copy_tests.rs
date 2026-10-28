@@ -28,8 +28,8 @@ fn enforcing(
 
 /// The receipt copy is never delivered, so classifying it leaves the
 /// delivery's effect alone: a verdict attached in monitor mode raises no
-/// `annotated` and notes no write, and an enforced malformed round raises no
-/// `refused`. Its audit classes are still noted: they describe the text the
+/// `annotated` and notes no write, an enforced malformed round raises no
+/// `refused`, and an enforced rebuild of the copy raises no `rewritten`. Its audit classes are still noted: they describe the text the
 /// client receives (RELAY.5).
 #[tokio::test]
 async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
@@ -41,7 +41,14 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
     let attached =
         json!({"contents": [{"uri": "res://orchard", "text": format!("{PROSE} {pii}")}]});
     let malformed = json!({"content": [{"type": "text", "text": pii}], "resultType": 5});
-    for (meta, prompt) in [(&monitored, attached), (&enforced, malformed)] {
+    // An enforced rebuild: the copy is rewritten, the prompt the client gets
+    // is not, so nothing is recorded as rewritten.
+    let rebuilt = json!({"content": [{"type": "text", "text": format!("{PROSE} {pii}")}]});
+    for (meta, prompt, enforcing) in [
+        (&monitored, attached, false),
+        (&enforced, malformed, true),
+        (&enforced, rebuilt, true),
+    ] {
         let ((recorded, effect, writes), notes) =
             super::super::super::audit::with_dispatch_scope(crate::gateway::delivery_facts::scope(
                 super::super::super::gateway_writes::scope(async {
@@ -82,6 +89,11 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
         assert!(
             recorded.get("_context_integrity").is_some(),
             "premise: classified: {recorded}"
+        );
+        assert_eq!(
+            recorded["_context_integrity"]["policy"]["enforcement_applied"],
+            json!(enforcing),
+            "premise: enforcement on the copy: {recorded}"
         );
         let (effect, findings) = effect;
         assert_eq!(effect, "delivered", "{prompt}");
