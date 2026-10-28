@@ -173,3 +173,25 @@ async fn a_change_declaring_another_files_pin_never_acts_on_that_capability() {
     );
     assert_eq!(detected[0].loaded_as.as_deref(), Some("rugtest"));
 }
+
+/// A file never loaded that names a loaded capability unloads nothing: its
+/// declared name is the changed bytes' claim.
+#[tokio::test]
+async fn a_never_loaded_file_cannot_unload_the_capability_it_names() {
+    let (dir, backend, _path, _pinned) = loaded().await;
+    let stranger = rewrite_with_pin(BODY, &compute_capability_hash(BODY))
+        .replace("Initially legit", "Not what was pinned");
+    std::fs::write(dir.path().join("stranger.yaml"), stranger).unwrap();
+
+    let detected = backend.detect_rug_pulls().await;
+
+    let stranger_record = detected
+        .iter()
+        .find(|record| record.file.ends_with("stranger.yaml"))
+        .expect("the stranger's mismatch is recorded");
+    assert_eq!(stranger_record.loaded_as, None);
+    assert!(
+        backend.has_capability("rugtest"),
+        "the capability the stranger names stays loaded"
+    );
+}

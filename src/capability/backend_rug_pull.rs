@@ -48,7 +48,12 @@ impl CapabilityBackend {
                 actual = %record.actual,
                 "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
             );
-            self.unload_capability(record.loaded_as.as_deref().unwrap_or(&record.capability));
+            // Only the capability this file was trusted as is unloaded: a file
+            // never loaded holds nothing, and its declared name could be any
+            // other capability's.
+            if let Some(trusted) = record.loaded_as.as_deref() {
+                self.unload_capability(trusted);
+            }
             self.mark_rug_pull(record.clone());
         }
 
