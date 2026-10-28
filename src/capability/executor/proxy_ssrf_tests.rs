@@ -61,25 +61,36 @@ providers:
 async fn call_through_proxy(base_url: impl Fn(u16) -> String) -> (bool, usize, usize) {
     let (proxy, via_proxy) = counting_listener().await;
     let (target, direct) = counting_listener().await;
-    let executor = CapabilityExecutor::for_config(&CapabilityConfig {
-        egress_proxy: Some(format!("http://127.0.0.1:{proxy}")),
+    let executor = through_proxy(&format!("http://127.0.0.1:{proxy}"));
+    let ok = call(&executor, &base_url(target)).await;
+    (
+        ok,
+        via_proxy.load(Ordering::SeqCst),
+        direct.load(Ordering::SeqCst),
+    )
+}
+
+fn through_proxy(proxy: &str) -> CapabilityExecutor {
+    CapabilityExecutor::for_config(&CapabilityConfig {
+        egress_proxy: Some(proxy.to_owned()),
         ..CapabilityConfig::default()
-    });
-    let result = tokio::time::timeout(
+    })
+}
+
+/// One call to `base_url`, with no loopback egress allowed: whether it
+/// succeeded.
+async fn call(executor: &CapabilityExecutor, base_url: &str) -> bool {
+    tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
         executor.execute_with_context(
-            &capability(&base_url(target)),
+            &capability(base_url),
             json!({}),
             CapabilityExecutionContext::default(),
         ),
     )
     .await
-    .expect("bounded");
-    (
-        result.is_ok(),
-        via_proxy.load(Ordering::SeqCst),
-        direct.load(Ordering::SeqCst),
-    )
+    .expect("bounded")
+    .is_ok()
 }
 
 /// A capability URL naming `localhost` is refused on the proxied route, and
@@ -106,4 +117,27 @@ async fn a_capability_naming_the_loopback_literal_is_refused_through_the_proxy()
         call_through_proxy(|port| format!("http://127.0.0.1:{port}")).await;
     assert_eq!((via_proxy, direct), (0, 0), "a listener was reached");
     assert!(!ok, "the call succeeded");
+}
+
+/// A proxy at `localhost` (a local egress proxy, `localhost:3128`): a target
+/// naming `localhost` is still refused, while a public name in the same
+/// executor still reaches the proxy. The proxy's name must exempt nothing.
+#[tokio::test]
+async fn a_proxy_at_localhost_exempts_no_localhost_target() {
+    let (proxy, via_proxy) = counting_listener().await;
+    let (target, direct) = counting_listener().await;
+    let executor = through_proxy(&format!("http://localhost:{proxy}"));
+    let target_ok = call(&executor, &format!("http://localhost:{target}")).await;
+    assert_eq!(
+        direct.load(Ordering::SeqCst),
+        0,
+        "a localhost target reached the listener"
+    );
+    assert!(!target_ok, "the localhost target succeeded");
+    let public_ok = call(&executor, "http://api.capability-fixture.test").await;
+    assert!(
+        via_proxy.load(Ordering::SeqCst) >= 1,
+        "a public name did not reach the proxy at localhost"
+    );
+    assert!(public_ok, "the proxy's answer did not arrive");
 }
