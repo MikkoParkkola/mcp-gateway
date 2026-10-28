@@ -587,6 +587,11 @@ test.describe('code review round 1', () => {
     const box = await dialog(page).boundingBox();
     expect(box.y).toBeGreaterThanOrEqual(0);
     expect(box.y + box.height).toBeLessThanOrEqual(120);
+    // Not vacuous: the dialog is there, and its buttons can be scrolled to inside it.
+    expect(box.height).toBeGreaterThan(40);
+    await action(page).scrollIntoViewIfNeeded();
+    const button = await action(page).boundingBox();
+    expect(button.y >= 0 && button.y + button.height <= 120).toBe(true);
   });
 });
 
@@ -612,5 +617,30 @@ test.describe('code review round 1, second seat', () => {
     expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
     // Room was added, so it stays centred rather than docking beside the opener.
     expect(Math.abs(box.y + box.height / 2 - 300)).toBeLessThanOrEqual(1);
+  });
+});
+
+test.describe('code review round 2', () => {
+  test('D24 sign-in taking over mid-request frees the lock: nothing opens while signed out, and the next identity can act', async ({ page }) => {
+    const h = held();
+    await page.route(PROBE, h.answer);
+    await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
+    await open(page);
+    await page.click('#remove-probe');
+    await action(page).click();
+    await page.evaluate(async () => { const m = await import(document.querySelector('script[type="module"][src*="/shell."]').src); try { await m.api('/ui/api/forbidden-probe'); } catch {} });
+    await expect(page.locator('#signin')).toBeVisible();
+    const confirmOther = () => page.evaluate(() => {
+      window.__other = null;
+      window.gatewayConfirm({ opener: document.getElementById('remove-probe'), key: 'other', verb: 'Remove', object: 'other', progress: 'Removing other…', consequences: [], run: () => null })
+        .then((r) => { window.__other = r; });
+    });
+    await confirmOther();
+    await expect.poll(() => page.evaluate(() => window.__other)).toEqual({ outcome: 'declined' });
+    // Signed in again (the request is still out): the lock went with the dialog.
+    await page.evaluate(() => { document.body.classList.remove('signed-out'); document.getElementById('signin').hidden = true; });
+    await confirmOther();
+    await expect(dialog(page)).toBeVisible();
+    h.release(204);
   });
 });
