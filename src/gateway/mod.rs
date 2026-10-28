@@ -125,6 +125,8 @@ pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
+#[cfg(feature = "webui")]
+pub(crate) mod ui_call;
 pub mod webhooks;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};

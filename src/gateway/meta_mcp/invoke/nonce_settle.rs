@@ -83,6 +83,9 @@ pub(crate) fn note_served(caller: &MetaMcpCallerContext<'_>, step: (&str, &str))
 /// backend is reached: from here on neither the key nor the nonce is given
 /// back, as a replay would repeat what the backend did.
 pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
+    // A web UI call learns the backend may act from here on (U12).
+    #[cfg(feature = "webui")]
+    crate::gateway::ui_call::note_dispatched(step);
     if let Some(execution) = caller.execution {
         execution.mark_dispatched();
     }

@@ -41,6 +41,9 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+// The web UI's Try-a-tool route runs this one MCP path in process (U12).
+#[cfg(feature = "webui")]
+pub(in crate::gateway) use handlers::meta_mcp_handler;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;

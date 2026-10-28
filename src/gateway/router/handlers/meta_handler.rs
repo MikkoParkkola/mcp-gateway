@@ -14,7 +14,7 @@ use super::{AppState, Arc, OutboundReply, State, judged_reply, meta_mcp_dispatch
 /// scoping (S-03): two concurrent POSTs are two tasks, so a backend
 /// notification can only ever be appended to the call that provoked it.
 /// `MIK-7272.SUB.2b`.
-pub(in crate::gateway::router) async fn meta_mcp_handler(
+pub(in crate::gateway) async fn meta_mcp_handler(
     state: State<Arc<AppState>>,
     http_request: axum::http::Request<axum::body::Body>,
 ) -> OutboundReply {

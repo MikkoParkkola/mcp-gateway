@@ -50,7 +50,7 @@ pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
-pub(super) use meta_handler::meta_mcp_handler;
+pub(in crate::gateway) use meta_handler::meta_mcp_handler;
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use request_facts::TASKS_EXTENSION;
