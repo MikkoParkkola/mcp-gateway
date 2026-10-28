@@ -639,7 +639,7 @@ fn print_results_human(results: &[CheckResult]) {
     for result in results {
         print!(
             "{}",
-            human_lines(&format_badge(&result.status, use_color), result)
+            human_lines(format_badge(&result.status, use_color), result)
         );
     }
 
