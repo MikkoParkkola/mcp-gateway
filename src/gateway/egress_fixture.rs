@@ -349,13 +349,54 @@ pub(crate) fn added_members(raw: &Value, delivered: &Value) -> Vec<String> {
     out
 }
 
+/// How a route delivers a backend's answer to the client.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Delivery {
+    /// The backend's answer, as it is.
+    Passthrough,
+    /// A `gateway_invoke` answer: the tool's value as text inside the
+    /// gateway's wrapper.
+    Wrapped,
+    /// A listing the gateway merges from its own entries and every
+    /// backend's (wrapped as text for `gateway_list_tools`): the backend's
+    /// entry is found by its name, URI or URI template.
+    Merged,
+}
+
+/// Whether `entry` is the backend's one listed item, under any prefix the
+/// merge gives its name.
+fn is_backend_entry(entry: &Value) -> bool {
+    let name = entry.get("name").and_then(Value::as_str);
+    name.is_some_and(|n| n == NAME || n.ends_with(&format!("/{NAME}")))
+        || entry.get("uri").and_then(Value::as_str) == Some(URI)
+        || entry.get("uriTemplate").and_then(Value::as_str) == Some("mem://{id}")
+}
+
+/// The first object in `value`, depth first, that is the backend's entry.
+fn find_entry(value: &Value) -> Option<&Value> {
+    match value {
+        Value::Object(_) if is_backend_entry(value) => Some(value),
+        Value::Object(map) => map.values().find_map(find_entry),
+        Value::Array(items) => items.iter().find_map(find_entry),
+        _ => None,
+    }
+}
+
+/// `result`'s tool value when it is a wrapper's JSON text, else `result`.
+fn unwrapped(result: &Value) -> Value {
+    result
+        .pointer("/content/0/text")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .unwrap_or_else(|| result.clone())
+}
+
 /// What the client received for `method` with `text` planted at `part`,
 /// diffed against what the backend sent: every member the gateway added
-/// that has no row in the member table. `wrapped` is a `gateway_invoke`
-/// answer, the tool's value carried as text inside the gateway's wrapper.
+/// that has no row in the member table.
 pub(crate) fn unclassified_additions(
     (method, part, text): (&str, Part, &str),
-    wrapped: bool,
+    delivery: Delivery,
     body: &str,
 ) -> Vec<String> {
     let Some(frame) = answer_frame(body) else {
@@ -364,23 +405,43 @@ pub(crate) fn unclassified_additions(
     // The tool-result shape a wrapper or a gateway-built result must have;
     // every other member of it is one the gateway chose to add.
     let wrapper = json!({"content": [], "isError": false});
+    let raw = shaped(method, text);
     let mut added = Vec::new();
     if let Some(result) = frame.get("result") {
-        if wrapped || part != Part::ResultText {
-            added.extend(added_members(&wrapper, result));
-        }
-        let value = if wrapped {
-            result
-                .pointer("/content/0/text")
-                .and_then(Value::as_str)
-                .and_then(|text| serde_json::from_str::<Value>(text).ok())
-        } else {
-            Some(result.clone())
-        };
-        if part == Part::ResultText
-            && let Some(value) = value
-        {
-            added.extend(added_members(&shaped(method, text), &value));
+        match delivery {
+            Delivery::Merged => {
+                if part == Part::ResultText {
+                    // The listing's one key and its one entry, as sent.
+                    let sent = raw.as_object().and_then(|m| m.iter().next());
+                    if let Some((key, list)) = sent
+                        && let Some(entry) = list.get(0)
+                    {
+                        match find_entry(&unwrapped(result)) {
+                            Some(found) => added.extend(
+                                added_members(entry, found)
+                                    .into_iter()
+                                    .map(|path| format!("{key}.*.{path}")),
+                            ),
+                            // The planted credential may withhold the entry;
+                            // a harmless one must be found, or this proves nothing.
+                            None if text == "harmless" => {
+                                added.push(format!("the backend's {key} entry is not in {result}"));
+                            }
+                            None => {}
+                        }
+                    }
+                }
+            }
+            Delivery::Wrapped => {
+                added.extend(added_members(&wrapper, result));
+                if part == Part::ResultText {
+                    added.extend(added_members(&raw, &unwrapped(result)));
+                }
+            }
+            Delivery::Passthrough if part == Part::ResultText => {
+                added.extend(added_members(&raw, result));
+            }
+            Delivery::Passthrough => added.extend(added_members(&wrapper, result)),
         }
     }
     if let Some(error) = frame.get("error") {

@@ -18,7 +18,7 @@ use super::direct_guards_fixture::{
     meta_firewall,
 };
 use crate::gateway::egress_fixture::{
-    BACKEND_METHODS, NAME, Part, Planted, URI, secret, unclassified_additions,
+    BACKEND_METHODS, Delivery, NAME, Part, Planted, URI, secret, unclassified_additions,
 };
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::security::firewall::FirewallAction;
@@ -561,25 +561,26 @@ mod slot_release;
 /// table, so the delivery record counts it and ingress strips a backend's
 /// copy. Each backend method, result and error, on both routes, with response
 /// inspection observing (findings written onto the answer) and enforcing,
-/// over harmless text and a credential the inspection flags. `/mcp`'s
-/// listings are left out: each is the gateway's own catalogue (its own
-/// entries and every backend's, `gateway_list_tools` for tools), not one
-/// backend's answer. The direct route passes every listing through.
+/// over harmless text and a credential the inspection flags. On `/mcp` a
+/// listing is merged from the gateway's own entries and every backend's
+/// (`gateway_list_tools` for tools), so the backend's entry is found in it
+/// and diffed; the gateway's own entries are not a backend's answer.
 #[tokio::test]
 async fn every_member_the_gateway_adds_is_in_the_member_table() {
     let mut failures = Vec::new();
     for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
         for method in BACKEND_METHODS {
             for route in ROUTES {
-                if route == Route::Meta && method.ends_with("/list") {
-                    continue;
-                }
                 for part in [Part::ResultText, Part::ErrorData] {
                     for text in ["harmless".to_owned(), secret()] {
                         let seen = cell(setup, route, method, part, text.clone()).await;
-                        let wrapped = route == Route::Meta && method == "tools/call";
+                        let delivery = match (route, method) {
+                            (Route::Meta, "tools/call") => Delivery::Wrapped,
+                            (Route::Meta, m) if m.ends_with("/list") => Delivery::Merged,
+                            _ => Delivery::Passthrough,
+                        };
                         for path in
-                            unclassified_additions((method, part, &text), wrapped, &seen.body)
+                            unclassified_additions((method, part, &text), delivery, &seen.body)
                         {
                             failures.push(format!(
                                 "{setup:?} {route:?} {method} {part:?}: `{path}` added outside the member table"

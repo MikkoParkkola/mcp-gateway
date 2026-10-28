@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
 use crate::gateway::egress_fixture::{
-    BACKEND_METHODS, NAME, Part, Planted, URI, secret, unclassified_additions,
+    BACKEND_METHODS, Delivery, NAME, Part, Planted, URI, secret, unclassified_additions,
 };
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
@@ -453,22 +453,24 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
 }
 
 /// The stdio twin of the HTTP row: every member the gateway adds to a
-/// backend's answer is a row of the member table. The listings are left out:
-/// each is the gateway's own catalogue (its own entries and every backend's,
-/// `gateway_list_tools` for tools), not one backend's answer.
+/// backend's answer is a row of the member table. A listing is merged from
+/// the gateway's own entries and every backend's, so the backend's entry is
+/// found in it and diffed.
 #[tokio::test]
 async fn every_member_the_gateway_adds_on_stdio_is_in_the_member_table() {
     let mut failures = Vec::new();
     for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
-        for method in BACKEND_METHODS
-            .into_iter()
-            .filter(|m| !m.ends_with("/list"))
-        {
+        for method in BACKEND_METHODS {
             for part in [Part::ResultText, Part::ErrorData] {
                 for text in ["harmless".to_owned(), secret()] {
                     let seen = cell(setup, method, part, text.clone()).await;
-                    let wrapped = method == "tools/call";
-                    for path in unclassified_additions((method, part, &text), wrapped, &seen.body) {
+                    let delivery = match method {
+                        "tools/call" => Delivery::Wrapped,
+                        m if m.ends_with("/list") => Delivery::Merged,
+                        _ => Delivery::Passthrough,
+                    };
+                    for path in unclassified_additions((method, part, &text), delivery, &seen.body)
+                    {
                         failures.push(format!(
                             "{setup:?} stdio {method} {part:?}: `{path}` added outside the member table"
                         ));
