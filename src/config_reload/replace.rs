@@ -195,6 +195,11 @@ pub(crate) enum ReplaceError {
 /// Write `replace` in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
 /// between its rename and its reload.
+///
+/// Invariant (ADR-024): a save's compute closure produces its bytes through
+/// a refusing in-place editor (the key editor or `edit_text`), never through
+/// a `CommentLoss::Rewrite` render, so a refusal surfaces as
+/// [`ReplaceError::Refused`] and nothing is written.
 #[cfg_attr(
     not(test),
     expect(
