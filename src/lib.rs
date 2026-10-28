@@ -57,6 +57,7 @@ pub mod control_plane;
 pub mod cost_accounting;
 mod counters;
 mod debug_trust_roots;
+mod decisions;
 #[doc(hidden)]
 pub mod discovery;
 mod duration_bound;
