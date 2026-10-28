@@ -202,15 +202,15 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
             ));
         }
         validate_url_not_ssrf(&graphql_config.endpoint)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::security::ssrf::refuse_loopback_name(&graphql_config.endpoint)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::capability::require_tls_for_auth(
             &graphql_config.endpoint,
             &ctx.capability.auth,
             graphql_config.headers.values().map(String::as_str),
         )
-        .map_err(crate::gateway::delivery_facts::refused)?;
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         // Build the { query, variables } body
         let body = Self::build_body(graphql_config, &params)?;

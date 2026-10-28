@@ -200,7 +200,10 @@ pub(super) async fn send_with_retry(
                             health.record_failure();
                             Error::Transport(format!("{label} failed: {}", redact_url(e)))
                         },
-                        crate::gateway::delivery_facts::refused,
+                        |refused| {
+                            crate::gateway::delivery_facts::refused_while_vouched();
+                            refused
+                        },
                     ),
                 ),
             };
@@ -213,7 +216,8 @@ pub(super) async fn send_with_retry(
             Err(e) => {
                 // A refused destination is refused again: one attempt, no health mark.
                 if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
-                    return Err(crate::gateway::delivery_facts::refused(refused));
+                    crate::gateway::delivery_facts::refused_while_vouched();
+                    return Err(refused);
                 }
                 note_redirect_refusal(&e);
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());

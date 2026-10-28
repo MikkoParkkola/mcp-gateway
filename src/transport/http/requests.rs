@@ -791,11 +791,9 @@ async fn detach_token_step(
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?;
     // The refresh ran in its own task, outside this call's delivery cell: a
     // destination refusal it returns is recorded here, in the caller's task.
-    token.map_err(|e| {
-        if crate::security::ssrf::is_ssrf_refusal(&e) {
-            crate::gateway::delivery_facts::refused(e)
-        } else {
-            e
+    token.inspect_err(|e| {
+        if crate::security::ssrf::is_ssrf_refusal(e) {
+            crate::gateway::delivery_facts::refused_while_vouched();
         }
     })
 }

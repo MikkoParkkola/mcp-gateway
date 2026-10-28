@@ -152,15 +152,15 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
             ));
         }
         validate_url_not_ssrf(&jsonrpc_config.endpoint)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::security::ssrf::refuse_loopback_name(&jsonrpc_config.endpoint)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         crate::capability::require_tls_for_auth(
             &jsonrpc_config.endpoint,
             &ctx.capability.auth,
             jsonrpc_config.headers.values().map(String::as_str),
         )
-        .map_err(crate::gateway::delivery_facts::refused)?;
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         // Build the JSON-RPC 2.0 request body
         let body = Self::build_request(jsonrpc_config, &params)?;

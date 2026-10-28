@@ -415,9 +415,9 @@ impl CapabilityExecutor {
         // own request may go (#2113): the same destination check, before any
         // byte is sent.
         super::super::require_tls_for_credentials(token_endpoint)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         super::super::validate_capability_url_for_context(token_endpoint, context)
-            .map_err(crate::gateway::delivery_facts::refused)?;
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // Read before the flight: the keychain lookup may block, and the
         // secret does not depend on the token.
         let keychain_key = format!("{provider}-client-secret");
@@ -442,9 +442,7 @@ impl CapabilityExecutor {
             // Recorded before the wrap: the wrapped error no longer reads as
             // a destination refusal.
             if crate::security::ssrf::is_ssrf_refusal(&error) {
-                crate::gateway::delivery_facts::raise(
-                    crate::gateway::delivery_facts::ResponseEffect::Refused,
-                );
+                crate::gateway::delivery_facts::refused_while_vouched();
             }
             Error::Config(format!(
                 "OAuth refresh request to '{}' for '{provider}' failed: {error}",

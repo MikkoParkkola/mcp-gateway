@@ -172,11 +172,9 @@ impl HttpTransport {
             let backend_name = oauth_task
                 .await
                 .map_err(|e| join_failure(&e))?
-                .map_err(|e| {
-                    if interactive && crate::security::ssrf::is_ssrf_refusal(&e) {
-                        crate::gateway::delivery_facts::refused(e)
-                    } else {
-                        e
+                .inspect_err(|e| {
+                    if interactive && crate::security::ssrf::is_ssrf_refusal(e) {
+                        crate::gateway::delivery_facts::refused_while_vouched();
                     }
                 })?;
 
