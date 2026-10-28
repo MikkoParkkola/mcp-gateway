@@ -382,9 +382,10 @@ use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
+#[cfg(feature = "webui")]
+pub(crate) use requests::with_admin;
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
-    with_admin,
 };
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";

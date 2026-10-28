@@ -153,7 +153,8 @@ pub(crate) async fn send_with_headers(
 
 /// Any fixture builder, run with the admin key `k-admin` added (the web UI's
 /// tool route runs only for an admin); off by default, so no other row's key
-/// set changes.
+/// set changes. Only the web UI's rows call it.
+#[cfg(feature = "webui")]
 pub(crate) async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
     super::WITH_ADMIN.with(|s| s.set(true));
     let fx = build.await;
