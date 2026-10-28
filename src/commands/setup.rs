@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use super::config_write::CommentLoss;
 #[cfg(feature = "config-export")]
 use mcp_gateway::cli::{ConnectionMode, ExportTarget};
+use mcp_gateway::cli_support::shown;
 #[cfg(test)]
 use mcp_gateway::gateway::test_helpers::write_config_fixture;
 use mcp_gateway::security::sanitize::redact_url_for_diagnostics;
@@ -242,7 +243,12 @@ fn interactive_select(servers: &[DiscoveredServer]) -> Result<Vec<&DiscoveredSer
         .iter()
         .map(|s| {
             let transport = transport_label(&s.transport);
-            format!("{} [{}] ({})", s.name, source_label(&s.source), transport)
+            format!(
+                "{} [{}] ({})",
+                shown(&s.name),
+                source_label(&s.source),
+                shown(&transport)
+            )
         })
         .collect();
 
@@ -337,20 +343,20 @@ fn merge_servers_into_config(
             .map_err(|refused| {
                 format!(
                     "'{}' has secret references that do not resolve: {}",
-                    server.name,
-                    refused.join("; ")
+                    shown(&server.name),
+                    shown(&refused.join("; "))
                 )
             })?;
     }
     let mut added = 0usize;
     for server in selected {
         if config.backends.contains_key(&server.name) {
-            println!("  Skipping '{}' (already in config)", server.name);
+            println!("  Skipping '{}' (already in config)", shown(&server.name));
             continue;
         }
         let backend = server.to_backend_config();
         config.backends.insert(server.name.clone(), backend);
-        println!("  Added '{}'", server.name);
+        println!("  Added '{}'", shown(&server.name));
         added += 1;
     }
     Ok(added)

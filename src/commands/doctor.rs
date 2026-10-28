@@ -12,6 +12,7 @@ use std::time::Instant;
 
 use mcp_gateway::{
     cli::output::OutputFormat,
+    cli_support::shown,
     config::{Config, TransportConfig},
     discovery::{
         AutoDiscovery,
@@ -631,7 +632,14 @@ fn print_results_human(results: &[CheckResult]) {
 
     for result in results {
         let badge = format_badge(&result.status, use_color);
-        println!("{badge} {}: {}", result.label, result.detail);
+        // A finding's label and detail can carry a discovered server's
+        // name; the JSON output keeps them raw, the terminal gets them
+        // escaped, once, here.
+        println!(
+            "{badge} {}: {}",
+            shown(&result.label),
+            shown(&result.detail)
+        );
         if let Some(ref hint) = result.hint {
             println!("       Hint: {hint}");
         }

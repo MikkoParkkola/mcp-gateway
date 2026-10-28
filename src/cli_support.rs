@@ -34,6 +34,50 @@ pub fn is_format_char(c: char) -> bool {
     )
 }
 
+/// Whether `c` can hide, reorder or break the text around it on a terminal:
+/// a control (Cc), a format character (Cf) or a line or paragraph separator
+/// (Zl, Zp).
+#[must_use]
+pub fn is_hidden_char(c: char) -> bool {
+    c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}')
+}
+
+/// Text from a client config, escaped for a terminal. Only [`shown`] makes
+/// one, and it can only be printed: it cannot be escaped twice, and a
+/// renderer that takes it cannot be handed raw text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown(String);
+
+impl std::fmt::Display for Shown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// `text` with every hidden character (see [`is_hidden_char`]) written as
+/// `\u{..}`; every other character, a backslash included, is kept, so a
+/// Windows path reads as it is. The last step before printing: summarize,
+/// redact or parse first.
+#[must_use]
+pub fn shown(text: &str) -> Shown {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if is_hidden_char(c) {
+            out.extend(c.escape_unicode());
+        } else {
+            out.push(c);
+        }
+    }
+    Shown(out)
+}
+
+/// Whether [`shown`] would print `text` unchanged: a runnable command that
+/// it would alter is withheld rather than shown altered.
+#[must_use]
+pub fn shows_unchanged(text: &str) -> bool {
+    !text.chars().any(is_hidden_char)
+}
+
 /// One discovered server's fate in [`adopt_literals`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -205,8 +249,9 @@ pub(crate) fn adopt_with(
             .check_secret_references(name, &overlay)
             .map_err(|refused| {
                 format!(
-                    "discovered server {name:?} has secret references that do not resolve: {}",
-                    refused.join("; ").escape_debug()
+                    "discovered server \"{}\" has secret references that do not resolve: {}",
+                    shown(name),
+                    shown(&refused.join("; "))
                 )
             })?;
     }
@@ -354,10 +399,11 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
         .iter()
         .filter_map(|outcome| match outcome {
             Outcome::Skipped { name, reasons } => Some(format!(
-                "{name:?}: {}",
+                "\"{}\": {}",
+                shown(name),
                 reasons
                     .iter()
-                    .map(|(code, field)| format!("{code} ({})", field.escape_debug()))
+                    .map(|(code, field)| format!("{code} ({})", shown(field)))
                     .collect::<Vec<_>>()
                     .join(", ")
             )),
