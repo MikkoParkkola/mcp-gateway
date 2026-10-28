@@ -96,6 +96,35 @@ const probed = {
   },
 };
 
+// The destructive-action rows (shell-destructive.spec.mjs) set fixture-probes=1:
+// Gateway › Actions then has a "Remove probe…" row whose button calls ctx.confirm
+// against /ui/api/destroy-probe. A test shapes the call through window.__confirm
+// (set in an init script) and reads the outcome from window.__outcomes.
+const confirmRow = (el, ctx) => {
+  const opener = document.createElement('button');
+  opener.type = 'button';
+  opener.className = 'btn';
+  opener.id = 'remove-probe';
+  opener.textContent = 'Remove probe…';
+  window.__outcomes = [];
+  opener.addEventListener('click', () => {
+    const extra = typeof window.__confirm === 'function' ? window.__confirm(opener) : (window.__confirm ?? {});
+    const settled = ctx.confirm({
+      opener,
+      key: 'probe:one',
+      verb: 'Remove',
+      object: 'probe',
+      progress: 'Removing probe…',
+      consequences: ['3 tools disappear for 2 keys.', 'They called them 12 times today.'],
+      run: () => api('/ui/api/destroy-probe', { method: 'DELETE' }),
+      ...extra,
+    });
+    Promise.resolve(settled).then((r) => window.__outcomes.push(r), (e) => window.__outcomes.push({ thrown: String(e) }));
+  });
+  window.gatewayConfirm = ctx.confirm;
+  el.replaceChildren('gateway - actions ', opener);
+};
+
 for (const [id, label] of PAGES) {
   const tab = (name) => (el, ctx) => {
     el.textContent = `${id} ${ctx.object ?? '-'} ${name}`;
@@ -107,7 +136,7 @@ for (const [id, label] of PAGES) {
       // Access › Status reads an API the tests can answer with 403.
       status: (probes && probed[id])
         || (id === 'access' ? async (el) => { await api('/ui/api/forbidden-probe'); el.textContent = 'access - status'; } : tab('status')),
-      actions: tab('actions'),
+      actions: (probes && id === 'gateway') ? confirmRow : tab('actions'),
       settings: id === 'tools' ? null : tab('settings'),
     },
     entries: [id === 'tools'
