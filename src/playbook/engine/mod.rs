@@ -351,7 +351,10 @@ async fn dispatch(
                     crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
                 );
                 warn!(step = %step.name, error = %e, refused, "Step failed");
-                if refused {
+                // Re-sent only when the error was raised before the request
+                // was sent: anything later may have acted, and a second send
+                // would repeat it (MIK-9042).
+                if refused || !e.is_pre_dispatch() {
                     return Err(e);
                 }
                 last_error = Some(e);
@@ -401,7 +404,7 @@ fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
 /// A failed step's entry in `step_errors`, caller output, not a log: the
 /// error and, for a tool error, its capped text.
 fn step_reason(error: &crate::Error) -> String {
-    match error {
+    let reason = match error {
         crate::Error::JsonRpc {
             data: Some(data), ..
         } if data[TOOL_TEXT_DATA_KEY].is_string() => {
@@ -411,7 +414,10 @@ fn step_reason(error: &crate::Error) -> String {
             )
         }
         _ => error.to_string(),
-    }
+    };
+    // A null-filled step returns success, so no outer settlement sees this
+    // error: the reason itself says the step may have run (MIK-9042).
+    crate::error::step_failure_text(error, reason)
 }
 
 /// The gateway-sealed transient a busy custody raises before any send,

@@ -10,6 +10,27 @@ use thiserror::Error;
 /// Result type alias for MCP Gateway
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Appended to a chain or playbook step's error when
+/// [`Error::outcome_undetermined`] holds, so a caller reading the text knows
+/// the step was not re-sent because it may already have acted (MIK-9042).
+pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have reached the \
+     backend, so it was not re-sent; reconcile at the backend before running it again";
+
+/// `error`'s text for a chain or playbook step result, with [`MAY_HAVE_RUN`]
+/// appended when the step may have acted. The one place both loops word it.
+///
+/// A gateway refusal (`Forbidden`) keeps its text unchanged: it is the
+/// caller-facing reason a policy gate gave, which stays neutral (A3), and the
+/// gates that raise it decide before the call. [`Error::outcome_undetermined`]
+/// still reads `true` for it; only the note is withheld.
+pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
+    if error.outcome_undetermined() && !matches!(error, Error::Forbidden { .. }) {
+        format!("{text}; {MAY_HAVE_RUN}")
+    } else {
+        text
+    }
+}
+
 /// MCP Gateway errors
 #[derive(Error, Debug)]
 pub enum Error {
@@ -437,6 +458,21 @@ impl Error {
     #[must_use]
     pub(crate) fn is_lost_round(&self) -> bool {
         matches!(self, Self::Transport(_) | Self::BackendTimeout(_))
+    }
+
+    /// Whether the call that raised this error may have run: `true` for every
+    /// error not proven raised before the request was sent
+    /// ([`Self::is_pre_dispatch`]). No later error is proof the backend did
+    /// nothing: a tool can act and then answer with an error, a response can
+    /// be refused after the backend produced it, and a proxy can answer 4xx
+    /// or 5xx after the backend acted. Reconcile with the backend before
+    /// running such a call again.
+    ///
+    /// Conservative by design: an error that in fact did nothing may still
+    /// read `true`; one that may have run never reads `false` (MIK-9042).
+    #[must_use]
+    pub fn outcome_undetermined(&self) -> bool {
+        !self.is_pre_dispatch()
     }
 
     /// The gateway's own limiter or slot admission refused: the backend was

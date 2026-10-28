@@ -26,9 +26,10 @@ enum Answer {
     ToolError,
     /// A tool error whose text is 10,000 characters long (D3).
     LongToolError,
-    /// A transport failure on the first call, [`Self::Busy`] after it.
+    /// A connection never made on the first call (the one failure re-sent,
+    /// MIK-9042), [`Self::Busy`] after it.
     TransportThenBusy,
-    /// A transport failure on the first call, [`Self::Served`] after it.
+    /// A connection never made on the first call, [`Self::Served`] after it.
     TransportThenServed,
 }
 
@@ -73,7 +74,9 @@ impl ToolInvoker for Scripted {
         self.total.fetch_add(1, Ordering::SeqCst);
         let answer = match self.script.get(tool).copied().unwrap_or(Answer::Served) {
             Answer::TransportThenBusy | Answer::TransportThenServed if call == 1 => {
-                return Err(crate::Error::Transport("connection reset".to_owned()));
+                return Err(crate::Error::TransportConnect(
+                    "connection refused".to_owned(),
+                ));
             }
             Answer::TransportThenBusy => Answer::Busy,
             Answer::TransportThenServed => Answer::Served,
@@ -220,9 +223,10 @@ async fn a_busy_step_after_a_completed_one_ends_the_plan_as_possibly_sent() {
 
 /// STEP.2 / STEP.3 negative control: the Busy's look-alike, the same code,
 /// text and `retryable` data without the gateway's seal, is an ordinary
-/// error and keeps today's policy: `continue` null-fills it and runs the
-/// successor, `retry` retries it, `abort` returns it unchanged. Green on the
-/// line and after the fix; red if Busy is recognised from its text.
+/// error and keeps its policy: `continue` null-fills it and runs the
+/// successor, `retry` records it after one call (a backend's error answer
+/// follows a send, so it is not re-sent: MIK-9042) and runs the successor,
+/// `abort` returns it unchanged. Red if Busy is recognised from its text.
 #[tokio::test]
 async fn an_ordinary_step_error_keeps_its_policy() {
     let invoker = Scripted::new(&[("first", Answer::LookAlike)]);
@@ -240,8 +244,8 @@ async fn an_ordinary_step_error_keeps_its_policy() {
         .expect("STEP.2 retry: the plan carries on");
     assert_eq!(
         invoker.calls("first"),
-        3,
-        "STEP.2 retry: retried to the cap"
+        1,
+        "STEP.2 retry: a backend's error answer is not re-sent"
     );
     assert_eq!(result.steps_completed, vec!["second"]);
 
@@ -433,8 +437,9 @@ async fn a_result_without_is_error_true_is_a_completed_step() {
 }
 
 /// STEP.1 partial run within one step (C1b): under `retry`, the first attempt
-/// of `first` failed in transport, so may have reached its backend; the retry
-/// meets Busy. The plan ends, and its error must not read as unsent.
+/// of `first` failed before its send and is retried; the retry meets Busy. The
+/// plan ends, and its error must not read as unsent: the plan counts every
+/// non-busy attempt as possibly sent, conservatively.
 #[tokio::test]
 async fn a_busy_retry_after_a_transport_failure_ends_the_plan_as_possibly_sent() {
     let invoker = Scripted::new(&[("first", Answer::TransportThenBusy)]);
@@ -458,8 +463,8 @@ async fn a_busy_retry_after_a_transport_failure_ends_the_plan_as_possibly_sent()
     );
 }
 
-/// D1 control: a transport failure is still retried (STEP.2: ordinary step
-/// errors keep today's policy), and the served retry is the step's result.
+/// D1 control: a failure before the send is still retried (MIK-9042), and the
+/// served retry is the step's result.
 #[tokio::test]
 async fn a_transport_failure_then_a_served_retry_completes_the_step() {
     let invoker = Scripted::new(&[("first", Answer::TransportThenServed)]);
