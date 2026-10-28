@@ -587,8 +587,9 @@ const runTab = (spec, route, into) => {
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
     show: screenBanner(into, route.page, guard),
-    // The title or subtitle a screen sets itself, e.g. a count; a kept one changes nothing later.
-    header: (fields) => { if (guardHolds(guard)) setHeader(fields); },
+    // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
+    // later: Retry reuses the render, so a failed attempt is told apart by its container.
+    header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
   }));
@@ -647,9 +648,13 @@ function screenBanner(into, page, guard) {
   };
 }
 
-/** Set the header title and subtitle as text; a field left out stays, a null subtitle hides it. */
+/**
+ * Set the header title and subtitle as text. A title left out or empty stays; a
+ * subtitle left out stays, and a null or empty one hides the line. Nothing is
+ * announced, so it suits a count read on load, not a value that keeps changing.
+ */
 function setHeader({ title, subtitle } = {}) {
-  if (title !== undefined) {
+  if (title) {
     document.querySelector('.head .plate').textContent = title;
     document.title = `${title} · MCP Gateway`;
   }
@@ -669,20 +674,18 @@ export function render() {
   const label = NAV.find(([id]) => id === route.page)?.[1];
   drawNav(route.page);
   const content = document.getElementById('content');
-  const plate = document.querySelector('.head .plate');
   const tabsNav = document.querySelector('nav.tabs');
   tabsNav.replaceChildren();
 
   const tabNamed = route.tab === null || TABS.some(([t]) => t === route.tab);
   if (!label || !tabNamed) {
-    plate.textContent = 'Not found';
-    document.title = 'Not found · MCP Gateway';
-    document.querySelector('.head .sub').hidden = true;
+    setHeader({ title: 'Not found', subtitle: null });
     content.replaceChildren(mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
   const spec = pages.get(route.page);
-  setHeader({ title: spec?.title ?? label, subtitle: spec?.subtitle ?? null });
+  const ownHeader = { title: spec?.title ?? label, subtitle: spec?.subtitle ?? null };
+  setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
     content.replaceChildren(mark(state('not-built')));
@@ -706,6 +709,7 @@ export function render() {
   const settle = (err) => {
     const status = err instanceof ApiError ? err.status : null;
     if (status === 401) return; // the sign-in view is showing; it re-renders after sign-in
+    setHeader(ownHeader); // a failed attempt's own header goes with its content
     if (status === 403) {
       snapshotsNow().delete(key); // this identity may no longer see it
       showBanner(content, bannerState('forbidden'));

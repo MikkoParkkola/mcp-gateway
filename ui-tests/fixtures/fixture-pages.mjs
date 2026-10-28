@@ -45,12 +45,14 @@ const probed = {
     if (fault) null.call();
   },
   // F20 (shell-frame.spec.mjs): a screen sets its own header through its context.
-  // F20b: with window.__failOnce set, the first attempt keeps its setter and fails.
+  // F20b, F20c: while window.__fails > 0, an attempt keeps its setter (and, with
+  // window.__headerThenFail, sets a header first) and fails.
   overview: (el, ctx) => {
-    if (window.__failOnce) {
-      window.__failOnce = false;
+    if (window.__fails > 0) {
+      window.__fails -= 1;
       window.failedHeader = ctx.header;
-      throw new Error('first attempt fails');
+      if (window.__headerThenFail) ctx.header({ title: 'From a failed attempt', subtitle: 'failed' });
+      throw new Error('attempt fails');
     }
     el.textContent = `overview ${ctx.object ?? '-'} status`;
     window.overviewHeader = ctx.header;
