@@ -572,11 +572,11 @@ impl Backend {
                     protocol_version.clone(),
                     built_under,
                 )?;
-                // MIK-6735 fix 2: a per-user pool slot's transport serves
-                // exactly one caller identity for its whole lifetime, which
-                // is what makes the transport's internal session-map
-                // single-tenant debug_assert provably safe -- tell it so,
-                // with the slot's lender its dispatches lend through.
+                // A per-user pool slot's transport serves one caller identity
+                // for life (MIK-6735 fix 2): tell it so, with the slot's
+                // lender its dispatches lend through. It marks itself single
+                // tenant only when lent-only, the one kind holding a single
+                // session.
                 if let Some(slot) = slot {
                     transport.mark_per_user_slot(slot, Arc::clone(&entry.lender));
                 }

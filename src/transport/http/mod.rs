@@ -589,15 +589,19 @@ impl HttpTransport {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
 
-    /// Mark this transport as a per-user pool slot's: one principal, and, for
-    /// `credential` [`SlotCredential::LentOnly`], only the credential a
-    /// dispatch in flight lends and one session bucket.
+    /// Mark this transport as a per-user pool slot's. For `credential`
+    /// [`SlotCredential::LentOnly`] it sends only the credential a dispatch in
+    /// flight lends and holds one session, its subscriber's, so it is single
+    /// tenant. An optional binding's slot also holds the session its start
+    /// opened as the gateway, beside its subscriber's, so it is not.
     pub(crate) fn mark_per_user_slot(
         &self,
         credential: SlotCredential,
         lender: Arc<crate::transport::Lender>,
     ) {
-        self.mark_single_tenant();
+        if credential == SlotCredential::LentOnly {
+            self.mark_single_tenant();
+        }
         let _ = self.lender.set(lender);
         self.lent_only
             .store(credential == SlotCredential::LentOnly, Ordering::Relaxed);
