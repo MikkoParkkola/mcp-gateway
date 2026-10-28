@@ -326,33 +326,12 @@ async fn effect_of_send(request: reqwest::RequestBuilder) -> (bool, Option<serde
 }
 
 /// Negative control: a redirect the policy allows is followed, and nothing
-/// is recorded as refused. The first request goes to a loopback literal,
-/// which skips the proxy; its hop names a public-looking host, which passes
-/// the hop check and goes through the proxy, standing in for the target.
+/// is recorded as refused. Both the request and its hop name a public-looking
+/// host, so both go through the proxy, which answers as the target would: a
+/// redirect from `/` to `/ok`, then `ok`. Neither leg is on this machine, so
+/// no cleartext rule applies.
 #[tokio::test]
 async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
-    let listener = tokio::time::timeout(
-        crate::test_wait::HANG_BOUND,
-        tokio::net::TcpListener::bind("127.0.0.1:0"),
-    )
-    .await
-    .expect("bounded")
-    .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    let app = axum::Router::new().route(
-        "/",
-        axum::routing::get(move || async move {
-            (
-                axum::http::StatusCode::FOUND,
-                [(
-                    axum::http::header::LOCATION,
-                    "http://capability-fixture.test/ok".to_string(),
-                )],
-            )
-        }),
-    );
-    tokio::spawn(async move { axum::serve(listener, app).await });
-    // The proxy answers the hop as its target would.
     let proxy_listener = tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
         tokio::net::TcpListener::bind("127.0.0.1:0"),
@@ -361,12 +340,25 @@ async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
     .expect("bounded")
     .expect("bind");
     let proxy_port = proxy_listener.local_addr().expect("addr").port();
-    let answer = axum::Router::new().fallback(|| async { "ok" });
-    tokio::spawn(async move { axum::serve(proxy_listener, answer).await });
+    let target = axum::Router::new()
+        .route(
+            "/",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::FOUND,
+                    [(
+                        axum::http::header::LOCATION,
+                        "http://capability-fixture.test/ok",
+                    )],
+                )
+            }),
+        )
+        .route("/ok", axum::routing::get(|| async { "ok" }));
+    tokio::spawn(async move { axum::serve(proxy_listener, target).await });
     let proxy = url::Url::parse(&format!("http://127.0.0.1:{proxy_port}/")).expect("proxy url");
     let client = super::client::build(Some(&proxy));
     let (ok, effect) = Box::pin(effect_of_send(
-        client.get(format!("http://127.0.0.1:{port}/")),
+        client.get("http://capability-fixture.test/"),
     ))
     .await;
     assert!(ok, "premise: the redirect is followed");
