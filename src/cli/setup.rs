@@ -32,8 +32,8 @@ pub enum SetupCommand {
         #[arg(long)]
         configure_client: bool,
 
-        /// Rewrite the whole file when the change cannot keep its comments
-        /// (the comments are lost); without it such a write is refused
+        /// Rewrite the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused
         #[arg(long)]
         force: bool,
     },
