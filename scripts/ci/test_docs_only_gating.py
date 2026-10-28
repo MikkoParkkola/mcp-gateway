@@ -114,12 +114,15 @@ def simulate(jobs: dict, c: dict) -> set[str]:
     return {k for k, v in results.items() if v == "success"}
 
 
+def as_train(c: dict, head: str = "train/20261027-1", repo: str = REPO) -> dict:
+    """`c` as a pull request from `head` in `repo` (a merge train by default)."""
+    c["github"]["head_ref"] = head
+    c["github"]["event"] = {"pull_request": {"head": {"repo": {"full_name": repo}}}}
+    return c
+
+
 def train_errors(jobs: dict) -> list[str]:
     """Each TRAIN_ONLY job runs on a code train and on nothing else."""
-    def as_train(c: dict, head: str = "train/20261027-1", repo: str = REPO) -> dict:
-        c["github"]["head_ref"] = head
-        c["github"]["event"] = {"pull_request": {"head": {"repo": {"full_name": repo}}}}
-        return c
     cases = {
         "code train": (as_train(ctx("pull_request", "success", "false")), True),
         "scope failed on a train": (as_train(ctx("pull_request", "failure", None)), True),
@@ -157,13 +160,13 @@ def train_errors(jobs: dict) -> list[str]:
 
 def macos_train_errors(jobs: dict) -> list[str]:
     """Each MACOS_TRAIN job runs on a train pull request and on non-PR events,
-    and on no other pull request; its aggregate follows its shards."""
-    def as_train(c: dict, head: str = "train/20261028-1", repo: str = REPO) -> dict:
-        c["github"]["head_ref"] = head
-        c["github"]["event"] = {"pull_request": {"head": {"repo": {"full_name": repo}}}}
-        return c
-    def pushed(ref: str) -> dict:
-        c = ctx("push", "success", "false")
+    and on no other pull request; its aggregate follows its shards.
+
+    Evaluated with each case's own scope result, not simulate()'s, so the
+    docs-only and scope-failed trains pin that the macOS jobs never come to
+    depend on the docs-only decision (the self-test in main() proves both)."""
+    def event(name: str, ref: str) -> dict:
+        c = ctx(name, "success", "false")
         c["github"]["ref"] = ref
         return c
     cases = {
@@ -176,15 +179,22 @@ def macos_train_errors(jobs: dict) -> list[str]:
         "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), False),
         "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), False),
         "a train into main": (as_train(ctx("pull_request", "success", "false")), True),
-        "push to main": (pushed("refs/heads/main"), True),
-        "release-line push": (pushed(f"refs/heads/{RELEASE_LINE}"), False),
+        "push to main": (event("push", "refs/heads/main"), True),
+        "release tag": (event("push", "refs/tags/v4.0.0"), True),
+        "workflow dispatch": (event("workflow_dispatch", "refs/heads/main"), True),
+        "release-line push": (event("push", f"refs/heads/{RELEASE_LINE}"), False),
     }
     cases["a train into main"][0]["github"]["base_ref"] = "main"
     errors = [f"MACOS_TRAIN names a job ci.yml lacks: {j}" for j in sorted(MACOS_TRAIN - set(jobs))]
+    if errors:
+        return errors
+    shards, check = jobs["macos-shards"], jobs["macos-check"]
     for label, (c, want) in cases.items():
-        ran = simulate(jobs, c)
-        for job in sorted(MACOS_TRAIN & set(jobs)):
-            if (job in ran) != want:
+        shards_ran = runs(shards, c)
+        after = dict(c, needs=dict(c["needs"], **{"macos-shards": {
+            "result": "success" if shards_ran else "skipped", "outputs": {}}}))
+        for job, ran in (("macos-shards", shards_ran), ("macos-check", runs(check, after))):
+            if ran != want:
                 errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
     return errors
 
@@ -284,15 +294,35 @@ def main() -> int:
     errors += train_errors(jobs)
     errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
-    # The macOS train gate must be able to fail: losing it is caught.
+    # The macOS cases must be able to fail: each mutant is caught by the case
+    # named beside it, not merely by some case.
     import copy
-    for job in sorted(MACOS_TRAIN & set(jobs)):
-        ungated = copy.deepcopy(jobs)
-        ungated[job]["if"] = str(ungated[job]["if"]).replace(
-            " && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
-            " && github.event.pull_request.head.repo.full_name == github.repository))", "")
-        if ungated[job]["if"] == jobs[job]["if"] or not macos_train_errors(ungated):
-            errors.append(f"macOS self-test: '{job} loses its train gate' was not caught")
+    gate = (" && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
+            " && github.event.pull_request.head.repo.full_name == github.repository))")
+    def ungate(j: dict, job: str) -> None:
+        j[job]["if"] = str(j[job]["if"]).replace(gate, "")
+    def waits_on_scope(j: dict) -> None:
+        j["macos-shards"]["needs"] = "scope"
+    def skips_docs_only(j: dict) -> None:
+        j["macos-shards"]["needs"] = "scope"
+        j["macos-shards"]["if"] = str(j["macos-shards"]["if"]).replace(
+            " }}", " && needs.scope.outputs.docs_only != 'true' }}")
+    def fork_trains_too(j: dict) -> None:
+        for job in MACOS_TRAIN:
+            j[job]["if"] = str(j[job]["if"]).replace(
+                " && github.event.pull_request.head.repo.full_name == github.repository))", "))")
+    macos_mutants = {
+        "macos-shards loses its train gate": (lambda j: ungate(j, "macos-shards"), "macos-shards: code PR runs"),
+        "macos-check loses its train gate": (lambda j: ungate(j, "macos-check"), "macos-check: code PR runs"),
+        "macOS waits on the scope job": (waits_on_scope, "macos-shards: scope failed on a train skips"),
+        "macOS skips a docs-only change": (skips_docs_only, "macos-shards: docs-only train skips"),
+        "a fork's train branch gets macOS": (fork_trains_too, "macos-shards: train branch from a fork runs"),
+    }
+    for label, (mutate, expected) in macos_mutants.items():
+        mutated = copy.deepcopy(jobs)
+        mutate(mutated)
+        if expected not in macos_train_errors(mutated):
+            errors.append(f"macOS self-test: '{label}' was not caught by: {expected}")
     # The post-merge check must be able to fail (MIK-8163): each mutation is caught.
     import copy
     mutations = {
