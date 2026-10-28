@@ -21,6 +21,8 @@
 /* The tool name opens its detail: a real button, the width of its cell. */
 .tool-toggle { background: none; border: 0; padding: 0; width: 100%; min-height: var(--size-row); color: var(--color-text-primary);
   font: inherit; font-family: var(--font-family-mono); text-align: left; cursor: pointer; }
+/* A finger needs the shell's touch height; this rule's class would otherwise beat the shell's. */
+@media (pointer: coarse) { .tool-toggle { min-height: var(--size-row-touch); } }
 /* The open marker is its own hidden span: generated content would join the button's name. */
 .tool-toggle .mark { color: var(--color-text-secondary); }
 .tool-detail td { background: var(--color-bg-raised); padding: var(--space-2) var(--space-4) var(--space-3) var(--space-10); }
