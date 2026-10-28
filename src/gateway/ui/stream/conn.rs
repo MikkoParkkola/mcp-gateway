@@ -9,7 +9,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use tokio::time::{Instant, interval_at};
+use tokio::time::{Instant, MissedTickBehavior, interval_at};
 
 use super::guard::{Guard, Snapshot};
 use super::id::StreamId;
@@ -80,6 +80,10 @@ impl Conn {
         self.require_entitled().await?;
         let room = tokio::time::timeout(WRITE_TIMEOUT, self.tx.reserve());
         tokio::pin!(room);
+        // A fixed cadence: a slow lookup delays one tick, never the schedule.
+        let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
+        recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let _waiting = self.state.dashboard_bootstrap.stream_hub().waiting();
         let permit = loop {
             tokio::select! {
                 done = &mut room => match done {
@@ -87,7 +91,7 @@ impl Conn {
                     Ok(Err(_)) => return Err(End::ClientGone),
                     Err(_) => return Err(End::WriteStalled),
                 },
-                () = tokio::time::sleep(RECHECK) => self.require_entitled().await?,
+                _ = recheck.tick() => self.require_entitled().await?,
             }
         };
         self.require_entitled().await?;

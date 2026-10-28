@@ -128,6 +128,12 @@ async fn a_frame_waiting_for_room_is_not_sent_after_the_credential_is_revoked() 
     // Nobody reads: `hello` fills the one-frame channel, the first `status`
     // frame waits for room, and no re-check tick has come yet.
     tokio::time::sleep(Duration::from_millis(600)).await;
+    let hub = state.dashboard_bootstrap.stream_hub();
+    assert_eq!(
+        hub.waiting_sends(),
+        1,
+        "the write is pending, not delivered"
+    );
     let out = Request::builder()
         .method("POST")
         .uri("/dashboard/logout")

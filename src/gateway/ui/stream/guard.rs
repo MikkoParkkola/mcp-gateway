@@ -75,6 +75,9 @@ struct Shared {
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
+    /// Test seam: sends currently waiting for room in their channel.
+    #[cfg(test)]
+    waiting: std::sync::atomic::AtomicUsize,
 }
 
 /// Caps, the watcher's lifetime and its published state.
@@ -91,6 +94,21 @@ impl std::fmt::Debug for StreamHub {
 impl Default for StreamHub {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Marks a send as waiting for room; a no-op outside tests.
+pub(super) struct Waiting {
+    #[cfg(test)]
+    shared: Arc<Shared>,
+}
+
+#[cfg(test)]
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.shared
+            .waiting
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -112,6 +130,8 @@ impl StreamHub {
                 snapshot: watch::channel(Snapshot::default()).0,
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                waiting: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
     }
@@ -148,6 +168,26 @@ impl StreamHub {
     pub(crate) fn hang_validation_for_test(&self, on: bool) {
         use std::sync::atomic::Ordering::SeqCst;
         self.shared.hang_validation.store(on, SeqCst);
+    }
+
+    /// Sends waiting for channel room right now.
+    #[cfg(test)]
+    pub(crate) fn waiting_sends(&self) -> usize {
+        self.shared
+            .waiting
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Count one send as waiting until the returned token drops.
+    pub(super) fn waiting(&self) -> Waiting {
+        #[cfg(test)]
+        self.shared
+            .waiting
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Waiting {
+            #[cfg(test)]
+            shared: Arc::clone(&self.shared),
+        }
     }
 
     #[cfg(test)]
