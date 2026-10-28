@@ -644,6 +644,10 @@ mod era_per_slot_tests;
 #[path = "era_lent_reprobe_tests.rs"]
 mod era_lent_reprobe_tests;
 
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_lent_slot_tests.rs"]
+mod a2a_lent_slot_tests;
+
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]
 mod frame_limit_start_tests;
