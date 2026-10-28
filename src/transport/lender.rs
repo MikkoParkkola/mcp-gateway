@@ -42,6 +42,31 @@ pub(crate) struct LentCredential {
     pub(crate) check: Option<SendCheck>,
 }
 
+impl LentCredential {
+    /// Whether this credential carries no header at all.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.headers.is_empty()
+    }
+}
+
+/// Header names only: a value is the subscriber's credential and is never
+/// printed.
+impl std::fmt::Debug for LentCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LentCredential")
+            .field(
+                "headers",
+                &self
+                    .headers
+                    .iter()
+                    .map(|(name, _)| name.as_str())
+                    .collect::<Vec<_>>(),
+            )
+            .field("checked", &self.check.is_some())
+            .finish()
+    }
+}
+
 /// Plain headers carry no check: a non-mint source (a shared-slot call, a
 /// call with no identity) and the test fixtures lend this way.
 impl From<&[(String, String)]> for LentCredential {

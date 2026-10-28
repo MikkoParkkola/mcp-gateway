@@ -84,7 +84,7 @@ fn passes_then(passes: usize, refusal: Refusal) -> SendCheck {
         let left = Arc::clone(&left);
         Box::pin(async move {
             let had = left
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
                 .is_ok();
             if had { Ok(()) } else { Err(refusal) }
         })
