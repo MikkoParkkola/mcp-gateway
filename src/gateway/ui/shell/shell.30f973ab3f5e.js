@@ -574,7 +574,8 @@ function placeConfirm(dialogEl, opener, room) {
   const above = o.top - margin - v.top;
   const below = v.top + v.height - (o.bottom + margin);
   const space = Math.max(above, below) - margin;
-  dialogEl.style.maxHeight = `${Math.max(space, 0)}px`;
+  // Never below the smallest usable dialog; when even that does not fit, the dialog scrolls.
+  dialogEl.style.maxHeight = `${Math.max(space, Math.min(smallest, v.height - 2 * margin))}px`;
   dialogEl.style.top = `${above >= below ? v.top + margin : o.bottom + margin}px`;
 }
 
@@ -607,8 +608,10 @@ export function confirmAction(spec) {
   }
   if (typeof spec.run !== 'function') throw new TypeError('confirm: run must be a function');
   if (!Array.isArray(spec.consequences)) throw new TypeError('confirm: consequences must be a list');
-  if (confirmEl || lock || unconfirmedKeys().has(spec.key) || paletteEl) {
-    console.warn(confirmEl || lock ? 'confirm: another action is still open or running'
+  const signedOut = document.body.classList.contains('signed-out');
+  if (signedOut || confirmEl || lock || unconfirmedKeys().has(spec.key) || paletteEl) {
+    console.warn(signedOut ? 'confirm: nobody is signed in'
+      : confirmEl || lock ? 'confirm: another action is still open or running'
       : paletteEl ? 'confirm: the palette is open' : 'confirm: the last outcome for this subject is not confirmed; reload first');
     return Promise.resolve({ outcome: 'declined' });
   }
@@ -641,6 +644,7 @@ export function confirmAction(spec) {
   let phase = 'confirm';
   let routed = false;
   let stopClocks = () => {};
+  let heldToken = null;
   let saidAfterClose = '';
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
@@ -674,6 +678,9 @@ export function confirmAction(spec) {
   });
   dialogEl.addEventListener('close', () => {
     stopClocks();
+    // Closed mid-request (sign-in took over): the lock goes with the dialog. Nothing new
+    // starts while signed out, and the subject stays refused until the page renders again.
+    if (phase === 'sending') releaseLock(heldToken);
     removeEventListener('resize', place);
     vv?.removeEventListener('resize', place);
     vv?.removeEventListener('scroll', place);
@@ -718,6 +725,7 @@ export function confirmAction(spec) {
     if (phase === 'sending' || !matches()) return;
     phase = 'sending';
     const token = {};
+    heldToken = token;
     lock = { token };
     const epoch = authEpoch;
     note.hidden = true;
