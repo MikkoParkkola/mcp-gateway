@@ -79,3 +79,38 @@ fn a_breaker_opened_through_one_config_stays_open_through_the_next() {
         "a rebuilt config closed the client's breaker"
     );
 }
+
+/// R3: a key's `rate_limit` lowered below what it has already used denies its
+/// next request: the usage is kept and judged at the new rate.
+#[test]
+fn a_rate_tightened_below_usage_denies_the_next_request() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = built_with_rate(&runtime, 3);
+    assert!(
+        admitted(&before) && admitted(&before),
+        "premise: two of three spent"
+    );
+    let after = built_with_rate(&runtime, 1);
+    assert!(
+        !admitted(&after),
+        "the tightened key started a fresh window"
+    );
+}
+
+/// R3: a key's `rate_limit` raised keeps what it has used: three of three
+/// spent at 3/min leaves two of five at 5/min.
+#[test]
+fn a_rate_loosened_keeps_the_usage() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = built_with_rate(&runtime, 3);
+    assert!(
+        (0..3).all(|_| admitted(&before)),
+        "premise: three of three spent"
+    );
+    let after = built_with_rate(&runtime, 5);
+    assert!(
+        admitted(&after) && admitted(&after),
+        "two more fit at 5/min"
+    );
+    assert!(!admitted(&after), "the loosened key started a fresh window");
+}
