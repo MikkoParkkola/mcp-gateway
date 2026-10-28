@@ -54,7 +54,9 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
             }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
-                RedirectDecision::Reject(msg) => attempt.error(msg),
+                RedirectDecision::Reject(msg) => {
+                    attempt.error(crate::security::ssrf::SsrfDenied::new(msg))
+                }
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
