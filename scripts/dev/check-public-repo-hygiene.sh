@@ -43,6 +43,7 @@ self_files=(
 # entry is <path glob>::<check id>::<why it is public>.
 content_allowlist=(
   "src/security/ssrf/*::tailnet-ip::the SSRF guard names the shared address range it refuses"
+  "src/preview_sandbox/proxy_deny_vectors.rs::tailnet-ip::the preview proxy's deny rows name the shared address range it refuses"
 )
 
 # Data that CI reads, kept public under a private directory until it moves to

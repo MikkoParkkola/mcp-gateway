@@ -11,6 +11,8 @@
 mod fetch;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(unix)]
+mod proxy;
 #[cfg(target_os = "linux")]
 use linux as os;
 
