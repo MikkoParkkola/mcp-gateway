@@ -64,6 +64,10 @@ pub(crate) struct Scope {
     pub(crate) member: &'static str,
     pub(crate) allowed: &'static [Allowed],
     /// The specification text that places it there.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "a citation for the reader; tests pin it")
+    )]
     pub(crate) spec: &'static str,
 }
 
@@ -76,9 +80,18 @@ pub(crate) const SCOPED: &[Scope] = &[
     Scope {
         member: "requestState",
         allowed: &[
-            at(Method::One("tools/call"), Shape::ResultType("input_required")),
-            at(Method::One("resources/read"), Shape::ResultType("input_required")),
-            at(Method::One("prompts/get"), Shape::ResultType("input_required")),
+            at(
+                Method::One("tools/call"),
+                Shape::ResultType("input_required"),
+            ),
+            at(
+                Method::One("resources/read"),
+                Shape::ResultType("input_required"),
+            ),
+            at(
+                Method::One("prompts/get"),
+                Shape::ResultType("input_required"),
+            ),
         ],
         spec: "MCP 2026-07-28 schema: InputRequiredResult; CallToolResultResponse, \
                ReadResourceResultResponse and GetPromptResultResponse are \
@@ -113,6 +126,10 @@ pub(crate) const SCOPED: &[Scope] = &[
 ];
 
 /// Protocol members a backend may send on every result.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "a record for the reader; tests pin it")
+)]
 pub(crate) const PROTOCOL_UNSCOPED: &[&str] = &["resultType"];
 
 /// Whether `method` is one of `allowed`'s methods.
