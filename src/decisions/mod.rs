@@ -161,14 +161,27 @@ impl DecisionSet {
 
     /// The open count and revision for an admin, or `None` for anyone else
     /// and while any source is `Unavailable`. In memory; never blocks.
-    pub(crate) fn snapshot(&self, _admin: bool) -> Option<(usize, u64)> {
-        let _ = (&self.key, self.revision);
-        None
+    pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
+        let view = self.view().filter(|_| admin)?;
+        Some((view.decisions.len(), view.revision))
+    }
+
+    /// Whether every source has been read: none is `Unavailable` or unset.
+    fn readable(&self) -> bool {
+        [Source::Access, Source::ControlPlane, Source::Capability]
+            .iter()
+            .all(|source| matches!(self.health.get(source), Some(Health::Ready | Health::Absent)))
     }
 
     /// The list route's answer, or `None` while any source is `Unavailable`.
     pub(crate) fn view(&self) -> Option<View> {
-        None
+        let _ = &self.key;
+        self.readable().then(|| View {
+            decisions: self.list(),
+            revision: self.revision,
+            missing_kinds: vec!["adopt"],
+            partial_kinds: vec!["capability_changed"],
+        })
     }
 
     /// The open items in display order.
