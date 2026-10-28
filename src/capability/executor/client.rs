@@ -78,14 +78,14 @@ impl std::fmt::Display for RedirectRefused {
 
 impl std::error::Error for RedirectRefused {}
 
-/// Records a refused redirect hop on the call's delivery. The caller still
-/// receives the same transport error, health mark included: the redirect is
-/// the backend's own answer.
+/// Records a cleartext downgrade refused at a redirect hop (`RedirectRefused`)
+/// on the call's delivery; the caller still receives it as a transport
+/// error. A hop the destination policy refuses is the SSRF refusal, which the
+/// send records wherever it arises (a refused hop or a pin-refused connect).
 fn note_redirect_refusal(error: &reqwest::Error) {
-    if crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
-        crate::gateway::delivery_facts::raise(
-            crate::gateway::delivery_facts::ResponseEffect::Refused,
-        );
+    if error.is_redirect() && crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
+        // A composite's step runs unvouched: its refusal is not the plan's.
+        crate::gateway::delivery_facts::refused_while_vouched();
     }
 }
 
