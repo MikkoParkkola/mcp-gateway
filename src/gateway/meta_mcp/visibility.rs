@@ -207,6 +207,7 @@ impl MetaMcp {
             }
             super::visible::Withholding::Schema
             | super::visible::Withholding::Descriptor
+            | super::visible::Withholding::Unselected
             | super::visible::Withholding::Lacked => {
                 tracing::warn!(
                     server,

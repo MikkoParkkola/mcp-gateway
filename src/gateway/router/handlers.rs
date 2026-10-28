@@ -332,6 +332,12 @@ async fn meta_mcp_dispatch(
             pending_view = state
                 .begin_listing(session_id, &intake.view_subject(), invoke_scope.caller)
                 .await;
+            // A backend with no shared session lists only the
+            // caller's own view, re-established here under the caller's grant.
+            state
+                .meta_mcp
+                .warm_listing_views(invoke_scope, Some(session_id.as_str()))
+                .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,

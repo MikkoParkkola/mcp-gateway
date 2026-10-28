@@ -264,6 +264,9 @@ impl MetaMcp {
         };
         match verdict {
             Ok(CatalogueVerdict::Offers) => Shared::Offered,
+            Ok(CatalogueVerdict::Withholds) if backend.is_unselected(tool) => {
+                Shared::Withheld(Withholding::Unselected)
+            }
             Ok(CatalogueVerdict::Withholds) if backend.is_blocked_tool(tool) => {
                 Shared::Withheld(Withholding::Descriptor)
             }
@@ -655,7 +658,7 @@ impl MetaMcp {
                 Withholding::Refused
             } else {
                 match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(Withholding::Descriptor) => Withholding::Descriptor,
+                    Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
                     _ => return None,
                 }
             };

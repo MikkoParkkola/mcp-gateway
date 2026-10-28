@@ -25,7 +25,9 @@ async fn resolutions(fx: &PerUser, authorizer: &(dyn ToolAuthorizer + Sync)) -> 
         ..caller.scope()
     };
     let before = fx.mints();
-    fx.meta.settle_caller_view(BACKEND, TOOL, scope, None).await;
+    if let Some(fill) = fx.meta.claim_caller_view(BACKEND, TOOL, scope, None).await {
+        fill.run().await;
+    }
     fx.mints() - before
 }
 
