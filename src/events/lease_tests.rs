@@ -497,3 +497,42 @@ async fn an_expired_lease_holds_no_generation_before_the_sweep() {
         "premise: no sweep ran"
     );
 }
+
+/// A replace whose call is dropped during the drain leaves no lease: neither
+/// the old generation nor the new one reads as held, and the rows ask for a
+/// credential again.
+#[tokio::test]
+async fn a_replace_dropped_during_the_drain_leaves_no_lease() {
+    let s = Arc::new(store());
+    s.install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let replace = {
+        let s = s.clone();
+        tokio::spawn(async move { s.install(key("p"), token_until(now() + 7200), FAR, 0).await })
+    };
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the replace never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    replace.abort();
+    assert!(
+        replace.await.is_err_and(|e| e.is_cancelled()),
+        "premise: dropped mid-drain"
+    );
+    drop(in_flight);
+    assert_eq!(s.held_generation(&key("p")), None);
+    assert!(
+        !s.held.lock().await.contains_key(&key("p")),
+        "no lease was installed"
+    );
+    assert_eq!(s.state(&key("p")).await, LeaseState::CredentialNeeded);
+}
