@@ -127,6 +127,25 @@ impl Fixture {
         tokio::spawn(async move { router.oneshot(request).await.expect("a response").status() })
     }
 
+    /// The request sent to its answer: the status and the JSON body.
+    async fn send_json(
+        &self,
+        request: axum::http::Request<axum::body::Body>,
+    ) -> (StatusCode, Value) {
+        let response = tokio::time::timeout(
+            GUARD,
+            create_router(Arc::clone(&self.state)).oneshot(request),
+        )
+        .await
+        .expect("the request finished")
+        .expect("a response");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("the body");
+        (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
+    }
+
     fn admin_actions(&self) -> Vec<Value> {
         std::fs::read_to_string(self.log.path())
             .unwrap_or_default()
@@ -360,4 +379,176 @@ async fn a_handler_panic_still_panics_out_of_the_layer() {
         Some(&"handler panic payload"),
         "the handler's own payload"
     );
+}
+
+/// An MCP server on loopback whose `tools/list` waits until `release` has a
+/// permit; `listing` is notified when a listing arrives.
+async fn held_upstream() -> (
+    String,
+    Arc<tokio::sync::Notify>,
+    Arc<tokio::sync::Semaphore>,
+) {
+    use axum::response::IntoResponse as _;
+    let listing = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let app = axum::Router::new().fallback({
+        let (listing, release) = (Arc::clone(&listing), Arc::clone(&release));
+        move |axum::Json(message): axum::Json<Value>| {
+            let (listing, release) = (Arc::clone(&listing), Arc::clone(&release));
+            async move {
+                let method = message["method"].as_str().unwrap_or_default().to_string();
+                let Some(id) = message.get("id").cloned() else {
+                    return StatusCode::ACCEPTED.into_response();
+                };
+                let result = match method.as_str() {
+                    // No discover document: the start falls back to the handshake.
+                    "server/discover" => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+                    "initialize" => json!({
+                        "protocolVersion": crate::protocol::PROTOCOL_VERSION,
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "held", "version": "0"}
+                    }),
+                    "tools/list" => {
+                        listing.notify_one();
+                        let _permit = release.acquire().await.expect("the release semaphore");
+                        json!({"tools": []})
+                    }
+                    _ => json!({}),
+                };
+                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+            }
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    (url, listing, release)
+}
+
+/// Describe then confirm a preview of `url`, as the admin; the confirm request
+/// itself, not yet sent.
+async fn confirmed_preview(fx: &Fixture, url: &str) -> axum::http::Request<axum::body::Body> {
+    let body = json!({"name": "p", "url": url});
+    let (status, described) = fx
+        .send_json(fx.request("POST", "/ui/api/previews", &body))
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{described}");
+    let confirm = described["confirm"]
+        .as_str()
+        .expect("a confirmation")
+        .to_string();
+    fx.request(
+        "POST",
+        "/ui/api/previews",
+        &json!({"name": "p", "url": url, "confirm": confirm}),
+    )
+}
+
+/// A confirmed preview whose client leaves mid-run runs to its teardown, as it
+/// already did, and is now recorded naming its caller. The one-at-a-time
+/// guard is released only after teardown, so a second confirmed preview being
+/// admitted shows the teardown ran.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_preview_runs_to_its_teardown_and_records_its_caller() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let mut open = Config::clone(&fx.state.live_config.get());
+    open.security.ssrf_protection = false;
+    fx.state.live_config.set(open);
+    let (url, listing, release) = held_upstream().await;
+
+    let confirm = confirmed_preview(&fx, &url).await;
+    assert_eq!(fx.admin_actions().len(), 1, "the describe step is recorded");
+    let request = fx.spawn(confirm);
+    tokio::time::timeout(GUARD, listing.notified())
+        .await
+        .expect("the preview reached its listing");
+    request.abort();
+    let _ = request.await;
+    release.add_permits(1);
+
+    let records = fx.wait_for_admin_actions(2).await;
+    assert_eq!(
+        records.len(),
+        2,
+        "describe, then the cancelled run: {records:#?}"
+    );
+    let run = &records[1];
+    assert_eq!(run["route"], "/ui/api/previews", "{run}");
+    assert_eq!(run["who"]["account"], KEY, "the caller is named: {run}");
+
+    let confirm = confirmed_preview(&fx, &url).await;
+    let (status, answer) = fx.send_json(confirm).await;
+    assert_ne!(
+        status,
+        StatusCode::CONFLICT,
+        "the guard was released: {answer}"
+    );
+}
+
+/// A client that disconnects while its body is still arriving: the request
+/// is dropped, then the body read fails, as the server's body does when the
+/// connection closes. The handler answers the failed read, and that answer
+/// is recorded naming the caller; nothing is written.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_disconnect_mid_body_records_the_handlers_refusal() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let (polled_tx, polled_rx) = tokio::sync::oneshot::channel::<()>();
+    let (fail_tx, fail_rx) = tokio::sync::oneshot::channel::<()>();
+    let body = futures::stream::unfold(
+        (0u8, Some(polled_tx), Some(fail_rx)),
+        |(step, polled, fail)| async move {
+            match step {
+                0 => Some((
+                    Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"{\"name\": \"b\", ")),
+                    (1, polled, fail),
+                )),
+                1 => {
+                    if let Some(polled) = polled {
+                        let _ = polled.send(());
+                    }
+                    if let Some(fail) = fail {
+                        let _ = fail.await;
+                    }
+                    Some((
+                        Err(std::io::Error::other("the client disconnected")),
+                        (2, None, None),
+                    ))
+                }
+                _ => None,
+            }
+        },
+    );
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ui/api/backends")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from_stream(body))
+        .expect("a request");
+    let request = fx.spawn(request);
+    tokio::time::timeout(GUARD, polled_rx)
+        .await
+        .expect("the handler read the body")
+        .expect("the body stream");
+    request.abort();
+    let _ = request.await;
+    let _ = fail_tx.send(());
+
+    let records = fx.wait_for_admin_actions(1).await;
+    assert_eq!(records.len(), 1, "{records:#?}");
+    let record = &records[0];
+    assert_eq!(
+        record["who"]["account"], KEY,
+        "the caller is named: {record}"
+    );
+    assert!(
+        record["http_status"]
+            .as_u64()
+            .is_some_and(|status| (400..500).contains(&status)),
+        "the handler's refusal of the failed read: {record}"
+    );
+    let file = std::fs::read_to_string(&fx.path).expect("read config");
+    assert_eq!(file, START, "nothing was written");
 }
