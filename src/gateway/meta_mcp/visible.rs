@@ -42,6 +42,14 @@ impl Withholding {
     pub(crate) fn is_backend_gate(self) -> bool {
         matches!(self, Self::Descriptor | Self::Unselected)
     }
+
+    /// Whether the gateway withholds for a policy reason (the caller may not
+    /// invoke it, or its schema or description failed a check): answered
+    /// absent, it is the gateway's refusal. A name the caller's catalogue
+    /// lacks, or a backend it cannot reach, is not.
+    pub(in crate::gateway::meta_mcp) fn is_policy(self) -> bool {
+        matches!(self, Self::Refused | Self::Schema | Self::Descriptor)
+    }
 }
 
 /// Whether a caller may be shown a tool.

@@ -304,13 +304,20 @@ async fn only_a_stored_read_refused_for_policy_records_refused() {
             .unwrap_or_else(|| panic!("{name}: premise: a task was made: {made}"))
             .to_owned();
         let (_, read) = settled(&fx, &id, name).await;
-        assert!(read.get("error").is_some(), "{name}: premise: refused: {read}");
+        assert!(
+            read.get("error").is_some(),
+            "{name}: premise: refused: {read}"
+        );
         let last = std::fs::read_to_string(&fx.path)
             .unwrap_or_default()
             .lines()
             .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
             .rfind(|entry| entry["event"] == "response_delivery_attempt")
             .expect("the read's delivery record");
-        assert_eq!(last["response_effect"] == "refused", refused, "{name}: {last}");
+        assert_eq!(
+            last["response_effect"] == "refused",
+            refused,
+            "{name}: {last}"
+        );
     }
 }

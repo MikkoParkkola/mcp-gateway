@@ -406,11 +406,7 @@ impl StdioTasks {
                                 Some(session_id),
                                 caller,
                             )
-                            .inspect(|_| {
-                                crate::gateway::delivery_facts::raise(
-                                    crate::gateway::delivery_facts::ResponseEffect::Refused,
-                                );
-                            })
+                            .map(|answer| answer.deliver())
                     },
                     |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
                 )
