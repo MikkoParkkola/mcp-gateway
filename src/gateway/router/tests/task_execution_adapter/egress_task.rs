@@ -201,3 +201,110 @@ async fn egress_an_a2a_agent_credential_is_screened_by_the_task_worker() {
         failures.join("\n")
     );
 }
+
+/// The firewalled gateway whose response rule blocks the backend tool, with
+/// its audit log at `log`.
+async fn blocking_state(
+    log: Arc<crate::security::TransparencyLogger>,
+) -> (Arc<AppState>, tempfile::TempDir) {
+    use crate::security::firewall::{FirewallAction, FirewallRule};
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules: vec![FirewallRule {
+                    tool_match: TOOL.to_string(),
+                    action: FirewallAction::Block,
+                    reason: None,
+                    scan: Vec::new(),
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    super::super::meta_fixture::test_router_app_state_with_meta(
+        &two_principal_auth(),
+        None,
+        |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
+            meta.set_firewall(Some(firewall));
+            meta.enable_transparency_log(log);
+            meta
+        },
+    )
+    .await
+}
+
+/// A task worker's egress refusal is recorded on the task's own record (the
+/// audit or terminal-state record the worker writes), never on a task read's
+/// delivery. The synchronous twin is the premise: the same answer through the
+/// same rule is refused.
+#[tokio::test]
+async fn a_worker_egress_refusal_is_recorded_on_the_tasks_own_record() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let leak = secret();
+    let answer = || {
+        MockBackend::answering(Answer::Result(
+            json!({"content": [{"type": "text", "text": leak}], "isError": false}),
+        ))
+    };
+
+    let (_sync_dir, sync_log) = temp_log(None);
+    let (sync_state, _sync_store) = blocking_state(Arc::clone(&sync_log)).await;
+    register(&sync_state, BACKEND, &answer());
+    let refused = post(&sync_state, "key-a", sync_invoke(1, json!({}))).await;
+    assert!(
+        refused.get("error").is_some() && !refused.to_string().contains(&leak),
+        "premise: the rule refuses the answer: {refused}"
+    );
+
+    let (_dir, log) = temp_log(None);
+    let (state, _store) = blocking_state(Arc::clone(&log)).await;
+    let mock = answer();
+    register(&state, BACKEND, &mock);
+    let created = post(&state, "key-a", task_invoke(2, "refuse-task", json!({}))).await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert!(mock.calls() > 0, "premise: the worker reached the backend");
+    assert!(
+        !settled.to_string().contains(&leak),
+        "premise: the task read carries no credential: {settled}"
+    );
+
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let recorded = entries.iter().any(|entry| {
+        entry["event"] != "response_delivery_attempt" && entry["response_effect"] == "refused"
+    });
+    let dump: Vec<String> = entries
+        .iter()
+        .map(|entry| {
+            let keys: Vec<&str> = entry
+                .as_object()
+                .map(|o| o.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            format!(
+                "event={} route={} outcome={} trace_id={} task_id={} keys={keys:?}",
+                entry["event"],
+                entry["route"],
+                entry["outcome"],
+                entry["trace_id"],
+                entry["task_id"]
+            )
+        })
+        .collect();
+    assert!(
+        recorded,
+        "task {task}: no record of the task carries response_effect=refused:\n{}",
+        dump.join("\n")
+    );
+}
