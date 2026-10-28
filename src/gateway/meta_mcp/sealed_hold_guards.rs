@@ -513,3 +513,63 @@ fn the_pre_scope_release_points_are_gone() {
         "retired release points are back: {found:?}"
     );
 }
+
+// The delivered_wire rows' fixtures, split by `concat!` like the ones above
+// so this file's text holds no projection shape.
+const UNHELD_CALL: &str = concat!("    task.delivered", "_wire()");
+const HELD_CALL: &str = concat!(
+    "    let task = held.del",
+    "iver(HoldSink::Scope);\n    task.delivered",
+    "_wire()"
+);
+const INNER_WIRE: &str = concat!("    to_value(self.task.wi", "re())");
+const INNER_RESULT: &str = concat!("    self.task.res", "ult()");
+fn synthetic_fn(name: &str, body: &str) -> String {
+    format!("fn {name}(task: X) -> Y {{\n{body}\n}}\n")
+}
+
+/// A caller of the stored task's delivery projection that never delivers the
+/// row's holds is reported, wherever it is written.
+#[test]
+fn an_unheld_caller_of_the_delivery_projection_is_reported() {
+    assert_eq!(
+        unguarded_in(
+            "task_route.rs",
+            &synthetic_fn("unheld", UNHELD_CALL),
+            &[DECISION_ONLY, OWNED_ELSEWHERE]
+        ),
+        vec!["task_route.rs:2: unheld".to_owned()],
+    );
+}
+
+/// The twin: the same call after the holds are delivered passes, so the row
+/// above fails only for the missing delivery.
+#[test]
+fn a_caller_that_delivers_the_holds_passes() {
+    assert!(
+        unguarded_in(
+            "task_route.rs",
+            &synthetic_fn("held", HELD_CALL),
+            &[DECISION_ONLY, OWNED_ELSEWHERE]
+        )
+        .is_empty()
+    );
+}
+
+/// The excuse for the delivery projection covers its own inner wire call and
+/// nothing else: another projection added to it is reported.
+#[test]
+fn the_delivery_projection_excuse_covers_its_inner_wire_only() {
+    let excused = |body: &str| {
+        unguarded_in(
+            "task_service/record.rs",
+            &synthetic_fn("delivered_wire", body),
+            &[DECISION_ONLY, OWNED_ELSEWHERE],
+        )
+    };
+    assert!(excused(INNER_WIRE).is_empty());
+    assert_eq!(
+        excused(INNER_RESULT),
+        vec!["task_service/record.rs:2: delivered_wire".to_owned()],
+    );
+}

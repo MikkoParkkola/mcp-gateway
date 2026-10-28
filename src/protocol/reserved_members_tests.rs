@@ -252,3 +252,34 @@ fn withheld_members_never_show_in_debug_or_on_the_wire() {
     let wire = serde_json::to_string(&response).expect("serializes");
     assert!(!wire.contains("FORGED-withheld"), "{wire}");
 }
+
+/// MIK-9002 RENAME.2, per member: each renamed member is stripped from a task
+/// envelope's slot and from an error's data, and the plain name a backend may
+/// use for its own data stays beside it.
+#[test]
+fn each_renamed_member_is_stripped_from_the_slot_and_error_data() {
+    for member in ["_recovery", "_predicted_next", "_trace_id"] {
+        let mut slot = serde_json::Map::new();
+        slot.insert("content".into(), json!([]));
+        slot.insert(member.into(), json!("FORGED"));
+        slot.insert("recovery".into(), json!("kept"));
+        let mut task = JsonRpcResponse::success(
+            RequestId::Number(1),
+            json!({"task": {}, "result": Value::Object(slot.clone())}),
+        );
+        strip_ingress("b", "tasks/result", &mut task);
+        let delivered = &task.result.as_ref().expect("a result")["result"];
+        assert!(
+            delivered.get(member).is_none(),
+            "{member} in the slot: {delivered}"
+        );
+        assert_eq!(delivered["recovery"], "kept", "{member}: {delivered}");
+
+        let mut failed = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "no");
+        failed.error.as_mut().expect("an error").data = Some(Value::Object(slot));
+        strip_ingress("b", "tools/call", &mut failed);
+        let data = failed.error.expect("an error").data.expect("data");
+        assert!(data.get(member).is_none(), "{member} in error.data: {data}");
+        assert_eq!(data["recovery"], "kept", "{member}: {data}");
+    }
+}

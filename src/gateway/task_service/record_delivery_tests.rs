@@ -63,8 +63,9 @@ fn assert_unforged(what: &str, delivered: &Value) {
 }
 
 /// A completed row stored since the rename keeps the gateway's own noted
-/// `_recovery` and its sealed provenance (sealed after the note, so its
-/// digest moved), and the `Outside` members it stored.
+/// `_recovery`, its sealed provenance (sealed after the note, so its digest
+/// moved), its signature under an answer-layer note, and the `Outside`
+/// members it stored.
 #[test]
 fn a_post_rename_row_keeps_every_gateway_write() {
     let result = json!({
@@ -72,9 +73,11 @@ fn a_post_rename_row_keeps_every_gateway_write() {
         "_recovery": {"hint": "the gateway's"},
         "_trace_id": "gw-1",
         "_context_integrity": {"policy": {"decision": "allow"}},
+        "_signature": {"sig": "the gateway's"},
         "_meta": {
             "provenance": {"receipt": {"r": 1}, "public_signature": {"sig": "sealed"}},
             "io.mcp-gateway/executionOutcome": "executed",
+            "io.mcp-gateway/reason": "the gateway's",
         },
     });
     let stored = completed(
@@ -82,6 +85,8 @@ fn a_post_rename_row_keeps_every_gateway_write() {
         vec![
             note("value", &["_recovery"], &["_recovery"], &[]),
             note("value", &["_trace_id"], &["_trace_id"], &[]),
+            // An answer-layer note claims an envelope member.
+            note("answer", &["_signature"], &["_signature"], &[]),
             note(
                 "value",
                 &["_meta", "provenance"],

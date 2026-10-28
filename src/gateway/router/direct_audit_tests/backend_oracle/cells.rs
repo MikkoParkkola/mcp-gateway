@@ -159,7 +159,7 @@ async fn f1_a_failing_log_answers_every_unreachable_backend_alike() {
 }
 
 /// U1 (narrowing guard): a `*` key keeps today's deep answer for a name that
-/// is not registered: the dispatch's `isError` result with `recovery`, not
+/// is not registered: the dispatch's `isError` result with `_recovery`, not
 /// the gate's early miss.
 #[tokio::test]
 async fn u1_an_unscoped_key_keeps_the_deep_miss_for_an_unregistered_name() {
@@ -174,7 +174,7 @@ async fn u1_an_unscoped_key_keeps_the_deep_miss_for_an_unregistered_name() {
         let (status, body) = answer(&fx, Route::Invoke, name).await;
         assert_eq!(status, StatusCode::OK, "{name}: {body}");
         assert!(
-            body.contains("recovery") && body.contains("Backend not found"),
+            body.contains("_recovery") && body.contains("Backend not found"),
             "U1 {name}: the unscoped deep miss changed: {body}"
         );
     }
