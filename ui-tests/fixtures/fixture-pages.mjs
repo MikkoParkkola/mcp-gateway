@@ -55,7 +55,10 @@ const probed = {
     const n = document.createElement('span');
     n.className = 'num';
     n.textContent = '42';
-    el.replaceChildren('tools - status ', n);
+    const table = document.createElement('table');
+    table.className = 't';
+    table.innerHTML = '<tbody><tr><td class="n">7</td></tr></tbody>';
+    el.replaceChildren('tools - status ', n, table);
     ctx.show('stale', { since: new Date(2026, 9, 28, 14, 2) });
     window.toolsShow = ctx.show;
   },

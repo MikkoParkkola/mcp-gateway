@@ -6,18 +6,21 @@
 // carries its time with its numbers dimmed; a failed To do count reads "?".
 // Rows T1-T8.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { withFixturePages, shellReady, shellModuleUrl, serverStates } from './shell.mjs';
 
 const COUNT = '**/ui/api/decisions/count';
 
-/** Run `fn(shellModule, arg)` in the page and return its result. */
+/**
+ * Run `fn(shellModule, arg)` in the page and return its result. The shell's CSP
+ * forbids eval in the page, so the call goes in as an expression Playwright
+ * evaluates over the DevTools protocol, which the page's CSP does not cover.
+ */
 async function inShell(page, fn, arg) {
   const url = await shellModuleUrl(page);
-  return page.evaluate(async ([u, src, a]) => {
-    const m = await import(u);
-    // eslint-disable-next-line no-new-func
-    return new Function('m', 'a', `return (${src})(m, a);`)(m, a);
-  }, [url, fn.toString(), arg]);
+  await page.evaluate(async (u) => { window.__shell = await import(u); }, url);
+  return page.evaluate(`(${fn.toString()})(window.__shell, ${JSON.stringify(arg ?? null)})`);
 }
 
 async function open(page) {
@@ -27,7 +30,9 @@ async function open(page) {
 
 test('T1 the table has exactly the gateway\'s server states, each with a word, glyph and tone', async ({ page }) => {
   await open(page);
-  const table = await inShell(page, (m) => m.SERVER_STATES);
+  // The word is the glossary's (UI1.24), so the table holds glyph, tone and copy only.
+  const table = await inShell(page, (m) => Object.fromEntries(Object.entries(m.SERVER_STATES)
+    .map(([state, row]) => [state, { glyph: row.glyph, tone: row.tone, word: m.stateWord(state) }])));
   expect(Object.keys(table).sort()).toEqual(serverStates().sort());
   for (const [state, row] of Object.entries(table)) {
     expect(row.word, state).toBeTruthy();
@@ -39,71 +44,97 @@ test('T1 the table has exactly the gateway\'s server states, each with a word, g
   expect(table.refused.tone).toBe('danger');
 });
 
-test('T2 a badge shows its glyph and word in its tone; the glyph is hidden from screen readers', async ({ page }) => {
+/** Every state and condition, with the exact banner and next step the table gives. */
+const ROWS = [
+  { server: { state: 'running', running: true }, tone: 'success', glyph: '✓', banner: null, next: null },
+  { server: { state: 'paused', circuit_state: 'open', next_retry_at: 'SOON' }, tone: 'neutral', glyph: '⏸',
+    banner: 'Calls to github are held back after failures. The gateway lets calls try it again from HHMM.', next: 'To retry now, use the Actions tab.' },
+  { server: { state: 'paused', circuit_state: 'open', next_retry_at: null }, tone: 'neutral', glyph: '⏸',
+    banner: 'Calls to github are held back after failures. The gateway lets calls try it again after a short wait.', next: 'To retry now, use the Actions tab.' },
+  { server: { state: 'paused', circuit_state: 'half_open', next_retry_at: null }, tone: 'neutral', glyph: '⏸',
+    banner: 'The gateway is letting a few calls through to github to see if it has recovered.', next: null },
+  { server: { state: 'dormant', running: false }, tone: 'neutral', glyph: 'ⓘ', banner: null, next: null },
+  { server: { state: 'unhealthy', running: true }, tone: 'warning', glyph: '⚠',
+    banner: 'github is failing; calls still go through.', next: 'Open Activity and filter by this server.' },
+  { server: { state: 'unhealthy', running: false }, tone: 'warning', glyph: '⚠',
+    banner: 'github is failing; the next call starts it again.', next: 'Open Activity and filter by this server.' },
+  { server: { state: 'refused', reason: 'Refused by the runtime policy: shell_exec, net_egress.' }, tone: 'danger', glyph: '⊘',
+    banner: 'The gateway cannot start github with its current runtime configuration.', next: "Check this server's runtime profile and the runtime policy." },
+  { server: { state: 'needs_sign_in' }, tone: 'warning', glyph: '⚠',
+    banner: 'github is waiting for someone to sign in.', next: 'Sign in from its Actions tab.' },
+  { server: { state: 'unmanaged' }, tone: 'neutral', glyph: 'ⓘ',
+    banner: 'github is on this machine but not behind the gateway.', next: 'Add it from the Servers Actions tab.' },
+  { server: { state: 'warming_up' }, tone: 'warning', glyph: '⚠',
+    banner: 'github is in a state this page does not recognise.', next: 'Open Activity and filter by this server.' },
+];
+
+test('T2 every state and condition gets its exact badge, banner and next step', async ({ page }) => {
   await open(page);
-  const badges = await inShell(page, (m) => Object.keys(m.SERVER_STATES).map((state) => {
-    const framed = m.serverBadge(state);
-    const plain = m.serverBadge(state, { plain: true });
-    const glyph = framed.querySelector('[aria-hidden="true"]');
-    return {
-      state,
-      text: framed.textContent,
-      glyph: glyph?.textContent ?? null,
-      word: m.SERVER_STATES[state].word,
-      tone: m.SERVER_STATES[state].tone,
-      classes: framed.className,
-      plain: plain.classList.contains('plain'),
+  const got = await inShell(page, (m, rows) => {
+    const soon = new Date(Date.now() + 60_000);
+    const hhmm = soon.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const colour = (value) => {
+      const probe = document.createElement('span');
+      probe.style.color = value;
+      document.body.append(probe);
+      const c = getComputedStyle(probe).color;
+      probe.remove();
+      return c;
     };
-  }));
-  for (const b of badges) {
-    expect(b.text, b.state).toContain(b.word);
-    expect(b.glyph, b.state).toBeTruthy();
-    expect(b.classes, b.state).toContain(`tone-${b.tone}`);
-    expect(b.plain, b.state).toBe(true);
-  }
-});
-
-test('T3 a refused server never shows the policy codes in its reason', async ({ page }) => {
-  await open(page);
-  const html = await inShell(page, (m) => {
-    const banner = m.serverBanner({
-      name: 'github',
-      state: 'refused',
-      reason: 'Refused by the runtime policy: shell_exec, net_egress.',
-      next_retry_at: null,
+    return rows.map(({ server }) => {
+      const s = { name: 'github', reason: '', ...server, next_retry_at: server.next_retry_at === 'SOON' ? soon.toISOString() : server.next_retry_at ?? null };
+      const badge = m.serverBadge(s.state);
+      const plain = m.serverBadge(s.state, { plain: true });
+      document.body.append(badge, plain);
+      const glyph = badge.querySelector('[aria-hidden="true"]');
+      const tone = ['success', 'warning', 'danger', 'neutral'].find((t) => badge.classList.contains(t));
+      const out = {
+        state: s.state,
+        word: badge.textContent.replace(glyph?.textContent ?? '', '').trim(),
+        expectedWord: m.stateWord(s.state),
+        glyph: glyph?.textContent ?? null,
+        tone,
+        glyphColour: glyph ? getComputedStyle(glyph).color : null,
+        toneColour: tone ? colour(`var(--color-status-${tone}-fg)`) : null,
+        // .plain keeps the border's box but makes it transparent.
+        framed: getComputedStyle(badge).borderTopColor !== 'rgba(0, 0, 0, 0)',
+        plainFramed: getComputedStyle(plain).borderTopColor !== 'rgba(0, 0, 0, 0)',
+        banner: null,
+        next: null,
+        html: '',
+      };
+      badge.remove();
+      plain.remove();
+      const node = m.serverBanner(s);
+      if (node) {
+        out.banner = node.querySelector('h2')?.textContent ?? null;
+        out.next = node.querySelector('p')?.textContent ?? null;
+        // The whole page with the banner in it, not only the node.
+        document.getElementById('content').append(node);
+        out.html = document.documentElement.outerHTML;
+        node.remove();
+      }
+      out.banner = out.banner?.replace(hhmm, 'HHMM') ?? null;
+      return out;
     });
-    document.getElementById('content').append(banner);
-    return document.body.innerHTML;
+  }, ROWS);
+  ROWS.forEach((row, i) => {
+    const g = got[i];
+    const at = `${row.server.state} ${JSON.stringify(row.server)}`;
+    expect(g.word, at).toBe(g.expectedWord);
+    expect(g.glyph, at).toBe(row.glyph);
+    expect(g.tone, at).toBe(row.tone);
+    expect(g.glyphColour, at).toBe(g.toneColour);
+    expect(g.framed, at).toBe(true);
+    expect(g.plainFramed, at).toBe(false);
+    expect(g.banner, at).toBe(row.banner);
+    expect(g.next, at).toBe(row.next);
+    // No policy code and no raw reason, ever.
+    expect(g.html, at).not.toContain('shell_exec');
+    expect(g.html, at).not.toContain('net_egress');
+    expect(g.html, at).not.toContain('Refused by the runtime policy');
+    expect(g.html, at).not.toContain('warming_up');
   });
-  expect(html).toContain('The runtime policy refuses to start github.');
-  expect(html).toContain('Policies shows the rule that refuses it.');
-  expect(html).not.toContain('shell_exec');
-  expect(html).not.toContain('net_egress');
-  expect(html).not.toContain('Refused by the runtime policy');
-});
-
-test('T4 a paused server says when the gateway retries, and what to do now', async ({ page }) => {
-  await open(page);
-  const [timed, untimed, hhmm] = await inShell(page, (m) => {
-    const at = new Date(Date.now() + 60_000);
-    const text = (s) => m.serverBanner(s).textContent;
-    return [
-      text({ name: 'github', state: 'paused', reason: '', next_retry_at: at.toISOString() }),
-      text({ name: 'github', state: 'paused', reason: '', next_retry_at: null }),
-      at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    ];
-  });
-  expect(timed).toContain(`The gateway retries at ${hhmm}.`);
-  expect(timed).toContain('To retry now, use the Actions tab.');
-  expect(untimed).toContain('retries it on its own');
-});
-
-test('T5 an unlisted state shows the glossary\'s fallback word, never its code', async ({ page }) => {
-  await open(page);
-  const text = await inShell(page, (m) => m.serverBadge('warming_up').textContent);
-  expect(text).toContain('Unknown state');
-  expect(text).not.toContain('warming_up');
-  expect(await inShell(page, (m) => m.serverBanner({ name: 'x', state: 'warming_up', reason: '', next_retry_at: null }))).toBeNull();
 });
 
 test('T6 stale data reads its time and dims the numbers until it clears', async ({ page }) => {
@@ -123,9 +154,19 @@ test('T6 stale data reads its time and dims the numbers until it clears', async 
     return c;
   });
   expect(await colour()).toBe(muted);
+  const cell = () => page.locator('#content .t .n').evaluate((n) => getComputedStyle(n).color);
+  expect(await cell()).toBe(muted);
   await page.evaluate(() => window.toolsShow(null));
   await expect(stale).toHaveCount(0);
   expect(await colour()).not.toBe(muted);
+  expect(await cell()).not.toBe(muted);
+  // A stop before today carries its date too.
+  const [title, date] = await inShell(page, (m) => {
+    const since = new Date(Date.now() - 86_400_000);
+    return [m.staleTitle(since), since.toLocaleDateString()];
+  });
+  expect(title).toContain(date);
+  expect(title).toMatch(/^Updates stopped at .+ · reconnecting$/);
 });
 
 test('T7 a failed To do count reads "?", a route not shipped shows nothing, and a known count replaces "?"', async ({ page }) => {
@@ -138,6 +179,9 @@ test('T7 a failed To do count reads "?", a route not shipped shows nothing, and 
   reply = { json: { count: 2 } };
   await inShell(page, (m) => m.refreshCounts());
   await expect(badge).toHaveText('2');
+  reply = { json: { total: 3 } }; // an answer without a whole-number count
+  await inShell(page, (m) => m.refreshCounts());
+  await expect(badge).toHaveText('?');
   reply = { status: 404, json: {} };
   await inShell(page, (m) => m.refreshCounts());
   await expect(badge).toHaveCount(0);
@@ -156,3 +200,25 @@ for (const width of WIDTHS) {
     expect(await blockingViolations(page)).toEqual([]);
   });
 }
+
+test('T9 the half-open breaker value the paused copy reads is the gateway\'s own wire value', () => {
+  const file = fileURLToPath(new URL('../../src/failsafe/circuit_breaker.rs', import.meta.url));
+  const source = readFileSync(file, 'utf8');
+  expect(source).toMatch(/Self::HalfOpen\s*=>\s*"half_open"/);
+});
+
+test('T10 an unlisted state warns once, without its value', async ({ page }) => {
+  const warnings = [];
+  page.on('console', (msg) => { if (msg.type() === 'warning') warnings.push(msg.text()); });
+  await open(page);
+  await inShell(page, (m) => { m.serverBadge('warming_up'); m.serverBadge('warming_up'); m.stateWord('warming_up'); });
+  const ours = warnings.filter((w) => w.includes('does not recognise'));
+  expect(ours).toHaveLength(1);
+  expect(ours[0]).not.toContain('warming_up');
+});
+
+test('T7b a negative count reads "?"', async ({ page }) => {
+  await page.route(COUNT, (r) => r.fulfill({ json: { count: -1 } }));
+  await open(page);
+  await expect(page.locator('nav.route-nav a[data-page="to' + 'do"] .count')).toHaveText('?');
+});
