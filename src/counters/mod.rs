@@ -26,9 +26,13 @@ mod ring;
 mod snapshot;
 // The readers serve the web UI's history routes; without them nothing reads.
 #[cfg(any(test, feature = "webui"))]
+mod sums;
+#[cfg(any(test, feature = "webui"))]
 mod view;
 
 pub(crate) use ring::Series;
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use sums::WindowSums;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use view::{Filter, Query, Window};
 #[cfg(test)]
@@ -383,6 +387,10 @@ impl Inner {
 #[derive(Debug)]
 pub(crate) struct CounterStore {
     inner: Mutex<Inner>,
+    /// Lock acquisitions by the readers, so a row can prove a batch read
+    /// takes one, whatever the label count. Per store, never global.
+    #[cfg(test)]
+    reads: std::sync::atomic::AtomicUsize,
 }
 
 impl CounterStore {
@@ -394,6 +402,8 @@ impl CounterStore {
     fn from_inner(inner: Inner) -> Self {
         Self {
             inner: Mutex::new(inner),
+            #[cfg(test)]
+            reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -529,6 +539,9 @@ mod store_tests;
 #[path = "persist_tests.rs"]
 mod persist_tests;
 
+#[cfg(test)]
+#[path = "sums_tests.rs"]
+mod sums_tests;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;

@@ -105,7 +105,6 @@ impl UsageStats {
             .map(|entry| (entry.key().clone(), entry.value().load(Ordering::Relaxed)))
             .collect();
         tool_counts.sort_by_key(|b| std::cmp::Reverse(b.1));
-        tool_counts.truncate(10);
 
         let top_tools: Vec<TopTool> = tool_counts
             .into_iter()
@@ -148,6 +147,10 @@ impl UsageStats {
     }
 }
 
+/// How many of the most-called tools a short list shows: the stats meta
+/// tool's answer and the legacy dashboard's table.
+pub(crate) const TOP_TOOLS: usize = 10;
+
 /// Snapshot of usage statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsSnapshot {
@@ -161,7 +164,8 @@ pub struct StatsSnapshot {
     pub tools_discovered: u64,
     /// Total tools available across backends
     pub tools_available: usize,
-    /// Top 10 most-used tools
+    /// Every tool called since start, most-called first. Not capped: a
+    /// presenter that shows a short list takes its own top N.
     pub top_tools: Vec<TopTool>,
     /// Total prompt-cached tokens observed across all backends
     pub total_cached_tokens: u64,
