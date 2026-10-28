@@ -48,6 +48,8 @@ TD = re.compile(r"(?:tempfile::)?TempDir\b")
 _spec = importlib.util.spec_from_file_location(
     "check_surface_inventory", f"{root}/scripts/release/check_surface_inventory.py"
 )
+if _spec is None or _spec.loader is None:
+    sys.exit("fixture-dir-sweep: cannot load scripts/release/check_surface_inventory.py")
 _inventory = importlib.util.module_from_spec(_spec)
 sys.modules[_spec.name] = _inventory  # its dataclasses look the module up
 _spec.loader.exec_module(_inventory)
@@ -77,7 +79,7 @@ def tuple_inside(text):
         depth -= ch == ")"
         if depth == 0 and i != len(text) - 1:
             return None
-    return text[1:-1]
+    return text[1:-1] if depth == 0 else None
 
 
 def replace_element(decl_line, index):
@@ -85,11 +87,14 @@ def replace_element(decl_line, index):
     open_at, close_at = decl_line.find("("), decl_line.rfind(")")
     if open_at < 0 or close_at < open_at:
         return None
-    parts = split_top(decl_line[open_at + 1 : close_at])
+    inside = decl_line[open_at + 1 : close_at]
+    parts = split_top(inside)
     if index >= len(parts) or len(TD.findall(parts[index])) != 1:
         return None
     parts[index] = TD.sub(ALIAS, parts[index])
-    return decl_line[: open_at + 1] + ",".join(parts) + decl_line[close_at:]
+    # split_top drops an empty last piece: keep a singleton tuple's comma.
+    trailing = "," if inside.rstrip().endswith(",") else ""
+    return decl_line[: open_at + 1] + ",".join(parts) + trailing + decl_line[close_at:]
 
 
 def fix_field(name, lineno, value):
@@ -124,6 +129,18 @@ def is_tail(lines, fn_line, span):
     """Whether `span` ends the function body opened at `fn_line`: the next code line
     after it is the closing brace at the function's own indentation."""
     indent = len(lines[fn_line]) - len(lines[fn_line].lstrip())
+    first, last = span["text"][0], span["text"][-1]
+    whole = first["highlight_start"] - 1 == len(first["text"]) - len(first["text"].lstrip()) and (
+        last["highlight_end"] - 1 >= len(last["text"].rstrip())
+    )
+    if not whole:
+        # Or one top-level element of a final tuple written on one line: `(state, store)`.
+        if span["line_start"] != span["line_end"]:
+            return False
+        inside = tuple_inside(first["text"])
+        value = first["text"][first["highlight_start"] - 1 : first["highlight_end"] - 1].strip()
+        if inside is None or [v.strip() for v in split_top(inside)].count(value) != 1:
+            return False
     k = span["line_end"]
     while k < len(lines) and not lines[k].strip():
         k += 1
@@ -154,7 +171,7 @@ def fix_return(name, span):
 
 def forward(notes):
     """The mismatch this script fixes: a TempDir expected, an Arc<TempDir> found."""
-    m = re.search(r"expected (.*?)\n\s*found (.*)", notes, re.S)
+    m = re.search(r"expected ([^\n]*)\n\s*found ([^\n]*)", notes)
     if not m:
         return False
     expected, found = m.group(1), m.group(2)
