@@ -34,6 +34,7 @@ mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
+mod per_user_headers_posture;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;

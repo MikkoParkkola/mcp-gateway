@@ -493,24 +493,6 @@ impl Backend {
         started
     }
 
-    /// A per-user-sessions-only backend's Shared slot never starts or fills,
-    /// whoever asks: refused before anything is built, charged or counted,
-    /// with the isolation refusal's code (a denial, so never retried).
-    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
-        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
-            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
-            return Err(Error::Forbidden {
-                code: -32001,
-                status: 403,
-                message: format!(
-                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
-                    self.name
-                ),
-            });
-        }
-        Ok(())
-    }
-
     async fn start_entry_inner(
         &self,
         key: &PoolKey,
@@ -579,10 +561,23 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                let oauth_client = self.create_oauth_client(http_url, built_under)?;
+                // A required binding's per-user slot carries nothing of the
+                // gateway's (MIK-8994): no static header and no OAuth client,
+                // as the per-user listener's transport is built.
+                let slot =
+                    matches!(key, PoolKey::PerUser { .. }).then(|| self.per_user_slot_credential());
+                let lent_only = slot == Some(crate::transport::SlotCredential::LentOnly);
+                let (statics, oauth_client) = if lent_only {
+                    (std::collections::HashMap::new(), None)
+                } else {
+                    (
+                        self.config.headers.clone(),
+                        self.create_oauth_client(http_url, built_under)?,
+                    )
+                };
                 let transport = HttpTransport::with_destination(
                     http_url,
-                    self.config.headers.clone(),
+                    statics,
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
@@ -592,9 +587,10 @@ impl Backend {
                 // MIK-6735 fix 2: a per-user pool slot's transport serves
                 // exactly one caller identity for its whole lifetime, which
                 // is what makes the transport's internal session-map
-                // single-tenant debug_assert provably safe -- tell it so.
-                if matches!(key, PoolKey::PerUser { .. }) {
-                    transport.mark_single_tenant();
+                // single-tenant debug_assert provably safe -- tell it so,
+                // with the slot's lender its dispatches lend through.
+                if let Some(slot) = slot {
+                    transport.mark_per_user_slot(slot, Arc::clone(&entry.lender));
                 }
                 #[cfg(test)]
                 {

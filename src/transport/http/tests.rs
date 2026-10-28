@@ -49,6 +49,10 @@ mod cancel_on_drop;
 /// The outbound half over HTTP, and status-carried JSON-RPC errors.
 mod outbound;
 
+/// MIK-8994: a required binding's per-user slot sends only what a dispatch
+/// in flight lends.
+mod lent_slot;
+
 /// Helper: create an `HttpTransport` for testing (streamable HTTP mode, no OAuth)
 fn make_transport(url: &str) -> Arc<HttpTransport> {
     HttpTransport::new(url, HashMap::new(), Duration::from_secs(30), true).unwrap()
