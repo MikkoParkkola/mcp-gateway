@@ -244,3 +244,46 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
         "{error}"
     );
 }
+
+/// The single-attempt path keeps the health mark a refused redirect has
+/// always carried: three refusals mark the backend, as on the retry path.
+#[tokio::test]
+async fn a_single_attempt_rejected_redirect_keeps_the_health_mark() {
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(|| async {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, "http://10.255.255.1/")],
+            )
+        }),
+    );
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    for _ in 0..3 {
+        let body = reqwest::Body::wrap_stream(futures::stream::once(async {
+            Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"streamed"))
+        }));
+        let request = client.post(format!("http://127.0.0.1:{port}/")).body(body);
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::send_with_retry(request, "test", true, &health),
+        )
+        .await
+        .expect("bounded");
+        outcome.expect_err("the redirect is refused");
+    }
+    assert!(
+        !health.is_healthy(),
+        "three refused redirects mark the backend"
+    );
+}
