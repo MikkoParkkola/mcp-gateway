@@ -229,7 +229,8 @@ async fn a_cross_origin_card_endpoint_is_refused_before_any_send() {
 /// A dispatch abandoned while its task works queues no `CancelTask` once it
 /// has ended: the slot has no credential left to send as. The cancel is
 /// decided when the abandoned call drops, so the row reads that decision
-/// rather than waiting out a window.
+/// rather than waiting out a window. The call is dropped once its first
+/// `GetTask` poll arrives: the cancel guard is armed before that poll.
 #[tokio::test]
 async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
     let (base, log) = agent(Script::Works, None).await;
@@ -248,14 +249,14 @@ async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
         checked(&subscriber_credential(USER)),
         Some(USER),
     ));
-    let created = async {
-        while !methods().iter().any(|m| m == "SendMessage") {
+    let armed = async {
+        while !methods().iter().any(|m| m == "GetTask") {
             tokio::task::yield_now().await;
         }
     };
     tokio::select! {
         result = &mut call => panic!("premise: the dispatch was still running: {result:?}"),
-        () = created => {}
+        () = armed => {}
     }
     let ((), warnings) = crate::test_log_capture::capture_warnings(|| drop(call));
 

@@ -377,11 +377,14 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
     // The whole invoke path is read (design r12.2 D3), so the boxes on its
     // other paths are named too: a box added anywhere, a new stage file
     // included, changes this inventory. Only send.rs's is the dispatch.
+    // account_mint.rs's is a managed account's send check, boxed once per
+    // send on a lent-only slot, never on a call without a managed account.
     let mut box_sites = sites("Box::pin(");
     box_sites.sort_unstable();
     assert_eq!(
         box_sites,
         [
+            ("account_mint.rs", 1),
             ("caller_verdict.rs", 1),
             ("legacy_bridge.rs", 1),
             ("policy.rs", 1),
