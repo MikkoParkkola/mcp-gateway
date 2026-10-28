@@ -124,9 +124,9 @@ fn checked(headers: &[(String, String)]) -> crate::transport::LentCredential {
 }
 
 /// The agent's one tool, called with `message`.
-fn delegate_params() -> Option<Value> {
-    Some(json!({"name": crate::a2a::translator::TOOL_NAME,
-        "arguments": {"message": "hi"}}))
+fn delegate_params() -> Value {
+    json!({"name": crate::a2a::translator::TOOL_NAME,
+        "arguments": {"message": "hi"}})
 }
 
 /// An A2A backend at `base` with a static credential header and a required
@@ -171,7 +171,7 @@ async fn an_a2a_per_user_slot_is_reached_only_as_its_user() {
     let _ = backend
         .request_with_headers_lent(
             "tools/call",
-            delegate_params(),
+            Some(delegate_params()),
             checked(&credential),
             Some(USER),
         )
@@ -205,7 +205,7 @@ async fn a_cross_origin_card_endpoint_is_refused_before_any_send() {
     let result = backend
         .request_with_headers_lent(
             "tools/call",
-            delegate_params(),
+            Some(delegate_params()),
             checked(&subscriber_credential(USER)),
             Some(USER),
         )
@@ -244,7 +244,7 @@ async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
 
     let mut call = Box::pin(backend.request_with_headers_lent(
         "tools/call",
-        delegate_params(),
+        Some(delegate_params()),
         checked(&subscriber_credential(USER)),
         Some(USER),
     ));
@@ -284,7 +284,7 @@ async fn a_call_whose_check_refuses_sends_nothing_to_the_agent() {
     };
 
     let result = backend
-        .request_with_headers_lent("tools/call", delegate_params(), refusing, Some(USER))
+        .request_with_headers_lent("tools/call", Some(delegate_params()), refusing, Some(USER))
         .await;
 
     assert!(result.is_err(), "a refused credential was sent");

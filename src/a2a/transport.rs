@@ -88,15 +88,14 @@ impl A2aTransport {
             destination,
             Arc::new(AtomicU64::new(0)),
         )?;
-        let client = match lender {
-            Some(lender) => A2aClient::new_lent_only(a2a_url, card_path, http, lender)?,
-            None => {
-                let headers = headers
-                    .iter()
-                    .map(|(name, value)| (name.clone(), value.clone()))
-                    .collect();
-                A2aClient::new(a2a_url, card_path, headers, http)?
-            }
+        let client = if let Some(lender) = lender {
+            A2aClient::new_lent_only(a2a_url, card_path, http, lender)?
+        } else {
+            let headers = headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            A2aClient::new(a2a_url, card_path, headers, http)?
         };
         // On a lent-only client this goes out as the start's own loan.
         let card = client.fetch_card(&[]).await?;
