@@ -125,6 +125,7 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
 pub(crate) mod visible;

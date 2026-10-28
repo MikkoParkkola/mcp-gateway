@@ -306,7 +306,7 @@ async fn tasks_get_judged(
                             caller.session_id,
                             policy_caller,
                         )
-                        .map(|answer| answer.deliver())
+                        .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                 })
             },
             |current, frame| state.meta_mcp.scan_task_read(current, frame),

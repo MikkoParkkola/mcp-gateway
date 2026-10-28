@@ -406,7 +406,7 @@ impl StdioTasks {
                                 Some(session_id),
                                 caller,
                             )
-                            .map(|answer| answer.deliver())
+                            .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                     },
                     |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
                 )
