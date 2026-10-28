@@ -71,8 +71,9 @@ fn d16_a_literal_is_stored_and_a_client_only_server_is_skipped() {
     let reference = written
         .lines()
         .find_map(|line| line.trim().strip_prefix("API_KEY:"))
-        .map(|value| value.trim().trim_matches(|c| c == '\'' || c == '"'))
-        .unwrap_or_else(|| panic!("no API_KEY line: {written}"));
+        .unwrap_or_else(|| panic!("no API_KEY line: {written}"))
+        .trim()
+        .trim_matches(|c| c == '\'' || c == '"');
     let path = reference
         .strip_prefix("file:")
         .unwrap_or_else(|| panic!("not a files reference: {reference}"));
