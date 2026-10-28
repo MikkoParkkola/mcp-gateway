@@ -357,15 +357,20 @@ test('G5b a Retry that is rejected again shows the error again, with aria-busy c
 });
 
 test('G5c leaving during a Retry leaves no loading state or aria-busy on the new page', async ({ page }) => {
+  await pausedClock(page);
   let calls = 0;
+  let served = false;
   const probe = heldProbe();
-  await page.route(PROBE, (r) => {
+  await page.route(PROBE, async (r) => {
     calls += 1;
-    return calls === 1 ? r.fulfill({ status: 500, json: {} }) : probe.answer(r);
+    if (calls === 1) return r.fulfill({ status: 500, json: {} });
+    await probe.answer(r); // the abandoned Retry's read, held until released
+    served = true;
   });
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
   await retryButton(page).click();
+  await page.clock.runFor(300);
   await expect(loading(page)).toBeVisible();
   await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
   await page.evaluate(() => {
@@ -374,10 +379,13 @@ test('G5c leaving during a Retry leaves no loading state or aria-busy on the new
   });
   await expect(page.locator('#content')).toContainText('servers - status');
   probe.release();
-  await page.evaluate(() => new Promise((done) => setTimeout(done, 600)));
+  await expect.poll(() => served, 'the abandoned Retry completed').toBe(true);
+  await page.evaluate(() => Promise.resolve()); // its handlers have run
+  await page.clock.runFor(400); // and its loading cleanup
   await expect(loading(page)).toHaveCount(0);
   await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
   await expect(page.locator('#content')).toContainText('servers - status');
+  await expect(page.locator('#content')).not.toContainText('value 1');
 });
 
 /**
