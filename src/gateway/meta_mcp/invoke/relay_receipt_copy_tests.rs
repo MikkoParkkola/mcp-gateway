@@ -61,8 +61,8 @@ async fn a_recorded_prompt_leaves_the_open_delivery_unchanged() {
                     );
                     super::super::super::gateway_writes::note(
                         super::super::super::gateway_writes::Layer::Value,
-                        &["trace_id"],
-                        &json!({"trace_id": "t-seed"}),
+                        &["_trace_id"],
+                        &json!({"_trace_id": "t-seed"}),
                     );
                     let recorded = meta.recorded_prompt(
                         ("alpha", "resources/read"),
