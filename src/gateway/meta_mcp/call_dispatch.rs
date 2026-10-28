@@ -314,14 +314,7 @@ impl MetaMcp {
         #[cfg(feature = "webui")]
         if caller.task.is_some() && crate::gateway::ui_call::refuses_task() {
             invoke::ask_refund(&caller);
-            return error_response_preserving_status(
-                id,
-                &crate::Error::Forbidden {
-                    code: crate::error::rpc_codes::INVALID_REQUEST,
-                    status: axum::http::StatusCode::FORBIDDEN.as_u16(),
-                    message: "a web UI call does not run as a task".to_owned(),
-                },
-            );
+            return error_response_preserving_status(id, &crate::gateway::ui_call::task_refused());
         }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).

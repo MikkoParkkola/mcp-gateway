@@ -190,6 +190,11 @@ pub(crate) fn refuses_task() -> bool {
     in_scope()
 }
 
+/// The refusal for [`refuses_task`].
+pub(crate) fn task_refused() -> crate::Error {
+    refused("a web UI call does not run as a task")
+}
+
 /// The gate before the send, where the dispatched backend and the caller's
 /// own binding are resolved: `declared_read_only` is that slot's declaration.
 /// `Err` refuses the call; nothing is sent.
@@ -243,7 +248,7 @@ fn refused(message: &str) -> crate::Error {
 /// delivery's record says refused; an admitted call still reads delivered.
 #[cfg(test)]
 mod refusal_effect_tests {
-    use super::{Confirm, UiCall, admit_send, gate};
+    use super::{Confirm, UiCall, admit_send, gate, gate_capability, task_refused};
     use crate::gateway::delivery_facts::{record_fields, scope, snapshot};
 
     fn effect() -> serde_json::Value {
@@ -279,6 +284,26 @@ mod refusal_effect_tests {
             assert!(admit_send(("srv", "tool")).is_err());
         });
         assert_eq!(ungated.await, "refused", "a send the gate never admitted");
+        let other_principal = under(Confirm::Confirmed, || {
+            assert!(gate(("srv", "tool"), Some("someone-else"), true).is_err());
+        });
+        assert_eq!(other_principal.await, "refused", "not the checked admin");
+        let capability_write = under(Confirm::DeclaredReadOnlyOnly, || {
+            assert!(gate_capability(false).is_err());
+        });
+        assert_eq!(capability_write.await, "refused", "a capability write");
+        let call = UiCall::new("srv", "tool", "admin", Confirm::Confirmed);
+        let cancelled = scope(call.scope(async {
+            gate(("srv", "tool"), Some("admin"), true).expect("the gate admits");
+            assert!(call.cancel(), "the deadline cancels first");
+            assert!(admit_send(("srv", "tool")).is_err());
+            effect()
+        }));
+        assert_eq!(cancelled.await, "refused", "a send after the deadline");
+        let task = under(Confirm::Confirmed, || {
+            let _ = task_refused();
+        });
+        assert_eq!(task.await, "refused", "a task-mode call");
         let admitted = under(Confirm::Confirmed, || {
             gate(("srv", "tool"), Some("admin"), true).expect("the gate admits");
             admit_send(("srv", "tool")).expect("the send is admitted");

@@ -355,6 +355,14 @@ async fn t4_an_undeclared_tool_asks_for_confirm_write() {
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
     assert_eq!(sent(&fx), 0, "nothing reached the backend");
+    // The internal dispatch's delivery record says the gateway refused it.
+    assert!(
+        records(&fx)
+            .iter()
+            .any(|r| r["event"] != "admin_action" && r["response_effect"] == "refused"),
+        "{:#?}",
+        records(&fx)
+    );
     let (status, body) = post(&fx, ADMIN, call("write", true)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(sent(&fx), 1);
