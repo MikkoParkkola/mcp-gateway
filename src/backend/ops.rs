@@ -432,7 +432,7 @@ impl Backend {
         // `server/discover` did. Correct the verdict: off the request path,
         // except on a lent-only slot, whose probe needs this dispatch's loan.
         if let Ok(response) = &result {
-            self.reprobe_if_contradicted(method, response, &transport)
+            self.reprobe_if_contradicted(method, response, &transport, credential)
                 .await;
         }
 

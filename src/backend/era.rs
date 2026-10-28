@@ -16,7 +16,7 @@ use crate::Result;
 use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::era::{EraObservation, PeerEra, ProbeOutcome, classify};
-use crate::transport::Transport;
+use crate::transport::{ResendPermission, Transport};
 
 /// Method a modern peer answers with its discovery document.
 const DISCOVER_METHOD: &str = "server/discover";
@@ -41,9 +41,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// otherwise lead a login, open the browser, and end it `Cancelled` when this
 /// bound drops the request, failing the start behind it. Meeting a lapsed
 /// token, the probe reads as silence instead.
-async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcome {
-    let request =
-        crate::oauth::login_gate::short_contention(transport.request(DISCOVER_METHOD, None));
+///
+/// `call` is the headers of the dispatch the probe runs inside, so a lent-only
+/// slot sends it as that dispatch's credential; a start's own probe has none.
+/// A probe is never resent after a session heal.
+async fn probe(
+    transport: &Arc<dyn Transport>,
+    timeout: Duration,
+    call: &[(String, String)],
+) -> ProbeOutcome {
+    let request = crate::oauth::login_gate::short_contention(transport.request_with_headers(
+        DISCOVER_METHOD,
+        None,
+        call,
+        None,
+        ResendPermission::Denied,
+    ));
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
@@ -264,7 +277,7 @@ impl Backend {
         transport: &Arc<dyn Transport>,
     ) -> crate::protocol::era::DetachedProbe {
         let timeout = self.probe_timeout();
-        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout)).await
+        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout, &[])).await
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.
@@ -295,7 +308,7 @@ impl Backend {
         entry
             .era
             .restart_while_serving(
-                || probe(transport, timeout),
+                || probe(transport, timeout, &[]),
                 |step| unless_retired(entry, step),
             )
             .await
@@ -317,11 +330,12 @@ impl Backend {
         method: &str,
         response: &JsonRpcResponse,
         transport: &Arc<dyn Transport>,
+        call: &[(String, String)],
     ) {
         let Some(error) = response.error.as_ref() else {
             return;
         };
-        self.reprobe_if_code_contradicts(method, error.code, transport)
+        self.reprobe_if_code_contradicts(method, error.code, transport, call)
             .await;
     }
 
@@ -334,6 +348,7 @@ impl Backend {
         method: &str,
         code: i32,
         transport: &Arc<dyn Transport>,
+        call: &[(String, String)],
     ) {
         // The slot this transport serves, found first: an answer that arrived over a transport
         // no slot holds any more is evidence about a peer that has been replaced, and must
@@ -368,9 +383,10 @@ impl Backend {
         let era = Arc::clone(&entry.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
+        let call = call.to_vec();
         let reprobe = async move {
             era.reprobe_with(
-                || probe(&transport, timeout),
+                || probe(&transport, timeout, &call),
                 |store| with_serving(&entry, &transport, store),
             )
             .await;

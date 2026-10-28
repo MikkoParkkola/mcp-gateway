@@ -48,7 +48,7 @@ async fn busy_slot_probing(
     let probed = Arc::clone(&transport);
     let reprobe = tokio::spawn(async move {
         reprobing
-            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &probed)
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &probed, &[])
             .await;
     });
     tokio::time::timeout(WAIT, &mut handles.started)
@@ -215,7 +215,7 @@ async fn a_contradiction_from_a_revoked_slot() {
         let backend = Arc::clone(&backend);
         async move {
             backend
-                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
+                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport, &[])
                 .await;
         }
     });

@@ -198,7 +198,7 @@ impl Backend {
         // modern-only code to a Legacy `ping`) re-probes it. Called before the
         // escalation check, so a misclassified peer is reclassified on the tick
         // that noticed.
-        self.reprobe_if_code_contradicts(method, code, transport)
+        self.reprobe_if_code_contradicts(method, code, transport, &[])
             .await;
 
         // A peer that answers at all is not the peer this escalation exists to
