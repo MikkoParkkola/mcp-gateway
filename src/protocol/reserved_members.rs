@@ -49,10 +49,6 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
-    #[expect(
-        dead_code,
-        reason = "the delivery record's annotated raise reads it; that change follows this one"
-    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
@@ -83,7 +79,7 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    // Outside until the delivery record notes it at its attach site.
+    // Raised where it is attached, never noted: a receipt copy keeps it.
     row(&["_context_integrity"], Counted, GatewayOnly, Outside),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),
@@ -305,6 +301,19 @@ mod tests;
 #[cfg(test)]
 pub(crate) mod test_support {
     use serde_json::{Value, json};
+
+    /// Whether `path`, dotted with array elements as `*`, is a member of the
+    /// table: a row's path, or a path inside a row's member (the gateway
+    /// filling a tool's missing annotation hints writes that member).
+    pub(crate) fn classified(path: &str) -> bool {
+        super::MEMBERS.iter().any(|m| {
+            let row = m.path.join(".");
+            path == row
+                || path
+                    .strip_prefix(&row)
+                    .is_some_and(|rest| rest.starts_with('.'))
+        })
+    }
 
     /// A backend answer planting every gateway-only member of
     /// `reserved_members::MEMBERS`, and one member of its own.

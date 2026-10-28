@@ -103,7 +103,12 @@ pub(super) async fn dashboard_handler(
 
     // Cumulative counts per tool. The stats count attempts and carry no
     // outcome, so the table shows none (MIK-8370).
-    let tool_counts = snap.top_tools.clone();
+    let tool_counts = snap
+        .top_tools
+        .iter()
+        .take(crate::stats::TOP_TOOLS)
+        .cloned()
+        .collect();
 
     let ds = DashboardState {
         backends: backend_healths,
