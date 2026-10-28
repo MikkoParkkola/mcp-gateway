@@ -301,6 +301,43 @@ async fn lease_t7_a_replace_bumps_the_generation_before_it_drains() {
     assert_eq!(s.held_generation(&key("p")), Some(new));
 }
 
+/// LEASE-T7 for a wipe (revocation, expiry, rejection): the generation is
+/// retired before the drain, so no new handoff begins under a lease that is
+/// being wiped.
+#[tokio::test]
+async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
+    let s = Arc::new(store());
+    let old = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let wiping = {
+        let s = s.clone();
+        tokio::spawn(async move { s.wipe(&key("p"), WipeReason::Released).await })
+    };
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the wipe never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    assert!(!wiping.is_finished(), "premise: the drain is held open");
+    assert_ne!(
+        s.held_generation(&key("p")),
+        Some(old),
+        "while the lease drains, its generation no longer reads as live"
+    );
+    drop(in_flight);
+    wiping.await.unwrap();
+    assert_eq!(s.state(&key("p")).await, LeaseState::CredentialNeeded);
+}
+
 #[test]
 fn the_store_debug_shows_no_lease() {
     let rendered = format!("{:?}", store());

@@ -163,8 +163,9 @@ impl LeaseStore {
     /// Create or replace the lease for `key` (C1-C3). `authorization` is the
     /// header value the backend expects; the lease lives until the earliest of
     /// its `exp`, `subscription_expires_at` and [`MAX_LEASE_TTL_SECS`], and is
-    /// refused if that leaves less than `min_remaining_secs`. A replace wipes
-    /// the old lease first and returns a fresh generation.
+    /// refused if that leaves less than `min_remaining_secs`. A replace
+    /// retires the old generation first, drains and wipes the old lease, and
+    /// only then installs the new one and returns its generation.
     ///
     /// # Errors
     /// The guard is not applied, the token has no usable `exp`, or it expires
@@ -197,6 +198,12 @@ impl LeaseStore {
         let generation = uuid::Uuid::new_v4().as_u128();
         let mut held = self.held.lock().await;
         if let Some(old) = held.remove(&key) {
+            // Bump first (§3.5): from here a record observed under the old
+            // generation fails delivery's check, so no new handoff begins
+            // for it while the old lease's sends drain. The new lease goes
+            // in only after the drain, so a call dropped meanwhile leaves
+            // none behind.
+            self.set_live(&key, None);
             wipe(old).await;
         }
         let cancel = CancellationToken::new();
@@ -224,8 +231,9 @@ impl LeaseStore {
     pub(crate) async fn wipe(&self, key: &LeaseKey, reason: WipeReason) {
         let mut held = self.held.lock().await;
         if let Some(old) = held.remove(key) {
-            wipe(old).await;
+            // Retired before the drain, as a replace does (§3.5).
             self.park(key, Some(reason));
+            wipe(old).await;
         }
     }
 
@@ -240,8 +248,8 @@ impl LeaseStore {
             .collect();
         for key in expired {
             if let Some(old) = held.remove(&key) {
-                wipe(old).await;
                 self.park(&key, Some(WipeReason::Released));
+                wipe(old).await;
             }
         }
     }
@@ -323,10 +331,10 @@ impl LeaseStore {
     ) {
         let mut held = self.held.lock().await;
         if held.get(key).is_some_and(|h| h.generation == generation) {
+            self.park(key, Some(reason));
             if let Some(old) = held.remove(key) {
                 wipe(old).await;
             }
-            self.park(key, Some(reason));
         }
     }
 
