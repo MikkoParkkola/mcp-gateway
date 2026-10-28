@@ -111,11 +111,8 @@ async fn invoke_with(inject_as: InjectTarget, key: &str) -> Received {
         answer.get("error").is_none(),
         "premise: the call succeeds: {answer}"
     );
-    Arc::try_unwrap(received)
-        .ok()
-        .expect("the recorder is released")
-        .into_inner()
-        .expect("recorder")
+    // The registry still holds the backend and its recorder: take the record.
+    std::mem::take(&mut *received.lock().expect("recorder"))
 }
 
 /// A `header` rule's secret reaches the backend as that header.
