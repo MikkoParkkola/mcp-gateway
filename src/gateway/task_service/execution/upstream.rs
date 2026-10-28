@@ -327,56 +327,67 @@ impl TaskExecutor {
         // on is recorded with it, so a later read's receipt leaves it out.
         let writes_mark = crate::gateway::gateway_writes::mark();
         let answer = adapter.query(&handle, deadline).await;
-        let (event, notes) = with_dispatch_scope(async move {
-            Some(match answer {
-                // Still running, waiting on an input round this gateway cannot
-                // continue, or unreachable. The handle and the working record
-                // are retained; nothing is faked terminal or resubmitted.
-                UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
-                UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
-                    Ok(processed) => (TaskTransition::Complete(processed), ErrorAuthor::Gateway),
-                    // The same configured output policy that guards a live
-                    // dispatch refused this payload. Its refusal is the outcome.
-                    Err(error) => (
+        // One cell for this settlement: its gates and its record, apart from
+        // the read that triggered it, whose own delivery stays unvouched.
+        let settled = crate::gateway::delivery_facts::scope(async {
+            let (event, notes) = with_dispatch_scope(async move {
+                Some(match answer {
+                    // Still running, waiting on an input round this gateway cannot
+                    // continue, or unreachable. The handle and the working record
+                    // are retained; nothing is faked terminal or resubmitted.
+                    UpstreamAnswer::Live | UpstreamAnswer::Unavailable => return None,
+                    UpstreamAnswer::Completed(result) => match finish(backend_output(result)) {
+                        Ok(processed) => {
+                            (TaskTransition::Complete(processed), ErrorAuthor::Gateway)
+                        }
+                        // The same configured output policy that guards a live
+                        // dispatch refused this payload. Its refusal is the outcome.
+                        Err(error) => (
+                            TaskTransition::Fail(strip_http_status(error)),
+                            ErrorAuthor::Gateway,
+                        ),
+                    },
+                    // A peer's failure is upstream content, not a gateway verdict:
+                    // its message and nested data pass the reader's configured
+                    // error policy BEFORE this settles, so nothing unscreened
+                    // reaches the durable record or the read that serves it. The
+                    // code is preserved.
+                    UpstreamAnswer::Failed(error) => {
+                        let (screened, author) = finish_error(strip_http_status(error));
+                        (TaskTransition::Fail(screened), author)
+                    }
+                    // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+                    UpstreamAnswer::Substituted(error) => (
                         TaskTransition::Fail(strip_http_status(error)),
                         ErrorAuthor::Gateway,
                     ),
-                },
-                // A peer's failure is upstream content, not a gateway verdict:
-                // its message and nested data pass the reader's configured
-                // error policy BEFORE this settles, so nothing unscreened
-                // reaches the durable record or the read that serves it. The
-                // code is preserved.
-                UpstreamAnswer::Failed(error) => {
-                    let (screened, author) = finish_error(strip_http_status(error));
-                    (TaskTransition::Fail(screened), author)
-                }
-                // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-                UpstreamAnswer::Substituted(error) => (
-                    TaskTransition::Fail(strip_http_status(error)),
-                    ErrorAuthor::Gateway,
-                ),
+                })
             })
+            .await;
+            let Some((event, screened)) = event else {
+                return Ok(None);
+            };
+
+            // Ordinary revision-checked durable settlement, over the digest the
+            // record persisted. The revision is re-read because the query took
+            // time; the one the caller first saw is not the one to compare against.
+            let revision = self
+                .service
+                .store
+                .get(owner_digest, id)
+                .map_err(|_| RecoveryRefusal::Unavailable)?
+                .revision;
+            // Recorded before the commit, under this record's slot, as a live call
+            // is recorded before its result is stored. A writer that lands
+            // meanwhile wins the revision below; the record then stands for a
+            // recovery that did not land.
+            let (event, kept) = settle(event, notes).await;
+            Ok::<_, RecoveryRefusal>(Some((event, screened, kept, revision)))
         })
-        .await;
-        let Some((event, screened)) = event else {
+        .await?;
+        let Some((event, screened, kept, revision)) = settled else {
             return Ok(RecoveredRead::Retained);
         };
-
-        // Ordinary revision-checked durable settlement, over the digest the
-        // record persisted. The revision is re-read because the query took
-        // time; the one the caller first saw is not the one to compare against.
-        let revision = self
-            .service
-            .store
-            .get(owner_digest, id)
-            .map_err(|_| RecoveryRefusal::Unavailable)?
-            .revision;
-        // Recorded before the commit, under this record's slot, as a live call
-        // is recorded before its result is stored. A writer that lands
-        // meanwhile wins the revision below; the record then stands for a
-        // recovery that did not land.
-        let (event, kept) = settle(event, notes).await;
         // The screen's verdict, unless the audit replaced the outcome
         // (MIK-7887.RECEIPT.1).
         let author = super::settle_followed::committed_author(screened, kept);

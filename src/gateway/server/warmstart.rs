@@ -611,6 +611,17 @@ async fn warm_start_until_cached(
     mode: WarmStartMode,
     instance: &Weak<Backend>,
 ) {
+    // A backend with per-user sessions only has no shared session to warm;
+    // each user's own slot starts on that user's first call. Settled with no
+    // shared list, as an attempt that stored none settles it: listeners told
+    // of a predecessor's tools hear now that this instance shows none.
+    if let Some(backend) = instance.upgrade()
+        && backend.shared_slot_refused()
+    {
+        debug!(backend = %name, "Warm-start skipped: per-user sessions only");
+        backend.nudge_tools(NudgeKind::Resolved);
+        return;
+    }
     // Prefetch is what fills the cache, so without it there is nothing for this
     // loop to wait for. Handled before the loop rather than inside it: an
     // attempt that cannot produce tools would otherwise retry forever against a

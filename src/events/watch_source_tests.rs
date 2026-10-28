@@ -571,213 +571,10 @@ async fn watch_ignores_default_volatile_fields_and_metadata() {
     assert_eq!(events[0].data["changed"], json!(["/timestamp"]));
 }
 
-/// A shared poller counts against the principal that opened it, so one key
-/// cannot fill the gateway's pollers with distinct shared arguments.
-#[tokio::test]
-async fn shared_pollers_count_against_the_principal_that_opened_them() {
-    let dir = tempfile::tempdir().expect("dir");
-    let mut config = crate::config::EventsConfig::default();
-    config.watch.max_pollers_per_principal = 1;
-    let hub = EventsHub::open(&config, dir.path()).expect("hub");
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    let source = WatchSource::new(&hub, host);
-    let name = "watch.weather.changed";
-    let open = |n: u32| {
-        let arguments = json!({"arguments": {"city": n}});
-        let key = source.lifecycle_key("p", name, &arguments, now());
-        (key, arguments)
-    };
-    let (key, arguments) = open(1);
-    source
-        .on_first_subscriber(&key, "p", name, &arguments)
-        .await
-        .expect("the first");
-    let (key, arguments) = open(2);
-    let refused = source
-        .on_first_subscriber(&key, "p", name, &arguments)
-        .await
-        .expect_err("past the principal's cap");
-    assert_eq!(refused.code, -32013);
-}
-
-/// A poller that ended on its own leaves its entry behind until the core
-/// reconciles; a subscribe in that gap starts a fresh poller instead of
-/// joining the dead one.
-#[tokio::test]
-async fn a_subscribe_after_a_poller_exited_starts_a_fresh_one() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    let source = WatchSource::new(&hub, host);
-    let name = "watch.weather.changed";
-    let arguments = json!({});
-    let key = source.lifecycle_key("p", name, &arguments, now());
-    source
-        .on_first_subscriber(&key, "p", name, &arguments)
-        .await
-        .expect("started");
-    let exited = Arc::clone(&source.pollers.lock()[&key].stop);
-    exited.store(true, Ordering::Release);
-    source
-        .on_first_subscriber(&key, "p", name, &arguments)
-        .await
-        .expect("restarted");
-    assert!(
-        !source.pollers.lock()[&key].stop.load(Ordering::Acquire),
-        "a live poller holds the key"
-    );
-}
-
-/// A poller that ends because no live holder is left retires its key under
-/// the lifecycle lock: a subscribe before the core's next reconcile starts a
-/// fresh poller instead of finding the key started with nothing polling.
-#[tokio::test]
-async fn a_poller_without_holders_retires_its_key() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    let poller = run(&hub, &host, "p", "watch.weather.changed", &json!({}));
-    let started = (SourceKind::RestWatch, poller.key.clone());
-    hub.lifecycle.lock().await.insert(started.clone());
-    let mut last = None;
-    assert!(matches!(poller.once(&hub, &mut last).await, Step::Stop));
-    assert!(
-        !hub.lifecycle.lock().await.contains(&started),
-        "the key is no longer started"
-    );
-    assert!(poller.stop.load(Ordering::Acquire), "marked stopped");
-}
-
-/// A holder that commits while the poll reads the store (its subscribe found
-/// the key started and joined it) keeps the poller and the key.
-#[tokio::test]
-async fn a_holder_that_joins_during_the_poll_keeps_the_poller() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    let name = "watch.weather.changed";
-    let poller = Arc::new(run(&hub, &host, "p", name, &json!({})));
-    let started = (SourceKind::RestWatch, poller.key.clone());
-    let mut lock = hub.lifecycle.lock().await;
-    lock.insert(started.clone());
-    let task = tokio::spawn({
-        let (hub, poller) = (Arc::clone(&hub), Arc::clone(&poller));
-        async move { matches!(poller.once(&hub, &mut None).await, Step::Stop) }
-    });
-    // The poll found no holder and now waits for the lock the subscribe holds.
-    for _ in 0..8 {
-        tokio::task::yield_now().await;
-    }
-    admit(&hub, "p", name, &json!({}));
-    drop(lock);
-    assert!(!task.await.expect("poll"), "the poller goes on");
-    assert!(
-        hub.lifecycle.lock().await.contains(&started),
-        "still started"
-    );
-    assert!(!poller.stop.load(Ordering::Acquire), "not stopped");
-}
-
 /// One pass of the worker's sweep, as the delivery loop runs it every 30 s.
 async fn sweep(hub: &Arc<EventsHub>) {
     let services = hub.runtime.services.get().cloned().expect("services");
     hub.sweep(&services).await;
-}
-
-/// MIK-8053 `WATCHREPLAY.1`/`.2`: a stored row whose capability was not
-/// offered when the source registered (the startup scan still running, or a
-/// partial catalogue) gets its poller from the next sweep once the capability
-/// is offered, and that poller polls.
-#[tokio::test]
-async fn a_sweep_starts_the_poller_of_a_capability_offered_again() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(Vec::new());
-    admit(&hub, "p", "watch.weather.changed", &json!({}));
-    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
-    // The replay the registration spawned runs here, over an empty catalogue.
-    tokio::task::yield_now().await;
-    assert!(hub.lifecycle.lock().await.is_empty(), "nothing offered yet");
-    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
-    sweep(&hub).await;
-    assert_eq!(hub.lifecycle.lock().await.len(), 1, "the sweep starts it");
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-    while host.calls.lock().is_empty() && tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-    assert!(!host.calls.lock().is_empty(), "the started poller polls");
-}
-
-/// MIK-8053: the sweep stops pollers no live row holds before it starts the
-/// restored ones, so a stale poller never takes the last `max_pollers` slot.
-/// A held watch is not stale: its poller runs to see it return (MIK-8122),
-/// so the slot here is freed by the row going.
-#[tokio::test]
-async fn a_sweep_frees_a_stale_slot_before_it_starts_a_restored_key() {
-    let dir = tempfile::tempdir().expect("dir");
-    let mut config = crate::config::EventsConfig::default();
-    config.watch.max_pollers = 1;
-    let hub = hub_with(dir.path(), &config);
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    admit(&hub, "p", "watch.weather.changed", &json!({}));
-    admit(&hub, "p", "watch.rain.changed", &json!({}));
-    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
-    tokio::task::yield_now().await;
-    assert_eq!(
-        hub.lifecycle.lock().await.len(),
-        1,
-        "weather holds the slot"
-    );
-    // Weather's row goes; rain comes in.
-    let weather = hub
-        .store
-        .subscriptions()
-        .into_iter()
-        .find(|s| s.name == "watch.weather.changed")
-        .expect("weather row");
-    let tail = super::super::tail_policy(&crate::config::EventsConfig::default());
-    hub.store
-        .remove(&weather.id, Ok(Utc::now()), tail)
-        .expect("removed");
-    *host.targets.lock() = vec![
-        target("weather", true, CredentialUse::Free),
-        target("rain", true, CredentialUse::Free),
-    ];
-    sweep(&hub).await;
-    let started = hub.lifecycle.lock().await;
-    assert_eq!(started.len(), 1, "one poller, within the cap");
-    assert!(
-        started.iter().any(|(_, key)| key.contains("rain")),
-        "the restored key took the freed slot: {started:?}"
-    );
-}
-
-/// MIK-8053 (review of #3406): a partial catalogue that leaves a watch's
-/// capability unread neither drops its row nor its poller: the row keeps its
-/// key (MIK-8122), the poller runs on and decides nothing while unread, and
-/// the whole catalogue finds it still started, once.
-#[tokio::test]
-async fn a_watch_poller_runs_through_a_partial_catalogue() {
-    let dir = tempfile::tempdir().expect("dir");
-    let hub = hub(dir.path());
-    let host = fake(vec![target("weather", true, CredentialUse::Free)]);
-    admit(&hub, "p", "watch.weather.changed", &json!({}));
-    hub.install_watch_source(Arc::clone(&host) as Arc<dyn WatchHost>);
-    tokio::task::yield_now().await;
-    assert_eq!(hub.lifecycle.lock().await.len(), 1, "premise: started");
-    host.targets.lock().clear();
-    host.partial.store(true, Ordering::Release);
-    sweep(&hub).await;
-    assert_eq!(
-        hub.lifecycle.lock().await.len(),
-        1,
-        "still started while unread"
-    );
-    assert_eq!(hub.store.subscriptions().len(), 1, "the row is kept");
-    host.partial.store(false, Ordering::Release);
-    *host.targets.lock() = vec![target("weather", true, CredentialUse::Free)];
-    sweep(&hub).await;
-    assert_eq!(hub.lifecycle.lock().await.len(), 1, "one poller once whole");
 }
 
 #[path = "watch_source_partial_tests.rs"]
@@ -794,6 +591,12 @@ mod clock_rows;
 
 #[path = "watch_source_charge_tests.rs"]
 mod charge;
+
+#[path = "watch_source_sweep_tests.rs"]
+mod sweep_rows;
+
+#[path = "watch_source_poller_tests.rs"]
+mod poller_life;
 
 /// MIK-8668 X-SHA golden, computed independently (Python hashlib over the
 /// compact JSON bytes `{"a":1}`).
