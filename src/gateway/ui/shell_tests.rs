@@ -185,7 +185,12 @@ async fn t7_the_tooltip_copy_is_a_hashed_json_asset() {
     let names: Vec<&str> = ASSETS
         .iter()
         .map(|(n, _)| *n)
-        .filter(|n| n.starts_with("tips.") && n.ends_with(".json"))
+        .filter(|n| {
+            n.starts_with("tips.")
+                && std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
         .collect();
     assert_eq!(names.len(), 1, "one tooltip copy asset: {names:?}");
     let name = names[0];
@@ -200,13 +205,15 @@ async fn t7_the_tooltip_copy_is_a_hashed_json_asset() {
     assert_eq!(response.status(), StatusCode::OK);
     let headers = response.headers();
     assert_eq!(
-        headers.get(header::CONTENT_TYPE).map(|v| v.as_bytes()),
+        headers
+            .get(header::CONTENT_TYPE)
+            .map(axum::http::HeaderValue::as_bytes),
         Some(&b"application/json"[..])
     );
     assert_eq!(
         headers
             .get(header::X_CONTENT_TYPE_OPTIONS)
-            .map(|v| v.as_bytes()),
+            .map(axum::http::HeaderValue::as_bytes),
         Some(&b"nosniff"[..])
     );
 }
