@@ -16,6 +16,7 @@ pub mod backends;
 pub mod capabilities;
 pub mod control_plane;
 mod dashboard;
+mod discovery;
 mod errors;
 mod events;
 mod history;
@@ -89,6 +90,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(backends::backends_router())
         .merge(events::events_router())
         .merge(import::import_router())
+        .merge(discovery::discovery_router())
         .merge(history::history_router());
 
     #[cfg(feature = "cost-governance")]

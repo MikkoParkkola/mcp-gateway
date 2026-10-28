@@ -372,7 +372,7 @@ use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
     fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on,
-    fixture_hardened_signed_firewalled, fixture_inspecting_on, meta_firewall,
+    fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_observing_on, meta_firewall,
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;

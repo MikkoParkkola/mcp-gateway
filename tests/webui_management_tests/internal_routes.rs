@@ -542,6 +542,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 404],
     ),
+    // src/gateway/ui/discovery.rs (list_discovery)
+    row(
+        "/ui/api/discovery",
+        Method::GET,
+        "/ui/api/discovery",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",
