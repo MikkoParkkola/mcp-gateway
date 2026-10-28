@@ -207,8 +207,7 @@ async fn every_loopback_literal_spelling_is_refused_as_a_target() {
 }
 
 /// A public name's answer redirecting to loopback, by name or by literal, is
-/// refused at the hop: the proxy answered once, the target never. A literal
-/// with extra trailing dots stays a name, and is refused as one.
+/// refused at the hop: the proxy answered once, the target never.
 #[tokio::test]
 async fn a_redirect_hop_to_loopback_is_refused() {
     let (port, target) = counting_listener().await;
@@ -223,32 +222,52 @@ async fn a_redirect_hop_to_loopback_is_refused() {
         "0.0.0.0",
         "[::1]",
         "[::ffff:127.0.0.1]",
-        "127.0.0.1..",
     ] {
-        let (proxy, via_proxy) = answering_listener(format!(
-            "HTTP/1.1 302 Found\r\nLocation: http://{host}:{port}/x\r\n\
-             Content-Length: 0\r\nConnection: close\r\n\r\n"
-        ))
-        .await;
-        let executor = through_proxy(&format!("http://127.0.0.1:{proxy}"));
-        let refused = call_in(
-            &executor,
-            &capability("http://api.capability-fixture.test"),
-            CapabilityExecutionContext::default(),
-        )
-        .await
-        .expect_err(host);
-        assert!(
-            crate::security::ssrf::is_ssrf_refusal(&refused),
-            "{host}: not the SSRF refusal: {refused}"
-        );
-        assert_eq!(via_proxy.load(Ordering::SeqCst), 1, "{host}: the proxy");
-        assert_eq!(
-            target.load(Ordering::SeqCst),
-            0,
-            "{host}: the target was reached"
-        );
+        assert_hop_refused(&format!("http://{host}:{port}/x"), &target).await;
     }
+}
+
+/// A literal with extra trailing dots stays a name, so the target check
+/// refuses it as one; the hop gets the same refusal.
+#[tokio::test]
+async fn a_redirect_hop_to_a_dotted_loopback_literal_is_refused() {
+    let (port, target) = counting_listener().await;
+    assert_hop_refused(&format!("http://127.0.0.1..:{port}/x"), &target).await;
+}
+
+/// The cloud metadata address, spelled with extra trailing dots, as a hop.
+#[tokio::test]
+async fn a_redirect_hop_to_a_dotted_metadata_literal_is_refused() {
+    let (_port, target) = counting_listener().await;
+    assert_hop_refused("http://169.254.169.254../latest/meta-data/", &target).await;
+}
+
+/// A public name whose answer redirects to `location` is refused at the hop
+/// with the SSRF refusal: the proxy answered once, `target` never.
+async fn assert_hop_refused(location: &str, target: &Arc<AtomicUsize>) {
+    let (proxy, via_proxy) = answering_listener(format!(
+        "HTTP/1.1 302 Found\r\nLocation: {location}\r\n\
+         Content-Length: 0\r\nConnection: close\r\n\r\n"
+    ))
+    .await;
+    let executor = through_proxy(&format!("http://127.0.0.1:{proxy}"));
+    let refused = call_in(
+        &executor,
+        &capability("http://api.capability-fixture.test"),
+        CapabilityExecutionContext::default(),
+    )
+    .await
+    .expect_err(location);
+    assert!(
+        crate::security::ssrf::is_ssrf_refusal(&refused),
+        "{location}: not the SSRF refusal: {refused}"
+    );
+    assert_eq!(via_proxy.load(Ordering::SeqCst), 1, "{location}: the proxy");
+    assert_eq!(
+        target.load(Ordering::SeqCst),
+        0,
+        "{location}: the target was reached"
+    );
 }
 
 /// The GraphQL and JSON-RPC endpoint checks refuse a loopback name too.
