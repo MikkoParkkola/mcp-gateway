@@ -20,7 +20,7 @@ use crate::identity_grants::{IdentityGrant, IdentityGrantAuditEvent};
 mod tests;
 
 /// A source the set is built from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Source {
     /// Grant-decision notes in the transparency log.
     Access,
