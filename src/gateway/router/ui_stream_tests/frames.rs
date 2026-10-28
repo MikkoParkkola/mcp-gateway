@@ -83,3 +83,31 @@ async fn a_snapshot_frame_never_advances_a_log_part() {
     let f = s.until("status").await;
     assert!(f.part('i').is_none() && f.part('g').is_none(), "{f:?}");
 }
+
+#[tokio::test]
+async fn a_counts_only_stream_is_silent_for_admin_fields_and_speaks_for_counts() {
+    let (state, _dir) = fixture().await;
+    let _ = state
+        .backends
+        .register(http_backend_at("docs", "http://127.0.0.1:9/mcp"));
+    let mut admin = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let mut counts = open(&state, request(STREAM, Who::Bearer(KEY), None)).await;
+    admin.until("status").await;
+    assert_eq!(counts.until("status").await.json()["server_count"], 1);
+    // An admin-only field moves: the success counter on the server's row.
+    let docs = state.backends.get("docs").expect("registered");
+    docs.shared_entry_for_test()
+        .failsafe
+        .record_success(Duration::from_millis(5));
+    let seen = admin.until("status").await.json();
+    assert_eq!(
+        seen["servers"][0]["success_count"], 1,
+        "admin sees it: {seen}"
+    );
+    // A counts-only field moves: a second server. The counts stream's very next
+    // status frame is that one, so nothing was sent for the success counter.
+    let _ = state
+        .backends
+        .register(http_backend_at("wiki", "http://127.0.0.1:9/mcp"));
+    assert_eq!(counts.until("status").await.json()["server_count"], 2);
+}
