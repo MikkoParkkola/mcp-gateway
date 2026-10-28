@@ -10,11 +10,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MCP Gateway</title>
-<link rel="stylesheet" href="/ui/assets/shell.54b46a7583fd.css">
-<script type="module" src="/ui/assets/shell.686a802f184b.js"></script>
+<link rel="stylesheet" href="/ui/assets/shell.ba0960f24f7f.css">
+<script type="module" src="/ui/assets/shell.bba27c106df1.js"></script>
 <!-- Screens: each module imports the shell by its hashed name and registers before DOMContentLoaded. -->
 <link rel="stylesheet" href="/ui/assets/tools.8d1b3907e0bf.css">
-<script type="module" src="/ui/assets/tools.6b6c1800c08d.js"></script>
+<script type="module" src="/ui/assets/tools.8f13d57aa381.js"></script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
@@ -45,8 +45,8 @@
     <form id="signin-form" novalidate>
       <label for="signin-key">API key</label>
       <input id="signin-key" class="input" type="password" autocomplete="off" spellcheck="false" placeholder="mcpg_…">
-      <p class="signin-error" role="alert" hidden></p>
-      <p class="signin-notice" role="status" hidden></p>
+      <p class="signin-error" id="signin-error" hidden></p>
+      <p class="signin-notice" hidden></p>
       <button class="btn primary" type="submit">Sign in</button>
     </form>
     <p class="signin-note muted">No key? Run <code>mcp-gateway serve</code> on this machine; it prints a one-time link. From another device, enter the code it shows at <a class="lnk" href="/dashboard/handoff">/dashboard/handoff</a>.</p>
@@ -54,5 +54,7 @@
     <i class="c1" aria-hidden="true"></i><i class="c2" aria-hidden="true"></i>
   </div>
 </section>
+<!-- The one live region (UI1.18): every announcement is an entry appended here. -->
+<div id="announcer" class="sr-only" role="status" aria-atomic="false"></div>
 </body>
 </html>

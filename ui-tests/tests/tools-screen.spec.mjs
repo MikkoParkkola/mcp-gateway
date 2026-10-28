@@ -114,8 +114,9 @@ test('T5: Open goes to the tool page, and an unknown tool says so', async ({ pag
   await page.getByRole('button', { name: t.name, exact: true }).click();
   await page.getByRole('link', { name: `Open ${t.name}` }).click();
   await expect(page).toHaveURL(`/ui/tools/${encodeURIComponent(`${t.server}:${t.name}`)}/status`);
-  await expect(page.locator('.head .plate')).toHaveText('Tools');
-  await expect(page.getByRole('heading', { name: t.name, exact: true })).toBeVisible();
+  await expect(page.locator('.head .plate')).toHaveText(t.name);
+  await expect(page).toHaveTitle(`${t.name} · MCP Gateway`);
+  await expect(page.getByRole('heading', { level: 2, name: t.name, exact: true })).toBeVisible();
   await expect(page.locator('#content')).toContainText(t.server);
   await expect(page.locator('#content')).toContainText(t.description);
   await expect(page.getByRole('region', { name: `Input schema of ${t.name}` })).toBeVisible();
@@ -176,7 +177,7 @@ test('T13: a tool page loads directly from its address', async ({ page }) => {
   const t = sorted[7];
   await page.goto(`/ui/tools/${encodeURIComponent(`${t.server}:${t.name}`)}/status`);
   await shellReady(page);
-  await expect(page.getByRole('heading', { name: t.name, exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: t.name, exact: true })).toBeVisible();
   await expect(page.locator('#content')).toContainText(t.description);
 });
 
@@ -238,7 +239,7 @@ test('T10: the journey from the sidebar to a tool and back', async ({ page }) =>
   await search(page).fill('j_charlie');
   await page.getByRole('button', { name: 'j_charlie_tool', exact: true }).click();
   await page.getByRole('link', { name: 'Open j_charlie_tool' }).click();
-  await expect(page.getByRole('heading', { name: 'j_charlie_tool', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 2, name: 'j_charlie_tool', exact: true })).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL('/ui/tools/status');
   // The search survives the visit, as it did on the classic tab.
@@ -256,7 +257,7 @@ for (const width of WIDTHS) {
     await page.getByRole('button', { name: sorted[0].name, exact: true }).click();
     expect(await blockingViolations(page)).toEqual([]);
     await page.goto(`/ui/tools/${encodeURIComponent(`${sorted[0].server}:${sorted[0].name}`)}/status`);
-    await expect(page.getByRole('heading', { name: sorted[0].name, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 2, name: sorted[0].name, exact: true })).toBeVisible();
     expect(await blockingViolations(page)).toEqual([]);
   });
 }

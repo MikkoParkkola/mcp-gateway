@@ -379,7 +379,7 @@ test.describe('touch targets', () => {
 });
 
 test.describe('page states and safety', () => {
-  test('F13 state() renders every kind with its heading and role', async ({ page }) => {
+  test('F13 state() renders every kind with its heading, and none is itself live', async ({ page }) => {
     await page.goto('/ui/overview/status');
     await shellReady(page);
     const url = await shellModuleUrl(page);
@@ -394,9 +394,8 @@ test.describe('page states and safety', () => {
       expect(k.data, k.kind).toBe(k.kind);
       expect(k.heading, k.kind).not.toBe('');
     }
-    expect(kinds.find((k) => k.kind === 'loading').role).toBe('status');
-    expect(kinds.find((k) => k.kind === 'error').role).toBe('alert');
-    expect(kinds.find((k) => k.kind === 'forbidden').role).toBe('alert');
+    // One live region announces transitions (UI1.18); no state is itself live.
+    for (const k of kinds) expect(k.role, k.kind).toBeNull();
   });
 
   test('F13b a 403 from an API renders the forbidden state in place', async ({ page }) => {
@@ -498,6 +497,46 @@ test.describe('budgets', () => {
     await page.locator('nav.tabs a', { hasText: /actions/i }).click();
     expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
   });
+});
+
+test('F20 a screen sets its header through its context, and a kept one changes nothing after navigation', async ({ page }) => {
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  const plate = page.locator('.head .plate');
+  const sub = page.locator('.head .sub');
+  await expect(sub).toHaveText('24 of 28 servers ready.');
+  await page.evaluate(() => window.overviewHeader({ title: 'Counted', subtitle: '40 tools from 4 servers' }));
+  await expect(plate).toHaveText('Counted');
+  await expect(sub).toHaveText('40 tools from 4 servers');
+  await expect(sub).toBeVisible();
+  expect(await page.title()).toBe('Counted · MCP Gateway');
+  // A field left out stays; a null subtitle hides the line.
+  await page.evaluate(() => window.overviewHeader({ subtitle: null }));
+  await expect(plate).toHaveText('Counted');
+  await expect(sub).toBeHidden();
+  // Text, never markup.
+  await page.evaluate(() => window.overviewHeader({ title: '<b>x</b>' }));
+  await expect(plate).toHaveText('<b>x</b>');
+  await expect(plate.locator('b')).toHaveCount(0);
+  // Kept past an in-page navigation: the next page's header is left alone.
+  await page.click('nav.route-nav a[data-page="tools"]');
+  await expect(plate).toHaveText('Tools');
+  await page.evaluate(() => window.overviewHeader({ title: 'Stale', subtitle: 'stale' }));
+  await expect(plate).toHaveText('Tools');
+  expect(await page.title()).toBe('Tools · MCP Gateway');
+});
+
+test('F20b a setter kept from a failed attempt changes nothing after a Retry succeeds', async ({ page }) => {
+  await page.addInitScript(() => { window.__failOnce = true; });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/overview/status');
+  await page.locator('#content').getByRole('button', { name: /Retry/ }).click();
+  await expect(page.locator('#content')).toContainText('overview - status');
+  await page.evaluate(() => window.overviewHeader({ title: 'Second' }));
+  await page.evaluate(() => window.failedHeader({ title: 'First', subtitle: 'first' }));
+  await expect(page.locator('.head .plate')).toHaveText('Second');
+  await expect(page.locator('.head .sub')).toHaveText('24 of 28 servers ready.');
 });
 
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {

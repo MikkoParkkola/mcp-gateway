@@ -7,7 +7,7 @@
 // once per render. Every server-supplied string goes in with textContent.
 // The shell is imported by its exact hashed name, so this page registers in
 // the same module instance the document loaded.
-import { register } from '/ui/assets/shell.686a802f184b.js';
+import { register } from '/ui/assets/shell.bba27c106df1.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
@@ -137,14 +137,15 @@ async function statusTab(body, ctx) {
 async function toolPage(body, ctx) {
   const { list } = await readTools(ctx.api);
   const t = list.find((x) => objectOf(x) === ctx.object);
-  // The plate stays "Tools": it uppercases, and a tool's name is case-sensitive,
-  // so the name is the page's own heading, as written.
-  ctx.header({ subtitle: null });
   if (!t) {
+    ctx.header({ title: 'No such tool', subtitle: null });
     body.append(ctx.state('empty', { title: 'No such tool', body: 'The gateway offers no tool by that name.' }),
       h('p', {}, h('a', { class: 'lnk', href: '/ui/tools/status' }, 'Back to all tools')));
     return;
   }
+  // The plate names the tool; it draws in capitals, and a tool's name is
+  // case-sensitive, so the page's own heading shows the name as written.
+  ctx.header({ title: t.name, subtitle: null });
   body.append(h('section', { class: 'tk tool-page', 'aria-labelledby': 'tool-page-title' },
     h('h2', { class: 'mono tool-page-name', id: 'tool-page-title' }, t.name),
     h('dl', { class: 'tool-facts' },
