@@ -308,7 +308,10 @@ impl Backend {
     /// went; a peer that answers a 2026-only method `method not found` is not
     /// modern however its probe went. Either way the stale verdict is dropped
     /// and one fresh probe is run, detached: the request that noticed must not
-    /// pay for it.
+    /// pay for it. A lent-only slot is the exception: it sends only while a
+    /// dispatch lends its credential, so its probe runs before the dispatch
+    /// that noticed returns, and that dispatch waits at most the probe's
+    /// timeout.
     pub(super) async fn reprobe_if_contradicted(
         &self,
         method: &str,

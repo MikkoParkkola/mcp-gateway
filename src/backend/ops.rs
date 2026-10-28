@@ -425,7 +425,8 @@ impl Backend {
 
         // An ordinary answer can contradict the era we probed for: a peer that
         // rejects this call with a 2026-only code is modern whatever its
-        // `server/discover` did. Correct the verdict off the request path.
+        // `server/discover` did. Correct the verdict: off the request path,
+        // except on a lent-only slot, whose probe needs this dispatch's loan.
         if let Ok(response) = &result {
             self.reprobe_if_contradicted(method, response, &transport)
                 .await;
