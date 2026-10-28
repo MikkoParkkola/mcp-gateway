@@ -81,3 +81,22 @@ async fn a_watcher_that_died_under_open_streams_is_replaced_at_the_next_admissio
         "within the bound"
     );
 }
+
+#[tokio::test]
+async fn an_open_stream_restarts_a_dead_watcher_without_a_new_admission() {
+    let (state, _dir) = fixture().await;
+    let hub = state.dashboard_bootstrap.stream_hub();
+    let mut a = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let a0 = generation(&a.until("reload").await);
+    let dead = hub.kill_watcher_for_test().expect("a watcher is running");
+    assert!(yield_until(|| dead.is_finished()).await);
+    let began = tokio::time::Instant::now();
+    state
+        .live_config
+        .edit(|c| c.auth.public_paths.push("/alone".to_owned()));
+    assert!(generation(&a.until("reload").await) > a0);
+    assert!(
+        began.elapsed() <= Duration::from_secs(3),
+        "within the bound"
+    );
+}
