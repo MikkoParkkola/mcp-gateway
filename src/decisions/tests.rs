@@ -620,3 +620,53 @@ fn scanning_a_changed_capability_makes_no_credential_lookup() {
     assert!(!item["scan"].is_null(), "the scan parsed and ran: {item}");
     assert_eq!(calls(), start, "no secret or env reference was looked up");
 }
+
+#[test]
+fn a_record_naming_no_one_reads_back_as_no_request() {
+    let record = |authority: &str, subject: &str| {
+        let serde_json::Value::Object(fields) = serde_json::json!({
+            "kind": super::GRANT_DECISION_KIND,
+            "timestamp": at(1).to_rfc3339(),
+            "reason": "missing_grant",
+            "capability": "stripe.charges",
+            "scope": "execute",
+            "agent_id": AGENT,
+            "subject": {"authority": authority, "subject": subject},
+        }) else {
+            unreachable!("a JSON object literal")
+        };
+        fields
+    };
+    assert!(super::denial_from_record(&record("https://idp.example", "alice")).is_some());
+    for (authority, subject) in [("", ""), ("https://idp.example", ""), ("", "alice")] {
+        assert!(
+            super::denial_from_record(&record(authority, subject)).is_none(),
+            "({authority:?}, {subject:?}) names no one"
+        );
+    }
+    let mut no_subject = record("", "");
+    no_subject.remove("subject");
+    assert!(super::denial_from_record(&no_subject).is_none());
+}
+
+#[test]
+fn an_empty_subject_is_never_covered_by_a_grant() {
+    let mut set = ready();
+    let nobody = super::AccessKey {
+        authority: String::new(),
+        subject: String::new(),
+        agent: AGENT.to_string(),
+    };
+    let requested = super::Requested {
+        scope: Some(GrantScope::Execute),
+        ..super::Requested::default()
+    };
+    // A row for the same empty subject: `GrantSubject::new` would match it.
+    let row = IdentityGrant {
+        subject: GrantSubject::new("", "", None),
+        owner: None,
+        ..grant("stripe.charges", GrantScope::Any)
+    };
+    set.set_grants(vec![row], at(2));
+    assert!(!set.covered(&nobody, "stripe.charges", &requested));
+}
