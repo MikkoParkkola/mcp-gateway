@@ -279,6 +279,21 @@ fn a_url_on_the_line_hides_neither_install_nor_keeper() {
     assert!(!misses_keeper(keeper), "a keeper after a URL was not seen");
 }
 
+/// A keeper named only in a block comment or a string literal does not
+/// count: neither is code.
+#[test]
+fn a_keeper_in_a_block_comment_or_a_string_is_flagged() {
+    let block = "fn t() {\n    /* test_log_capture */\n    \
+                 tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(misses_keeper(block), "a block comment satisfied the guard");
+    let string = "fn t() {\n    let _why = \"keep_interest_open\";\n    \
+                  tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        misses_keeper(string),
+        "a string literal satisfied the guard"
+    );
+}
+
 /// An install that is only commented out is not an install.
 #[test]
 fn a_commented_out_install_is_ignored() {
