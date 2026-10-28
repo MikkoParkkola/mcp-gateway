@@ -168,6 +168,12 @@ pub(crate) fn note_dispatched(_step: (&str, &str)) {
 /// call did not run. Any other failure may follow an attempt that reached
 /// the backend: a retry can end in a connect failure after a timeout, so the
 /// broader "cannot have acted" list is not used here.
+///
+/// Known gap: a backend retired between retry attempts raises
+/// `BackendNotFound` on the later attempt (backend/lifecycle.rs), so a call
+/// whose first attempt reached the backend can still read as not run. The
+/// retry loops are to carry "an attempt may have reached the backend" out as
+/// a non-pre-dispatch error; this check then becomes `is_pre_dispatch()`.
 pub(crate) fn note_send_error(catalogue_miss: bool) {
     if let Some(call) = current() {
         if catalogue_miss && !call.failed_after_send.load(Ordering::SeqCst) {
