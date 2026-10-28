@@ -125,3 +125,59 @@ fn a_rate_loosened_keeps_the_usage() {
     );
     assert!(!admitted(&after), "the loosened key started a fresh window");
 }
+
+/// No input from outside grows the store: 200 random bearer tokens through
+/// the real middleware are refused and leave no bucket and no breaker. The
+/// configured key then makes exactly one of each (control).
+#[tokio::test]
+async fn rejected_credentials_create_no_store_entry() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode, header};
+    use tower::Service;
+
+    use crate::gateway::auth::{AuthState, DashboardBootstrap, auth_middleware};
+
+    let runtime = Arc::new(AuthRuntime::default());
+    let state = AuthState {
+        auth_config: Arc::new(built_over(&runtime)),
+        key_server: None,
+        dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
+        tls_enabled: false,
+        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            crate::config::Config::default(),
+        )),
+        agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
+    };
+    let mut router = axum::Router::new()
+        .route(
+            "/protected",
+            axum::routing::get(|| async { StatusCode::OK }),
+        )
+        .layer(axum::middleware::from_fn_with_state(state, auth_middleware));
+    let mut call = |bearer: &str| {
+        let request = Request::builder()
+            .uri("/protected")
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}"))
+            .body(Body::empty())
+            .expect("request builds");
+        router.call(request)
+    };
+
+    for i in 0..200 {
+        let response = call(&format!("random-token-{i}-not-configured"))
+            .await
+            .expect("infallible");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "token {i}");
+    }
+    assert_eq!(runtime.buckets.len(), 0, "a refused token made a bucket");
+    assert_eq!(runtime.breakers.len(), 0, "a refused token made a breaker");
+
+    let response = call(SECRET).await.expect("infallible");
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "premise: the key authenticates"
+    );
+    assert_eq!(runtime.buckets.len(), 1, "the key's bucket");
+    assert_eq!(runtime.breakers.len(), 1, "the key's breaker");
+}
