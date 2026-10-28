@@ -62,7 +62,7 @@ fn t3_a_chain_receipt_on_an_unreadable_clock_is_refused_as_a_clock_refusal() {
     let _clock = crate::clock::test_clock::before_epoch();
     let outcome = meta.chain_receive(
         (ChainMode::Require, &origins, Some(KEY_ID)),
-        &mut result,
+        (&mut result, None),
         Some(nonce),
         &slot,
     );

@@ -34,43 +34,150 @@ const DRAIN: std::time::Duration = std::time::Duration::from_secs(1);
 /// finishes (a grandchild holding the pipe) can still be read after abort.
 pub(super) type StderrTail = std::sync::Arc<parking_lot::Mutex<VecDeque<Vec<u8>>>>;
 
+/// The read loop over one start's stderr, shared between the task that
+/// drives it while the start runs and a failed start that drives it itself.
+type ReadLoop = futures::future::Shared<futures::future::BoxFuture<'static, ()>>;
+
+/// One start's stderr reader.
+///
+/// A failed start does not wait for the task: a loaded host may not run it in
+/// time. It polls the same read loop itself, so whatever the child wrote is
+/// read before the window can close. The loop is never cancelled mid-read,
+/// so a partial line and the key-block state stay inside it.
+pub(super) struct StderrReader {
+    task: tokio::task::JoinHandle<()>,
+    read_loop: ReadLoop,
+    pub(super) tail: StderrTail,
+}
+
+impl StderrReader {
+    /// Read the child's stderr to its end, within `window`; past it, something
+    /// still holds the pipe, and what was read is kept.
+    ///
+    /// The task lets go of the loop first, so the drain is its only reader: a
+    /// poll in flight on another worker ends before the drain's first poll,
+    /// and nothing reads into the tail once this returns.
+    pub(super) async fn drain(self, window: std::time::Duration) {
+        self.task.abort();
+        let _ = self.task.await;
+        // `timeout` polls the read loop before its clock, so the clock wins
+        // only once a read has found the pipe empty.
+        let _ = tokio::time::timeout(window, self.read_loop).await;
+    }
+}
+
+/// Test-only: where the reader task is held on an OS thread, and for how long,
+/// as a loaded host can hold it. The read loop itself is never held.
+#[cfg(all(test, unix))]
+#[derive(Clone, Copy)]
+pub(super) enum ReaderHold {
+    /// Before it first polls the loop: it has never run.
+    BeforeFirstRead(std::time::Duration),
+    /// Once the loop has stored a line and waits for more: it ran, then starved.
+    AfterFirstLine(std::time::Duration),
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// The hold for a stderr reader spawned on this thread.
+    pub(super) static STDERR_READER_HOLD: std::cell::Cell<Option<ReaderHold>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Holds the task on an OS thread, so its runtime keeps running.
+#[cfg(all(test, unix))]
+async fn hold_reader(hold: std::time::Duration) {
+    let _ = tokio::task::spawn_blocking(move || std::thread::sleep(hold)).await;
+}
+
+/// The task's side of [`ReaderHold`]: returns once the task should drive the
+/// loop as usual, or `true` if the loop already ended while it was watched.
+#[cfg(all(test, unix))]
+async fn held_task(hold: Option<ReaderHold>, read_loop: &mut ReadLoop, tail: &StderrTail) -> bool {
+    use futures::FutureExt as _;
+    match hold {
+        None => false,
+        Some(ReaderHold::BeforeFirstRead(hold)) => {
+            hold_reader(hold).await;
+            false
+        }
+        Some(ReaderHold::AfterFirstLine(hold)) => {
+            let ended = std::future::poll_fn(|cx| {
+                if read_loop.poll_unpin(cx).is_ready() {
+                    return std::task::Poll::Ready(true);
+                }
+                if tail.lock().is_empty() {
+                    std::task::Poll::Pending
+                } else {
+                    std::task::Poll::Ready(false)
+                }
+            })
+            .await;
+            if !ended {
+                hold_reader(hold).await;
+            }
+            ended
+        }
+    }
+}
+
 /// Read stderr to its end into a bounded tail.
 ///
 /// `read_until`, not `lines()`: a child killed mid-write leaves a last line
 /// with no newline, and that is often the one that names the cause.
-pub(super) fn spawn_stderr_tail(
-    stderr: ChildStderr,
-    command: String,
-) -> (tokio::task::JoinHandle<()>, StderrTail) {
+pub(super) fn spawn_stderr_tail(stderr: ChildStderr, command: String) -> StderrReader {
+    use futures::FutureExt as _;
     let tail = StderrTail::default();
-    let shared = std::sync::Arc::clone(&tail);
+    let read_loop = read_to_end(stderr, command, std::sync::Arc::clone(&tail))
+        .boxed()
+        .shared();
+    #[cfg(all(test, unix))]
+    let hold = STDERR_READER_HOLD.with(std::cell::Cell::get);
+    // Mutable only for the test hold, which polls it in place.
+    #[cfg_attr(not(all(test, unix)), allow(unused_mut))]
+    let mut driven = read_loop.clone();
+    #[cfg(all(test, unix))]
+    let watched = std::sync::Arc::clone(&tail);
     let task = tokio::spawn(async move {
-        let mut reader = BufReader::new(stderr);
-        let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
-        let mut in_block = false;
-        loop {
-            buf.clear();
-            let limit = RAW_LINE_BYTES as u64;
-            match (&mut reader).take(limit).read_until(b'\n', &mut buf).await {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    debug!(command = %command, line_len = n, "Received line from stderr");
-                    {
-                        let mut tail = shared.lock();
-                        if tail.len() == TAIL_LINES {
-                            tail.pop_front();
-                        }
-                        tail.push_back(sanitize::captured_line(&mut in_block, &buf));
+        #[cfg(all(test, unix))]
+        if held_task(hold, &mut driven, &watched).await {
+            return;
+        }
+        driven.await;
+    });
+    StderrReader {
+        task,
+        read_loop,
+        tail,
+    }
+}
+
+/// The read loop: every line into `shared`, until EOF or an error.
+async fn read_to_end(stderr: ChildStderr, command: String, shared: StderrTail) {
+    let mut reader = BufReader::new(stderr);
+    let mut buf = Vec::with_capacity(RAW_LINE_BYTES);
+    let mut in_block = false;
+    loop {
+        buf.clear();
+        let limit = RAW_LINE_BYTES as u64;
+        match (&mut reader).take(limit).read_until(b'\n', &mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                debug!(command = %command, line_len = n, "Received line from stderr");
+                {
+                    let mut tail = shared.lock();
+                    if tail.len() == TAIL_LINES {
+                        tail.pop_front();
                     }
-                    // Published first, so a held pipe cannot lose the prefix.
-                    if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
-                        discard_rest_of_line(&mut reader, &mut in_block, &buf).await;
-                    }
+                    tail.push_back(sanitize::captured_line(&mut in_block, &buf));
+                }
+                // Published first, so a held pipe cannot lose the prefix.
+                if n == RAW_LINE_BYTES && !buf.ends_with(b"\n") {
+                    discard_rest_of_line(&mut reader, &mut in_block, &buf).await;
                 }
             }
         }
-    });
-    (task, tail)
+    }
 }
 
 /// Skip to the end of an overlong line in bounded chunks, still tracking key
@@ -281,26 +388,24 @@ impl StdioTransport {
         DRAIN
     }
 
-    /// How long the start waits for the stderr reader's last bytes:
-    /// [`DRAIN`], or the test-only stderr bound. Separate from
-    /// [`Self::exit_window`] so a row can keep this window real (a grandchild
-    /// holding the pipe) while the exit wait stays long (MIK-8360).
+    /// How long a failed start reads the child's last stderr bytes: `path`'s
+    /// window ([`DRAIN`] here, a shorter one on the late path), or the
+    /// test-only stderr bound. Separate from [`Self::exit_window`] so a row
+    /// can keep this window real (a grandchild holding the pipe) while the
+    /// exit wait stays long (MIK-8360).
     #[cfg_attr(not(test), allow(clippy::unused_self))]
-    fn stderr_window(&self) -> std::time::Duration {
+    pub(super) fn stderr_window(&self, path: std::time::Duration) -> std::time::Duration {
         #[cfg(test)]
         if let Some(bound) = *self.stderr_bound.lock() {
             return bound;
         }
-        DRAIN
+        path
     }
 
     /// Turn an early exit into its report: the exit status, class and needle,
     /// for the caller and the log alike. Kills a child that closed stdout but
     /// is still running.
-    pub(super) async fn early_exit_error(
-        &self,
-        stderr_tail: (tokio::task::JoinHandle<()>, StderrTail),
-    ) -> Error {
+    pub(super) async fn early_exit_error(&self, stderr: StderrReader) -> Error {
         // Wait for the exit without reaping, then end the group (any
         // descendant left in it) and reap, in that order (MIK-8080). The tree
         // stays in the slot while waiting, so a retire can still reach it, and
@@ -315,15 +420,8 @@ impl StdioTransport {
         };
         // Kept for classifying the failure (#1759).
         self.failure.record_exit(status);
-        let (reader, tail) = stderr_tail;
-        let abort = reader.abort_handle();
-        if tokio::time::timeout(self.stderr_window(), reader)
-            .await
-            .is_err()
-        {
-            // Something still holds the pipe; keep what was read so far.
-            abort.abort();
-        }
+        let tail = std::sync::Arc::clone(&stderr.tail);
+        stderr.drain(self.stderr_window(DRAIN)).await;
         let (class, needle) = {
             let tail = tail.lock();
             *self.start.shown_stderr.lock() = sanitize::sanitize(&tail);
