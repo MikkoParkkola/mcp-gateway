@@ -434,3 +434,42 @@ async fn lease_t5_after_a_restart_the_row_needs_a_credential_and_no_file_holds_t
         );
     }
 }
+
+/// LEASE-T4 end to end: a backend that answers the leased token with 401
+/// wipes the lease at once, through the listener's own send (not a direct
+/// call), and the admin view shows the row's credential as rejected.
+#[tokio::test]
+async fn lease_t4_a_401_from_the_backend_wipes_the_lease_and_shows_it_rejected() {
+    let (a, b) = (token(Some(in_an_hour())), token(Some(in_an_hour() + 60)));
+    let mut peer = two_token_peer([a.to_string(), b.to_string()]).await;
+    let f = fixture_with(&format!(
+        "backends:\n  pt:\n    http_url: {}\n    streamable_http: true\n    \
+         identity_propagation:\n      \
+         strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n",
+        peer.url
+    ));
+    let handle = subscribe(&f, "p", "pt", "p");
+    let _listening = parked_listener(&f).await;
+    // A token the backend does not accept: its first request is refused.
+    lease_as(&f, &handle, token(Some(in_an_hour() + 120))).await;
+    let key = lease_key(&f, "p");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while f.hub.leases.state(&key).await != LeaseState::CredentialRejected
+        && tokio::time::Instant::now() < deadline
+    {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert_eq!(
+        f.hub.leases.state(&key).await,
+        LeaseState::CredentialRejected,
+        "the backend's 401 wiped the lease"
+    );
+    assert_eq!(f.hub.leases.held_generation(&key), None);
+    let listed = f.hub.list_leases().await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["state"], "credential_rejected");
+    assert!(
+        peer.streams.try_recv().is_err(),
+        "no stream opened under it"
+    );
+}
