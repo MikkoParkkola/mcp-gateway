@@ -115,6 +115,20 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
     );
 }
 
+/// Serves `app` on a fresh loopback port and returns the port.
+async fn serve(app: axum::Router) -> u16 {
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    port
+}
+
 /// One capability send to a loopback listener that redirects to `location`,
 /// in its own delivery cell: the error and the `response_effect` it records.
 async fn redirected(location: &'static str) -> (crate::Error, Option<serde_json::Value>) {
@@ -128,15 +142,7 @@ async fn redirected(location: &'static str) -> (crate::Error, Option<serde_json:
             )
         }),
     );
-    let listener = tokio::time::timeout(
-        crate::test_wait::HANG_BOUND,
-        tokio::net::TcpListener::bind("127.0.0.1:0"),
-    )
-    .await
-    .expect("bounded")
-    .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move { axum::serve(listener, app).await });
+    let port = serve(app).await;
     let client = super::client::build(None);
     let health = crate::failsafe::HealthTracker::new("test");
     let url = format!("http://127.0.0.1:{port}/");
@@ -205,15 +211,7 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
             )
         }),
     );
-    let listener = tokio::time::timeout(
-        crate::test_wait::HANG_BOUND,
-        tokio::net::TcpListener::bind("127.0.0.1:0"),
-    )
-    .await
-    .expect("bounded")
-    .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move { axum::serve(listener, app).await });
+    let port = serve(app).await;
     let client = super::client::build(None);
     let health = crate::failsafe::HealthTracker::new("test");
     let body = reqwest::Body::wrap_stream(futures::stream::once(async {
@@ -258,15 +256,7 @@ async fn a_single_attempt_rejected_redirect_keeps_the_health_mark() {
             )
         }),
     );
-    let listener = tokio::time::timeout(
-        crate::test_wait::HANG_BOUND,
-        tokio::net::TcpListener::bind("127.0.0.1:0"),
-    )
-    .await
-    .expect("bounded")
-    .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move { axum::serve(listener, app).await });
+    let port = serve(app).await;
     let client = super::client::build(None);
     let health = crate::failsafe::HealthTracker::new("test");
     for _ in 0..3 {
