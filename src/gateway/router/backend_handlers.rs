@@ -232,9 +232,10 @@ async fn guard_tool_call(
     // gateway refused this call, and the record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     let lens = crate::backend::Lens::Withheld;
+    let no_credential = crate::transport::LentCredential::default();
     let answered = key_check::key_refusal(
         backend,
-        ((None, &crate::transport::LentCredential::default()), failed),
+        ((None, &no_credential), failed),
         params,
         (id, lens),
     );
