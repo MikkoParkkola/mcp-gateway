@@ -291,14 +291,33 @@ async fn lease_t7_a_replace_bumps_the_generation_before_it_drains() {
         tokio::task::yield_now().await;
     }
     assert!(!replace.is_finished(), "premise: the drain is held open");
-    assert_ne!(
+    // Between the old lease and the new no lease is held, so a delivery
+    // check and a listener start both fail closed (credential needed).
+    assert_eq!(
         s.held_generation(&key("p")),
-        Some(old),
-        "while the old lease drains, its generation no longer reads as live"
+        None,
+        "while the old lease drains, no generation reads as live"
     );
+    assert!(!s.is_held(&key("p")), "no lease is held in the window");
+    // A send that asks in the window waits out the drain, then is refused:
+    // it neither runs nor hangs.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let late = {
+        let (s, calls) = (s.clone(), calls.clone());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(async move {
+            s.with_credential(&key("p"), old, recording(seen, calls))
+                .await
+        })
+    };
     drop(in_flight);
     let new = replace.await.unwrap().unwrap();
     assert_eq!(s.held_generation(&key("p")), Some(new));
+    assert!(
+        late.await.unwrap().is_err(),
+        "the old generation is refused"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "and never sends");
 }
 
 /// LEASE-T7 for a wipe: `wipe_by` wipes the lease of generation `g` while a
