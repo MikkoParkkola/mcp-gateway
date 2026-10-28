@@ -97,7 +97,7 @@ impl A2aClient {
     pub(crate) fn start_call(&self) -> Vec<(String, String)> {
         self.lender
             .as_ref()
-            .map(|lender| lender.starter_headers())
+            .map(|lender| lender.start_call())
             .unwrap_or_default()
     }
 

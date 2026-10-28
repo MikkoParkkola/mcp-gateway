@@ -112,6 +112,10 @@ pub(crate) struct Snapshot {
     pub(crate) refused: Option<Refusal>,
 }
 
+/// The name of the [`Lender::start_call`] marker: a slot start's own send,
+/// resolved to the starter at each send. Never sent.
+const START_MARKER: &str = "x-mcp-gateway-slot-start";
+
 /// The loans of one slot, newest last.
 #[derive(Default)]
 pub(crate) struct Lender {
@@ -185,14 +189,20 @@ impl Lender {
         waiting.into_iter().find_map(|id| self.loan(id))
     }
 
-    /// The credential headers of the dispatch whose slot start is running,
-    /// for that start's own sends (connect, era probe, handshake, the A2A
-    /// card fetch) to carry explicitly; empty when no start runs. Only a
-    /// lent-only slot lends, so any other slot's start gets none.
-    pub(crate) fn starter_headers(&self) -> Vec<(String, String)> {
-        self.starter()
-            .map(|starter| starter.headers.to_vec())
-            .unwrap_or_default()
+    /// The call a slot start's own sends carry (connect, era probe,
+    /// handshake, the A2A card fetch) while a dispatch waits on the start; an
+    /// empty call when none does. It names no credential: [`Self::lent_for`]
+    /// resolves it at each send to the oldest dispatch still waiting, so a
+    /// starter cancelled mid-start hands the remaining sends to the next one.
+    /// Only a lent-only slot lends, so any other slot's start gets an empty
+    /// call. The marker never reaches the wire: a lent-only send carries only
+    /// its loan's headers and the call's `Mcp-Param-*` mirrors.
+    pub(crate) fn start_call(&self) -> Vec<(String, String)> {
+        if self.starter().is_some() {
+            vec![(START_MARKER.to_owned(), String::new())]
+        } else {
+            Vec::new()
+        }
     }
 
     /// The live loan `id`, if its dispatch still runs.
@@ -207,7 +217,7 @@ impl Lender {
     /// The headers a lent-only send carries: the loan the call's own
     /// credential headers select, after every loan matching them passes its
     /// check. A call with no credential headers is refused: a slot start's own
-    /// sends carry [`Self::starter_headers`] explicitly, so no other send can
+    /// sends carry [`Self::start_call`] explicitly, so no other send can
     /// borrow the starting dispatch's loan. Snapshots are owned, so no lock is
     /// held across a check. Every transport that sends on a lent-only slot
     /// picks its loan here.
@@ -220,7 +230,11 @@ impl Lender {
         &self,
         call: &[(String, String)],
     ) -> Result<Vec<(String, String)>> {
-        let loans = self.matching_all(call);
+        let loans = if matches!(call, [(name, _)] if name == START_MARKER) {
+            self.starter().into_iter().collect()
+        } else {
+            self.matching_all(call)
+        };
         let Some(first) = loans.first() else {
             return Err(counted_refusal(
                 "unlent",
@@ -441,7 +455,7 @@ mod tests {
     }
 
     /// While a start runs, a send that carries no credential is refused: only
-    /// the start's own sends, passing [`Lender::starter_headers`] explicitly,
+    /// the start's own sends, passing [`Lender::start_call`] explicitly,
     /// go out as the starting dispatch.
     #[test]
     fn a_send_without_a_credential_never_borrows_the_starting_loan() {
@@ -466,11 +480,41 @@ mod tests {
                 "a mirror-only call borrowed the starting dispatch's loan"
             );
             assert_eq!(
-                lender.lent_for(&lender.starter_headers()).await.ok(),
+                lender.lent_for(&lender.start_call()).await.ok(),
                 Some(headers("one")),
                 "the start's own send, carrying the starter explicitly, goes out"
             );
         });
+    }
+
+    /// A start's call is resolved at each send: captured while the first
+    /// dispatch was the starter, it sends as the next one once the first is
+    /// cancelled mid-start, never as the ended loan.
+    #[test]
+    fn a_start_call_follows_the_starter_cancelled_mid_start() {
+        let lender = Arc::new(Lender::default());
+        let checked = |value: &str| LentCredential {
+            headers: headers(value),
+            check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
+        };
+        let first = lender.lend(checked("one"));
+        let second = lender.lend(checked("two"));
+        let first_waits = lender.starting(first.id());
+        let _second_waits = lender.starting(second.id());
+        let call = lender.start_call();
+        drop(first_waits);
+        drop(first);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+
+        let sent = runtime.block_on(lender.lent_for(&call)).ok();
+
+        assert_eq!(
+            sent,
+            Some(headers("two")),
+            "the start sent as the next waiter"
+        );
     }
 
     /// A refusal mark only escalates: ThisLoan then Definitive evicts once, and

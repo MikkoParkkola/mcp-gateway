@@ -279,7 +279,7 @@ impl Backend {
         entry: &PooledEntry,
     ) -> crate::protocol::era::DetachedProbe {
         let timeout = self.probe_timeout();
-        let call = entry.lender.starter_headers();
+        let call = entry.lender.start_call();
         crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout, &call)).await
     }
 
@@ -309,7 +309,7 @@ impl Backend {
         // A revocation removes a per-user slot without its start lock, so the slot this
         // start serves may be retired before the discard or before the install (MIK-7643).
         // The start's own probe, sent as the dispatch whose start this is.
-        let call = entry.lender.starter_headers();
+        let call = entry.lender.start_call();
         entry
             .era
             .restart_while_serving(

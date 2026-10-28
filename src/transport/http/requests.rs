@@ -237,13 +237,14 @@ impl HttpTransport {
         lender.lent_for(call).await
     }
 
-    /// The headers this transport's slot start sends as: the starting
-    /// dispatch's loan ([`Lender::starter_headers`](crate::transport::Lender::starter_headers)),
-    /// empty on a slot that lends nothing. Only the start's own sends pass it.
+    /// The call this transport's slot start sends with: resolved at each send
+    /// to the oldest dispatch still waiting on the start
+    /// ([`Lender::start_call`](crate::transport::Lender::start_call)), empty on
+    /// a slot that lends nothing. Only the start's own sends pass it.
     pub(crate) fn start_call(&self) -> Vec<(String, String)> {
         self.lender
             .get()
-            .map(|lender| lender.starter_headers())
+            .map(|lender| lender.start_call())
             .unwrap_or_default()
     }
 
