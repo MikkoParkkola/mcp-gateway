@@ -96,4 +96,6 @@ owned_routes! {
     ACCOUNTS_COMPLETE_SCRIPT = "/accounts/v1/assets/complete.js",
     UI_OVERVIEW = "/ui/api/overview",
     UI_REFUSALS = "/ui/api/refusals",
+    /// The UI's live event feed (server-sent events).
+    UI_STREAM = "/ui/api/stream",
 }

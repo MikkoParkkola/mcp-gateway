@@ -27,6 +27,7 @@ mod preview_identity;
 mod refusals;
 pub(crate) mod session;
 mod shell;
+pub(crate) mod stream;
 
 use crate::gateway::routes;
 use std::sync::Arc;
@@ -87,7 +88,8 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(events::events_router())
         .merge(import::import_router())
         .merge(discovery::discovery_router())
-        .merge(history::history_router());
+        .merge(history::history_router())
+        .merge(stream::stream_router());
 
     #[cfg(feature = "cost-governance")]
     let router = router.route(routes::UI_COSTS, get(costs));
