@@ -4,7 +4,7 @@
 // Helpers for the shell specs. Test-only page registrations go through the
 // shell module the page itself loaded (same URL, so the same module
 // instance); nothing test-only ships in the shell.
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { expect } from './base.mjs';
 
@@ -53,9 +53,41 @@ export async function withFixturePages(page, { title, probes } = {}) {
   await page.context().addCookies(cookies);
 }
 
+/** The tooltip module's hashed asset path, read from the shell directory; throws while none exists. */
+export function tooltipModuleUrl() {
+  const dir = fileURLToPath(new URL('../../src/gateway/ui/shell/', import.meta.url));
+  const name = readdirSync(dir).find((f) => /^tooltip\.[0-9a-f]{12}\.js$/.test(f));
+  if (!name) throw new Error('no tooltip module (tooltip.<hash>.js) in src/gateway/ui/shell');
+  return `/ui/assets/${name}`;
+}
+
 /** Wait until the shell has rendered something into its content area. */
 export async function shellReady(page) {
   await page.waitForSelector('#content [data-rendered]');
+}
+
+/**
+ * The screens' placement check (lead ruling on tooltips, 2026-10-26): open
+ * the tooltip for a copy id by focusing its trigger, and return every visible
+ * focusable control outside that tooltip whose box intersects the open popup.
+ * A screen's journey test expects it to be empty for each trigger it draws:
+ *   expect(await tooltipCoversNothing(page, 'servers.status.paused')).toEqual([]);
+ */
+export async function tooltipCoversNothing(page, id) {
+  await page.locator(`.has-tip[data-tip="${id}"] button`).focus();
+  return page.evaluate(async (id) => {
+    await Promise.all(document.getAnimations().map((a) => a.finished));
+    const wrap = document.querySelector(`.has-tip[data-tip="${id}"]`);
+    const pop = wrap.querySelector('.tip').getBoundingClientRect();
+    const sel = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+    return [...document.querySelectorAll(sel)]
+      .filter((e) => !wrap.contains(e) && e.checkVisibility() && !e.disabled)
+      .filter((e) => {
+        const r = e.getBoundingClientRect();
+        return r.left < pop.right && pop.left < r.right && r.top < pop.bottom && pop.top < r.bottom;
+      })
+      .map((e) => `${e.tagName.toLowerCase()} "${(e.getAttribute('aria-label') ?? e.textContent).trim().slice(0, 40)}"`);
+  }, id);
 }
 
 /** The ServerState variants, read from the gateway's own source, in snake_case. */
