@@ -436,3 +436,134 @@ async fn a_listing_whose_account_check_is_cut_short_withholds_http() {
         "an unchecked listing served the old grant's schema: {second}"
     );
 }
+
+/// A cold caller's claim whose credential release fails leaves only the
+/// retry backoff behind, and no fill runs under it: neither that listing nor
+/// the next one inside the backoff waits out the backend's fill bound, and
+/// nothing is fetched meanwhile.
+#[tokio::test(start_paused = true)]
+async fn a_listing_after_a_failed_credential_lookup_answers_at_once_http() {
+    let fx = fixture().await;
+    let bound = fill_bound(&fx, BACKEND);
+    let floor = std::time::Duration::from_secs(1);
+    assert!(bound > floor * 2, "premise: a fill bound worth waiting on");
+    fx.gateway.fail_release_for_test();
+    let started = tokio::time::Instant::now();
+    let first = rpc(&fx, 1, "tools/list", json!({})).await;
+    let first_took = started.elapsed();
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    let id = crate::personal_accounts::identity::Principal::SoleOperator.stable_actor_id();
+    assert!(
+        backend.cold_lease_remaining(&id).is_some(),
+        "premise: the claim was made and its lease stands as the backoff"
+    );
+    assert_eq!(fx.gateway.releases(), 0, "premise: the lookup failed");
+    let started = tokio::time::Instant::now();
+    let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    let second_took = started.elapsed();
+    assert!(
+        first_took < floor && second_took < floor,
+        "a listing waited on a failed lookup's backoff: {first_took:?} then \
+         {second_took:?}, against a {bound:?} fill bound"
+    );
+    for answer in [&first, &second] {
+        assert!(
+            surfaced_on(answer, BACKEND).is_empty(),
+            "no view of the caller's own was filled: {answer}"
+        );
+    }
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        0,
+        "nothing fetched in the backoff"
+    );
+}
+
+/// A listing waiting on another listing's running claim is woken as that
+/// claim's credential lookup fails: it answers within the floor of the
+/// failure, not at the backend's fill bound.
+#[tokio::test(start_paused = true)]
+async fn a_listing_waiting_on_a_lookup_that_fails_is_woken_at_once_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    let floor = std::time::Duration::from_secs(1);
+    assert!(bound > floor * 2, "premise: a fill bound worth waiting on");
+    fx.gateway.fail_release_for_test();
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    // The first listing wins the claim and is held before its lookup.
+    let (reached, release) = backend.cold_winner.arm();
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    // The clock only moves once every task is idle: the second listing is
+    // parked on the first one's running lease by then.
+    tokio::time::sleep(floor / 10).await;
+    assert!(!second.is_finished(), "premise: the second listing waits");
+    let failed_at = tokio::time::Instant::now();
+    release.notify_one();
+    let second = second.await.expect("the second listing");
+    let woke_after = failed_at.elapsed();
+    first.await.expect("the first listing");
+    assert!(
+        woke_after < floor,
+        "a waiter slept {woke_after:?} past a failed lookup, against a {bound:?} fill bound"
+    );
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "no view was filled: {second}"
+    );
+    assert_eq!(fx.gateway.releases(), 0, "premise: the lookup failed");
+}
+
+/// A listing waiting on another listing's running claim is woken when that
+/// claim's request is cancelled mid-lookup (its attempt dropped, not
+/// failed), and the claim's lease still stands as the retry backoff.
+#[tokio::test(start_paused = true)]
+async fn a_listing_waiting_on_a_cancelled_claim_is_woken_at_once_http() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    let floor = std::time::Duration::from_secs(1);
+    assert!(bound > floor * 2, "premise: a fill bound worth waiting on");
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    let (reached, _held) = backend.cold_winner.arm();
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let second = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(floor / 10).await;
+    assert!(!second.is_finished(), "premise: the second listing waits");
+    let cancelled_at = tokio::time::Instant::now();
+    first.abort();
+    let _ = first.await;
+    let second = second.await.expect("the second listing");
+    let woke_after = cancelled_at.elapsed();
+    assert!(
+        woke_after < floor,
+        "a waiter slept {woke_after:?} past a cancelled claim, against a {bound:?} fill bound"
+    );
+    assert!(
+        surfaced_on(&second, BACKEND).is_empty(),
+        "no view was filled: {second}"
+    );
+    let id = crate::personal_accounts::identity::Principal::SoleOperator.stable_actor_id();
+    assert!(
+        backend.cold_lease_remaining(&id).is_some(),
+        "the cancelled claim's lease still stands as the backoff"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        0,
+        "nothing fetched in the backoff"
+    );
+}
