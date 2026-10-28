@@ -838,7 +838,7 @@ export async function refreshCounts() {
     const reply = await api('/ui/api/decisions/count');
     next = Number.isInteger(reply?.count) && reply.count >= 0 ? reply.count : 'unavailable';
   } catch (err) {
-    // A 404: the route ships with the To do queue (MIK-8868), so until then no badge.
+    // A 404: the route ships with the To do queue, so until then no badge.
     // Anything else failed and reads "?".
     next = err instanceof ApiError && err.status === 404 ? null : 'unavailable';
   }
