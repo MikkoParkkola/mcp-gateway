@@ -58,10 +58,7 @@ fn a_burst_matches_governor() {
 fn a_steady_stream_at_twice_the_rate_matches_governor() {
     for n in RATES {
         let step = (interval(rate(n)) / 2).max(1);
-        let schedule: Vec<u64> = (0..)
-            .map(|i| i * step)
-            .take_while(|&t| t <= 3 * MINUTE)
-            .collect();
+        let schedule: Vec<u64> = (0..=3 * MINUTE / step).map(|i| i * step).collect();
         let (theirs, ours) = both(n, &schedule);
         assert_eq!(ours, theirs, "rate {n}");
     }
@@ -184,7 +181,7 @@ fn cost_against_governor() {
             scope.spawn(|| {
                 (0..CHECKS / THREADS).for_each(|_| {
                     let _ = theirs.check();
-                })
+                });
             });
         }
     });
@@ -197,7 +194,7 @@ fn cost_against_governor() {
             scope.spawn(|| {
                 (0..CHECKS / THREADS).for_each(|_| {
                     let _ = ours.check_at(max, super::now_ns());
-                })
+                });
             });
         }
     });

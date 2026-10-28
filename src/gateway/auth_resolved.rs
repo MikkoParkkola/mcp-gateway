@@ -137,7 +137,9 @@ impl ResolvedAuthConfig {
 
     /// This config with its per-client buckets and breakers in `runtime`, the
     /// store shared by every config built over it, so rebuilding the key list
-    /// resets no client's usage or breaker.
+    /// resets no client's usage or breaker. Test-only until the key list is
+    /// rebuilt on reload, which is its production caller.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn with_runtime(self, runtime: Arc<super::runtime::AuthRuntime>) -> Self {
         Self { runtime, ..self }
