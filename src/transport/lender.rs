@@ -117,8 +117,10 @@ pub(crate) struct Snapshot {
 pub(crate) struct Lender {
     loans: parking_lot::Mutex<Vec<Lent>>,
     next: AtomicU64,
-    /// The loan of the dispatch whose start is running on this slot, if any.
-    starter: parking_lot::Mutex<Option<u64>>,
+    /// The loans of the dispatches waiting on this slot's start, oldest
+    /// first: the oldest still waiting is the starter, so a cancelled first
+    /// caller hands the start to the next rather than leaving it loanless.
+    starter: parking_lot::Mutex<Vec<u64>>,
     /// Run once a loan is refused definitively: the slot that owns this
     /// lender evicts itself, whether or not its dispatch is still awaited.
     evict: parking_lot::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -165,24 +167,22 @@ impl Lender {
             .collect()
     }
 
-    /// Mark `loan_id` as the loan of the dispatch whose slot start is running.
-    /// The first caller wins; the guard clears the mark when dropped.
+    /// Queue `loan_id` as a dispatch waiting on this slot's start. The oldest
+    /// one still queued is the starter; the guard leaves the queue when
+    /// dropped.
     pub(crate) fn starting(self: &Arc<Self>, loan_id: u64) -> StartGuard {
-        let mut starter = self.starter.lock();
-        let owns = starter.is_none();
-        if owns {
-            *starter = Some(loan_id);
-        }
+        self.starter.lock().push(loan_id);
         StartGuard {
             lender: Arc::clone(self),
-            id: owns.then_some(loan_id),
+            id: loan_id,
         }
     }
 
-    /// The live loan of the dispatch whose start is running, if any.
+    /// The live loan of the oldest dispatch waiting on this slot's start, if
+    /// any.
     pub(crate) fn starter(&self) -> Option<Snapshot> {
-        let id = (*self.starter.lock())?;
-        self.loan(id)
+        let waiting = self.starter.lock().clone();
+        waiting.into_iter().find_map(|id| self.loan(id))
     }
 
     /// The credential headers of the dispatch whose slot start is running,
@@ -347,14 +347,14 @@ fn canonical(headers: &[(String, String)]) -> Vec<(String, &str)> {
 /// if the mark is still its own.
 pub(crate) struct StartGuard {
     lender: Arc<Lender>,
-    id: Option<u64>,
+    id: u64,
 }
 
 impl Drop for StartGuard {
     fn drop(&mut self) {
-        let mut starter = self.lender.starter.lock();
-        if self.id.is_some() && *starter == self.id {
-            *starter = None;
+        let mut waiting = self.lender.starter.lock();
+        if let Some(at) = waiting.iter().position(|&id| id == self.id) {
+            waiting.remove(at);
         }
     }
 }
@@ -475,6 +475,19 @@ mod tests {
 
     /// A refusal mark only escalates: ThisLoan then Definitive evicts once, and
     /// a ThisLoan after a Definitive leaves it Definitive.
+    /// The first starter cancelled, the next dispatch waiting on the start
+    /// becomes its starter: the start is never left with no loan to send as.
+    #[test]
+    fn a_cancelled_first_starter_hands_the_start_to_the_next() {
+        let lender = Arc::new(Lender::default());
+        let first = lender.lend(&headers("one"));
+        let second = lender.lend(&headers("two"));
+        let first_waits = lender.starting(first.id());
+        let _second_waits = lender.starting(second.id());
+        drop(first_waits);
+        assert_eq!(lender.starter().map(|s| s.id), Some(second.id()));
+    }
+
     #[test]
     fn a_refusal_mark_only_escalates() {
         let lender = Arc::new(Lender::default());
