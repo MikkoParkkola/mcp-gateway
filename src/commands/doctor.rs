@@ -12,7 +12,6 @@ use std::time::Instant;
 
 use mcp_gateway::{
     cli::output::OutputFormat,
-    cli_support::shown,
     config::{Config, TransportConfig},
     discovery::{
         AutoDiscovery,
@@ -625,32 +624,6 @@ fn print_results(results: &[CheckResult], format: OutputFormat) {
     }
 }
 
-/// One result's terminal lines. Its label, detail and hint can carry a
-/// discovered server's name or a configured backend's: JSON keeps them raw,
-/// the terminal gets them escaped, once, here.
-fn human_lines(badge: &str, result: &CheckResult) -> String {
-    use std::fmt::Write as _;
-
-    let mut lines = String::new();
-    // Line by line: a detail's own breaks (the `--show-stderr` section)
-    // stay, and every line's text is escaped, captured stderr included.
-    let detail: Vec<String> = result
-        .detail
-        .split('\n')
-        .map(|line| shown(line).to_string())
-        .collect();
-    let _ = writeln!(
-        lines,
-        "{badge} {}: {}",
-        shown(&result.label),
-        detail.join("\n")
-    );
-    if let Some(hint) = &result.hint {
-        let _ = writeln!(lines, "       Hint: {}", shown(hint));
-    }
-    lines
-}
-
 fn print_results_human(results: &[CheckResult]) {
     use std::fmt::Write as _;
 
@@ -817,6 +790,9 @@ pub(super) fn which_command(bin: &str) -> bool {
 #[path = "doctor/start_stdio.rs"]
 mod start_stdio;
 pub use start_stdio::StdioProbe;
+#[path = "doctor/human.rs"]
+mod human;
+use human::human_lines;
 #[cfg(test)]
 #[path = "doctor/key_digest_tests.rs"]
 mod key_digest_tests;
