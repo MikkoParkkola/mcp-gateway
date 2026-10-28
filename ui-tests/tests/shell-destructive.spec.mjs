@@ -594,6 +594,12 @@ test.describe('code review round 1', () => {
     await action(page).scrollIntoViewIfNeeded();
     const button = await action(page).boundingBox();
     expect(button.y >= 0 && button.y + button.height <= 120).toBe(true);
+    // The typed field and the last consequence can be reached the same way.
+    for (const part of [dialog(page).getByLabel('Type probe to confirm'), dialog(page).locator('li').last()]) {
+      await part.scrollIntoViewIfNeeded();
+      const r = await part.boundingBox();
+      expect(r.y >= 0 && r.y + r.height <= 120).toBe(true);
+    }
   });
 });
 
