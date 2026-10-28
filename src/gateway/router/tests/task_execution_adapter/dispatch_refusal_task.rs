@@ -234,7 +234,9 @@ fn loopback_capability() -> Arc<crate::capability::CapabilityBackend> {
 /// A destination refusal inside the worker's dispatch (a capability whose
 /// endpoint is a loopback literal) is tied to its task as a policy refusal
 /// is: one settlement record saying refused, carrying the SSRF refusal's
-/// code, joined to the worker's dispatch record by trace.
+/// code, joined to the worker's dispatch record by trace. The refusal reaches
+/// the task as an `isError` result, which the settlement reads as refused
+/// only because the dispatch cell says so.
 #[tokio::test]
 async fn a_destination_refusal_in_the_dispatch_is_tied_to_its_task() {
     use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
@@ -249,7 +251,12 @@ async fn a_destination_refusal_in_the_dispatch_is_tied_to_its_task() {
     .await;
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
-    assert_eq!(status_of(&settled), "failed", "premise: refused: {settled}");
+    // The capability's refusal is delivered as an `isError` result, so the
+    // task completes carrying it.
+    assert!(
+        settled.to_string().contains("SSRF blocked"),
+        "premise: the dispatch was refused: {settled}"
+    );
     let _ = delivery_rows(&log).await;
     let entries: Vec<Value> = std::fs::read_to_string(log.path())
         .unwrap_or_default()

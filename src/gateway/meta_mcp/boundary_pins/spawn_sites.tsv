@@ -37,6 +37,7 @@ src/gateway/meta_mcp/discovery_fetch.rs	refresh_stale_backend_tools_in_backgroun
 src/gateway/meta_mcp/events_hook.rs	reconcile_events_after_scan	spawn	1	outside-calls	waits for the initial capability scan then reconciles event routes
 src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	spawn	1	no-refusal-inside	best-effort append of withheld grant-decision records; failure only logged
 src/gateway/meta_mcp/grant_audit.rs	write_owned	spawn	1	raised-at-join	owned append of grant-decision records; a failed append returns through the join and the caller turns it into AuditUnavailable under FailClosed
+src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	spawn	1	no-refusal-inside	fills a caller's listing view during a tools/list warm-up; a listing is not a call, so no call's delivery runs inside
 src/gateway/outbound/audit.rs	submit	spawn	1	no-refusal-inside	audits a tenant_read rejection to the log; the frame is withheld either way
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	spawn	1	no-refusal-inside	auto-subscribes a new SSE session to configured backends' notifications
 src/gateway/server/background.rs	poll_export_source	spawn-blocking	1	no-refusal-inside	reads the on-disk transparency log tail for SIEM export
@@ -74,6 +75,10 @@ src/gateway/task_service/store_targets.rs	claim_upstream_cancel	spawn-blocking	1
 src/gateway/task_service/store_targets.rs	claim_upstream_cancel_undated	spawn-blocking	1	no-refusal-inside	task store claim of an upstream cancel without a date; claim returned to the awaiting caller
 src/gateway/task_service/store_targets.rs	settle_bounded_by	spawn-blocking	1	no-refusal-inside	task store write settling a task within its bound; error returned to the awaiting caller
 src/gateway/ui/activity/mod.rs	blocking	spawn-blocking	1	no-refusal-inside	web UI activity read from disk
+src/gateway/ui/admin_audit.rs	recorded	spawn	1	no-refusal-inside	runs an admin UI handler and writes its admin audit record; no tool call's delivery runs inside
+src/gateway/ui/discovery.rs	list_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers for the discovery list; a read failure returns as a 503
+src/gateway/ui/discovery_adopt.rs	adopt_discovery	spawn-blocking	1	no-refusal-inside	reads gateway.yaml off the async workers before an adopt; a read failure returns as a 503
+src/gateway/ui/discovery_adopt.rs	open_store	spawn-blocking	1	no-refusal-inside	opens the secret store choice and the vault off the async workers; a keychain that does not answer in time is a 503
 src/gateway/ui/mod.rs	config	spawn-blocking	1	no-refusal-inside	web UI config page reads the literal config file for secret references
 src/gateway/ui/preview.rs	preview_backend	spawn	1	outside-calls	web UI backend preview: starts and describes a backend in its own task; not a tool call
 src/idempotency/guard.rs	spawn_cleanup_task	spawn	1	outside-calls	idempotency cache cleanup timer
