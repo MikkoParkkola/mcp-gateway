@@ -24,6 +24,21 @@ export const test = base.extend({
 
 export { expect };
 
+/**
+ * Reach `region` with one Tab from `from`, as a keyboard user does, then
+ * press `key` and expect it to scroll along `axis` ('x' or 'y'). The region
+ * must overflow first, or the check proves nothing.
+ */
+export async function scrollsFromKeyboard(page, { from, region, key, axis }) {
+  const overflows = (el, a) => (a === 'x' ? el.scrollWidth > el.clientWidth : el.scrollHeight > el.clientHeight);
+  expect(await region.evaluate(overflows, axis)).toBe(true);
+  await from.focus();
+  await page.keyboard.press('Tab');
+  await expect(region).toBeFocused();
+  await page.keyboard.press(key);
+  await expect.poll(() => region.evaluate((el, a) => (a === 'x' ? el.scrollLeft : el.scrollTop), axis)).toBeGreaterThan(0);
+}
+
 /** The two widths every screen is checked at (phone and desktop). */
 export const WIDTHS = [390, 1440];
 
