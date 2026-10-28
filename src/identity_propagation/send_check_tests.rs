@@ -8,10 +8,6 @@ use super::*;
 
 const NOW: i64 = 1_800_000_000;
 
-fn now() -> Option<i64> {
-    Some(NOW)
-}
-
 fn jwt(header: &str, claims: &str) -> String {
     format!(
         "{}.{}.sig",
@@ -48,11 +44,11 @@ fn only_a_jwt_with_an_alg_header_yields_an_exp() {
 async fn a_published_expiry_refuses_definitively_once_past() {
     let headers = bearer("opaque");
     assert_eq!(
-        run(expiry_check(Expiry::At(NOW + 60), &headers, now)).await,
+        run(expiry_check(Expiry::At(NOW + 60), &headers, || Some(NOW))).await,
         Ok(())
     );
     assert_eq!(
-        run(expiry_check(Expiry::At(NOW - 1), &headers, now)).await,
+        run(expiry_check(Expiry::At(NOW - 1), &headers, || Some(NOW))).await,
         Err(Refusal::Definitive)
     );
 }
@@ -61,7 +57,10 @@ async fn a_published_expiry_refuses_definitively_once_past() {
 async fn an_unpublished_expiry_is_only_ever_shortened_by_a_jwt_exp() {
     let expired = jwt(r#"{"alg":"RS256"}"#, &format!(r#"{{"exp":{}}}"#, NOW - 1));
     assert_eq!(
-        run(expiry_check(Expiry::Unpublished, &bearer(&expired), now)).await,
+        run(expiry_check(Expiry::Unpublished, &bearer(&expired), || {
+            Some(NOW)
+        }))
+        .await,
         Err(Refusal::ThisLoan),
         "an expired JWT is refused for this loan, never evicting"
     );
@@ -69,7 +68,7 @@ async fn an_unpublished_expiry_is_only_ever_shortened_by_a_jwt_exp() {
         run(expiry_check(
             Expiry::Unpublished,
             &bearer("opaque-token"),
-            now
+            || Some(NOW)
         ))
         .await,
         Ok(()),
@@ -80,7 +79,10 @@ async fn an_unpublished_expiry_is_only_ever_shortened_by_a_jwt_exp() {
         &format!(r#"{{"exp":{}}}"#, NOW + 3600),
     );
     assert_eq!(
-        run(expiry_check(Expiry::At(NOW - 1), &bearer(&far), now)).await,
+        run(expiry_check(Expiry::At(NOW - 1), &bearer(&far), || Some(
+            NOW
+        )))
+        .await,
         Err(Refusal::Definitive),
         "a JWT exp never extends a published expiry"
     );
@@ -90,12 +92,20 @@ async fn an_unpublished_expiry_is_only_ever_shortened_by_a_jwt_exp() {
 async fn a_synthetic_expiry_refuses_this_loan_and_never_evicts() {
     let headers = bearer("opaque");
     assert_eq!(
-        run(expiry_check(Expiry::AtSynthetic(NOW + 60), &headers, now)).await,
+        run(expiry_check(
+            Expiry::AtSynthetic(NOW + 60),
+            &headers,
+            || Some(NOW)
+        ))
+        .await,
         Ok(()),
         "before its synthetic expiry the credential is sent"
     );
     assert_eq!(
-        run(expiry_check(Expiry::AtSynthetic(NOW - 1), &headers, now)).await,
+        run(expiry_check(Expiry::AtSynthetic(NOW - 1), &headers, || {
+            Some(NOW)
+        }))
+        .await,
         Err(Refusal::ThisLoan),
         "a default expiry passing is not the issuer's word: no eviction"
     );

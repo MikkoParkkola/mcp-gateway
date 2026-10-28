@@ -57,7 +57,7 @@ async fn a_lent_only_slot_sends_nothing_with_nothing_lent() {
 #[tokio::test]
 async fn a_lent_only_slot_sends_the_loan_and_no_static_header() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
-    let loan = lender.lend(&checked(subscriber()));
+    let loan = lender.lend(checked(subscriber()));
     for mode in [
         HeaderMode::Request { method: "m" },
         HeaderMode::Notify,
@@ -159,7 +159,7 @@ async fn only_a_lent_only_slot_rides_its_starts_session() {
     ] {
         let (t, lender) = slot("http://localhost", credential);
         set_default_session(&t, "the-starts-session");
-        let _loan = lender.lend(&checked(subscriber()));
+        let _loan = lender.lend(checked(subscriber()));
         let map = t
             .build_mcp_headers(
                 HeaderMode::Request { method: "m" },
@@ -193,7 +193,7 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
     let lender = Arc::new(Lender::default());
     t.mark_per_user_slot(SlotCredential::LentOnly, Arc::clone(&lender));
     let key = vec![("X-Api-Key".to_string(), "subscriber-key".to_string())];
-    let loan = lender.lend(&checked(key.clone()));
+    let loan = lender.lend(checked(key.clone()));
     for mode in [
         HeaderMode::Request { method: "m" },
         HeaderMode::Notify,
@@ -243,7 +243,7 @@ async fn a_subset_of_a_loans_credential_sends_nothing() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
     let mut both = bearer("subscriber");
     both.push(("X-Api-Key".to_string(), "key".to_string()));
-    let _loan = lender.lend(&checked(both));
+    let _loan = lender.lend(checked(both));
     assert!(request_headers(&t, &bearer("subscriber")).await.is_err());
 }
 
@@ -252,8 +252,8 @@ async fn a_subset_of_a_loans_credential_sends_nothing() {
 #[tokio::test]
 async fn a_send_carries_its_own_loan_not_the_newest() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
-    let _a = lender.lend(&checked(bearer("a")));
-    let _b = lender.lend(&checked(bearer("b")));
+    let _a = lender.lend(checked(bearer("a")));
+    let _b = lender.lend(checked(bearer("b")));
     let map = request_headers(&t, &bearer("a")).await.unwrap();
     assert_eq!(map[header::AUTHORIZATION], "Bearer a");
 }
@@ -270,8 +270,8 @@ async fn an_unchecked_loan_is_refused_on_a_lent_only_slot() {
 #[tokio::test]
 async fn a_refused_twin_loan_refuses_the_send() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
-    let first = lender.lend(&checked(subscriber()));
-    let _second = lender.lend(&checked(subscriber()));
+    let first = lender.lend(checked(subscriber()));
+    let _second = lender.lend(checked(subscriber()));
     assert!(request_headers(&t, &subscriber()).await.is_ok());
     lender.refuse(first.id(), crate::transport::Refusal::ThisLoan);
     assert!(request_headers(&t, &subscriber()).await.is_err());
