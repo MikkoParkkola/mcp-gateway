@@ -441,3 +441,25 @@ fn a_changed_capability_carries_the_inferred_risk_class() {
     assert_eq!(item["scan"], serde_json::Value::Null, "{item}");
     assert_eq!(item["scan_reason"], "unparsed", "{item}");
 }
+
+#[test]
+fn scanning_a_changed_capability_makes_no_credential_lookup() {
+    use crate::secrets::lookup_probe::calls;
+
+    // Control: the probe counts a resolver call on this thread.
+    let before = calls();
+    let _ = crate::secrets::SecretResolver::new().resolve("{env.DECISIONS_PROBE_UNSET}");
+    assert_eq!(calls(), before + 1, "the probe counts a lookup");
+
+    let content = "name: probe_refs\ndescription: Holds references\nauth:\n  required: true\n  type: bearer\n  key: keychain:decisions-probe\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://{env.DECISIONS_PROBE_HOST}/v1\n      path: /items\n".to_string();
+    let start = calls();
+    let mut set = ready();
+    set.set_capability_changes(
+        "caps",
+        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("probe_refs")) }],
+        at(1),
+    );
+    let item = &set.list()[0];
+    assert!(!item["scan"].is_null(), "the scan parsed and ran: {item}");
+    assert_eq!(calls(), start, "no secret or env reference was looked up");
+}
