@@ -561,10 +561,8 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                let slot =
-                    matches!(key, PoolKey::PerUser { .. }).then(|| self.per_user_slot_credential());
-                let (statics, oauth_client) =
-                    self.slot_gateway_credentials(slot, http_url, built_under)?;
+                let (slot, statics, oauth_client) =
+                    self.slot_gateway_credentials(key, http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
                     statics,

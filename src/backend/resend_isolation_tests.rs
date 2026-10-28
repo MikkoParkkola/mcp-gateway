@@ -164,11 +164,17 @@ async fn one_identity_fill_does_not_decide_another_identity_resend_verdict() {
     let backend = per_user_backend();
 
     backend
-        .get_tools_for_binding(Some("alpha"), &[])
+        .get_tools_for_binding(
+            Some("alpha"),
+            &[("Authorization".to_owned(), "Bearer alpha".to_owned())],
+        )
         .await
         .expect("alpha catalogue fill");
     backend
-        .get_tools_for_binding(Some("beta"), &[])
+        .get_tools_for_binding(
+            Some("beta"),
+            &[("Authorization".to_owned(), "Bearer beta".to_owned())],
+        )
         .await
         .expect("beta catalogue fill");
 
