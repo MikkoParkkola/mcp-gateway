@@ -339,10 +339,7 @@ impl CapabilityBackend {
     /// capability is not an error here — it is reported in
     /// [`DirectoryLoad::rejected`] so the caller decides.
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
-        let loaded = self.note_loaded(
-            CapabilityLoader::load_directory_with_paths(path).await?,
-            false,
-        );
+        let loaded = CapabilityLoader::load_directory_with_paths(path).await?;
         let mut report = DirectoryLoad {
             admitted: loaded.len(),
             rejected: Vec::new(),
@@ -360,9 +357,9 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
-        for cap in loaded {
+        for (file, cap) in loaded {
             let capability = cap.name.clone();
-            if let Err(error) = self.register_capability(cap) {
+            if let Err(error) = self.admit_from(file, cap) {
                 warn!(
                     backend = %self.name,
                     capability = %capability,
@@ -415,13 +412,15 @@ impl CapabilityBackend {
             }
         }
 
-        let all_caps = self.note_loaded(paths, !partial);
         // The same admission gate the initial load applies.
-        let mut admitted = Vec::with_capacity(all_caps.len());
+        let (mut admitted, mut trusted) = (Vec::with_capacity(paths.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        for cap in all_caps {
+        for (file, cap) in paths {
             match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
-                Ok(()) => admitted.push(cap),
+                Ok(()) => {
+                    trusted.push((file, cap.name.clone()));
+                    admitted.push(cap);
+                }
                 Err(error) => {
                     total -= 1;
                     refused.insert(cap.name.clone());
@@ -466,6 +465,7 @@ impl CapabilityBackend {
             });
         }
         self.catalogue_changed();
+        self.note_admitted(trusted, !partial);
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)

@@ -29,14 +29,9 @@ impl CapabilityBackend {
         // A reload drops a refused file from the map, so a later change to
         // it keeps the name its earlier record took from the same path.
         for record in &mut detected {
-            // Recorded at load, before the admission gate: trusted only if the
-            // capability was admitted and is loaded.
-            let loaded = self
-                .loaded_from
-                .read()
-                .get(&record.file)
-                .filter(|name| self.has_capability(name))
-                .cloned();
+            // Only an admitted file is recorded: its path, not a name some
+            // other file may also hold, is what is trusted.
+            let loaded = self.loaded_from.read().get(&record.file).cloned();
             record.loaded_as = loaded.or_else(|| {
                 let state = self.rug_pull_state.read();
                 state
@@ -115,25 +110,27 @@ impl CapabilityBackend {
         mismatches
     }
 
-    /// Record the name each loaded file holds, its pin having matched, and
-    /// hand the capabilities on. A full reload replaces the map; a single
-    /// directory or a partial reload only adds, keeping what it did not read.
-    pub(super) fn note_loaded(
+    /// Admit `capability`, loaded from `file`, and on success record the
+    /// file as the one it was loaded from: only an admitted file is trusted.
+    pub(super) fn admit_from(
         &self,
-        loaded: Vec<(String, super::CapabilityDefinition)>,
-        replace: bool,
-    ) -> Vec<super::CapabilityDefinition> {
+        file: String,
+        capability: super::CapabilityDefinition,
+    ) -> crate::Result<()> {
+        let name = capability.name.clone();
+        self.register_capability(capability)?;
+        self.loaded_from.write().insert(file, name);
+        Ok(())
+    }
+
+    /// Record a reload's admitted files. A full reload replaces the map; a
+    /// partial one only adds, keeping what it did not read.
+    pub(super) fn note_admitted(&self, admitted: Vec<(String, String)>, replace: bool) {
         let mut names = self.loaded_from.write();
         if replace {
             names.clear();
         }
-        loaded
-            .into_iter()
-            .map(|(path, capability)| {
-                names.insert(path, capability.name.clone());
-                capability
-            })
-            .collect()
+        names.extend(admitted);
     }
 }
 

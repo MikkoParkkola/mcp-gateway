@@ -243,25 +243,23 @@ async fn an_unreadable_change_keeps_its_record() {
     assert_eq!(backend.rug_pull_records().len(), 1, "the record stays");
 }
 
-/// A name recorded for a path whose capability was never admitted (the gate
-/// refused it after the load read it) is not trusted.
+/// A file never admitted that holds the same name as an admitted one gets no
+/// trusted name: trust follows the admitted file, not the name.
 #[tokio::test]
-async fn a_name_the_gate_refused_is_not_trusted() {
-    let dir = TempDir::new().unwrap();
-    let body = BODY.replace("name: rugtest", "name: refused");
-    let pinned = rewrite_with_pin(&body, &compute_capability_hash(&body));
-    let path = dir.path().join("refused.yaml");
-    std::fs::write(&path, &pinned).unwrap();
-    let backend = CapabilityBackend::new("test", Arc::new(CapabilityExecutor::new()));
-    backend.register_directories(&[dir.path().to_str().unwrap().to_string()]);
-    // What the load records before the gate runs, with no admission after.
-    let definition = crate::capability::parse_capability(&pinned).unwrap();
-    let _ = backend.note_loaded(vec![(path.display().to_string(), definition)], false);
-    assert!(!backend.has_capability("refused"));
+async fn a_never_admitted_file_sharing_a_name_is_not_trusted() {
+    let (dir, backend, _path, pinned) = loaded().await;
+    let twin = dir.path().join("twin.yaml");
+    std::fs::write(&twin, pinned.replace("Initially legit", "Changed")).unwrap();
 
-    std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
     let detected = backend.detect_rug_pulls().await;
 
-    assert_eq!(detected.len(), 1);
-    assert_eq!(detected[0].loaded_as, None);
+    let record = detected
+        .iter()
+        .find(|record| record.file.ends_with("twin.yaml"))
+        .expect("the twin's mismatch is recorded");
+    assert_eq!(
+        record.loaded_as, None,
+        "the admitted file's name is not the twin's"
+    );
+    assert!(backend.has_capability("rugtest"));
 }
