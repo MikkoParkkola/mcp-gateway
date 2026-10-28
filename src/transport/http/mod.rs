@@ -279,10 +279,6 @@ pub struct HttpTransport {
     /// the `debug_assert!` at the session-write site below for the invariant
     /// this hint unlocks.
     single_tenant_hint: AtomicBool,
-    /// A per-user pool slot's transport: it serves one principal for life,
-    /// so every session it holds is that principal's and lives in one bucket,
-    /// whatever identity key a send names.
-    slot_owned: AtomicBool,
     /// A per-user slot of a backend whose identity binding is required: no
     /// send carries the backend's static headers or a gateway token, and each
     /// carries only the credential the dispatch in flight lends (ADR-007
@@ -513,7 +509,6 @@ impl HttpTransport {
             era: std::sync::OnceLock::new(),
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
-            slot_owned: AtomicBool::new(false),
             lent_only: AtomicBool::new(false),
             lender: std::sync::OnceLock::new(),
             body_budget: std::sync::OnceLock::new(),
@@ -594,16 +589,15 @@ impl HttpTransport {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
     }
 
-    /// Mark this transport as a per-user pool slot's: one principal, one
-    /// session bucket, and, for `credential` [`SlotCredential::LentOnly`],
-    /// only the credential a dispatch in flight lends.
+    /// Mark this transport as a per-user pool slot's: one principal, and, for
+    /// `credential` [`SlotCredential::LentOnly`], only the credential a
+    /// dispatch in flight lends and one session bucket.
     pub(crate) fn mark_per_user_slot(
         &self,
         credential: SlotCredential,
         lender: Arc<crate::transport::Lender>,
     ) {
         self.mark_single_tenant();
-        self.slot_owned.store(true, Ordering::Relaxed);
         let _ = self.lender.set(lender);
         self.lent_only
             .store(credential == SlotCredential::LentOnly, Ordering::Relaxed);
@@ -620,10 +614,13 @@ impl HttpTransport {
         self.lender.get().and_then(|lender| lender.now())
     }
 
-    /// The session bucket a send under `identity_key` reads and writes: the
-    /// one bucket of a per-user slot, else the caller's own.
+    /// The session bucket a send under `identity_key` reads and writes. A
+    /// lent-only slot has one: its start runs as its one subscriber, so its
+    /// calls ride that start's session. Any other transport keeps the
+    /// caller's own, as an optional binding's slot did before (its start runs
+    /// as the gateway).
     fn bucket<'a>(&self, identity_key: Option<&'a str>) -> &'a str {
-        if self.slot_owned.load(Ordering::Relaxed) {
+        if self.is_lent_only() {
             ""
         } else {
             Self::bucket_key(identity_key)
