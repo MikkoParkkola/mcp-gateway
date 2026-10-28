@@ -30,39 +30,9 @@ const RENAME_ATTEMPTS: u32 = 8;
 /// reusing a name whose owner is still writing to it.
 pub(super) const SCRATCH_ATTEMPTS: u64 = 8;
 
-/// Write `yaml` to a scratch file next to `path`, then rename it over `path`.
-///
-/// The rename is what makes the write atomic: a reader sees either the old
-/// file or the new one, never a half-written one. Writing in place instead
-/// would leave the config truncated if the process died mid-write, which is
-/// exactly the config a restart needs to be intact.
-///
-/// This path is deliberately not platform-gated. An earlier version wrote in
-/// place on Windows, so the one platform without a crash-safe write was also
-/// the one no test covered.
-/// Write pre-rendered config text through the same secure path as [`write_config`](super::write_config).
-///
-/// It must not be replaced by `std::fs::write`: a starter config carries a
-/// generated admin credential.
-///
-/// Deprecated: it takes no config lock and checks nothing, so it replaces
-/// whatever another writer put there. Use [`edit_config_text`](super::edit_config_text). Removal is
-/// planned for 5.0.
-///
-/// # Errors
-///
-/// Returns an error when the file cannot be created or replaced.
-#[deprecated(
-    since = "4.0.0",
-    note = "writes gateway.yaml with no config lock and no check; use edit_config_text"
-)]
-pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
-    write_yaml(path, yaml)
-}
-
 /// Replace `path` with `text` atomically: exclusive scratch, `sync_all`, rename.
 ///
-/// The neutral-named door onto the same mechanism as [`write_config_text`],
+/// The neutral-named door onto the same mechanism as [`write_config_text`](super::write_config_text),
 /// for files that are neither config nor YAML. The identity-grants file needs
 /// it for a reason stronger than credential hygiene: `IdentityGrantFile`
 /// defaults BOTH `schema_version` and `grants`, and the schema check compares
@@ -82,7 +52,7 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
     write_yaml(path, text)
 }
 
-fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
+pub(super) fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     // Replace the config itself, not a symlink naming it: renaming onto the
     // link would detach the config from its target.
     write_yaml_at(&crate::identity_grants::journal::resolved(path), yaml)

@@ -91,14 +91,14 @@ pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
 
 #[path = "config_persistence_scratch.rs"]
 mod scratch;
+pub use scratch::write_text_atomic;
 use scratch::{
     SCRATCH_ATTEMPTS, ScratchClaimError, claim_scratch, next_scratch_seed, rename_with_retry,
-    write_yaml_at,
+    write_yaml, write_yaml_at,
 };
 pub(crate) use scratch::{create_new_private, create_private_replacing};
 #[cfg(test)]
 use scratch::{create_scratch_exclusive, is_transient, scratch_candidate};
-pub use scratch::{write_config_text, write_text_atomic};
 
 /// Recover a byte write a crash left behind, before a serving gateway first
 /// loads `config` (ADR-024). Exists for the bundled binary's two serve paths;
@@ -547,6 +547,37 @@ fn render(
         .unwrap_or_default();
     Ok(Some((yaml, dropped)))
 }
+
+/// Write `yaml` to a scratch file next to `path`, then rename it over `path`.
+///
+/// The rename is what makes the write atomic: a reader sees either the old
+/// file or the new one, never a half-written one. Writing in place instead
+/// would leave the config truncated if the process died mid-write, which is
+/// exactly the config a restart needs to be intact.
+///
+/// This path is deliberately not platform-gated. An earlier version wrote in
+/// place on Windows, so the one platform without a crash-safe write was also
+/// the one no test covered.
+/// Write pre-rendered config text through the same secure path as [`write_config`].
+///
+/// It must not be replaced by `std::fs::write`: a starter config carries a
+/// generated admin credential.
+///
+/// Deprecated: it takes no config lock and checks nothing, so it replaces
+/// whatever another writer put there. Use [`edit_config_text`]. Removal is
+/// planned for 5.0.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be created or replaced.
+#[deprecated(
+    since = "4.0.0",
+    note = "writes gateway.yaml with no config lock and no check; use edit_config_text"
+)]
+pub fn write_config_text(path: &Path, yaml: &str) -> Result<(), String> {
+    write_yaml(path, yaml)
+}
+
 #[cfg(test)]
 #[path = "config_persistence_tests.rs"]
 mod tests;
