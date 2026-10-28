@@ -607,7 +607,23 @@ mod resolution;
 /// check passes for a freshly minted credential.
 #[tokio::test]
 async fn the_mint_attaches_the_send_check_to_what_it_lends() {
-    let m = meta_with_strategy();
+    use tempfile::NamedTempFile;
+
+    use crate::security::TransparencyLogger;
+    use crate::security::transparency_log::TransparencyLogConfig;
+
+    // A required binding mints only with a durable audit record.
+    let file = NamedTempFile::new().expect("tempfile");
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "test".to_string(),
+        ..TransparencyLogConfig::default()
+    });
+    let mut m = meta_with_strategy();
+    m.enable_transparency_log(Arc::new(
+        TransparencyLogger::open(cfg).expect("logger opens"),
+    ));
     let cred = m
         .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
         .await

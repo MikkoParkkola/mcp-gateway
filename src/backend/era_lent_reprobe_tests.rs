@@ -121,7 +121,15 @@ async fn reprobe_carries_the_bearer(credential: Vec<(String, String)>) {
     let bearer = credential[0].1.clone();
 
     let _ = backend
-        .request_with_headers("server/discover", None, &credential, Some(USER))
+        .request_with_headers(
+            "server/discover",
+            None,
+            crate::transport::LentCredential {
+                headers: credential.clone(),
+                check: Some(std::sync::Arc::new(|| Box::pin(async { Ok(()) }))),
+            },
+            Some(USER),
+        )
         .await;
 
     let discovers: Vec<(String, String)> = seen
