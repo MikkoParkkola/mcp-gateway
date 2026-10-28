@@ -485,8 +485,10 @@ impl HttpTransport {
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
-                // Maintainability guard (MIK-6735 fix 2): under a per-user pool slot this instance
-                // serves exactly one caller identity for life, so `sessions` is provably <=1 entry
+                // Maintainability guard (MIK-6735 fix 2): a lent-only per-user pool slot (the
+                // single-tenant hint) serves exactly one caller identity for life, so `sessions`
+                // is provably <=1 entry. An optional binding's per-user slot also holds its
+                // start's gateway session, so it is not hinted and may hold two
                 // — do NOT "simplify" this map to a single `Option<String>` on the strength of
                 // that; it stays multi-entry and load-bearing for the Shared slot (Stateless-mode
                 // backends and the no-identity path), which is Arc-shared across every caller and
