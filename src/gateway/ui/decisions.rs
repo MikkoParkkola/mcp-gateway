@@ -239,32 +239,18 @@ fn tick(meta: &MetaMcp, shared: &Shared, read_edge: bool) {
     });
 }
 
-/// Each pin mismatch still on disk, read once. A file that is gone, or whose
-/// bytes match their pin again, closes its decision and clears its record,
-/// only while that record is the one read.
+/// The backend's pin mismatches as decisions, each from one read of its bytes.
 fn capability_changes(backend: &CapabilityBackend) -> Vec<CapabilityChange> {
-    let mut changes = Vec::new();
-    for record in backend.rug_pull_records() {
-        let content = match std::fs::read_to_string(&record.file) {
-            Ok(content) => content,
-            Err(_) => {
-                backend.clear_rug_pull_if(&record.file, &record.actual);
-                continue;
-            }
-        };
-        let actual = crate::capability::hash::compute_capability_hash(&content);
-        if actual.eq_ignore_ascii_case(&record.expected) {
-            backend.clear_rug_pull_if(&record.file, &record.actual);
-            continue;
-        }
-        changes.push(CapabilityChange {
+    backend
+        .current_mismatches()
+        .into_iter()
+        .map(|(record, content, actual)| CapabilityChange {
             file: record.file,
             actual,
             loaded_as: record.loaded_as,
             content,
-        });
-    }
-    changes
+        })
+        .collect()
 }
 
 /// When the oldest kept segment of the log at `path` was opened: no record

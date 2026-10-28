@@ -78,6 +78,13 @@ pub(crate) enum Fold {
     /// A grant-decision note.
     Denial(IdentityGrantAuditEvent),
     /// A UI decision from the control-plane audit.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "UI decisions are first written by the resolve routes"
+        )
+    )]
     Decided(UiDecision),
 }
 
@@ -322,6 +329,13 @@ impl DecisionSet {
 
     /// The open count and revision for an admin, or `None` for anyone else
     /// and while any source is `Unavailable`. In memory; never blocks.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the event stream's read, wired after the adopt kind"
+        )
+    )]
     pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
         let view = self.view().filter(|_| admin)?;
         Some((view.decisions.len(), view.revision))
@@ -367,6 +381,7 @@ impl DecisionSet {
     }
 
     /// The open items in display order.
+    #[cfg(test)]
     pub(crate) fn list(&self) -> Vec<Value> {
         self.items.clone()
     }
@@ -429,6 +444,13 @@ impl Shared {
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the event stream's read, wired after the adopt kind"
+        )
+    )]
     pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
         self.0.read().snapshot(admin)
     }

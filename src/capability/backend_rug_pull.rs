@@ -69,6 +69,27 @@ impl CapabilityBackend {
         current
     }
 
+    /// Each pin mismatch still on disk, with its bytes read once and their
+    /// hash. A file that is gone, or whose bytes match their pin again, has
+    /// its record cleared (only while that record is the one read) and is
+    /// left out. Blocking: call it off the async workers.
+    pub(crate) fn current_mismatches(&self) -> Vec<(RugPullRecord, String, String)> {
+        let mut mismatches = Vec::new();
+        for record in self.rug_pull_records() {
+            let Ok(content) = std::fs::read_to_string(&record.file) else {
+                self.clear_rug_pull_if(&record.file, &record.actual);
+                continue;
+            };
+            let actual = compute_capability_hash(&content);
+            if actual.eq_ignore_ascii_case(&record.expected) {
+                self.clear_rug_pull_if(&record.file, &record.actual);
+                continue;
+            }
+            mismatches.push((record, content, actual));
+        }
+        mismatches
+    }
+
     /// Record the name each loaded file holds, its pin having matched, and
     /// hand the capabilities on. A full reload replaces the map; a single
     /// directory or a partial reload only adds, keeping what it did not read.
