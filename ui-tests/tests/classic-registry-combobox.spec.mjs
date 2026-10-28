@@ -176,16 +176,23 @@ test('C9: Tab and Shift+Tab close the open list and move focus on', async ({ pag
 test('C10: keys that belong to an input method composition are left alone', async ({ page }) => {
   await addServerForm(page);
   await search(page);
-  const composing = (key) => box(page).evaluate((el, k) => el.dispatchEvent(new KeyboardEvent('keydown', {
-    key: k, isComposing: true, keyCode: 229, bubbles: true, cancelable: true,
-  })), key);
-  // dispatchEvent answers false when a handler cancelled the event.
-  expect(await composing('ArrowDown')).toBe(true);
-  await expect(box(page)).not.toHaveAttribute('aria-activedescendant', /./);
+  // Each guard alone: isComposing, and the 229 keyCode some browsers send
+  // for the first key of a composition instead.
+  const composing = (key, init) => box(page).evaluate((el, [k, i]) => el.dispatchEvent(new KeyboardEvent('keydown', {
+    key: k, bubbles: true, cancelable: true, ...i,
+  })), [key, init]);
+  for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+    const tag = JSON.stringify(init);
+    // dispatchEvent answers false when a handler cancelled the event.
+    expect(await composing('ArrowDown', init), tag).toBe(true);
+    await expect(box(page), tag).not.toHaveAttribute('aria-activedescendant', /./);
+  }
   await page.keyboard.press('ArrowDown');
   await expect(box(page)).toHaveAttribute('aria-activedescendant', /./);
-  expect(await composing('Enter')).toBe(true);
-  await expect(page.locator('#reg-name-override')).toBeHidden();
+  for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+    expect(await composing('Enter', init), JSON.stringify(init)).toBe(true);
+    await expect(page.locator('#reg-name-override')).toBeHidden();
+  }
 });
 
 test('C11: after a mouse pick the box keeps focus and the list stays closed', async ({ page }) => {
@@ -204,7 +211,10 @@ test('C12: the caret keys clear the active option and keep the list open', async
   for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
     await page.keyboard.press('ArrowDown');
     await expect(box(page), key).toHaveAttribute('aria-activedescendant', /./);
+    await box(page).evaluate((el) => el.setSelectionRange(3, 3));
     await page.keyboard.press(key);
+    const want = { ArrowLeft: 2, ArrowRight: 4, Home: 0, End: 'server'.length }[key];
+    expect(await box(page).evaluate((el) => el.selectionStart), key).toBe(want);
     await expect(box(page), key).not.toHaveAttribute('aria-activedescendant', /./);
     await expect(list(page).locator('[aria-selected="true"]'), key).toHaveCount(0);
     await expect(list(page), key).toBeVisible();
@@ -287,6 +297,42 @@ test('C17: moving through the list scrolls only the list, never the page', async
   for (let i = 0; i < 20; i++) await page.keyboard.press('ArrowDown');
   await expect.poll(() => list(page).evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.scrollY)).toBe(before);
+});
+
+test('C18: Shift, Ctrl and Meta with an arrow are left to the browser for editing', async ({ page }) => {
+  await addServerForm(page);
+  await search(page);
+  for (const chord of ['Shift+ArrowUp', 'Shift+ArrowDown', 'Control+ArrowUp', 'Meta+ArrowDown']) {
+    await page.keyboard.press('ArrowDown');
+    await box(page).evaluate((el) => el.setSelectionRange(3, 3));
+    const cancelled = await box(page).evaluate((el, c) => {
+      const [mod, key] = c.split('+');
+      const flags = { Shift: 'shiftKey', Control: 'ctrlKey', Meta: 'metaKey' };
+      return !el.dispatchEvent(new KeyboardEvent('keydown', { key, [flags[mod]]: true, bubbles: true, cancelable: true }));
+    }, chord);
+    expect(cancelled, chord).toBe(false);
+    await expect(box(page), chord).not.toHaveAttribute('aria-activedescendant', /./);
+  }
+  // A real Shift+ArrowUp selects from the caret to the start, as in any box.
+  await box(page).evaluate((el) => el.setSelectionRange(3, 3));
+  await page.keyboard.press('Shift+ArrowUp');
+  expect(await box(page).evaluate((el) => [el.selectionStart, el.selectionEnd])).toEqual([0, 3]);
+});
+
+test('C19: the active option stays visible in forced-colors mode', async ({ page }) => {
+  await page.emulateMedia({ forcedColors: 'active' });
+  await addServerForm(page);
+  await search(page);
+  await page.keyboard.press('ArrowDown');
+  const active = list(page).locator('[aria-selected="true"]');
+  const style = await active.evaluate((el) => {
+    const c = getComputedStyle(el);
+    return { outline: c.outlineStyle, width: parseFloat(c.outlineWidth) };
+  });
+  expect(style.outline).toBe('solid');
+  expect(style.width).toBeGreaterThanOrEqual(2);
+  const other = await list(page).getByRole('option').nth(1).evaluate((el) => getComputedStyle(el).outlineStyle);
+  expect(other).toBe('none');
 });
 
 for (const width of WIDTHS) {
