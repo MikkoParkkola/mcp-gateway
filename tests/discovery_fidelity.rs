@@ -132,17 +132,33 @@ fn backend(config: &Path, name: &str) -> mcp_gateway::config::BackendConfig {
         .clone()
 }
 
+/// The value a `file:` reference written by `--write` points at.
+fn stored(reference: Option<&String>) -> String {
+    let reference = reference.expect("the field is written");
+    let path = reference
+        .strip_prefix("file:")
+        .unwrap_or_else(|| panic!("not a file reference: {reference}"));
+    std::fs::read_to_string(path)
+        .expect("the secret file reads")
+        .trim_end_matches(['\r', '\n'])
+        .to_owned()
+}
+
 #[test]
 fn commented_zed_settings_are_discovered_with_env_headers_and_args() {
     let home = Home::new();
     home.write_zed_settings(&zed_settings());
     let out = write_config(&home);
 
-    let local = backend(&out, "local");
-    assert_eq!(
-        local.env.get("DEMO_VAR").map(String::as_str),
-        Some(SENTINEL)
+    // `--write` moves each literal into the secret store (MIK-8859): the
+    // config carries only a `file:` reference, and the value never reaches it.
+    let written = std::fs::read_to_string(&out).expect("the config reads");
+    assert!(
+        !written.contains(SENTINEL),
+        "a literal reached the config: {written}"
     );
+    let local = backend(&out, "local");
+    assert_eq!(stored(local.env.get("DEMO_VAR")), SENTINEL);
     let TransportConfig::Stdio { command, .. } = &local.transport else {
         panic!("local is not stdio");
     };
@@ -155,16 +171,13 @@ fn commented_zed_settings_are_discovered_with_env_headers_and_args() {
         )
     );
     let remote = backend(&out, "remote");
-    assert_eq!(
-        remote.headers.get("X-Demo").map(String::as_str),
-        Some(SENTINEL)
-    );
+    assert_eq!(stored(remote.headers.get("X-Demo")), SENTINEL);
     // Unix-only: asserts POSIX mode bits; Windows owner-only comes from DACLs (win_acl).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(&out).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600, "the config holding the values is owner-only");
+        assert_eq!(mode, 0o600, "the written config is owner-only");
     }
 }
 
