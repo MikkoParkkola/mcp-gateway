@@ -26,6 +26,7 @@ const pages = new Map();
 /**
  * Register a page: `{title, subtitle, tabs: {status, actions, settings}, entries}`.
  * A null tab is hidden. The subtitle is the one line under the plate.
+ * A tab can set either later, as text, through `header({title, subtitle})` in its context.
  */
 export function register(id, spec) {
   if (!PAGE_IDS.has(id)) throw new Error(`register: no sidebar page ${id}`);
@@ -586,6 +587,8 @@ const runTab = (spec, route, into) => {
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
     show: screenBanner(into, route.page, guard),
+    // The title or subtitle a screen sets itself, e.g. a count; a kept one changes nothing later.
+    header: (fields) => { if (guardHolds(guard)) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
   }));
@@ -644,6 +647,19 @@ function screenBanner(into, page, guard) {
   };
 }
 
+/** Set the header title and subtitle as text; a field left out stays, a null subtitle hides it. */
+function setHeader({ title, subtitle } = {}) {
+  if (title !== undefined) {
+    document.querySelector('.head .plate').textContent = title;
+    document.title = `${title} · MCP Gateway`;
+  }
+  if (subtitle !== undefined) {
+    const sub = document.querySelector('.head .sub');
+    sub.textContent = subtitle ?? '';
+    sub.hidden = !subtitle;
+  }
+}
+
 /** Render the current address. */
 export function render() {
   const seq = ++renderSeq;
@@ -666,11 +682,7 @@ export function render() {
     return;
   }
   const spec = pages.get(route.page);
-  plate.textContent = spec?.title ?? label;
-  const sub = document.querySelector('.head .sub');
-  sub.textContent = spec?.subtitle ?? '';
-  sub.hidden = !spec?.subtitle;
-  document.title = `${spec?.title ?? label} · MCP Gateway`;
+  setHeader({ title: spec?.title ?? label, subtitle: spec?.subtitle ?? null });
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
     content.replaceChildren(mark(state('not-built')));
