@@ -1117,13 +1117,22 @@ export function render() {
   };
 
   const loading = watchLoading(content, body, label, current);
+  // Busy from the first render's start until it settles (data, error or empty), as a Retry is.
+  content.setAttribute('aria-busy', 'true');
   runTab(spec, route, body)
     .then(() => {
       // The data is already in the body, under the loading state: let it go after its minimum.
       loading.release();
-      if (current()) saveSnapshot(key, body);
+      if (current()) {
+        content.removeAttribute('aria-busy');
+        saveSnapshot(key, body);
+      }
     })
-    .catch((err) => loading.after(() => { if (current()) settle(err); }));
+    .catch((err) => loading.after(() => {
+      if (!current()) return;
+      settle(err);
+      content.removeAttribute('aria-busy');
+    }));
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
