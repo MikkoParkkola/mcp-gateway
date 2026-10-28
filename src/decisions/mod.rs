@@ -305,7 +305,9 @@ impl DecisionSet {
         let (Some(now), Some(scope)) = (self.now, requested.scope.as_ref()) else {
             return false;
         };
-        let subject = GrantSubject::new(&key.authority, &key.subject, None);
+        let Some(subject) = GrantSubject::checked(&key.authority, &key.subject, None) else {
+            return false;
+        };
         self.grants.iter().any(|grant| {
             grant.covers_noted(
                 &subject,
@@ -377,8 +379,7 @@ pub(crate) const GRANT_DECISION_KIND: &str = "identity_grant_decision";
 /// from, live or replayed alike; `None` for a record that names no subject.
 pub(crate) fn denial_from_record(record: &Map<String, Value>) -> Option<IdentityGrantAuditEvent> {
     let text = |key: &str| record.get(key).and_then(Value::as_str);
-    let reason: IdentityGrantDecisionReason =
-        serde_json::from_value(record.get("reason")?.clone()).ok()?;
+    let (reason, scope) = reason_and_scope(record)?;
     let subject = record.get("subject")?;
     let timestamp = DateTime::parse_from_rfc3339(text("timestamp")?).ok()?;
     Some(IdentityGrantAuditEvent {
@@ -388,17 +389,28 @@ pub(crate) fn denial_from_record(record: &Map<String, Value>) -> Option<Identity
         // a matched grant allowed the call.
         allowed: reason == IdentityGrantDecisionReason::GrantMatched,
         reason,
-        subject: Some(GrantSubject::new(
+        // Through the checked constructor: a record naming no one is no request.
+        subject: Some(GrantSubject::checked(
             subject.get("authority")?.as_str()?,
             subject.get("subject")?.as_str()?,
             None,
-        )),
+        )?),
         agent_id: text("agent_id").map(str::to_string),
         capability: text("capability")?.to_string(),
         tool: text("tool").map(str::to_string),
-        scope: serde_json::from_value(record.get("scope")?.clone()).ok()?,
+        scope,
         grant_id: text("grant_id").map(str::to_string),
     })
+}
+
+/// A record's decision reason and requested scope: the two typed fields that
+/// are no identity.
+fn reason_and_scope(
+    record: &Map<String, Value>,
+) -> Option<(IdentityGrantDecisionReason, GrantScope)> {
+    let reason = serde_json::from_value(record.get("reason")?.clone()).ok()?;
+    let scope = serde_json::from_value(record.get("scope")?.clone()).ok()?;
+    Some((reason, scope))
 }
 
 /// The set as the gateway holds it: one lock, read by the list route and the
