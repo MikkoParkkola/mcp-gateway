@@ -60,7 +60,8 @@ const OWNED_ELSEWHERE: &[(&str, &str, &str, &str)] = &[
         "task_service/record.rs",
         "delivered_wire",
         r"\.wire\(\)",
-        "the stored task's projection for delivery (MIK-9002); it holds no hold of its own, and `.delivered_wire()` is itself a guarded shape, so every caller must deliver the row's holds as it did for `.wire()`",
+        // The reason names no projection call: this file is scanned too.
+        "the stored task's projection for delivery (MIK-9002); it holds no hold of its own, and a call to it is itself a guarded shape, so every caller must deliver the row's holds as it did for the plain wire projection",
     ),
     (
         "router/backend_handlers/direct_idempotency.rs",
