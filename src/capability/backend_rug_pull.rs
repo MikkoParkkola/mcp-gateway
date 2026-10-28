@@ -39,7 +39,18 @@ impl CapabilityBackend {
 
         detected
     }
+
+    /// Clear the record for `file` only if its observed hash is still
+    /// `actual`, so a newer mismatch found meanwhile is never dropped.
+    /// Returns whether a record was cleared.
+    pub fn clear_rug_pull_if(&self, _file: &str, _actual: &str) -> bool {
+        false
+    }
 }
+
+#[cfg(test)]
+#[path = "backend_rug_pull_tests.rs"]
+mod tests;
 
 use std::path::Path;
 
@@ -95,6 +106,7 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
                 file: path.display().to_string(),
                 expected,
                 actual,
+                loaded_as: None,
             });
         }
     }

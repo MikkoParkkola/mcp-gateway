@@ -190,6 +190,9 @@ pub struct RugPullRecord {
     pub expected: String,
     /// Hash actually observed on disk at detection time.
     pub actual: String,
+    /// The name this file was last loaded under while its pin matched, when
+    /// it ever was: `capability` comes from the changed bytes and is not.
+    pub loaded_as: Option<String>,
 }
 
 impl CapabilityBackend {

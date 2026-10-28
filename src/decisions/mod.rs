@@ -41,6 +41,72 @@ pub(crate) enum Health {
     Unavailable,
 }
 
+/// Where an event sits in its log: the replay reads up to a cut-off and live
+/// delivery covers the rest, so an event can arrive by both; its position
+/// makes the second arrival a repeat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct LogPos {
+    /// The log the event is in.
+    pub(crate) log: Source,
+    /// The segment number.
+    pub(crate) segment: u64,
+    /// The record's offset in its segment.
+    pub(crate) offset: u64,
+}
+
+/// A UI decision on one capability for a subject and agent: a decline, or a
+/// consumed allow attribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UiDecision {
+    /// The subject's authority.
+    pub(crate) authority: String,
+    /// The subject id.
+    pub(crate) subject: String,
+    /// The proven agent, `source:id`.
+    pub(crate) agent: String,
+    /// The capability decided on.
+    pub(crate) capability: String,
+    /// When it was decided.
+    pub(crate) at: DateTime<Utc>,
+}
+
+/// One event for the set, from either log.
+#[derive(Debug, Clone)]
+pub(crate) enum Fold {
+    /// A grant-decision note.
+    Denial(IdentityGrantAuditEvent),
+    /// A UI decision from the control-plane audit.
+    Decided(UiDecision),
+}
+
+/// One capability whose pinned bytes no longer match their pin, as the
+/// backend reported it on one read of those bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapabilityChange {
+    /// The capability's path on disk.
+    pub(crate) file: String,
+    /// The hash of the bytes read.
+    pub(crate) actual: String,
+    /// The name it was last loaded under while its pin matched.
+    pub(crate) loaded_as: Option<String>,
+    /// The text that read hashed to `actual`; only a safe summary of it is
+    /// ever shown.
+    pub(crate) content: String,
+}
+
+/// The list route's whole answer, read under one lock.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct View {
+    /// The open items, in the order they are shown.
+    pub(crate) decisions: Vec<Value>,
+    /// The revision these items are at.
+    pub(crate) revision: u64,
+    /// Kinds this build does not produce yet.
+    pub(crate) missing_kinds: Vec<&'static str>,
+    /// Kinds produced, but not yet for every case.
+    pub(crate) partial_kinds: Vec<&'static str>,
+}
+
 /// The decision set: open items, a revision that rises on any visible change,
 /// and each source's health.
 pub(crate) struct DecisionSet {
@@ -64,18 +130,23 @@ impl DecisionSet {
         self.health.insert(source, health);
     }
 
-    /// Fold one grant-decision note, live or replayed.
-    pub(crate) fn note_denial(&mut self, _event: &IdentityGrantAuditEvent) {}
+    /// Fold one event read by a source's startup replay.
+    pub(crate) fn replayed(&mut self, _pos: LogPos, _event: Fold) {}
 
-    /// Fold a UI decision (a decline, or a consumed allow attribution) on
-    /// one capability for a subject and agent.
-    pub(crate) fn note_ui_decision(
+    /// Fold one live event; held while any replay runs, applied after.
+    pub(crate) fn live(&mut self, _pos: LogPos, _event: Fold) {}
+
+    /// Mark `source`'s replay finished: once every replay has, the held live
+    /// events are applied and the source is `Ready`.
+    pub(crate) fn replay_done(&mut self, _source: Source) {}
+
+    /// Replace one backend's capability changes; the source is `Ready` once
+    /// a backend has reported.
+    pub(crate) fn set_capability_changes(
         &mut self,
-        _authority: &str,
-        _subject: &str,
-        _agent: &str,
-        _capability: &str,
-        _at: DateTime<Utc>,
+        _backend: &str,
+        _changes: Vec<CapabilityChange>,
+        _now: DateTime<Utc>,
     ) {
     }
 
@@ -92,6 +163,11 @@ impl DecisionSet {
     /// and while any source is `Unavailable`. In memory; never blocks.
     pub(crate) fn snapshot(&self, _admin: bool) -> Option<(usize, u64)> {
         let _ = (&self.key, self.revision);
+        None
+    }
+
+    /// The list route's answer, or `None` while any source is `Unavailable`.
+    pub(crate) fn view(&self) -> Option<View> {
         None
     }
 

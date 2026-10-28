@@ -5,7 +5,7 @@
 
 use chrono::{DateTime, Duration, TimeZone as _, Utc};
 
-use super::{DecisionSet, Health, Source};
+use super::{DecisionSet, Fold, Health, LogPos, Source, UiDecision};
 use crate::identity_grants::{
     GrantAgent, GrantAgentKey, GrantScope, GrantSubject, IdentityGrant, IdentityGrantAuditEvent,
     IdentityGrantDecisionReason,
@@ -65,6 +65,30 @@ fn grant(capability: &str, scope: GrantScope) -> IdentityGrant {
     }
 }
 
+fn pos(log: Source, offset: u64) -> LogPos {
+    LogPos { log, segment: 1, offset }
+}
+
+/// Deliver a denial live at transparency-log offset `offset`.
+fn deny(set: &mut DecisionSet, offset: u64, event: &IdentityGrantAuditEvent) {
+    set.live(pos(Source::Access, offset), Fold::Denial(event.clone()));
+}
+
+fn decision(capability: &str, minute: i64) -> UiDecision {
+    UiDecision {
+        authority: "https://idp.example".to_string(),
+        subject: "alice".to_string(),
+        agent: AGENT.to_string(),
+        capability: capability.to_string(),
+        at: at(minute),
+    }
+}
+
+/// Deliver a UI decision live at control-plane offset `offset`.
+fn decide(set: &mut DecisionSet, offset: u64, capability: &str, minute: i64) {
+    set.live(pos(Source::ControlPlane, offset), Fold::Decided(decision(capability, minute)));
+}
+
 fn count(set: &DecisionSet) -> usize {
     set.snapshot(true).expect("all sources ready").0
 }
@@ -72,8 +96,8 @@ fn count(set: &DecisionSet) -> usize {
 #[test]
 fn a_missing_grant_with_a_proven_agent_opens_one_access_request() {
     let mut set = ready();
-    set.note_denial(&missing("stripe.charges", 1));
-    set.note_denial(&missing("stripe.refunds", 2));
+    deny(&mut set, 101, &missing("stripe.charges", 1));
+    deny(&mut set, 102, &missing("stripe.refunds", 2));
     let list = set.list();
     assert_eq!(list.len(), 1, "one item per subject and agent: {list:?}");
     assert_eq!(list[0]["kind"], "access_request");
@@ -84,43 +108,43 @@ fn a_missing_grant_with_a_proven_agent_opens_one_access_request() {
 fn every_a1_exclusion_opens_nothing() {
     use IdentityGrantDecisionReason as R;
     let mut set = ready();
-    for reason in [R::MissingIdentity, R::MissingOwner, R::OwnerMismatch, R::PublicCapability, R::SharedCapability, R::GrantMatched] {
-        set.note_denial(&denial("stripe.charges", reason, 1));
+    for (offset, reason) in [R::MissingIdentity, R::MissingOwner, R::OwnerMismatch, R::PublicCapability, R::SharedCapability, R::GrantMatched].into_iter().enumerate() {
+        deny(&mut set, 200 + offset as u64, &denial("stripe.charges", reason, 1));
     }
     let mut no_agent = missing("stripe.charges", 1);
     no_agent.agent_id = None;
-    set.note_denial(&no_agent);
+    deny(&mut set, 104, &no_agent);
     let mut no_subject = missing("stripe.charges", 1);
     no_subject.subject = None;
-    set.note_denial(&no_subject);
+    deny(&mut set, 105, &no_subject);
     // The positive control: the same set does open on a real missing grant.
     assert_eq!(count(&set), 0);
-    set.note_denial(&missing("stripe.charges", 2));
+    deny(&mut set, 106, &missing("stripe.charges", 2));
     assert_eq!(count(&set), 1);
 }
 
 #[test]
 fn a_newer_ui_decision_closes_and_a_newer_denial_reopens() {
     let mut set = ready();
-    set.note_denial(&missing("stripe.charges", 1));
-    set.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(2));
+    deny(&mut set, 107, &missing("stripe.charges", 1));
+    decide(&mut set, 121, "stripe.charges", 2);
     assert_eq!(count(&set), 0);
-    set.note_denial(&missing("stripe.charges", 3));
+    deny(&mut set, 108, &missing("stripe.charges", 3));
     assert_eq!(count(&set), 1);
 }
 
 #[test]
 fn an_older_ui_decision_leaves_the_item_open() {
     let mut set = ready();
-    set.note_denial(&missing("stripe.charges", 5));
-    set.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(4));
+    deny(&mut set, 109, &missing("stripe.charges", 5));
+    decide(&mut set, 122, "stripe.charges", 4);
     assert_eq!(count(&set), 1);
 }
 
 #[test]
 fn a_covering_grant_closes_and_its_expiry_reopens() {
     let mut set = ready();
-    set.note_denial(&missing("stripe.charges", 1));
+    deny(&mut set, 110, &missing("stripe.charges", 1));
     let mut row = grant("stripe.charges", GrantScope::Execute);
     row.expires_at = Some(at(10));
     set.set_grants(vec![row], at(2));
@@ -148,7 +172,7 @@ fn a_row_that_evaluate_would_not_match_leaves_the_item_open() {
         let mut set = ready();
         let mut note = missing("stripe.charges", 1);
         note.tool = Some("charge".to_string());
-        set.note_denial(&note);
+        deny(&mut set, 111, &note);
         set.set_grants(vec![row], at(2));
         assert_eq!(count(&set), 1, "{why}");
     }
@@ -170,7 +194,7 @@ fn every_row_evaluate_would_match_closes_the_item() {
         let mut set = ready();
         let mut note = missing("stripe.charges", 1);
         note.tool = Some("charge".to_string());
-        set.note_denial(&note);
+        deny(&mut set, 112, &note);
         set.set_grants(vec![row], at(2));
         assert_eq!(count(&set), 0, "{why}");
     }
@@ -193,16 +217,16 @@ fn revision_rises_on_open_close_and_field_change_and_not_on_a_no_op() {
     let mut set = ready();
     let rev = |set: &DecisionSet| set.snapshot(true).expect("ready").1;
     let r0 = rev(&set);
-    set.note_denial(&missing("stripe.charges", 1));
+    deny(&mut set, 113, &missing("stripe.charges", 1));
     let r1 = rev(&set);
     assert!(r1 > r0, "open");
-    set.note_denial(&missing("stripe.refunds", 2));
+    deny(&mut set, 114, &missing("stripe.refunds", 2));
     let r2 = rev(&set);
     assert!(r2 > r1, "a scope entry added to an open item");
     set.expire(at(3));
     assert_eq!(rev(&set), r2, "nothing changed");
-    set.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(4));
-    set.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.refunds", at(4));
+    decide(&mut set, 123, "stripe.charges", 4);
+    decide(&mut set, 124, "stripe.refunds", 4);
     assert!(rev(&set) > r2, "close");
 }
 
@@ -214,9 +238,9 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
         let mut set = ready();
         for step in order {
             match step {
-                1 => set.note_denial(&denial_1),
-                2 => set.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(2)),
-                _ => set.note_denial(&denial_3),
+                1 => deny(&mut set, 115, &denial_1),
+                2 => decide(&mut set, 125, "stripe.charges", 2),
+                _ => deny(&mut set, 116, &denial_3),
             }
         }
         set.list()
@@ -227,20 +251,165 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
         assert_eq!(apply(&order), expected, "{order:?}");
     }
     let mut once = ready();
-    once.note_denial(&denial_1);
-    once.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(2));
-    once.note_ui_decision("https://idp.example", "alice", AGENT, "stripe.charges", at(2));
-    once.note_denial(&denial_1);
+    deny(&mut once, 117, &denial_1);
+    decide(&mut once, 126, "stripe.charges", 2);
+    decide(&mut once, 126, "stripe.charges", 2);
+    deny(&mut once, 117, &denial_1);
     assert_eq!(count(&once), 0, "a replayed older denial cannot resurrect a declined request");
 }
 
 #[test]
 fn eviction_closes_a_request_whose_newest_denial_is_past_the_edge() {
     let mut set = ready();
-    set.note_denial(&missing("stripe.charges", 1));
-    set.note_denial(&missing("stripe.refunds", 5));
+    deny(&mut set, 119, &missing("stripe.charges", 1));
+    deny(&mut set, 120, &missing("stripe.refunds", 5));
     set.evict_before(at(3));
     let list = set.list();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["scope"].as_array().map(Vec::len), Some(1));
+}
+
+/// A set just built: every source unavailable until its replay finishes.
+fn booting() -> DecisionSet {
+    let mut set = DecisionSet::with_key(KEY);
+    set.set_health(Source::Capability, Health::Absent);
+    set
+}
+
+fn replay_all(set: &mut DecisionSet, logs_first: Source) {
+    let denial = Fold::Denial(missing("stripe.charges", 1));
+    let declined = Fold::Decided(decision("stripe.charges", 2));
+    let later = Fold::Denial(missing("stripe.refunds", 3));
+    let steps = [
+        (Source::Access, vec![(1, denial), (2, later)]),
+        (Source::ControlPlane, vec![(1, declined)]),
+    ];
+    let order: Vec<_> = if logs_first == Source::Access { steps.into_iter().collect() } else { steps.into_iter().rev().collect() };
+    for (log, events) in order {
+        for (offset, event) in events {
+            set.replayed(pos(log, offset), event);
+        }
+        set.replay_done(log);
+    }
+}
+
+#[test]
+fn replaying_the_two_logs_in_either_order_gives_the_same_set() {
+    let mut access_first = booting();
+    replay_all(&mut access_first, Source::Access);
+    let mut audit_first = booting();
+    replay_all(&mut audit_first, Source::ControlPlane);
+    assert_eq!(access_first.list(), audit_first.list());
+    assert_eq!(access_first.list().len(), 1, "refunds stays open, charges was declined");
+}
+
+#[test]
+fn an_admin_decline_does_not_come_back_after_a_restart() {
+    for first in [Source::Access, Source::ControlPlane] {
+        let mut set = booting();
+        replay_all(&mut set, first);
+        let list = set.list();
+        let scope = list[0]["scope"].as_array().expect("scope").clone();
+        assert_eq!(scope.len(), 1, "{first:?}: {list:?}");
+        assert_eq!(scope[0]["capability"], "stripe.refunds", "{first:?}");
+    }
+}
+
+#[test]
+fn an_event_seen_twice_is_applied_once() {
+    let mut set = ready();
+    let charge = missing("stripe.charges", 1);
+    deny(&mut set, 1, &charge);
+    deny(&mut set, 1, &charge);
+    assert_eq!(set.list()[0]["refused_calls"], 1, "same position: one refusal");
+    deny(&mut set, 2, &charge);
+    assert_eq!(set.list()[0]["refused_calls"], 2, "a second position is a second refusal");
+}
+
+#[test]
+fn a_live_event_during_replay_is_neither_lost_nor_counted_twice() {
+    let mut set = booting();
+    set.replayed(pos(Source::Access, 1), Fold::Denial(missing("stripe.charges", 1)));
+    // Written after the cut-off: arrives only live.
+    set.live(pos(Source::Access, 3), Fold::Denial(missing("stripe.charges", 3)));
+    // Written before the cut-off: arrives by both paths.
+    set.live(pos(Source::Access, 2), Fold::Denial(missing("stripe.charges", 2)));
+    set.replayed(pos(Source::Access, 2), Fold::Denial(missing("stripe.charges", 2)));
+    assert_eq!(set.snapshot(true), None, "held while the replay runs");
+    set.replay_done(Source::Access);
+    assert_eq!(set.snapshot(true), None, "the control-plane replay is still running");
+    set.replay_done(Source::ControlPlane);
+    assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
+    assert_eq!(set.list()[0]["refused_calls"], 3);
+}
+
+fn change(path: &str, actual: &str, loaded_as: Option<&str>) -> super::CapabilityChange {
+    super::CapabilityChange {
+        file: path.to_string(),
+        actual: actual.to_string(),
+        loaded_as: loaded_as.map(str::to_string),
+        content: "name: stripe.charges\ndescription: d\n".to_string(),
+    }
+}
+
+#[test]
+fn the_capability_source_is_unavailable_until_its_backend_reports() {
+    let mut set = DecisionSet::with_key(KEY);
+    set.set_health(Source::Access, Health::Ready);
+    set.set_health(Source::ControlPlane, Health::Ready);
+    assert_eq!(set.snapshot(true), None);
+    set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", Some("stripe.charges"))], at(1));
+    assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
+}
+
+#[test]
+fn an_access_request_waits_on_the_change_to_its_trusted_capability() {
+    let mut set = ready();
+    deny(&mut set, 1, &missing("stripe.charges", 1));
+    // The changed bytes may claim any name; the link follows the trusted one.
+    set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", Some("stripe.charges"))], at(2));
+    let list = set.list();
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[0]["kind"], "capability_changed", "the blocking item comes first");
+    assert_eq!(list[1]["waits_on"], serde_json::json!([list[0]["id"].clone()]));
+}
+
+#[test]
+fn an_untrusted_change_blocks_nothing() {
+    let mut set = ready();
+    deny(&mut set, 1, &missing("stripe.charges", 1));
+    set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", None)], at(2));
+    let list = set.list();
+    let access = list.iter().find(|item| item["kind"] == "access_request").expect("access item");
+    assert_eq!(access["waits_on"], serde_json::json!([]));
+}
+
+#[test]
+fn the_view_names_missing_and_partial_kinds_and_carries_the_snapshot_revision() {
+    let mut set = ready();
+    deny(&mut set, 1, &missing("stripe.charges", 1));
+    let view = set.view().expect("ready");
+    assert_eq!(view.missing_kinds, vec!["adopt"]);
+    assert_eq!(view.partial_kinds, vec!["capability_changed"]);
+    assert_eq!(Some((view.decisions.len(), view.revision)), set.snapshot(true));
+    assert_eq!(DecisionSet::with_key(KEY).view(), None);
+}
+
+#[test]
+fn no_name_or_text_from_changed_bytes_reaches_the_list() {
+    const CANARY: &str = "Zq7canary";
+    let content = format!(
+        "name: tool{CANARY}\ndescription: desc{CANARY}\nschema:\n  input:\n    type: object\n    properties:\n      prop{CANARY}:\n        type: str{CANARY}\n        default: def{CANARY}\n        examples: [ex{CANARY}]\n        const: const{CANARY}\n    required: [prop{CANARY}]\n"
+    );
+    let mut set = ready();
+    set.set_capability_changes(
+        "caps",
+        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("stripe.charges")) }],
+        at(1),
+    );
+    let view = set.view().expect("ready");
+    assert_eq!(view.decisions.len(), 1, "the change is listed");
+    let text = serde_json::to_string(&view.decisions).expect("serialize");
+    assert!(!text.contains(CANARY), "{text}");
+    assert!(text.contains("stripe.charges"), "the trusted name is shown: {text}");
 }
