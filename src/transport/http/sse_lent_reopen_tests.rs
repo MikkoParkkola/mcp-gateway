@@ -33,6 +33,20 @@ fn authorization(headers: &HeaderMap) -> String {
 /// `Authorization`: each GET is a new session; every POST is answered 202
 /// with its response on that session's stream.
 async fn recording_peer() -> (String, Seen, Streams) {
+    peer(Expiry::Never).await
+}
+
+/// Whether the peer expires the session under the first call.
+#[derive(Clone, Copy)]
+enum Expiry {
+    Never,
+    /// The first `tools/list` is answered "session not found".
+    FirstList,
+}
+
+/// [`recording_peer`], expiring the session as `expiry` says.
+async fn peer(expiry: Expiry) -> (String, Seen, Streams) {
+    let lists = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen: Seen = Arc::default();
     let streams: Streams = Arc::default();
     let (get_streams, post_streams) = (streams.clone(), streams.clone());
@@ -70,19 +84,25 @@ async fn recording_peer() -> (String, Seen, Streams) {
                       headers: HeaderMap,
                       axum::Json(frame): axum::Json<Value>| {
                     let (streams, seen) = (post_streams.clone(), post_seen.clone());
+                    let lists = Arc::clone(&lists);
                     async move {
                         let session: u32 = q["session_id"].parse().expect("session");
                         seen.lock()
                             .expect("seen")
                             .push(("POST", session, authorization(&headers)));
                         if let Some(id) = frame.get("id") {
-                            let result = if frame["method"] == "initialize" {
-                                json!({"protocolVersion": "2024-11-05", "capabilities": {},
-                                       "serverInfo": {"name": "lent-reopen", "version": "1"}})
+                            let first_list = frame["method"] == "tools/list"
+                                && lists.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+                            let answer = if first_list && matches!(expiry, Expiry::FirstList) {
+                                json!({"jsonrpc": "2.0", "id": id,
+                                       "error": {"code": -32015, "message": "session not found"}})
+                            } else if frame["method"] == "initialize" {
+                                json!({"jsonrpc": "2.0", "id": id, "result":
+                                       {"protocolVersion": "2024-11-05", "capabilities": {},
+                                        "serverInfo": {"name": "lent-reopen", "version": "1"}}})
                             } else {
-                                json!({"tools": []})
+                                json!({"jsonrpc": "2.0", "id": id, "result": {"tools": []}})
                             };
-                            let answer = json!({"jsonrpc": "2.0", "id": id, "result": result});
                             if let Some(Some(tx)) = streams.lock().expect("streams").get(&session) {
                                 let _ = tx.send(answer.to_string());
                             }
@@ -174,5 +194,46 @@ async fn a_dropped_legacy_stream_reopens_as_the_next_caller_before_its_post() {
             .all(|&(kind, session)| kind == "POST" && session == 2)
             && after.len() > 1,
         "the call posts on the reopened stream only: {seen:?}"
+    );
+}
+
+/// A session that expires under a call is healed by a re-handshake inside
+/// that call: on a legacy SSE peer the new stream opens as the call's
+/// credential, and the call is resent and answered.
+#[tokio::test]
+async fn a_session_expiry_reopens_the_legacy_stream_as_the_call() {
+    let (url, seen, _streams) = peer(Expiry::FirstList).await;
+    let transport = HttpTransport::new(&url, HashMap::new(), Duration::from_secs(10), false)
+        .expect("transport");
+    let lender = Arc::new(Lender::default());
+    transport.mark_per_user_slot(SlotCredential::LentOnly, Arc::clone(&lender));
+    let _loan = lender.lend(checked());
+
+    transport
+        .initialize_as(&subscriber())
+        .await
+        .expect("start as the subscriber");
+    let answered = transport
+        .request_with_headers(
+            "tools/list",
+            None,
+            &subscriber(),
+            None,
+            ResendPermission::Permitted,
+        )
+        .await;
+
+    let seen = seen.lock().expect("seen").clone();
+    assert!(
+        answered.as_ref().is_ok_and(|r| r.error.is_none()),
+        "the expired call was not healed and answered: {answered:?} {seen:?}"
+    );
+    assert!(
+        seen.contains(&("GET", 2, "Bearer subscriber".to_owned())),
+        "the re-handshake did not reopen the stream as the call: {seen:?}"
+    );
+    assert!(
+        seen.iter().all(|(_, _, auth)| auth == "Bearer subscriber"),
+        "a request went out other than as the subscriber: {seen:?}"
     );
 }
