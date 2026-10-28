@@ -189,3 +189,58 @@ async fn a_refused_redirect_answers_the_same_transport_error() {
         );
     }
 }
+
+/// A streaming body cannot be cloned for a retry, so the send takes its
+/// single-attempt path; a hop the redirect decision rejects there records
+/// `refused` too.
+#[tokio::test]
+async fn a_single_attempt_rejected_redirect_records_refused() {
+    use crate::gateway::delivery_facts;
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::post(|| async {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, "http://10.255.255.1/")],
+            )
+        }),
+    );
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let body = reqwest::Body::wrap_stream(futures::stream::once(async {
+        Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"streamed"))
+    }));
+    let request = client.post(format!("http://127.0.0.1:{port}/")).body(body);
+    assert!(
+        request.try_clone().is_none(),
+        "premise: the body is not cloneable"
+    );
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = tokio::time::timeout(
+            crate::test_wait::HANG_BOUND,
+            super::send_with_retry(request, "test", true, &health),
+        )
+        .await
+        .expect("bounded");
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("the redirect is refused");
+    assert!(matches!(error, crate::Error::Transport(_)), "{error:?}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{error}"
+    );
+}
