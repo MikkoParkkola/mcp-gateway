@@ -25,6 +25,7 @@ use crate::oauth::OAuthClient;
 use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
+use crate::protocol::param_headers::is_param_header;
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
     is_version_mismatch_error, parse_supported_versions_from_error,
@@ -70,21 +71,16 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
         origin: CredentialOrigin,
-        _call: &[(String, String)],
+        call: &[(String, String)],
     ) -> Result<header::HeaderMap> {
         // A lent-only per-user slot sends nothing of the gateway's: no static
-        // header and no gateway token, only what the dispatch in flight lends,
-        // merged last. With nothing lent there is no subscriber to send as,
-        // so nothing is sent. A send whose credential a source lends (an
+        // header and no gateway token, only the loan the call's own headers
+        // select, merged last. A call whose credential is not lent, or whose
+        // loan's check refuses, is not sent. A send whose credential a source lends (an
         // event listener's stream) already carries nothing of the gateway's,
         // and its source is its lender.
         let lent = if self.is_lent_only() && origin == CredentialOrigin::Gateway {
-            let lent = self.lent_now().filter(|headers| !headers.is_empty());
-            Some(lent.ok_or_else(|| {
-                Error::Transport(
-                    "per-user send refused: no calling subscriber's credential is lent".to_string(),
-                )
-            })?)
+            Some(self.lent_for(call).await?)
         } else {
             None
         };
@@ -205,6 +201,68 @@ impl HttpTransport {
         }
 
         Ok(headers)
+    }
+
+    /// Merge a call's own headers into `headers`. On a lent-only slot the
+    /// credential part is already the loan's, merged by the builder, so only
+    /// the gateway-owned `Mcp-Param-*` mirrors are taken from the call: never
+    /// the caller's copy of the credential.
+    fn merge_call_headers(&self, headers: &mut header::HeaderMap, call: &[(String, String)]) {
+        if self.is_lent_only() {
+            let mirrors: Vec<_> = call
+                .iter()
+                .filter(|(name, _)| is_param_header(name))
+                .cloned()
+                .collect();
+            merge_extra_headers(headers, &mirrors);
+        } else {
+            merge_extra_headers(headers, call);
+        }
+    }
+
+    /// The headers a lent-only slot's send carries: the loan the call's own
+    /// credential headers select, after every loan matching them passes its
+    /// check. A call with no credential headers (a start the slot runs for
+    /// its dispatch) sends as the starter's loan. Snapshots are owned, so no
+    /// lock is held across a check.
+    ///
+    /// # Errors
+    ///
+    /// A refusal when no loan matches, a matching loan has no check or was
+    /// refused, or a check refuses now. One refusal refuses the send.
+    pub(super) async fn lent_for(
+        &self,
+        call: &[(String, String)],
+    ) -> Result<Vec<(String, String)>> {
+        let Some(lender) = self.lender.get() else {
+            return Err(send_refused("this slot has no lender"));
+        };
+        let has_credential = call.iter().any(|(name, _)| !is_param_header(name));
+        let loans = if has_credential {
+            lender.matching_all(call)
+        } else {
+            lender.starter().into_iter().collect()
+        };
+        let Some(first) = loans.first() else {
+            return Err(send_refused(if has_credential {
+                "the call's credential is not lent on this slot"
+            } else {
+                "no calling subscriber's credential is lent"
+            }));
+        };
+        for loan in &loans {
+            if loan.refused.is_some() {
+                return Err(send_refused("this credential was refused"));
+            }
+            let Some(check) = loan.check.as_ref() else {
+                return Err(send_refused("no recheck is attached to this credential"));
+            };
+            if let Err(refusal) = check().await {
+                lender.refuse(loan.id, refusal);
+                return Err(send_refused("this credential's recheck refused it"));
+            }
+        }
+        Ok(first.headers.to_vec())
     }
 
     /// Get OAuth access token if OAuth is configured
@@ -337,7 +395,7 @@ impl HttpTransport {
                 extra_headers,
             )
             .await?;
-        merge_extra_headers(&mut headers, extra_headers);
+        self.merge_call_headers(&mut headers, extra_headers);
         // AFTER every merge this path runs. Placed inside `build_mcp_headers`
         // it would be overridden by the loop just above.
         if era == Some(PeerEra::Modern) {
@@ -665,7 +723,7 @@ impl HttpTransport {
             .build_mcp_headers(HeaderMode::Notify, identity_key, extra_headers)
             .await?;
         // The caller's credential, as on a request (#2292).
-        merge_extra_headers(&mut headers, extra_headers);
+        self.merge_call_headers(&mut headers, extra_headers);
         if era == Some(PeerEra::Modern) {
             finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
         }
@@ -734,6 +792,15 @@ async fn detach_token_step(
     }));
     task.await
         .map_err(|e| Error::OAuth(format!("the detached token step failed: {e}")))?
+}
+
+/// The refusal of a lent-only send: nothing reached the wire.
+fn send_refused(why: &str) -> Error {
+    Error::Forbidden {
+        code: -32001,
+        status: 403,
+        message: format!("per-user send refused: {why}"),
+    }
 }
 
 /// Whose credential a request's headers carry.

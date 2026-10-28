@@ -102,11 +102,6 @@ impl Lender {
         }
     }
 
-    /// The credential of the newest dispatch in flight, if any lends one.
-    pub(crate) fn now(&self) -> Option<Vec<(String, String)>> {
-        self.loans.lock().last().map(|lent| lent.headers.to_vec())
-    }
-
     /// Every loan whose headers are exactly the call's credential headers: the
     /// call's headers less the gateway-owned `Mcp-Param-*` mirrors, compared as
     /// sets of (lowercased name, value). Never a subset, never "contains"; a
@@ -338,19 +333,5 @@ mod tests {
             1,
             "a this-loan refusal does not evict"
         );
-    }
-
-    #[test]
-    fn a_loan_lends_only_while_held_and_the_newest_wins() {
-        let lender = Arc::new(Lender::default());
-        assert_eq!(lender.now(), None, "nothing lent: nothing to send as");
-        let first = lender.lend(&headers("one"));
-        assert_eq!(lender.now(), Some(headers("one")));
-        let second = lender.lend(&headers("two"));
-        assert_eq!(lender.now(), Some(headers("two")), "the newest dispatch's");
-        drop(second);
-        assert_eq!(lender.now(), Some(headers("one")), "the other still lends");
-        drop(first);
-        assert_eq!(lender.now(), None, "no dispatch in flight: nothing lent");
     }
 }

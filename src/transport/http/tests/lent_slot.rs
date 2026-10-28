@@ -57,19 +57,22 @@ async fn a_lent_only_slot_sends_nothing_with_nothing_lent() {
 #[tokio::test]
 async fn a_lent_only_slot_sends_the_loan_and_no_static_header() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
-    let loan = lender.lend(&subscriber());
+    let loan = lender.lend_credential(&checked(subscriber()));
     for mode in [
         HeaderMode::Request { method: "m" },
         HeaderMode::Notify,
         HeaderMode::Sse,
     ] {
-        let map = t.build_mcp_headers(mode, None, &[]).await.unwrap();
+        let map = t
+            .build_mcp_headers(mode, None, &subscriber())
+            .await
+            .unwrap();
         assert_eq!(map[header::AUTHORIZATION], "Bearer subscriber");
         assert!(!map.contains_key("x-static-credential"), "{map:?}");
     }
     drop(loan);
     assert!(
-        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+        t.build_mcp_headers(HeaderMode::Notify, None, &subscriber())
             .await
             .is_err(),
         "the loan ended with its dispatch"
@@ -156,9 +159,13 @@ async fn only_a_lent_only_slot_rides_its_starts_session() {
     ] {
         let (t, lender) = slot("http://localhost", credential);
         set_default_session(&t, "the-starts-session");
-        let _loan = lender.lend(&subscriber());
+        let _loan = lender.lend_credential(&checked(subscriber()));
         let map = t
-            .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("subscriber"), &[])
+            .build_mcp_headers(
+                HeaderMode::Request { method: "m" },
+                Some("subscriber"),
+                &subscriber(),
+            )
             .await
             .unwrap();
         let carried = map
@@ -185,13 +192,14 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
         .install_live_token_for_test(&token);
     let lender = Arc::new(Lender::default());
     t.mark_per_user_slot(SlotCredential::LentOnly, Arc::clone(&lender));
-    let loan = lender.lend(&[("X-Api-Key".to_string(), "subscriber-key".to_string())]);
+    let key = vec![("X-Api-Key".to_string(), "subscriber-key".to_string())];
+    let loan = lender.lend_credential(&checked(key.clone()));
     for mode in [
         HeaderMode::Request { method: "m" },
         HeaderMode::Notify,
         HeaderMode::Sse,
     ] {
-        let map = t.build_mcp_headers(mode, None, &[]).await.unwrap();
+        let map = t.build_mcp_headers(mode, None, &key).await.unwrap();
         assert_eq!(map["x-api-key"], "subscriber-key");
         assert!(
             map.values()
@@ -201,7 +209,7 @@ async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
     }
     drop(loan);
     assert!(
-        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+        t.build_mcp_headers(HeaderMode::Notify, None, &key)
             .await
             .is_err(),
         "with nothing lent the token is no fallback"
