@@ -90,3 +90,46 @@ async fn a_malformed_result_under_enforcement_is_withheld() {
     assert_eq!(gate, GateEffect::Withheld, "{value}");
     assert_ne!(effect, Some("rewritten".into()), "{value}");
 }
+
+/// A composite's step: the plan's record is unvouched before any step runs,
+/// so a step the gate rewrites leaves the plan without a rewrite of its own.
+#[tokio::test]
+async fn a_rewritten_composite_step_leaves_the_plan_unrewritten() {
+    let meta = stripping();
+    let (gated, effect) = effect_of(|| {
+        delivery_facts::unvouched();
+        meta.apply_response_gates_effect("alpha", "read", None, "t", answer(INJECTED))
+    })
+    .await;
+    let (value, gate) = gated.expect("delivered");
+    assert_eq!(gate, GateEffect::Enforced, "premise: {value}");
+    assert_ne!(effect, Some("rewritten".into()), "{value}");
+}
+
+/// An enforced follow-up question is refused, never resumed: its frame is
+/// the gateway's refusal, so its record says refused, not rewritten.
+#[tokio::test]
+async fn an_enforced_follow_up_question_records_refused() {
+    let meta = stripping();
+    let round = json!({
+        "resultType": "input_required",
+        "content": [{ "type": "text", "text": INJECTED }],
+    });
+    let (outcome, facts) = delivery_facts::scope(async {
+        let outcome = meta.apply_response_gates_effect("alpha", "read", None, "t", round);
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    assert!(
+        matches!(outcome, Err(crate::Error::ResponseFirewallRefused)),
+        "premise: the round is refused: {outcome:?}"
+    );
+    // Recorded as the outlet records it: the delivered frame is the refusal.
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), true, false, &mut fields);
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&"refused".into()),
+        "{fields:?}"
+    );
+}

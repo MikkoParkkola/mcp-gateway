@@ -142,3 +142,70 @@ async fn a_malformed_result_the_gate_refuses_records_refused() {
         assert_eq!(row["response_effect"], "refused", "{route:?}: {row}");
     }
 }
+
+/// One keyed `read` (`r1`) on `route`.
+async fn keyed_read(fx: &fixture::Fx, route: HttpRoute) -> Value {
+    match route {
+        HttpRoute::Mcp => {
+            fixture::post_meta_invoke(fx, "k-std", "alpha", "read", json!({}), Some("r1"), None)
+                .await
+                .1
+        }
+        HttpRoute::Direct => {
+            fixture::post_direct(fx, "alpha", "k-std", "read", json!({}), Some("r1"), None)
+                .await
+                .1
+        }
+    }
+}
+
+/// An idempotency replay serves the answer its first call stored, already
+/// rewritten. The replay itself rewrote nothing, so it records no rewrite,
+/// while the first call does.
+#[tokio::test]
+async fn an_idempotency_replay_of_a_rewritten_answer_records_no_rewrite() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let (_dir, log) = temp_log(None);
+        let meta_log = Arc::clone(&log);
+        let fx = Box::pin(fixture::fixture_logged(
+            Answer::Text(INJECTED),
+            Arc::clone(&log),
+            move |mut meta| {
+                meta.enable_transparency_log(meta_log);
+                meta.set_context_integrity_kernel(ContextIntegrityKernel::new(rewriting(
+                    ContextIntegrityDecisionKind::Strip,
+                )));
+                meta
+            },
+        ))
+        .await;
+        let first = Box::pin(keyed_read(&fx, route)).await;
+        let replay = Box::pin(keyed_read(&fx, route)).await;
+        assert_eq!(
+            fx.calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "{route:?}: premise: the second call is a replay"
+        );
+        let rows = delivery_rows(&log).await;
+        let [first_row, replay_row] = rows.as_slice() else {
+            panic!("{route:?}: two delivery records: {rows:?}");
+        };
+        assert!(
+            !first.to_string().contains(INSTRUCTION),
+            "{route:?}: premise: the first call was stripped: {first}"
+        );
+        assert_eq!(
+            first_row["response_effect"], "rewritten",
+            "{route:?}: premise: the first call recorded its rewrite: {first_row}"
+        );
+        assert_eq!(
+            replay.get("result"),
+            first.get("result"),
+            "{route:?}: the replay serves the stored answer"
+        );
+        assert_ne!(
+            replay_row["response_effect"], "rewritten",
+            "{route:?}: {replay_row}"
+        );
+    }
+}
