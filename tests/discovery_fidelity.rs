@@ -107,6 +107,11 @@ fn text(output: &Output) -> String {
 
 fn write_config(home: &Home) -> PathBuf {
     let out = home.root.join("discovered.yaml");
+    // Pinned to the files store: under the default `auto` a passing keychain
+    // probe wins (the Windows and macOS shards), so the reference scheme
+    // would depend on the runner. `--write` reads the choice from this file.
+    mcp_gateway::gateway::test_helpers::write_owner_only(&out, "secrets:\n  store: files\n")
+        .unwrap();
     let output = home.run(&[
         "cap",
         "discover",
