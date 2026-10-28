@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::tests::test_router_app_state_with_auth_and_config;
+use super::ui_tool_call_cell_tests::assert_refused_delivery;
 use crate::backend::Backend;
 use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig};
 use crate::gateway::router::{AppState, create_router};
@@ -306,20 +307,6 @@ fn call(tool: &str, confirm_write: bool) -> Value {
 
 pub(super) fn sent(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)
-}
-
-/// The internal dispatch's delivery records (the only records carrying a
-/// response effect) say the gateway refused the call, and there is one.
-pub(super) fn assert_refused_delivery(fx: &Fx) {
-    let records = records(fx);
-    let effects: Vec<&Value> = records
-        .iter()
-        .filter_map(|r| r.get("response_effect"))
-        .collect();
-    assert!(
-        !effects.is_empty() && effects.iter().all(|e| *e == "refused"),
-        "{records:#?}"
-    );
 }
 
 pub(super) fn records(fx: &Fx) -> Vec<Value> {

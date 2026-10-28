@@ -8,9 +8,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::ui_tool_call_tests::{
-    ADMIN, SERVER, assert_refused_delivery, fixture, invoke, post_mcp, sent,
-};
+use super::ui_tool_call_tests::{ADMIN, Fx, SERVER, fixture, invoke, post_mcp, records, sent};
 
 /// `key`'s principal as the auth layer derives it from the secret.
 fn principal_of(key: &str) -> String {
@@ -390,4 +388,18 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
         tokio::task::yield_now().await;
     }
     assert_eq!(sent(&fx), 0, "nothing was sent after the release either");
+}
+
+/// The internal dispatch's delivery records (the only records carrying a
+/// response effect) say the gateway refused the call, and there is one.
+pub(super) fn assert_refused_delivery(fx: &Fx) {
+    let records = records(fx);
+    let effects: Vec<&Value> = records
+        .iter()
+        .filter_map(|r| r.get("response_effect"))
+        .collect();
+    assert!(
+        !effects.is_empty() && effects.iter().all(|e| *e == "refused"),
+        "{records:#?}"
+    );
 }
