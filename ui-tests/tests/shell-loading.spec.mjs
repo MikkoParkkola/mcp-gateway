@@ -197,7 +197,7 @@ test('G1b a render that settles while the loading message waits its turn is neve
   // The page's clock is paused from before it loads and moved only by runFor, so no
   // step depends on how long the host takes between two of them.
   await page.clock.install({ time: 0 });
-  await page.clock.pauseAt(1000);
+  await page.clock.pauseAt(60_000); // far ahead of any stall since install
   await recordAnnouncements(page);
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
@@ -286,7 +286,7 @@ const content = (page) => page.locator('#content');
 /** A paused clock, so busy is read between the render's start and the 300 ms onset. */
 async function pausedClock(page) {
   await page.clock.install({ time: 0 });
-  await page.clock.pauseAt(1000);
+  await page.clock.pauseAt(60_000); // far ahead of any stall since install
 }
 
 test('G8 a first render is aria-busy from its start, before the onset, and not after it settles', async ({ page }) => {
