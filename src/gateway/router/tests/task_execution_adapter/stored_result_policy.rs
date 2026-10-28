@@ -450,11 +450,11 @@ async fn state_with_record_budget(
 ) -> (
     Arc<AppState>,
     crate::gateway::router::tests::FixtureDir,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let (state, first) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
-    let dir = tempfile::tempdir().expect("a private task-store directory");
+    let dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let limits = crate::gateway::task_service::StoreLimits {
         record_bytes,
         ..crate::gateway::task_service::StoreLimits::default()
@@ -468,6 +468,9 @@ async fn state_with_record_budget(
     )
     .await
     .expect("the small-budget task store opens");
+    // The store holds a share of its directory, so a worker's late write
+    // cannot land while the test removes it.
+    service.store.keep_test_dir(Arc::clone(&dir));
     (app.tasks, app.task_executor) = (service, executor);
     (Arc::new(app), first, dir)
 }
