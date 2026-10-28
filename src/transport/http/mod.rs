@@ -281,15 +281,15 @@ pub struct HttpTransport {
     single_tenant_hint: AtomicBool,
     /// A per-user pool slot's transport: it serves one principal for life,
     /// so every session it holds is that principal's and lives in one bucket,
-    /// whatever identity key a send names (MIK-8994).
+    /// whatever identity key a send names.
     slot_owned: AtomicBool,
     /// A per-user slot of a backend whose identity binding is required: no
     /// send carries the backend's static headers or a gateway token, and each
     /// carries only the credential the dispatch in flight lends (ADR-007
-    /// IDP.7, MIK-8994). Nothing lent: nothing is sent.
+    /// IDP.7). Nothing lent: nothing is sent.
     lent_only: AtomicBool,
     /// The slot's lender: the credentials its dispatches in flight lend,
-    /// read by every send of a lent-only transport (MIK-8994).
+    /// read by every send of a lent-only transport.
     lender: std::sync::OnceLock<Arc<crate::transport::Lender>>,
     /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
@@ -393,7 +393,7 @@ fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
 }
 
-/// What a per-user slot's transport may send with (MIK-8994).
+/// What a per-user slot's transport may send with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SlotCredential {
     /// A may-share backend: the backend's static headers as configured, and
@@ -596,7 +596,7 @@ impl HttpTransport {
 
     /// Mark this transport as a per-user pool slot's: one principal, one
     /// session bucket, and, for `credential` [`SlotCredential::LentOnly`],
-    /// only the credential a dispatch in flight lends (MIK-8994).
+    /// only the credential a dispatch in flight lends.
     pub(crate) fn mark_per_user_slot(
         &self,
         credential: SlotCredential,
@@ -621,7 +621,7 @@ impl HttpTransport {
     }
 
     /// The session bucket a send under `identity_key` reads and writes: the
-    /// one bucket of a per-user slot, else the caller's own (MIK-6784).
+    /// one bucket of a per-user slot, else the caller's own.
     fn bucket<'a>(&self, identity_key: Option<&'a str>) -> &'a str {
         if self.slot_owned.load(Ordering::Relaxed) {
             ""

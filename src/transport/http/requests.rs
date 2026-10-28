@@ -73,7 +73,7 @@ impl HttpTransport {
         // A lent-only per-user slot sends nothing of the gateway's: no static
         // header and no gateway token, only what the dispatch in flight lends,
         // merged last. With nothing lent there is no subscriber to send as,
-        // so nothing is sent (MIK-8994).
+        // so nothing is sent.
         let lent = if self.is_lent_only() {
             let lent = self.lent_now().filter(|headers| !headers.is_empty());
             Some(lent.ok_or_else(|| {

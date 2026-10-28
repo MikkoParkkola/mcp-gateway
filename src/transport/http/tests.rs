@@ -49,7 +49,7 @@ mod cancel_on_drop;
 /// The outbound half over HTTP, and status-carried JSON-RPC errors.
 mod outbound;
 
-/// MIK-8994: a required binding's per-user slot sends only what a dispatch
+/// A required binding's per-user slot sends only what a dispatch
 /// in flight lends.
 mod lent_slot;
 

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A per-user pool slot's lender (MIK-8994, ADR-007 IDP.7): the credentials
+//! A per-user pool slot's lender (ADR-007 IDP.7): the credentials
 //! the dispatches now in flight on the slot lend to its transport. A
 //! lent-only transport sends only what is lent here, so a send with no
 //! dispatch in flight (a session DELETE on close, a reconnect between calls)

@@ -27,7 +27,7 @@ enum Attempts {
 
 impl Backend {
     /// The loan a dispatch holds on its per-user slot for its whole run, the
-    /// slot's start included (MIK-8994, ADR-007 IDP.7): a lent-only slot
+    /// slot's start included (ADR-007 IDP.7): a lent-only slot
     /// sends only this dispatch's credential. `None` for a Shared slot and
     /// for a slot that keeps its configured headers. A required binding's
     /// dispatch that carries no credential is refused before anything is

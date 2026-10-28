@@ -562,7 +562,7 @@ impl Backend {
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
                 // A required binding's per-user slot carries nothing of the
-                // gateway's (MIK-8994): no static header and no OAuth client,
+                // gateway's: no static header and no OAuth client,
                 // as the per-user listener's transport is built.
                 let slot =
                     matches!(key, PoolKey::PerUser { .. }).then(|| self.per_user_slot_credential());

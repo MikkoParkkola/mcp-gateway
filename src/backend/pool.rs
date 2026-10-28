@@ -102,7 +102,7 @@ pub(crate) struct PooledEntry {
     /// detached re-probe outlives the request that triggered it.
     pub(crate) era: Arc<crate::protocol::era::EraCache>,
     /// The credentials this slot's dispatches in flight lend its transport
-    /// (MIK-8994). A per-user slot's transport reads it on every send; a
+    ///. A per-user slot's transport reads it on every send; a
     /// required backend's sends nothing else.
     pub(crate) lender: Arc<crate::transport::Lender>,
     /// The four metadata caches, and the set derived from the first of them.
@@ -335,7 +335,7 @@ impl Backend {
         Ok(())
     }
 
-    /// What this backend's per-user slots may send with (MIK-8994, ADR-007
+    /// What this backend's per-user slots may send with (ADR-007
     /// IDP.7): a required identity binding, whatever its session mode, sends
     /// only the credential its dispatch lends, never a static header or a
     /// gateway token; a may-share binding (an optional one) keeps its

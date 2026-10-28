@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8994 (START.7, START.8, START.9): a lent-only per-user slot's
+//! A lent-only per-user slot's
 //! transport sends only the credential a dispatch in flight lends, never its
 //! static headers, and sends nothing with no dispatch in flight; a slot that
 //! keeps its configured headers is unchanged.

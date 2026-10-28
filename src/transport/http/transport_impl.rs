@@ -288,7 +288,7 @@ impl Transport for HttpTransport {
 
         // A lent-only slot closes with no subscriber in flight to send as:
         // its session is left to the backend's own expiry rather than ended
-        // with a request carrying no subscriber's credential (MIK-8994).
+        // with a request carrying no subscriber's credential.
         if self.is_lent_only() {
             debug!(target: HTTP_TARGET, "Lent-only slot closed: no session DELETE without a subscriber");
             return Ok(());
