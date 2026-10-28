@@ -14,6 +14,10 @@ use chrono::TimeZone;
 use super::view::{Filter, Window, previous_buckets, window_slots};
 use super::{CounterStore, HALF, Inner, Metric, Series};
 
+/// One label's calls: `(last 24 hours, the same hours of the day before)`,
+/// each `None` when it could be low.
+pub(crate) type CallWindows = (Option<u64>, Option<u64>);
+
 /// What [`CounterStore::window_sums`] read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WindowSums {
@@ -21,7 +25,7 @@ pub(crate) struct WindowSums {
     pub since: u64,
     /// `(last 24 hours, the same hours of the day before)` per asked label,
     /// in the order asked.
-    pub counts: Vec<(Option<u64>, Option<u64>)>,
+    pub counts: Vec<CallWindows>,
 }
 
 impl CounterStore {

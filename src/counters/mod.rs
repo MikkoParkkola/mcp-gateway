@@ -32,7 +32,7 @@ mod view;
 
 pub(crate) use ring::Series;
 #[cfg(any(test, feature = "webui"))]
-pub(crate) use sums::WindowSums;
+pub(crate) use sums::CallWindows;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use view::{Filter, Query, Window};
 #[cfg(test)]

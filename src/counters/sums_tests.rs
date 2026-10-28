@@ -10,7 +10,6 @@ use chrono_tz::{Europe::Amsterdam, UTC};
 use super::*;
 
 const HOUR: u64 = 3600;
-const DAY: u64 = 86_400;
 /// 2026-10-20T00:00:00Z.
 const T0: u64 = 1_792_454_400;
 

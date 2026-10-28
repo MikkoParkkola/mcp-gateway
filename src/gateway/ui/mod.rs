@@ -767,7 +767,7 @@ struct ToolsQuery {
 fn call_windows(
     state: &AppState,
     labels: &[crate::counters::Filter<'_>],
-) -> (Vec<(Option<u64>, Option<u64>)>, Option<u64>) {
+) -> (Vec<crate::counters::CallWindows>, Option<u64>) {
     let unknown = || vec![(None, None); labels.len()];
     let (Some(store), Ok(now)) = (state.meta_mcp.counters(), crate::clock::unix_secs()) else {
         return (unknown(), None);
