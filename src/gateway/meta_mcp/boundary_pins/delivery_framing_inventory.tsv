@@ -104,7 +104,7 @@ src/gateway/meta_mcp/task_confirmation.rs	redeem	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse	JsonRpcResponse::error	1
 src/gateway/meta_mcp/task_replay.rs	retry_later	error_response_preserving_status	1
 src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	JsonRpcResponse::error	1
-src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	6
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	error_response_preserving_status	5
 src/gateway/meta_mcp/visibility.rs	grant_evaluation	Error::json_rpc	1
 src/gateway/meta_mcp/visibility.rs	settle_grant	Error::json_rpc	1
 src/gateway/meta_mcp/visibility.rs	withheld_surfaced_in	Error::json_rpc	1
@@ -144,9 +144,9 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	admit_signing_nonce	build
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	JsonRpcResponse::error	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	build_http_response	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	build_http_response	1
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	build_http_response	1
-src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	build_http_response	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	build_http_response	1
+src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_plain	build_http_response	1
+src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_sanitized	build_http_response	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::error	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::error_with_data	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	build_http_response	2
@@ -244,5 +244,6 @@ src/gateway/task_route.rs	store_unavailable	JsonRpcResponse::error	1
 src/gateway/task_route.rs	update	JsonRpcResponse::error	5
 src/gateway/task_route.rs	update	error_response_preserving_status	1
 src/gateway/task_service/execution.rs	into_response	JsonRpcResponse::error	5
-src/gateway/task_service/execution/worker.rs	inspect_settled_pinned	delivery_refusal_error	1
+src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	JsonRpcResponse::error	1
+src/gateway/task_service/execution/worker_inspect.rs	inspect_settled_pinned	delivery_refusal_error	1
 src/gateway/task_service/host.rs	readmit	JsonRpcResponse::error	1
