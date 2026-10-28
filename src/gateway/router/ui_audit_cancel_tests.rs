@@ -290,3 +290,74 @@ async fn an_uncancelled_write_is_recorded_once() {
     assert_eq!(records.len(), 1, "exactly one record: {records:#?}");
     assert_eq!(records[0]["who"]["account"], KEY, "{}", records[0]);
 }
+
+/// A request cancelled while the audit log is still admitting it runs no
+/// handler: nothing is written and nothing is recorded. Admission is held by
+/// stalling the probe write a degraded log makes before it admits; the
+/// request is dropped there, then the probe is let go. Every task the
+/// request started has ended before the effects are read.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_request_cancelled_during_admission_writes_and_records_nothing() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    fx.log.set_append_failure_for_test(true);
+    assert!(fx.log.probe().is_err(), "the priming append fails");
+    fx.log.set_append_failure_for_test(false);
+    assert!(fx.log.is_degraded(), "admission will probe");
+    let stall = fx.log.stall_next_write_for_test(GUARD);
+    let metrics = tokio::runtime::Handle::current().metrics();
+    let baseline = metrics.num_alive_tasks();
+
+    let request = fx.spawn(fx.request(
+        "POST",
+        "/ui/api/backends",
+        &json!({"name": "b", "url": "http://127.0.0.1:9/b"}),
+    ));
+    let gate = Arc::clone(&stall.0);
+    let entered = tokio::task::spawn_blocking(move || gate.wait_entered())
+        .await
+        .expect("the gate wait");
+    assert!(entered, "admission's probe reached the stalled write");
+    request.abort();
+    let _ = request.await;
+    drop(stall);
+
+    let deadline = tokio::time::Instant::now() + GUARD;
+    while metrics.num_alive_tasks() > baseline {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a task the request started never ended"
+        );
+        tokio::task::yield_now().await;
+    }
+    let file = std::fs::read_to_string(&fx.path).expect("read config");
+    assert_eq!(file, START, "nothing was written");
+    assert!(!fx.ctx.live_config.get().backends.contains_key("b"));
+    assert!(fx.admin_actions().is_empty(), "{:#?}", fx.admin_actions());
+}
+
+/// A handler whose only act is to panic.
+async fn panicking_handler() -> StatusCode {
+    panic!("handler panic payload")
+}
+
+/// A handler that panics still panics out of the layer, with its own
+/// payload, rather than being answered as a 500 (test and dev builds;
+/// release builds abort on panic).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_handler_panic_still_panics_out_of_the_layer() {
+    let fx = fixture(AuditFailurePolicy::FailClosed).await;
+    let panics =
+        axum::Router::new().route("/ui/api/panics", axum::routing::post(panicking_handler));
+    let router = crate::gateway::ui::admin_audit::behind_admin_layer_for_test(panics, &fx.state)
+        .with_state(Arc::clone(&fx.state));
+    let request = fx.request("POST", "/ui/api/panics", &json!({}));
+    let joined = tokio::spawn(async move { router.oneshot(request).await }).await;
+    let error = joined.expect_err("the layer panicked");
+    assert!(error.is_panic(), "{error}");
+    let payload = error.into_panic();
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"handler panic payload"),
+        "the handler's own payload"
+    );
+}

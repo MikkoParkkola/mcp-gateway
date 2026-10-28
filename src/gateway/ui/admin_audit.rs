@@ -59,6 +59,19 @@ pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     ))
 }
 
+/// Test-only: `router` behind the same layer, for rows that need a handler
+/// the API router does not have (one that panics).
+#[cfg(test)]
+pub(crate) fn behind_admin_layer_for_test(
+    router: Router<Arc<AppState>>,
+    state: &Arc<AppState>,
+) -> Router<Arc<AppState>> {
+    router.route_layer(axum::middleware::from_fn_with_state(
+        Arc::clone(state),
+        admin_action_layer,
+    ))
+}
+
 /// The layer. With no audit log configured it passes every request through.
 /// A refusal is counted on every path (D4), from the handler's own answer.
 async fn admin_action_layer(
