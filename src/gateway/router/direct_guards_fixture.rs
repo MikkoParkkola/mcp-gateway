@@ -373,6 +373,7 @@ mod quota;
 mod requests;
 #[cfg(feature = "firewall")]
 pub(crate) use egress::fixture_hardened_signed_built_on;
+pub(crate) use egress::fixture_logged;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
