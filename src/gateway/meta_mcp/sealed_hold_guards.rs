@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 /// result, a cached replay, and the task envelope builder itself.
 const PROJECTIONS: &[&str] = &[
     r"\.wire\(\)",
+    r"::wire\(",
     r"\.delivered_wire\(\)",
+    r"::delivered_wire\(",
     r"\.result\(\)",
     r"GuardOutcome::CachedResult\(",
     r"SyncAdmission::Replay\(",
@@ -522,6 +524,8 @@ const HELD_CALL: &str = concat!(
     "iver(HoldSink::Scope);\n    task.delivered",
     "_wire()"
 );
+const UNHELD_UFCS_DELIVERY: &str = concat!("    CommittedTask::delivered", "_wire(&task)");
+const UNHELD_UFCS_WIRE: &str = concat!("    Task::wi", "re(&task.task)");
 const INNER_WIRE: &str = concat!("    to_value(self.task.wi", "re())");
 const INNER_RESULT: &str = concat!("    self.task.res", "ult()");
 fn synthetic_fn(name: &str, body: &str) -> String {
@@ -572,4 +576,24 @@ fn the_delivery_projection_excuse_covers_its_inner_wire_only() {
         excused(INNER_RESULT),
         vec!["task_service/record.rs:2: delivered_wire".to_owned()],
     );
+}
+
+/// The fully qualified spellings the compiler also accepts are projections
+/// too: an unheld `Type::method(&value)` call is reported like a dot-call.
+#[test]
+fn an_unheld_qualified_path_projection_is_reported() {
+    for (name, body) in [
+        ("ufcs_delivery", UNHELD_UFCS_DELIVERY),
+        ("ufcs_wire", UNHELD_UFCS_WIRE),
+    ] {
+        assert_eq!(
+            unguarded_in(
+                "task_route.rs",
+                &synthetic_fn(name, body),
+                &[DECISION_ONLY, OWNED_ELSEWHERE]
+            ),
+            vec![format!("task_route.rs:2: {name}")],
+            "{name}"
+        );
+    }
 }
