@@ -4,11 +4,131 @@
 //! resolved key list: one store for the process, shared by every resolved
 //! auth config built over it, so a reload that rebuilds the key list does not
 //! reset any client's usage or breaker.
+//!
+//! The buckets are not `governor` limiters: a reload may change a key's
+//! `rate_limit`, and the design keeps the usage already spent under the new
+//! rate, which needs a bucket whose rate can change in place. `governor`
+//! exposes neither. [`ClientBucket`] runs the same GCRA as
+//! `governor::Quota::per_minute(rate)` (burst = rate), pinned to it by the
+//! equivalence rows.
 
-/// The shared per-client store (stub: not yet used by the auth config).
+use std::num::NonZeroU32;
+use std::sync::{Arc, OnceLock};
+use std::time::Instant;
+
+use dashmap::DashMap;
+
+use crate::config::CircuitBreakerConfig;
+use crate::failsafe::CircuitBreaker;
+
+/// Nanoseconds in the one-minute period a `rate_limit` counts over.
+const MINUTE_NS: u128 = 60_000_000_000;
+
+/// The shared per-client store, keyed by the credential's state key, never by
+/// a display name (MIK-8489).
 #[derive(Debug, Default)]
-pub(crate) struct AuthRuntime;
+pub(crate) struct AuthRuntime {
+    buckets: DashMap<String, Arc<ClientBucket>>,
+    breakers: DashMap<String, Arc<CircuitBreaker>>,
+}
+
+impl AuthRuntime {
+    /// Whether one more request fits `key`'s bucket at `rate` per minute. A
+    /// bucket made at another rate is first re-priced to `rate`, keeping what
+    /// was spent.
+    pub(crate) fn admit(&self, key: String, rate: NonZeroU32) -> bool {
+        let bucket = self
+            .buckets
+            .entry(key)
+            .or_insert_with(|| Arc::new(ClientBucket::new(rate)))
+            .clone();
+        bucket.check_at(rate, now_ns())
+    }
+
+    /// `key`'s breaker, made under `config` on first use. A breaker keeps the
+    /// policy it was made with: `client_circuit_breaker` is restart-only.
+    pub(crate) fn breaker(
+        &self,
+        key: String,
+        label: &str,
+        config: &CircuitBreakerConfig,
+    ) -> Arc<CircuitBreaker> {
+        self.breakers
+            .entry(key)
+            .or_insert_with(|| Arc::new(CircuitBreaker::new(label, config)))
+            .clone()
+    }
+
+    /// `key`'s breaker, if one was made.
+    pub(crate) fn existing_breaker(&self, key: &str) -> Option<Arc<CircuitBreaker>> {
+        self.breakers.get(key).map(|breaker| Arc::clone(&breaker))
+    }
+}
+
+/// One client's bucket: GCRA in integer nanoseconds, as `governor` runs
+/// `Quota::per_minute(rate)`, with a rate that can change in place.
+#[derive(Debug)]
+pub(crate) struct ClientBucket {
+    state: parking_lot::Mutex<BucketState>,
+}
+
+#[derive(Debug)]
+struct BucketState {
+    rate: NonZeroU32,
+    /// The theoretical arrival time of the next request, in nanoseconds on
+    /// [`now_ns`]'s clock; `None` until the first request.
+    tat: Option<u64>,
+}
+
+impl ClientBucket {
+    pub(crate) fn new(rate: NonZeroU32) -> Self {
+        Self {
+            state: parking_lot::Mutex::new(BucketState { rate, tat: None }),
+        }
+    }
+
+    /// Whether a request at `t0` fits at `rate`. A changed rate re-prices the
+    /// requests still owed: the same count of them, at the new interval. Both
+    /// steps run under the one lock, which is never held across an await.
+    pub(crate) fn check_at(&self, rate: NonZeroU32, t0: u64) -> bool {
+        let mut state = self.state.lock();
+        if state.rate != rate {
+            if let Some(tat) = state.tat.filter(|&tat| tat > t0) {
+                let owed = u128::from(tat - t0) * u128::from(interval(rate))
+                    / u128::from(interval(state.rate));
+                state.tat = Some(t0.saturating_add(u64::try_from(owed).unwrap_or(u64::MAX)));
+            }
+            state.rate = rate;
+        }
+        let t = interval(rate);
+        let tau = t * (u64::from(rate.get()) - 1);
+        let tat = state.tat.unwrap_or(t0);
+        if t0 < tat.saturating_sub(tau) {
+            return false;
+        }
+        state.tat = Some(tat.max(t0).saturating_add(t));
+        true
+    }
+}
+
+/// One request's cost in nanoseconds at `rate` per minute, truncated as
+/// `governor::Quota::per_minute` truncates it, and never zero.
+fn interval(rate: NonZeroU32) -> u64 {
+    u64::try_from(MINUTE_NS / u128::from(rate.get()))
+        .unwrap_or(u64::MAX)
+        .max(1)
+}
+
+/// Nanoseconds since the first bucket check in this process.
+fn now_ns() -> u64 {
+    static ANCHOR: OnceLock<Instant> = OnceLock::new();
+    u64::try_from(ANCHOR.get_or_init(Instant::now).elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
 
 #[cfg(test)]
 #[path = "auth_runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "auth_bucket_tests.rs"]
+mod bucket_tests;

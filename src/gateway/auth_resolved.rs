@@ -6,8 +6,6 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use dashmap::DashMap;
-use governor::{Quota, RateLimiter};
 use tracing::warn;
 
 use super::{
@@ -131,18 +129,18 @@ impl ResolvedAuthConfig {
             bearer_quota_principal,
             api_keys,
             public_paths: config.enforced_public_paths(),
-            rate_limiters: DashMap::new(),
             client_circuit_breaker: config.client_circuit_breaker.clone(),
-            client_circuit_breakers: DashMap::new(),
+            runtime: Arc::default(),
             record_key,
         })
     }
 
     /// This config with its per-client buckets and breakers in `runtime`, the
-    /// store shared by every config built over it (stub: not yet used).
+    /// store shared by every config built over it, so rebuilding the key list
+    /// resets no client's usage or breaker.
     #[must_use]
-    pub(crate) fn with_runtime(self, _runtime: Arc<super::runtime::AuthRuntime>) -> Self {
-        self
+    pub(crate) fn with_runtime(self, runtime: Arc<super::runtime::AuthRuntime>) -> Self {
+        Self { runtime, ..self }
     }
 
     /// Create resolved config from `AuthConfig`.
@@ -384,12 +382,7 @@ impl ResolvedAuthConfig {
         let Some(quota) = NonZeroU32::new(client.rate_limit) else {
             return true;
         };
-        let limiter = self
-            .rate_limiters
-            .entry(client_state_key(client))
-            .or_insert_with(|| Arc::new(RateLimiter::direct(Quota::per_minute(quota))))
-            .clone();
-        limiter.check().is_ok()
+        self.runtime.admit(client_state_key(client), quota)
     }
 
     /// Check whether this authenticated client's dispatch circuit allows a request.
@@ -420,8 +413,8 @@ impl ResolvedAuthConfig {
     /// Return the current circuit state for tests and observability adapters.
     #[must_use]
     pub fn client_circuit_state(&self, client: &AuthenticatedClient) -> Option<CircuitState> {
-        self.client_circuit_breakers
-            .get(&client_state_key(client))
+        self.runtime
+            .existing_breaker(&client_state_key(client))
             .map(|breaker| breaker.state())
     }
 
@@ -438,16 +431,12 @@ impl ResolvedAuthConfig {
         client: &AuthenticatedClient,
         config: &CircuitBreakerConfig,
     ) -> Arc<CircuitBreaker> {
-        self.client_circuit_breakers
-            .entry(client_state_key(client))
-            .or_insert_with(|| {
-                // The label is for logs only; the map key is the credential.
-                Arc::new(CircuitBreaker::new(
-                    &format!("client:{}", client.name),
-                    config,
-                ))
-            })
-            .clone()
+        // The label is for logs only; the store key is the credential.
+        self.runtime.breaker(
+            client_state_key(client),
+            &format!("client:{}", client.name),
+            config,
+        )
     }
 }
 
