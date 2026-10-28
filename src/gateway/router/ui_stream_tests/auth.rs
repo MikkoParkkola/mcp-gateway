@@ -143,3 +143,16 @@ async fn a_frame_waiting_for_room_is_not_sent_after_the_credential_is_revoked() 
     let next = s.next().await;
     assert!(next.is_none(), "a revoked viewer got {next:?}");
 }
+
+#[tokio::test]
+async fn a_credential_check_that_never_answers_ends_the_stream_within_its_deadline() {
+    let (state, _dir) = fixture().await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    s.until("status").await;
+    state
+        .dashboard_bootstrap
+        .stream_hub()
+        .hang_validation_for_test(true);
+    let bound = Duration::from_secs(5);
+    assert!(s.ended_within(bound).await, "ended within {bound:?}");
+}

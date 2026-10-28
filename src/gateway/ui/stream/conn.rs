@@ -100,6 +100,15 @@ impl Conn {
 
     /// Whether the held credential still gives this connection what it had.
     async fn still_entitled(&self) -> bool {
+        #[cfg(test)]
+        if self
+            .state
+            .dashboard_bootstrap
+            .stream_hub()
+            .validation_hangs()
+        {
+            std::future::pending::<()>().await;
+        }
         match current_caller(&self.auth, self.held.as_ref()).await {
             Some(caller) => super::kinds_for(&caller.client) == self.kinds,
             None => false,

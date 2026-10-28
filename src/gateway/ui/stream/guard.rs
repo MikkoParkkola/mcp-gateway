@@ -69,6 +69,9 @@ struct Shared {
     boot: u64,
     inner: Mutex<Inner>,
     snapshot: watch::Sender<Snapshot>,
+    /// Test seam: credential validation never answers while set.
+    #[cfg(test)]
+    hang_validation: std::sync::atomic::AtomicBool,
 }
 
 /// Caps, the watcher's lifetime and its published state.
@@ -104,6 +107,8 @@ impl StreamHub {
                 boot: rand::rng().random(),
                 inner: Mutex::new(Inner::default()),
                 snapshot: watch::channel(Snapshot::default()).0,
+                #[cfg(test)]
+                hang_validation: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -132,6 +137,21 @@ impl StreamHub {
         let watcher = self.shared.lock().watcher.clone()?;
         watcher.abort();
         Some(watcher)
+    }
+
+    /// Make credential validation hang (or not), as a stuck key-server or
+    /// discovery fetch would.
+    #[cfg(test)]
+    pub(crate) fn hang_validation_for_test(&self, on: bool) {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.shared.hang_validation.store(on, SeqCst);
+    }
+
+    #[cfg(test)]
+    pub(super) fn validation_hangs(&self) -> bool {
+        self.shared
+            .hang_validation
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Take a slot for `credential`, starting the watcher with `start` if
