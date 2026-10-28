@@ -373,3 +373,64 @@ async fn a_passthrough_stamp_comes_only_from_a_leased_runs_fence() {
         "an unmarked fence names no lease"
     );
 }
+
+/// Every file under `dir`, recursively.
+fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let mut dirs = vec![dir.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("readable").flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// LEASE-T5: a lease is memory only. After a restart the subscription row is
+/// still there and waits in "credential needed", and no file the store
+/// wrote holds the token or its claims.
+#[tokio::test]
+async fn lease_t5_after_a_restart_the_row_needs_a_credential_and_no_file_holds_the_token() {
+    let f = fixture();
+    let handle = subscribe(&f, "p", "pt", "p");
+    let leased = token(Some(in_an_hour()));
+    let secret = leased.to_string();
+    let claims = secret.split('.').nth(1).expect("a JWT payload").to_owned();
+    lease_as(&f, &handle, leased).await;
+    let key = lease_key(&f, "p");
+    assert!(
+        f.hub.leases.held_generation(&key).is_some(),
+        "premise: leased"
+    );
+    let Fixture { hub, dir, .. } = f;
+    drop(hub);
+    let reopened = EventsHub::open(&crate::config::EventsConfig::default(), dir.path())
+        .expect("the store reopens");
+    assert!(
+        reopened
+            .store
+            .subscriptions()
+            .iter()
+            .any(|s| s.name == "backend.pt.tools_changed"),
+        "premise: the row survives the restart"
+    );
+    assert_eq!(reopened.leases.held_generation(&key), None);
+    assert_eq!(
+        reopened.leases.state(&key).await,
+        crate::events::lease::LeaseState::CredentialNeeded
+    );
+    for file in files_under(dir.path()) {
+        let bytes = std::fs::read(&file).expect("readable");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains(&secret) && !text.contains(&claims),
+            "{} holds the leased token",
+            file.display()
+        );
+    }
+}
