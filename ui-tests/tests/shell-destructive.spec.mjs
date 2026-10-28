@@ -589,6 +589,8 @@ test.describe('code review round 1', () => {
     expect(box.y + box.height).toBeLessThanOrEqual(120);
     // Not vacuous: the dialog is there, and its buttons can be scrolled to inside it.
     expect(box.height).toBeGreaterThan(40);
+    // A user can scroll it: content taller than the dialog is never clipped away.
+    expect(await dialog(page).evaluate((d) => d.scrollHeight <= d.clientHeight || ['auto', 'scroll'].includes(getComputedStyle(d).overflowY))).toBe(true);
     await action(page).scrollIntoViewIfNeeded();
     const button = await action(page).boundingBox();
     expect(button.y >= 0 && button.y + button.height <= 120).toBe(true);
