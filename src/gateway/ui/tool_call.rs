@@ -87,30 +87,9 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
         return admin_auth_required().into_response();
     }
     let (parts, body) = request.into_parts();
-    // `DefaultBodyLimit` binds extractors only, so this read is capped here.
-    let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
-        return refusal(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "the body could not be read",
-            Disposition::NotRun,
-        );
-    };
-    let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&bytes) else {
-        return refusal(
-            StatusCode::BAD_REQUEST,
-            "bad_request",
-            "the body is not a JSON object",
-            Disposition::NotRun,
-        );
-    };
-    let Ok(ask) = serde_json::from_value::<CallRequest>(Value::Object(object)) else {
-        return refusal(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "invalid",
-            "expected server, tool, arguments (an object) and confirm_write only",
-            Disposition::NotRun,
-        );
+    let ask = match parse(body).await {
+        Ok(ask) => ask,
+        Err(refused) => return refused,
     };
     let via = via_label(&state, client.as_ref(), &parts.extensions);
     let mut detail = Map::new();
@@ -119,40 +98,10 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     detail.insert("tool".into(), ask.tool.clone().into());
     detail.insert("confirm_write".into(), ask.confirm_write.into());
 
-    // Under required signing every call carries the caller's nonce; the
-    // route mints none on its behalf. Refused here: unsigned, dispatch would
-    // answer with the code a missing tool also uses.
-    if state.meta_mcp.requires_call_nonce() {
-        return finish(
-            refusal(
-                StatusCode::FORBIDDEN,
-                "signing_required",
-                "this gateway requires signed calls; use a signing client",
-                Disposition::NotRun,
-            ),
-            detail,
-            Disposition::NotRun,
-            None,
-        );
-    }
-    // One of the few UI calls that may run at once, and the drain tracker's
-    // permit, so shutdown waits for a call that runs on past its answer.
-    let pool = Arc::clone(state.meta_mcp.ui_call_permits()).try_acquire_owned();
-    let drain = Arc::clone(&state.inflight).try_acquire_owned();
-    let (Ok(pool), Ok(drain)) = (pool, drain) else {
-        return finish(
-            refusal(
-                StatusCode::FORBIDDEN,
-                "busy",
-                "too many tool calls are running from the web UI; nothing was run",
-                Disposition::NotRun,
-            ),
-            detail,
-            Disposition::NotRun,
-            None,
-        );
+    let permit = match admit(&state) {
+        Ok(permit) => permit,
+        Err(refused) => return finish(refused, detail, Disposition::NotRun, None),
     };
-    let permit = (pool, drain);
     let principal = client
         .as_ref()
         .map(|c| c.principal.storage_form().to_owned())
@@ -173,29 +122,7 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     };
     let abort = spawn_call(&state, &ui_call, internal, permit, answered, follow_up);
     let Ok(answer) = tokio::time::timeout(deadline(), answer).await else {
-        if !ui_call.outcome().dispatched {
-            // Nothing was sent: nothing runs on past this answer.
-            abort.abort();
-        }
-        // Read after the abort: a send that began in between is marked
-        // before it starts, so it reads here as may-have-run.
-        let outcome = ui_call.outcome();
-        let disposition = if outcome.dispatched {
-            Disposition::MayHaveRun
-        } else {
-            Disposition::NotRun
-        };
-        return finish(
-            refusal(
-                StatusCode::GATEWAY_TIMEOUT,
-                "deadline",
-                "no answer in time; the tool may still be running",
-                disposition,
-            ),
-            detail,
-            disposition,
-            outcome.trace,
-        );
+        return past_deadline(&ui_call, &abort, detail);
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let outcome = ui_call.outcome();
@@ -203,27 +130,126 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     let answer = answer.ok().flatten();
     let (status, disposition) = classify(&outcome, answer.as_ref());
     let response = if status == StatusCode::OK {
-        let result = answer
-            .as_ref()
-            .and_then(|a| a.get("result"))
-            .map(tool_result)
-            .unwrap_or(Value::Null);
-        let is_error = result.get("isError").and_then(Value::as_bool) == Some(true);
-        let mut body = json!({
-            "result": result,
-            "is_error": is_error,
-            "latency_ms": latency_ms,
-            "disposition": disposition.as_str(),
-        });
-        if let Some(trace) = &outcome.trace {
-            body["receipt"] = trace.as_ref().into();
-        }
-        (status, axum::Json(body)).into_response()
+        ran(answer.as_ref(), latency_ms, outcome.trace.as_deref())
     } else {
         let (code, message) = wording(status);
         refusal(status, code, message, disposition)
     };
     finish(response, detail, disposition, outcome.trace)
+}
+
+/// The request body, read under its own cap: `DefaultBodyLimit` binds
+/// extractors only.
+async fn parse(body: Body) -> Result<CallRequest, Response> {
+    let Ok(bytes) = axum::body::to_bytes(body, MAX_BODY).await else {
+        return Err(refusal(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the body could not be read",
+            Disposition::NotRun,
+        ));
+    };
+    let Ok(Value::Object(object)) = serde_json::from_slice::<Value>(&bytes) else {
+        return Err(refusal(
+            StatusCode::BAD_REQUEST,
+            "bad_request",
+            "the body is not a JSON object",
+            Disposition::NotRun,
+        ));
+    };
+    serde_json::from_value::<CallRequest>(Value::Object(object)).map_err(|_| {
+        refusal(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            "expected server, tool, arguments (an object) and confirm_write only",
+            Disposition::NotRun,
+        )
+    })
+}
+
+/// The refusals before anything is built, and the permits a call runs on.
+fn admit(
+    state: &AppState,
+) -> Result<
+    (
+        tokio::sync::OwnedSemaphorePermit,
+        tokio::sync::OwnedSemaphorePermit,
+    ),
+    Response,
+> {
+    // Under required signing every call carries the caller's nonce; the
+    // route mints none on its behalf. Refused here: unsigned, dispatch would
+    // answer with the code a missing tool also uses.
+    if state.meta_mcp.requires_call_nonce() {
+        return Err(refusal(
+            StatusCode::FORBIDDEN,
+            "signing_required",
+            "this gateway requires signed calls; use a signing client",
+            Disposition::NotRun,
+        ));
+    }
+    // One of the few UI calls that may run at once, and the drain tracker's
+    // permit, so shutdown waits for a call that runs on past its answer.
+    let pool = Arc::clone(state.meta_mcp.ui_call_permits()).try_acquire_owned();
+    let drain = Arc::clone(&state.inflight).try_acquire_owned();
+    match (pool, drain) {
+        (Ok(pool), Ok(drain)) => Ok((pool, drain)),
+        _ => Err(refusal(
+            StatusCode::FORBIDDEN,
+            "busy",
+            "too many tool calls are running from the web UI; nothing was run",
+            Disposition::NotRun,
+        )),
+    }
+}
+
+/// The 504: a call not yet sent is stopped; one sent runs on.
+fn past_deadline(
+    ui_call: &UiCall,
+    abort: &tokio::task::AbortHandle,
+    detail: Map<String, Value>,
+) -> Response {
+    if !ui_call.outcome().dispatched {
+        // Nothing was sent: nothing runs on past this answer.
+        abort.abort();
+    }
+    // Read after the abort: a send that began in between is marked before
+    // it starts, so it reads here as may-have-run.
+    let outcome = ui_call.outcome();
+    let disposition = if outcome.dispatched {
+        Disposition::MayHaveRun
+    } else {
+        Disposition::NotRun
+    };
+    finish(
+        refusal(
+            StatusCode::GATEWAY_TIMEOUT,
+            "deadline",
+            "no answer in time; the tool may still be running",
+            disposition,
+        ),
+        detail,
+        disposition,
+        outcome.trace,
+    )
+}
+
+/// The 200 body of a call that ran.
+fn ran(answer: Option<&Value>, latency_ms: u64, trace: Option<&str>) -> Response {
+    let result = answer
+        .and_then(|a| a.get("result"))
+        .map_or(Value::Null, tool_result);
+    let is_error = result.get("isError").and_then(Value::as_bool) == Some(true);
+    let mut body = json!({
+        "result": result,
+        "is_error": is_error,
+        "latency_ms": latency_ms,
+        "disposition": Disposition::Ran.as_str(),
+    });
+    if let Some(trace) = trace {
+        body["receipt"] = trace.into();
+    }
+    (StatusCode::OK, axum::Json(body)).into_response()
 }
 
 /// Who and what the completion record names, captured before the spawn.

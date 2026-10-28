@@ -150,3 +150,13 @@ pub(crate) async fn send_with_headers(
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&body).unwrap())
 }
+
+/// Any fixture builder, run with the admin key `k-admin` added (the web UI's
+/// tool route runs only for an admin); off by default, so no other row's key
+/// set changes.
+pub(crate) async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
+    super::WITH_ADMIN.with(|s| s.set(true));
+    let fx = build.await;
+    super::WITH_ADMIN.with(|s| s.set(false));
+    fx
+}

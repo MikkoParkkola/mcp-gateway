@@ -294,7 +294,8 @@ pub(super) fn admin_actions(fx: &Fx) -> Vec<Value> {
 async fn t1_a_declared_read_runs_and_returns_its_receipt() {
     let fx = fixture().await;
     let (status, body) = post(&fx, ADMIN, call("read", false)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    // On a refusal, the audit records name the gate that refused.
+    assert_eq!(status, StatusCode::OK, "{body} {:#?}", records(&fx));
     assert_eq!(sent(&fx), 1);
     assert_eq!(body["disposition"], "ran", "{body}");
     assert_eq!(body["is_error"], false, "{body}");
@@ -310,7 +311,7 @@ async fn t1_a_declared_read_runs_and_returns_its_receipt() {
 }
 
 /// T4 (API12.2): a tool with no readOnlyHint is refused 409 without
-/// confirm_write and never sent; with it, it runs once.
+/// `confirm_write` and never sent; with it, it runs once.
 #[tokio::test]
 async fn t4_an_undeclared_tool_asks_for_confirm_write() {
     let fx = fixture().await;
@@ -343,7 +344,7 @@ async fn t6b_a_replaced_backend_is_judged_by_its_own_list() {
     assert_eq!(sent(&fx), 0);
 }
 
-/// T7 (API12.2): the admin_action record names `ui:key:<name>` and the
+/// T7 (API12.2): the `admin_action` record names `ui:key:<name>` and the
 /// receipt; the invocation under that trace names the same principal, not
 /// a `ui:` one.
 #[tokio::test]
@@ -416,7 +417,7 @@ async fn t15_a_failure_after_the_send_is_never_4xx() {
     assert!(sent(&fx) >= 1, "the call was sent");
 }
 
-/// T17: a 409 and a 404 each still write an admin_action naming server
+/// T17: a 409 and a 404 each still write an `admin_action` naming server
 /// and tool.
 #[tokio::test]
 async fn t17_refusals_are_audited_with_their_target() {
@@ -500,10 +501,16 @@ pub(super) fn invoke(tool: &str) -> Value {
 async fn t23_a_ui_call_is_never_served_from_the_cache() {
     let fx = fixture_cached().await;
     // Control: the cache is on, so two /mcp calls send once.
+    let mut answers = Vec::new();
     for _ in 0..2 {
-        let _ = post_mcp(&fx, ADMIN, invoke("read"), None).await;
+        let answer = post_mcp(&fx, ADMIN, invoke("read"), None).await;
+        answers.push(String::from_utf8_lossy(&answer).into_owned());
     }
-    assert_eq!(sent(&fx), 1, "the premise: /mcp is served from the cache");
+    assert_eq!(
+        sent(&fx),
+        1,
+        "the premise: /mcp is served from the cache: {answers:#?}"
+    );
     for _ in 0..2 {
         let (status, body) = post(&fx, ADMIN, call("read", false)).await;
         assert_eq!(status, StatusCode::OK, "{body}");
@@ -512,7 +519,7 @@ async fn t23_a_ui_call_is_never_served_from_the_cache() {
 }
 
 /// T12: past the deadline the route answers 504 "may have run"; the sent
-/// call finishes, and its invocation record and a completion admin_action
+/// call finishes, and its invocation record and a completion `admin_action`
 /// naming its trace still appear.
 /// Mutant: the deadline not enforced (the timeout removed).
 #[tokio::test]
@@ -591,7 +598,7 @@ async fn t25_required_signing_is_refused_up_front() {
 }
 
 /// T26 (lead): with the pool's calls all held, the next answers 403 `busy`;
-/// the backend sees nothing for it and an admin_action records the refusal.
+/// the backend sees nothing for it and an `admin_action` records the refusal.
 /// Mutant: the pool permit not taken.
 #[tokio::test]
 async fn t26_a_full_pool_answers_busy() {

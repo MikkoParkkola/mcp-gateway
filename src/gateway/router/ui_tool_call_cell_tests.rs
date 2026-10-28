@@ -103,7 +103,12 @@ async fn t13b_mcp_bytes_are_unchanged_by_a_ui_call_in_scope() {
     use axum::http::Request;
     use std::sync::atomic::Ordering;
     use tower::ServiceExt;
-    let fx = fixture_firewalled_with(Answer::Text(WITH_SECRET), None, false).await;
+    let fx = Box::pin(fixture_firewalled_with(
+        Answer::Text(WITH_SECRET),
+        None,
+        false,
+    ))
+    .await;
     let send = |scope: Option<Arc<crate::gateway::ui_call::UiCall>>| {
         let request = Request::builder()
             .method("POST")

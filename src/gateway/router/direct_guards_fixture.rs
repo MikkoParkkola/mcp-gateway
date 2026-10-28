@@ -222,14 +222,6 @@ pub(crate) async fn auth_off<T, F: std::future::Future<Output = T>>(build: F) ->
     fx
 }
 
-/// Any fixture builder, run with the admin key `k-admin` added.
-pub(crate) async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
-    WITH_ADMIN.with(|s| s.set(true));
-    let fx = build.await;
-    WITH_ADMIN.with(|s| s.set(false));
-    fx
-}
-
 /// Any fixture builder, run with `security.sanitize_input` = `on` (MIK-8154
 /// rows: the firewalled and code-mode fixtures under sanitization).
 pub(crate) async fn sanitizing<T, F: std::future::Future<Output = T>>(on: bool, build: F) -> T {
@@ -392,6 +384,7 @@ pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budg
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
+    with_admin,
 };
 
 pub(crate) const SIGNING_KEY: &str = "direct-guards-signing-key-0123456789abcdef";
@@ -542,8 +535,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Add the admin key `k-admin` (the web UI's tool route runs only for an
-    /// admin); off by default, so no other row's key set changes.
+    /// Add the admin key `k-admin`; off by default ([`with_admin`]).
     static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
