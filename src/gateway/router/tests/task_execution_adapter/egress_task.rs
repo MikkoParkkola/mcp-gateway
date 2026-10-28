@@ -331,16 +331,15 @@ async fn a_worker_egress_refusal_is_recorded_on_the_tasks_own_record() {
             dump(&entries)
         );
     };
-    assert_eq!(record["response_effect"], "refused", "{record}");
-    assert_eq!(record["outcome"], "denied", "{record}");
+    assert!(record["response_effect"] == "refused", "{record}");
+    assert!(record["outcome"] == "denied", "{record}");
     assert!(!record.to_string().contains(&leak), "no content: {record}");
     let dispatches: Vec<&Value> = entries
         .iter()
         .filter(|entry| entry["route"] == "meta" && entry["trace_id"] == record["trace_id"])
         .collect();
-    assert_eq!(
-        dispatches.len(),
-        1,
+    assert!(
+        dispatches.len() == 1,
         "the record's trace names exactly the worker's dispatch record:\n{}",
         dump(&entries)
     );
@@ -368,8 +367,8 @@ async fn a_worker_redaction_is_recorded_as_rewritten() {
             dump(&entries)
         );
     };
-    assert_eq!(record["response_effect"], "rewritten", "{record}");
-    assert_eq!(record["outcome"], "ok", "{record}");
+    assert!(record["response_effect"] == "rewritten", "{record}");
+    assert!(record["outcome"] == "ok", "{record}");
     let findings = record["response_findings"]
         .as_array()
         .cloned()
