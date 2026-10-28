@@ -197,13 +197,20 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
 }
 
 /// The guard's rule for one file's text: it installs a scoped subscriber
-/// but never reaches the keeper.
+/// but never reaches the keeper. Matched on code only, each line cut at its
+/// first `//`, so a line or doc comment can neither satisfy nor trigger it.
+/// The cut also falls inside a string literal holding `//` (a URL): a keeper
+/// call after one on the same line is not seen, and the file is flagged.
+/// That fails closed; move the call to its own line.
 fn misses_keeper(text: &str) -> bool {
+    let code: Vec<&str> = text
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect();
+    let has = |needle: &&str| code.iter().any(|line| line.contains(needle));
     let installs = ["subscriber::with_default(", "subscriber::set_default("];
     let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
-    let installs_one = installs.iter().any(|needle| text.contains(needle));
-    let keeps_one = keeps.iter().any(|needle| text.contains(needle));
-    installs_one && !keeps_one
+    installs.iter().any(has) && !keeps.iter().any(has)
 }
 
 /// A keeper named only in a line or doc comment does not count: the file is
