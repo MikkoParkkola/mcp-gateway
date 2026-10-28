@@ -18,18 +18,31 @@ impl ManagedLease {
     ///
     /// [`Refusal::Definitive`] when the grant is revoked, removed or no longer
     /// releasable, the token's durable expiry has passed, or `installed` is
-    /// not the vault that released the lease. [`Refusal::Transient`] for
-    /// every other fault, a busy or stopping custody included.
+    /// not the vault that released the lease. [`Refusal::ThisLoan`] when the
+    /// lease was retired but its account is still connected (a refresh).
+    /// [`Refusal::Transient`] for every other fault, a busy or stopping
+    /// custody included.
     pub(crate) async fn recheck_send(&self, installed: &Arc<VaultStrategy>) -> Result<(), Refusal> {
         if !self.minted_by(installed) {
             return Err(Refusal::Definitive);
         }
-        let released = self
-            .strategy
-            .custody
-            .release(&self.lease)
-            .await
-            .map_err(|error| classify(&error))?;
+        let released = match self.strategy.custody.release(&self.lease).await {
+            Ok(released) => released,
+            // A retired lease is two things: the account is gone (consent
+            // withdrawn), or it is still connected under a newer lease (a
+            // refreshed token, a moved generation). One read tells them
+            // apart. Consent withdrawn after this read is caught by the next
+            // dispatch's mint, not by this loan; the old slot idles out.
+            Err(CustodyError::Account(AccountServiceError::LeaseRetired)) => {
+                return Err(
+                    match self.strategy.custody.resolve(&self.lease.account).await {
+                        Ok(_) => Refusal::ThisLoan,
+                        Err(error) => classify(&error),
+                    },
+                );
+            }
+            Err(error) => return Err(classify(&error)),
+        };
         // A lease that still matches says nothing about a token that has
         // since run out; an unreadable clock says nothing about the grant.
         let now = crate::clock::unix_secs().map_err(|_| Refusal::Transient)?;
