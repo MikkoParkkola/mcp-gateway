@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7211.PARENT.6 test 3 (stdio leg): a surfaced backend tool's envelope is
-//! returned as the backend sent it, so a backend's `public` must be clamped on
-//! the way out of the real stdio dispatch.
+//! returned as the backend sent it, so a backend's `public` must never leave
+//! the real stdio dispatch. A `tools/call` answer may not carry `cacheScope`
+//! at all, so ingress removes it.
 
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -106,5 +107,5 @@ async fn stdio_surfaced_tool_never_delivers_a_public_scope() {
 
     assert!(body.get("error").is_none(), "{body}");
     assert_eq!(body["result"]["isError"], false, "{body}");
-    assert_eq!(body["result"]["cacheScope"], "private", "{body}");
+    assert!(body["result"].get("cacheScope").is_none(), "{body}");
 }

@@ -88,6 +88,7 @@ pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
 pub(crate) mod local_day;
+mod log_escape;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
@@ -259,7 +260,9 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
         }
         _ => {
             subscriber
-                .with(fmt::layer().with_writer(std::io::stderr))
+                .with(log_escape::escaping(
+                    fmt::layer().with_writer(std::io::stderr),
+                ))
                 .init();
         }
     }
