@@ -86,6 +86,16 @@ async fn t18_a_ui_call_never_runs_as_a_task() {
     // No task was made, so no worker exists to send it later.
     assert!(body.pointer("/result/taskId").is_none(), "{body}");
     assert_eq!(sent(&fx), 0);
+    // Control: the same request with no UI call in scope makes a task.
+    let mut params = invoke("read");
+    params["task"] = json!({});
+    params["_meta"] = json!({(crate::protocol::mrtr::IDEMPOTENCY_KEY_META): "t18-control"});
+    let body = post_mcp(&fx, ADMIN, params, None).await;
+    let body: Value = serde_json::from_slice(&body).expect("json");
+    assert!(
+        body.pointer("/result/taskId").is_some(),
+        "the premise: this fixture makes tasks: {body}"
+    );
 }
 
 /// A result carrying a credential the response firewall withholds.

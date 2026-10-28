@@ -686,9 +686,10 @@ async fn t26_a_full_pool_answers_busy() {
 }
 
 /// T27 (lead): a tool that stops to ask a follow-up question cannot finish
-/// from the web UI, which declares no client capabilities: the call was
-/// sent, so the route answers a 5xx, may have run, never 200 and never a 4xx.
-/// Mutant: a returned question read as a finished result.
+/// from the web UI, which declares no client capabilities: dispatch refuses
+/// the undeclared round after the send, so the route answers a 5xx, may have
+/// run, never 200 and never a 4xx.
+/// Mutant: a failure after the send read as not run.
 #[tokio::test]
 async fn t27_a_tool_that_asks_a_question_answers_may_have_run() {
     let fx = fixture().await;
