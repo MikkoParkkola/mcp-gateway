@@ -418,7 +418,7 @@ only when a test exists that fails on its mutant.
   `lifecycle_key` from the listener's key and none is built with `None`; every
   listener send passes a credential; every `lifecycle_key` call site is covered.
   Fixture rows prove the scan fails when either is dropped.
-- **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open once the revocation runs (at once
+- **ISO-T6.** A revoked U1 has no connection open once the revocation runs (at once
   on a pushed revocation, at the latest on the next 30-second sweep), even
   with a silent backend, and nothing is emitted for U1 after it; stop on the last subscriber is covered too.
   Unit level only: key-server policy changes take effect on restart, not on a
@@ -443,17 +443,17 @@ stays listener-ineligible.
 
 ### Lease
 
-- **LEASE-T0.** *Required, not yet implemented.* A direct-route call with no `events/lease` leaves the lease store
+- **LEASE-T0.** A direct-route call with no `events/lease` leaves the lease store
   empty.
 - **LEASE-T1.** A token with no `exp`, or a malformed one, is refused.
-- **LEASE-T2.** *Required; partly covered.* A lease request from principal Q never touches P's lease, and Q's
+- **LEASE-T2.** A lease request from principal Q never touches P's lease, and Q's
   token never reaches P's listener (the fixture records presented tokens).
   **LEASE-T2b:** a replace closes and re-handshakes before the next emit.
 - **LEASE-T3.** Each wipe trigger clears the lease, with zero outbound requests
   after it, retries and legacy cleanup included.
 - **LEASE-T4.** A 401 from the backend wipes the lease and marks the rows credential
   rejected.
-- **LEASE-T5.** *Required, not yet implemented.* After a restart the rows are in credential needed, and nothing on
+- **LEASE-T5.** After a restart the rows are in credential needed, and nothing on
   disk contains the token (the store directory is scanned for its bytes).
 - **LEASE-T6.** The memory-only source scan (§3.3), plus a backend that echoes the
   presented token in an error body: no log line, span or answer contains it.
