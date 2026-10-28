@@ -63,6 +63,10 @@ test.describe('C2 planted faults', () => {
     const src = "register('servers', { tabs: {\n // One renderer, two routes: a note\n status: (b) => b,\n /* later: a, b */ actions: null,\n settings: null } });";
     expect(scanScreens([src]).tabs.servers).toEqual({ status: true, actions: false, settings: false });
   });
+  test('a closing brace inside a string does not end the tabs early', () => {
+    const src = "register('servers', { tabs: { status: (b) => { b.textContent = '} oops: ,'; }, actions: (b) => b, settings: null } });";
+    expect(scanScreens([src]).tabs.servers).toEqual({ status: true, actions: true, settings: false });
+  });
   test('a tab function with braces in it is still read as built', () => {
     const src = "register('servers', { title: 'S', tabs: { status: (b) => { if (b) { b.x = 1; } }, actions: null, settings: null } });\ntip('servers.status.paused');";
     expect(pairingProblems(OK, scanScreens([src]))).toEqual([]);

@@ -73,8 +73,10 @@ export function scanScreens(sources) {
       if (lit) drawn.add(lit[1] ?? lit[2]);
       else nonLiteral += 1;
     }
-    for (const m of src.matchAll(/register\(\s*'([a-z0-9-]+)'/g)) {
-      const block = tabsBlock(src, m.index);
+    // Brackets, commas and colons inside strings are text, not structure: blank them (same length) first.
+    const code = src.replace(/'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\])*`/g, (lit) => lit.replace(/[{}()[\],:]/g, ' '));
+    for (const m of code.matchAll(/register\(\s*'([a-z0-9-]+)'/g)) {
+      const block = tabsBlock(code, m.index);
       if (block === null) continue;
       // Comments go first: their commas and colons are not entries. A // inside a string needs no space before it.
       const specs = topLevelEntries(block.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/[^\n]*/g, '$1'));

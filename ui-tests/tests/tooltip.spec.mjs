@@ -549,19 +549,22 @@ test.describe('CSS fallback and the failure latch', () => {
     await page.clock.install();
     await serveCopy(page);
     await ready(page);
-    await mount(page, ['fixture.status.paused', 'fixture.status.calls']);
+    await mount(page, ['fixture.status.paused']);
     await expect(page.locator('.tip.open')).toHaveCount(0);
     await page.getByRole('button', { name: 'About Paused' }).hover(); // nothing open, so the 300 ms timer is armed
     await page.clock.runFor(100);
-    await page.evaluate(() => {
-      window.__rect = Element.prototype.getBoundingClientRect;
-      Element.prototype.getBoundingClientRect = () => { throw new Error('planted placement fault'); };
-    });
-    await page.getByRole('button', { name: 'About Calls today' }).focus();
-    await page.evaluate(() => { Element.prototype.getBoundingClientRect = window.__rect; });
+    // A fault off the show path: filling a new trigger throws once, so only the latch can stop the armed timer.
+    await page.evaluate(async (url) => {
+      const real = Element.prototype.replaceChildren;
+      Element.prototype.replaceChildren = function () {
+        Element.prototype.replaceChildren = real;
+        throw new Error('planted fill fault');
+      };
+      document.getElementById('content').append((await import(url)).tip('fixture.status.calls'));
+    }, tooltipModuleUrl());
+    expect(await page.evaluate(() => document.documentElement.hasAttribute('data-tips'))).toBe(false);
     await page.clock.runFor(400); // the armed timer would have fired by now
     await expect(page.locator('.tip.open')).toHaveCount(0);
-    expect(await page.evaluate(() => document.documentElement.hasAttribute('data-tips'))).toBe(false);
   });
 
   test('T10d a one-shot fault while filling: every placeholder still fills, and CSS takes over', async ({ page }) => {
@@ -742,7 +745,11 @@ test.describe('review round 1', () => {
     const tip = tipOf(page, 'fixture.status.calls');
     expect(await tip.evaluate((t) => t.scrollHeight > t.clientHeight)).toBe(true);
     await page.keyboard.press('ArrowDown');
-    expect(await tip.evaluate((t) => t.scrollTop)).toBeGreaterThan(0);
+    // Its own scroll must not place it again (which would reset the offset): check after a frame, then go further.
+    const first = await tip.evaluate((t) => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(t.scrollTop)))));
+    expect(first).toBeGreaterThan(0);
+    await page.keyboard.press('ArrowDown');
+    expect(await tip.evaluate((t) => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(t.scrollTop)))))).toBeGreaterThan(first);
     await expect(button).toBeFocused();
   });
 
@@ -770,5 +777,54 @@ test.describe('review round 1', () => {
     expect(await tip.evaluate((t) => getComputedStyle(t).position)).toBe('absolute');
     await page.clock.runFor(250);
     expect(await tip.evaluate((t) => [getComputedStyle(t).position, t.style.left, t.style.maxHeight])).toEqual(['fixed', '', '']);
+  });
+});
+
+test.describe('review round 2', () => {
+  test('T29 reopened and closed again within one fade, it stays anchored for the whole second fade', async ({ page }) => {
+    await page.clock.install();
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.calls'], { layout: 'top-right' });
+    const button = page.getByRole('button', { name: 'About Calls today' });
+    const tip = tipOf(page, 'fixture.status.calls');
+    await button.focus();
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100);
+    await page.keyboard.press('Enter'); // reopen inside the first fade
+    await expect(tip).toHaveClass(/open/);
+    await page.keyboard.press('Escape');
+    await page.clock.runFor(100); // the first fade's timer would fire about now
+    expect(await tip.evaluate((t) => getComputedStyle(t).position)).toBe('absolute');
+    await page.clock.runFor(200);
+    expect(await tip.evaluate((t) => getComputedStyle(t).position)).toBe('fixed');
+  });
+
+  test('T30 a stylesheet that fails to load: triggers collapse and one warning says so', async ({ page }) => {
+    const warned = warnings(page);
+    await page.route('**/ui/assets/tooltip.*.css', (r) => r.fulfill({ status: 404, body: '' }));
+    await serveCopy(page);
+    await ready(page);
+    await mount(page, ['fixture.status.paused']);
+    await expect(page.locator('.tip-i')).toHaveCount(0);
+    await expect(page.locator('[data-tip="fixture.status.paused"]')).toHaveJSProperty('hidden', true);
+    expect(warned.filter((w) => /tooltip copy not loaded \(stylesheet not loaded\)/.test(w))).toHaveLength(1);
+  });
+
+  test.describe('touch', () => {
+    test.use({ hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } });
+    test('T14b with a coarse pointer, filling a placeholder still moves nothing beside it', async ({ page }) => {
+      const { hold, release } = gate();
+      await serveCopy(page, { hold });
+      await ready(page);
+      expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+      await mount(page, ['fixture.status.paused'], { settle: false });
+      const box = () => page.evaluate(() => document.querySelector('.next-action').getBoundingClientRect().toJSON());
+      const before = await box();
+      release();
+      await settled(page);
+      await expect(page.locator('.tip-i')).toHaveCount(1);
+      expect(await box()).toEqual(before);
+    });
   });
 });

@@ -17,13 +17,18 @@ const COPY_URL = '/ui/assets/tips.7c43dc6560cf.json';
 
 // The stylesheet comes with the module, not with the document: only pages that draw a
 // tooltip need it, and a render-blocking link would hold up every page's first paint.
-if (!document.querySelector('link[data-tooltip-css]')) {
+// Triggers are filled only once it has loaded, so the controller never runs on unstyled popups.
+const cssReady = new Promise((resolve, reject) => {
   const css = document.createElement('link');
   css.rel = 'stylesheet';
   css.href = '/ui/assets/tooltip.5251c22696fd.css';
   css.dataset.tooltipCss = '';
+  css.onload = () => resolve();
+  css.onerror = () => reject(new Error('stylesheet not loaded'));
   document.head.append(css);
-}
+});
+// Handled here; load() reports a failure when a tooltip asks for it.
+cssReady.catch(() => {});
 const OPEN_MS = 300;
 const CLOSE_MS = 150;
 /** The popup keeps this far from the viewport's sides. */
@@ -100,6 +105,14 @@ function body(entry) {
   return el('span', { class: 'tip-body' }, String(entry.text ?? ''));
 }
 
+const RESERVED = ['display', 'inline-size', 'block-size', 'vertical-align'];
+
+/** Drop the box a placeholder reserved, and only that: a screen may style the element too. */
+function unreserve(holder) {
+  for (const prop of RESERVED) holder.style.removeProperty(prop);
+  if (!holder.getAttribute('style')) holder.removeAttribute('style');
+}
+
 /** Put the trigger into a placeholder, or collapse it when there is no copy for it. */
 function fill(holder) {
   const id = holder.dataset.tip;
@@ -107,6 +120,7 @@ function fill(holder) {
   if (!entry || id === '_pending') {
     if (copy) warnOnce(`id:${id}`, `tooltip copy has no entry ${id}; its trigger is left out`);
     holder.classList.remove('tip-pending');
+    unreserve(holder);
     holder.hidden = true;
     return;
   }
@@ -116,6 +130,7 @@ function fill(holder) {
     el('strong', { class: 'tip-title', 'aria-hidden': 'true' }, String(entry.title)), body(entry));
   holder.replaceChildren(button, pop);
   holder.classList.remove('tip-pending');
+  unreserve(holder);
 }
 
 /** fill() under its own guard: a failure trips the latch, the placeholder gets one retry, then collapses. */
@@ -128,6 +143,7 @@ function fillOnce(holder) {
       fill(holder);
     } catch {
       holder.classList.remove('tip-pending');
+      unreserve(holder); // an inline display would beat [hidden]
       holder.hidden = true;
     }
   }
@@ -135,11 +151,13 @@ function fillOnce(holder) {
 
 function load() {
   if (settled) return settled;
-  settled = fetch(COPY_URL, { credentials: 'same-origin' })
-    .then((r) => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    })
+  const copyFetch = fetch(COPY_URL, { credentials: 'same-origin' }).then((r) => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  });
+  // The copy and the stylesheet both, or neither: an unstyled popup would show where it should hide.
+  settled = Promise.all([copyFetch, cssReady])
+    .then(([c]) => c)
     .then((c) => { copy = c; }, (err) => {
       warnOnce('copy', `tooltip copy not loaded (${err.message}); tooltips are left out`);
     })
@@ -167,6 +185,10 @@ export function tip(id) {
     fillOnce(holder);
   } else {
     holder.classList.add('tip-pending');
+    // Reserve the finished trigger's box now, from the shell's tokens (loaded with the page): the
+    // module's stylesheet may still be on its way, and filling must move nothing beside it.
+    const size = matchMedia('(pointer: coarse)').matches ? 'var(--size-touch)' : 'var(--size-icon-sm)';
+    Object.assign(holder.style, { display: 'inline-block', inlineSize: size, blockSize: size, verticalAlign: 'middle' });
     pending.push(holder);
     load();
   }
@@ -182,13 +204,14 @@ function show(wrap) {
   if (openWrap && openWrap !== wrap) hide(openWrap);
   openWrap = wrap;
   const pop = wrap.querySelector('.tip');
+  cancel(pop.fadeTimer);
   pop.classList.remove('closing');
   pop.classList.add('open');
   place(wrap, pop);
 }
 
-/** The popup's exit fade: anchored by its trigger until it ends, then back to its closed place. */
-const FADE_MS = 200;
+/** How long the exit fade runs: the popup's own transition, plus a frame. */
+const fadeMs = (pop) => Math.max(0, ...getComputedStyle(pop).transitionDuration.split(',').map((d) => parseFloat(d) * (d.trim().endsWith('ms') ? 1 : 1000))) + 20;
 
 function clearPlacement(pop) {
   pop.classList.remove('open', 'closing', 'flip-y');
@@ -201,11 +224,13 @@ function hide(wrap) {
   if (openWrap === wrap) openWrap = null;
   if (!pop?.classList.contains('open')) return;
   pop.classList.replace('open', 'closing');
-  later(() => { if (!pop.classList.contains('open')) clearPlacement(pop); }, FADE_MS);
+  // Anchored by its trigger until the fade ends, then back to its closed place.
+  pop.fadeTimer = later(() => clearPlacement(pop), fadeMs(pop));
 }
 
 /** Below the trigger, left edges aligned; slide left and flip up to stay inside the viewport, never over the trigger. */
 function place(wrap, pop) {
+  const scrolled = pop.scrollTop;
   pop.classList.remove('flip-y');
   pop.style.left = '';
   pop.style.maxHeight = '';
@@ -222,6 +247,7 @@ function place(wrap, pop) {
   if (up) pop.classList.add('flip-y');
   const room = up ? above : below;
   if (r.height > room) pop.style.maxHeight = `${Math.max(room, 0)}px`;
+  pop.scrollTop = scrolled;
 }
 
 let hoverTimer = 0;
@@ -298,7 +324,13 @@ function start() {
     document.documentElement.dataset.tips = 'js';
     for (const [type, fn] of HANDLERS) document.addEventListener(type, guard(fn), true);
     // The page moved under an open popup: place it again by its trigger.
-    const replace = guard(() => { if (openWrap?.isConnected) place(openWrap, openWrap.querySelector('.tip')); });
+    // Its own scrolling is not the page moving; and one placement per frame is enough.
+    let frame = 0;
+    const replace = guard((ev) => {
+      if (ev?.target instanceof Element && ev.target.closest('.has-tip[data-tip] .tip')) return;
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(guard(() => { if (openWrap?.isConnected) place(openWrap, openWrap.querySelector('.tip')); }));
+    });
     addEventListener('resize', replace);
     document.addEventListener('scroll', replace, true);
   })();

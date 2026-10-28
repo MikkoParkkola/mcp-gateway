@@ -97,7 +97,7 @@ async function statusTab(body, ctx) {
   // The tooltip module loads after the catalogue is drawn and never holds it up: a static
   // import would put its bytes before every page's first paint, and if it fails to load
   // the sentence simply stands without its (i).
-  import('/ui/assets/tooltip.f45de7495153.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
+  import('/ui/assets/tooltip.deb27f374db3.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
   body.append(h('div', { class: 'tools-bar' }, search, pick, load), card);
   search.value = filters.query;
   pick.value = servers.includes(filters.server) ? filters.server : '';
