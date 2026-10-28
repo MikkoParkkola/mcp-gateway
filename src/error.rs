@@ -570,7 +570,7 @@ mod pre_send_scan_tests;
 
 #[cfg(test)]
 mod rpc_code_tests {
-    use super::Error;
+    use super::{Error, MAY_HAVE_RUN, step_failure_text};
 
     /// MIK-7979: every `BackendUnavailable` is raised before the request is
     /// sent, so it frees an idempotency key; a lost round does not.
@@ -659,6 +659,41 @@ mod rpc_code_tests {
                 "{lost:?}"
             );
         }
+        for status in [400, 500] {
+            let response = axum::http::Response::builder()
+                .status(status)
+                .body(String::new())
+                .expect("fixture response builds");
+            let http = Error::Http(
+                reqwest::Response::from(response)
+                    .error_for_status()
+                    .expect_err("a fixture status is non-2xx"),
+            );
+            assert!(http.outcome_undetermined(), "Http {status}");
+        }
+    }
+
+    /// A step's text says it may have run, except a gateway refusal's, which
+    /// keeps its neutral reason (A3) while still reading as undetermined.
+    #[test]
+    fn only_a_refusal_keeps_its_step_text_unmarked() {
+        let lost = Error::BackendTimeout("no answer".into());
+        assert!(step_failure_text(&lost, lost.to_string()).ends_with(MAY_HAVE_RUN));
+        let refused = Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: "step not permitted for this caller".into(),
+        };
+        assert!(refused.outcome_undetermined());
+        assert_eq!(
+            step_failure_text(&refused, refused.to_string()),
+            "step not permitted for this caller"
+        );
+        let unsent = Error::TransportConnect("refused".into());
+        assert_eq!(
+            step_failure_text(&unsent, unsent.to_string()),
+            unsent.to_string()
+        );
     }
 
     #[test]

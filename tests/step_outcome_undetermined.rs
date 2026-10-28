@@ -108,5 +108,10 @@ async fn an_aborted_playbook_returns_an_error_that_says_it_may_have_run() {
             .await
             .expect_err("abort returns the step's error");
         assert!(error.outcome_undetermined(), "{what}: {error:?}");
+        assert_eq!(
+            std::mem::discriminant(&error),
+            std::mem::discriminant(&make()),
+            "{what}: abort returned another kind of error: {error:?}"
+        );
     }
 }

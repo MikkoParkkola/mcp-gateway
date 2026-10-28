@@ -104,7 +104,10 @@ fn assert_ran_once(invoker: &Scripted, step: &crate::chains::ChainStepResult, wh
     assert_eq!(step.state, StepState::Failed, "{what}");
     assert_eq!(step.attempts, 1, "{what}: attempts made, not allowed");
     let error = step.error.as_deref().unwrap_or_default();
-    assert!(error.contains("may have run"), "{what}: {error}");
+    assert!(
+        error.ends_with(crate::error::MAY_HAVE_RUN),
+        "{what}: {error}"
+    );
 }
 
 /// MIK-9042.CHAIN.1: each error that can follow a send ends the step after one
@@ -162,7 +165,7 @@ async fn a_lost_round_after_a_retried_refusal_ends_the_step() {
     assert_eq!(step.state, StepState::Failed);
     assert_eq!(step.attempts, 2);
     let error = step.error.as_deref().unwrap_or_default();
-    assert!(error.contains("may have run"), "{error}");
+    assert!(error.ends_with(crate::error::MAY_HAVE_RUN), "{error}");
 }
 
 /// MIK-9042.CHAIN.5: an optional step that may have run is skipped after one
@@ -175,7 +178,7 @@ async fn an_optional_step_that_may_have_run_is_skipped_once_and_says_so() {
     assert_eq!(step.state, StepState::Skipped);
     assert_eq!(step.attempts, 1);
     let error = step.error.as_deref().unwrap_or_default();
-    assert!(error.contains("may have run"), "{error}");
+    assert!(error.ends_with(crate::error::MAY_HAVE_RUN), "{error}");
 }
 
 /// MIK-9042.CHAIN.6: the step-failed event carries the attempts made.
@@ -208,7 +211,7 @@ async fn only_an_error_after_the_send_says_the_step_may_have_run() {
     let step = run_one(&invoker, false).await;
     assert_eq!(invoker.calls(), 1);
     let error = step.error.as_deref().unwrap_or_default();
-    assert!(!error.contains("may have run"), "{error}");
+    assert!(!error.contains(crate::error::MAY_HAVE_RUN), "{error}");
 
     let invoker = Scripted::new(vec![answer(|| Error::JsonRpc {
         code: -32602,

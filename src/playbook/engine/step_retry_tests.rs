@@ -171,8 +171,29 @@ async fn the_failed_steps_reason_says_it_may_have_run() {
             .get("charge")
             .cloned()
             .unwrap_or_default();
-        assert!(reason.contains("may have run"), "{strategy:?}: {reason}");
+        assert!(
+            reason.ends_with(crate::error::MAY_HAVE_RUN),
+            "{strategy:?}: {reason}"
+        );
     }
+    let invoker = Scripted::new(vec![answer(|| crate::Error::JsonRpc {
+        code: -32602,
+        message: "invalid params".into(),
+        data: None,
+    })]);
+    let result = engine(ErrorStrategy::Continue)
+        .execute("pay", json!({}), &invoker)
+        .await
+        .expect("the playbook carries on");
+    let reason = result
+        .step_errors
+        .get("charge")
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        reason.ends_with(crate::error::MAY_HAVE_RUN),
+        "a backend's plain error answer follows a send: {reason}"
+    );
     let invoker = Scripted::new(vec![answer(|| {
         crate::Error::BackendNotFound("gone".into())
     })]);
@@ -185,7 +206,7 @@ async fn the_failed_steps_reason_says_it_may_have_run() {
         .get("charge")
         .cloned()
         .unwrap_or_default();
-    assert!(!reason.contains("may have run"), "{reason}");
+    assert!(!reason.contains(crate::error::MAY_HAVE_RUN), "{reason}");
 }
 
 /// MIK-9042.PLAY.5: a retried pre-send failure, then a lost round: the
