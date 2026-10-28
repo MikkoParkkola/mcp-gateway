@@ -194,23 +194,31 @@ test('W3 a dropped stream reads Updates stopped, and no state word is spelled ou
 });
 
 test('G1b a render that settles while the loading message waits its turn is never said', async ({ page }) => {
+  // The page's clock is paused from before it loads and moved only by runFor, so no
+  // step depends on how long the host takes between two of them.
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(1000);
   await recordAnnouncements(page);
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
-  // Something said at once, with a long pause after it, keeps the loading message
-  // queued however late this host runs it.
+  // Something said at once, with a long pause after it, keeps the loading message queued.
   const url = await shellModuleUrl(page);
   await page.evaluate(async (u) => {
     const m = await import(u);
     m.announcerTiming.dwellMs = 5000;
     m.announce('Earlier news.');
   }, url);
+  await page.clock.runFor(1); // the earlier news is written
+  await page.clock.runFor(300); // the onset: the loading state shows, its message queues
   await expect(loading(page)).toBeVisible();
   probe.release();
   await expect(page.locator('#content')).toContainText('value 1');
+  await page.clock.runFor(400); // the minimum: the loading state goes
+  await expect(loading(page)).toHaveCount(0);
   await page.evaluate(async (u) => { (await import(u)).announcerTiming.dwellMs = 500; }, url);
+  await page.clock.runFor(5000);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual([]);
 });
