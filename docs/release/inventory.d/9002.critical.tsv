@@ -1,0 +1,1 @@
+src/gateway/task_service/record.rs	delivered_wire	1	critical	b	CommittedTask::delivered_wire	Serves a stored task without any noted gateway-only member its write record does not claim (result, error data, parked input requests), and drops a provenance signature over removed bytes; every serve site calls it.
