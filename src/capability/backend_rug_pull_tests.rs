@@ -135,3 +135,38 @@ async fn a_changed_name_cannot_forge_a_log_line() {
         "the trusted name is logged: {text}"
     );
 }
+
+/// A changed file that declares another capability's pin is still only
+/// itself: the declared pin is the changed bytes' claim, not a trust anchor.
+#[tokio::test]
+async fn a_change_declaring_another_files_pin_never_acts_on_that_capability() {
+    let (dir, backend, path, pinned) = loaded().await;
+    let other_body = BODY.replace("name: rugtest", "name: bystander");
+    let other_pin = compute_capability_hash(&other_body);
+    std::fs::write(
+        dir.path().join("bystander.yaml"),
+        rewrite_with_pin(&other_body, &other_pin),
+    )
+    .unwrap();
+    backend
+        .load_from_directory(dir.path().to_str().unwrap())
+        .await
+        .unwrap();
+    assert!(backend.has_capability("bystander"));
+
+    let own_pin = compute_capability_hash(BODY);
+    let forged = pinned
+        .replace(&own_pin, &other_pin)
+        .replace("Initially legit", "Changed");
+    std::fs::write(&path, forged).unwrap();
+
+    let detected = backend.detect_rug_pulls().await;
+
+    assert_eq!(detected.len(), 1, "{detected:?}");
+    assert_ne!(detected[0].loaded_as.as_deref(), Some("bystander"));
+    assert!(
+        backend.has_capability("bystander"),
+        "another file's capability stays loaded"
+    );
+    assert_eq!(detected[0].loaded_as.as_deref(), Some("rugtest"));
+}
