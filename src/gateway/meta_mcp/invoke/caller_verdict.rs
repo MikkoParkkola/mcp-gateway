@@ -71,40 +71,36 @@ pub(super) enum SlotJudgement {
 }
 
 impl MetaMcp {
-    /// Re-establish `caller`'s cold per-user view of `server` for a stored
-    /// read that won the claim `generation` (MIK-8392 B', d1): resolve the
-    /// caller's credential, fill the caller's own slot through the fill that
-    /// reports its real failure (never the stale-cache fallback), and only
-    /// then publish the slot, and only over this claim's own lease. One
-    /// resolution per claimed attempt; a failure leaves the lease to expire.
-    pub(in crate::gateway::meta_mcp) async fn warm_cold_view(
+    /// The request half of re-establishing a cold view (MIK-8392 B', d1):
+    /// resolve the caller's own credential and binding for the claim
+    /// `generation`, so the fill can run inline or as its own task. `None`
+    /// when nothing resolves: the lease expires and the view stays cold.
+    pub(in crate::gateway::meta_mcp) async fn resolve_cold_view(
         &self,
         (server, tool): (&str, &str),
-        backend: &Backend,
+        backend: &std::sync::Arc<Backend>,
         caller: CallerProof<'_>,
         generation: u64,
-    ) {
+    ) -> Option<ColdFill> {
         #[cfg(test)]
         backend.cold_winner.pause().await;
-        let Ok(resolved) = self
-            .resolve_dispatch((server, tool), Some(backend), caller, caller.verified())
+        let resolved = self
+            .resolve_dispatch(
+                (server, tool),
+                Some(backend.as_ref()),
+                caller,
+                caller.verified(),
+            )
             .await
-        else {
-            return;
-        };
-        let Some(binding) = resolved.binding.as_deref() else {
-            return;
-        };
-        if backend
-            .tools_for_check(Some(binding), &resolved.caller_credential.headers, false)
-            .await
-            .is_err()
-        {
-            return;
-        }
-        if let Some(principal) = self.principal_for(backend, caller) {
-            backend.publish_cold_view(&principal.stable_actor_id(), generation, binding);
-        }
+            .ok()?;
+        let principal_id = self.principal_for(backend, caller)?.stable_actor_id();
+        Some(ColdFill {
+            backend: std::sync::Arc::clone(backend),
+            binding: resolved.binding?,
+            headers: resolved.caller_credential.headers,
+            principal_id,
+            generation,
+        })
     }
 
     /// The live call's own refusal for `caller` on `(server, tool)`: the
@@ -576,3 +572,42 @@ mod dispatch_seam {
 #[cfg(test)]
 #[path = "noview_cooldown_tests.rs"]
 mod noview_cooldown_tests;
+
+/// A claimed cold view's fill, resolved in the request and owning everything
+/// it needs, so it runs inline (a stored read) or as its own task (a listing)
+/// with no borrowed request context to lose.
+pub(in crate::gateway::meta_mcp) struct ColdFill {
+    backend: std::sync::Arc<Backend>,
+    binding: String,
+    headers: Vec<(String, String)>,
+    principal_id: String,
+    generation: u64,
+}
+
+impl ColdFill {
+    /// The fill bound of the backend this fill runs on.
+    pub(in crate::gateway::meta_mcp) fn backend_bound(&self) -> std::time::Duration {
+        self.backend.tools_fill_bound()
+    }
+
+    /// Fill the caller's own slot, within the backend's own fetch bound, then
+    /// publish it over the claim's lease. The credential headers are dropped
+    /// as soon as the fetch returns, so a hung backend holds none past it.
+    pub(in crate::gateway::meta_mcp) async fn run(self) {
+        let Self {
+            backend,
+            binding,
+            headers,
+            principal_id,
+            generation,
+        } = self;
+        backend.extend_cold_lease(&principal_id, generation, backend.tools_fill_bound());
+        let filled = backend
+            .tools_for_check(Some(&binding), &headers, false)
+            .await;
+        drop(headers);
+        if filled.is_ok() {
+            backend.publish_cold_view(&principal_id, generation, &binding);
+        }
+    }
+}
