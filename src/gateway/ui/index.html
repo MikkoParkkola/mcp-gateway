@@ -1199,7 +1199,8 @@ function onRegSearch(q) {
       <div class="reg-desc">${esc(truncate(s.description || '', 80))}</div>
       <div class="reg-desc">login: ${esc(s.login || 'none')}${s.reach_reason ? ' - added disabled: can reach any address' : ''}${s.setup ? ' - needs ' + esc(s.setup) : ''}</div>
     </div>`).join('');
-  // A new list starts with no option active.
+  // A new list starts at its top with no option active.
+  dd.scrollTop = 0;
   setRegistryListOpen(true);
   setRegistryActive(-1);
 }
@@ -1262,13 +1263,18 @@ regBox().addEventListener('keydown', (e) => {
   }
 });
 
-// A click on an option must not take focus from the box: the box's focus
-// handler would reopen the list after the pick.
-document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => e.preventDefault());
-// The option under the pointer is the active one, so Enter and a click agree.
-document.getElementById('reg-dropdown').addEventListener('mouseover', (e) => {
+// A press on an option must not take focus from the box: the box's focus
+// handler would reopen the list after the pick. A press on the list itself
+// (its scrollbar) keeps its default, so the scrollbar still drags.
+document.getElementById('reg-dropdown').addEventListener('mousedown', (e) => {
+  if (e.target.closest('.reg-opt')) e.preventDefault();
+});
+// The option the pointer moves onto is the active one, so Enter and a click
+// agree. Movement only: a list rebuilt under a resting pointer keeps the
+// keyboard's choice.
+document.getElementById('reg-dropdown').addEventListener('mousemove', (e) => {
   const opt = e.target.closest('.reg-opt');
-  if (opt) setRegistryActive(Number(opt.dataset.value));
+  if (opt && Number(opt.dataset.value) !== regActive) setRegistryActive(Number(opt.dataset.value));
 });
 
 // Close the list on a click outside the search.
