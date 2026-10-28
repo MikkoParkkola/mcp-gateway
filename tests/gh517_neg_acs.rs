@@ -207,6 +207,7 @@ fn backend_for(url: &str) -> Backend {
         signature_chain: mcp_gateway::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
+        ..BackendConfig::default()
     };
     Backend::new(
         "gh517-mock",
