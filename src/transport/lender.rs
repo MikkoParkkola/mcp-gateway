@@ -271,17 +271,22 @@ impl Lender {
         if refusal == Refusal::Transient {
             return;
         }
-        let first = {
+        // The mark only escalates: a later ThisLoan never hides a Definitive,
+        // and the first Definitive evicts even over an earlier ThisLoan.
+        let newly_definitive = {
             let mut loans = self.loans.lock();
             loans
                 .iter_mut()
                 .find(|lent| lent.id == id)
-                .is_some_and(|lent| lent.refused.replace(refusal).is_none())
+                .is_some_and(|lent| {
+                    let was = lent.refused;
+                    if was != Some(Refusal::Definitive) {
+                        lent.refused = Some(refusal);
+                    }
+                    refusal == Refusal::Definitive && was != Some(Refusal::Definitive)
+                })
         };
-        if first
-            && refusal == Refusal::Definitive
-            && let Some(evict) = self.evict.lock().as_ref()
-        {
+        if newly_definitive && let Some(evict) = self.evict.lock().as_ref() {
             evict();
         }
     }
@@ -466,6 +471,29 @@ mod tests {
                 "the start's own send, carrying the starter explicitly, goes out"
             );
         });
+    }
+
+    /// A refusal mark only escalates: ThisLoan then Definitive evicts once, and
+    /// a ThisLoan after a Definitive leaves it Definitive.
+    #[test]
+    fn a_refusal_mark_only_escalates() {
+        let lender = Arc::new(Lender::default());
+        let evicted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = Arc::clone(&evicted);
+        lender.on_definitive_refusal(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let loan = lender.lend(&headers("one"));
+        lender.refuse(loan.id(), Refusal::ThisLoan);
+        lender.refuse(loan.id(), Refusal::Definitive);
+        assert_eq!(evicted.load(Ordering::SeqCst), 1, "the upgrade evicts");
+        lender.refuse(loan.id(), Refusal::ThisLoan);
+        assert_eq!(
+            loan.refused(),
+            Some(Refusal::Definitive),
+            "never downgraded"
+        );
+        assert_eq!(evicted.load(Ordering::SeqCst), 1, "evicted once");
     }
 
     #[test]
