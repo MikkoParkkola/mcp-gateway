@@ -435,9 +435,5 @@ impl Interfaces for System {
 }
 
 #[cfg(test)]
-#[path = "proxy_deny_vectors.rs"]
-mod deny_vectors;
-
-#[cfg(test)]
-#[path = "proxy_tests.rs"]
+#[path = "proxy_tests/mod.rs"]
 mod tests;

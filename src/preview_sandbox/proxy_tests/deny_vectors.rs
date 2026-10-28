@@ -84,8 +84,3 @@ pub(super) const DENIED: &[&str] = &[
     "2001:0:4136:e378:8000:63bf:f5ff:fffe",
     "64:ff9b::a00:1",
 ];
-
-/// A test address literal.
-pub(super) fn ip(s: &str) -> std::net::IpAddr {
-    s.parse().unwrap_or_else(|_| panic!("bad address {s}"))
-}
