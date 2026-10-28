@@ -45,10 +45,10 @@ pub(crate) fn shape_modern_response(
     // Only a final answer is the resource: an interim one (`input_required`)
     // or an error is not, and nothing may cache it. Read before the result is
     // shaped, so a supplied `resultType` cannot make an interim answer final.
-    let cacheable_answer = response.result.as_ref().is_some_and(|result| {
-        crate::protocol::cacheable::is_final(result)
-            && !crate::protocol::cacheable::is_error(result)
-    });
+    let cacheable_answer = response
+        .result
+        .as_ref()
+        .is_some_and(crate::protocol::cacheable::is_cacheable_answer);
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {

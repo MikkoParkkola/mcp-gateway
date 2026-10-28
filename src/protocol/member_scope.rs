@@ -16,7 +16,7 @@
 
 use serde_json::Value;
 
-use super::cacheable::{CACHEABLE_METHODS, is_final, result_type_of};
+use super::cacheable::{CACHEABLE_METHODS, is_cacheable_answer, result_type_of};
 
 /// Whether the send this answer answers declared the tasks extension
 /// upstream. Only a send that did may be answered with a task handle.
@@ -40,7 +40,8 @@ pub(crate) enum Method {
 /// The answer shape a member may arrive in.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Shape {
-    /// A final answer: `resultType` absent or `complete` (absent means complete).
+    /// A final answer that is not an error: `resultType` absent or `complete`
+    /// (absent means complete), and no `isError: true`.
     Final,
     /// An answer whose `resultType` is this value.
     ResultType(&'static str),
@@ -143,7 +144,7 @@ fn method_matches(allowed: Method, method: &str) -> bool {
 /// Whether `result` has `shape`, answering a send that declared `declared`.
 fn shape_matches(shape: Shape, result: &Value, declared: Declared) -> bool {
     match shape {
-        Shape::Final => is_final(result),
+        Shape::Final => is_cacheable_answer(result),
         Shape::ResultType(value) => result_type_of(result) == value,
         Shape::DeclaredTask => result_type_of(result) == "task" && declared == Declared::Tasks,
         Shape::Any => true,

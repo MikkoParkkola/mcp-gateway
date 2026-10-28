@@ -304,6 +304,12 @@ pub(crate) fn is_error(result: &Value) -> bool {
     result.get("isError").and_then(Value::as_bool) == Some(true)
 }
 
+/// Whether `result` may carry cache hints: a final answer that is not an
+/// error. The ingress scope and the gateway's own hints read this one rule.
+pub(crate) fn is_cacheable_answer(result: &Value) -> bool {
+    is_final(result) && !is_error(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::is_error;

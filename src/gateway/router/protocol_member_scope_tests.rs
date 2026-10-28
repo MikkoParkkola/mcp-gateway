@@ -192,6 +192,9 @@ async fn an_undeclared_task_handle_is_refused() {
             "{backend}: a task handle with no declaration was delivered: {answer}"
         );
         let error = answer["error"].to_string();
+        // The refusal itself, not some other failure on the way.
+        assert!(error.contains("task handle"), "{backend}: {error}");
+        assert!(error.contains("tools/call"), "{backend}: {error}");
         assert!(!error.contains("t-1"), "{backend}: {error}");
     }
 }

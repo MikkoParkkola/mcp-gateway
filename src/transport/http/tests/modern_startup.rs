@@ -241,6 +241,11 @@ async fn a_modern_only_peer_starts_without_a_handshake_and_takes_a_task_call() {
         Some(HANDLE),
         "the task handle must survive the typed path"
     );
+    assert_eq!(
+        response.result.as_ref().and_then(|r| r["ttlMs"].as_u64()),
+        Some(900_000),
+        "a declared task handle keeps its retention through ingress"
+    );
 
     let seen = recorded(&recorder);
     assert_eq!(

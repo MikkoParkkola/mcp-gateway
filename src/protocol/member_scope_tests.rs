@@ -84,6 +84,13 @@ fn misplacements_are_named() {
         misplaced("tools/call", &all_four(Some("task")), Declared::Nothing),
         ["requestState", "cacheScope", "ttlMs", "taskId"]
     );
+    // An error is not a cacheable answer, final or not.
+    let mut error = all_four(Some("complete"));
+    error["isError"] = json!(true);
+    assert_eq!(
+        misplaced("resources/read", &error, Declared::Nothing),
+        ["requestState", "cacheScope", "ttlMs", "taskId"]
+    );
     // A method no row lists loses all four.
     assert_eq!(
         misplaced("vendor/thing", &complete, Declared::Tasks),
