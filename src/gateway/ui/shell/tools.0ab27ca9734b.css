@@ -7,14 +7,16 @@
 .tools-bar #tools-search { flex: 1 1 calc(var(--space-16) * 5); max-width: calc(var(--space-16) * 10); }
 .tools-bar #tools-server { flex: 0 0 auto; width: auto; }
 
-.tools-card-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
+.tools-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
 .tools-card-head h2 { margin: 0; }
 .tools-meta { margin-left: auto; font: var(--type-small); }
+/* The table scrolls inside the card on a narrow screen; the page never does. */
+.tools-scroll { overflow-x: auto; }
 .tools-table td { vertical-align: middle; padding-top: var(--space-0-5); padding-bottom: var(--space-0-5); height: auto; }
 /* Column widths as frame 48q draws them. */
 .tools-table th:nth-child(1) { width: calc(var(--space-16) * 4); }
 .tools-table th:nth-child(2) { width: calc(var(--space-16) * 2); }
-.tools-none { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
+.tools-none:not([hidden]) { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
 
 /* The tool name opens its detail: a real button, the width of its cell. */
 .tool-toggle { background: none; border: 0; padding: 0; width: 100%; min-height: var(--size-row); color: var(--color-text-primary);

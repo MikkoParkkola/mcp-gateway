@@ -37,10 +37,10 @@ async function readTools(api) {
 
 const plural = (n, one, many) => `${n.toLocaleString('en')} ${n === 1 ? one : many}`;
 
-/** "read (declared)", "read (guessed from the name)" or "write". */
+/** The class and where it came from: "read (declared)", "write (guessed from the name)", … */
 function classWord(t) {
-  if (t.class !== 'read') return 'write';
-  return t.class_source === 'declared' ? 'read (declared)' : 'read (guessed from the name)';
+  const cls = t.class === 'read' ? 'read' : 'write';
+  return `${cls} (${t.class_source === 'declared' ? 'declared' : 'guessed from the name'})`;
 }
 
 /**
@@ -90,7 +90,8 @@ async function statusTab(body, ctx) {
     h('button', { class: 'btn', type: 'button' }, 'Clear filters'));
   const card = h('section', { class: 'tk tools-card', 'aria-labelledby': 'tools-card-title' },
     h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: 'tools-card-title' }, 'All tools'), meta),
-    table, none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
+    h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Tool list' }, table),
+    none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   body.append(h('div', { class: 'tools-bar' }, search, pick), card);
   search.value = filters.query;
   pick.value = servers.includes(filters.server) ? filters.server : '';
@@ -109,12 +110,18 @@ async function statusTab(body, ctx) {
       const mark = h('span', { class: 'mark', 'aria-hidden': 'true' }, '▸ ');
       const toggle = h('button', { class: 'tool-toggle mono', type: 'button', 'aria-expanded': 'false', 'aria-controls': id }, mark, t.name);
       const row = h('tr', { class: 'tool' }, h('td', {}, toggle), h('td', { class: 't2' }, t.server), h('td', { class: 'muted' }, t.description ?? ''));
-      // As frame 48q: the open row is the schema; the row above already shows the description.
-      const detail = h('tr', { class: 'tool-detail', id, hidden: true }, h('td', { colspan: 3 },
-        h('p', { class: 'mono tool-schema-label' }, 'Input schema'),
-        schemaBlock(t, { compact: true }),
-        h('p', {}, h('a', { class: 'lnk', href: toolPath(t), 'aria-label': `Open ${t.name}` }, 'Open'))));
+      // As frame 48q: the open row is the schema, with the tool's class; the row
+      // above already shows the description. Built on first open, so a filter
+      // never serialises schemas nobody looks at.
+      const cell = h('td', { colspan: 3 });
+      const detail = h('tr', { class: 'tool-detail', id, hidden: true }, cell);
       toggle.addEventListener('click', () => {
+        if (!cell.childElementCount) {
+          cell.append(
+            h('p', { class: 'mono tool-schema-label' }, `Input schema · ${classWord(t)}`),
+            schemaBlock(t, { compact: true }),
+            h('p', {}, h('a', { class: 'lnk', href: toolPath(t), 'aria-label': `Open ${t.name}` }, 'Open')));
+        }
         const open = toggle.getAttribute('aria-expanded') !== 'true';
         toggle.setAttribute('aria-expanded', String(open));
         mark.textContent = open ? '▾ ' : '▸ ';

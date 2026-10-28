@@ -268,7 +268,7 @@ test('T16: on a phone the page never scrolls sideways; the table scrolls in its 
   await page.goto('/ui/tools/status');
   await expect(rows(page)).toHaveCount(40);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
-  const region = page.getByRole('region', { name: 'All tools' });
+  const region = page.getByRole('region', { name: 'Tool list' });
   await expect(region).toHaveAttribute('tabindex', '0');
 });
 

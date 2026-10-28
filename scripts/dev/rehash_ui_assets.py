@@ -48,7 +48,8 @@ def in_dependency_order(found):
     """
     keys = {p: (HASHED.match(p.name)["stem"], HASHED.match(p.name)["ext"]) for p in found}
     text = {p: p.read_text(errors="ignore") if keys[p][1] in ("css", "js") else "" for p in found}
-    deps = {p: {q for q in found if q != p and ref_pattern(*keys[q]).search(text[p])} for p in found}
+    # A file naming itself is a cycle too: its name could never match its bytes.
+    deps = {p: {q for q in found if ref_pattern(*keys[q]).search(text[p])} for p in found}
     ordered, done, visiting = [], set(), []
 
     def visit(p):

@@ -49,7 +49,7 @@ const CASES = [
   // open, as drawn.
   ['48q-tools-status-search-results.png', 1440, 900, 'dark', [
     ['toolbar', 256, 200, 760, 52, 0.15, 'the server choice is a native select, not a drawn button; no ⌘K hint in a page search (the palette owns ⌘K)'],
-    ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
+    ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page and the tool's class beside \"Input schema\" in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
 ];
 
 /** The tools frame 48q draws, then filler to its totals. */
