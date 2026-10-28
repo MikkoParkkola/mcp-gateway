@@ -196,6 +196,46 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
         .count()
 }
 
+/// The guard's rule for one file's text: it installs a scoped subscriber
+/// but never reaches the keeper.
+fn misses_keeper(text: &str) -> bool {
+    let installs = ["subscriber::with_default(", "subscriber::set_default("];
+    let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
+    let installs_one = installs.iter().any(|needle| text.contains(needle));
+    let keeps_one = keeps.iter().any(|needle| text.contains(needle));
+    installs_one && !keeps_one
+}
+
+/// A keeper named only in a line or doc comment does not count: the file is
+/// flagged.
+#[test]
+fn a_keeper_named_only_in_a_comment_is_flagged() {
+    let line = "fn t() {\n    // reaches crate::test_log_capture first\n    \
+                tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(misses_keeper(line), "a line comment satisfied the guard");
+    let doc = "/// Uses test_log_capture.\nfn t() {\n    \
+               let _g = tracing::subscriber::set_default(s);\n}\n";
+    assert!(misses_keeper(doc), "a doc comment satisfied the guard");
+}
+
+/// A real keeper call passes.
+#[test]
+fn a_real_keeper_call_passes() {
+    let text = "fn t() {\n    crate::test_log_capture::keep_interest_open();\n    \
+                tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(!misses_keeper(text));
+}
+
+/// An install that is only commented out is not an install.
+#[test]
+fn a_commented_out_install_is_ignored() {
+    let text = "fn t() {\n    // tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        !misses_keeper(text),
+        "a commented-out install triggered the guard"
+    );
+}
+
 /// MIK-8254 guard: every test file that installs its own scoped subscriber
 /// also keeps callsite interest open, so the next capture cannot bring the
 /// flake back. Lexical by design: a file that names `subscriber::with_default`
@@ -217,15 +257,11 @@ fn every_scoped_log_capture_keeps_interest_open() {
     let mut files = Vec::new();
     walk(&root.join("src"), &mut files);
     walk(&root.join("tests"), &mut files);
-    let installs = ["subscriber::with_default(", "subscriber::set_default("];
-    let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
     let mut missing: Vec<String> = files
         .iter()
         .filter_map(|path| {
             let text = std::fs::read_to_string(path).ok()?;
-            let installs_one = installs.iter().any(|needle| text.contains(needle));
-            let keeps_one = keeps.iter().any(|needle| text.contains(needle));
-            (installs_one && !keeps_one).then(|| {
+            misses_keeper(&text).then(|| {
                 path.strip_prefix(root)
                     .unwrap_or(path)
                     .display()
