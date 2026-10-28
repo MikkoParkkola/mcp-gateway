@@ -13,9 +13,9 @@ use axum::http::StatusCode;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use super::AppState;
 use super::create_router;
 use super::tests::test_router_app_state_with_auth;
-use super::AppState;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, FailsafeConfig};
 use crate::config_reload::{LiveConfig, ReloadContext};
 use crate::gateway::test_helpers::write_owner_only;
@@ -77,7 +77,11 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
-            path: dir.path().join("audit.jsonl").to_string_lossy().into_owned(),
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
             key_id: "ui-cancel".to_string(),
             ..TransparencyLogConfig::default()
         }))
@@ -98,7 +102,12 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
 }
 
 impl Fixture {
-    fn request(&self, method: &str, uri: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+    fn request(
+        &self,
+        method: &str,
+        uri: &str,
+        body: &Value,
+    ) -> axum::http::Request<axum::body::Body> {
         axum::http::Request::builder()
             .method(method)
             .uri(uri)
@@ -110,11 +119,12 @@ impl Fixture {
 
     /// The request sent on a task of its own, so a row can abort it as a
     /// disconnecting client's request is dropped.
-    fn spawn(&self, request: axum::http::Request<axum::body::Body>) -> tokio::task::JoinHandle<StatusCode> {
+    fn spawn(
+        &self,
+        request: axum::http::Request<axum::body::Body>,
+    ) -> tokio::task::JoinHandle<StatusCode> {
         let router = create_router(Arc::clone(&self.state));
-        tokio::spawn(async move {
-            router.oneshot(request).await.expect("a response").status()
-        })
+        tokio::spawn(async move { router.oneshot(request).await.expect("a response").status() })
     }
 
     fn admin_actions(&self) -> Vec<Value> {
@@ -178,12 +188,18 @@ async fn cancel_after_writer_start(
 
     let records = fx.wait_for_admin_actions(1).await;
     let file = std::fs::read_to_string(&fx.path).expect("read config");
-    assert!(landed(&fx.ctx.live_config.get(), &file), "the write did not land: {file}");
+    assert!(
+        landed(&fx.ctx.live_config.get(), &file),
+        "the write did not land: {file}"
+    );
     assert_eq!(records.len(), 1, "exactly one record: {records:#?}");
     let record = &records[0];
     assert_eq!(record["route"], route, "{record}");
     assert_eq!(record["method"], method, "{record}");
-    assert_eq!(record["who"]["account"], KEY, "the caller is named: {record}");
+    assert_eq!(
+        record["who"]["account"], KEY,
+        "the caller is named: {record}"
+    );
     assert!(
         record["http_status"]
             .as_u64()
@@ -268,7 +284,8 @@ async fn an_uncancelled_write_is_recorded_once() {
         .expect("the request finished")
         .expect("the request task");
     assert!(status.is_success(), "{status}");
-    fx.wait_for_live("loaded b", |live| live.backends.contains_key("b")).await;
+    fx.wait_for_live("loaded b", |live| live.backends.contains_key("b"))
+        .await;
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "exactly one record: {records:#?}");
     assert_eq!(records[0]["who"]["account"], KEY, "{}", records[0]);
