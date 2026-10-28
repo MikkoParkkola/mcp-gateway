@@ -167,6 +167,21 @@ impl Fixture {
         }
     }
 
+    /// The log's admin actions once every task started since `baseline` (a
+    /// count of live tasks) has ended, so a late duplicate cannot slip past.
+    async fn settled_admin_actions(&self, baseline: usize) -> Vec<Value> {
+        let metrics = tokio::runtime::Handle::current().metrics();
+        let deadline = tokio::time::Instant::now() + GUARD;
+        while metrics.num_alive_tasks() > baseline {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "a task the request started never ended"
+            );
+            tokio::task::yield_now().await;
+        }
+        self.admin_actions()
+    }
+
     /// Poll until the running gateway's config passes `ready`, within the guard.
     async fn wait_for_live(&self, what: &str, ready: impl Fn(&Config) -> bool) {
         let deadline = tokio::time::Instant::now() + GUARD;
@@ -193,6 +208,9 @@ async fn cancel_after_writer_start(
 ) {
     let fx = fixture(AuditFailurePolicy::FailClosed).await;
     let pause = crate::config_reload::arm_reload_pause(&fx.path);
+    let baseline = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
     let request = fx.spawn(request(method, uri, body));
     tokio::time::timeout(GUARD, pause.reached.notified())
         .await
@@ -201,7 +219,8 @@ async fn cancel_after_writer_start(
     let _ = request.await;
     pause.release.notify_one();
 
-    let records = fx.wait_for_admin_actions(1).await;
+    fx.wait_for_admin_actions(1).await;
+    let records = fx.settled_admin_actions(baseline).await;
     let file = std::fs::read_to_string(&fx.path).expect("read config");
     assert!(
         landed(&fx.ctx.live_config.get(), &file),
@@ -528,6 +547,9 @@ async fn a_disconnect_mid_body_records_the_handlers_refusal() {
         .header("content-type", "application/json")
         .body(axum::body::Body::from_stream(body))
         .expect("a request");
+    let baseline = tokio::runtime::Handle::current()
+        .metrics()
+        .num_alive_tasks();
     let request = fx.spawn(request);
     tokio::time::timeout(GUARD, polled_rx)
         .await
@@ -537,7 +559,8 @@ async fn a_disconnect_mid_body_records_the_handlers_refusal() {
     let _ = request.await;
     let _ = fail_tx.send(());
 
-    let records = fx.wait_for_admin_actions(1).await;
+    fx.wait_for_admin_actions(1).await;
+    let records = fx.settled_admin_actions(baseline).await;
     assert_eq!(records.len(), 1, "{records:#?}");
     let record = &records[0];
     assert_eq!(
