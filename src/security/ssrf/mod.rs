@@ -262,7 +262,7 @@ pub(crate) fn is_loopback_name(host: &str) -> bool {
 }
 
 /// Refuse a capability destination that names the loopback interface by
-/// name (MIK-9038). The literal forms are refused by
+/// name. The literal forms are refused by
 /// [`validate_url_not_ssrf`]; a name is otherwise only refused where the
 /// pinning resolver sees it, and with `capabilities.egress_proxy` set the
 /// client sends loopback past the proxy unpinned. Refusing the name before

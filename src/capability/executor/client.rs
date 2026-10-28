@@ -40,7 +40,7 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .previous()
                 .first()
                 .is_some_and(crate::gateway::is_tls_or_loopback);
-            // A hop to a loopback name is refused as a target is (MIK-9038):
+            // A hop to a loopback name is refused as a target is:
             // with a proxy set it would otherwise go direct, unpinned.
             if attempt
                 .url()
@@ -76,9 +76,9 @@ fn route(proxy: Option<&url::Url>) -> reqwest::ClientBuilder {
         None => crate::security::ssrf::pinned_client_builder(),
         // Loopback goes direct: cleartext to it is allowed only because it
         // stays on the machine, and the proxy would carry it off (#3013).
-        // Only the literals: a loopback name is refused before any send
-        // (MIK-9038), and one a check missed reaches the proxy, never this
-        // unpinned direct path.
+        // Only the literals: a loopback name is refused before any send,
+        // and one a check missed reaches the proxy, never this unpinned
+        // direct path.
         Some(url) => Client::builder().no_proxy().proxy(
             reqwest::Proxy::all(url.as_str())
                 .expect("capabilities.egress_proxy validated at load")

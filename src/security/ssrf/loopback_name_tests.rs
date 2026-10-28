@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A capability destination naming loopback is refused by name before any
 //! DNS lookup, and every literal spelling of a loopback or unspecified
-//! address parses to an IP the synchronous check refuses (MIK-9038).
+//! address parses to an IP the synchronous check refuses.
 
 use super::{is_loopback_name, is_ssrf_refusal, refuse_loopback_name, validate_url_not_ssrf};
 

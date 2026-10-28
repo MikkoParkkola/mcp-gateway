@@ -6,7 +6,7 @@
 //! to the fixture's listener on `127.0.0.1`.
 //!
 //! Fixtures used `localhost` for this until loopback names were refused
-//! before any lookup (MIK-9038). Test-only: production has no client that
+//! before any lookup. Test-only: production has no client that
 //! resolves a name without pinning it.
 
 use std::net::{Ipv4Addr, SocketAddr};
