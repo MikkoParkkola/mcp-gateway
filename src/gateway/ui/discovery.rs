@@ -17,7 +17,7 @@ use axum::Router;
 use axum::extract::{Extension, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use serde_json::json;
 
 use super::backends::validate_backend_name;
@@ -43,6 +43,7 @@ pub(super) fn discovery_router() -> Router<Arc<AppState>> {
 pub(super) fn discovery_router_with(cache: Arc<DiscoveryCache>) -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_DISCOVERY, get(list_discovery))
+        .route(routes::UI_DISCOVERY_ADOPT, post(adopt::adopt_discovery))
         .layer(Extension(cache))
 }
 
@@ -186,6 +187,9 @@ fn body(gateway: &Gateway, listing: &Listing, outdated: bool) -> serde_json::Val
         "radar": {"counts": counts, "findings": findings},
     })
 }
+
+#[path = "discovery_adopt.rs"]
+mod adopt;
 
 #[cfg(test)]
 #[path = "discovery_tests.rs"]
