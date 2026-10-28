@@ -43,7 +43,33 @@ const CASES = [
     ['key form', 546, 446, 348, 135, 0.02, '', 546, 467]], 'signin'],
   ['32-sign-in-390.png', 390, 800, 'dark', [
     ['key form', 42, 346, 306, 135, 0.02, '', 42, 367]], 'signin'],
+  // Frame 48q exists only at 1440 px, dark. The Tools screen is served with
+  // the frame's own six rows, padded with filler tools that sort after them
+  // to the frame's totals (1,284 tools, 28 servers), with filesystem.list_dir
+  // open, as drawn.
+  ['48q-tools-status-search-results.png', 1440, 900, 'dark', [
+    ['toolbar', 256, 200, 760, 52, 0.15, 'the server choice is a native select, not a drawn button; no ⌘K hint in a page search (the palette owns ⌘K)'],
+    ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page and the tool's class beside \"Input schema\" in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
 ];
+
+/** The tools frame 48q draws, then filler to its totals. */
+function frameTools() {
+  const drawn = [
+    ['aws.describe_instances', 'aws', 'List EC2 instances with state and tags'],
+    ['aws.get_object', 'aws', 'Read an object from an S3 bucket'],
+    ['context7.get_docs', 'context7', 'Fetch current documentation for a library'],
+    ['docker.list_containers', 'docker', 'List containers and their state'],
+    ['filesystem.list_dir', 'filesystem', 'List a folder inside the allowed paths'],
+    ['filesystem.read_file', 'filesystem', 'Read a text file inside the allowed paths'],
+  ].map(([name, server, description]) => ({ name, server, description, class: 'read', class_source: 'declared',
+    schema: name === 'filesystem.list_dir'
+      ? { type: 'object', properties: { path: { type: 'string', description: 'Folder to list' }, depth: { type: 'integer', default: 1 } }, required: ['path'] }
+      : { type: 'object' } }));
+  const filler = Array.from({ length: 1284 - drawn.length }, (_, i) => ({
+    name: `zz_filler_${i}`, server: `zz_server_${i % 24}`, description: 'Filler', class: 'read', class_source: 'declared', schema: {},
+  }));
+  return [...drawn, ...filler];
+}
 
 test.describe('frames', () => {
   test('FRAMES_DIR points at the r6 frames', () => {
@@ -59,10 +85,18 @@ test.describe('frames', () => {
       if (act === 'signin') {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
       }
-      // The fixture pages give Overview its subtitle, as a real screen will.
-      await withFixturePages(page);
-      await page.goto('/ui/overview/status');
+      if (act === 'tools') {
+        await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+        await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: frameTools() } }));
+        await page.goto('/ui/tools/status');
+        await page.getByRole('button', { name: 'filesystem.list_dir', exact: true }).click();
+      } else {
+        // The fixture pages give Overview its subtitle, as a real screen will.
+        await withFixturePages(page);
+        await page.goto('/ui/overview/status');
+      }
       await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
+      if (act === 'tools') await page.evaluate(() => document.activeElement?.blur());
       if (act?.startsWith('palette:')) {
         await page.keyboard.press('Control+KeyK');
         await page.keyboard.type(act.slice('palette:'.length));
