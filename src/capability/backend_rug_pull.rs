@@ -101,9 +101,18 @@ impl CapabilityBackend {
             // Matching the pin these bytes declare (restored, or re-pinned
             // by an admin) or declaring none resolves it; the pin recorded
             // at detection is the changed bytes' own and decides nothing.
-            if declared_pin(&content).is_none_or(|pin| pin.eq_ignore_ascii_case(&actual)) {
-                self.clear_rug_pull_if(&record.file, &record.actual);
-                continue;
+            match declared_pin(&content) {
+                Ok(pin) if pin.is_none_or(|pin| pin.eq_ignore_ascii_case(&actual)) => {
+                    self.clear_rug_pull_if(&record.file, &record.actual);
+                    continue;
+                }
+                Ok(_) => {}
+                // Garbled bytes resolve nothing: the record stays, and its
+                // summary cannot be built, so the list is incomplete.
+                Err(()) => {
+                    mismatches.incomplete = true;
+                    continue;
+                }
             }
             mismatches.changes.push((record, content, actual));
         }
@@ -149,13 +158,15 @@ pub(crate) struct Mismatches {
     pub(crate) incomplete: bool,
 }
 
-/// The `sha256:` pin a capability file declares, if any.
-fn declared_pin(content: &str) -> Option<String> {
-    crate::yaml::from_str::<crate::yaml::Value>(content)
-        .ok()?
-        .get("sha256")
-        .and_then(crate::yaml::Value::as_str)
-        .map(str::to_string)
+/// The `sha256:` pin a capability file declares: `Ok(None)` for none,
+/// `Err(())` when the bytes do not parse or the pin is not a string, which
+/// says nothing either way.
+fn declared_pin(content: &str) -> Result<Option<String>, ()> {
+    let parsed = crate::yaml::from_str::<crate::yaml::Value>(content).map_err(|_| ())?;
+    match parsed.get("sha256") {
+        None => Ok(None),
+        Some(pin) => pin.as_str().map(|pin| Some(pin.to_string())).ok_or(()),
+    }
 }
 
 /// Recursively walk a directory and report any YAML file whose embedded
@@ -185,7 +196,7 @@ async fn detect_rug_pulls_in_dir(dir: &Path, out: &mut Vec<RugPullRecord>) {
         // Extract embedded pin via lightweight deserialisation. A parse error
         // here is not a rug-pull (the loader will surface it); we only care
         // about files that self-declare a pin that no longer matches.
-        let Some(expected) = declared_pin(&content) else {
+        let Ok(Some(expected)) = declared_pin(&content) else {
             continue;
         };
         let actual = compute_capability_hash(&content);

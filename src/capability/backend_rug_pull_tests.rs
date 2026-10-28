@@ -263,3 +263,20 @@ async fn a_never_admitted_file_sharing_a_name_is_not_trusted() {
     );
     assert!(backend.has_capability("rugtest"));
 }
+
+/// Garbled bytes, or a pin that is not a string, resolve nothing: the record
+/// stays and the reconcile is incomplete.
+#[tokio::test]
+async fn garbled_bytes_keep_the_record() {
+    for garbled in ["name: [unclosed\n", "name: rugtest\nsha256: [1, 2]\n"] {
+        let (_dir, backend, path, pinned) = loaded().await;
+        std::fs::write(&path, pinned.replace("Initially legit", "Changed")).unwrap();
+        assert_eq!(backend.detect_rug_pulls().await.len(), 1);
+        std::fs::write(&path, garbled).unwrap();
+
+        let mismatches = backend.current_mismatches();
+
+        assert!(mismatches.incomplete, "{garbled:?}");
+        assert_eq!(backend.rug_pull_records().len(), 1, "{garbled:?}");
+    }
+}
