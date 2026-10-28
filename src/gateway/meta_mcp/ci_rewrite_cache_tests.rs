@@ -66,7 +66,7 @@ async fn search(meta: &MetaMcp) -> (Value, Option<Value>) {
     })
     .await;
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     (answer, fields.get("response_effect").cloned())
 }
 
