@@ -154,7 +154,11 @@ impl StreamHub {
         }
         *held += 1;
         inner.streams += 1;
-        if inner.watcher.is_none() {
+        let dead = inner.watcher.as_ref().is_some_and(AbortHandle::is_finished);
+        if dead {
+            tracing::warn!("ui stream: the watcher ended unexpectedly; starting a new one");
+        }
+        if dead || inner.watcher.is_none() {
             self.shared
                 .snapshot
                 .send_if_modified(|s| std::mem::replace(&mut s.fresh, false));
