@@ -36,8 +36,10 @@ pub(super) enum CpCheck {
     Read,
     /// One RBAC action, checked where the handler always checked it.
     Action(ControlPlaneAction),
-    /// Authenticated only; the handler picks the action from the body.
-    Authenticated,
+    /// Authenticated only at admission; the handler then checks the action
+    /// the body names, which is one of these. The report counts the route
+    /// open to a caller who may take any of them.
+    FromBody(&'static [ControlPlaneAction]),
 }
 
 /// What a route asks of its caller.
@@ -416,7 +418,10 @@ pub(super) static ROWS: &[Row] = &[
     row(
         routes::UI_CONTROL_PLANE_DECISIONS,
         Post,
-        ControlPlane(CpCheck::Authenticated),
+        ControlPlane(CpCheck::FromBody(&[
+            ControlPlaneAction::MutateGrant,
+            ControlPlaneAction::MutatePolicy,
+        ])),
         &[(Page::Policies, Tab::Actions)],
         false,
     ),

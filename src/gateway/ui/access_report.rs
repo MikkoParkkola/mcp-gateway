@@ -121,7 +121,7 @@ fn admits(
             // control-plane routes read the live config.
             let mapping = match check {
                 CpCheck::Read => &generation.config().control_plane.role_mapping,
-                CpCheck::Action(_) | CpCheck::Authenticated => &live.control_plane.role_mapping,
+                CpCheck::Action(_) | CpCheck::FromBody(_) => &live.control_plane.role_mapping,
             };
             let actor = super::control_plane::mutations::actor_from_client(
                 caller.client,
@@ -135,7 +135,7 @@ fn admits(
                         && allowed(ControlPlaneAction::ReadEvidence)
                 }
                 CpCheck::Action(action) => allowed(action),
-                CpCheck::Authenticated => true,
+                CpCheck::FromBody(actions) => actions.iter().any(|&action| allowed(action)),
             }
         }
         need => guard::decide(need, caller.client).is_ok(),

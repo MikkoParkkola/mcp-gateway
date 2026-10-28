@@ -66,7 +66,7 @@ fn admitted_actor(
             ),
             action,
         )),
-        CpCheck::Read | CpCheck::Authenticated => Err(Box::new(
+        CpCheck::Read | CpCheck::FromBody(_) => Err(Box::new(
             super::super::guard::Refused::AdminRequired.into_response(),
         )),
     })
