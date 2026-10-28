@@ -35,7 +35,11 @@ where
     T: FormatTime + Send + Sync + 'static,
     W: for<'w> MakeWriter<'w> + Send + Sync + 'static,
 {
-    base.fmt_fields(EscapingFields).map_writer(EscapingWriter)
+    // The message and errors rely on the library's own escape: keep it on,
+    // whatever the base layer was built with.
+    base.with_ansi_sanitization(true)
+        .fmt_fields(EscapingFields)
+        .map_writer(EscapingWriter)
 }
 
 /// Characters a log line must not carry raw: every C0 and C1 control and
@@ -192,15 +196,15 @@ impl<W: io::Write> io::Write for EscapedLine<W> {
     }
 }
 
-/// The length of a colour code (`ESC [ digits and ; m`) at the start of
-/// `s`, the only escape sequence the formatter writes.
+/// The length of a colour code at the start of `s`, if it is one the
+/// formatter itself writes (tracing-subscriber 0.3.23 fmt/format/mod.rs:
+/// reset, bold, dimmed, italic, and the five level colours). Any other
+/// sequence, such as one that conceals text, is escaped.
 fn colour_code(s: &str) -> Option<usize> {
+    const OWN: [&str; 9] = ["0", "1", "2", "3", "31", "32", "33", "34", "35"];
     let tail = s.strip_prefix("\x1b[")?;
-    let params = tail
-        .bytes()
-        .take_while(|b| b.is_ascii_digit() || *b == b';')
-        .count();
-    (tail.as_bytes().get(params) == Some(&b'm')).then_some(2 + params + 1)
+    let (params, _) = tail.split_once('m')?;
+    OWN.contains(&params).then_some(2 + params.len() + 1)
 }
 
 #[cfg(test)]

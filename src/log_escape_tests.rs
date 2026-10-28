@@ -384,24 +384,25 @@ async fn a_changed_capability_name_cannot_forge_a_rug_pull_line() {
         CapabilityBackend, CapabilityExecutor, compute_capability_hash, rewrite_with_pin,
     };
 
-    let dir = tempfile::TempDir::new().expect("a directory");
     let body = "name: rugtest\ndescription: legit\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://caps.invalid\n      path: /v1\n";
     let pinned = rewrite_with_pin(body, &compute_capability_hash(body));
-    let path = dir.path().join("rugtest.yaml");
-    std::fs::write(&path, &pinned).expect("written");
-    let backend = CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()));
-    backend
-        .load_from_directory(dir.path().to_str().expect("utf-8"))
-        .await
-        .expect("loaded");
     let hostile = serde_json::to_string(PROBE).expect("a quoted name");
-    std::fs::write(
-        &path,
-        pinned.replace("name: rugtest", &format!("name: {hostile}")),
-    )
-    .expect("tampered");
-
     for ansi in [false, true] {
+        // A fresh directory and backend per mode: a detection unloads it.
+        let dir = tempfile::TempDir::new().expect("a directory");
+        let path = dir.path().join("rugtest.yaml");
+        std::fs::write(&path, &pinned).expect("written");
+        let backend = CapabilityBackend::new("caps", Arc::new(CapabilityExecutor::new()));
+        backend
+            .load_from_directory(dir.path().to_str().expect("utf-8"))
+            .await
+            .expect("loaded");
+        std::fs::write(
+            &path,
+            pinned.replace("name: rugtest", &format!("name: {hostile}")),
+        )
+        .expect("tampered");
+
         let buf = Buf::default();
         let layer = escaping(
             tracing_subscriber::fmt::layer()
@@ -412,11 +413,7 @@ async fn a_changed_capability_name_cannot_forge_a_rug_pull_line() {
         let detected = backend.detect_rug_pulls().await;
         drop(guard);
         let out = buf.text();
-        assert!(ansi || !detected.is_empty(), "no rug pull detected");
-        if detected.is_empty() {
-            // The first pass unloaded and marked it; nothing logs twice.
-            continue;
-        }
+        assert!(!detected.is_empty(), "no rug pull detected (ansi {ansi})");
         assert!(out.contains("RUG-PULL DETECTED"), "{out:?}");
         // Other events may log here too, so the row asserts what forging
         // needs: no line starts with the planted text, and no erase code.
@@ -471,5 +468,49 @@ fn a_field_value_cannot_add_a_colour() {
         assert_one_line(&out, ansi);
         assert!(!out.contains("\x1b[31mred"), "{out:?}");
         assert!(out.contains(r"\u{1b}[31mred"), "{out:?}");
+    }
+}
+
+/// The writer lets through only the colour codes the formatter itself
+/// writes: a bridged target cannot conceal what follows it.
+#[test]
+fn a_bridged_target_cannot_conceal_text() {
+    let _ = tracing_log::LogTracer::init();
+    for ansi in [false, true] {
+        let out = text(ansi, || {
+            log::logger().log(
+                &log::Record::builder()
+                    .level(log::Level::Warn)
+                    .target("dep\x1b[8mhidden")
+                    .args(format_args!("from a dependency"))
+                    .build(),
+            );
+        });
+        assert_one_line(&out, ansi);
+        assert!(!out.contains("\x1b[8m"), "{out:?}");
+    }
+}
+
+/// The message and an error rely on the library's own escape, which a base
+/// layer can switch off: `escaping` switches it back on, so neither can add
+/// a colour.
+#[test]
+fn a_message_or_an_error_cannot_add_a_colour() {
+    let e = Chained(std::io::Error::other("cause \x1b[31mred"));
+    for ansi in [false, true] {
+        let buf = Buf::default();
+        let layer = escaping(
+            tracing_subscriber::fmt::layer()
+                .with_ansi_sanitization(false)
+                .with_ansi(ansi)
+                .with_writer(buf.clone()),
+        );
+        let out = written(layer, &buf, || {
+            tracing::warn!(message = "plain \x1b[31mred");
+            tracing::warn!("formatted \x1b[31mred");
+            tracing::warn!(error = &e as &(dyn std::error::Error + 'static), "x");
+        });
+        assert_eq!(out.matches('\n').count(), 3, "{out:?}");
+        assert!(!out.contains("\x1b[31mred"), "{out:?}");
     }
 }
