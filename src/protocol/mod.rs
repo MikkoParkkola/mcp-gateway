@@ -14,6 +14,7 @@ pub mod modern_refusal;
 pub mod mrtr;
 mod negotiate;
 pub mod param_headers;
+pub(crate) mod reserved_members;
 pub mod subscriptions;
 pub mod tasks;
 pub mod trace;
