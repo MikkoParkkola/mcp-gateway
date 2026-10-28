@@ -592,7 +592,7 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
     // A row older than the descriptor cannot have captured one; a descriptor
     // found there is forged or downgraded (the loader and store.rs agree).
     if record.version < UPSTREAM_VERSION
-        || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+        || crate::gateway::meta_mcp::is_composite_meta_tool(task.tool())
     {
         return Vec::new();
     }

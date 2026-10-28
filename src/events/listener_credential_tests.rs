@@ -210,3 +210,66 @@ async fn a_refused_mint_on_a_grant_with_no_view_ends_the_run() {
         "nothing sent after the refusals"
     );
 }
+
+/// A mint that answers with no credential at all, against the
+/// [`ListenerMint`] contract.
+struct MintsNothing;
+
+#[async_trait::async_trait]
+impl ListenerMint for MintsNothing {
+    async fn mint(
+        &self,
+        _backend: &str,
+        _identity: &VerifiedIdentity,
+    ) -> crate::Result<ListenerGrant> {
+        Ok(ListenerGrant {
+            headers: Vec::new(),
+            fence: None,
+        })
+    }
+
+    async fn fence_binding(
+        &self,
+        _backend: &str,
+        _identity: &VerifiedIdentity,
+    ) -> Result<Option<String>, FenceRead> {
+        Ok(None)
+    }
+}
+
+/// A minted source lends a credential or refuses: a mint that yields none
+/// sends nothing. A per-user slot of a required binding takes a source-lent
+/// send as the subscriber's own, so this source is where "never lend empty"
+/// is held.
+#[tokio::test]
+async fn a_mint_with_no_credential_sends_nothing() {
+    let run = run_on(&Scripted::new());
+    let run = Arc::new(RunFence {
+        mint: Arc::new(MintsNothing) as Arc<dyn ListenerMint>,
+        backend: run.backend.clone(),
+        identity: run.identity.clone(),
+        binding: OnceLock::new(),
+        ended: AtomicBool::new(false),
+    });
+    let minted = Minted {
+        run,
+        obs: "u1".to_owned(),
+    };
+    let sent = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&sent);
+    let outcome = minted
+        .with_credential(Box::new(move |_headers| {
+            async move {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Err::<reqwest::Response, _>(crate::Error::Transport("no peer".to_owned()))
+            }
+            .boxed()
+        }))
+        .await;
+    assert_eq!(
+        sent.load(Ordering::SeqCst),
+        0,
+        "a send ran with no credential"
+    );
+    assert!(outcome.is_err());
+}

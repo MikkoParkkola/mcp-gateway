@@ -334,6 +334,8 @@ impl Backend {
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
+        // A lent-only slot's fill, its start included, sends as this caller.
+        let _loan = self.lend_to_slot(&key, &entry, fetch_headers)?;
         // MIK-8399: what a tools fill read, for the permit's abandon hook.
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tools = family.truncated_flag.is_some();

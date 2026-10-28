@@ -12,11 +12,7 @@ impl Settling<'_> {
     /// The calls a plan actually dispatched, for the settlement to commit with
     /// its outcome. `None` for a call whose one target was recorded at creation.
     pub(super) fn plan_targets(&self) -> Option<Vec<Target>> {
-        matches!(
-            self.call.tool.as_str(),
-            "gateway_execute" | "gateway_run_playbook"
-        )
-        .then(|| {
+        crate::gateway::meta_mcp::is_composite_meta_tool(&self.call.tool).then(|| {
             self.owned
                 .dispatch_log()
                 .snapshot()
