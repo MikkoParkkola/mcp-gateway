@@ -121,6 +121,14 @@ pub(super) struct LogMerge<S: LogSource> {
     /// unseen log counts as 0, so a rewrite before the first announcement is
     /// still caught, at the cost of one extra check for a late subscriber.
     generations: [u64; 2],
+    /// Where a lag recovery restarts: the last completed page's scan cursor,
+    /// which moves past hidden rows. Used only once every row handed out
+    /// before it is acknowledged; resume ids still come from `delivered`.
+    recovery: Option<LogCursor>,
+    /// A page's scan cursor, waiting for its rows to be acknowledged.
+    hint: Option<LogCursor>,
+    /// Rows handed out and not yet acknowledged.
+    unacked: usize,
     lag_recoveries: usize,
     lag: LagWindow,
     too_slow: bool,
@@ -150,6 +158,9 @@ impl<S: LogSource> LogMerge<S> {
             delivered,
             seen: head.clone(),
             generations: [0; 2],
+            recovery: None,
+            hint: None,
+            unacked: 0,
             lag_recoveries: 0,
             lag: LagWindow::default(),
             too_slow: false,
@@ -167,8 +178,38 @@ impl<S: LogSource> LogMerge<S> {
     /// delivered position move.
     pub(super) fn ack(&mut self, out: &Out) {
         match out {
-            Out::Reset => self.delivered = LogCursor::default(),
+            Out::Reset => {
+                self.delivered = LogCursor::default();
+                self.recovery = None;
+            }
             Out::Row(row) => *self.slot(row.log) = Some(row.part.clone()),
+        }
+        self.unacked = self.unacked.saturating_sub(1);
+        self.promote_hint();
+    }
+
+    fn promote_hint(&mut self) {
+        if self.unacked == 0
+            && let Some(hint) = self.hint.take()
+        {
+            self.recovery = Some(hint);
+        }
+    }
+
+    /// Where a scan starts: the delivered position, or the recovery position
+    /// where that is further on in a log.
+    fn scan_start(&self) -> LogCursor {
+        let Some(r) = &self.recovery else {
+            return self.delivered.clone();
+        };
+        let pick = |d: &Option<LogPart>, r: &Option<LogPart>| match (d, r) {
+            (Some(d), Some(r)) if r.n > d.n => Some(r.clone()),
+            (None, r) => r.clone(),
+            (d, _) => d.clone(),
+        };
+        LogCursor {
+            inv: pick(&self.delivered.inv, &r.inv),
+            gov: pick(&self.delivered.gov, &r.gov),
         }
     }
 
@@ -204,6 +245,7 @@ impl<S: LogSource> LogMerge<S> {
             match self.rx.recv().await {
                 Ok(appended) => {
                     if let Some(row) = self.live(&appended).await {
+                        self.unacked += 1;
                         return vec![Out::Row(row)];
                     }
                 }
@@ -229,7 +271,7 @@ impl<S: LogSource> LogMerge<S> {
     async fn begin_scan(&mut self) {
         self.stop = self.source.head(&self.access).await;
         self.seen = self.stop.clone();
-        self.scan = Some(self.delivered.clone());
+        self.scan = Some(self.scan_start());
     }
 
     /// One catch-up page from `from`, after yielding to the runtime.
@@ -250,6 +292,9 @@ impl<S: LogSource> LogMerge<S> {
             }
         }
         let done = past || !page.more || self.reached_head(&page.next);
+        self.unacked += out.len();
+        self.hint = Some(page.next.clone());
+        self.promote_hint();
         self.scan = (!done).then_some(page.next);
         out
     }
