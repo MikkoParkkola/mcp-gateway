@@ -257,7 +257,9 @@ impl Backend {
     /// The probe's rebuild: a forced restart run non-interactive, so it
     /// neither ends a login in flight nor opens one (MIK-7982).
     async fn rebuild_from_probe(&self) {
-        let _ = crate::oauth::login_gate::short_contention(self.force_restart()).await;
+        // Boxed: a restart runs a whole start, too large to inline in
+        // every probe path's future.
+        let _ = crate::oauth::login_gate::short_contention(Box::pin(self.force_restart())).await;
     }
 }
 

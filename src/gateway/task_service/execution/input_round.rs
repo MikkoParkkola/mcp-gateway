@@ -18,7 +18,7 @@ use super::observe::{Acceptance, Handoff};
 use super::settlement::{
     DispatchSettlement, abandoned_input_round, classify_dispatch, interrupted_before_dispatch,
 };
-use super::worker::{inspect_and_record, settle_surfaced_refused};
+use super::worker::{dispatched_in_cell, inspect_and_record, settle_surfaced_refused};
 use super::{CommitStage, OwnedCallerContext, TaskCall, TaskExecutor};
 use crate::gateway::task_service::host::LiveHost;
 use crate::gateway::task_service::record::{CONTINUATION_DEADLINE_MARGIN_SECS, InputRound};
@@ -483,7 +483,7 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     );
     #[cfg(test)]
     super::resume_seams::at(super::resume_seams::ResumePoint::BeforeRedeem).await;
-    let response = redeeming_dispatch(
+    let (response, refused) = redeeming_dispatch(
         (&state, &owned, &call, &retry),
         &executor,
         ids,
@@ -499,7 +499,8 @@ async fn resume_flow(resume: Resume, mut cancel_rx: watch::Receiver<bool>) -> Op
     executor
         .proceed_unless_late(ids, deadline, expired, at)
         .await?;
-    let response = inspect_and_record(&state, &call, (&*principal, &*id), response).await;
+    let response =
+        inspect_and_record(&state, &call, (&*principal, &*id), (response, refused)).await;
     Settling::new(&executor, &state, &owned, &call, &principal, &id, revision)
         .settle_or_ask(response, &mut cancel_rx)
         .await;
