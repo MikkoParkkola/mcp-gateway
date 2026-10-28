@@ -119,3 +119,27 @@ async fn a_removed_configured_key_is_restart_required_and_stream_and_list_agree(
         "the stream follows exactly what ingress does for this key"
     );
 }
+
+#[tokio::test]
+async fn a_frame_waiting_for_room_is_not_sent_after_the_credential_is_revoked() {
+    let (state, _dir) = fixture().await;
+    let h = issue(&state);
+    let mut s = open(&state, request(STREAM, Who::Cookie(&h), None)).await;
+    // Nobody reads: `hello` fills the one-frame channel, the first `status`
+    // frame waits for room, and no re-check tick has come yet.
+    tokio::time::sleep(Duration::from_millis(600)).await;
+    let out = Request::builder()
+        .method("POST")
+        .uri("/dashboard/logout")
+        .header(header::COOKIE, format!("{SESSION_COOKIE}={h}"))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
+        .body(Body::empty())
+        .unwrap();
+    let _ = create_router(Arc::clone(&state))
+        .oneshot(out)
+        .await
+        .unwrap();
+    assert_eq!(s.next().await.expect("hello").event, "hello");
+    let next = s.next().await;
+    assert!(next.is_none(), "a revoked viewer got {next:?}");
+}
