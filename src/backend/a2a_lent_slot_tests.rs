@@ -24,18 +24,21 @@ use crate::identity_propagation::{
 const USER: &str = "u:alpha";
 const STATIC_HEADER: &str = "x-static-credential";
 
-/// One request the agent received: its path, its `Authorization`, and
-/// whether it carried the static header.
+/// One request the agent received: its path, the JSON-RPC method it carried
+/// (empty for a card fetch), its `Authorization`, and whether it carried the
+/// static header.
 #[derive(Debug, Clone)]
 struct Seen {
     path: &'static str,
+    method: String,
     authorization: String,
     static_header: bool,
 }
 
-fn seen(path: &'static str, headers: &HeaderMap) -> Seen {
+fn seen(path: &'static str, method: &str, headers: &HeaderMap) -> Seen {
     Seen {
         path,
+        method: method.to_owned(),
         authorization: headers
             .get("authorization")
             .and_then(|v| v.to_str().ok())
@@ -45,19 +48,50 @@ fn seen(path: &'static str, headers: &HeaderMap) -> Seen {
     }
 }
 
-/// An A2A 1.0 agent on loopback that records every request and answers each
-/// `SendMessage` with a completed task.
+/// How the recording agent answers a task.
+#[derive(Clone, Copy)]
+enum Script {
+    /// Every `SendMessage` completes at once.
+    Completes,
+    /// A task stays working until it is canceled.
+    Works,
+}
+
+fn task_reply(state: &str) -> Value {
+    json!({"id": "t-1", "contextId": "c-1",
+        "status": {"state": state, "message": {
+            "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "done"}]}}})
+}
+
+/// The result `script` answers JSON-RPC `method` with.
+fn rpc_result(script: Script, method: &str) -> Value {
+    match (script, method) {
+        (Script::Completes, _) => json!({"task": task_reply("TASK_STATE_COMPLETED")}),
+        (Script::Works, "SendMessage") => json!({"task": task_reply("TASK_STATE_WORKING")}),
+        (Script::Works, "CancelTask") => task_reply("TASK_STATE_CANCELED"),
+        (Script::Works, _) => task_reply("TASK_STATE_WORKING"),
+    }
+}
+
+/// An A2A 1.0 agent on loopback that records every request and answers as
+/// `script` says.
 async fn recording_agent() -> (String, Arc<Mutex<Vec<Seen>>>) {
+    agent(Script::Completes, None).await
+}
+
+/// [`recording_agent`] answering as `script`, its card advertising
+/// `advertised` as its endpoint when given.
+async fn agent(script: Script, advertised: Option<String>) -> (String, Arc<Mutex<Vec<Seen>>>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let endpoint = format!("{base}/a2a");
+    let endpoint = advertised.unwrap_or_else(|| format!("{base}/a2a"));
     let log = Arc::new(Mutex::new(Vec::new()));
     let (card_log, rpc_log) = (Arc::clone(&log), Arc::clone(&log));
     let app = Router::new()
         .route(
             "/.well-known/agent-card.json",
             get(move |headers: HeaderMap| {
-                card_log.lock().unwrap().push(seen("card", &headers));
+                card_log.lock().unwrap().push(seen("card", "", &headers));
                 let endpoint = endpoint.clone();
                 async move {
                     axum::Json(json!({"name": "recording", "supportedInterfaces": [
@@ -68,17 +102,31 @@ async fn recording_agent() -> (String, Arc<Mutex<Vec<Seen>>>) {
         .route(
             "/a2a",
             post(move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
-                rpc_log.lock().unwrap().push(seen("rpc", &headers));
+                let method = body["method"].as_str().unwrap_or_default().to_owned();
+                rpc_log.lock().unwrap().push(seen("rpc", &method, &headers));
                 async move {
-                    axum::Json(json!({"jsonrpc": "2.0", "id": body["id"], "result": {"task": {
-                        "id": "t-1", "contextId": "c-1",
-                        "status": {"state": "TASK_STATE_COMPLETED", "message": {
-                            "messageId": "m", "role": "ROLE_AGENT", "parts": [{"text": "done"}]}}}}}))
+                    axum::Json(
+                        json!({"jsonrpc": "2.0", "id": body["id"], "result": rpc_result(script, &method)}),
+                    )
                 }
             }),
         );
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (base, log)
+}
+
+/// The credential `headers` with a send check that always passes.
+fn checked(headers: &[(String, String)]) -> crate::transport::LentCredential {
+    crate::transport::LentCredential {
+        headers: headers.to_vec(),
+        check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
+    }
+}
+
+/// The agent's one tool, called with `message`.
+fn delegate_params() -> Option<Value> {
+    Some(json!({"name": crate::a2a::translator::TOOL_NAME,
+        "arguments": {"message": "hi"}}))
 }
 
 /// An A2A backend at `base` with a static credential header and a required
@@ -121,11 +169,10 @@ async fn an_a2a_per_user_slot_is_reached_only_as_its_user() {
     let bearer = credential[0].1.clone();
 
     let _ = backend
-        .request_with_headers(
+        .request_with_headers_lent(
             "tools/call",
-            Some(json!({"name": crate::a2a::translator::TOOL_NAME,
-                "arguments": {"message": "hi"}})),
-            &credential,
+            delegate_params(),
+            checked(&credential),
             Some(USER),
         )
         .await;
@@ -145,4 +192,97 @@ async fn an_a2a_per_user_slot_is_reached_only_as_its_user() {
         not_as_user.is_empty(),
         "a per-user request reached the agent other than as its user: {not_as_user:?}"
     );
+}
+
+/// A card that advertises an endpoint on another origin is refused: the call
+/// fails and neither origin receives a send.
+#[tokio::test]
+async fn a_cross_origin_card_endpoint_is_refused_before_any_send() {
+    let (other, other_log) = recording_agent().await;
+    let (base, log) = agent(Script::Completes, Some(format!("{other}/a2a"))).await;
+    let backend = required_a2a_backend(&base);
+
+    let result = backend
+        .request_with_headers_lent(
+            "tools/call",
+            delegate_params(),
+            checked(&subscriber_credential(USER)),
+            Some(USER),
+        )
+        .await;
+
+    assert!(result.is_err(), "the cross-origin card was accepted");
+    let rpcs = log
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|s| s.path == "rpc")
+        .count();
+    assert_eq!(rpcs, 0, "a call reached the agent past a cross-origin card");
+    let elsewhere = other_log.lock().unwrap().clone();
+    assert!(
+        elsewhere.is_empty(),
+        "the other origin was sent to: {elsewhere:?}"
+    );
+}
+
+/// A dispatch abandoned while its task works sends no `CancelTask` once it
+/// has ended: the slot has no credential left to send as.
+#[tokio::test]
+async fn a_deferred_cancel_after_the_dispatch_ended_sends_nothing() {
+    let (base, log) = agent(Script::Works, None).await;
+    let backend = required_a2a_backend(&base);
+
+    let abandoned = tokio::time::timeout(
+        Duration::from_millis(900),
+        backend.request_with_headers_lent(
+            "tools/call",
+            delegate_params(),
+            checked(&subscriber_credential(USER)),
+            Some(USER),
+        ),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(600)).await;
+
+    assert!(
+        abandoned.is_err(),
+        "premise: the dispatch was still running"
+    );
+    let methods: Vec<String> = log
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|s| s.method.clone())
+        .collect();
+    assert!(
+        methods.iter().any(|m| m == "SendMessage"),
+        "premise: the task was created: {methods:?}"
+    );
+    assert!(
+        !methods.iter().any(|m| m == "CancelTask"),
+        "a cancel was sent after its dispatch ended: {methods:?}"
+    );
+}
+
+/// A call whose credential's check refuses sends nothing: neither the card
+/// fetch nor any rpc carries it.
+#[tokio::test]
+async fn a_call_whose_check_refuses_sends_nothing_to_the_agent() {
+    let (base, log) = recording_agent().await;
+    let backend = required_a2a_backend(&base);
+    let refusing = crate::transport::LentCredential {
+        headers: subscriber_credential(USER),
+        check: Some(Arc::new(|| {
+            Box::pin(async { Err(crate::transport::Refusal::ThisLoan) })
+        })),
+    };
+
+    let result = backend
+        .request_with_headers_lent("tools/call", delegate_params(), refusing, Some(USER))
+        .await;
+
+    assert!(result.is_err(), "a refused credential was sent");
+    let log = log.lock().unwrap().clone();
+    assert!(log.is_empty(), "the agent received a refused call: {log:?}");
 }
