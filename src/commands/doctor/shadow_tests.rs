@@ -203,6 +203,15 @@ fn a_stderr_tail_prints_marked_and_escaped_and_joins_raw_for_json() {
     );
     result.stderr_tail = Some(Vec::new());
     assert_eq!(result.full_detail(), "exited 1\n  (no stderr captured)");
+    assert_eq!(
+        human_lines("[FAIL]", &result),
+        "[FAIL] Backend tool: exited 1\n  (no stderr captured)\n"
+    );
+    result.stderr_tail = None;
+    assert_eq!(
+        human_lines("[FAIL]", &result),
+        "[FAIL] Backend tool: exited 1\n"
+    );
 }
 
 /// A backend printing a result-shaped stderr line cannot pass it off as a
