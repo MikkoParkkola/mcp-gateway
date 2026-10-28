@@ -76,6 +76,7 @@ function el(tag, attrs = {}, ...children) {
 export const GLOSSARY = {
   server: {
     running: 'Running',
+    slow: 'Slow',
     paused: 'Paused',
     dormant: 'Dormant',
     unhealthy: 'Unhealthy',
@@ -106,6 +107,13 @@ export function stateWord(value) {
  */
 export const SERVER_STATES = {
   running: { glyph: '✓', tone: 'success', banner: () => null, next: () => null },
+  // Calls still work, but its recent ones are far slower than its own usual.
+  slow: {
+    glyph: '⚠',
+    tone: 'warning',
+    banner: (s) => `${s.name} still works, but far slower than its usual.`,
+    next: () => 'Open Activity and filter by this server.',
+  },
   paused: {
     glyph: '⏸',
     tone: 'neutral',
