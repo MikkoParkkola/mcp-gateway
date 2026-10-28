@@ -295,9 +295,11 @@ async fn run_dispatched(
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
-    let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
-        Arc::clone(intent.owned.dispatch_log()),
-        dispatch,
+    let mut dispatch = Box::pin(dispatched_in_cell(
+        crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+            Arc::clone(intent.owned.dispatch_log()),
+            dispatch,
+        ),
     ));
 
     // Awaited into its own binding so the dispatch future — which borrows both
@@ -727,7 +729,7 @@ use held::{cancel_held_upstream, follow_upstream_job};
 
 #[path = "worker_inspect.rs"]
 mod inspect;
-pub(super) use inspect::inspect_and_record;
+pub(super) use inspect::{dispatched_in_cell, inspect_and_record};
 
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]

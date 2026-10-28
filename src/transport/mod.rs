@@ -4,6 +4,7 @@
 
 mod command_split;
 mod http;
+mod lender;
 pub(crate) mod notification_sink;
 mod stdio;
 pub(crate) mod submit_mark;
@@ -16,12 +17,14 @@ mod write_claim;
 pub(crate) use self::command_split::join_command;
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
+pub(crate) use self::http::SlotCredential;
 #[cfg(feature = "a2a")]
 pub(crate) use self::http::guarded_client;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use self::http::is_budget_refusal;
 #[doc(hidden)]
 pub use self::http::transport_follows_redirect;
+pub(crate) use self::lender::{Lender, Loan};
 #[cfg(test)]
 pub(crate) use self::stdio::assigned_package_cache_dir;
 pub(crate) use self::stdio::isolated_env_and_assigned_cache;
