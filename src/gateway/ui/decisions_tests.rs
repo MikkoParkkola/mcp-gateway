@@ -61,7 +61,7 @@ fn write(log: &TransparencyLogger, fields: Map<String, Value>) {
         .expect("the record is written");
 }
 
-/// A gateway state whose MetaMcp writes `log`, and the store dir it keeps.
+/// A gateway state whose `MetaMcp` writes `log`, and the store dir it keeps.
 async fn state_with(log: &Arc<TransparencyLogger>) -> (Arc<AppState>, tempfile::TempDir) {
     let log = Arc::clone(log);
     crate::gateway::router::tests::audience_state(
@@ -289,7 +289,7 @@ fn measure_the_replay_at_the_retention_cap() {
         .to_rfc3339();
     let mut n = 0_u64;
     while bytes < 13 * 64 * 1024 * 1024 {
-        let line = if n % 20 == 0 {
+        let line = if n.is_multiple_of(20) {
             notes += 1;
             json!({
                 "kind": GRANT_DECISION_KIND, "timestamp": at, "reason": "missing_grant",

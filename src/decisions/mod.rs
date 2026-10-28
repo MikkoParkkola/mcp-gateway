@@ -444,12 +444,9 @@ impl Shared {
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the event stream's read, wired after the adopt kind"
-        )
+    #[expect(
+        dead_code,
+        reason = "the event stream's read, wired after the adopt kind"
     )]
     pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
         self.0.read().snapshot(admin)
@@ -464,8 +461,9 @@ impl Shared {
 }
 
 /// The subject, agent and capability a note refused for a missing grant, or
-/// `None` for every note A1 excludes: allowed, another reason, no subject or
-/// no proven agent. MissingGrant is reached only for a personal capability.
+/// `None` for every note the projection excludes: allowed, another reason, no
+/// subject or no proven agent. `MissingGrant` is reached only for a personal
+/// capability.
 fn access_key(event: &IdentityGrantAuditEvent) -> Option<(AccessKey, String)> {
     if event.allowed || event.reason != IdentityGrantDecisionReason::MissingGrant {
         return None;

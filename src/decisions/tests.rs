@@ -16,7 +16,8 @@ const KEY: [u8; 32] = [7; 32];
 const AGENT: &str = "mtls:runner";
 
 fn at(minute: i64) -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap() + Duration::minutes(minute)
+    Utc.with_ymd_and_hms(2026, 10, 28, 12, 0, 0).unwrap()
+        + Duration::try_minutes(minute).expect("a test minute is in range")
 }
 
 fn ready() -> DecisionSet {

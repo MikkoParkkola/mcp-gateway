@@ -32,13 +32,30 @@ fn sort(items: &mut [(DateTime<Utc>, Value)]) {
     });
 }
 
+/// An item and the time it sorts by.
+type Dated = (DateTime<Utc>, Value);
+
+/// Which changed-capability ids each trusted name blocks.
+type Blocks = BTreeMap<String, Vec<String>>;
+
 pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
+    let (mut changed, blocks) = changed_capabilities(set);
+    let mut requests = access_requests(set, &blocks);
+    sort(&mut changed);
+    sort(&mut requests);
+    changed
+        .into_iter()
+        .chain(requests)
+        .map(|(_, item)| item)
+        .collect()
+}
+
+/// The changed capabilities, and which trusted name each one blocks.
+fn changed_capabilities(set: &mut DecisionSet) -> (Vec<Dated>, Blocks) {
     let key = set.key;
     let now = set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-
-    // Changed capabilities, and which trusted name each one blocks.
     let mut blocks: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut changed = Vec::new();
+    let mut changed: Vec<Dated> = Vec::new();
     let mut live_ids = Vec::new();
     for ((backend, file), change) in &set.changes {
         let item_id = id(
@@ -91,15 +108,22 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
         ));
     }
     set.first_seen.retain(|seen, _| live_ids.contains(seen));
+    (changed, blocks)
+}
 
-    // Open access requests, one item per subject and agent.
-    struct Open<'a> {
-        scope: Vec<Value>,
-        capabilities: Vec<&'a str>,
-        refused: usize,
-        first: DateTime<Utc>,
-        newest: DateTime<Utc>,
-    }
+/// One access request being gathered from its open capabilities.
+struct Open<'a> {
+    scope: Vec<Value>,
+    capabilities: Vec<&'a str>,
+    refused: usize,
+    first: DateTime<Utc>,
+    newest: DateTime<Utc>,
+}
+
+/// The open access requests, one per subject and agent, each waiting on the
+/// changed capabilities its scope names.
+fn access_requests(set: &DecisionSet, blocks: &Blocks) -> Vec<Dated> {
+    let key = set.key;
     let mut open: BTreeMap<&AccessKey, Open<'_>> = BTreeMap::new();
     for ((access, capability), requested) in &set.requested {
         let pending: Vec<DateTime<Utc>> = requested.pending(set.edge).copied().collect();
@@ -163,11 +187,5 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
         ));
     }
 
-    sort(&mut changed);
-    sort(&mut requests);
-    changed
-        .into_iter()
-        .chain(requests)
-        .map(|(_, item)| item)
-        .collect()
+    requests
 }

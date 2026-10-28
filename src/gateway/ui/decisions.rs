@@ -147,7 +147,7 @@ fn start_with(
         let mut ticks = 0_u32;
         loop {
             let (meta, shared) = (Arc::clone(&meta), Arc::clone(&shared));
-            let read_edge = ticks % EDGE_EVERY == 0;
+            let read_edge = ticks.is_multiple_of(EDGE_EVERY);
             ticks = ticks.wrapping_add(1);
             let _ = tokio::task::spawn_blocking(move || tick(&meta, &shared, read_edge)).await;
             tokio::select! {
