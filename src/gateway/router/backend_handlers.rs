@@ -232,7 +232,12 @@ async fn guard_tool_call(
     // gateway refused this call, and the record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     let lens = crate::backend::Lens::Withheld;
-    let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
+    let answered = key_check::key_refusal(
+        backend,
+        ((None, &crate::transport::LentCredential::default()), failed),
+        params,
+        (id, lens),
+    );
     // A withheld name is always answered (`Some`); were it not, it is still
     // never sent.
     Ok(Some(

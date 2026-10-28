@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use super::service::AccountServiceError;
-use super::worker::CustodyError;
 use super::{ManagedLease, VaultStrategy};
+use crate::personal_accounts::service::AccountServiceError;
+use crate::personal_accounts::worker::CustodyError;
 use crate::transport::Refusal;
 
 impl ManagedLease {
