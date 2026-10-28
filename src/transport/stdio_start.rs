@@ -55,7 +55,7 @@ impl StdioTransport {
         self.failure.begin();
 
         let cmd = self.spawn_command()?;
-        // The reaper exists before any child does (MIK-7923, design P4).
+        // The reaper exists before any child does (design P4).
         reaper::ensure_started()
             .map_err(|error| Error::Transport(format!("stdio reaper unavailable: {error}")))?;
         // Taken before the spawn: from spawn to install there is no await, so a
