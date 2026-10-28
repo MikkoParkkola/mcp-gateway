@@ -84,7 +84,7 @@ pub fn write_text_atomic(path: &Path, text: &str) -> Result<(), String> {
 
 fn write_yaml(path: &Path, yaml: &str) -> Result<(), String> {
     // Replace the config itself, not a symlink naming it: renaming onto the
-    // link would detach the config from its target (MIK-8153).
+    // link would detach the config from its target.
     write_yaml_at(&crate::identity_grants::journal::resolved(path), yaml)
 }
 
