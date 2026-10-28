@@ -154,3 +154,26 @@ async fn a_refused_token_endpoint_records_refused() {
     }
     assert!(fails.is_empty(), "{fails:#?}");
 }
+
+/// A composite's step: the plan's record is unvouched before any step runs,
+/// so a step refused here leaves it without a refusal of its own.
+#[tokio::test]
+async fn a_refused_step_of_a_composite_records_no_refusal() {
+    let executor = CapabilityExecutor::new();
+    let cap = definition("rest", "http://10.0.0.5", false);
+    let provider = cap.providers.named.get("primary").expect("primary");
+    let context = CapabilityExecutionContext::default();
+    let (outcome, facts) = delivery_facts::scope(async {
+        delivery_facts::unvouched();
+        let outcome =
+            Box::pin(executor.execute_provider_with_context(&cap, provider, &json!({}), &context))
+                .await;
+        (outcome, delivery_facts::snapshot())
+    })
+    .await;
+    let error = outcome.expect_err("the step is refused").to_string();
+    assert!(error.contains("SSRF blocked"), "{error}");
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    assert_eq!(fields.get("response_effect"), None, "{fields:?}");
+}
