@@ -91,6 +91,25 @@ impl WriteRecord {
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Whether this record notes the whole member at `path` from the stored
+    /// value's root as the gateway's write. A `Value` note claims any member;
+    /// an `Answer` note only an envelope member, the layer it is made on. A
+    /// note for part of a member, or rebased under a composite's step, claims
+    /// no top-level member.
+    pub(crate) fn claims(&self, path: &[&str], class: reserved_members::Class) -> bool {
+        self.0.iter().any(|written| {
+            written.within.is_empty()
+                && written
+                    .dest
+                    .iter()
+                    .map(String::as_str)
+                    .eq(path.iter().copied())
+                && (written.layer == Layer::Value
+                    || (written.layer == Layer::Answer
+                        && class == reserved_members::Class::Envelope))
+        })
+    }
 }
 
 /// The response-contract verdict the gateway writes on a violating answer.
@@ -151,13 +170,29 @@ impl<'de> serde::Deserialize<'de> for WriteRecord {
     }
 }
 
+/// A kind as this build names it: a record stored before 4.0 names the
+/// recovery hint, prediction and trace id by their old plain names. Decode
+/// only: `dest` keeps the stored path, which names the old member in the old
+/// stored value, and the record is written back under the new kind.
+fn renamed(segment: &str) -> &str {
+    match segment {
+        "recovery" => "_recovery",
+        "trace_id" => "_trace_id",
+        "predicted_next" => "_predicted_next",
+        other => other,
+    }
+}
+
 fn decode_entry(entry: &Value) -> Option<Written> {
     let layer = serde_json::from_value(entry.get("layer")?.clone()).ok()?;
     let dest = segments(entry.get("dest")?)?;
     let within = segments(entry.get("within")?)?;
     let kind = segments(entry.get("kind")?)?;
-    let kind = reserved_members::noted()
-        .find(|path| path.iter().copied().eq(kind.iter().map(String::as_str)))?;
+    let kind = reserved_members::noted().find(|path| {
+        path.iter()
+            .copied()
+            .eq(kind.iter().map(|segment| renamed(segment)))
+    })?;
     let hex_digest = entry.get("digest")?.as_str()?;
     if hex_digest.len() != 64
         || !hex_digest

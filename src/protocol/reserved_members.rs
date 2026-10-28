@@ -49,10 +49,6 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
-    #[expect(
-        dead_code,
-        reason = "the delivery record's annotated raise reads it; that change follows this one"
-    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
@@ -100,10 +96,11 @@ pub(crate) const MEMBERS: &[Member] = &[
         GatewayOnly,
         Outside,
     ),
-    // Plain names a backend may use for its own data.
-    row(&["recovery"], Counted, BackendMayCarry, Noted),
-    row(&["predicted_next"], Counted, BackendMayCarry, Noted),
-    row(&["trace_id"], Envelope, BackendMayCarry, Noted),
+    // The gateway's recovery hint, prediction and correlation id. Written
+    // under the plain names before 4.0, which a backend may also use.
+    row(&["_recovery"], Counted, GatewayOnly, Noted),
+    row(&["_predicted_next"], Counted, GatewayOnly, Noted),
+    row(&["_trace_id"], Envelope, GatewayOnly, Noted),
     // Protocol members a backend sends.
     row(&["taskId"], Envelope, BackendMayCarry, Noted),
     row(&["requestState"], Envelope, BackendMayCarry, Noted),
@@ -159,6 +156,24 @@ pub(crate) fn strip_with(table: &[Member], value: &mut Value) -> Vec<String> {
         map.remove("_meta");
     }
     removed
+}
+
+/// Remove from a stored value every [`Writer::Noted`] gateway-only member
+/// that `kept` does not claim as the gateway's own write (MIK-9002: a row
+/// stored before ingress stripped, or before the rename, can hold a backend's
+/// copy). [`Writer::Outside`] members are never noted, so they stay as stored.
+/// Returns whether a removed member was one a content digest covers, so a
+/// seal over the old bytes no longer holds.
+pub(crate) fn strip_unnoted(value: &mut Value, kept: impl Fn(&Member) -> bool) -> bool {
+    let unclaimed: Vec<Member> = MEMBERS
+        .iter()
+        .filter(|m| m.origin == Origin::GatewayOnly && m.writer == Writer::Noted && !kept(m))
+        .copied()
+        .collect();
+    let removed = strip_with(&unclaimed, value);
+    removed
+        .iter()
+        .any(|path| digest_covers(path.split('.').next().unwrap_or_default()))
 }
 
 /// The top-level members a signature chain's content digest covers: every one

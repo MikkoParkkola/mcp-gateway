@@ -40,12 +40,13 @@ pub(super) fn attach_tool_error_recovery(
     // (schema validation, executor failure) it sets `isError: true`
     // in the JSON value without propagating a Rust `Err`.  Attach a
     // recovery hint so the LLM has structured guidance to fix the
-    // call — but only when the `recovery` field is not already set.
+    // call — but only when the gateway has not set `_recovery` already;
+    // a backend's own `recovery` is its data and does not count.
     if value
         .get("isError")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
-        && value.get("recovery").is_none()
+        && value.get("_recovery").is_none()
     {
         let detail = value
             .get("content")
@@ -72,7 +73,7 @@ pub(super) fn attach_tool_error_recovery(
         );
         let value = attach_recovery(value, hint);
         // MIK-7939: the hint is the gateway's text, never a receipt's.
-        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["_recovery"], &value);
         value
     } else {
         value

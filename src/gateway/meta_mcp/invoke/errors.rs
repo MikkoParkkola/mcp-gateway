@@ -52,7 +52,7 @@ pub(super) fn dispatch_error_result(
         hint,
     );
     // MIK-7939: the hint is the gateway's text, never a receipt's.
-    super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &answer);
+    super::gateway_writes::note(super::gateway_writes::Layer::Value, &["_recovery"], &answer);
     answer
 }
 
