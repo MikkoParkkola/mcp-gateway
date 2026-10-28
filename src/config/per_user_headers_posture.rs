@@ -16,18 +16,26 @@ impl Config {
     /// One warning per enabled backend whose identity binding is required
     /// and that sets static headers, naming the backend and each such header,
     /// sorted. Empty when there is none.
+    ///
+    /// The binding read is the one the backend runs with: a backend bound to
+    /// a managed account runs with the binding that account compiles to. A
+    /// config whose account bindings do not compile is refused before any
+    /// backend starts, so it has no per-user sends to warn about.
     #[must_use]
     pub fn per_user_dropped_header_warnings(&self) -> Vec<String> {
+        let bound = super::account_bindings::compile(self).unwrap_or_default();
+        let required = |name: &str, backend: &super::BackendConfig| {
+            bound
+                .get(name)
+                .and_then(|account| account.propagation.as_ref())
+                .or(backend.identity_propagation.as_ref())
+                .is_some_and(|binding| binding.required)
+        };
         let mut warnings: Vec<(&str, String)> = self
             .backends
             .iter()
-            .filter(|(_, backend)| {
-                backend.enabled
-                    && !backend.headers.is_empty()
-                    && backend
-                        .identity_propagation
-                        .as_ref()
-                        .is_some_and(|binding| binding.required)
+            .filter(|(name, backend)| {
+                backend.enabled && !backend.headers.is_empty() && required(name.as_str(), backend)
             })
             .map(|(name, backend)| {
                 let mut headers: Vec<&str> = backend.headers.keys().map(String::as_str).collect();
