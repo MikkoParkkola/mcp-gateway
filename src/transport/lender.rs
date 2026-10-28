@@ -74,6 +74,8 @@ pub(crate) struct Snapshot {
 pub(crate) struct Lender {
     loans: parking_lot::Mutex<Vec<Lent>>,
     next: AtomicU64,
+    /// The loan of the dispatch whose start is running on this slot, if any.
+    starter: parking_lot::Mutex<Option<u64>>,
     /// Run once a loan is refused definitively: the slot that owns this
     /// lender evicts itself, whether or not its dispatch is still awaited.
     evict: parking_lot::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -90,7 +92,7 @@ impl Lender {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.loans.lock().push(Lent {
             id,
-            headers: Zeroizing::new(credential.headers.clone()),
+            headers: Zeroizing::new(credential_part(&credential.headers)),
             check: credential.check.clone(),
             refused: None,
         });
@@ -105,15 +107,46 @@ impl Lender {
         self.loans.lock().last().map(|lent| lent.headers.to_vec())
     }
 
-    /// The loan whose headers are exactly `headers`: the one the dispatch
-    /// that sent them lent. Two live loans with identical headers carry one
-    /// credential, so either one's check is a check on it.
-    pub(crate) fn matching(&self, headers: &[(String, String)]) -> Option<Snapshot> {
+    /// Every loan whose headers are exactly the call's credential headers: the
+    /// call's headers less the gateway-owned `Mcp-Param-*` mirrors, compared as
+    /// sets of (lowercased name, value). Never a subset, never "contains"; a
+    /// call with no credential headers matches nothing.
+    ///
+    /// Identical bytes in a credential header set are the same grant. Every
+    /// strategy derives a credential from one principal's grant, and an equal
+    /// bearer value is one bearer: whoever holds the bytes holds the grant. So
+    /// when several loans match, each one's check is a check on that same grant.
+    pub(crate) fn matching_all(&self, call: &[(String, String)]) -> Vec<Snapshot> {
+        let wanted = canonical(&credential_part(call));
+        if wanted.is_empty() {
+            return Vec::new();
+        }
         self.loans
             .lock()
             .iter()
-            .find(|lent| lent.headers.as_slice() == headers)
+            .filter(|lent| canonical(&lent.headers) == wanted)
             .map(Self::snapshot)
+            .collect()
+    }
+
+    /// Mark `loan_id` as the loan of the dispatch whose slot start is running.
+    /// The first caller wins; the guard clears the mark when dropped.
+    pub(crate) fn starting(self: &Arc<Self>, loan_id: u64) -> StartGuard {
+        let mut starter = self.starter.lock();
+        let owns = starter.is_none();
+        if owns {
+            *starter = Some(loan_id);
+        }
+        StartGuard {
+            lender: Arc::clone(self),
+            id: owns.then_some(loan_id),
+        }
+    }
+
+    /// The live loan of the dispatch whose start is running, if any.
+    pub(crate) fn starter(&self) -> Option<Snapshot> {
+        let id = (*self.starter.lock())?;
+        self.loan(id)
     }
 
     /// The live loan `id`, if its dispatch still runs.
@@ -161,6 +194,42 @@ impl Lender {
     }
 }
 
+/// The headers of `headers` that are credential: all but the gateway-owned
+/// `Mcp-Param-*` mirrors, which a call carries beside its credential.
+fn credential_part(headers: &[(String, String)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter(|(name, _)| !crate::protocol::param_headers::is_param_header(name))
+        .cloned()
+        .collect()
+}
+
+/// `headers` as a sorted list of (lowercased name, value).
+fn canonical(headers: &[(String, String)]) -> Vec<(String, &str)> {
+    let mut sorted: Vec<_> = headers
+        .iter()
+        .map(|(name, value)| (name.to_ascii_lowercase(), value.as_str()))
+        .collect();
+    sorted.sort_unstable();
+    sorted
+}
+
+/// Holds a loan's place as the slot's starter; clears it when dropped, only
+/// if the mark is still its own.
+pub(crate) struct StartGuard {
+    lender: Arc<Lender>,
+    id: Option<u64>,
+}
+
+impl Drop for StartGuard {
+    fn drop(&mut self) {
+        let mut starter = self.lender.starter.lock();
+        if self.id.is_some() && *starter == self.id {
+            *starter = None;
+        }
+    }
+}
+
 /// One dispatch's loan; ends when dropped.
 pub(crate) struct Loan {
     lender: Arc<Lender>,
@@ -198,12 +267,48 @@ mod tests {
         let lender = Arc::new(Lender::default());
         let first = lender.lend(&headers("one"));
         let _second = lender.lend(&headers("two"));
-        let mine = lender.matching(&headers("one")).expect("its own loan");
-        assert_eq!(mine.id, first.id(), "never the newest loan: its own");
+        let mine = lender.matching_all(&headers("one"));
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].id, first.id(), "never the newest loan: its own");
         assert!(
-            lender.matching(&headers("three")).is_none(),
+            lender.matching_all(&headers("three")).is_empty(),
             "no loan: nothing to send as"
         );
+    }
+
+    #[test]
+    fn a_strict_subset_of_a_loans_credential_matches_nothing() {
+        let lender = Arc::new(Lender::default());
+        let mut both = headers("one");
+        both.push(("X-Api-Key".to_owned(), "key".to_owned()));
+        let _loan = lender.lend(&both);
+        assert!(lender.matching_all(&headers("one")).is_empty());
+        assert!(lender.matching_all(&[]).is_empty(), "empty matches nothing");
+    }
+
+    #[test]
+    fn mcp_param_mirrors_on_the_call_are_ignored_for_matching() {
+        let lender = Arc::new(Lender::default());
+        let loan = lender.lend(&headers("one"));
+        let mut call = headers("one");
+        call.push(("Mcp-Param-Region".to_owned(), "eu".to_owned()));
+        let found = lender.matching_all(&call);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].id, loan.id());
+    }
+
+    #[test]
+    fn the_first_starter_wins_and_only_its_own_guard_clears_it() {
+        let lender = Arc::new(Lender::default());
+        let first = lender.lend(&headers("one"));
+        let second = lender.lend(&headers("two"));
+        let held = lender.starting(first.id());
+        let ignored = lender.starting(second.id());
+        assert_eq!(lender.starter().map(|s| s.id), Some(first.id()));
+        drop(ignored);
+        assert_eq!(lender.starter().map(|s| s.id), Some(first.id()));
+        drop(held);
+        assert!(lender.starter().is_none());
     }
 
     #[test]
