@@ -144,7 +144,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
 /// MULTI-USER GATEWAY, AND THE LEGACY LOGIN IS NEVER TOUCHED.
 ///
 /// Same shape as `an_identical_second_request_from_alice_is_served_from_the_warm_cache`
-/// — explicit positive TTL, `localhost` base URL, no loopback relaxation so the
+/// — explicit positive TTL, fixture-host base URL, no loopback relaxation so the
 /// cache is live — but dispatched through the multi-user `CapabilityBackend`,
 /// which is where the isolation guard sits. A valid gateway-held `oauth:google`
 /// token is seeded as the TRAP: it is exactly the credential the guard exists to

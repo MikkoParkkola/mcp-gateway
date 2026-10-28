@@ -10,7 +10,7 @@ use super::*;
 // that lets an IP-literal endpoint be reached — also suppresses the response
 // cache by design, so none of those cases can say anything about a cached
 // entry. The cases below therefore run the OTHER way round: an explicit
-// positive TTL, a `localhost` base URL that clears the SSRF guard on its own,
+// positive TTL, a fixture-host base URL that clears the SSRF guard on its own,
 // no loopback relaxation, and a swapped (finite-timeout, unpinned) client. The
 // endpoint's request COUNT is the oracle for a real cache hit, and its echoed
 // body is the oracle for whose entry was served.
