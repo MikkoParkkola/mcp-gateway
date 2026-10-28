@@ -108,7 +108,7 @@ async fn k4b_a_stream_closed_before_the_post_sends_on_the_replacement() {
     let (reached, release) = transport.before_sse_post.arm();
     let sending = {
         let transport = Arc::clone(&transport);
-        tokio::spawn(async move { transport.send_request(&list(77)).await })
+        tokio::spawn(async move { transport.send_request_as(&list(77), &[]).await })
     };
     crate::test_pause::within("the request took its place", reached.notified()).await;
     // End session 1's stream while the request holds its place on it, and

@@ -35,7 +35,8 @@ pub(crate) enum Refusal {
 }
 
 /// Whether a lent credential may be sent now; run before every send.
-pub(crate) type SendCheck = Arc<dyn Fn() -> BoxFuture<'static, Result<(), Refusal>> + Send + Sync>;
+pub(crate) type SendCheck =
+    Arc<dyn Fn() -> BoxFuture<'static, std::result::Result<(), Refusal>> + Send + Sync>;
 
 /// A dispatch's credential and the check every send of it runs first. Only
 /// the mint core attaches a check; headers from anywhere else carry none,
