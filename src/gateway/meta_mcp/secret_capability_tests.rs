@@ -50,7 +50,7 @@ async fn recording_capability(meta: &MetaMcp) -> Seen {
     let definition = crate::capability::parse_capability(&format!(
         "name: probe\ndescription: the capability under test\n\
          providers:\n  primary:\n    service: rest\n    config:\n      \
-         base_url: http://127.0.0.1:{port}\n      path: /probe\n      method: POST\n"
+         base_url: http://localhost:{port}\n      path: /probe\n      method: POST\n"
     ))
     .expect("fixture capability");
     let client = reqwest::Client::builder()

@@ -113,10 +113,13 @@ pub(crate) async fn fixture_with_secrets(
     fx
 }
 
-/// The directory the fixture's gateway writes its stores under.
-pub(crate) fn store_path(fx: &Fx) -> &std::path::Path {
-    let Fx { _store: store, .. } = fx;
-    store.path()
+#[cfg(feature = "firewall")]
+impl Fx {
+    /// The directory the fixture's gateway writes its stores under.
+    pub(crate) fn store_path(&self) -> &std::path::Path {
+        let Self { _store: store, .. } = self;
+        store.path()
+    }
 }
 
 /// One fixture backend's config: pass-through or not, and, for a propagating

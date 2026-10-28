@@ -11,7 +11,7 @@ use serde_json::json;
 use super::direct_continuation_tests::call;
 use super::direct_guards_fixture::fixture_with_secrets;
 #[cfg(feature = "firewall")]
-use super::direct_guards_fixture::{initialize, post_meta_invoke, send_with_headers, store_path};
+use super::direct_guards_fixture::{initialize, post_meta_invoke, send_with_headers};
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
 /// The secret the rule injects: a literal, so no environment is read.
@@ -285,7 +285,7 @@ async fn the_secret_is_sent_and_nothing_answered_or_kept_holds_it() {
         );
     }
 
-    let stored = files_under(store_path(&fx));
+    let stored = files_under(fx.store_path());
     assert!(
         stored.iter().any(|(_, bytes)| holds(bytes, &id)),
         "premise: a scanned file holds the stored task"
