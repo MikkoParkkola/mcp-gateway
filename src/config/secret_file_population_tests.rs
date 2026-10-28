@@ -341,7 +341,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
-        "src/trust/provenance_public.rs",
+        "src/trust/provenance_public_cli.rs",
         "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
     ),
     (
