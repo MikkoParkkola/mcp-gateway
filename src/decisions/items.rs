@@ -46,6 +46,11 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
         if let Some(trusted) = &change.loaded_as {
             blocks.entry(trusted.clone()).or_default().push(item_id.clone());
         }
+        // The trust card's own inference, over the changed bytes parsed
+        // without their pin check; only its class is kept.
+        let scan = crate::capability::parse_capability(&change.content)
+            .ok()
+            .map(|capability| crate::trust::generator::trust_card_from_capability(&capability).server.risk_class);
         let tool = change
             .loaded_as
             .as_deref()
@@ -61,8 +66,9 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
                 "after": display::summary(&change.content),
                 "before": null,
                 "before_reason": "no_history",
-                "scan": null,
-                "scan_reason": "not_computed",
+                "scan": scan,
+                "scan_basis": "inferred",
+                "scan_reason": scan.is_none().then_some("unparsed"),
                 "tools_off": 1,
                 "off_since": time(observed),
                 "observed_at": time(observed),
