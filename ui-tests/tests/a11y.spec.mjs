@@ -53,6 +53,8 @@ for (const width of WIDTHS) {
               await page.locator(`.has-tip[data-tip="${tip}"] button`).focus();
               await expect(page.locator('.tip.open'), `/ui/${id}/${tab} opens ${tip}`).toHaveCount(1);
               await expect(page.locator(`.has-tip[data-tip="${tip}"] .tip`)).toHaveClass(/open/);
+              // axe measures colour as drawn: wait out the fade-in, or a half-faded title reads as low contrast.
+              await page.evaluate(() => Promise.all(document.getAnimations().map((x) => x.finished)));
             }
             for (const v of await blockingViolations(page)) found.push(`/ui/${id}/${tab}: ${v}`);
           }
@@ -77,6 +79,7 @@ for (const width of WIDTHS) {
       await expect(page.locator('.tip-i')).toHaveCount(1);
       await page.locator('.has-tip button').focus();
       await expect(page.locator('.tip.open')).toHaveCount(1);
+      await page.evaluate(() => Promise.all(document.getAnimations().map((x) => x.finished))); // as in A1
       expect(await blockingViolations(page)).toEqual([]);
     });
   }
