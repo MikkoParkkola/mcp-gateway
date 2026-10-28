@@ -115,15 +115,25 @@ struct Fx {
 /// A backend `alpha` answered by [`Stub`], its tool list filled, and both
 /// audit logs on.
 async fn fixture() -> Fx {
-    fixture_with(false).await
+    fixture_with(Setup::Plain).await
+}
+
+/// What the fixture's `MetaMcp` has on beyond the audit logs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Setup {
+    Plain,
+    /// The response cache, as a server builds it.
+    Cached,
+    /// Message signing that requires a nonce on every call.
+    SignedNonce,
 }
 
 /// [`fixture`] with the response cache on, as a server builds it.
 async fn fixture_cached() -> Fx {
-    fixture_with(true).await
+    fixture_with(Setup::Cached).await
 }
 
-async fn fixture_with(cached: bool) -> Fx {
+async fn fixture_with(setup: Setup) -> Fx {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![key(ADMIN, true), key(USER, false)],
@@ -146,7 +156,7 @@ async fn fixture_with(cached: bool) -> Fx {
     );
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     let backends = Arc::clone(&state_mut.backends);
-    let mut meta = if cached {
+    let mut meta = if setup == Setup::Cached {
         crate::gateway::MetaMcp::with_features(
             backends,
             Some(Arc::new(crate::cache::ResponseCache::new())),
@@ -157,6 +167,17 @@ async fn fixture_with(cached: bool) -> Fx {
     } else {
         crate::gateway::MetaMcp::new(backends)
     };
+    if setup == Setup::SignedNonce {
+        meta.enable_message_signing(
+            crate::security::message_signing::MessageSigner::new(
+                b"ui-tool-call-test-signing-key-0123456789".to_vec(),
+                None,
+                "ui".into(),
+            ),
+            Duration::from_secs(300),
+            true,
+        );
+    }
     meta.enable_transparency_log(Arc::clone(&log));
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(log);
@@ -809,4 +830,47 @@ async fn t24_a_capability_is_judged_by_the_definition_it_runs() {
             "read_only: {read_only}"
         );
     }
+}
+
+/// T25 (lead): under signing that requires a nonce, the route mints none
+/// for the caller: 403 `signing_required`, nothing sent, the refusal audited.
+/// Mutant: the up-front signing check removed (dispatch then refuses with
+/// the no-such-tool code, and the route answers 404).
+#[tokio::test]
+async fn t25_required_signing_is_refused_up_front() {
+    let fx = fixture_with(Setup::SignedNonce).await;
+    let (status, body) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "signing_required", "{body}");
+    assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(sent(&fx), 0);
+    let actions = admin_actions(&fx);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(actions[0]["tool"], "read", "{}", actions[0]);
+}
+
+/// T26 (lead): with the pool's calls all held, the next answers 403 `busy`;
+/// the backend sees nothing for it and an admin_action records the refusal.
+/// Mutant: the pool permit not taken.
+#[tokio::test]
+async fn t26_a_full_pool_answers_busy() {
+    let fx = fixture().await;
+    let held: Vec<_> = (0..crate::gateway::ui_call::MAX_UI_CALLS)
+        .map(|_| {
+            Arc::clone(fx.state.meta_mcp.ui_call_permits())
+                .try_acquire_owned()
+                .expect("a free permit")
+        })
+        .collect();
+    let (status, body) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(body["error"], "busy", "{body}");
+    assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(sent(&fx), 0);
+    let actions = admin_actions(&fx);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(actions[0]["disposition"], "not_run", "{}", actions[0]);
+    drop(held);
+    let (status, _) = post(&fx, ADMIN, call("read", false)).await;
+    assert_eq!(status, StatusCode::OK, "a freed pool runs the call");
 }

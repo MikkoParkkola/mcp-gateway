@@ -119,14 +119,32 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
     detail.insert("tool".into(), ask.tool.clone().into());
     detail.insert("confirm_write".into(), ask.confirm_write.into());
 
-    // The drain tracker's permit: a call shutdown waits for, and a bound on
-    // how many run on past their answer.
-    let Ok(permit) = Arc::clone(&state.inflight).try_acquire_owned() else {
+    // Under required signing every call carries the caller's nonce; the
+    // route mints none on its behalf. Refused here: unsigned, dispatch would
+    // answer with the code a missing tool also uses.
+    if state.meta_mcp.requires_call_nonce() {
+        return finish(
+            refusal(
+                StatusCode::FORBIDDEN,
+                "signing_required",
+                "this gateway requires signed calls; use a signing client",
+                Disposition::NotRun,
+            ),
+            detail,
+            Disposition::NotRun,
+            None,
+        );
+    }
+    // One of the few UI calls that may run at once, and the drain tracker's
+    // permit, so shutdown waits for a call that runs on past its answer.
+    let pool = Arc::clone(state.meta_mcp.ui_call_permits()).try_acquire_owned();
+    let drain = Arc::clone(&state.inflight).try_acquire_owned();
+    let (Ok(pool), Ok(drain)) = (pool, drain) else {
         return finish(
             refusal(
                 StatusCode::FORBIDDEN,
                 "busy",
-                "the gateway is busy; nothing was run",
+                "too many tool calls are running from the web UI; nothing was run",
                 Disposition::NotRun,
             ),
             detail,
@@ -134,6 +152,7 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
             None,
         );
     };
+    let permit = (pool, drain);
     let principal = client
         .as_ref()
         .map(|c| c.principal.storage_form().to_owned())
@@ -223,7 +242,10 @@ fn spawn_call(
     state: &Arc<AppState>,
     ui_call: &Arc<UiCall>,
     internal: Request,
-    permit: tokio::sync::OwnedSemaphorePermit,
+    permit: (
+        tokio::sync::OwnedSemaphorePermit,
+        tokio::sync::OwnedSemaphorePermit,
+    ),
     answered: tokio::sync::oneshot::Sender<Option<Value>>,
     follow_up: FollowUp,
 ) -> tokio::task::AbortHandle {

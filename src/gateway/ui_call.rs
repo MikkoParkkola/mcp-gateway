@@ -18,6 +18,10 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
+/// Web UI tool calls that may run at once, per gateway. A constant: the
+/// shell's contract leaves no status for "wait", so a full pool refuses.
+pub(crate) const MAX_UI_CALLS: usize = 4;
+
 /// What the route confirmed for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Confirm {
