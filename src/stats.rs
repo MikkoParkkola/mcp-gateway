@@ -254,6 +254,21 @@ mod tests {
         assert_eq!(snapshot.top_tools[1].count, 1);
     }
 
+    /// T9: the snapshot keeps every tool, most-called first; the presenters
+    /// cut it, not the snapshot.
+    #[test]
+    fn the_snapshot_keeps_every_tool_most_called_first() {
+        let stats = UsageStats::new();
+        for n in 0..300 {
+            stats.record_invocation("s", &format!("tool-{n}"));
+        }
+        stats.record_invocation("s", "tool-299");
+        let snapshot = stats.snapshot(300);
+        assert_eq!(snapshot.top_tools.len(), 300);
+        assert_eq!(snapshot.top_tools[0].tool, "tool-299");
+        assert_eq!(snapshot.top_tools[0].count, 2);
+    }
+
     #[test]
     fn test_default_impl() {
         let stats = UsageStats::default();
