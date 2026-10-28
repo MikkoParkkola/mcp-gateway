@@ -43,9 +43,9 @@ PUSH_ONLY_WORKFLOWS = ("codeql.yml", "feature-combos.yml", "mingw-debs.yml", "pa
 # and gws-dry-run (neither reads a docs file): tests read docs files
 # (include_str!, doc-claim tests), in the lib/bin suite as well as tests/.
 KEPT = {
-    "scope", "public-repo-hygiene", "test", "windows-check", "macos-check",
+    "scope", "public-repo-hygiene", "test", "windows-check",
     # Their shards (MIK-8482): the aggregates above only read these results.
-    "test-shards", "windows-shards", "windows-clippy", "macos-shards",
+    "test-shards", "windows-shards", "windows-clippy",
     "orphan-test-modules",
     # Compiles every test target from the packaged crate: a test that reads a
     # repository file (docs included) the package leaves out only fails here.
@@ -65,6 +65,11 @@ NOT_ON_PRS = {"test-throwaway-hosted", "test-trusted", "docker-build", "docker-m
 # `train/` branch in this repository, and not when it is docs-only. Checked by
 # its own cases below, so it is in neither SKIPPED nor KEPT.
 TRAIN_ONLY = {"feature-combos-train"}
+# On a pull request, macOS runs only for a merge train (a `train/` branch in
+# this repository), docs-only or not, into any base; every non-PR event runs it
+# as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
+# own cases below, so it is in neither SKIPPED nor KEPT.
+MACOS_TRAIN = {"macos-shards", "macos-check"}
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 # Skipped on a push to the release line (MIK-8163, merge skew); every other job
@@ -150,6 +155,40 @@ def train_errors(jobs: dict) -> list[str]:
     return errors
 
 
+def macos_train_errors(jobs: dict) -> list[str]:
+    """Each MACOS_TRAIN job runs on a train pull request and on non-PR events,
+    and on no other pull request; its aggregate follows its shards."""
+    def as_train(c: dict, head: str = "train/20261028-1", repo: str = REPO) -> dict:
+        c["github"]["head_ref"] = head
+        c["github"]["event"] = {"pull_request": {"head": {"repo": {"full_name": repo}}}}
+        return c
+    def pushed(ref: str) -> dict:
+        c = ctx("push", "success", "false")
+        c["github"]["ref"] = ref
+        return c
+    cases = {
+        "code PR": (ctx("pull_request", "success", "false"), False),
+        "docs-only PR": (ctx("pull_request", "success", "true"), False),
+        "scope failed on a PR": (ctx("pull_request", "failure", None), False),
+        "code train": (as_train(ctx("pull_request", "success", "false")), True),
+        "docs-only train": (as_train(ctx("pull_request", "success", "true")), True),
+        "scope failed on a train": (as_train(ctx("pull_request", "failure", None)), True),
+        "train branch from a fork": (as_train(ctx("pull_request", "success", "false"), repo="fork/x"), False),
+        "a branch merely containing train/": (as_train(ctx("pull_request", "success", "false"), head="x/train/y"), False),
+        "a train into main": (as_train(ctx("pull_request", "success", "false")), True),
+        "push to main": (pushed("refs/heads/main"), True),
+        "release-line push": (pushed(f"refs/heads/{RELEASE_LINE}"), False),
+    }
+    cases["a train into main"][0]["github"]["base_ref"] = "main"
+    errors = [f"MACOS_TRAIN names a job ci.yml lacks: {j}" for j in sorted(MACOS_TRAIN - set(jobs))]
+    for label, (c, want) in cases.items():
+        ran = simulate(jobs, c)
+        for job in sorted(MACOS_TRAIN & set(jobs)):
+            if (job in ran) != want:
+                errors.append(f"{job}: {label} {'skips' if want else 'runs'}")
+    return errors
+
+
 def post_merge_errors(jobs: dict) -> list[str]:
     """A release-line push runs everything but POST_MERGE_SKIPPED and NOT_ON_PRS."""
     errors = []
@@ -197,7 +236,7 @@ def runs(job: dict, c: dict) -> bool:
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
-    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY - MACOS_TRAIN
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
@@ -232,7 +271,7 @@ def main() -> int:
     if {"test", "test-shards"} & set(shard_needs):
         errors.append("windows-shards needs the Linux suite: it must start in parallel with it")
     for name, c in cases.items():
-        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS | TRAIN_ONLY and runs(j, c)}
+        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS | TRAIN_ONLY | MACOS_TRAIN and runs(j, c)}
         want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
         if ran != want:
             errors.append(f"{name}: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
@@ -243,7 +282,17 @@ def main() -> int:
             if active == (name == "docs-only PR"):
                 errors.append(f"{name}: capability-pins step '{step}' {'runs' if active else 'skips'}")
     errors += train_errors(jobs)
+    errors += macos_train_errors(jobs)
     errors += post_merge_errors(jobs)
+    # The macOS train gate must be able to fail: losing it is caught.
+    import copy
+    for job in sorted(MACOS_TRAIN & set(jobs)):
+        ungated = copy.deepcopy(jobs)
+        ungated[job]["if"] = str(ungated[job]["if"]).replace(
+            " && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/')"
+            " && github.event.pull_request.head.repo.full_name == github.repository))", "")
+        if ungated[job]["if"] == jobs[job]["if"] or not macos_train_errors(ungated):
+            errors.append(f"macOS self-test: '{job} loses its train gate' was not caught")
     # The post-merge check must be able to fail (MIK-8163): each mutation is caught.
     import copy
     mutations = {
