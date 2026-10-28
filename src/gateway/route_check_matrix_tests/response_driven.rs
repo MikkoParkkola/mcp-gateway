@@ -209,9 +209,10 @@ const fn invisible_pins(reason: Invisible) -> &'static [&'static str] {
         Invisible::StoredBytesAlreadyClamped => {
             &["protocol::cacheable::clamp_tests::every_non_private_scope_is_delivered_as_private"]
         }
-        Invisible::IngressStripsBackendSignature => {
-            &["rows::r_ownsig_the_gateway_signature_is_not_receipted"]
-        }
+        Invisible::IngressStripsBackendSignature => &[
+            "protocol::reserved_members::tests::a_full_strip_removes_every_gateway_only_member_and_nothing_else",
+            "rows::r_ownsig_the_gateway_signature_is_not_receipted",
+        ],
         Invisible::JudgeOnlyReplaces
         | Invisible::StampIgnoresShapedMembers
         | Invisible::SealWritesOnlyExcludedMeta
@@ -233,6 +234,7 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
             "rows::r_stamp_seal_binds_the_delivered_bytes",
             "rows::stdio::r_stamp_stdio_seal_binds_the_delivered_bytes",
             "rows::r_clamp_read_delivers_private",
+            "router::tests::task_execution_adapter::provenance_seal::a_worker_task_with_a_public_scope_is_sealed_as_delivered",
         ],
         RespNa::NoModernShapeOnLegacy
         | RespNa::NoCacheOnDirect
