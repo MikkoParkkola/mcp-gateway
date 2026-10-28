@@ -53,6 +53,7 @@ impl Transport for Stub {
                     tool("fail", &ro),
                     tool("iserr", &ro),
                     tool("slow", &ro),
+                    tool("ask", &ro),
                     tool("write", &json!({})),
                     tool("get_x", &json!({})),
                 ]}),
@@ -65,6 +66,18 @@ impl Transport for Stub {
             .unwrap_or_default()
             .to_owned();
         match name.as_str() {
+            // A tool that stops to ask the user a question (elicitation).
+            "ask" => Ok(JsonRpcResponse::success(
+                id,
+                json!({
+                    "resultType": "input_required",
+                    "inputRequests": {"k1": {
+                        "method": "elicitation/create",
+                        "params": {"message": "Which account?", "requestedSchema": {"type": "object"}},
+                    }},
+                    "requestState": "backend-state-1",
+                }),
+            )),
             "slow" => {
                 tokio::time::sleep(Duration::from_millis(400)).await;
                 Ok(JsonRpcResponse::success(
@@ -622,4 +635,18 @@ async fn t26_a_full_pool_answers_busy() {
     drop(held);
     let (status, _) = post(&fx, ADMIN, call("read", false)).await;
     assert_eq!(status, StatusCode::OK, "a freed pool runs the call");
+}
+
+/// T27 (lead): a tool that stops to ask a follow-up question cannot finish
+/// from the web UI, which declares no client capabilities: the call was
+/// sent, so the route answers a 5xx, may have run, never 200 and never a 4xx.
+/// Mutant: a returned question read as a finished result.
+#[tokio::test]
+async fn t27_a_tool_that_asks_a_question_answers_may_have_run() {
+    let fx = fixture().await;
+    let (status, body) = post(&fx, ADMIN, call("ask", false)).await;
+    assert!(status.is_server_error(), "{status} {body}");
+    assert_eq!(body["disposition"], "may_have_run", "{body}");
+    assert_eq!(sent(&fx), 1, "the call was sent");
+    assert!(!body.to_string().contains("Which account"), "{body}");
 }

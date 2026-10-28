@@ -325,7 +325,16 @@ fn classify(outcome: &Outcome, answer: Option<&Value>) -> (StatusCode, Dispositi
         return (StatusCode::CONFLICT, Disposition::NotRun);
     }
     if outcome.dispatched {
-        let ran = !outcome.failed_after_send && answer.is_some_and(|a| a.get("result").is_some());
+        // A result that asks the user a question did not finish: the web UI
+        // declares no capability to answer it.
+        let asks = answer.and_then(|a| a.get("result")).is_some_and(|result| {
+            use crate::protocol::mrtr::InputRequired;
+            InputRequired::claims_input_required(result)
+                || InputRequired::claims_input_required(&tool_result(result))
+        });
+        let ran = !outcome.failed_after_send
+            && !asks
+            && answer.is_some_and(|a| a.get("result").is_some());
         return match (ran, audit_down) {
             (true, _) => (StatusCode::OK, Disposition::Ran),
             (false, true) => (StatusCode::SERVICE_UNAVAILABLE, Disposition::MayHaveRun),
