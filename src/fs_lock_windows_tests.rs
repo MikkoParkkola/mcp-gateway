@@ -421,3 +421,47 @@ fn a_delete_pending_sidecar_is_contention_not_an_error() {
     drop(ExclusiveFileLock::acquire(&path).expect("taken once the name is free"));
     assert_owner_only("delete-pending", &path, false);
 }
+
+/// The delete-pending race, 50 times in one run: each iteration leaves a
+/// fresh sidecar name delete-pending (the probe answers `Held`), then lets the
+/// other handle close on a second thread while `acquire` races it. Whichever
+/// side wins, `acquire` takes the lock; it never returns an error.
+#[test]
+fn a_delete_pending_race_never_fails_acquire() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_DELETE_ON_CLOSE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let share_all = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    let dir = tempfile::tempdir().expect("dir");
+    for i in 0..50 {
+        let path = dir.path().join(format!(".store-{i}.lock"));
+        std::fs::write(&path, b"").expect("planted");
+        let keeper = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share_all)
+            .open(&path)
+            .expect("keeper");
+        drop(
+            std::fs::OpenOptions::new()
+                .access_mode(DELETE)
+                .share_mode(share_all)
+                .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+                .open(&path)
+                .expect("deleter"),
+        );
+        assert!(
+            matches!(ExclusiveFileLock::try_lease(&path), Ok(Attempt::Held)),
+            "iteration {i}: a delete-pending sidecar is contention"
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::yield_now();
+            drop(keeper);
+        });
+        let lock = ExclusiveFileLock::acquire(&path);
+        release.join().expect("release");
+        assert!(lock.is_ok(), "iteration {i}: {:?}", lock.err());
+        drop(lock);
+        assert_owner_only("delete-pending race", &path, false);
+    }
+}
