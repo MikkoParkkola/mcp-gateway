@@ -291,10 +291,11 @@ async fn a_record_read_under_a_held_lease_is_sent() {
     );
 }
 
-/// A callback that takes one request, reports it has arrived, and answers
-/// 200 only once released: a delivery handoff held on the wire.
+/// A callback that takes one connection, reports once the client's first
+/// bytes (its TLS hello) arrive, and hangs up only once released: a delivery
+/// handoff held on the wire whose outcome the sender cannot know.
 async fn held_callback() -> (u16, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncReadExt;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind");
@@ -303,25 +304,32 @@ async fn held_callback() -> (u16, Arc<tokio::sync::Notify>, Arc<tokio::sync::Not
         Arc::new(tokio::sync::Notify::new()),
         Arc::new(tokio::sync::Notify::new()),
     );
-    let (arrived, answer) = (Arc::clone(&reached), Arc::clone(&release));
+    let (arrived, hang_up) = (Arc::clone(&reached), Arc::clone(&release));
     tokio::spawn(async move {
         let Ok((mut stream, _)) = listener.accept().await else {
             return;
         };
-        let mut request = vec![0u8; 64 * 1024];
-        let _ = stream.read(&mut request).await;
+        let mut hello = vec![0u8; 16 * 1024];
+        let _ = stream.read(&mut hello).await;
         arrived.notify_one();
-        answer.notified().await;
-        let _ = stream
-            .write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
-            .await;
+        hang_up.notified().await;
+        drop(stream);
     });
     (port, reached, release)
 }
 
+/// The queued record for `event_id` in the outbox under `dir`, if any.
+fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Value> {
+    std::fs::read_dir(dir.join("outbox"))
+        .ok()?
+        .flatten()
+        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .find(|record: &serde_json::Value| record["event_id"] == event_id)
+}
+
 /// LEASE-T7, the committed half: a handoff already on the wire when the
-/// lease is replaced is not recalled. It completes, and the record settles
-/// as sent rather than buried.
+/// lease is replaced is not recalled. Its attempt completes as possibly sent:
+/// counted, and left for its retry to judge, never buried by the replace.
 #[tokio::test]
 async fn lease_t7_a_handoff_on_the_wire_at_a_replace_completes() {
     let dir = tempfile::tempdir().expect("dir");
@@ -345,17 +353,13 @@ async fn lease_t7_a_handoff_on_the_wire_at_a_replace_completes() {
         release.notify_one();
     };
     tokio::join!(hub.attempt(&services, "evt_wire"), replace);
-    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
-        let row = hub.store.subscriptions().pop().expect("row");
-        match row.last_delivery_at {
-            Some(_) => std::ops::ControlFlow::Break(()),
-            None => std::ops::ControlFlow::Continue("not settled yet".to_owned()),
-        }
-    })
-    .await
-    .expect("the handoff settled as sent");
     assert!(
         hub.store.dead_letter_by_id("evt_wire").is_none(),
         "not buried by the replace"
+    );
+    let record = queued_record(dir.path(), "evt_wire").expect("still queued for its retry");
+    assert!(
+        record["attempt"].as_u64().is_some_and(|n| n >= 1),
+        "the attempt on the wire is counted: {record}"
     );
 }
