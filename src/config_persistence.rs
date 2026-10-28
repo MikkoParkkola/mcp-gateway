@@ -61,6 +61,8 @@ pub fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     })
 }
 
+#[path = "config_persistence_keyedit.rs"]
+pub(crate) mod keyedit;
 #[path = "config_persistence_splice.rs"]
 mod splice;
 #[cfg(feature = "webui")]

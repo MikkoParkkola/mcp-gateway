@@ -111,6 +111,9 @@ impl Backend {
     /// regardless — a real failure is never disguised as a nap.
     #[must_use]
     pub fn lifecycle(&self) -> BackendLifecycle {
+        if self.shared_slot_refused() {
+            return BackendLifecycle::PerUser;
+        }
         if self.is_running() {
             return BackendLifecycle::Running;
         }
@@ -241,6 +244,7 @@ impl Backend {
             reaped: entry.stopped_when_idle.load(Ordering::SeqCst),
             ever_started: entry.ever_started.load(Ordering::Relaxed),
             start_failed: entry.start_failed.load(Ordering::Relaxed),
+            slow: entry.failsafe.health_tracker.slow(),
         }
     }
 

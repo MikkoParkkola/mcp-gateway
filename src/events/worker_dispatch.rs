@@ -4,7 +4,7 @@
 //! starts, and how long it sleeps before looking again (design §6.5).
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::Semaphore;
 
@@ -21,10 +21,12 @@ impl EventsHub {
     /// Run the worker until the runtime stops.
     pub(in crate::events) async fn deliver_forever(self: Arc<Self>, services: &Arc<Services>) {
         let slots = Arc::new(Semaphore::new(self.config.max_in_flight));
-        let mut swept: Option<Instant> = None;
+        // On tokio's clock, so a paused test clock can pin the cadence; it
+        // reads the same monotonic time as `std::time::Instant` otherwise.
+        let mut swept: Option<tokio::time::Instant> = None;
         loop {
             if swept.is_none_or(|at| at.elapsed() >= SWEEP_EVERY) {
-                swept = Some(Instant::now());
+                swept = Some(tokio::time::Instant::now());
                 self.sweep(services).await;
             }
             self.stop_expired_keys().await;
@@ -109,7 +111,7 @@ impl EventsHub {
             if let Err(later) = self
                 .runtime
                 .rates
-                .take(&record.subscription_id, Instant::now())
+                .take(&record.subscription_id, std::time::Instant::now())
             {
                 // Delayed, never dropped: the record stays due.
                 wait = wait.min(later);

@@ -158,6 +158,7 @@ const KNOWN_BACKEND_KEYS: &[&str] = &[
     "passthrough",
     "input_schema_enforcement",
     "allow_flagged_tools",
+    "allowed_tools",
     "allow_cleartext_credentials",
     "runtime_profile",
     "identity_propagation",

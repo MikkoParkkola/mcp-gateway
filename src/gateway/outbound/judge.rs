@@ -69,6 +69,7 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
                 chain_source: crate::protocol::ChainSource::NotEligible,
                 chain_upstream: None,
                 invocation_trace: None,
+                ingress_withheld: None,
             };
             serde_json::to_value(view).ok()
         }
@@ -373,6 +374,7 @@ mod emitted_document_tests {
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
             invocation_trace: None,
+            ingress_withheld: None,
         }
     }
 

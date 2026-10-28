@@ -375,7 +375,7 @@ impl AuthenticatedClient {
 
         // If allowlist is set, ONLY tools in the list are permitted
         if let Some(ref allowed) = self.allowed_tools
-            && !Self::matches_any_pattern(allowed, tool, &qualified)
+            && !crate::config::tool_pattern_matches(allowed, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
@@ -385,7 +385,7 @@ impl AuthenticatedClient {
 
         // If denylist is set, tools in the list are blocked
         if let Some(ref denied) = self.denied_tools
-            && Self::matches_any_pattern(denied, tool, &qualified)
+            && crate::config::tool_pattern_matches(denied, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
@@ -394,20 +394,6 @@ impl AuthenticatedClient {
         }
 
         Ok(())
-    }
-
-    /// Check if a tool name matches any pattern in the list.
-    /// Supports exact match and glob suffix patterns (e.g., `"search_*"`).
-    fn matches_any_pattern(patterns: &[String], tool: &str, qualified: &str) -> bool {
-        patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                // Glob pattern: check prefix match on both tool and qualified name
-                tool.starts_with(prefix) || qualified.starts_with(prefix)
-            } else {
-                // Exact match on both tool and qualified name
-                tool == pattern || qualified == pattern
-            }
-        })
     }
 }
 

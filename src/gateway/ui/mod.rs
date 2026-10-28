@@ -521,6 +521,9 @@ async fn tools(
                     "schema": tool.input_schema,
                     "class": class,
                     "class_source": class_source,
+                    // The admin view lists every cached tool, so one left out
+                    // of `allowed_tools` can be ticked again.
+                    "selected": !backend.is_unselected(&tool.name),
                 }));
             }
         }
@@ -556,6 +559,8 @@ async fn config(
                 "name": s.name,
                 "transport": s.transport,
                 "running": s.running,
+                // As written, so a pattern that matches no current tool shows.
+                "allowed_tools": b.allowed_tools(),
             })
         })
         .collect();

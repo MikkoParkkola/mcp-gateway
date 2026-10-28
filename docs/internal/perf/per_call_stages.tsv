@@ -62,6 +62,7 @@ src/gateway/meta_mcp/invoke/admin.rs	revive_server	-	gateway_revive_server meta-
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	-	gateway_run_playbook meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/admin.rs	set_playbook_engine	-	startup wiring, set once when the gateway is built
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	-	gateway_webhook_status meta-tool only, not the tools/call path
+src/gateway/meta_mcp/invoke/audit/settlement.rs	append_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	attributes_tenants	-	on-path, untimed: read only by the chain-refusal note (note_uninspected); the timed backend is not chained
 src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-record attribution, built only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -69,6 +70,7 @@ src/gateway/meta_mcp/invoke/audit.rs	audit_refused_credential	-	on-path, untimed
 src/gateway/meta_mcp/invoke/audit.rs	audit_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement	-	test-only shorthand (cfg(test))
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
+src/gateway/meta_mcp/invoke/audit/settlement.rs	decided_fields	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt
 src/gateway/meta_mcp/invoke/audit.rs	from_caller	-	on-path, untimed: invocation-record writer, only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -82,6 +84,7 @@ src/gateway/meta_mcp/invoke/audit.rs	note_upstream_task	-	on-path, untimed: upst
 src/gateway/meta_mcp/invoke/audit.rs	noted_classes	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	noted_response	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	outcome	-	on-path, untimed: invocation and settlement records, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit/settlement.rs	record_task_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	request_tenants	-	on-path, untimed: tenant attribution under a firewall tenant guard (arg_keys); the harness configures none
 src/gateway/meta_mcp/invoke/audit.rs	responded	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	response_reading	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -122,14 +125,18 @@ src/gateway/meta_mcp/invoke/cache_reads.rs	note_delivered_reading	http_invoke_ti
 src/gateway/meta_mcp/invoke/cache_reads.rs	reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
 src/gateway/meta_mcp/invoke/cache_reads.rs	restore	-	on-path, untimed: response-cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/caller_credential.rs	fmt	-	Debug formatting (redacting); not called per call
+src/gateway/meta_mcp/invoke/caller_verdict.rs	backend_bound	-	on-path, untimed: the deadline bound of a cold per-user view's fill (ColdFill::backend_bound), cold tools/list warms only; the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict_acting	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdicts	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's verdicts)
 src/gateway/meta_mcp/invoke/caller_verdict.rs	dispatch_resolution	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/caller_verdict.rs	drop	-	on-path, untimed: a won cold claim's attempt settling as it ends (ColdAttempt's Drop), stored task replay reads and cold tools/list warms only; the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/caller_verdict.rs	judge_caller_slot	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
 src/gateway/meta_mcp/invoke/caller_verdict.rs	live_refusal	-	on-path, untimed: stored task replay reads only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/caller_verdict.rs	new	-	on-path, untimed: a won cold claim's attempt (ColdAttempt::new), stored task replay reads and cold tools/list warms only; the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/caller_verdict.rs	of	http_invoke_tiny	on the HTTP gateway_invoke path (TargetNaming::of, per route target)
-src/gateway/meta_mcp/invoke/caller_verdict.rs	warm_cold_view	-	on-path, untimed: stored task replay reads of a cold per-user view only; the timed rows carry no task member
+src/gateway/meta_mcp/invoke/caller_verdict.rs	resolve_cold_view	-	on-path, untimed: stored task replay reads of a cold per-user view and cold tools/list warms only; the timed rows carry neither
+src/gateway/meta_mcp/invoke/caller_verdict.rs	run	-	on-path, untimed: the fill a cold per-user view's claim runs (ColdFill::run); the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/chokepoint.rs	as_str	-	on-path, untimed: firewall warn/block verdicts at the chokepoint only; the timed blob is allowed
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's authorize of each requested target)
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_route_target	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage authorize)
