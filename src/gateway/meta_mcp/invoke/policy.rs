@@ -454,7 +454,9 @@ impl MetaMcp {
         text: &str,
     ) -> Result<Vec<crate::security::response_inspect::Finding>> {
         use crate::security::response_inspect::ResponseInspectionMode;
-        if text.is_empty() {
+        // Off (`enabled: false`): nothing inspected, logged, annotated or
+        // blocked here, whatever `action_mode` says.
+        if text.is_empty() || self.response_inspection == ResponseInspectionMode::Off {
             return Ok(Vec::new());
         }
         #[cfg(test)]
