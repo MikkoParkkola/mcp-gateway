@@ -149,6 +149,11 @@ async fn the_owner_leases_their_own_row() {
         f.hub.leases.state(&lease_key(&f, "p")).await,
         LeaseState::Active { .. }
     ));
+    assert_eq!(
+        f.hub.held_leases().await,
+        1,
+        "the count LEASE-T0 reads sees it"
+    );
 }
 
 /// LEASE-T9 / E3: a handle on backend `other` is refused on `/mcp/pt`.
