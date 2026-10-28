@@ -363,8 +363,8 @@ pub(crate) const fn expect(
             _,
             _,
             _,
-            ShapeSeal | FirewallSeal | ClampLink | ClampSeal | StampSeal | SealSign | SignRecord
-            | JudgeRecord | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
+            ShapeSeal | FirewallSeal | StampSeal | SealSign | SignRecord | JudgeRecord
+            | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
         ) => Ordered,
     }
 }

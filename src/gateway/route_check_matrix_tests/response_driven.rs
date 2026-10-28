@@ -238,6 +238,11 @@ const fn na_pins(reason: RespNa) -> &'static [&'static str] {
             "rows::stdio::r_erareplay_stdio_cross_era_replay_is_refused",
         ],
         RespNa::ReplayMintsNoReceipt => &["rows::r_replayseal_direct_replay_seal_gap"],
+        RespNa::IngressRemovesToolCallScope => &[
+            "rows::r_stamp_seal_binds_the_delivered_bytes",
+            "rows::stdio::r_stamp_stdio_seal_binds_the_delivered_bytes",
+            "rows::r_link_read_scope_clamp_precedes_origin_link",
+        ],
         RespNa::NoModernShapeOnLegacy
         | RespNa::NoCacheOnDirect
         | RespNa::TaskHasNoOriginLink

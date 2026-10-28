@@ -502,7 +502,7 @@ mod stdio {
 
     use super::{assert_sealed_bound, delivered, receipt};
     use crate::gateway::router::route_matrix_driver_tests::response::{
-        CHAIN_NONCE, planted_credential, trust_set,
+        planted_credential, trust_set,
     };
     use crate::gateway::server::route_matrix_driver_tests::response::{
         StdioSetup, stdio_legacy_then_modern_replay, stdio_sealed, stdio_sealed_replay,
