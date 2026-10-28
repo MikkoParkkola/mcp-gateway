@@ -43,9 +43,20 @@ function classWord(t) {
   return t.class_source === 'declared' ? 'read (declared)' : 'read (guessed from the name)';
 }
 
-/** The schema, pretty-printed, in a focusable named region a keyboard can scroll. */
-function schemaBlock(t) {
-  const text = t.schema === undefined || t.schema === null ? 'No input schema.' : JSON.stringify(t.schema, null, 2);
+/**
+ * JSON on one line with a space after each `:` and `,`, as frame 48q draws a
+ * schema. Formatting newlines are the only raw newlines JSON writes (a string
+ * escapes its own), so collapsing them never touches a value.
+ */
+function oneLine(value) {
+  return JSON.stringify(value, null, 1)
+    .replace(/([[{])\n\s*/g, '$1').replace(/\n\s*([\]}])/g, '$1').replace(/\n\s*/g, ' ');
+}
+
+/** The schema in a focusable named region a keyboard can scroll: one line in the list, indented on the tool's page. */
+function schemaBlock(t, { compact = false } = {}) {
+  const text = t.schema === undefined || t.schema === null ? 'No input schema.'
+    : compact ? oneLine(t.schema) : JSON.stringify(t.schema, null, 2);
   return h('pre', { class: 'mono tool-schema', tabindex: 0, role: 'region', 'aria-label': `Input schema of ${t.name}` }, text);
 }
 
@@ -89,7 +100,7 @@ async function statusTab(body, ctx) {
     filters.server = pick.value;
     const shown = matching(list, search.value, pick.value);
     meta.textContent = shown.length === list.length
-      ? `${plural(list.length, 'tool', 'tools')} · A to Z`
+      ? `${list.length.toLocaleString('en')} · A to Z · name, server, description`
       : `${shown.length.toLocaleString('en')} of ${list.length.toLocaleString('en')} match`;
     table.hidden = shown.length === 0;
     none.hidden = shown.length !== 0;
@@ -98,11 +109,10 @@ async function statusTab(body, ctx) {
       const mark = h('span', { class: 'mark', 'aria-hidden': 'true' }, '▸ ');
       const toggle = h('button', { class: 'tool-toggle mono', type: 'button', 'aria-expanded': 'false', 'aria-controls': id }, mark, t.name);
       const row = h('tr', { class: 'tool' }, h('td', {}, toggle), h('td', { class: 't2' }, t.server), h('td', { class: 'muted' }, t.description ?? ''));
+      // As frame 48q: the open row is the schema; the row above already shows the description.
       const detail = h('tr', { class: 'tool-detail', id, hidden: true }, h('td', { colspan: 3 },
-        h('p', { class: 'muted' }, t.description ?? 'No description.'),
-        h('p', { class: 't2' }, classWord(t)),
-        h('p', { class: 'kicker' }, 'Input schema'),
-        schemaBlock(t),
+        h('p', { class: 'mono tool-schema-label' }, 'Input schema'),
+        schemaBlock(t, { compact: true }),
         h('p', {}, h('a', { class: 'lnk', href: toolPath(t), 'aria-label': `Open ${t.name}` }, 'Open'))));
       toggle.addEventListener('click', () => {
         const open = toggle.getAttribute('aria-expanded') !== 'true';

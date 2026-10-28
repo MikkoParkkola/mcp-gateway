@@ -10,7 +10,10 @@
 .tools-card-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
 .tools-card-head h2 { margin: 0; }
 .tools-meta { margin-left: auto; font: var(--type-small); }
-.tools-table td { vertical-align: top; padding-top: var(--space-2); padding-bottom: var(--space-2); height: auto; }
+.tools-table td { vertical-align: middle; padding-top: var(--space-0-5); padding-bottom: var(--space-0-5); height: auto; }
+/* Column widths as frame 48q draws them. */
+.tools-table th:nth-child(1) { width: calc(var(--space-16) * 4); }
+.tools-table th:nth-child(2) { width: calc(var(--space-16) * 2); }
 .tools-none { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
 
 /* The tool name opens its detail: a real button, the width of its cell. */
@@ -18,8 +21,9 @@
   font: inherit; font-family: var(--font-family-mono); text-align: left; cursor: pointer; }
 /* The open marker is its own hidden span: generated content would join the button's name. */
 .tool-toggle .mark { color: var(--color-text-secondary); }
-.tool-detail td { background: var(--color-bg-raised); }
+.tool-detail td { background: var(--color-bg-raised); padding: var(--space-2) var(--space-4) var(--space-3) var(--space-10); }
 .tool-detail p { margin: 0 0 var(--space-2); }
+.tool-schema-label { font: var(--type-small); font-family: var(--font-family-mono); color: var(--color-text-secondary); }
 
 /* The schema scrolls inside itself, from the keyboard too; the shell's
    :focus-visible ring marks it. */

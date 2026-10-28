@@ -26,7 +26,8 @@ const TOOLS = SERVERS.flatMap((server, s) => Array.from({ length: 10 }, (_, i) =
   name: `${String.fromCharCode(106 - i)}_${server}_tool`,
   server,
   description: `Does thing ${i} on ${server}`,
-  schema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 30 }, (_, k) => [`field_${k}`, { type: 'string' }])) },
+  // Long enough to overflow its pane even on one line.
+  schema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 120 }, (_, k) => [`field_${k}`, { type: 'string', description: `Field number ${k}` }])) },
   class: i % 2 ? 'write' : 'read',
   class_source: i % 3 ? 'inferred' : 'declared',
 })));
@@ -67,7 +68,7 @@ test('T2: every tool is listed A to Z with its server and description', async ({
   // The open marker is a hidden span ahead of the name.
   expect(names.map((n) => n.replace(/^[▸▾]\s*/, '').trim())).toEqual(sorted.map((t) => t.name));
   await expect(rows(page).first().locator('td:nth-child(2)')).toHaveText(sorted[0].server);
-  await expect(page.locator('#content')).toContainText('40 tools · A to Z');
+  await expect(page.locator('#content')).toContainText('40 · A to Z · name, server, description');
 });
 
 test('T3: search and the server filter narrow the list, together and apart', async ({ page }) => {
@@ -100,7 +101,6 @@ test('T4: a tool name opens its detail, and the schema scrolls from the keyboard
   await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   const schema = page.getByRole('region', { name: `Input schema of ${sorted[0].name}` });
   await expect(schema).toBeVisible();
-  await expect(page.locator('#content')).toContainText(sorted[0].class === 'read' ? 'read' : 'write');
   await scrollsFromKeyboard(page, { from: toggle, region: schema, key: 'ArrowDown', axis: 'y' });
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -138,8 +138,9 @@ test('T6: markup in a tool description renders as text', async ({ page }) => {
   await expect(page.getByRole('region', { name: `Input schema of ${withSchema.name}` })).toContainText('<img src=x onerror=');
   await expect(page.locator('#content img')).toHaveCount(0);
   expect(await page.evaluate(() => window.__pwned)).toBeUndefined();
-  await page.getByRole('button', { name: TOOLS[2].name, exact: true }).click();
-  await expect(page.locator('#content')).toContainText('No description.');
+  // A null description is an empty cell, never the word null.
+  const nullRow = rows(page).filter({ has: page.getByRole('button', { name: TOOLS[2].name, exact: true }) });
+  await expect(nullRow.locator('td:nth-child(3)')).toHaveText('');
   await expect(page.locator('#content')).not.toContainText('null');
 });
 
