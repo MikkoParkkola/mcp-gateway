@@ -357,3 +357,17 @@ test('G5d a slow Retry shows loading after the same onset as a first render, and
   expect(t.shown - t.click, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
   expect(t.gone - t.shown, 'kept for about 400 ms').toBeGreaterThanOrEqual(395);
 });
+
+test('G8b a sign-out during a slow first load leaves no aria-busy behind', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/dashboard/logout', (r) => r.fulfill({ status: 204 }));
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  probe.release();
+});
