@@ -12,6 +12,8 @@ use serde_json::Value;
 use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
+use crate::config_reload::Generation;
+
 /// Streams open at once. A few browser tabs per operator, each holding a
 /// watcher subscription and a credential re-check every second; a fixed
 /// constant, not a setting.
@@ -29,7 +31,11 @@ pub(super) enum Refusal {
 /// The shared view every stream reads: generations and the latest payloads.
 #[derive(Clone, Debug, Default)]
 pub(super) struct Snapshot {
+    /// Rises when the full (admin) status changes.
     pub(super) status_gen: u64,
+    /// Rises when the counts-only status changes; admin-only change rates
+    /// never show in it.
+    pub(super) counts_gen: u64,
     pub(super) reload_gen: u64,
     pub(super) full: Value,
     pub(super) counts: Value,
@@ -38,11 +44,25 @@ pub(super) struct Snapshot {
     pub(super) fresh: bool,
 }
 
+impl Snapshot {
+    /// The generation of the status view this caller is shown.
+    pub(super) fn status_gen_for(&self, admin: bool) -> u64 {
+        if admin {
+            self.status_gen
+        } else {
+            self.counts_gen
+        }
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     streams: usize,
     per_credential: HashMap<String, usize>,
     watcher: Option<AbortHandle>,
+    /// The last generation the watcher saw, kept across watcher restarts so
+    /// a reload applied while no stream was open still counts.
+    last_generation: Option<Arc<Generation>>,
 }
 
 struct Shared {
@@ -137,6 +157,13 @@ impl StreamHub {
         })
     }
 
+    /// Whether `now` replaced the generation seen last, counting reloads
+    /// applied while the watcher was stopped. The first sight is not one.
+    pub(super) fn reloaded(&self, now: &Arc<Generation>) -> bool {
+        let prev = self.shared.lock().last_generation.replace(Arc::clone(now));
+        prev.is_some_and(|p| !Arc::ptr_eq(&p, now))
+    }
+
     /// A receiver on the published snapshot.
     pub(super) fn subscribe(&self) -> watch::Receiver<Snapshot> {
         self.shared.snapshot.subscribe()
@@ -146,8 +173,11 @@ impl StreamHub {
     /// change; `uptime_secs` never counts as one.
     pub(super) fn observe(&self, full: Value, counts: Value, reloaded: bool) {
         self.shared.snapshot.send_if_modified(|s| {
-            let changed = !same_ignoring_uptime(&s.full, &full) || s.counts != counts;
-            s.status_gen += u64::from(changed);
+            let full_changed = !same_ignoring_uptime(&s.full, &full);
+            let counts_changed = !same_ignoring_uptime(&s.counts, &counts);
+            let changed = full_changed || counts_changed;
+            s.status_gen += u64::from(full_changed);
+            s.counts_gen += u64::from(counts_changed);
             s.reload_gen += u64::from(reloaded);
             s.full = full;
             s.counts = counts;

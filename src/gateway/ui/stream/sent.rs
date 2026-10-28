@@ -32,7 +32,7 @@ impl Sent {
     /// this as its position.
     pub(super) fn head(&self, snap: &Snapshot, admin: bool) -> String {
         StreamId {
-            status: Some(snap.status_gen),
+            status: Some(snap.status_gen_for(admin)),
             reload: admin.then_some(snap.reload_gen),
             ..self.id.clone()
         }
@@ -55,7 +55,7 @@ impl Sent {
             .as_ref()
             .is_none_or(|last| !same_ignoring_uptime(last, &payload));
         if changed {
-            self.id.status = Some(snap.status_gen);
+            self.id.status = Some(snap.status_gen_for(conn.admin));
             conn.send(frame("status", Some(&self.id), &payload)).await?;
             self.status = Some(payload);
         }

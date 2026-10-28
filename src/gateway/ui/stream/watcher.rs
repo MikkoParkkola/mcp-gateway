@@ -11,7 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::status::{StatusView, status_body};
-use crate::config_reload::Generation;
 use crate::gateway::router::AppState;
 
 /// Every change lands within 250 ms, well inside the 1 s the stream promises.
@@ -22,14 +21,9 @@ pub(super) async fn run(state: Arc<AppState>) {
     let hub = state.dashboard_bootstrap.stream_hub();
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let mut last: Option<Arc<Generation>> = None;
     loop {
         tick.tick().await;
-        // A publish swaps the generation's `Arc`; holding the previous one
-        // keeps its address from being reused, so pointer equality is exact.
-        let now = state.live_config.generation();
-        let reloaded = last.as_ref().is_some_and(|prev| !Arc::ptr_eq(prev, &now));
-        last = Some(now);
+        let reloaded = hub.reloaded(&state.live_config.generation());
         hub.observe(
             status_body(&state, StatusView::Full),
             status_body(&state, StatusView::CountsOnly),
