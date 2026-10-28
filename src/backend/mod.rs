@@ -116,7 +116,7 @@ pub struct Backend {
     /// own transport and start lock, so concurrent warm-start/client requests do
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
-    pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    pool: Arc<DashMap<PoolKey, Arc<PooledEntry>>>,
     /// Which per-user slot holds each caller's own catalogue (MIK-8356,
     /// design R3.5): caller principal id to that slot's binding and entry.
     /// Written when a fill stores into the slot, removed with the entry

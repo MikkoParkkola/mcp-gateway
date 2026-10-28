@@ -76,14 +76,14 @@ impl Backend {
             metric_label: Arc::<str>::from(name).into(),
             config,
             runtime_plan,
-            pool: {
+            pool: Arc::new({
                 let pool = DashMap::new();
                 pool.insert(
                     PoolKey::Shared,
                     Arc::new(PooledEntry::new(name, failsafe_config)),
                 );
                 pool
-            },
+            }),
             caller_slots: DashMap::new(),
             caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
