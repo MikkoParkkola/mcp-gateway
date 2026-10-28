@@ -580,6 +580,21 @@ pub(crate) fn account_binding(server: &str, account: &DescriptorId) -> Option<St
     .flatten()
 }
 
+/// Whether `held`, a caller's held slot binding on `server`, is still the
+/// binding the pre-pass's read of `account` gave. A rotated grant's slot is
+/// not current. With no account, or no read of it in this request, there is
+/// nothing to judge it by and the held slot stands. The one rule for the
+/// listings and the stored reads, so the two cannot drift.
+pub(crate) fn held_binding_current(
+    server: &str,
+    account: Option<&DescriptorId>,
+    held: &str,
+) -> bool {
+    account
+        .and_then(|account| account_binding(server, account))
+        .is_none_or(|current| current == held)
+}
+
 /// Keep the live call's refusal for `(server, account)` in the open request;
 /// outside one it is dropped.
 pub(crate) fn record_account_refusal(server: &str, account: &DescriptorId, refusal: crate::Error) {
