@@ -726,6 +726,9 @@ async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
 #[path = "relay_delivery_tests.rs"]
 mod delivery;
 
+#[path = "relay_receipt_copy_tests.rs"]
+mod receipt_copy;
+
 #[path = "relay_plan_tests.rs"]
 mod plan;
 

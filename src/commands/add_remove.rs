@@ -726,3 +726,7 @@ mod tests {
         assert!(!staged.exists(), "the staged original is gone");
     }
 }
+
+#[cfg(test)]
+#[path = "add_remove_layout_tests.rs"]
+mod layout_tests;

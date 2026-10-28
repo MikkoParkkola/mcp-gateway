@@ -272,6 +272,11 @@ mod signing;
 #[serde(default)]
 pub struct ResponseInspectionConfig {
     /// Enable response inspection. Default: `true` (observe mode by default).
+    ///
+    /// `false` turns it off entirely, `action_mode` included: no answer is
+    /// inspected, annotated or blocked by it. The firewall's own response scan
+    /// (`security.firewall.scan_responses`) and context integrity are separate
+    /// switches and are not affected.
     pub enabled: bool,
     /// Block responses with HIGH/CRITICAL findings. Default: `false` (observe only).
     ///

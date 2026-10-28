@@ -26,6 +26,36 @@ enum Attempts {
 }
 
 impl Backend {
+    /// The loan a dispatch holds on its per-user slot for its whole run, the
+    /// slot's start included (ADR-007 IDP.7): a lent-only slot
+    /// sends only this dispatch's credential. `None` for a Shared slot and
+    /// for a slot that keeps its configured headers. A required binding's
+    /// dispatch that carries no credential is refused before anything is
+    /// built or sent: there is no subscriber to send as.
+    pub(super) fn lend_to_slot(
+        &self,
+        key: &super::pool::PoolKey,
+        entry: &super::pool::PooledEntry,
+        headers: &[(String, String)],
+    ) -> Result<Option<crate::transport::Loan>> {
+        if !matches!(key, super::pool::PoolKey::PerUser { .. })
+            || self.per_user_slot_credential() != crate::transport::SlotCredential::LentOnly
+        {
+            return Ok(None);
+        }
+        if headers.is_empty() {
+            return Err(Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: format!(
+                    "backend '{}' is reached only with each user's own credential, and this call carried none",
+                    self.name
+                ),
+            });
+        }
+        Ok(Some(entry.lender.lend(headers)))
+    }
+
     /// Send a request to the backend
     ///
     /// # Errors
@@ -308,7 +338,9 @@ impl Backend {
         // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both
         // here because every route's tools/call passes through. Resolved
         // before the call is admitted, so a value that does not resolve holds
-        // no permit.
+        // no permit. The caller's own credential is taken first, before the
+        // rules or the mirror add anything: a slot's start lends only that.
+        let credential = extra_headers;
         let (params, extra_headers) = self.outbound(method, params, extra_headers, identity_key)?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
@@ -345,6 +377,9 @@ impl Backend {
         // request holds it. The one captured above may already be evicted, and
         // the start and dispatch outcomes belong to the slot actually used (#2261).
         let entry = std::sync::Arc::clone(activity.entry());
+        // This dispatch's credential is what a lent-only slot sends as, its
+        // start included, for as long as the dispatch runs.
+        let _loan = self.lend_to_slot(&key, &entry, credential)?;
 
         // Ensure this slot's transport is live.
         let transport = self.start_judged(&key, &entry, start_time, method).await?;
@@ -413,7 +448,8 @@ impl Backend {
 
         // An ordinary answer can contradict the era we probed for: a peer that
         // rejects this call with a 2026-only code is modern whatever its
-        // `server/discover` did. Correct the verdict off the request path.
+        // `server/discover` did. Correct the verdict: off the request path,
+        // except on a lent-only slot, whose probe needs this dispatch's loan.
         if let Ok(response) = &result {
             self.reprobe_if_contradicted(method, response, &transport)
                 .await;
@@ -617,6 +653,7 @@ impl Backend {
         let activity = self.begin_activity(&key)?;
         // As in `request_attempted`: record on the claimed entry (#2261).
         let entry = std::sync::Arc::clone(activity.entry());
+        let _loan = self.lend_to_slot(&key, &entry, extra_headers)?;
 
         let transport = self.start_recorded(&key, &entry, start_time).await?;
 

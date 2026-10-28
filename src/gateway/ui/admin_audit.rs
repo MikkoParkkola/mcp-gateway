@@ -14,6 +14,7 @@ use axum::extract::{MatchedPath, Request, State};
 use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use tracing::Instrument as _;
 
 use super::errors::flat_error;
 use super::{AppState, AuthenticatedClient};
@@ -58,8 +59,22 @@ pub fn audited_api_router(state: &Arc<AppState>) -> Router<Arc<AppState>> {
     ))
 }
 
+/// Test-only: `router` behind the same layer, for rows that need a handler
+/// the API router does not have (one that panics).
+#[cfg(test)]
+pub(crate) fn behind_admin_layer_for_test(
+    router: Router<Arc<AppState>>,
+    state: &Arc<AppState>,
+) -> Router<Arc<AppState>> {
+    router.route_layer(axum::middleware::from_fn_with_state(
+        Arc::clone(state),
+        admin_action_layer,
+    ))
+}
+
 /// The layer. With no audit log configured it passes every request through.
-/// A refusal is counted on every path (D4), from the handler's own answer.
+/// A refusal is counted on every path (D4), from the handler's own answer, in
+/// the request's own task: a recorder scoped to it sees the count.
 async fn admin_action_layer(
     State(state): State<Arc<AppState>>,
     request: Request,
@@ -70,21 +85,25 @@ async fn admin_action_layer(
         .extensions()
         .get::<MatchedPath>()
         .is_some_and(|p| p.as_str().starts_with("/ui/api/control-plane"));
-    let run = |request| async move {
-        let response = next.run(request).await;
-        if matches!(
-            response.status(),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-        ) {
-            use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
-            if control_plane {
-                denied(DenialRoute::ControlPlane, DenialReason::Rbac);
-            } else {
-                denied(DenialRoute::Ui, DenialReason::AdminRequired);
-            }
+    let response = recorded(state, request, next).await;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
+        if control_plane {
+            denied(DenialRoute::ControlPlane, DenialReason::Rbac);
+        } else {
+            denied(DenialRoute::Ui, DenialReason::AdminRequired);
         }
-        response
-    };
+    }
+    response
+}
+
+/// The handler's answer, recorded as an `admin_action` when the request is one
+/// the layer records.
+async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Response {
+    let run = move |request| next.run(request);
     let Some(log) = state.transparency_log.clone() else {
         return run(request).await;
     };
@@ -114,24 +133,40 @@ async fn admin_action_layer(
         .get::<VerifiedIdentity>()
         .and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
 
-    let response = run(request).await;
-
-    let status = response.status();
-    fields.insert("http_status".into(), status.as_u16().into());
-    if let Some(AuditDetail(detail)) = response.extensions().get::<AuditDetail>() {
-        fields.extend(detail.clone());
-    }
-    let envelope = AuditEnvelope {
-        outcome: AuditOutcome::from_http_status(status, None),
-        ..AuditEnvelope::ok(AuditWho::from_request(
-            client.as_ref(),
-            subject.as_ref(),
-            state.auth_config.record_key(),
-        ))
-    };
-    match log.append_admin_action("admin_ui", fields, &envelope) {
-        Ok(()) => response,
-        Err(error) => withheld(&error),
+    // The handler and its record run on a task of their own: a client that
+    // disconnects drops only this wait, so a write that commits after it left
+    // (the detached config writers) is still recorded, naming its caller.
+    // ponytail: graceful shutdown does not wait for this task; a process exit
+    // mid-handler can still lose the record, as it can a detached write's reload.
+    let task = tokio::spawn(
+        async move {
+            let response = run(request).await;
+            let status = response.status();
+            fields.insert("http_status".into(), status.as_u16().into());
+            if let Some(AuditDetail(detail)) = response.extensions().get::<AuditDetail>() {
+                fields.extend(detail.clone());
+            }
+            let envelope = AuditEnvelope {
+                outcome: AuditOutcome::from_http_status(status, None),
+                ..AuditEnvelope::ok(AuditWho::from_request(
+                    client.as_ref(),
+                    subject.as_ref(),
+                    state.auth_config.record_key(),
+                ))
+            };
+            match log.append_admin_action("admin_ui", fields, &envelope) {
+                Ok(()) => response,
+                Err(error) => withheld(&error),
+            }
+        }
+        .in_current_span(),
+    );
+    match task.await {
+        Ok(response) => response,
+        // A handler that panics still panics out of the layer (test and dev
+        // builds; release builds abort on panic).
+        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
+        Err(_) => withheld(&crate::Error::AuditUnavailable),
     }
 }
 

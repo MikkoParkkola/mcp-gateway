@@ -495,24 +495,6 @@ impl Backend {
         started
     }
 
-    /// A per-user-sessions-only backend's Shared slot never starts or fills,
-    /// whoever asks: refused before anything is built, charged or counted,
-    /// with the isolation refusal's code (a denial, so never retried).
-    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
-        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
-            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
-            return Err(Error::Forbidden {
-                code: -32001,
-                status: 403,
-                message: format!(
-                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
-                    self.name
-                ),
-            });
-        }
-        Ok(())
-    }
-
     async fn start_entry_inner(
         &self,
         key: &PoolKey,
@@ -581,22 +563,24 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                let oauth_client = self.create_oauth_client(http_url, built_under)?;
+                let (slot, statics, oauth_client) =
+                    self.slot_gateway_credentials(key, http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
-                    self.config.headers.clone(),
+                    statics,
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
                     protocol_version.clone(),
                     built_under,
                 )?;
-                // MIK-6735 fix 2: a per-user pool slot's transport serves
-                // exactly one caller identity for its whole lifetime, which
-                // is what makes the transport's internal session-map
-                // single-tenant debug_assert provably safe -- tell it so.
-                if matches!(key, PoolKey::PerUser { .. }) {
-                    transport.mark_single_tenant();
+                // A per-user pool slot's transport serves one caller identity
+                // for life (MIK-6735 fix 2): tell it so, with the slot's
+                // lender its dispatches lend through. It marks itself single
+                // tenant only when lent-only, the one kind holding a single
+                // session.
+                if let Some(slot) = slot {
+                    transport.mark_per_user_slot(slot, Arc::clone(&entry.lender));
                 }
                 #[cfg(test)]
                 {

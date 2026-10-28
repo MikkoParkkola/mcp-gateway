@@ -101,6 +101,10 @@ pub(crate) struct PooledEntry {
     /// and only this slot's start and re-probes write it. `Arc` because the
     /// detached re-probe outlives the request that triggered it.
     pub(crate) era: Arc<crate::protocol::era::EraCache>,
+    /// The credentials this slot's dispatches in flight lend its transport
+    ///. A per-user slot's transport reads it on every send; a
+    /// required backend's sends nothing else.
+    pub(crate) lender: Arc<crate::transport::Lender>,
     /// The four metadata caches, and the set derived from the first of them.
     ///
     /// CO-LOCATED WITH THE SLOT, NOT THE BACKEND (MIK-7334.CATALOGUE.1). A
@@ -253,6 +257,7 @@ impl PooledEntry {
             retired: AtomicBool::new(false),
             failsafe: Failsafe::new(name, failsafe_config),
             era: Arc::new(crate::protocol::era::EraCache::for_slot(name, "shared")),
+            lender: Arc::default(),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             read_only_declared: RwLock::default(),
@@ -310,6 +315,42 @@ impl Backend {
         self.config.identity_propagation.as_ref().is_some_and(|c| {
             c.required && c.session_mode == crate::identity_propagation::SessionMode::PerUser
         })
+    }
+
+    /// A per-user-sessions-only backend's Shared slot never starts or fills,
+    /// whoever asks: refused before anything is built, charged or counted,
+    /// with the isolation refusal's code (a denial, so never retried).
+    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> crate::Result<()> {
+        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
+            tracing::debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
+            return Err(crate::Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: format!(
+                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
+                    self.name
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// What this backend's per-user slots may send with (ADR-007
+    /// IDP.7): a required identity binding, whatever its session mode, sends
+    /// only the credential its dispatch lends, never a static header or a
+    /// gateway token; a may-share binding (an optional one) keeps its
+    /// configured headers.
+    pub(crate) fn per_user_slot_credential(&self) -> crate::transport::SlotCredential {
+        if self
+            .config
+            .identity_propagation
+            .as_ref()
+            .is_some_and(|c| c.required)
+        {
+            crate::transport::SlotCredential::LentOnly
+        } else {
+            crate::transport::SlotCredential::Configured
+        }
     }
 
     /// Whether this backend keeps one catalogue per caller: with identity
