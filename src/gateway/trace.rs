@@ -5,7 +5,7 @@
 //! A `TraceId` is a UUID v4 string prefixed with `"gw-"` that is minted
 //! once per `gateway_invoke` call and:
 //!
-//! - Returned in the response JSON as `"trace_id"`.
+//! - Returned in the response JSON as `"_trace_id"`.
 //! - Propagated to all outbound HTTP requests as the `X-Trace-Id` header.
 //! - Attached to all [`tracing`] spans for the duration of the call.
 //!
