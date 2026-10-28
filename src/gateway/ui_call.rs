@@ -296,7 +296,12 @@ mod refusal_effect_tests {
         let cancelled = scope(call.scope(async {
             gate(("srv", "tool"), Some("admin"), true).expect("the gate admits");
             assert!(call.cancel(), "the deadline cancels first");
-            assert!(admit_send(("srv", "tool")).is_err());
+            let refusal = admit_send(("srv", "tool")).expect_err("the deadline won");
+            assert!(
+                matches!(&refusal, crate::Error::Forbidden { message, .. }
+                    if message.contains("stopped waiting")),
+                "{refusal:?}"
+            );
             effect()
         }));
         assert_eq!(cancelled.await, "refused", "a send after the deadline");
