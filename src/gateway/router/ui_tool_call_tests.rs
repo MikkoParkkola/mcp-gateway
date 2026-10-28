@@ -24,6 +24,8 @@ use crate::transport::Transport;
 const ROUTE: &str = "/ui/api/tools/call";
 pub(super) const ADMIN: &str = "k-admin";
 const USER: &str = "k-user";
+/// An admin key denied `write` by policy.
+const ADMIN_DENIED: &str = "k-admin-deny";
 pub(super) const SERVER: &str = "alpha";
 
 /// A backend whose `tools/list` declares `read`, `fail` and `iserr`
@@ -157,7 +159,14 @@ async fn fixture_cached() -> Fx {
 pub(super) async fn fixture_with(setup: Setup) -> Fx {
     let auth = AuthConfig {
         enabled: true,
-        api_keys: vec![key(ADMIN, true), key(USER, false)],
+        api_keys: vec![
+            key(ADMIN, true),
+            key(USER, false),
+            ApiKeyConfig {
+                denied_tools: Some(vec!["write".to_string()]),
+                ..key(ADMIN_DENIED, true)
+            },
+        ],
         ..Default::default()
     };
     let (mut state, store) =
@@ -396,16 +405,47 @@ async fn t9_a_non_admin_is_refused_before_anything_runs() {
     assert_eq!(sent(&fx), 0);
 }
 
-/// T10: no such server, no such tool: 404, nothing sent.
+/// T10: a server that is not registered is a 404 and nothing is sent: the
+/// gateway's own pre-dispatch judgement clears the send mark its failure
+/// came after. (A tool missing on a registered server is answered as a
+/// forbidden one is: T28.)
+/// Mutant: the send mark kept on a pre-dispatch failure.
 #[tokio::test]
-async fn t10_no_such_server_or_tool_is_404() {
+async fn t10_no_such_server_is_404() {
     let fx = fixture().await;
     let ghost = json!({"server": "ghost", "tool": "read", "arguments": {}, "confirm_write": true});
     let (status, body) = post(&fx, ADMIN, ghost).await;
     assert_eq!(status, StatusCode::NOT_FOUND, "{body} {:#?}", records(&fx));
-    let (status, body) = post(&fx, ADMIN, call("missing", true)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(sent(&fx), 0);
+}
+
+/// T28 (lead): a tool missing from a registered server and a tool the
+/// caller's policy denies are answered alike on /mcp (names aside), and
+/// alike by the route: the route names no more than /mcp does.
+#[tokio::test]
+async fn t28_a_missing_tool_and_a_denied_one_answer_alike() {
+    let fx = fixture().await;
+    let mcp = |tool: &'static str| {
+        let fx = &fx;
+        async move {
+            let raw = post_mcp(fx, ADMIN_DENIED, invoke(tool), None).await;
+            String::from_utf8_lossy(&raw).replace(tool, "<tool>")
+        }
+    };
+    let (denied, missing) = (mcp("write").await, mcp("missing").await);
+    let mask = |s: &str| {
+        let mut v: Value = serde_json::from_str(s).unwrap_or(Value::Null);
+        if let Some(o) = v.pointer_mut("/result").and_then(Value::as_object_mut) {
+            o.remove("trace_id");
+        }
+        v
+    };
+    assert_eq!(mask(&denied), mask(&missing), "/mcp: {denied} vs {missing}");
+    let (s1, b1) = post(&fx, ADMIN_DENIED, call("write", true)).await;
+    let (s2, b2) = post(&fx, ADMIN_DENIED, call("missing", true)).await;
+    assert_eq!((s1, &b1), (s2, &b2), "the route");
+    assert!(s1.is_client_error(), "{s1} {b1}");
     assert_eq!(sent(&fx), 0);
 }
 
@@ -438,7 +478,8 @@ async fn t17_refusals_are_audited_with_their_target() {
     let (status, _) = post(&fx, ADMIN, call("write", false)).await;
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, _) = post(&fx, ADMIN, call("missing", true)).await;
-    assert_eq!(status, StatusCode::NOT_FOUND, "{:#?}", records(&fx));
+    // Answered as a forbidden tool is (T28).
+    assert_eq!(status, StatusCode::FORBIDDEN, "{:#?}", records(&fx));
     let actions = admin_actions(&fx);
     assert_eq!(actions.len(), 2, "{actions:?}");
     assert_eq!(actions[0]["tool"], "write", "{}", actions[0]);

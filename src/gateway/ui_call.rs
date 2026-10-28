@@ -126,10 +126,17 @@ pub(crate) fn note_dispatched(step: (&str, &str)) {
     }
 }
 
-/// A sent call failed.
-pub(crate) fn note_failed_after_send() {
+/// A sent call failed. `pre_dispatch` is the gateway's own judgement that
+/// the backend cannot have acted (`Error::is_pre_dispatch`, the allowlist an
+/// idempotency key is released on): such a failure was never sent (a server
+/// that is not registered fails after the mark), so the call did not run.
+pub(crate) fn note_send_error(pre_dispatch: bool) {
     if let Some(call) = current() {
-        call.failed_after_send.store(true, Ordering::SeqCst);
+        if pre_dispatch {
+            call.dispatched.store(false, Ordering::SeqCst);
+        } else {
+            call.failed_after_send.store(true, Ordering::SeqCst);
+        }
     }
 }
 
