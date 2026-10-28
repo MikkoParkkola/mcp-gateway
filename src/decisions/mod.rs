@@ -219,7 +219,8 @@ impl DecisionSet {
     ) {
         self.changes.retain(|(owner, _), _| owner != backend);
         for change in changes {
-            self.changes.insert((backend.to_string(), change.file.clone()), change);
+            self.changes
+                .insert((backend.to_string(), change.file.clone()), change);
         }
         self.health.insert(Source::Capability, Health::Ready);
         self.now = Some(now);
@@ -251,9 +252,12 @@ impl DecisionSet {
 
     /// Whether a log's replay has not finished: live events wait for it.
     fn replaying(&self) -> bool {
-        [Source::Access, Source::ControlPlane]
-            .iter()
-            .any(|source| !matches!(self.health.get(source), Some(Health::Ready | Health::Absent)))
+        [Source::Access, Source::ControlPlane].iter().any(|source| {
+            !matches!(
+                self.health.get(source),
+                Some(Health::Ready | Health::Absent)
+            )
+        })
     }
 
     /// Apply one event. A repeat at the same position changes nothing.
@@ -277,8 +281,15 @@ impl DecisionSet {
                     subject: decision.subject,
                     agent: decision.agent,
                 };
-                let requested = self.requested.entry((key, decision.capability)).or_default();
-                requested.decided = Some(requested.decided.map_or(decision.at, |old| old.max(decision.at)));
+                let requested = self
+                    .requested
+                    .entry((key, decision.capability))
+                    .or_default();
+                requested.decided = Some(
+                    requested
+                        .decided
+                        .map_or(decision.at, |old| old.max(decision.at)),
+                );
             }
         }
     }
@@ -299,7 +310,14 @@ impl DecisionSet {
         };
         let subject = GrantSubject::new(&key.authority, &key.subject, None);
         self.grants.iter().any(|grant| {
-            grant.covers_noted(&subject, &key.agent, capability, requested.tool.as_deref(), scope, now)
+            grant.covers_noted(
+                &subject,
+                &key.agent,
+                capability,
+                requested.tool.as_deref(),
+                scope,
+                now,
+            )
         })
     }
 
@@ -314,7 +332,12 @@ impl DecisionSet {
     fn readable(&self) -> bool {
         [Source::Access, Source::ControlPlane, Source::Capability]
             .iter()
-            .all(|source| matches!(self.health.get(source), Some(Health::Ready | Health::Absent)))
+            .all(|source| {
+                matches!(
+                    self.health.get(source),
+                    Some(Health::Ready | Health::Absent)
+                )
+            })
     }
 
     /// The list route's answer, or `None` while any source is `Unavailable`.
@@ -340,7 +363,10 @@ fn access_key(event: &IdentityGrantAuditEvent) -> Option<(AccessKey, String)> {
     if event.allowed || event.reason != IdentityGrantDecisionReason::MissingGrant {
         return None;
     }
-    let subject = event.subject.as_ref().filter(|s| !s.authority.is_empty() && !s.subject.is_empty())?;
+    let subject = event
+        .subject
+        .as_ref()
+        .filter(|s| !s.authority.is_empty() && !s.subject.is_empty())?;
     let agent = event.agent_id.clone().filter(|agent| !agent.is_empty())?;
     let key = AccessKey {
         authority: subject.authority.clone(),

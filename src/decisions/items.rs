@@ -27,7 +27,8 @@ fn time(at: DateTime<Utc>) -> String {
 /// Newest first, then by id: the order within one kind.
 fn sort(items: &mut [(DateTime<Utc>, Value)]) {
     items.sort_by(|(a_at, a), (b_at, b)| {
-        b_at.cmp(a_at).then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
+        b_at.cmp(a_at)
+            .then_with(|| a["id"].as_str().cmp(&b["id"].as_str()))
     });
 }
 
@@ -40,21 +41,32 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
     let mut changed = Vec::new();
     let mut live_ids = Vec::new();
     for ((backend, file), change) in &set.changes {
-        let item_id = id(&key, "capability_changed", &json!([backend, file, change.actual]));
+        let item_id = id(
+            &key,
+            "capability_changed",
+            &json!([backend, file, change.actual]),
+        );
         let observed = *set.first_seen.entry(item_id.clone()).or_insert(now);
         live_ids.push(item_id.clone());
         if let Some(trusted) = &change.loaded_as {
-            blocks.entry(trusted.clone()).or_default().push(item_id.clone());
+            blocks
+                .entry(trusted.clone())
+                .or_default()
+                .push(item_id.clone());
         }
         // The trust card's own inference, over the changed bytes parsed
         // without their pin check; only its class is kept.
         let scan = crate::capability::parse_capability(&change.content)
             .ok()
-            .map(|capability| crate::trust::generator::trust_card_from_capability(&capability).server.risk_class);
-        let tool = change
-            .loaded_as
-            .as_deref()
-            .map_or_else(|| display::label(&key, file), |trusted| display::name(&key, trusted));
+            .map(|capability| {
+                crate::trust::generator::trust_card_from_capability(&capability)
+                    .server
+                    .risk_class
+            });
+        let tool = change.loaded_as.as_deref().map_or_else(
+            || display::label(&key, file),
+            |trusted| display::name(&key, trusted),
+        );
         changed.push((
             observed,
             json!({
@@ -153,5 +165,9 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
 
     sort(&mut changed);
     sort(&mut requests);
-    changed.into_iter().chain(requests).map(|(_, item)| item).collect()
+    changed
+        .into_iter()
+        .chain(requests)
+        .map(|(_, item)| item)
+        .collect()
 }

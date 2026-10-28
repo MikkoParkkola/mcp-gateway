@@ -27,7 +27,11 @@ fn ready() -> DecisionSet {
     set
 }
 
-fn denial(capability: &str, reason: IdentityGrantDecisionReason, minute: i64) -> IdentityGrantAuditEvent {
+fn denial(
+    capability: &str,
+    reason: IdentityGrantDecisionReason,
+    minute: i64,
+) -> IdentityGrantAuditEvent {
     IdentityGrantAuditEvent {
         event: "identity_grant_decision".to_string(),
         timestamp: at(minute),
@@ -43,7 +47,11 @@ fn denial(capability: &str, reason: IdentityGrantDecisionReason, minute: i64) ->
 }
 
 fn missing(capability: &str, minute: i64) -> IdentityGrantAuditEvent {
-    denial(capability, IdentityGrantDecisionReason::MissingGrant, minute)
+    denial(
+        capability,
+        IdentityGrantDecisionReason::MissingGrant,
+        minute,
+    )
 }
 
 fn grant(capability: &str, scope: GrantScope) -> IdentityGrant {
@@ -66,7 +74,11 @@ fn grant(capability: &str, scope: GrantScope) -> IdentityGrant {
 }
 
 fn pos(log: Source, offset: u64) -> LogPos {
-    LogPos { log, segment: 1, offset }
+    LogPos {
+        log,
+        segment: 1,
+        offset,
+    }
 }
 
 /// Deliver a denial live at transparency-log offset `offset`.
@@ -86,7 +98,10 @@ fn decision(capability: &str, minute: i64) -> UiDecision {
 
 /// Deliver a UI decision live at control-plane offset `offset`.
 fn decide(set: &mut DecisionSet, offset: u64, capability: &str, minute: i64) {
-    set.live(pos(Source::ControlPlane, offset), Fold::Decided(decision(capability, minute)));
+    set.live(
+        pos(Source::ControlPlane, offset),
+        Fold::Decided(decision(capability, minute)),
+    );
 }
 
 fn count(set: &DecisionSet) -> usize {
@@ -108,8 +123,22 @@ fn a_missing_grant_with_a_proven_agent_opens_one_access_request() {
 fn every_a1_exclusion_opens_nothing() {
     use IdentityGrantDecisionReason as R;
     let mut set = ready();
-    for (offset, reason) in [R::MissingIdentity, R::MissingOwner, R::OwnerMismatch, R::PublicCapability, R::SharedCapability, R::GrantMatched].into_iter().enumerate() {
-        deny(&mut set, 200 + offset as u64, &denial("stripe.charges", reason, 1));
+    for (offset, reason) in [
+        R::MissingIdentity,
+        R::MissingOwner,
+        R::OwnerMismatch,
+        R::PublicCapability,
+        R::SharedCapability,
+        R::GrantMatched,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        deny(
+            &mut set,
+            200 + offset as u64,
+            &denial("stripe.charges", reason, 1),
+        );
     }
     let mut no_agent = missing("stripe.charges", 1);
     no_agent.agent_id = None;
@@ -151,7 +180,11 @@ fn a_covering_grant_closes_and_its_expiry_reopens() {
     set.set_grants(vec![row], at(2));
     assert_eq!(count(&set), 0, "a live covering row closes it");
     set.expire(at(11));
-    assert_eq!(count(&set), 1, "the denial outlives the row that covered it");
+    assert_eq!(
+        count(&set),
+        1,
+        "the denial outlives the row that covered it"
+    );
 }
 
 #[test]
@@ -160,14 +193,44 @@ fn a_row_that_evaluate_would_not_match_leaves_the_item_open() {
     let rows: Vec<(&str, IdentityGrant)> = vec![
         ("narrower scope", grant("stripe.charges", GrantScope::Read)),
         ("other capability", grant("stripe.refunds", GrantScope::Any)),
-        ("other agent", IdentityGrant {
-            agent: GrantAgent::Exact(GrantAgentKey { source: ProofSource::VerifiedJwtSubject, id: "runner".to_string() }),
-            ..grant("stripe.charges", GrantScope::Any)
-        }),
-        ("other subject", IdentityGrant { subject: other.clone(), ..grant("stripe.charges", GrantScope::Any) }),
-        ("other owner", IdentityGrant { owner: Some(other), ..grant("stripe.charges", GrantScope::Any) }),
-        ("revoked", IdentityGrant { revoked_at: Some(at(0)), ..grant("stripe.charges", GrantScope::Any) }),
-        ("other tool", IdentityGrant { tool: Some("refund".to_string()), ..grant("stripe.charges", GrantScope::Any) }),
+        (
+            "other agent",
+            IdentityGrant {
+                agent: GrantAgent::Exact(GrantAgentKey {
+                    source: ProofSource::VerifiedJwtSubject,
+                    id: "runner".to_string(),
+                }),
+                ..grant("stripe.charges", GrantScope::Any)
+            },
+        ),
+        (
+            "other subject",
+            IdentityGrant {
+                subject: other.clone(),
+                ..grant("stripe.charges", GrantScope::Any)
+            },
+        ),
+        (
+            "other owner",
+            IdentityGrant {
+                owner: Some(other),
+                ..grant("stripe.charges", GrantScope::Any)
+            },
+        ),
+        (
+            "revoked",
+            IdentityGrant {
+                revoked_at: Some(at(0)),
+                ..grant("stripe.charges", GrantScope::Any)
+            },
+        ),
+        (
+            "other tool",
+            IdentityGrant {
+                tool: Some("refund".to_string()),
+                ..grant("stripe.charges", GrantScope::Any)
+            },
+        ),
     ];
     for (why, row) in rows {
         let mut set = ready();
@@ -185,12 +248,31 @@ fn every_row_evaluate_would_match_closes_the_item() {
     let rows: Vec<(&str, IdentityGrant)> = vec![
         ("exact", grant("stripe.charges", GrantScope::Execute)),
         ("wider scope", grant("stripe.charges", GrantScope::Any)),
-        ("any agent", IdentityGrant { agent: GrantAgent::Any, ..grant("stripe.charges", GrantScope::Execute) }),
-        ("same owner", IdentityGrant {
-            owner: Some(GrantSubject::new("https://idp.example", "alice", Some("label".to_string()))),
-            ..grant("stripe.charges", GrantScope::Execute)
-        }),
-        ("same tool", IdentityGrant { tool: Some("charge".to_string()), ..grant("stripe.charges", GrantScope::Execute) }),
+        (
+            "any agent",
+            IdentityGrant {
+                agent: GrantAgent::Any,
+                ..grant("stripe.charges", GrantScope::Execute)
+            },
+        ),
+        (
+            "same owner",
+            IdentityGrant {
+                owner: Some(GrantSubject::new(
+                    "https://idp.example",
+                    "alice",
+                    Some("label".to_string()),
+                )),
+                ..grant("stripe.charges", GrantScope::Execute)
+            },
+        ),
+        (
+            "same tool",
+            IdentityGrant {
+                tool: Some("charge".to_string()),
+                ..grant("stripe.charges", GrantScope::Execute)
+            },
+        ),
     ];
     for (why, row) in rows {
         let mut set = ready();
@@ -211,8 +293,16 @@ fn snapshot_is_none_for_a_non_admin_and_while_a_source_is_unavailable() {
     set.set_health(Source::ControlPlane, Health::Unavailable);
     assert_eq!(set.snapshot(true), None);
     set.set_health(Source::ControlPlane, Health::Absent);
-    assert_eq!(set.snapshot(true).map(|s| s.0), Some(0), "an absent source is not an error");
-    assert_eq!(DecisionSet::with_key(KEY).snapshot(true), None, "sources start unavailable");
+    assert_eq!(
+        set.snapshot(true).map(|s| s.0),
+        Some(0),
+        "an absent source is not an error"
+    );
+    assert_eq!(
+        DecisionSet::with_key(KEY).snapshot(true),
+        None,
+        "sources start unavailable"
+    );
 }
 
 #[test]
@@ -258,7 +348,11 @@ fn folding_is_order_free_and_a_repeat_changes_nothing() {
     decide(&mut once, 126, "stripe.charges", 2);
     decide(&mut once, 126, "stripe.charges", 2);
     deny(&mut once, 117, &denial_1);
-    assert_eq!(count(&once), 0, "a replayed older denial cannot resurrect a declined request");
+    assert_eq!(
+        count(&once),
+        0,
+        "a replayed older denial cannot resurrect a declined request"
+    );
 }
 
 #[test]
@@ -287,7 +381,11 @@ fn replay_all(set: &mut DecisionSet, logs_first: Source) {
         (Source::Access, vec![(1, denial), (2, later)]),
         (Source::ControlPlane, vec![(1, declined)]),
     ];
-    let order: Vec<_> = if logs_first == Source::Access { steps.into_iter().collect() } else { steps.into_iter().rev().collect() };
+    let order: Vec<_> = if logs_first == Source::Access {
+        steps.into_iter().collect()
+    } else {
+        steps.into_iter().rev().collect()
+    };
     for (log, events) in order {
         for (offset, event) in events {
             set.replayed(pos(log, offset), event);
@@ -303,7 +401,11 @@ fn replaying_the_two_logs_in_either_order_gives_the_same_set() {
     let mut audit_first = booting();
     replay_all(&mut audit_first, Source::ControlPlane);
     assert_eq!(access_first.list(), audit_first.list());
-    assert_eq!(access_first.list().len(), 1, "refunds stays open, charges was declined");
+    assert_eq!(
+        access_first.list().len(),
+        1,
+        "refunds stays open, charges was declined"
+    );
 }
 
 #[test]
@@ -326,23 +428,47 @@ fn an_event_seen_twice_is_applied_once() {
     deny(&mut set, 1, &charge);
     deny(&mut set, 1, &charge);
     assert_eq!(set.list().len(), 1, "one request");
-    assert_eq!(set.list()[0]["refused_calls"], 1, "same position: one refusal");
+    assert_eq!(
+        set.list()[0]["refused_calls"],
+        1,
+        "same position: one refusal"
+    );
     deny(&mut set, 2, &charge);
-    assert_eq!(set.list()[0]["refused_calls"], 2, "a second position is a second refusal");
+    assert_eq!(
+        set.list()[0]["refused_calls"],
+        2,
+        "a second position is a second refusal"
+    );
 }
 
 #[test]
 fn a_live_event_during_replay_is_neither_lost_nor_counted_twice() {
     let mut set = booting();
-    set.replayed(pos(Source::Access, 1), Fold::Denial(missing("stripe.charges", 1)));
+    set.replayed(
+        pos(Source::Access, 1),
+        Fold::Denial(missing("stripe.charges", 1)),
+    );
     // Written after the cut-off: arrives only live.
-    set.live(pos(Source::Access, 3), Fold::Denial(missing("stripe.charges", 3)));
+    set.live(
+        pos(Source::Access, 3),
+        Fold::Denial(missing("stripe.charges", 3)),
+    );
     // Written before the cut-off: arrives by both paths.
-    set.live(pos(Source::Access, 2), Fold::Denial(missing("stripe.charges", 2)));
-    set.replayed(pos(Source::Access, 2), Fold::Denial(missing("stripe.charges", 2)));
+    set.live(
+        pos(Source::Access, 2),
+        Fold::Denial(missing("stripe.charges", 2)),
+    );
+    set.replayed(
+        pos(Source::Access, 2),
+        Fold::Denial(missing("stripe.charges", 2)),
+    );
     assert_eq!(set.snapshot(true), None, "held while the replay runs");
     set.replay_done(Source::Access);
-    assert_eq!(set.snapshot(true), None, "the control-plane replay is still running");
+    assert_eq!(
+        set.snapshot(true),
+        None,
+        "the control-plane replay is still running"
+    );
     set.replay_done(Source::ControlPlane);
     assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
     assert_eq!(set.list()[0]["refused_calls"], 3);
@@ -363,7 +489,11 @@ fn the_capability_source_is_unavailable_until_its_backend_reports() {
     set.set_health(Source::Access, Health::Ready);
     set.set_health(Source::ControlPlane, Health::Ready);
     assert_eq!(set.snapshot(true), None);
-    set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", Some("stripe.charges"))], at(1));
+    set.set_capability_changes(
+        "caps",
+        vec![change("/c/a.yaml", "h1", Some("stripe.charges"))],
+        at(1),
+    );
     assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
 }
 
@@ -372,11 +502,21 @@ fn an_access_request_waits_on_the_change_to_its_trusted_capability() {
     let mut set = ready();
     deny(&mut set, 1, &missing("stripe.charges", 1));
     // The changed bytes may claim any name; the link follows the trusted one.
-    set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", Some("stripe.charges"))], at(2));
+    set.set_capability_changes(
+        "caps",
+        vec![change("/c/a.yaml", "h1", Some("stripe.charges"))],
+        at(2),
+    );
     let list = set.list();
     assert_eq!(list.len(), 2);
-    assert_eq!(list[0]["kind"], "capability_changed", "the blocking item comes first");
-    assert_eq!(list[1]["waits_on"], serde_json::json!([list[0]["id"].clone()]));
+    assert_eq!(
+        list[0]["kind"], "capability_changed",
+        "the blocking item comes first"
+    );
+    assert_eq!(
+        list[1]["waits_on"],
+        serde_json::json!([list[0]["id"].clone()])
+    );
 }
 
 #[test]
@@ -385,7 +525,10 @@ fn an_untrusted_change_blocks_nothing() {
     deny(&mut set, 1, &missing("stripe.charges", 1));
     set.set_capability_changes("caps", vec![change("/c/a.yaml", "h1", None)], at(2));
     let list = set.list();
-    let access = list.iter().find(|item| item["kind"] == "access_request").expect("access item");
+    let access = list
+        .iter()
+        .find(|item| item["kind"] == "access_request")
+        .expect("access item");
     assert_eq!(access["waits_on"], serde_json::json!([]));
 }
 
@@ -396,7 +539,10 @@ fn the_view_names_missing_and_partial_kinds_and_carries_the_snapshot_revision() 
     let view = set.view().expect("ready");
     assert_eq!(view.missing_kinds, vec!["adopt"]);
     assert_eq!(view.partial_kinds, vec!["capability_changed"]);
-    assert_eq!(Some((view.decisions.len(), view.revision)), set.snapshot(true));
+    assert_eq!(
+        Some((view.decisions.len(), view.revision)),
+        set.snapshot(true)
+    );
     assert_eq!(DecisionSet::with_key(KEY).view(), None);
 }
 
@@ -409,14 +555,20 @@ fn no_name_or_text_from_changed_bytes_reaches_the_list() {
     let mut set = ready();
     set.set_capability_changes(
         "caps",
-        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("stripe.charges")) }],
+        vec![super::CapabilityChange {
+            content,
+            ..change("/c/a.yaml", "h1", Some("stripe.charges"))
+        }],
         at(1),
     );
     let view = set.view().expect("ready");
     assert_eq!(view.decisions.len(), 1, "the change is listed");
     let text = serde_json::to_string(&view.decisions).expect("serialize");
     assert!(!text.contains(CANARY), "{text}");
-    assert!(text.contains("stripe.charges"), "the trusted name is shown: {text}");
+    assert!(
+        text.contains("stripe.charges"),
+        "the trusted name is shown: {text}"
+    );
 }
 
 #[test]
@@ -425,7 +577,10 @@ fn a_changed_capability_carries_the_inferred_risk_class() {
     let content = "name: stripe_charges\ndescription: Charge a card\nproviders:\n  primary:\n    service: rest\n    config:\n      base_url: https://api.stripe.com\n      path: /v1/charges\n".to_string();
     set.set_capability_changes(
         "caps",
-        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("stripe_charges")) }],
+        vec![super::CapabilityChange {
+            content,
+            ..change("/c/a.yaml", "h1", Some("stripe_charges"))
+        }],
         at(1),
     );
     let item = &set.list()[0];
@@ -456,7 +611,10 @@ fn scanning_a_changed_capability_makes_no_credential_lookup() {
     let mut set = ready();
     set.set_capability_changes(
         "caps",
-        vec![super::CapabilityChange { content, ..change("/c/a.yaml", "h1", Some("probe_refs")) }],
+        vec![super::CapabilityChange {
+            content,
+            ..change("/c/a.yaml", "h1", Some("probe_refs"))
+        }],
         at(1),
     );
     let item = &set.list()[0];

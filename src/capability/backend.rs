@@ -156,7 +156,7 @@ pub struct CapabilityBackend {
     capabilities: RwLock<IndexedCapabilities>,
     /// Directories to load capabilities from
     directories: RwLock<Vec<String>>,
-    /// Capability names currently quarantined by a rug-pull detection event.
+    /// Rug-pull records by capability file, from a detection event.
     ///
     /// Populated by the file watcher when an on-disk YAML's `sha256:` pin no
     /// longer matches its content. A quarantined capability is removed from
@@ -278,12 +278,15 @@ impl CapabilityBackend {
     pub fn mark_rug_pull(&self, record: RugPullRecord) {
         self.rug_pull_state
             .write()
-            .insert(record.capability.clone(), record);
+            .insert(record.file.clone(), record);
     }
 
     /// Check whether a capability is currently quarantined.
     pub fn is_rug_pulled(&self, name: &str) -> bool {
-        self.rug_pull_state.read().contains_key(name)
+        let state = self.rug_pull_state.read();
+        state
+            .values()
+            .any(|r| r.loaded_as.as_deref().unwrap_or(&r.capability) == name)
     }
 
     /// Snapshot all active rug-pull records (e.g. for status / observability).

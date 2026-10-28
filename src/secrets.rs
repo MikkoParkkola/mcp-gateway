@@ -276,7 +276,6 @@ impl Default for SecretResolver {
     }
 }
 
-
 /// Counts calls into the credential resolvers on this thread, so a row can
 /// show a code path made none. Test builds only.
 #[cfg(test)]

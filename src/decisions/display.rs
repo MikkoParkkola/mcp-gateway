@@ -39,7 +39,10 @@ pub(super) fn agent(key: &[u8; 32], agent: &str) -> String {
     };
     // A URL scheme is letters, digits, `+`, `-` and `.` only, so it is shown.
     let url = url::Url::parse(id).ok();
-    let shown = match url.as_ref().and_then(|url| Some((url.scheme(), url.host_str()?))) {
+    let shown = match url
+        .as_ref()
+        .and_then(|url| Some((url.scheme(), url.host_str()?)))
+    {
         Some((scheme, host)) => format!("{scheme}://{}", name(key, host)),
         None => name(key, id),
     };
@@ -69,7 +72,12 @@ pub(super) fn summary(content: &str) -> Value {
         .and_then(|input| input.get("properties"))
         .and_then(Value::as_object);
     let mut types: Vec<&str> = properties
-        .map(|props| props.values().map(|prop| mapped_type(prop.get("type"))).collect())
+        .map(|props| {
+            props
+                .values()
+                .map(|prop| mapped_type(prop.get("type")))
+                .collect()
+        })
         .unwrap_or_default();
     types.sort_unstable();
     let required = input

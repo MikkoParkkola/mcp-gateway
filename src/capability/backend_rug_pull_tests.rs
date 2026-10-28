@@ -115,8 +115,11 @@ async fn a_changed_name_cannot_forge_a_log_line() {
     let forged = "name: \"evil\\n2026-10-28T12:00:00Z  WARN forged line\\u001b[2K\"";
     std::fs::write(&path, pinned.replace("name: rugtest", forged)).unwrap();
     let logs = Captured::default();
-    let subscriber = tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_ansi(false).with_writer(logs.clone()));
+    let subscriber = tracing_subscriber::registry().with(
+        tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(logs.clone()),
+    );
     let guard = tracing::subscriber::set_default(subscriber);
 
     let detected = backend.detect_rug_pulls().await;
@@ -127,5 +130,8 @@ async fn a_changed_name_cannot_forge_a_log_line() {
     assert!(text.contains("RUG-PULL DETECTED"), "{text}");
     assert_eq!(text.lines().count(), 1, "one warning, one line: {text:?}");
     assert!(!text.contains('\u{1b}'), "{text:?}");
-    assert!(text.contains("rugtest"), "the trusted name is logged: {text}");
+    assert!(
+        text.contains("rugtest"),
+        "the trusted name is logged: {text}"
+    );
 }

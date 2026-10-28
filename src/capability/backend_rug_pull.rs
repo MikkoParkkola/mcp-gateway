@@ -24,16 +24,29 @@ impl CapabilityBackend {
             detect_rug_pulls_in_dir(Path::new(dir), &mut detected).await;
         }
 
+        // Before anything unloads: the name each file was trusted as is the
+        // loaded capability its still-declared pin verified, kept across a
+        // later change to the same file.
+        for record in &mut detected {
+            record.loaded_as = self.trusted_name(&record.expected).or_else(|| {
+                let state = self.rug_pull_state.read();
+                state
+                    .get(&record.file)
+                    .and_then(|old| old.loaded_as.clone())
+            });
+        }
         for record in &detected {
+            // The changed bytes chose `capability` and `expected`: neither is
+            // logged raw. The trusted name passed the loader's name rule.
             warn!(
                 backend = %self.name,
-                capability = %record.capability,
-                file = %record.file,
-                expected = %record.expected,
+                trusted = ?record.loaded_as,
+                file = ?record.file,
+                expected = ?record.expected,
                 actual = %record.actual,
                 "RUG-PULL DETECTED: capability YAML sha256 pin mismatch — unloading",
             );
-            self.unload_capability(&record.capability);
+            self.unload_capability(record.loaded_as.as_deref().unwrap_or(&record.capability));
             self.mark_rug_pull(record.clone());
         }
 
@@ -43,8 +56,28 @@ impl CapabilityBackend {
     /// Clear the record for `file` only if its observed hash is still
     /// `actual`, so a newer mismatch found meanwhile is never dropped.
     /// Returns whether a record was cleared.
-    pub fn clear_rug_pull_if(&self, _file: &str, _actual: &str) -> bool {
-        false
+    pub fn clear_rug_pull_if(&self, file: &str, actual: &str) -> bool {
+        let mut state = self.rug_pull_state.write();
+        let current = state
+            .get(file)
+            .is_some_and(|record| record.actual == actual);
+        if current {
+            state.remove(file);
+        }
+        current
+    }
+
+    /// The loaded capability whose own pin is `expected`.
+    fn trusted_name(&self, expected: &str) -> Option<String> {
+        let caps = self.capabilities.read();
+        caps.entries
+            .iter()
+            .find(|cap| {
+                cap.sha256
+                    .as_deref()
+                    .is_some_and(|pin| pin.eq_ignore_ascii_case(expected))
+            })
+            .map(|cap| cap.name.clone())
     }
 }
 
