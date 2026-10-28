@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::super::sanitize_url_for_diagnostics;
 use super::super::{ResendPermission, Transport, resend_permission};
