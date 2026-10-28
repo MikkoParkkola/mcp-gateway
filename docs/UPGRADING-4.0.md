@@ -3400,6 +3400,9 @@ settlement now writes its own invocation record, before the result is committed:
   live call's record gives that refusal (`denied` for a response-firewall refusal), and
   `error_code` is the code the task committed;
 - `who` names only the principal the task was admitted under, with no credential kind.
+- when the recovery's gates refuse or rewrite the answer, `response_effect` and
+  `response_findings` as on a delivery record (see the `task_settlement` record for a task the
+  gateway runs itself).
 
 The submission record carries the same `task_id` whenever the backend's task handle was captured.
 Under `FailClosed`, a failed settlement write settles the task `-32005 "audit log unavailable"`
