@@ -126,9 +126,10 @@ fn a_rate_loosened_keeps_the_usage() {
     assert!(!admitted(&after), "the loosened key started a fresh window");
 }
 
-/// No input from outside grows the store: 200 random bearer tokens through
-/// the real middleware are refused and leave no bucket and no breaker. The
-/// configured key then makes exactly one of each (control).
+/// No input from outside grows the store: random bearer tokens, a forged
+/// near-miss of the configured key, and a configured key past its expiry are
+/// all refused through the real middleware and leave no bucket and no
+/// breaker. The live key then makes exactly one of each (control).
 #[tokio::test]
 async fn rejected_credentials_create_no_store_entry() {
     use axum::body::Body;
@@ -137,9 +138,28 @@ async fn rejected_credentials_create_no_store_entry() {
 
     use crate::gateway::auth::{AuthState, DashboardBootstrap, auth_middleware};
 
+    const EXPIRED: &str = "the-expired-runtime-test-secret";
+    let mut with_expired = config(1);
+    with_expired.api_keys.push(ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(EXPIRED.as_bytes())),
+        name: "expired".to_string(),
+        rate_limit: 1,
+        backends: vec!["*".to_string()],
+        expires_at: Some(
+            "2001-01-01T00:00:00Z"
+                .parse()
+                .expect("a fixed past instant"),
+        ),
+        ..Default::default()
+    });
     let runtime = Arc::new(AuthRuntime::default());
+    let resolved = ResolvedAuthConfig::from_config(
+        &with_expired,
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    )
+    .with_runtime(Arc::clone(&runtime));
     let state = AuthState {
-        auth_config: Arc::new(built_over(&runtime)),
+        auth_config: Arc::new(resolved),
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
@@ -163,11 +183,14 @@ async fn rejected_credentials_create_no_store_entry() {
         router.call(request)
     };
 
-    for i in 0..200 {
-        let response = call(&format!("random-token-{i}-not-configured"))
-            .await
-            .expect("infallible");
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "token {i}");
+    let forged = format!("{}X", &SECRET[..SECRET.len() - 1]);
+    let mut refused: Vec<String> = (0..200)
+        .map(|i| format!("random-token-{i}-not-configured"))
+        .collect();
+    refused.extend([forged, EXPIRED.to_string()]);
+    for token in &refused {
+        let response = call(token).await.expect("infallible");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{token}");
     }
     assert_eq!(runtime.buckets.len(), 0, "a refused token made a bucket");
     assert_eq!(runtime.breakers.len(), 0, "a refused token made a breaker");
