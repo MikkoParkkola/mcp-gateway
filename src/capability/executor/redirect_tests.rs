@@ -167,7 +167,7 @@ async fn redirected_in(
     })
     .await;
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     let error = outcome.expect_err("the redirect is refused");
     (error, fields.get("response_effect").cloned())
 }
@@ -262,7 +262,7 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
     let error = outcome.expect_err("the redirect is refused");
     assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error:?}");
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),
@@ -321,7 +321,7 @@ async fn effect_of_send(request: reqwest::RequestBuilder) -> (bool, Option<serde
     })
     .await;
     let mut fields = serde_json::Map::new();
-    delivery_facts::record_fields(facts.as_ref(), false, false, &mut fields);
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     (ok, fields.get("response_effect").cloned())
 }
 
