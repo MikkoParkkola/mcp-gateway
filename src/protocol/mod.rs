@@ -8,6 +8,7 @@ pub mod continuation;
 pub mod era;
 pub mod extensions;
 pub mod headers;
+pub(crate) mod member_scope;
 mod messages;
 pub mod meta;
 pub mod modern_refusal;

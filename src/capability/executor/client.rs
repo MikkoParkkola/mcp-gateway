@@ -40,9 +40,16 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 .previous()
                 .first()
                 .is_some_and(crate::gateway::is_tls_or_loopback);
+            // A hop naming loopback is refused by the target's own check:
+            // with a proxy set it would otherwise go direct, unpinned.
+            if let Err(Error::Protocol(reason)) =
+                crate::security::ssrf::refuse_loopback_name(attempt.url().as_str())
+            {
+                return crate::security::ssrf::refuse_hop(attempt, reason);
+            }
             match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
                 RedirectDecision::Stop => attempt.stop(),
-                RedirectDecision::Reject(msg) => attempt.error(msg),
+                RedirectDecision::Reject(msg) => crate::security::ssrf::refuse_hop(attempt, msg),
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
@@ -64,10 +71,13 @@ fn route(proxy: Option<&url::Url>) -> reqwest::ClientBuilder {
         None => crate::security::ssrf::pinned_client_builder(),
         // Loopback goes direct: cleartext to it is allowed only because it
         // stays on the machine, and the proxy would carry it off (#3013).
+        // Only the literals: a loopback name is refused before any send,
+        // and one a check missed reaches the proxy, never this unpinned
+        // direct path.
         Some(url) => Client::builder().no_proxy().proxy(
             reqwest::Proxy::all(url.as_str())
                 .expect("capabilities.egress_proxy validated at load")
-                .no_proxy(reqwest::NoProxy::from_string("localhost,127.0.0.0/8,::1")),
+                .no_proxy(reqwest::NoProxy::from_string("127.0.0.0/8,::1")),
         ),
     }
 }

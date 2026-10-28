@@ -177,13 +177,42 @@ async fn interim_replies_from_chained_backends() {
     }
 }
 
+/// The refusal of a task handle answering a call that declared no tasks.
+const UNDECLARED_TASK: &str = "Protocol error: backend 'up': the backend answered `tools/call` \
+     with a task handle, but this call did not declare the tasks extension";
+
+/// A task handle answering a call that declared no tasks is refused where
+/// the answer enters, before the chain is judged, in every chain mode. The
+/// call answers a tool error, not the chain's `-32001`: `isError`, the
+/// `INVALID_PARAM` recovery code and the refusal text. `gateway_invoke`
+/// carries the tool result as its text; a surfaced name returns it directly.
+/// No handle and no chain is delivered.
+fn assert_undeclared_task_refused(response: &Value) {
+    assert!(response.get("error").is_none(), "a tool error: {response}");
+    let result = &response["result"];
+    let nested = result["content"][0]["text"]
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(|inner| inner.get("isError").is_some());
+    let tool = nested.as_ref().unwrap_or(result);
+    assert_eq!(tool["isError"], true, "{response}");
+    assert_eq!(
+        tool["_recovery"]["error_code"], "INVALID_PARAM",
+        "{response}"
+    );
+    assert_eq!(tool["content"][0]["text"], UNDECLARED_TASK, "{response}");
+    let text = response.to_string();
+    assert!(!text.contains(oracle::CHAIN_KEY), "{response}");
+    assert!(!text.contains("\"taskId\""), "{response}");
+}
+
 /// K3: an unsolicited task handle to a synchronous `require` call is refused
 /// at raw receipt; nothing is polled.
 #[tokio::test]
 async fn require_refuses_an_unsolicited_task_handle() {
     let upstream = FakeUpstream::start(Mode::TaskHandle).await;
     let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
-    assert_refused(&call(&d, Route::Invoke, Some("n-k3")).await, "interim");
+    assert_undeclared_task_refused(&call(&d, Route::Invoke, Some("n-k3")).await);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert_eq!(upstream.calls().len(), 1, "nothing polled or retried");
 }
@@ -194,7 +223,7 @@ async fn require_refuses_an_unsolicited_task_handle() {
 async fn require_refuses_an_unsolicited_task_handle_by_name() {
     let upstream = FakeUpstream::start(Mode::TaskHandle).await;
     let d = HttpGateway::start(d_config(&upstream.url, "require", "on_request")).await;
-    assert_refused(&call(&d, Route::Surfaced, Some("n-k3s")).await, "interim");
+    assert_undeclared_task_refused(&call(&d, Route::Surfaced, Some("n-k3s")).await);
     assert_eq!(upstream.calls().len(), 1, "refused on the first answer");
 }
 

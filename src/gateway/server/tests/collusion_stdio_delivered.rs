@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! MIK-7887.RECEIPT.4 over stdio: a surfaced tool's answer has its
-//! `cacheScope` clamped on the way out, so backend text stuffed there never
-//! reaches the operator. The receipt is built from the answer delivered.
+//! `serverInfo` stamped by the gateway on a modern call, after the receipt is
+//! first staged, so backend text stuffed there never reaches the operator.
+//! The receipt is built from the answer delivered.
 
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -129,19 +130,23 @@ async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
 #[tokio::test]
 async fn a_stdio_answer_is_receipted_as_delivered() {
     let stuffing = stuffing();
-    let (meta, firewall) = stdio_meta(
-        json!({"content": [{"type": "text", "text": PROSE}], "isError": false, "cacheScope": stuffing}),
-    );
+    let (meta, firewall) = stdio_meta(json!({
+        "content": [{"type": "text", "text": PROSE}], "isError": false,
+        "_meta": {"io.modelcontextprotocol/serverInfo": {"name": stuffing}},
+    }));
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
-                         "params": {"name": "read", "arguments": {}}});
+    "params": {"name": "read", "arguments": {}, "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }}});
     let read = dispatch(&meta, &request).await;
     assert!(
         read.get("error").is_none(),
         "base: the read is delivered: {read}"
     );
     assert_eq!(
-        read["result"]["cacheScope"], "private",
-        "base: the scope is clamped: {read}"
+        read["result"]["_meta"]["io.modelcontextprotocol/serverInfo"]["name"], "mcp-gateway",
+        "base: the gateway's serverInfo replaced the backend's: {read}"
     );
 
     assert!(
@@ -151,7 +156,7 @@ async fn a_stdio_answer_is_receipted_as_delivered() {
     let piece: String = stuffing.chars().take(400).collect();
     assert!(
         !relayed_by_bob(&firewall, &piece),
-        "undelivered cacheScope text was receipted"
+        "the backend's undelivered serverInfo text was receipted"
     );
 }
 
