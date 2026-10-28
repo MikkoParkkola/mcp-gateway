@@ -252,3 +252,85 @@ fn inspect_settled_pinned(
     }
     (response, decided)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{dispatch_refusal, dispatch_refusal_code, dispatched_in_cell};
+    use crate::gateway::delivery_facts;
+    use crate::protocol::{JsonRpcResponse, RequestId};
+
+    fn refused_error() -> JsonRpcResponse {
+        JsonRpcResponse::error(Some(RequestId::Number(0)), -32603, "refused")
+    }
+
+    /// A backend's own failure as the task receives it: an `isError` result,
+    /// not a JSON-RPC error (`dispatch_error_result`).
+    fn is_error_result() -> JsonRpcResponse {
+        JsonRpcResponse::success(
+            RequestId::Number(0),
+            serde_json::json!({"isError": true, "content": []}),
+        )
+    }
+
+    /// A refusal is recorded with the code the task settles with, and one
+    /// delivered as a withheld `isError` result with the firewall's.
+    #[test]
+    fn a_refusal_is_recorded_in_either_shape() {
+        assert_eq!(
+            dispatch_refusal_code(Some(true), &refused_error()),
+            Some(-32603)
+        );
+        assert_eq!(
+            dispatch_refusal_code(Some(true), &is_error_result()),
+            Some(crate::Error::ResponseFirewallRefused.to_rpc_code())
+        );
+    }
+
+    /// Paired control: a refusal's code is not a refusal. With the cell clean,
+    /// or no cell, neither shape is recorded.
+    #[test]
+    fn the_code_alone_records_nothing() {
+        for settled in [refused_error(), is_error_result()] {
+            assert_eq!(dispatch_refusal_code(Some(false), &settled), None);
+            assert_eq!(dispatch_refusal_code(None, &settled), None);
+        }
+    }
+
+    /// A dispatch that still delivered a clean answer is not recorded as
+    /// refused, whatever its cell holds: no false refusal in the audit trail.
+    #[test]
+    fn a_clean_answer_records_no_refusal() {
+        for result in [
+            serde_json::json!({"content": []}),
+            serde_json::json!({"isError": false, "content": []}),
+        ] {
+            let settled = JsonRpcResponse::success(RequestId::Number(0), result);
+            assert_eq!(dispatch_refusal_code(Some(true), &settled), None);
+        }
+    }
+
+    /// With no cell to read, nothing is recorded.
+    #[test]
+    fn no_cell_reads_as_unknown() {
+        assert_eq!(dispatch_refusal(None), None);
+    }
+
+    /// A dispatch reads the refusal raised in its own cell and only that:
+    /// neither an earlier attempt's refusal nor an enclosing cell's.
+    #[tokio::test]
+    async fn each_dispatch_reads_its_own_cell() {
+        let ((), refused) = dispatched_in_cell(async {
+            delivery_facts::refused(());
+        })
+        .await;
+        assert_eq!(refused, Some(true));
+        let ((), clean) = dispatched_in_cell(async {}).await;
+        assert_eq!(clean, Some(false));
+        let ((), inner) = delivery_facts::scope(async {
+            delivery_facts::refused(());
+            dispatched_in_cell(async {}).await
+        })
+        .await;
+        assert_eq!(inner, Some(false));
+    }
+}
