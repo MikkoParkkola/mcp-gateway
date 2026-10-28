@@ -177,6 +177,72 @@ pub(super) fn forget_lease_debt(shared: &Shared, state: &super::State<'_>) {
     }
 }
 
+/// When a leased listener reconnects after its lease moved: exactly `floor`
+/// after the move is seen, never sooner whatever the backoff's jitter, and
+/// once per newly held generation, so a handshake that keeps failing under
+/// it backs off as usual. A lease that is gone cuts nothing: there is no
+/// credential to reconnect with.
+#[derive(Default)]
+pub(super) struct LeaseCut {
+    cut_for: Option<u128>,
+}
+
+impl LeaseCut {
+    /// The deadline of a backoff of `delay` that starts now.
+    pub(super) fn deadline(
+        &mut self,
+        shared: &Shared,
+        hub: &Weak<crate::events::EventsHub>,
+        ran_under: Option<u128>,
+        delay: std::time::Duration,
+        floor: std::time::Duration,
+    ) -> tokio::time::Instant {
+        let now = tokio::time::Instant::now();
+        self.decide(held_now(shared, hub), ran_under, now + delay, now, floor)
+    }
+
+    /// The deadline after a wake during the backoff.
+    pub(super) fn on_wake(
+        &mut self,
+        shared: &Shared,
+        hub: &Weak<crate::events::EventsHub>,
+        ran_under: Option<u128>,
+        deadline: tokio::time::Instant,
+        floor: std::time::Duration,
+    ) -> tokio::time::Instant {
+        let now = tokio::time::Instant::now();
+        self.decide(held_now(shared, hub), ran_under, deadline, now, floor)
+    }
+
+    /// `deadline`, unless `held` is a generation newer than the run's
+    /// (`ran_under`) and not yet cut for: then `now + floor`.
+    pub(super) fn decide(
+        &mut self,
+        held: Option<u128>,
+        ran_under: Option<u128>,
+        deadline: tokio::time::Instant,
+        now: tokio::time::Instant,
+        floor: std::time::Duration,
+    ) -> tokio::time::Instant {
+        match (held, ran_under) {
+            (Some(held), Some(ran)) if held != ran && self.cut_for != Some(held) => {
+                self.cut_for = Some(held);
+                now + floor
+            }
+            _ => deadline,
+        }
+    }
+}
+
+/// The lease generation held now for a per-user key; `None` for a shared key.
+fn held_now(shared: &Shared, hub: &Weak<crate::events::EventsHub>) -> Option<u128> {
+    let (obs, hub) = (shared.key.obs.as_ref()?, hub.upgrade()?);
+    hub.leases.held_generation(&crate::events::lease::LeaseKey {
+        backend: shared.key.backend.clone(),
+        obs: obs.clone(),
+    })
+}
+
 /// Retires the run's ledger holder when an own session's run ends.
 struct RetireOnEnd(Arc<Shared>);
 
