@@ -9,11 +9,12 @@
 # the same rules.
 #
 #   PR_BODY="$(gh pr view N --json body -q .body)" scripts/dev/check-pr-body-hygiene.sh
+#   PR_TITLE="$(gh pr view N --json title -q .title)" PR_BODY=... scripts/dev/check-pr-body-hygiene.sh
 #   scripts/dev/check-pr-body-hygiene.sh body.md
 #
 # Exactly one source: $PR_BODY or one file. Whether PR_BODY is SET decides,
 # not its value: set to "" is an explicit empty body, which passes (it cannot
-# leak anything, and CI always sets it). Unset with no file, two sources, a
+# leak anything, and CI always sets it), though the title is still checked. Unset with no file, two sources, a
 # missing file, more than one file or an option is a misused call and is
 # refused, because a check that reads nothing and prints OK is worse than no
 # check.
@@ -41,20 +42,12 @@ elif [[ -n "${PR_BODY+set}" ]]; then
 else
   usage
 fi
-if [[ -z "${body//[[:space:]]/}" ]]; then
-  printf 'Pull request body hygiene OK: the body is empty.\n'
-  exit 0
-fi
 failures=0
 
 report() {
   printf 'FAIL: pull request %s %s\n' "$1" "$2" >&2
   failures=$((failures + 1))
 }
-
-# A reviewing model, in any spelling (gpt-review, gpt-5.5, GLM-5.3), or the
-# phrase. Whole words only: "amused" or "glmark" is not a hit.
-reviewer_regex='(^|[^[:alnum:]_])(gpt|muse|glm|grok|kimi|codex|review models?)([^[:alnum:]_]|$)'
 
 check_line() {
   local where="$1" line="$2"
@@ -74,7 +67,7 @@ check_line() {
     shopt -u nocasematch
   done
   shopt -s nocasematch
-  if [[ "$line" =~ $reviewer_regex ]]; then
+  if [[ ! "$line" =~ $authoring_footer_regex && "$line" =~ $reviewer_regex ]]; then
     report "$where" "names a reviewing model: ${BASH_REMATCH[2]}"
   fi
   shopt -u nocasematch
@@ -88,11 +81,13 @@ check_line() {
 if [[ -n "${PR_TITLE:-}" ]]; then
   check_line "title" "$PR_TITLE"
 fi
-n=0
-while IFS= read -r line || [[ -n "$line" ]]; do
-  n=$((n + 1))
-  check_line "body line $n" "$line"
-done <<<"$body"
+if [[ -n "${body//[[:space:]]/}" ]]; then
+  n=0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    n=$((n + 1))
+    check_line "body line $n" "$line"
+  done <<<"$body"
+fi
 
 if (( failures > 0 )); then
   printf 'Pull request body hygiene failed with %d issue(s). Edit the title or body; the check reruns on edit.\n' "$failures" >&2

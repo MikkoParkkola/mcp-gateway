@@ -21,8 +21,8 @@
 #   * private content, from scripts/dev/public-hygiene-patterns.sh: a private
 #     project name, a home-directory or agent-configuration path, a
 #     private-network address -- trailers included, except Co-Authored-By
-#   * a tracker id, anywhere in the message, trailers included, on a commit
-#     made after the cutoff below
+#   * a tracker id or a reviewing model's name, anywhere in the message,
+#     trailers included, on a commit made after the cutoff below
 #
 # RUN IT BEFORE YOU PUSH, and gate the push on its exit status with `&&`, not
 # `;` -- a check whose verdict is not read is not a check:
@@ -122,9 +122,9 @@ while IFS= read -r sha; do
 
 done <<<"$commits"
 
-# Private content and tracker ids, in every commit of the range, merges too,
-# and in every line of the message: a trailer or a merge subject leaks as
-# easily as the body.
+# Private content, tracker ids and reviewing models, in every commit of the
+# range, merges too, and in every line of the message: a trailer or a merge
+# subject leaks as easily as the body.
 all_commits="$(git rev-list "$range" 2>/dev/null || true)"
 while IFS= read -r sha; do
   [[ -n "$sha" ]] || continue
@@ -146,6 +146,11 @@ while IFS= read -r sha; do
   if (( $(git log -1 --format='%at' "$sha") >= ticket_id_cutoff )); then
     if match="$(printf '%s\n' "$full" | sed -E "s/$ac_id_regex//g" | grep -E -n -m 1 -e "$ticket_id_regex" || true)"; [[ -n "$match" ]]; then
       printf 'FAIL %s: cites a tracker id; describe the change instead -- %s\n' "${sha:0:8}" "$match" >&2
+      failures=$((failures + 1))
+    fi
+    # Co-Authored-By and the authoring footer name the authoring tool.
+    if match="$(printf '%s\n' "$full" | grep -E -v -i -e '^co-authored-by:' -e "$authoring_footer_regex" | grep -E -i -m 1 -e "$reviewer_regex" || true)"; [[ -n "$match" ]]; then
+      printf 'FAIL %s: names a reviewing model -- %s\n' "${sha:0:8}" "$match" >&2
       failures=$((failures + 1))
     fi
   fi

@@ -195,6 +195,38 @@ run_case attribution_trailer_only pass 'fix(router): refuse a credentialed http 
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
 run_case word_containing_a_name pass 'docs: the amused operator ran glmark'
+run_case reviewer_in_a_trailer fail 'fix(router): refuse a credentialed http URL
+
+Reviewed-by: gpt-5.5'
+
+# A merge commit's message is checked too.
+merge_case() {
+  local name="$1" expectation="$2" message="$3" repo="$tmp_root/merge_$1" status=0
+  mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email "test@localhost"
+  git -C "$repo" config user.name "Commit Hygiene Test"
+  printf 'base\n' >"$repo/file.txt"
+  git -C "$repo" add file.txt
+  git -C "$repo" commit -q -m "chore: seed the fixture"
+  git -C "$repo" checkout -q -b side
+  printf 'side\n' >"$repo/side.txt"
+  git -C "$repo" add side.txt
+  git -C "$repo" commit -q -m "chore: a side change"
+  git -C "$repo" checkout -q -
+  GIT_AUTHOR_DATE=2030-01-01T00:00:00Z GIT_COMMITTER_DATE=2030-01-01T00:00:00Z \
+    git -C "$repo" merge -q --no-ff -m "$message" side
+  (cd "$repo" && bash "$checker" 'HEAD~1..HEAD' >/dev/null 2>&1) || status=$?
+  if [[ "$expectation" == "fail" && "$status" -eq 0 ]]; then
+    printf 'FAIL %s: expected the checker to reject this merge message\n' "$name" >&2
+    failures=$((failures + 1))
+  elif [[ "$expectation" == "pass" && "$status" -ne 0 ]]; then
+    printf 'FAIL %s: expected a clean merge message to pass, exit %d\n' "$name" "$status" >&2
+    failures=$((failures + 1))
+  fi
+}
+merge_case merge_naming_a_reviewer fail 'Merge the base after the muse review'
+merge_case merge_clean pass 'Merge the release line'
 
 pr_body_case() {
   local name="$1" expectation="$2" body="$3" status=0
@@ -279,6 +311,9 @@ pr_body_case kimi fail 'Kimi raised a LOW finding.'
 pr_body_case codex fail 'A codex run returned no verdict.'
 pr_body_case review_model fail 'Two review models agreed.'
 pr_body_case word_containing_a_name pass 'The amused operator ran glmark and gptables.'
+pr_body_case chatgpt fail 'ChatGPT agreed.'
+pr_body_case compact_version fail 'GPT5 found one issue.'
+pr_body_case footer_naming_another_tool pass '🤖 Generated with [Codex](https://openai.com/codex)'
 
 # The refusal names the matched word, never the rest of the line.
 pr_body_echo_case() {
@@ -306,6 +341,18 @@ pr_title_case() {
 pr_title_case names_a_model fail 'fix(config): apply the muse review'
 pr_title_case clean pass 'fix(config): refuse a write it cannot make in place'
 pr_title_case ticket_id fail 'fix(config): close MIK-1234'
+
+# An empty body still has its title checked.
+pr_empty_body_title_case() {
+  local name="$1" body="$2" status=0
+  PR_BODY="$body" PR_TITLE='fix(config): apply the muse review' bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" >/dev/null 2>&1 || status=$?
+  if [[ "$status" -eq 0 ]]; then
+    printf 'FAIL pr_title_%s: a banned title passed with an empty body\n' "$name" >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_empty_body_title_case with_empty_body ''
+pr_empty_body_title_case with_blank_body $'  \n\t\n'
 
 
 if (( failures > 0 )); then
