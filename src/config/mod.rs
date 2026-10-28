@@ -8,7 +8,7 @@
 
 pub(crate) mod account_bindings;
 mod account_refs;
-mod backend_add;
+pub(crate) mod backend_add;
 mod backend_config;
 mod backend_debug;
 mod backend_ownership;
