@@ -35,6 +35,7 @@ struct Fake {
     tx: broadcast::Sender<Appended>,
     biggest_page: Mutex<usize>,
     reads: Mutex<usize>,
+    generation: Mutex<u64>,
     heads: Mutex<usize>,
     append_on_read: Mutex<bool>,
 }
@@ -47,6 +48,7 @@ impl Fake {
             tx,
             biggest_page: Mutex::new(0),
             reads: Mutex::new(0),
+            generation: Mutex::new(0),
             heads: Mutex::new(0),
             append_on_read: Mutex::new(false),
         })
@@ -64,6 +66,7 @@ impl Fake {
             })
             .collect();
         *self.rows.lock().unwrap() = swapped;
+        *self.generation.lock().unwrap() += 1;
     }
 
     fn append(&self, hidden: bool) -> u64 {
@@ -74,6 +77,7 @@ impl Fake {
         let _ = self.tx.send(Appended {
             log: LogName::Invocation,
             part: r.part.clone(),
+            generation: *self.generation.lock().unwrap(),
             entry: Arc::new(r.data),
         });
         n
@@ -373,4 +377,39 @@ async fn rows_hidden_from_the_viewer_do_not_cost_a_scan_per_visible_row() {
     assert_eq!(got, visible, "exactly the visible rows, in order");
     let scans = *fake.reads.lock().unwrap() + *fake.heads.lock().unwrap() - 1;
     assert!(scans <= 400_usize.div_ceil(PAGE) + 1, "{scans} scans");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_log_rewritten_in_place_resets_even_when_the_next_counter_follows() {
+    let fake = Fake::new(5, 64);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    fake.replace(5, "fedcba9876543210");
+    fake.append(false);
+    let out = collect(&mut merge, 6).await;
+    assert_eq!(out.first(), Some(&Out::Reset));
+    assert_eq!(ids(&out), (1..=6).collect::<Vec<_>>());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_truncated_log_whose_counter_restarts_resets_and_drops_no_row() {
+    let fake = Fake::new(5, 64);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    fake.replace(0, "fedcba9876543210");
+    for _ in 0..3 {
+        fake.append(false);
+    }
+    let out = collect(&mut merge, 3).await;
+    assert_eq!(out.first(), Some(&Out::Reset));
+    assert_eq!(ids(&out), vec![1, 2, 3]);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_continuation_under_the_same_generation_is_not_a_reset() {
+    let fake = Fake::new(5, 64);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    fake.append(false);
+    fake.append(false);
+    let out = collect(&mut merge, 2).await;
+    assert!(!out.contains(&Out::Reset));
+    assert_eq!(ids(&out), vec![6, 7]);
 }

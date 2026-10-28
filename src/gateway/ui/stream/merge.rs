@@ -44,6 +44,11 @@ pub(super) struct Appended {
     /// The announced row's position and hash; the announcing hook fills it,
     /// so a row hidden from this caller still moves the view's `seen` mark.
     pub(super) part: LogPart,
+    /// Per log, in memory, starting at 0, and comparable only within one
+    /// subscription. The source raises it when the log gets a new file id,
+    /// when the file shrinks below its last write, and when a resync's tail
+    /// counter is lower than before. Rotation does not raise it.
+    pub(super) generation: u64,
     pub(super) entry: Arc<Value>,
 }
 
