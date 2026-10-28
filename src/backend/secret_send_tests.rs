@@ -137,14 +137,85 @@ fn refused(backend: &Backend, why: &str) {
     );
 }
 
+/// Set in the nested run's process environment only.
+const PROCESS_KEY: &str = "SEND_SIDE_PROCESS_KEY";
+/// The value the process environment holds for [`PROCESS_KEY`].
+const PROCESS_VALUE: &str = "process-env-value-ef09";
+/// Present in the nested run, which makes the assertions.
+const SCENARIO_ENV: &str = "MCP_GATEWAY_TEST_UNSTAMPED_RESOLVER_SCENARIO";
+const SCENARIO: &str = "backend::secret_send::tests::unstamped_resolver_scenario";
+
+/// A backend no registry stamped refuses a call its rule applies to, and
+/// never reads the process environment in place of the gateway's: the test
+/// binary reruns with a variable the rule names set in its own environment,
+/// since setting one in-process needs `unsafe`.
+#[tokio::test]
+async fn a_backend_no_registry_stamped_refuses_rather_than_resolve_the_process_environment() {
+    let mut nested = tokio::process::Command::new(std::env::current_exe().expect("test binary"));
+    nested
+        .args(["--exact", SCENARIO, "--nocapture"])
+        .env(SCENARIO_ENV, "1")
+        .env(PROCESS_KEY, PROCESS_VALUE)
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(60), nested.output())
+        .await
+        .expect("the scenario finished within the limit")
+        .expect("run the scenario");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("1 passed") && stdout.contains(SCENARIO),
+        "the scenario failed or did not run; stdout={stdout:?} stderr={stderr:?}"
+    );
+}
+
 #[test]
-fn a_backend_no_registry_stamped_refuses_rather_than_resolve_the_process_environment() {
+fn unstamped_resolver_scenario() {
+    if std::env::var_os(SCENARIO_ENV).is_none() {
+        return;
+    }
+    assert_eq!(
+        std::env::var(PROCESS_KEY).as_deref(),
+        Ok(PROCESS_VALUE),
+        "premise: the process environment holds the value"
+    );
+    let reference = format!("{{env.{PROCESS_KEY}}}");
     let backend = backend(
         http(),
-        vec![rule(InjectTarget::Argument, "api_key", SECRET)],
+        vec![rule(InjectTarget::Argument, "api_key", &reference)],
         false,
     );
-    refused(&backend, "has no secret resolver");
+    let mut result = None;
+    let records = crate::test_log_capture::records(|| {
+        result = Some(send(
+            &backend,
+            json!({"name": "read", "arguments": {}}),
+            Vec::new(),
+        ));
+    });
+    let error = match result.expect("the send ran") {
+        Err(error) => error,
+        Ok(sent) => panic!("the call was not refused: {sent:?}"),
+    };
+    assert!(
+        matches!(error, crate::Error::Config(_)),
+        "not the non-retryable configuration error: {error:?}"
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("backend 'svc' secret rule 'api'")
+            && message.contains("has no secret resolver"),
+        "{message}"
+    );
+    assert!(
+        !message.contains(PROCESS_VALUE),
+        "the refusal holds the value: {message}"
+    );
+    let logged = serde_json::to_string(&records).expect("records serialise");
+    assert!(
+        !logged.contains(PROCESS_VALUE),
+        "a log record holds the value"
+    );
 }
 
 #[test]
