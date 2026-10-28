@@ -133,3 +133,59 @@ async fn an_enforced_follow_up_question_records_refused() {
         "{fields:?}"
     );
 }
+
+/// The `task_recovery` settlement record of an upstream task whose result
+/// is `result`, recovered and settled in one delivery cell, as the recovery
+/// worker opens it around its query and commit.
+async fn recovery_record(result: Value) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = stripping();
+    let log = crate::security::TransparencyLogger::open(Arc::new(
+        crate::security::transparency_log::TransparencyLogConfig {
+            enabled: true,
+            path: dir
+                .path()
+                .join("audit.jsonl")
+                .to_string_lossy()
+                .into_owned(),
+            key_id: "cirewrite".to_string(),
+            ..crate::security::transparency_log::TransparencyLogConfig::default()
+        },
+    ))
+    .expect("open log");
+    meta.enable_transparency_log(Arc::new(log));
+    delivery_facts::scope(async {
+        let recovered = meta
+            .recover_task_result("alpha", "read", None, "t", result)
+            .expect("recovered");
+        let task = super::audit::SettledTask {
+            server: "alpha",
+            tool: "read",
+            id: "task-1",
+        };
+        let notes = super::audit::DispatchNotes::default();
+        let _ = Box::pin(meta.audit_settlement(
+            task,
+            crate::protocol::tasks::TaskTransition::Complete(recovered),
+            &notes,
+            "owner",
+        ))
+        .await;
+    })
+    .await;
+    let text = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap();
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|entry| entry["route"] == "task_recovery")
+        .unwrap_or_else(|| panic!("a settlement record: {text}"))
+}
+
+/// A recovered task whose result the gate rewrote records the rewrite on its
+/// settlement record; a clean one records no effect.
+#[tokio::test]
+async fn a_recovered_task_records_its_rewrite_on_the_settlement() {
+    let rewritten = Box::pin(recovery_record(answer(INJECTED))).await;
+    assert_eq!(rewritten["response_effect"], "rewritten", "{rewritten}");
+    let clean = Box::pin(recovery_record(answer("Quarterly figures attached."))).await;
+    assert!(clean.get("response_effect").is_none(), "{clean}");
+}
