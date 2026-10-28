@@ -131,8 +131,10 @@ impl MetaMcp {
         let _ = tokio::time::timeout_at(deadline, futures::future::join_all(waits)).await;
     }
 
-    /// The caller's cold lease on `server` another reader holds, if one
-    /// runs, through the caller's own backend grant.
+    /// The caller's cold lease on `server` another reader holds, if its
+    /// lookup or fill still runs, through the caller's own backend grant. A
+    /// settled lease (a failed attempt's retry backoff) has nothing to wait
+    /// for.
     fn running_cold_lease(
         &self,
         server: &str,
@@ -144,7 +146,7 @@ impl MetaMcp {
         let id = self
             .principal_for(&backend, scope.caller)?
             .stable_actor_id();
-        backend.cold_lease_remaining(&id)?;
+        backend.cold_fill_remaining(&id)?;
         Some((backend, id))
     }
 }

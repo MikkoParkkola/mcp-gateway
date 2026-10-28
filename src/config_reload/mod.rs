@@ -513,6 +513,8 @@ use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
+#[cfg(feature = "webui")]
+pub(crate) use reload_context::replace::FileRevision;
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
@@ -554,6 +556,10 @@ mod config_error_leak_tests;
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
+/// For the admin audit layer's cancel rows, which pause a UI write between
+/// writing the file and publishing its reload.
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use reload_pause::arm as arm_reload_pause;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
 #[cfg(test)]

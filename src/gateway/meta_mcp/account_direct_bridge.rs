@@ -293,6 +293,12 @@ impl DirectAccountGateway {
         self.custody.fail_after(allowed);
     }
 
+    /// Make only the mint's release step answer `Busy`: the account still
+    /// reads live, so a cold view is claimed and its credential lookup fails.
+    pub(crate) fn fail_release_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Release);
+    }
+
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
     /// refused call resolves nothing).
     pub(crate) fn releases(&self) -> usize {

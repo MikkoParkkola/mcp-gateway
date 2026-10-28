@@ -245,3 +245,27 @@ fn withheld_members_never_show_in_debug_or_on_the_wire() {
     let wire = serde_json::to_string(&response).expect("serializes");
     assert!(!wire.contains("FORGED-withheld"), "{wire}");
 }
+
+/// The guard's reading of the table: a row's path and any path inside that
+/// member are classified; a sibling sharing the text, and a `_meta` key with
+/// no row of its own, are not.
+#[test]
+fn a_path_inside_a_listed_member_is_classified_and_a_lookalike_is_not() {
+    use super::test_support::classified;
+    for path in [
+        "_security_findings",
+        "tools.*.annotations",
+        "tools.*.annotations.destructiveHint",
+        "_meta.provenance",
+    ] {
+        assert!(classified(path), "{path} is a member");
+    }
+    for path in [
+        "tools.*.annotationsX",
+        "_meta.unlisted",
+        "_security_findings_x",
+        "extra",
+    ] {
+        assert!(!classified(path), "{path} is not a member");
+    }
+}
