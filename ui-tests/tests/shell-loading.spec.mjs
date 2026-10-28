@@ -380,32 +380,41 @@ test('G5c leaving during a Retry leaves no loading state or aria-busy on the new
   await expect(page.locator('#content')).toContainText('servers - status');
 });
 
+/**
+ * Walk the loading thresholds on a paused clock, after `start` began an attempt whose
+ * answer is held: no loading state at 299 ms, one at 300 ms; with the answer already
+ * settled, still there 399 ms later, gone at 400 ms.
+ */
+async function walkThresholds(page, probe) {
+  await page.clock.runFor(299);
+  await expect(loading(page), 'not before the onset').toHaveCount(0);
+  await page.clock.runFor(1);
+  await expect(loading(page), 'at the onset').toBeVisible();
+  probe.release();
+  await expect(page.locator('#content')).toContainText('value 1');
+  await page.evaluate(() => Promise.resolve()); // the settled attempt has run its handlers
+  await page.clock.runFor(399);
+  await expect(loading(page), 'just before the minimum').toBeVisible();
+  await page.clock.runFor(1);
+  await expect(loading(page), 'at the minimum').toHaveCount(0);
+}
+
 test('G5d a slow Retry shows loading after the same onset as a first render, and keeps it the same minimum', async ({ page }) => {
+  await pausedClock(page);
   let calls = 0;
-  const probe = heldProbe();
+  const held = [heldProbe(), heldProbe()];
   await page.route(PROBE, (r) => {
     calls += 1;
-    return calls === 1 ? r.fulfill({ status: 500, json: {} }) : probe.answer(r);
+    if (calls === 1) return held[0].answer(r); // a first render
+    if (calls === 2) return r.fulfill({ status: 500, json: {} }); // the next page's first read fails
+    return held[1].answer(r); // its Retry
   });
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
-  // By the page's own clock: the click, then the loading state's arrival and removal.
-  await page.evaluate(() => {
-    window.__t = {};
-    document.addEventListener('click', () => { window.__t.click ??= performance.now(); }, true);
-    new MutationObserver(() => {
-      const there = !!document.querySelector('#content [data-state="loading"]');
-      if (there && !window.__t.shown) window.__t.shown = performance.now();
-      if (!there && window.__t.shown && !window.__t.gone) window.__t.gone = performance.now();
-    }).observe(document.getElementById('content'), { childList: true, subtree: true });
-  });
+  await walkThresholds(page, held[0]);
+  await page.goto('/ui/policies/status');
   await retryButton(page).click();
-  await expect(loading(page)).toBeVisible();
-  probe.release(); // answered at once: the minimum, not the data, decides when it goes
-  await expect(loading(page)).toHaveCount(0);
-  const t = await page.evaluate(() => window.__t);
-  expect(t.shown - t.click, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
-  expect(t.gone - t.shown, 'kept for about 400 ms').toBeGreaterThanOrEqual(395);
+  await walkThresholds(page, held[1]);
 });
 
 test('G8b a sign-out during a slow first load leaves no aria-busy behind', async ({ page }) => {
