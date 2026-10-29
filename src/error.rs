@@ -10,6 +10,45 @@ use thiserror::Error;
 /// Result type alias for MCP Gateway
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Appended to a chain or playbook step's error when
+/// [`Error::outcome_undetermined`] holds, so a caller reading the text knows
+/// the step was not re-sent because it may already have acted.
+pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have reached the \
+     backend, so it was not re-sent; reconcile at the backend before running it again";
+
+/// Whether a step that failed with `error` is reported as one that may have
+/// run: the error is not raised before the send ([`Error::is_pre_dispatch`]),
+/// is not a gateway refusal (`Forbidden`, whose caller-facing reason stays
+/// neutral, A3, or `GatewayRefused`, raised only at admission checks before
+/// the call), and is not a sealed account offer or a marked account
+/// refusal (their text is the gateway's own: it goes out as written, and a
+/// marked refusal's text is read back). The one rule both loops and an aborted
+/// playbook use.
+///
+/// A step not reported this way has not been shown never to have run: a
+/// gateway refusal reads `false` from `is_pre_dispatch` (the conservative
+/// answer, until its construction sites are proven pre-send), and the absence of the
+/// note is inconclusive, never "not run".
+pub(crate) fn reports_may_have_run(error: &Error) -> bool {
+    error.outcome_undetermined()
+        && !matches!(
+            error,
+            Error::Forbidden { .. } | Error::GatewayRefused { .. }
+        )
+        && crate::personal_accounts::refusal::offer_data(error).is_none()
+        && crate::personal_accounts::refusal::marked(error).is_none()
+}
+
+/// `error`'s text for a chain or playbook step result, with [`MAY_HAVE_RUN`]
+/// appended when [`reports_may_have_run`] holds. The one place both loops word it.
+pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
+    if reports_may_have_run(error) {
+        format!("{text}; {MAY_HAVE_RUN}")
+    } else {
+        text
+    }
+}
+
 /// MCP Gateway errors
 ///
 /// Non-exhaustive: a release may add a variant, so a `match` outside this
@@ -524,6 +563,13 @@ impl Error {
     /// holds to a reviewed list of files. The gateway-sealed transient (a
     /// busy custody, MIK-8428) earns it the same way, decided by its seal and
     /// never its text; `Config` stays out, as it is also raised after a send.
+    ///
+    /// This is also the public check for whether a failed call may have run:
+    /// `false` means the request may have reached the backend, so a chain or
+    /// playbook step that failed this way was not re-sent, and a caller should
+    /// reconcile with the backend before running it again. A gateway refusal
+    /// (`Forbidden`) reads `false` too, the conservative answer until its
+    /// construction sites are proven pre-send.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
         crate::personal_accounts::refusal::transient_data(self).is_some()
@@ -554,6 +600,93 @@ impl Error {
     #[must_use]
     pub(crate) fn is_lost_round(&self) -> bool {
         matches!(self, Self::Transport(_) | Self::BackendTimeout(_))
+    }
+
+    /// Whether the call that raised this error may have run: `true` for every
+    /// error not proven raised before the request was sent
+    /// ([`Self::is_pre_dispatch`]). No later error is proof the backend did
+    /// nothing: a tool can act and then answer with an error, a response can
+    /// be refused after the backend produced it, and a proxy can answer 4xx
+    /// or 5xx after the backend acted. Reconcile with the backend before
+    /// running such a call again.
+    ///
+    /// Conservative by design: an error that in fact did nothing may still
+    /// read `true`; one that may have run never reads `false`.
+    #[must_use]
+    pub(crate) fn outcome_undetermined(&self) -> bool {
+        !self.is_pre_dispatch()
+    }
+
+    /// This error with [`MAY_HAVE_RUN`] appended to its message when
+    /// [`reports_may_have_run`] holds and the variant carries text of its own.
+    /// Variant, code, status and data are unchanged; a variant with no text of
+    /// ours (`Io`, `Http`, a firewall refusal) is returned as it is, and a
+    /// caller reads it through `!is_pre_dispatch()`.
+    #[must_use]
+    pub(crate) fn with_may_have_run(self) -> Self {
+        if !reports_may_have_run(&self) {
+            return self;
+        }
+        let note = |text: String| format!("{text}; {MAY_HAVE_RUN}");
+        match self {
+            Self::Config(m) => Self::Config(note(m)),
+            Self::ConfigValidation(m) => Self::ConfigValidation(note(m)),
+            Self::ConfigWatcher(m) => Self::ConfigWatcher(note(m)),
+            Self::CliCredentialRefused { message } => Self::CliCredentialRefused {
+                message: note(message),
+            },
+            Self::BackendTimeout(m) => Self::BackendTimeout(note(m)),
+            Self::Transport(m) => Self::Transport(note(m)),
+            Self::TransportPermanent(m) => Self::TransportPermanent(note(m)),
+            Self::Protocol(m) => Self::Protocol(note(m)),
+            Self::OAuth(m) => Self::OAuth(note(m)),
+            Self::Tls(m) => Self::Tls(note(m)),
+            Self::Internal(m) => Self::Internal(note(m)),
+            Self::JsonRpc {
+                code,
+                message,
+                data,
+            } => Self::JsonRpc {
+                code,
+                message: note(message),
+                data,
+            },
+            Self::JsonRpcRetryable {
+                code,
+                message,
+                status,
+                data,
+            } => Self::JsonRpcRetryable {
+                code,
+                message: note(message),
+                status,
+                data,
+            },
+            // No text of ours to append to (or never reported, by
+            // `reports_may_have_run`). Listed, not `_`, so a new variant is a
+            // compile-time decision here.
+            other @ (Self::Forbidden { .. }
+            | Self::GatewayRefused { .. }
+            | Self::ResponseFirewallRefused
+            | Self::AuditUnavailable
+            | Self::CapabilityHashMismatch { .. }
+            | Self::BackendNotFound(_)
+            | Self::BackendUnavailable(_)
+            | Self::CircuitOpen { .. }
+            | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
+            | Self::ToolNotFound(_)
+            | Self::TransportConnect(_)
+            | Self::ProtocolVersionRejected { .. }
+            | Self::AuthorizationIncomplete { .. }
+            | Self::AuthorizationCancelled { .. }
+            | Self::AuthorizationRequired { .. }
+            | Self::AuthorizationPending { .. }
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Http(_)
+            | Self::Shutdown) => other,
+        }
     }
 
     /// The gateway's own limiter or slot admission refused: the backend was
@@ -651,90 +784,8 @@ pub mod rpc_codes {
 mod pre_send_scan_tests;
 
 #[cfg(test)]
-mod rpc_code_tests {
-    use super::Error;
-
-    /// MIK-7979: every `BackendUnavailable` is raised before the request is
-    /// sent, so it frees an idempotency key; a lost round does not.
-    #[test]
-    fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
-        assert!(Error::BackendUnavailable("svc".to_string()).is_pre_dispatch());
-        assert!(!Error::Transport("reset".to_string()).is_pre_dispatch());
-        assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
-    }
-
-    /// MIK-8428 Case A: the gateway-sealed transient is pre-dispatch (it is
-    /// built only before a send); a look-alike with the same code, text and
-    /// data but no seal, as a backend could answer, is not. The seal decides,
-    /// never the text.
-    #[test]
-    fn only_the_sealed_transient_is_pre_dispatch() {
-        let sealed = crate::personal_accounts::refusal::transient_retry_error(None);
-        let Error::JsonRpc { code, message, .. } = &sealed else {
-            panic!("premise: the transient is a JSON-RPC error: {sealed}");
-        };
-        let look_alike = Error::JsonRpc {
-            code: *code,
-            message: message.clone(),
-            data: crate::personal_accounts::refusal::transient_data(&sealed),
-        };
-        assert!(sealed.is_pre_dispatch(), "{sealed}");
-        assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
-    }
-
-    #[test]
-    fn a_permanent_transport_failure_reports_as_a_backend_error() {
-        // Omitting the variant here reported a missing backend command as an
-        // INTERNAL error, blaming the gateway for the operator's typo.
-        assert_eq!(
-            Error::TransportPermanent("Failed to spawn: no such file".to_string()).to_rpc_code(),
-            -32000,
-        );
-        assert_eq!(
-            Error::Transport("connection refused".to_string()).to_rpc_code(),
-            -32000,
-            "the two transport variants must look the same to a JSON-RPC caller"
-        );
-    }
-
-    #[test]
-    fn a_refusal_keeps_the_peers_code_whichever_carriage_brings_it() {
-        // A peer code recovered from a 429/503 body is the peer's answer, not a
-        // gateway fault: omitting the retryable variant here reported an
-        // exhausted backend refusal as INTERNAL and sent operators after the
-        // wrong process.
-        assert_eq!(
-            Error::JsonRpcRetryable {
-                code: -32601,
-                message: "method not found".to_string(),
-                status: 503,
-                data: None,
-            }
-            .to_rpc_code(),
-            -32601,
-        );
-    }
-
-    /// MIK-8668: the five standard JSON-RPC 2.0 codes keep their spec values
-    /// (written as literals here on purpose; every site migrated to these
-    /// names relies on them).
-    #[test]
-    fn the_standard_codes_keep_their_spec_values() {
-        use super::rpc_codes::{
-            INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
-        };
-        assert_eq!(
-            [
-                PARSE_ERROR,
-                INVALID_REQUEST,
-                METHOD_NOT_FOUND,
-                INVALID_PARAMS,
-                INTERNAL_ERROR
-            ],
-            [-32700, -32600, -32601, -32602, -32603]
-        );
-    }
-}
+#[path = "error_rpc_code_tests.rs"]
+mod rpc_code_tests;
 
 #[cfg(test)]
 #[path = "error_non_exhaustive_tests.rs"]
