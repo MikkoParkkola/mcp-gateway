@@ -150,8 +150,11 @@ impl Sink for Exits {
 /// The reviewed list: file, function, exits, class, reason.
 const LISTED: &str = include_str!("presend_exits.tsv");
 
+/// (file, function) -> (exits, class) as listed.
+type Listed = BTreeMap<(String, String), (usize, String)>;
+
 /// The listed rows, and the ones that are malformed.
-fn listed() -> (BTreeMap<(String, String), (usize, String)>, Vec<String>) {
+fn listed() -> (Listed, Vec<String>) {
     let mut rows = BTreeMap::new();
     let mut bad = Vec::new();
     for line in LISTED
@@ -188,7 +191,7 @@ fn every_pre_send_refusal_exit_is_marked_or_excluded() {
         match want.get(&(file.clone(), func.clone())) {
             Some((m, c)) if m == n && c == class => {}
             Some((m, c)) => {
-                wrong.push(format!("listed {m} {c}, found {n} {class}: {file}\t{func}"))
+                wrong.push(format!("listed {m} {c}, found {n} {class}: {file}\t{func}"));
             }
             None => wrong.push(format!("unlisted: {file}\t{func}\t{n}\t{class}\t<reason>")),
         }
