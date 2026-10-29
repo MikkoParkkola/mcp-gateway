@@ -768,6 +768,10 @@ impl OwnedRouterAuthorizer {
         };
         let fresh = at
             .and_then(|at| keys.client_for_key_at(name, client.principal.storage_form(), at))
+            // The same credential, not only the same name and principal: a
+            // key re-issued under an explicit principal keeps both, and its
+            // old secret's work must not run.
+            .filter(|fresh| fresh.quota_principal == client.quota_principal)
             .filter(|fresh| fresh.admin || !client.admin)
             .ok_or(KeyGone)?;
         Ok(Some(Self {
