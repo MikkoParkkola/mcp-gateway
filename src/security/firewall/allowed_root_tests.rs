@@ -190,6 +190,46 @@ const SHAPES: &[Shape] = &[
         unix: NN,
         windows: NA,
     },
+    // W18 (lead ruling): Windows strips a trailing dot or space and expands
+    // an 8.3 short name, so each aliases a name the gateway did not check
+    // there. On Unix each is a distinct legal name. A file really named with
+    // `~1` is refused on Windows: a stated false refusal.
+    Shape {
+        row: "W18a",
+        value: r"C:\safe\secret.",
+        unix: NA,
+        windows: NN,
+    },
+    Shape {
+        row: "W18b",
+        value: r"C:\safe\secret ",
+        unix: NA,
+        windows: NN,
+    },
+    Shape {
+        row: "W18c",
+        value: r"C:\PROGRA~1\x",
+        unix: NA,
+        windows: NN,
+    },
+    Shape {
+        row: "W18d",
+        value: "/safe/secret.",
+        unix: None,
+        windows: NA,
+    },
+    Shape {
+        row: "W18e",
+        value: "/safe/secret ",
+        unix: None,
+        windows: NA,
+    },
+    Shape {
+        row: "W18f",
+        value: "/safe/PROGRA~1/x",
+        unix: None,
+        windows: NA,
+    },
 ];
 
 /// W1-W17 and R9-R15: the string precheck, one table on every OS with each
