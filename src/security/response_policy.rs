@@ -11,6 +11,111 @@ use serde::Serialize;
 pub(crate) struct ResponsePolicyTarget {
     pub server: String,
     pub tool: String,
+    /// Where the target came from; never written to the audit row.
+    #[serde(skip)]
+    pub(crate) origin: TargetOrigin,
+}
+
+impl ResponsePolicyTarget {
+    /// The backend the call was routed to.
+    pub(crate) fn routed(server: &str, tool: &str) -> Self {
+        Self {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+            origin: TargetOrigin::Routed,
+        }
+    }
+}
+
+/// Where a [`ResponsePolicyTarget`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum TargetOrigin {
+    /// The backend the call was routed to.
+    Routed,
+    /// An answer no one backend can be named for (discovery, a notification,
+    /// a target-less meta answer): `server` is the `gateway` label, and the
+    /// scan judges it as every registered backend could have sent it.
+    NoBackend,
+    /// One of those backends, added by `MetaMcp::expand_targets` for rule
+    /// matching only: the audit row lists the targets the call had.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    Expanded,
+}
+
+/// The API key a call was authenticated with, for a firewall rule's `keys`
+/// scope. `NotKnown` is a surface that carries no key: a rule there resolves to
+/// the strongest outcome over every key it could have been.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyOf<'a> {
+    /// Authenticated with this API key.
+    Key(&'a str),
+    /// Known to carry no API key (stdio, an anonymous or non-key caller).
+    NoKey,
+    /// The key is not carried here.
+    NotKnown,
+}
+
+impl<'a> KeyOf<'a> {
+    /// From a caller whose credential is known: its proven API key name
+    /// (`AuthenticatedClient::api_key_identity`), or none.
+    pub(crate) fn of_client(api_key: Option<&'a str>) -> Self {
+        api_key.map_or(Self::NoKey, Self::Key)
+    }
+
+    /// From an authenticated caller: its proven API key name, or no key.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) fn of_caller(client: Option<&'a crate::gateway::auth::AuthenticatedClient>) -> Self {
+        Self::of_client(
+            client.and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+        )
+    }
+}
+
+/// The backend a firewall rule's `servers` scope is judged against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+pub(crate) enum ServerOf<'a> {
+    /// The backend's registry name.
+    Backend(&'a str),
+    /// No backend: matches no `servers` glob.
+    NoBackend,
+}
+
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+impl<'a> ServerOf<'a> {
+    /// The name records and per-backend guards key on: the backend, or the
+    /// `gateway` label for none.
+    pub(crate) const fn label(self) -> &'a str {
+        match self {
+            Self::Backend(name) => name,
+            Self::NoBackend => "gateway",
+        }
+    }
+}
+
+/// What a firewall rule is matched against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+pub(crate) struct RuleTarget<'a> {
+    pub(crate) server: ServerOf<'a>,
+    pub(crate) tool: &'a str,
+    pub(crate) key: KeyOf<'a>,
+}
+
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+impl<'a> RuleTarget<'a> {
+    /// A call routed to `server`'s `tool` by `client` (its API key, or none).
+    pub(crate) fn routed(
+        server: &'a str,
+        tool: &'a str,
+        client: Option<&'a crate::gateway::auth::AuthenticatedClient>,
+    ) -> Self {
+        Self {
+            server: ServerOf::Backend(server),
+            tool,
+            key: KeyOf::of_caller(client),
+        }
+    }
 }
 
 /// Internal response admission requires at least one server-bound policy target.
@@ -33,6 +138,11 @@ pub(crate) struct ResponseCorrelation<'a> {
     /// where no single invocation produced the answer (a notification, a
     /// plan) or the correlation only labels a scan.
     pub(crate) trace_id: Option<&'a str>,
+    /// The API key the caller authenticated with, for a firewall rule's
+    /// `keys` scope. Only the firewall reads it; `NotKnown` where this
+    /// surface carries no proven key.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) key: KeyOf<'a>,
 }
 
 /// Distinguishes a served result from an internally consumed legacy question.
