@@ -41,7 +41,8 @@ test('R1 the first load of /ui/overview/status asks for no screen before its fir
     const fcp = performance.getEntriesByName('first-contentful-paint')[0].startTime;
     return performance.getEntriesByType('resource').filter((r) => r.startTime < fcp).map((r) => new URL(r.name).pathname);
   });
-  for (const name of early) {
+  // The shell's own reads of /ui/api may start first; its assets are the shell's and the fonts.
+  for (const name of early.filter((n) => n.startsWith('/ui/assets/'))) {
     expect(name, `requested before first paint: ${early.join(', ')}`).toMatch(/^\/ui\/assets\/(shell\.[0-9a-f]{12}\.(js|css)|[\w-]+\.[0-9a-f]{12}\.woff2)$/);
   }
 });

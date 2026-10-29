@@ -3,8 +3,10 @@
 //
 // The web UI shell: sidebar, page title, tabs in the address, page states
 // and the authenticated API client. Screens register a page; the shell owns
-// the URL. Page modules run before DOMContentLoaded and call register(), so
-// the first render already knows them. All text goes in with textContent.
+// the URL. The document lists the screens in a manifest; the shell loads the
+// current route's screen before rendering it and the rest after the first
+// paint. A screen calls register() whenever it runs, before boot or after.
+// All text goes in with textContent.
 
 /** The sidebar, in order. The To do page id is composed so it reads as a name. */
 export const NAV = [
@@ -32,6 +34,49 @@ export function register(id, spec) {
   if (!PAGE_IDS.has(id)) throw new Error(`register: no sidebar page ${id}`);
   pages.set(id, spec);
 }
+
+/** The document's screen manifest: page id → {js, css}. The shell never names a screen's file itself. */
+function screens() {
+  try {
+    return JSON.parse(document.getElementById('screens')?.textContent || '{}');
+  } catch {
+    return {};
+  }
+}
+
+/** One load per screen; a failed one is forgotten so Retry tries again. */
+const loads = new Map();
+
+/** Add a stylesheet and settle when it has loaded; a failed one is taken out again. */
+function sheet(href) {
+  return new Promise((ok, fail) => {
+    const link = el('link', { rel: 'stylesheet', href });
+    link.addEventListener('load', ok);
+    link.addEventListener('error', () => {
+      link.remove();
+      fail(new Error(`stylesheet ${href} did not load`));
+    });
+    document.head.append(link);
+  });
+}
+
+/**
+ * Load page `id`'s screen, its stylesheet and module, unless the page is
+ * registered already or has no screen. The module registers itself.
+ */
+function loadScreen(id) {
+  const entry = screens()[id];
+  if (!entry || pages.has(id)) return Promise.resolve();
+  if (!loads.has(id)) {
+    const load = Promise.all([sheet(entry.css), import(entry.js)]).then(() => {});
+    load.catch(() => loads.delete(id));
+    loads.set(id, load);
+  }
+  return loads.get(id);
+}
+
+/** Every screen in the manifest; failures stay with their own route. */
+const loadAllScreens = () => Promise.allSettled(Object.keys(screens()).map(loadScreen));
 
 /**
  * The palette's entries, navigation only: every sidebar page, each visible
@@ -386,7 +431,8 @@ export function openPalette() {
   let options = [];
   let active = 0;
   let chosen = false;
-  const draw = () => {
+  const draw = (keep = false) => {
+    const was = keep ? options[active]?.dataset.path : null;
     const q = input.value.trim().toLowerCase();
     const found = entries().filter((e) => !q || e.label.toLowerCase().includes(q) || crumb(e.path).toLowerCase().includes(q));
     list.replaceChildren();
@@ -406,7 +452,9 @@ export function openPalette() {
       list.append(box);
     }
     if (!options.length) list.append(el('p', { class: 'muted palette-empty' }, 'No page, action or setting matches.'));
-    active = Math.min(active, Math.max(options.length - 1, 0));
+    // A redraw keeps the user's place on the entry, not on its position.
+    const kept = was ? options.findIndex((o) => o.dataset.path === was) : -1;
+    active = kept >= 0 ? kept : Math.min(active, Math.max(options.length - 1, 0));
     mark();
   };
   const mark = () => {
@@ -453,6 +501,9 @@ export function openPalette() {
   });
   paletteEl.addEventListener('click', (ev) => { if (ev.target === paletteEl) close(); });
   draw();
+  // Screens not loaded yet declare their entries when they register: list them as they arrive.
+  const dialog = paletteEl;
+  loadAllScreens().then(() => { if (paletteEl === dialog) draw(true); });
   search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
   // A modal makes the rest of the page inert, the live region with it: it rides along.
@@ -1031,9 +1082,17 @@ function setHeader({ title, subtitle } = {}) {
 
 /** Render the current address. */
 export function render() {
-  const seq = ++renderSeq;
+  draw(++renderSeq);
+}
+
+/**
+ * Draw render `seq`. A page whose screen is not loaded yet loads it first,
+ * under the loading state, then draws again into the same body with the same
+ * loading state (`held`), so a slow load and slow data say "Loading" once.
+ */
+function draw(seq, held = null) {
   // A Retry left running by the last page has nothing to show here.
-  document.getElementById('content').removeAttribute('aria-busy');
+  if (!held) document.getElementById('content').removeAttribute('aria-busy');
   const route = parse(location.pathname);
   const label = NAV.find(([id]) => id === route.page)?.[1];
   drawNav(route.page);
@@ -1047,15 +1106,36 @@ export function render() {
     setContent(content, mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
+  if (!held && !pages.has(route.page) && screens()[route.page]) {
+    setHeader({ title: label, subtitle: null });
+    // Not marked: shellReady and the screens wait for the screen's own render.
+    const body = el('div', { class: 'body' });
+    setContent(content, body);
+    content.setAttribute('aria-busy', 'true');
+    const epoch = authEpoch;
+    const current = () => seq === renderSeq && epoch === authEpoch;
+    const loading = watchLoading(content, body, label, current);
+    loadScreen(route.page).then(
+      () => { if (current()) draw(seq, { body, loading }); else loading.release(); },
+      (err) => loading.after(() => {
+        if (!current()) return;
+        showBanner(content, failure(err, routeKey(route), () => render()));
+        content.removeAttribute('aria-busy');
+      }),
+    );
+    return;
+  }
   const spec = pages.get(route.page);
   const ownHeader = { title: spec?.title ?? label, subtitle: spec?.subtitle ?? null };
   setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
+    held?.loading.release();
     setContent(content, mark(state('not-built')));
     return;
   }
   if (!tabs.some(([t]) => t === route.tab)) {
+    held?.loading.release();
     go(pathFor({ ...route, tab: tabs[0][0] }), { replace: true });
     return;
   }
@@ -1063,8 +1143,10 @@ export function render() {
     const href = pathFor({ ...route, tab: t });
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
-  const body = el('div', { class: 'body' });
-  setContent(content, mark(body));
+  const body = held?.body ?? el('div', { class: 'body' });
+  // A held body is in place already, under its loading state.
+  if (held) mark(body);
+  else setContent(content, mark(body));
   // Every effect of this render is dropped once the user navigates or signs in as someone else.
   const epoch = authEpoch;
   const current = () => seq === renderSeq && epoch === authEpoch;
@@ -1116,7 +1198,7 @@ export function render() {
       }));
   };
 
-  const loading = watchLoading(content, body, label, current);
+  const loading = held?.loading ?? watchLoading(content, body, label, current);
   // Busy from the first render's start until it settles (data, error or empty), as a Retry is.
   content.setAttribute('aria-busy', 'true');
   runTab(spec, route, body)
@@ -1530,6 +1612,13 @@ function boot() {
     document.getElementById('content').focus();
   });
   render();
+  // The other screens load once the first paint is out, when the browser is idle,
+  // so the palette lists their actions and settings and a later visit is instant.
+  new PerformanceObserver((list, observer) => {
+    if (!list.getEntriesByName('first-contentful-paint').length) return;
+    observer.disconnect();
+    (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  }).observe({ type: 'paint', buffered: true });
   refreshCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.
