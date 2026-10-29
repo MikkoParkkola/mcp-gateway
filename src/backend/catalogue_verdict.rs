@@ -77,10 +77,10 @@ impl Backend {
     pub(crate) fn catalogue_verdict<'a>(
         &'a self,
         binding: Option<&'a str>,
-        headers: impl Into<LentCredential>,
+        headers: LentCredential,
         tool: &'a str,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<CatalogueVerdict>> + Send + 'a>> {
-        Box::pin(self.catalogue_verdict_inner(binding, headers.into(), tool))
+        Box::pin(self.catalogue_verdict_inner(binding, headers, tool))
     }
 
     async fn catalogue_verdict_inner(

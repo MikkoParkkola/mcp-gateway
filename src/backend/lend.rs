@@ -33,6 +33,6 @@ impl Backend {
                 ),
             });
         }
-        Ok(Some(entry.lender.lend(credential)))
+        Ok(Some(entry.lender.lend(credential.clone())))
     }
 }

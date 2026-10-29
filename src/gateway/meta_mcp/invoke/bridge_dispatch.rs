@@ -245,7 +245,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.tool,
             self.arguments,
             self.cache_binding,
-            self.headers,
+            self.headers.clone(),
             (self.scope, self.session_id),
         );
         let refusal = match refusal.await {

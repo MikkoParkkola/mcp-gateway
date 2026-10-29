@@ -42,11 +42,11 @@ pub(super) async fn drain(
     backend: &crate::backend::Backend,
     id: &RequestId,
     params: Option<&Value>,
-    propagated_headers: impl Into<crate::transport::LentCredential>,
+    propagated_headers: crate::transport::LentCredential,
     identity_key: Option<&str>,
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
-    let credential = propagated_headers.into();
+    let credential = propagated_headers;
     // Every page read so far. Armed until the listing is remembered, so an
     // early return, `?`, the page cap, a cancellation or an unwind still
     // revokes from what was read (MIK-8399).
@@ -85,7 +85,7 @@ pub(super) async fn drain(
             backend,
             id,
             Some(page_params),
-            (&credential, identity_key),
+            (credential.clone(), identity_key),
         )
         .await?;
         if page.error.is_some() {

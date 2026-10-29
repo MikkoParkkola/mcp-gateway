@@ -62,7 +62,7 @@ impl MetaMcp {
             )));
         };
         let caller = CallerProof::new(Some(identity), CallerProvenance::Anonymous);
-        let minted = self
+        let mut minted = self
             .resolve_caller_credential_as(server, backend.as_deref(), &idp_cfg, caller)
             .await?;
         if minted.headers.is_empty() {
@@ -79,7 +79,7 @@ impl MetaMcp {
                 Error::Config(format!("events listener for backend '{server}': {error}"))
             })?;
         Ok(crate::events::ListenerGrant {
-            headers: minted.headers,
+            headers: std::mem::take(&mut *minted.headers),
             fence,
         })
     }

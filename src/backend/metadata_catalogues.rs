@@ -43,7 +43,7 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Resource>>> {
-        self.get_resources_for_binding_lent(binding, LentCredential::from(extra_headers))
+        self.get_resources_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
             .await
     }
 
@@ -108,8 +108,11 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_resource_templates_for_binding_lent(binding, LentCredential::from(extra_headers))
-            .await
+        self.get_resource_templates_for_binding_lent(
+            binding,
+            LentCredential::unchecked(extra_headers),
+        )
+        .await
     }
 
     /// [`Self::get_resource_templates_for_binding`] for a credential the mint core produced,
@@ -171,7 +174,7 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Prompt>>> {
-        self.get_prompts_for_binding_lent(binding, LentCredential::from(extra_headers))
+        self.get_prompts_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
             .await
     }
 

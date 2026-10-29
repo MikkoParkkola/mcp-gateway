@@ -66,7 +66,9 @@ pub(super) async fn key_refusal(
         if lens == Lens::Withheld {
             return Some(absent());
         }
-        let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
+        let verdict = backend
+            .catalogue_verdict(identity_key, headers.clone(), tool)
+            .await;
         // The check may have filled the caller's slot: index it, whatever the
         // verdict; an unfilled slot is never recorded (MIK-8356).
         let proof = crate::identity_propagation::CallerProof::new(
@@ -90,19 +92,23 @@ pub(super) async fn key_refusal(
     // caller's credential, which is not resolved for it.
     // The gateway's own static headers, for the shared slot's gate: no
     // caller's credential, so nothing to check.
-    let gate = crate::transport::LentCredential::from(backend.gate_headers());
+    let gate = crate::transport::LentCredential::unchecked(backend.gate_headers());
     let (slot, lens) = match lens {
-        Lens::Withheld => ((None, &gate), Lens::Withheld),
+        Lens::Withheld => ((None, gate), Lens::Withheld),
         Lens::Catalogue => {
             // Under `off` no call lists the catalogue: judged from what is held.
             let verdict = if backend.checks_membership() {
-                backend.catalogue_verdict(identity_key, headers, tool).await
+                backend
+                    .catalogue_verdict(identity_key, headers.clone(), tool)
+                    .await
             } else {
                 Ok(backend.held_verdict(identity_key, tool))
             };
             match verdict {
-                Ok(CatalogueVerdict::Withholds) => ((identity_key, headers), Lens::Withheld),
-                _ => ((identity_key, headers), Lens::Catalogue),
+                Ok(CatalogueVerdict::Withholds) => {
+                    ((identity_key, headers.clone()), Lens::Withheld)
+                }
+                _ => ((identity_key, headers.clone()), Lens::Catalogue),
             }
         }
     };

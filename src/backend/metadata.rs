@@ -496,7 +496,7 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
-        self.get_tools_for_binding_lent(binding, LentCredential::from(extra_headers))
+        self.get_tools_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
             .await
     }
 
@@ -584,7 +584,7 @@ impl Backend {
     pub(crate) async fn tools_for_check(
         &self,
         binding: Option<&str>,
-        headers: impl Into<LentCredential>,
+        headers: LentCredential,
         stale_hit: bool,
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
         // A fresh slot fetches nothing, so no lease, hook or deadline (PERF.12).
@@ -595,12 +595,8 @@ impl Backend {
         // Boxed: the fill's future is large, and inline it would make every
         // check's future large, the fresh hit above included; boxed, only a
         // check that really fetches pays for it.
-        let fill = Box::pin(self.tools_fill(
-            binding,
-            headers.into(),
-            FillBound::CallTimeout(limit),
-            stale_hit,
-        ));
+        let fill =
+            Box::pin(self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit));
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
             tokio::time::timeout(self.tools_fill_bound(), fill)

@@ -68,32 +68,17 @@ impl std::fmt::Debug for LentCredential {
     }
 }
 
-/// Plain headers carry no check: a non-mint source (a shared-slot call, a
-/// call with no identity) and the test fixtures lend this way.
-impl From<&[(String, String)]> for LentCredential {
-    fn from(headers: &[(String, String)]) -> Self {
+impl LentCredential {
+    /// A loan with no send check, for headers no mint produced: a shared
+    /// slot's call, a call with no identity, a backend's own gate headers. A
+    /// lent-only slot refuses it. The only way to build one without a check,
+    /// so every such loan is named where it is made; there is deliberately no
+    /// `From` conversion that could make one silently.
+    pub(crate) fn unchecked(headers: &[(String, String)]) -> Self {
         Self {
             headers: headers.to_vec().into(),
             check: None,
         }
-    }
-}
-
-impl From<&Vec<(String, String)>> for LentCredential {
-    fn from(headers: &Vec<(String, String)>) -> Self {
-        Self::from(headers.as_slice())
-    }
-}
-
-impl<const N: usize> From<&[(String, String); N]> for LentCredential {
-    fn from(headers: &[(String, String); N]) -> Self {
-        Self::from(headers.as_slice())
-    }
-}
-
-impl From<&LentCredential> for LentCredential {
-    fn from(credential: &LentCredential) -> Self {
-        credential.clone()
     }
 }
 
@@ -136,8 +121,7 @@ pub(crate) struct Lender {
 impl Lender {
     /// Lend `credential` until the returned [`Loan`] drops. Plain headers
     /// lend with no check, which a lent-only slot refuses to send.
-    pub(crate) fn lend(self: &Arc<Self>, credential: impl Into<LentCredential>) -> Loan {
-        let credential = credential.into();
+    pub(crate) fn lend(self: &Arc<Self>, credential: LentCredential) -> Loan {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         self.loans.lock().push(Lent {
             id,
@@ -421,8 +405,8 @@ mod tests {
     #[test]
     fn a_send_finds_its_own_loan_by_its_headers() {
         let lender = Arc::new(Lender::default());
-        let first = lender.lend(&headers("one"));
-        let _second = lender.lend(&headers("two"));
+        let first = lender.lend(LentCredential::unchecked(&headers("one")));
+        let _second = lender.lend(LentCredential::unchecked(&headers("two")));
         let mine = lender.matching_all(&headers("one"));
         assert_eq!(mine.len(), 1);
         assert_eq!(mine[0].id, first.id(), "never the newest loan: its own");
@@ -437,7 +421,7 @@ mod tests {
         let lender = Arc::new(Lender::default());
         let mut both = headers("one");
         both.push(("X-Api-Key".to_owned(), "key".to_owned()));
-        let _loan = lender.lend(&both);
+        let _loan = lender.lend(LentCredential::unchecked(&both));
         assert!(lender.matching_all(&headers("one")).is_empty());
         assert!(lender.matching_all(&[]).is_empty(), "empty matches nothing");
     }
@@ -445,7 +429,7 @@ mod tests {
     #[test]
     fn mcp_param_mirrors_on_the_call_are_ignored_for_matching() {
         let lender = Arc::new(Lender::default());
-        let loan = lender.lend(&headers("one"));
+        let loan = lender.lend(LentCredential::unchecked(&headers("one")));
         let mut call = headers("one");
         call.push(("Mcp-Param-Region".to_owned(), "eu".to_owned()));
         let found = lender.matching_all(&call);
@@ -456,8 +440,8 @@ mod tests {
     #[test]
     fn the_first_starter_wins_and_only_its_own_guard_clears_it() {
         let lender = Arc::new(Lender::default());
-        let first = lender.lend(&headers("one"));
-        let second = lender.lend(&headers("two"));
+        let first = lender.lend(LentCredential::unchecked(&headers("one")));
+        let second = lender.lend(LentCredential::unchecked(&headers("two")));
         let held = lender.starting(first.id());
         let ignored = lender.starting(second.id());
         assert_eq!(lender.starter().map(|s| s.id), Some(first.id()));
@@ -582,7 +566,7 @@ mod tests {
     /// so no copy of a caller's credential outlives its holder unwiped.
     #[test]
     fn a_lent_credentials_headers_are_wiped_on_drop() {
-        let credential = LentCredential::from(&headers("one"));
+        let credential = LentCredential::unchecked(&headers("one"));
         let wiped: &Zeroizing<Vec<(String, String)>> = &credential.headers;
         assert_eq!(wiped.as_slice(), headers("one").as_slice());
     }
@@ -594,8 +578,8 @@ mod tests {
     #[test]
     fn a_cancelled_first_starter_hands_the_start_to_the_next() {
         let lender = Arc::new(Lender::default());
-        let first = lender.lend(&headers("one"));
-        let second = lender.lend(&headers("two"));
+        let first = lender.lend(LentCredential::unchecked(&headers("one")));
+        let second = lender.lend(LentCredential::unchecked(&headers("two")));
         let first_waits = lender.starting(first.id());
         let _second_waits = lender.starting(second.id());
         drop(first_waits);
@@ -610,7 +594,7 @@ mod tests {
         lender.on_definitive_refusal(Box::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
         }));
-        let loan = lender.lend(&headers("one"));
+        let loan = lender.lend(LentCredential::unchecked(&headers("one")));
         lender.refuse(loan.id(), Refusal::ThisLoan);
         lender.refuse(loan.id(), Refusal::Definitive);
         assert_eq!(evicted.load(Ordering::SeqCst), 1, "the upgrade evicts");
@@ -631,7 +615,7 @@ mod tests {
         lender.on_definitive_refusal(Box::new(move || {
             counted.fetch_add(1, Ordering::SeqCst);
         }));
-        let loan = lender.lend(&headers("one"));
+        let loan = lender.lend(LentCredential::unchecked(&headers("one")));
         lender.refuse(loan.id(), Refusal::Transient);
         assert_eq!(loan.refused(), None, "a transient fault marks nothing");
         lender.refuse(loan.id(), Refusal::Definitive);
@@ -642,7 +626,7 @@ mod tests {
             1,
             "evicted once, at the refusal"
         );
-        let other = lender.lend(&headers("two"));
+        let other = lender.lend(LentCredential::unchecked(&headers("two")));
         lender.refuse(other.id(), Refusal::ThisLoan);
         assert_eq!(other.refused(), Some(Refusal::ThisLoan));
         assert_eq!(
@@ -685,5 +669,47 @@ mod tests {
                 "{series} not counted once:\n{rendered}"
             );
         }
+    }
+
+    /// No conversion builds a loan: one would make a loan with no send check
+    /// at a call site that never says so. Every unchecked loan is made by
+    /// `LentCredential::unchecked`, by name. Scans every source file for an
+    /// impl header that converts into the type.
+    #[test]
+    fn no_conversion_builds_a_loan() {
+        fn scan(dir: &std::path::Path, hits: &mut Vec<String>) {
+            for entry in std::fs::read_dir(dir).expect("src is readable") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    scan(&path, hits);
+                    continue;
+                }
+                if path.extension().is_none_or(|ext| ext != "rs") {
+                    continue;
+                }
+                let text = std::fs::read_to_string(&path).expect("a source file");
+                let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                // Built at run time, so this row's own text never matches.
+                let target = format!("{}{}", "Lent", "Credential");
+                let conversions = [concat!("From", "<"), concat!("Into", "<")];
+                for (at, _) in flat.match_indices(&target) {
+                    let Some(start) = flat[..at].rfind("impl") else {
+                        continue;
+                    };
+                    // The impl header up to the type, path prefix included.
+                    let header = &flat[start..at];
+                    if header.contains(['{', '}']) || !header.contains(" for ") {
+                        continue;
+                    }
+                    if conversions.iter().any(|c| header.contains(c)) {
+                        hits.push(format!("{}: {header}", path.display()));
+                    }
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut hits = Vec::new();
+        scan(&src, &mut hits);
+        assert!(hits.is_empty(), "a conversion builds a loan: {hits:?}");
     }
 }

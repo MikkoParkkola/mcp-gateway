@@ -259,7 +259,7 @@ impl MetaMcp {
         backend: &Arc<Backend>,
         allow_empty_cache_fetch: bool,
         binding: Option<&str>,
-        headers: impl Into<crate::transport::LentCredential>,
+        headers: crate::transport::LentCredential,
     ) -> Option<Arc<Vec<Tool>>> {
         let tools = backend.get_cached_tools_snapshot_for(binding);
         // An empty shared slot is filled behind this read, never by it: one
@@ -288,10 +288,7 @@ impl MetaMcp {
         // A per-user slot fills on its owner's own credentialed read, never on a
         // background task's, so an empty one is always worth filling here.
         if allow_empty_cache_fetch || binding.is_some() {
-            return match backend
-                .get_tools_for_binding_lent(binding, headers.into())
-                .await
-            {
+            return match backend.get_tools_for_binding_lent(binding, headers).await {
                 Ok(tools) if !tools.is_empty() => Some(tools),
                 Ok(_) => None,
                 Err(e) => {

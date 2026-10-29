@@ -33,7 +33,7 @@ pub(super) async fn dispatch_tool_call(
     backend: &crate::backend::Backend,
     id: &RequestId,
     params: Option<Value>,
-    (propagated_headers, identity_key): (impl Into<crate::transport::LentCredential>, Option<&str>),
+    (propagated_headers, identity_key): (crate::transport::LentCredential, Option<&str>),
 ) -> crate::Result<JsonRpcResponse> {
     send_in_scope(
         backend,
@@ -52,7 +52,7 @@ pub(super) async fn dispatch_non_call(
     backend: &crate::backend::Backend,
     id: &RequestId,
     params: Option<Value>,
-    (propagated_headers, identity_key): (impl Into<crate::transport::LentCredential>, Option<&str>),
+    (propagated_headers, identity_key): (crate::transport::LentCredential, Option<&str>),
 ) -> crate::Result<JsonRpcResponse> {
     send_in_scope(
         backend,
@@ -79,10 +79,10 @@ async fn send_in_scope(
     method: &str,
     id: &RequestId,
     params: Option<Value>,
-    propagated_headers: impl Into<crate::transport::LentCredential>,
+    propagated_headers: crate::transport::LentCredential,
     identity_key: Option<&str>,
 ) -> crate::Result<JsonRpcResponse> {
-    let credential = propagated_headers.into();
+    let credential = propagated_headers;
     // Collected and discarded unread: nothing reaches a client, so no screen.
     let (response, _discarded) = crate::transport::notification_sink::collect(None, async {
         if credential.headers.is_empty() && identity_key.is_none() {

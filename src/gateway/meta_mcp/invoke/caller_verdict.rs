@@ -489,7 +489,7 @@ impl MetaMcp {
         (server, tool): (&str, &str),
         backend: &Backend,
         binding: Option<&str>,
-        headers: impl Into<crate::transport::LentCredential>,
+        headers: crate::transport::LentCredential,
         proof: CallerProof<'_>,
     ) -> crate::Result<SlotJudgement> {
         let verdict = backend.catalogue_verdict(binding, headers, tool).await;
@@ -638,9 +638,8 @@ impl ColdFill {
             backend.tools_fill_bound(),
         );
         let filled = backend
-            .tools_for_check(Some(&binding), &headers, false)
+            .tools_for_check(Some(&binding), headers, false)
             .await;
-        drop(headers);
         if filled.is_ok() {
             backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
         }

@@ -42,7 +42,7 @@ async fn a_lent_only_slot_sends_nothing_with_nothing_lent() {
             "built headers with nothing lent"
         );
     }
-    let empty = lender.lend(&[]);
+    let empty = lender.lend(LentCredential::unchecked(&[]));
     assert!(
         t.build_mcp_headers(HeaderMode::Request { method: "m" }, None, &[])
             .await
@@ -274,7 +274,7 @@ async fn a_send_carries_its_own_loan_not_the_newest() {
 #[tokio::test]
 async fn an_unchecked_loan_is_refused_on_a_lent_only_slot() {
     let (t, lender) = slot("http://localhost", SlotCredential::LentOnly);
-    let _loan = lender.lend(&subscriber());
+    let _loan = lender.lend(LentCredential::unchecked(&subscriber()));
     assert!(request_headers(&t, &subscriber()).await.is_err());
 }
 

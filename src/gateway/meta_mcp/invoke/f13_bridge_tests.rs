@@ -144,7 +144,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &LentCredential::from(&headers),
+        headers: &LentCredential::unchecked(&headers),
         cache_binding: Some("beta@edits"),
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,

@@ -164,7 +164,7 @@ impl Backend {
     pub(crate) fn undeclared_key_refusal<'a>(
         &'a self,
         identity_key: Option<&'a str>,
-        headers: impl Into<LentCredential>,
+        headers: LentCredential,
         tool: &'a str,
         arguments: &'a Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
@@ -186,7 +186,7 @@ impl Backend {
     /// `RateLimited`, and under `closed` the fill's transport error.
     pub(crate) fn catalogue_refusal<'a>(
         &'a self,
-        (identity_key, headers): (Option<&'a str>, impl Into<LentCredential>),
+        (identity_key, headers): (Option<&'a str>, LentCredential),
         tool: &'a str,
         arguments: &'a Value,
         lens: Lens,
@@ -195,12 +195,7 @@ impl Backend {
         {
             return Box::pin(std::future::ready(answer));
         }
-        Box::pin(self.undeclared_key_refusal_inner(
-            (identity_key, headers.into()),
-            tool,
-            arguments,
-            lens,
-        ))
+        Box::pin(self.undeclared_key_refusal_inner((identity_key, headers), tool, arguments, lens))
     }
 
     /// The answer `undeclared_key_refusal_inner` reaches without a fetch.
@@ -521,7 +516,12 @@ mod tests {
         assert!(backend.is_blocked_tool("evil_read"), "premise: withheld");
         assert!(
             backend
-                .undeclared_key_refusal(None, &[], "evil_read", &json!({"q": "x"}))
+                .undeclared_key_refusal(
+                    None,
+                    crate::transport::LentCredential::default(),
+                    "evil_read",
+                    &json!({"q": "x"})
+                )
                 .await
                 .expect("no failsafe refusal")
                 .is_some(),
@@ -547,7 +547,12 @@ mod tests {
         ];
         backend.remember_listed_tools(None, false, &listed);
         let refusal = backend
-            .undeclared_key_refusal(None, &[], "edit", &json!({"b": 1}))
+            .undeclared_key_refusal(
+                None,
+                crate::transport::LentCredential::default(),
+                "edit",
+                &json!({"b": 1}),
+            )
             .await;
         assert!(
             refusal.expect("no failsafe refusal").is_some(),
@@ -558,7 +563,12 @@ mod tests {
     /// The check on `edit` with one argument `key`, on a warm shared slot.
     async fn judged(backend: &Backend, key: &str) -> Option<String> {
         backend
-            .undeclared_key_refusal(None, &[], "edit", &json!({key: 1}))
+            .undeclared_key_refusal(
+                None,
+                crate::transport::LentCredential::default(),
+                "edit",
+                &json!({key: 1}),
+            )
             .await
             .expect("no failsafe refusal")
     }

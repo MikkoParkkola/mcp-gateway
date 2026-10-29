@@ -211,7 +211,7 @@ impl Backend {
         self.request_with_headers_lent(
             method,
             params,
-            crate::transport::LentCredential::from(extra_headers),
+            crate::transport::LentCredential::unchecked(extra_headers),
             identity_key,
         )
         .await
@@ -272,7 +272,7 @@ impl Backend {
         self.request_with_task_capability_lent(
             method,
             params,
-            crate::transport::LentCredential::from(extra_headers),
+            crate::transport::LentCredential::unchecked(extra_headers),
             identity_key,
         )
         .await
@@ -640,7 +640,7 @@ impl Backend {
         self.notify_with_headers_lent(
             method,
             params,
-            crate::transport::LentCredential::from(extra_headers),
+            crate::transport::LentCredential::unchecked(extra_headers),
             identity_key,
         )
         .await
