@@ -139,3 +139,61 @@ async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
         "only the step a backend ran is a replay call"
     );
 }
+
+/// A one-target plan (two steps on alpha) whose replay entry is gone, by a
+/// restart, stages nothing on re-read: its stored result is the plan's own
+/// assembly, which can carry the gateway's text for a refused step, so it is
+/// never receipted whole as the one target's answer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_restarted_one_target_plan_receipts_nothing_whole() {
+    use super::relay_plan_replay::{ALPHA, OTHER_PROSE, PROSE, Rig, playbook_args, rig, task_call};
+    use super::relay_plan_replay_guards::{renews_nothing_after_reopen, state_over_tasks};
+    let one_target = format!(
+        "name: replay\ndescription: plan steps\non_error: continue\ninputs: {{}}\nsteps:\n\
+         \x20 - name: s1\n    server: {ALPHA}\n    tool: {TOOL}\n\
+         \x20 - name: s2\n    server: {ALPHA}\n    tool: {TOOL}\n\
+         output:\n  type: object\n  properties:\n\
+         \x20   a:\n      path: $s1.content[0].text\n"
+    );
+    let first = rig(PROSE, OTHER_PROSE, Some(&one_target)).await;
+    let created = post(
+        &first.state,
+        "key-a",
+        task_call(1, "one-target", "gateway_run_playbook", &playbook_args()),
+    )
+    .await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&first.state, "key-a", &task).await;
+    std::assert_eq!(status_of(&settled), "completed", "base: {settled}");
+    let joined = first
+        .state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(
+        joined.is_clean(),
+        "the settling worker must finish: {joined:?}"
+    );
+    std::assert_eq!(first.calls(), (2, 0), "premise: both steps ran on alpha");
+    std::assert_eq!(
+        first
+            .state
+            .task_executor
+            .service
+            .store
+            .targets_for_test(&task)
+            .len(),
+        1,
+        "premise: the plan records ONE distinct target"
+    );
+    let Rig {
+        state: first_state,
+        _store: first_store,
+        ..
+    } = first;
+    let tasks_dir = first_store.path().join("tasks");
+    drop(first_state);
+    let restarted =
+        state_over_tasks(rig(PROSE, OTHER_PROSE, Some(&one_target)).await, tasks_dir).await;
+    renews_nothing_after_reopen(&restarted, &task, 330).await;
+}

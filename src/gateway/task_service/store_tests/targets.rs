@@ -433,3 +433,42 @@ async fn a_refused_round_on_a_row_with_calls_is_version_6() {
     assert_eq!(value["version"], json!(6), "{value}");
     assert_eq!(value["errorAuthor"], json!("gateway"), "{value}");
 }
+
+/// Fail closed, as for a peer's error: a legacy row that cannot name its
+/// calls is not raised past the version that stores them when its round was
+/// refused before its backend. The gateway's authorship is not recorded, so
+/// the row stays legacy and its read keeps the delivery check.
+#[tokio::test]
+async fn a_legacy_row_without_calls_records_no_gateway_authorship() {
+    use crate::gateway::meta_mcp::dispatch_log::PreSend;
+    use crate::gateway::task_service::ErrorAuthor;
+    let dir = tempfile::tempdir().unwrap();
+    let (path, id) = one_row(dir.path()).await;
+    set_version(&path.join(format!("{id}.json")), 3);
+    let store = open(&path).await;
+    let settled = store
+        .settle_bounded_by(
+            OWNER,
+            &id,
+            1,
+            (
+                TaskTransition::Complete(json!({"content": [], "isError": true})),
+                crate::gateway::task_service::record::Provenance {
+                    pre_send: PreSend::Refused,
+                    ..Default::default()
+                },
+                crate::gateway::gateway_writes::WriteRecord::default(),
+            ),
+            ErrorAuthor::Gateway,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(settled.error_author, None);
+    assert!(!settled.targets_recorded, "the row stays legacy");
+    store.close().await.unwrap();
+    let value: Value =
+        serde_json::from_slice(&fs::read(path.join(format!("{id}.json"))).unwrap()).unwrap();
+    assert_eq!(value["version"], json!(3), "{value}");
+    assert!(value.get("errorAuthor").is_none(), "{value}");
+}
