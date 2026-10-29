@@ -759,30 +759,46 @@ async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
     );
 }
 
-/// A dispatch error the backend never saw (unavailable), answered as a tool
-/// result, is the gateway's text: no receipt names the backend for it.
-#[tokio::test]
-async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
-    let meta = alpha_relay_meta(
-        Arc::new(Unreachable),
-        crate::secret_injection::SecretInjector::new(HashMap::new()),
-    );
-    let _ = super::take_staged_for_test();
-    // Authenticated: the relay check refuses an anonymous caller first.
+/// The receipts naming `alpha` that one invocation of `meta` stages, read
+/// inside the delivery's own receipt scope, as the meta path collects them.
+async fn alpha_receipts(meta: &MetaMcp) -> (super::super::Invoked, usize) {
     let bob = MetaMcpCallerContext {
         caller_key: Some("bob"),
         ..ctx(&AllowAll)
     };
     let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
-    let invoked = Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
+    super::RELAY_RECEIPTS
+        .scope(std::cell::RefCell::new(Vec::new()), async {
+            let invoked =
+                Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
+            let staged = super::RELAY_RECEIPTS
+                .with(|r| r.borrow().iter().filter(|r| r.server == "alpha").count());
+            (invoked, staged)
+        })
+        .await
+}
+
+/// A dispatch error the backend never saw (unavailable), answered as a tool
+/// result, is the gateway's text: no receipt names the backend for it. The
+/// control, an answered call, stages one in the same scope.
+#[tokio::test]
+async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
+    let none = crate::secret_injection::SecretInjector::new(HashMap::new());
+    let answered = alpha_relay_meta(
+        Arc::new(Seen(Arc::new(parking_lot::Mutex::new(Vec::new())))),
+        none,
+    );
+    let (_, control) = alpha_receipts(&answered).await;
+    assert_eq!(control, 1, "control: an answered call stages its receipt");
+    let refused = alpha_relay_meta(
+        Arc::new(Unreachable),
+        crate::secret_injection::SecretInjector::new(HashMap::new()),
+    );
+    let (invoked, staged) = alpha_receipts(&refused).await;
     assert_eq!(
         invoked.pre_send,
         crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
         "premise: the dispatch error is a refusal before the backend"
     );
-    let staged = super::take_staged_for_test();
-    assert!(
-        staged.is_empty(),
-        "a receipt was staged for the gateway's text: {staged:?}"
-    );
+    assert_eq!(staged, 0, "a receipt was staged for the gateway's text");
 }
