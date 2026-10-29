@@ -283,3 +283,64 @@ fn insertion_gives_up_on_flow_anchor_and_inline_empty_parents() {
 fn an_empty_document_edits_as_an_empty_root() {
     assert_eq!(edited("", &[set_int("a.b", 1)]), "a:\n  b: 1\n");
 }
+
+// A18: a hand table in place of a property test (no property-testing
+// library): key order, nesting depth, and a comment beside each edit.
+
+#[test]
+fn edits_keep_untouched_bytes_across_order_depth_and_comments() {
+    let new_v = || (path("s.new"), Change::Set(Scalar::Str("v".into())));
+    let cases: Vec<(&str, Vec<(FieldPath, Change)>, &str)> = vec![
+        // Unsorted keys: an insert goes last, nothing is reordered.
+        (
+            "z: 1\na: 2\nm: 3\n",
+            vec![set_int("b", 4)],
+            "z: 1\na: 2\nm: 3\nb: 4\n",
+        ),
+        // Four levels deep, beside an inline comment.
+        (
+            "a:\n  b:\n    c:\n      d: 1 # deep\n",
+            vec![set_int("a.b.c.e", 2)],
+            "a:\n  b:\n    c:\n      d: 1 # deep\n      e: 2\n",
+        ),
+        // A new chain under a deep parent ends after that parent's subtree.
+        (
+            "a:\n  b:\n    c:\n      d: 1 # deep\n",
+            vec![set_int("a.b.x.y", 3)],
+            "a:\n  b:\n    c:\n      d: 1 # deep\n    x:\n      y: 3\n",
+        ),
+        // Full-line and inline comments around a value edit.
+        (
+            "# top\na: 1 # one\n# mid\nb: 2 # two\n",
+            vec![set_int("b", 5)],
+            "# top\na: 1 # one\n# mid\nb: 5 # two\n",
+        ),
+        // An insert lands before a comment that follows its parent.
+        (
+            "a:\n  b: 1 # keep\n# after\nc: 2\n",
+            vec![set_int("a.x", 1)],
+            "a:\n  b: 1 # keep\n  x: 1\n# after\nc: 2\n",
+        ),
+        // A removal beside commented lines takes only its own line.
+        (
+            "# head\na: 1\nb: 2 # two\n",
+            vec![remove("a")],
+            "# head\nb: 2 # two\n",
+        ),
+        // Set, insert and remove under one parent in one save.
+        (
+            "s:\n  k: 1 # k\n  old: 2\nt: 3\n",
+            vec![set_int("s.k", 9), new_v(), remove("s.old")],
+            "s:\n  k: 9 # k\n  new: \"v\"\nt: 3\n",
+        ),
+        // A file indented by four spaces keeps its indentation.
+        (
+            "a:\n    b: 1\n",
+            vec![set_int("a.c", 2)],
+            "a:\n    b: 1\n    c: 2\n",
+        ),
+    ];
+    for (original, changes, want) in cases {
+        assert_eq!(edited(original, &changes), want, "from {original:?}");
+    }
+}
