@@ -394,9 +394,10 @@ pub(super) fn apply_mutation(
 /// Resolve the control-plane actor.
 ///
 /// When a verified identity is present, the role comes from the issuer-scoped
-/// role mapping (MIK-6688); an identity that matches no rule gets `Auditor`
-/// (least privilege). With no verified identity, the legacy admin-key
-/// projection applies (admin key -> Admin, else Auditor) — backward compatible.
+/// role mapping; an identity that matches no rule gets `Viewer`, which reads
+/// only its own grants and audit events. With no verified identity, an admin
+/// key is `Admin` and any other caller `Viewer`. `Auditor` is only ever an
+/// explicit role rule, since it reads every principal's rows.
 pub(in crate::gateway::ui) fn actor_from_client(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
@@ -405,7 +406,7 @@ pub(in crate::gateway::ui) fn actor_from_client(
     if let Some(id) = identity {
         let role = role_mapping
             .resolve_role(id)
-            .unwrap_or(ControlPlaneRole::Auditor);
+            .unwrap_or(ControlPlaneRole::Viewer);
         let display_name = id.name.clone().unwrap_or_else(|| id.email.clone());
         return ControlPlaneActor {
             actor_id: id.stable_actor_id(),
@@ -423,13 +424,13 @@ pub(in crate::gateway::ui) fn actor_from_client(
         ),
         Some(client) => (
             client.name.clone(),
-            ControlPlaneRole::Auditor,
-            "local-auditors".to_string(),
+            ControlPlaneRole::Viewer,
+            "local-viewers".to_string(),
         ),
         None => (
             "anonymous".to_string(),
-            ControlPlaneRole::Auditor,
-            "local-auditors".to_string(),
+            ControlPlaneRole::Viewer,
+            "local-viewers".to_string(),
         ),
     };
 
