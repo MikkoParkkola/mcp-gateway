@@ -158,6 +158,7 @@ pub(super) fn default_auth(
     overlay: &crate::config::EnvOverlay,
     record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
 ) -> crate::gateway::auth::ResolvedAuthConfig {
+    // invariant: the default auth config names no secret reference to resolve.
     crate::gateway::auth::ResolvedAuthConfig::try_from_config_keyed(
         &crate::config::AuthConfig::default(),
         overlay,

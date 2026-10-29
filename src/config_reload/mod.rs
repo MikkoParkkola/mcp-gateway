@@ -317,6 +317,8 @@ impl LiveConfig {
         let prepared = if same_auth {
             Generation::prepare_startup(config, Arc::clone(published.auth()))
         } else {
+            // A test-only path: a source pin keeps production off it.
+            // invariant: a config a test cannot prepare is a broken fixture.
             self.prepare(config, &crate::config::EnvOverlay::none())
                 .expect("the config prepares")
         };

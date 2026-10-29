@@ -51,7 +51,6 @@ src/gateway/server/run_steps.rs	GatewayKeyPair::generate().expect("RSA key pair 
 src/gateway/server/stdio_loop.rs	.expect("the admission semaphore is never closed");	2
 src/gateway/server/stdio_loop.rs	let slot = slot.expect("a spawned request holds the slot it was admitted on");	1
 src/gateway/server/stdio_nonce.rs	.expect("the OS RNG must yield 32 bytes");	1
-src/gateway/server/stdio_tasks.rs	.expect("the default auth configuration holds no secret to resolve");	1
 src/gateway/server/support.rs	.expect("Failed to install Ctrl+C handler");	1
 src/gateway/server/support.rs	.expect("Failed to install SIGTERM handler")	1
 src/gateway/task_service/execution.rs	_ => unreachable!("matched above"),	1
