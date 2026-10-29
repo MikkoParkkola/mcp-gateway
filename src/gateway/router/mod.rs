@@ -162,6 +162,8 @@ mod hardened_identity_tests;
 mod identity_parity_tests;
 mod judged_answer;
 #[cfg(test)]
+mod live_keys_tests;
+#[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
 mod mcp_nonce_tests;
