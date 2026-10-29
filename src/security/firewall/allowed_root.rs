@@ -179,23 +179,44 @@ pub(crate) struct RootOutcome {
     pub(crate) findings: Vec<(Finding, FirewallAction)>,
 }
 
-/// The folder check. Inert in this commit: decides nothing.
-pub(crate) fn root_check(
-    _firewall: &super::Firewall,
-    _target: RuleTarget<'_>,
-    _args: &Value,
-    _backend: Option<&crate::backend::Backend>,
-) -> RootOutcome {
-    RootOutcome::default()
-}
+#[path = "allowed_root_check.rs"]
+mod check;
+pub(crate) use check::{apply_roots, root_check};
 
-/// Fold a folder outcome into the content action. Inert in this commit:
-/// returns the content action and no findings.
-pub(crate) fn apply_roots(
-    _outcome: RootOutcome,
-    content_action: FirewallAction,
-) -> (FirewallAction, Vec<Finding>) {
-    (content_action, Vec::new())
+/// Is `value` inside one of `roots`? Both sides canonical, compared by
+/// component; a missing remainder resolves through its deepest existing
+/// ancestor. Minimal form: the shared pool, deadline and look-alike check
+/// replace it in the next commit.
+fn judge(
+    _firewall: &super::Firewall,
+    roots: &[Option<std::path::PathBuf>],
+    value: &str,
+) -> Result<bool, RootReason> {
+    let mut canonical_roots = Vec::new();
+    for root in roots {
+        let root = root.as_ref().ok_or(RootReason::RootUnresolvable)?;
+        canonical_roots
+            .push(std::fs::canonicalize(root).map_err(|_| RootReason::RootUnresolvable)?);
+    }
+    let path = std::path::Path::new(value);
+    let mut existing = path;
+    let mut rest = Vec::new();
+    let resolved = loop {
+        match std::fs::canonicalize(existing) {
+            Ok(prefix) => break rest.iter().rev().fold(prefix, |p, c| p.join(c)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+                    return Err(RootReason::Unresolvable);
+                };
+                rest.push(name);
+                existing = parent;
+            }
+            Err(_) => return Err(RootReason::Unresolvable),
+        }
+    };
+    Ok(canonical_roots
+        .iter()
+        .any(|root| resolved.starts_with(root)))
 }
 
 /// Argument names the suggester treats as paths (design section 7).

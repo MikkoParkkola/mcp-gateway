@@ -382,7 +382,8 @@ impl Firewall {
         let mut findings = self.content_findings(target.tool, args);
         let (action, root_findings) =
             allowed_root::apply_roots(roots, self.resolve_action(target, &findings));
-        findings.extend(root_findings);
+        // A root finding leads: the refusal's wire text is the first finding's.
+        findings.splice(0..0, root_findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -473,7 +474,8 @@ impl Firewall {
         let roots = allowed_root::root_check(self, target, args, backend);
         let content_action = self.resolve_action(target, &findings);
         let (rooted_action, root_findings) = allowed_root::apply_roots(roots, content_action);
-        findings.extend(root_findings);
+        // A root finding leads: the refusal's wire text is the first finding's.
+        findings.splice(0..0, root_findings);
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
