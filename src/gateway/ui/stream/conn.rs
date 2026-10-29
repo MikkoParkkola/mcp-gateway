@@ -92,11 +92,20 @@ impl Conn {
                     Ok(Err(_)) => return Err(End::ClientGone),
                     Err(_) => return Err(End::WriteStalled),
                 },
-                _ = recheck.tick() => self.require_entitled().await?,
+                _ = recheck.tick() => self.upkeep().await?,
             }
         };
         self.require_entitled().await?;
         permit.send(Ok(bytes));
+        Ok(())
+    }
+
+    /// What a stream does each time it wakes to check on itself, wherever it
+    /// waits: re-check the credential, and revive a watcher that ended.
+    async fn upkeep(&self) -> Result<(), End> {
+        self.require_entitled().await?;
+        let hub = self.state.dashboard_bootstrap.stream_hub();
+        hub.ensure_watcher(|old| watcher::spawn(&self.state, old));
         Ok(())
     }
 
@@ -143,27 +152,21 @@ async fn drive(
     rx: &mut tokio::sync::watch::Receiver<Snapshot>,
 ) -> Result<End, End> {
     let mut sent = Sent::new(boot);
-    let hub = conn.state.dashboard_bootstrap.stream_hub();
-    let fresh = rx.wait_for(|s| s.fresh);
-    let first = tokio::select! {
-        r = fresh => r.map(|s| s.clone()).map_err(|_| End::ClientGone)?,
-        () = conn.tx.closed() => return Err(End::ClientGone),
-    };
+    let start = Instant::now();
+    let deadline = start + MAX_LIFETIME;
+    let mut recheck = interval_at(start + RECHECK, RECHECK);
+    recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let first = first_snapshot(conn, rx, &mut recheck, deadline).await?;
     let hello = json!({"kinds": conn.kinds, "head": sent.head(&first, conn.admin)});
     conn.send(hello_frame(&hello)).await?;
     sent.deliver(conn, &first).await?;
-    let start = Instant::now();
-    let mut keep = interval_at(start + KEEP_ALIVE, KEEP_ALIVE);
-    let mut recheck = interval_at(start + RECHECK, RECHECK);
-    recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let deadline = start + MAX_LIFETIME;
+    let mut keep = interval_at(Instant::now() + KEEP_ALIVE, KEEP_ALIVE);
     loop {
         tokio::select! {
             () = conn.tx.closed() => return Ok(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Ok(End::Lifetime),
             _ = recheck.tick() => {
-                if let Err(end) = conn.require_entitled().await { return Ok(end); }
-                hub.ensure_watcher(|old| watcher::spawn(&conn.state, old));
+                if let Err(end) = conn.upkeep().await { return Ok(end); }
             }
             _ = keep.tick() => conn.send(Bytes::from_static(b": keep-alive\n\n")).await?,
             changed = rx.changed() => {
@@ -171,6 +174,26 @@ async fn drive(
                 let snap = rx.borrow_and_update().clone();
                 sent.deliver(conn, &snap).await?;
             }
+        }
+    }
+}
+
+/// Wait for the first fresh snapshot, with the same upkeep and lifetime limit
+/// as the main loop: a revoked viewer ends and a dead watcher is replaced.
+async fn first_snapshot(
+    conn: &Conn,
+    rx: &mut tokio::sync::watch::Receiver<Snapshot>,
+    recheck: &mut tokio::time::Interval,
+    deadline: Instant,
+) -> Result<Snapshot, End> {
+    let fresh = rx.wait_for(|s| s.fresh);
+    tokio::pin!(fresh);
+    loop {
+        tokio::select! {
+            r = &mut fresh => return r.map(|s| s.clone()).map_err(|_| End::ClientGone),
+            () = conn.tx.closed() => return Err(End::ClientGone),
+            () = tokio::time::sleep_until(deadline) => return Err(End::Lifetime),
+            _ = recheck.tick() => conn.upkeep().await?,
         }
     }
 }
