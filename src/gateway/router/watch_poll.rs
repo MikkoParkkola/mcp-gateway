@@ -67,14 +67,13 @@ pub(crate) async fn poll_capability(
     let identity = super::identity::caller_key(None, None, Some(client));
     #[cfg(feature = "firewall")]
     if let Some(fw) = &state.firewall {
-        let verdict = fw.check_request(
-            &session,
-            &target.backend,
-            &target.capability,
-            &arguments,
-            &client.name,
-            &identity,
-        );
+        let rule_target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(&target.backend),
+            tool: &target.capability,
+            key: crate::security::response_policy::KeyOf::of_client(client.api_key_identity()),
+        };
+        let verdict =
+            fw.check_request_keyed(&session, rule_target, &arguments, &client.name, &identity);
         if !verdict.allowed {
             return Err(PollRefused::Firewall);
         }
@@ -129,6 +128,7 @@ pub(crate) async fn poll_capability(
     let targets = [crate::security::response_policy::ResponsePolicyTarget {
         server: target.backend.clone(),
         tool: target.capability.clone(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     state
         .meta_mcp

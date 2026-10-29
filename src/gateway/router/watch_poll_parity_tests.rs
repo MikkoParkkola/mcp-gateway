@@ -25,7 +25,7 @@ const NOT_ON_POLLS: [&str; 1] = ["session_profile"];
 /// the response firewall.
 const POLL_STAGES: [&str; 5] = [
     "check_authenticated_client_rate_limit(",
-    "fw.check_request(",
+    "fw.check_request_keyed(",
     "read_only_call_as(",
     "dispatch_below_gate_native_result(",
     "inspect_task_result(",

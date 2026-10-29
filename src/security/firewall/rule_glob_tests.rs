@@ -17,6 +17,9 @@ fn allow_rule(tool_match: &str) -> FirewallRule {
         action: FirewallAction::Allow,
         reason: None,
         scan: vec![],
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 
@@ -69,7 +72,7 @@ fn an_invalid_allow_glob_does_not_allow_an_unrelated_tool() {
 }
 
 /// A `block` rule with a broken glob is refused the same way: its fallback
-/// matches no tool, so the load is what keeps it from failing open.
+/// would block every tool, so the load refusal names the broken key.
 #[test]
 fn an_invalid_block_glob_is_refused_at_load() {
     let cfg = FirewallConfig {
@@ -98,11 +101,45 @@ fn gateway_yaml_with_an_invalid_rule_glob_does_not_load() {
     assert!(err.contains("security.firewall.rules[0].match"), "{err}");
 }
 
-/// A rule whose glob does not parse matches no tool, its own text included.
+/// A rule whose glob does not parse, reaching the firewall without the load,
+/// fails closed: it blocks on every tool, whatever its action. Matching no
+/// tool would leave a `block` rule blocking nothing.
 #[test]
-fn an_invalid_glob_compiles_to_a_rule_that_matches_nothing() {
-    let rule = compile_rule(&allow_rule("exec_*["));
-    for tool in ["exec_*[", "exec_run", "exec_", "anything"] {
-        assert!(!rule_matches(&rule, tool), "matched {tool}");
+fn an_invalid_glob_compiles_to_a_block_on_every_tool() {
+    for action in [
+        FirewallAction::Allow,
+        FirewallAction::Warn,
+        FirewallAction::Block,
+    ] {
+        let rule = compile_rule(&FirewallRule {
+            action,
+            ..allow_rule("exec_*[")
+        });
+        assert_eq!(rule.action, FirewallAction::Block, "{action:?}");
+        for tool in ["exec_*[", "exec_run", "exec_", "anything"] {
+            assert!(rule_matches(&rule, tool), "{action:?} missed {tool}");
+        }
     }
+}
+
+/// A broken `block` glob ahead of an `allow` still blocks the call.
+#[test]
+fn an_invalid_block_glob_still_blocks_without_the_load() {
+    let cfg = FirewallConfig {
+        rules: vec![
+            FirewallRule {
+                action: FirewallAction::Block,
+                ..allow_rule(BAD_GLOB)
+            },
+            allow_rule("*"),
+        ],
+        ..FirewallConfig::default()
+    };
+    let fw = Firewall::from_config(cfg, None);
+    let args = json!({ "cmd": "; rm -rf /" });
+    let verdict = fw.check_request("s1", "srv", "shell_run", &args, "caller", "s1");
+    assert!(
+        !verdict.allowed,
+        "a broken block glob let it through: {verdict:?}"
+    );
 }
