@@ -48,7 +48,7 @@ impl crate::transport::Transport for Prose {
 
 /// A backend whose every call fails before it is reached: the transport
 /// reports the backend unavailable, a pre-dispatch error.
-struct Unreachable;
+struct Unreachable(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for Unreachable {
@@ -57,6 +57,9 @@ impl crate::transport::Transport for Unreachable {
         method: &str,
         _params: Option<Value>,
     ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/call" {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         if method == "tools/list" {
             let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(
@@ -141,6 +144,16 @@ async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
         seen.lock().is_empty(),
         "premise: nothing reached the backend"
     );
+    // Premise: refused by the injection failure itself, not by an earlier exit.
+    let answer = match &invoked.outcome {
+        Ok(super::super::SourcedOutcome::Live((value, _, _))) => value.to_string(),
+        Ok(super::super::SourcedOutcome::Stored(_)) => panic!("premise: a stored answer"),
+        Err(error) => panic!("premise: refused earlier than the injection: {error}"),
+    };
+    assert!(
+        answer.contains("Failed to resolve credential 'token'"),
+        "premise: the injection failure is the answer: {answer}"
+    );
     assert_eq!(
         invoked.pre_send,
         crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
@@ -174,8 +187,9 @@ async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
     let answered = alpha_relay_meta(Arc::new(Prose), none);
     let (_, control) = alpha_receipts(&answered).await;
     assert_eq!(control, 1, "control: an answered call stages its receipt");
+    let tried = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let refused = alpha_relay_meta(
-        Arc::new(Unreachable),
+        Arc::new(Unreachable(Arc::clone(&tried))),
         crate::secret_injection::SecretInjector::new(HashMap::new()),
     );
     let (invoked, staged) = alpha_receipts(&refused).await;
@@ -183,6 +197,10 @@ async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
         invoked.pre_send,
         crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
         "premise: the dispatch error is a refusal before the backend"
+    );
+    assert!(
+        tried.load(std::sync::atomic::Ordering::SeqCst) > 0,
+        "premise: the call reached its transport, which reported the backend unavailable"
     );
     assert_eq!(staged, 0, "a receipt was staged for the gateway's text");
 }
