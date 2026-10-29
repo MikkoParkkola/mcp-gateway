@@ -17,7 +17,11 @@ use pretty_assertions::assert_eq;
 const URI_A: &str = "file:///a";
 const URI_B: &str = "file:///b";
 
-async fn enforced() -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
+async fn enforced() -> (
+    axum::Router,
+    Arc<RecordingTransport>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     router_with(Some(AttestationMode::Enforce), false).await
 }
 
@@ -314,7 +318,7 @@ async fn direct_route_refusal_precedes_identity_minting() {
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let (state, _store) =
+    let (_log, state, _store) =
         super::super::test_router_app_state_minting_without_route_audit(backend).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let meta =

@@ -40,7 +40,7 @@ fn key(secret: &str, admin: bool) -> ApiKeyConfig {
 }
 
 /// Auth on, one admin and one standard key.
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![key(ADMIN, true), key(STANDARD, false)],
@@ -50,7 +50,7 @@ async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
 }
 
 /// `fixture`, with `config` as the configuration the process started with.
-async fn fixture_with(config: Config) -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture_with(config: Config) -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let (mut state, dir) = fixture().await;
     Arc::get_mut(&mut state).expect("unshared").live_config = Arc::new(LiveConfig::new(config));
     (state, dir)

@@ -36,6 +36,7 @@ const probed = {
   policies: async (el, ctx) => {
     const query = ctx.object ? `?object=${encodeURIComponent(ctx.object)}` : '';
     const { value, fault } = await api(`/ui/api/page-probe${query}`);
+    if (value === 'empty') return; // G8: a completion that draws nothing
     const link = document.createElement('a');
     link.href = '/ui/servers';
     link.id = 'probe-link';

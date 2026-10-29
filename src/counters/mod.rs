@@ -400,6 +400,10 @@ pub(crate) struct CounterStore {
     /// takes one, whatever the label count. Per store, never global.
     #[cfg(test)]
     reads: std::sync::atomic::AtomicUsize,
+    /// Label windows a batch read walked bucket by bucket, so a row can prove
+    /// that labels the store does not hold share one walk.
+    #[cfg(test)]
+    window_walks: std::sync::atomic::AtomicUsize,
 }
 
 impl CounterStore {
@@ -413,6 +417,8 @@ impl CounterStore {
             inner: Mutex::new(inner),
             #[cfg(test)]
             reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            window_walks: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -460,13 +466,25 @@ impl CounterStore {
     /// Markers at or after `from`, oldest first.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
-        let inner = self.inner.lock();
+        let inner = self.read_lock();
         inner
             .markers
             .iter()
             .filter(|m| m.at >= from)
             .cloned()
             .collect()
+    }
+
+    /// The newest `limit` markers at or after `from`, newest first, and how
+    /// many markers are at or after `from` in all. One lock, and only the
+    /// rows returned are cloned.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn newest_markers(&self, from: u64, limit: usize) -> (Vec<Marker>, usize) {
+        let inner = self.read_lock();
+        let mut in_window = inner.markers.iter().rev().filter(|m| m.at >= from);
+        let newest: Vec<Marker> = in_window.by_ref().take(limit).cloned().collect();
+        let total = newest.len() + in_window.count();
+        (newest, total)
     }
 
     /// When coverage began.
@@ -565,6 +583,10 @@ impl CounterStore {
 #[cfg(test)]
 #[path = "store_tests.rs"]
 mod store_tests;
+
+#[cfg(test)]
+#[path = "pairs_tests.rs"]
+mod pairs_tests;
 
 #[cfg(test)]
 #[path = "persist_tests.rs"]

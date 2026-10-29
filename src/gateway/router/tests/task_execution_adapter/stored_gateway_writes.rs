@@ -15,7 +15,9 @@ fn text(text: &str) -> Value {
 
 /// The suite's state with `mock` registered and a `block` relay detector over
 /// every `mock` tool, so the gateway's receipts are live.
-async fn relay_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn relay_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {

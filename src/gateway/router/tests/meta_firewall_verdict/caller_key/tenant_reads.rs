@@ -65,16 +65,24 @@ fn reads_firewall(
 
 /// The router with one API-key caller and production's split firewall: one
 /// instance on `AppState`, another on the Meta-MCP, from one config.
-async fn router(mode: CrossTenantReads) -> (axum::Router, tempfile::TempDir) {
+async fn router(
+    mode: CrossTenantReads,
+) -> (axum::Router, crate::gateway::router::tests::FixtureDir) {
     windowed_router(mode, 3600).await
 }
 
-async fn windowed_router(mode: CrossTenantReads, window: u64) -> (axum::Router, tempfile::TempDir) {
+async fn windowed_router(
+    mode: CrossTenantReads,
+    window: u64,
+) -> (axum::Router, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = split_state(mode, window).await;
     (create_router(state), store)
 }
 
-async fn split_state(mode: CrossTenantReads, window: u64) -> (Arc<AppState>, tempfile::TempDir) {
+async fn split_state(
+    mode: CrossTenantReads,
+    window: u64,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     keyed_state(mode, window, &["customer_id"]).await
 }
 
@@ -83,7 +91,7 @@ async fn keyed_state(
     mode: CrossTenantReads,
     window: u64,
     arg_keys: &[&str],
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let reads = ReadHistory::shared();
     // One keyring for both, as startup pairs them (#2210, MIK-8276).
     let keys = Arc::new(crate::protocol::continuation::ContinuationState::new());
@@ -153,14 +161,22 @@ impl Transport for NotifyingBackend {
 }
 
 /// [`router`] in observe mode with a transparency log on the Meta-MCP.
-async fn logged_router() -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
+async fn logged_router() -> (
+    axum::Router,
+    crate::gateway::router::tests::FixtureDir,
+    tempfile::TempDir,
+) {
     logged_router_in(CrossTenantReads::Observe).await
 }
 
 /// [`logged_router`] in `mode`.
 async fn logged_router_in(
     mode: CrossTenantReads,
-) -> (axum::Router, tempfile::TempDir, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    crate::gateway::router::tests::FixtureDir,
+    tempfile::TempDir,
+) {
     let (state, store) = split_state(mode, 3600).await;
     let log_dir = tempfile::tempdir().expect("a log directory");
     let log = Arc::new(

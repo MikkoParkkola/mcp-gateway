@@ -17,9 +17,13 @@ const FRESH: u64 = u64::MAX;
 
 /// alice's managed gateway: `SERVER` bound to [`WORK`], alice's grant seeded,
 /// and the shared slot holding a valid [`TOOL`].
-fn managed() -> (MetaMcp, Custody) {
+fn managed() -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Custody,
+) {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
-    let (meta, _dispatches) = gateway(
+    let (log, meta, _dispatches) = gateway(
         &[(SERVER, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -35,7 +39,7 @@ fn managed() -> (MetaMcp, Custody) {
         .get(SERVER)
         .expect("the backend")
         .store_shared_tools_for_test(vec![tool]);
-    (meta, custody)
+    (log, meta, custody)
 }
 
 /// Disable [`TOOL`] by its error budget, so the disabled list has an entry
@@ -92,7 +96,7 @@ async fn disabled_names_tool(meta: &MetaMcp) -> bool {
 /// the disabled list judges the shared slot (valid) and names it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_index_entry_checked_against_current_grant() {
-    let (meta, custody) = managed();
+    let (_log, meta, custody) = managed();
     warm_alice(&meta).await;
     disable_tool(&meta);
     assert!(
@@ -128,7 +132,7 @@ async fn managed_index_entry_checked_against_current_grant() {
 /// that resolves a credential moves the counter. Green on base.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn managed_listing_lookup_is_non_minting() {
-    let (meta, custody) = managed();
+    let (_log, meta, custody) = managed();
     warm_alice(&meta).await;
     let before = custody.releases();
     Box::pin(execute(&meta, SERVER, Some(&identity("alice"))))

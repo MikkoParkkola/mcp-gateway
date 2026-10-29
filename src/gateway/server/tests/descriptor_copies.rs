@@ -36,7 +36,7 @@ fn test_path(name: &str) -> String {
 }
 
 /// The fixture's `demo` backend with `search` listed, its schema padded.
-async fn state(pad: usize) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state(pad: usize) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = crate::gateway::router::tests::direct_route_state_with_identity(
         crate::config::AgentIdentityConfig::default(),
     )

@@ -23,29 +23,29 @@ use crate::security::audit::{AuditEnvelope, AuditWho};
 use crate::security::transparency_log::TransparencyLogConfig;
 
 const OVERVIEW: &str = "/ui/api/overview";
-const ADMIN_KEY: &str = "overview-admin-key";
+pub(super) const ADMIN_KEY: &str = "overview-admin-key";
 const STANDARD_KEY: &str = "overview-standard-key";
 /// The handler's caps (`ui/overview.rs`), repeated so a changed cap is a
 /// deliberate edit in both places.
-const SERVER_ROWS: usize = 24;
-const NEEDS_YOU_ROWS: usize = 20;
-const ACTION_ROWS: usize = 5;
+pub(super) const SERVER_ROWS: usize = 24;
+pub(super) const NEEDS_YOU_ROWS: usize = 20;
+pub(super) const ACTION_ROWS: usize = 5;
 /// The longest a clipped text field serializes to: 256 bytes, each a control
 /// character JSON writes as a six-byte `\u00XX` escape, plus its quotes.
-const FIELD: usize = 2 + 6 * 256;
+pub(super) const FIELD: usize = 2 + 6 * 256;
 /// The body's byte ceiling from the caps alone. Each row is its clipped text
 /// fields at [`FIELD`] plus a margin for keys and numbers: a server row has one
 /// text field, a needs-you row two (subject, name), an action row seven (at,
 /// route, method, outcome, authority, subject, account). The rest of the body
 /// (KPIs, `more`, `complete`, `degraded`) fits in 4 KiB.
-const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
+pub(super) const WORST_BODY: usize = SERVER_ROWS * (FIELD + 64)
     + NEEDS_YOU_ROWS * (2 * FIELD + 256)
     + ACTION_ROWS * (7 * FIELD + 256)
     + 4096;
 /// A fixed instant for the budget tests: the enforcer's day must not roll
 /// over between recording spend and reading the overview.
 #[cfg(feature = "cost-governance")]
-const BUDGET_NOW: u64 = 1_800_000_000;
+pub(super) const BUDGET_NOW: u64 = 1_800_000_000;
 
 fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
     ApiKeyConfig {
@@ -65,7 +65,10 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on, one admin and one standard key, and `servers` registered
 /// backends named `name-NNN` (`long` pads each name to 200 characters).
-async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn fixture(
+    servers: usize,
+    long: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -88,7 +91,7 @@ async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDi
     (state, dir)
 }
 
-async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String) {
+pub(super) async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String) {
     let mut builder = Request::builder().method("GET").uri(OVERVIEW);
     if let Some(credential) = bearer {
         builder = builder.header(header::AUTHORIZATION, format!("Bearer {credential}"));
@@ -108,7 +111,7 @@ async fn get(state: &Arc<AppState>, bearer: Option<&str>) -> (StatusCode, String
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-async fn overview(state: &Arc<AppState>) -> Value {
+pub(super) async fn overview(state: &Arc<AppState>) -> Value {
     let (status, body) = get(state, Some(ADMIN_KEY)).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     serde_json::from_str(&body).expect("a JSON body")
@@ -309,13 +312,14 @@ async fn o3d_the_fold_sorts_on_the_full_name() {
     assert_eq!(body["servers"]["more"]["down"], 0, "{body}");
 }
 
-/// O3e (API16.2, worst case): every capped list full and every text field at
-/// its clip, written as control characters so JSON escapes each byte six-fold.
-/// The body stays under [`WORST_BODY`], and over three quarters of it, so the
-/// fixture really is the worst case the ceiling is computed for.
+/// The O3e fixture: every list at its cap with escape-heavy text. The clock
+/// stays pinned at [`BUDGET_NOW`] while the returned guard lives.
 #[cfg(feature = "cost-governance")]
-#[tokio::test]
-async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
+pub(super) async fn worst_case() -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    crate::clock::test_clock::Forced,
+) {
     use crate::cost_accounting::config::CostGovernanceConfig;
     use crate::cost_accounting::enforcer::BudgetEnforcer;
     use crate::cost_accounting::registry::CostRegistry;
@@ -351,7 +355,7 @@ async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
     for tool in &tools {
         cfg.budgets.per_tool.insert(tool.clone(), 1.0);
     }
-    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
+    let clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
     let enforcer = Arc::new(BudgetEnforcer::new(
         cfg.clone(),
         Arc::new(CostRegistry::new(&cfg)),
@@ -363,7 +367,17 @@ async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
     meta.budget_enforcer = Some(enforcer);
     inner.meta_mcp = Arc::new(meta);
+    (state, dir, clock)
+}
 
+/// O3e (API16.2, worst case): every capped list full and every text field at
+/// its clip, written as control characters so JSON escapes each byte six-fold.
+/// The body stays under [`WORST_BODY`], and over three quarters of it, so the
+/// fixture really is the worst case the ceiling is computed for.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o3e_a_worst_case_body_stays_under_the_ceiling() {
+    let (state, _dir, _clock) = worst_case().await;
     let (status, raw) = get(&state, Some(ADMIN_KEY)).await;
     assert_eq!(status, StatusCode::OK, "{raw}");
     let body: Value = serde_json::from_str(&raw).expect("a JSON body");
@@ -432,118 +446,6 @@ fn with_log(state: &mut Arc<AppState>, dir: &tempfile::TempDir) -> Arc<Transpare
         .expect("state is unique")
         .transparency_log = Some(Arc::clone(&log));
     log
-}
-
-fn admin_action(log: &TransparencyLogger, route: &str) {
-    let mut fields = Map::new();
-    fields.insert("route".into(), route.into());
-    fields.insert("method".into(), "POST".into());
-    let envelope = AuditEnvelope::ok(AuditWho::from_actor_id("operator"));
-    log.append_admin_action("admin_ui", fields, &envelope)
-        .expect("admin action appended");
-}
-
-/// O5: no log configured, `last_actions` is absent and not degraded. With a
-/// log, seven admin actions and invocation records after them: the five
-/// newest actions, newest first. A log that cannot be read: absent, and
-/// `degraded` names it.
-#[tokio::test]
-async fn o5_last_actions_are_the_newest_admin_actions() {
-    let (mut state, _dir) = fixture(1, false).await;
-    let body = overview(&state).await;
-    assert!(body.get("last_actions").is_none(), "no log: {body}");
-
-    let logs = tempfile::tempdir().expect("log dir");
-    let log = with_log(&mut state, &logs);
-    for i in 0..7 {
-        admin_action(&log, &format!("/ui/api/route-{i}"));
-    }
-    for _ in 0..50 {
-        let mut fields = Map::new();
-        fields.insert("event".into(), "invocation_note".into());
-        let envelope = AuditEnvelope::ok(AuditWho::from_actor_id("caller"));
-        log.append_event(fields, &envelope)
-            .expect("invocation appended");
-    }
-    let body = overview(&state).await;
-    let routes: Vec<&str> = body["last_actions"]["rows"]
-        .as_array()
-        .expect("action rows")
-        .iter()
-        .map(|row| row["route"].as_str().expect("a route"))
-        .collect();
-    assert_eq!(
-        routes,
-        [
-            "/ui/api/route-6",
-            "/ui/api/route-5",
-            "/ui/api/route-4",
-            "/ui/api/route-3",
-            "/ui/api/route-2"
-        ],
-        "{body}"
-    );
-    assert_eq!(body["last_actions"]["complete"], true, "{body}");
-    assert!(body.get("degraded").is_none(), "{body}");
-
-    let path = log.path();
-    std::fs::remove_file(&path).expect("remove the log file");
-    std::fs::create_dir(&path).expect("a directory where the log was");
-    let body = overview(&state).await;
-    assert!(body.get("last_actions").is_none(), "unreadable log: {body}");
-    assert_eq!(body["degraded"], json!(["last_actions"]), "{body}");
-}
-
-/// O5b: a line too long to read, newer than the five actions found, may
-/// itself have been an action, so the list says it is not complete.
-#[tokio::test]
-async fn o5b_a_skipped_newer_line_makes_the_list_incomplete() {
-    use std::io::Write as _;
-    let (mut state, _dir) = fixture(1, false).await;
-    let logs = tempfile::tempdir().expect("log dir");
-    let log = with_log(&mut state, &logs);
-    for i in 0..ACTION_ROWS {
-        admin_action(&log, &format!("/ui/api/route-{i}"));
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(log.path())
-        .expect("open the log for a raw append");
-    writeln!(file, "{}", "x".repeat(300 << 10)).expect("a 300 KiB line");
-    drop(file);
-    let body = overview(&state).await;
-    assert_eq!(
-        body["last_actions"]["rows"].as_array().map(Vec::len),
-        Some(ACTION_ROWS),
-        "the five older actions are still found: {body}"
-    );
-    assert_eq!(body["last_actions"]["complete"], false, "{body}");
-}
-
-/// O5c: a newer record that does not parse may have been an action too, so
-/// the list is not complete even with five rows found.
-#[tokio::test]
-async fn o5c_an_unreadable_newer_record_makes_the_list_incomplete() {
-    use std::io::Write as _;
-    let (mut state, _dir) = fixture(1, false).await;
-    let logs = tempfile::tempdir().expect("log dir");
-    let log = with_log(&mut state, &logs);
-    for i in 0..ACTION_ROWS {
-        admin_action(&log, &format!("/ui/api/route-{i}"));
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .append(true)
-        .open(log.path())
-        .expect("open the log for a raw append");
-    writeln!(file, "{{\"event\": \"admin_action\", broken").expect("a broken record");
-    drop(file);
-    let body = overview(&state).await;
-    assert_eq!(
-        body["last_actions"]["rows"].as_array().map(Vec::len),
-        Some(ACTION_ROWS),
-        "{body}"
-    );
-    assert_eq!(body["last_actions"]["complete"], false, "{body}");
 }
 
 /// O4 (API16.3, the D6 half): with the default Notify rule at 80, spend at
@@ -746,3 +648,6 @@ async fn o4d_needs_you_folds_past_its_cap() {
     assert_eq!(shown, want, "{body}");
     assert_eq!(body["needs_you"]["more"]["count"], 2, "{body}");
 }
+
+#[path = "overview_actions_tests.rs"]
+mod actions_tests;

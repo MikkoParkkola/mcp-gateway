@@ -186,6 +186,8 @@ mod metrics_scrape_tests;
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
+mod overview_sources_tests;
+#[cfg(all(test, feature = "webui"))]
 mod overview_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]
@@ -193,9 +195,15 @@ mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+/// Secret injection applies on the direct route as through gateway_invoke.
+#[cfg(test)]
+mod secret_injection_direct_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+/// U3: the UI live stream.
+#[cfg(all(test, feature = "webui"))]
+mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
@@ -497,10 +505,11 @@ async fn readyz(
     }
 }
 
-/// The `AuthState` needed by [`auth_middleware`], split out of
-/// [`create_router_with`] purely to keep that function under the line
-/// budget — logic and ordering are unchanged.
-fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+/// The one `AuthState` builder: ingress ([`auth_middleware`], wired in
+/// [`create_router_with`]) and the UI stream's per-second credential
+/// re-check both judge with it, so a stream can never decide differently
+/// from the request that opened it.
+pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),

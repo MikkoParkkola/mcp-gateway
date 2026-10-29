@@ -77,8 +77,8 @@ impl crate::transport::Transport for Asker {
 struct Gateway {
     router: axum::Router,
     calls: Calls,
-    _store: tempfile::TempDir,
-    _audit: tempfile::NamedTempFile,
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: crate::security::transparency_log::temp::TempLog,
 }
 
 /// A single-user gateway with one optional-passthrough backend, `ledger`: its
@@ -109,7 +109,7 @@ async fn gateway() -> Gateway {
     }
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
-    let audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let audit = crate::security::transparency_log::temp::TempLog::new();
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
     let config = TransparencyLogConfig {

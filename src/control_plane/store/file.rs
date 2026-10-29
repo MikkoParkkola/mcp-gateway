@@ -339,46 +339,46 @@ impl ControlPlaneStore for FileControlPlaneStore {
         filter.validate()?;
         let log = self.audit.path();
         let at = pager::position(&log, filter.cursor.map(|c| (c.offset, c.segment)))?;
-        // A resolved position always names its segment.
-        let opened = pager::open_segment(&log, at.segment.unwrap_or(0), || {})?;
-        let Some(file) = opened else {
-            // Bytes the cursor still names are under neither the active nor
-            // the sealed name: refuse, rather than page past records unread.
-            if at.end > 0 {
+        let segment = Some(at.segment);
+        let Some(file) = pager::open_segment(&log, at.segment, || {})? else {
+            // The segment is under neither name. If the log had files and the
+            // page still names bytes in it, they went unread: refuse rather
+            // than page past them. Otherwise there is nothing to read here.
+            if at.lost_if_unopened() {
                 return Err(StoreError::Io(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!(
-                        "audit segment {:?} vanished with {} bytes unread",
-                        at.segment, at.end
-                    ),
+                    format!("audit segment {} vanished with bytes unread", at.segment),
                 )));
             }
             return Ok(AuditPage {
-                next_cursor: next_page(&log, 0, at.segment)?,
+                next_cursor: next_page(&log, 0, segment)?,
                 ..AuditPage::empty(at.reset)
             });
         };
+        // The page's end, from the file opened, once: a length read by name
+        // could be a different file after a rotation.
+        let end = pager::end_in(at.bound, &file)?;
         // The cursor's offset is an exclusive upper bound: everything below it
         // is still unread. Read one tail window ending there, assembling a
         // line up to the logger's record cap across windows (the shared pager,
         // as the Activity reader does), so one call reads at most
         // MAX_AUDIT_SCAN_BYTES plus one assembly window.
-        let (tail, window_len) = pager::tail_window_assembled(&file, at.end, MAX_AUDIT_SCAN_BYTES)?;
+        let (tail, window_len) = pager::tail_window_assembled(&file, end, MAX_AUDIT_SCAN_BYTES)?;
         // A cursor this store hands out sits at a line start, at 0, or at a
         // file's end, so a page ending inside a line is one stepping through
         // an over-cap line already reported: the line is skipped, not re-read.
         let len = file.metadata()?.len();
-        let continuation = continues_a_skipped_line(&file, at.end, len)?;
+        let continuation = continues_a_skipped_line(&file, end, len)?;
         let pager::Tail::Lines {
             start: body_start, ..
         } = tail
         else {
             // A line over the cap: report it once, at the bottom of the bytes
             // read, and page on below it.
-            let below = at.end - at.end.min(pager::ASSEMBLY_WINDOW);
+            let below = end - end.min(pager::ASSEMBLY_WINDOW);
             let unreadable = (!continuation).then_some(AuditCursor {
                 offset: below,
-                segment: at.segment,
+                segment,
             });
             if let Some(hole) = &unreadable {
                 tracing::warn!(
@@ -388,7 +388,7 @@ impl ControlPlaneStore for FileControlPlaneStore {
                 );
             }
             return Ok(AuditPage {
-                next_cursor: next_page(&log, below, at.segment)?,
+                next_cursor: next_page(&log, below, segment)?,
                 bytes_examined: window_len,
                 unreadable,
                 ..AuditPage::empty(at.reset)
@@ -405,7 +405,7 @@ impl ControlPlaneStore for FileControlPlaneStore {
         let resume = scan.stopped_at.unwrap_or(body_start);
         Ok(AuditPage {
             events: scan.events,
-            next_cursor: next_page(&log, resume, at.segment)?,
+            next_cursor: next_page(&log, resume, segment)?,
             records_examined: scan.records_examined,
             bytes_examined: window_len,
             cursor_reset: at.reset,

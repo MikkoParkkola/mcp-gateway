@@ -15,6 +15,8 @@ const BOUND: Duration = Duration::from_millis(200);
 
 /// Whether the late write cleared its generation within `HANG_BOUND`. Waits
 /// on the blocking pool, so no runtime worker is held while it waits.
+/// A test that releases a held write waits on this before its `dir` drops:
+/// the write recreates the log's folder, and nothing would remove it.
 async fn write_cleared(l: &Arc<TransparencyLogger>) -> bool {
     let l = Arc::clone(l);
     tokio::task::spawn_blocking(move || l.wait_write_cleared_for_test(HANG_BOUND))
@@ -79,6 +81,7 @@ async fn stalled_append_times_out() {
     assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     assert!(l.is_stalled());
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -90,10 +93,13 @@ async fn stall_pins_no_runtime_worker() {
         let l = Arc::clone(&l);
         async move { invocation(&l).await }
     });
-    // The single runtime thread is still free to run this timer.
+    // The single runtime thread is still free to run this timer; any
+    // length shows that, so a longer sleep under load is fine.
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(call.await.unwrap().is_err());
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 /// T2: callers that arrive while a write is stuck wait for the one permit
@@ -159,6 +165,7 @@ async fn stall_parks_one_blocking_thread() {
         "callers were refused, not queued on the permit"
     );
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 /// Once stalled, fail-closed appends refuse at once: no permit wait, no
@@ -184,6 +191,7 @@ async fn fail_closed_calls_fail_fast_while_stalled() {
     }
     assert_eq!(l.bound.closures_entered.load(Ordering::Acquire), 1);
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -225,6 +233,7 @@ async fn best_effort_is_admitted_while_stalled() {
     assert!(l.is_stalled());
     assert!(l.admit().await.is_ok(), "best effort keeps serving");
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -306,6 +315,7 @@ async fn append_timeout_is_counted() {
         "{rendered}"
     );
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }
 
 /// #2252. A degraded log whose probe write hangs must be marked stalled by
@@ -352,4 +362,5 @@ async fn probe_timeout_marks_the_log_stalled() {
         "no second probe while stalled"
     );
     release.release();
+    assert!(write_cleared(&l).await, "the late write never finished");
 }

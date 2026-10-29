@@ -143,7 +143,11 @@ const B_ON_ONE: Caller<'static> = caller(Some("agent-b"), Some(KEY_ONE));
 /// and an agent identity no registry proved is dead).
 async fn agents(
     tokens: &[(&str, Option<&str>)],
-) -> (Arc<AppState>, tempfile::TempDir, Vec<String>) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    Vec<String>,
+) {
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
     let minted: Vec<String> = (0..)
         .zip(tokens)
@@ -518,7 +522,7 @@ const PROXY: std::net::SocketAddr = std::net::SocketAddr::new(
 /// agent auth off: the subject is a proxy-named identity, admitted apart from
 /// the bearer, so these rows vary the subject while the credential bytes stay
 /// equal, and can present no credential at all (MIK-8377).
-async fn proxied(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
+async fn proxied(auth: &AuthConfig) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let identity = crate::security::caller_identity::CallerIdentityConfig {
         mode: crate::security::caller_identity::CallerIdentityMode::TrustedProxy,
         trusted_proxies: vec![PROXY.ip()],

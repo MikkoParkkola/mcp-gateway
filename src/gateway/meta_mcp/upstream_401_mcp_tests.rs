@@ -31,7 +31,7 @@ async fn mcp_route_401_uses_propagated_lease() {
         &[ProviderStep::InvalidGrant],
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -66,7 +66,7 @@ async fn mcp_route_401_uses_propagated_lease() {
 async fn non_vault_401_forces_no_refresh() {
     let custody = custody_with_steps(&[], ROTATED_TOKEN, &[]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("partner", Bind::Propagation(external_cfg()))],
         &Descriptors::same(&[]),
         &installed,
@@ -101,7 +101,7 @@ async fn mcp_route_401_with_live_grant_says_retry() {
         &[ProviderStep::Rotate(ROTATED_TOKEN)],
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -143,7 +143,7 @@ async fn bridged_continuation_401_forces_the_refresh() {
         &[ProviderStep::InvalidGrant],
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -193,7 +193,7 @@ async fn bridged_continuation_401_with_live_grant_says_retry() {
         &[ProviderStep::Rotate(ROTATED_TOKEN)],
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -243,7 +243,7 @@ async fn a_cold_slot_list_401_forces_the_refresh() {
         &[ProviderStep::InvalidGrant],
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -280,7 +280,7 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         &[ProviderStep::InvalidGrant],
     );
     let installed = custody.installed();
-    let (mut meta, dispatches) = gateway(
+    let (_log, mut meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,

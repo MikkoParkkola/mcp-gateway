@@ -16,7 +16,7 @@ const BETA: &str = "beta";
 async fn surfaced_state(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     // The suite's keys reach only `mock`; these rows need both servers
     // visible, so the move is the only thing that can refuse.
     let mut auth = two_principal_auth();
@@ -174,7 +174,11 @@ async fn resumed_after(
     beta: &Arc<MockBackend>,
     key: &str,
     before_answer: impl FnOnce(&Arc<AppState>, &str),
-) -> (Arc<AppState>, tempfile::TempDir, Value) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    Value,
+) {
     let (state, store) = surfaced_state(alpha, beta).await;
     let created = post(&state, "key-a", declaring_elicitation(surfaced_task(key))).await;
     let id = task_id(&created);

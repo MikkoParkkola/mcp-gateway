@@ -206,6 +206,11 @@ async fn send(gw: &Gateway, req: Request<Body>) -> (StatusCode, String, Vec<u8>)
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    // A live stream has no end: its status and headers are the answer here;
+    // its frames are read by the router tests beside the route.
+    if content_type.starts_with("text/event-stream") {
+        return (status, content_type, Vec::new());
+    }
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap()
@@ -314,6 +319,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 200, 200, 200],
     ),
+    // src/gateway/ui/stream/mod.rs (stream): any signed-in caller gets its
+    // own kinds; `send` reads an event stream's headers only.
+    row(
+        "/ui/api/stream",
+        Method::GET,
+        "/ui/api/stream",
+        Payload::None,
+        [401, 200, 200, 200],
+    ),
     // src/gateway/ui/overview.rs (overview)
     row(
         "/ui/api/overview",
@@ -337,14 +351,6 @@ const ROWS: &[Row] = &[
         "/ui/api/refusals",
         Method::GET,
         "/ui/api/refusals",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/gateway_status.rs (gateway; admin-only read, like refusals)
-    row(
-        "/ui/api/gateway",
-        Method::GET,
-        "/ui/api/gateway",
         Payload::None,
         [401, 403, 403, 200],
     ),
@@ -620,9 +626,10 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+const GROUPS: [&[Row]; 2] = [control_plane::ROWS, gateway_rows::ROWS];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -793,6 +800,8 @@ async fn internal_routes_refuse_every_other_method() {
 
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]

@@ -51,7 +51,7 @@ pub(super) fn answering(answer: &str) -> Arc<MockBackend> {
 /// fingerprint enough to refuse; and the handle that ages its receipts.
 pub(super) struct Rig {
     pub(super) state: Arc<AppState>,
-    pub(super) _store: tempfile::TempDir,
+    pub(super) _store: crate::gateway::router::tests::FixtureDir,
     pub(super) relay: Arc<Firewall>,
     pub(super) alpha: Arc<MockBackend>,
     pub(super) beta: Arc<MockBackend>,
@@ -566,7 +566,7 @@ async fn detection_on_gateway(
     auth: &AuthConfig,
     admission: Arc<crate::idempotency::admission::ExecutionAdmission>,
     erring: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let relay_fw = Arc::new(
         Firewall::from_config(
             FirewallConfig {

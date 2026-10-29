@@ -99,7 +99,7 @@ fn stored(bearer: &str, subject: &str) -> TemporaryToken {
 /// Auth on with `/mcp` public, a key server trusting the one issuer for
 /// delegated bearers, and two stored temporary tokens: one named, one whose
 /// identity names nobody.
-async fn gateway(idp: &Idp) -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway(idp: &Idp) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let config = KeyServerConfig {
         enabled: true,
         delegated_bearer: true,

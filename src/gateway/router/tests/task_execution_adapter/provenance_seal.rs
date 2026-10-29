@@ -25,7 +25,9 @@ use crate::trust::provenance_public::{
 
 /// The suite's state with both provenance signers installed on the Meta-MCP
 /// before it is shared (as in `relay_settlement`).
-async fn dual_signed_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn dual_signed_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,

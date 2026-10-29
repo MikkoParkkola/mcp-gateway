@@ -38,7 +38,7 @@ struct CapabilityHarness {
     router: axum::Router,
     state: Arc<super::super::AppState>,
     account: CapabilityAccount,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 async fn capability_harness(signed: bool) -> CapabilityHarness {

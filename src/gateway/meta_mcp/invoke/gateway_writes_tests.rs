@@ -530,3 +530,115 @@ async fn noting_a_counted_member_raises_annotated() {
         assert_eq!(effect, expected, "{path:?}");
     }
 }
+
+/// The response-contract gate's annotations make the delivery `annotated`
+/// on both branches that write them (no contract declared; a declared
+/// contract violated), and an answer the declared contract admits stays
+/// `delivered`: each noted contract member is counted where it is written.
+///
+/// "No contract declared" annotates by design, not by accident: with
+/// `fail_closed` on, a tool with no declared contract is itself a violation,
+/// and in observe mode (`action_mode` off) the gate writes
+/// `_contract_violation: true` and `_contract_reason: "no_contract_declared"`
+/// through `write_contract` (src/gateway/meta_mcp/invoke/policy.rs:527-547).
+#[tokio::test]
+async fn a_contract_annotation_records_annotated() {
+    use std::sync::Arc;
+    let declared = crate::config::ToolContractConfig {
+        max_bytes: Some(1),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    let roomy = crate::config::ToolContractConfig {
+        max_bytes: Some(1 << 20),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    // (tool, the effect, the reason the gate writes: `None` writes none).
+    let cases = [
+        ("undeclared", "annotated", Some("no_contract_declared")),
+        ("declared", "annotated", Some("max_bytes_exceeded")),
+        ("roomy", "delivered", None),
+    ];
+    // Every case's effect is collected and compared at once, so a failure
+    // shows each branch's answer, not only the first that differs.
+    let mut effects = Vec::new();
+    for (tool, _, reason) in cases {
+        let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        meta.set_response_contract(crate::config::ResponseContractConfig {
+            enabled: true,
+            action_mode: false,
+            fail_closed: true,
+            tools: [
+                ("declared".to_owned(), declared.clone()),
+                ("roomy".to_owned(), roomy.clone()),
+            ]
+            .into(),
+            ..Default::default()
+        });
+        let (effect, written) = crate::gateway::delivery_facts::scope(async {
+            let mut result = json!({"content": [{"type": "text", "text": "longer than one byte"}]});
+            meta.apply_response_contract_gate("alpha", tool, "t-1", &mut result)
+                .expect("observe mode annotates");
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            (
+                fields["response_effect"].clone(),
+                (
+                    result.get("_contract_violation").cloned(),
+                    result.get("_contract_reason").cloned(),
+                ),
+            )
+        })
+        .await;
+        // Premise: each case reached the branch it names.
+        let annotation = reason.map(|reason| (json!(true), json!(reason)));
+        assert_eq!(
+            written,
+            annotation.map_or((None, None), |(v, r)| (Some(v), Some(r))),
+            "premise {tool}: the gate's annotation"
+        );
+        effects.push((tool, effect));
+    }
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|&(tool, effect, _)| (tool, json!(effect)))
+        .collect();
+    assert_eq!(effects, expected);
+}
+
+/// Each contract member is counted on its own: noting either one alone
+/// makes the delivery `annotated`, so neither can lose its counted status
+/// behind the other (the gate always writes both together).
+#[tokio::test]
+async fn each_contract_member_alone_records_annotated() {
+    let value = json!({"_contract_violation": true, "_contract_reason": "r"});
+    let mut effects = Vec::new();
+    for path in [CONTRACT_VIOLATION, CONTRACT_REASON] {
+        let effect = crate::gateway::delivery_facts::scope(async {
+            note(Layer::Value, path, &value);
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields["response_effect"].clone()
+        })
+        .await;
+        effects.push((path[0], effect));
+    }
+    assert_eq!(
+        effects,
+        [
+            ("_contract_violation", json!("annotated")),
+            ("_contract_reason", json!("annotated")),
+        ]
+    );
+}
