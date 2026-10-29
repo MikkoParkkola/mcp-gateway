@@ -163,6 +163,8 @@ mod identity_parity_tests;
 mod judged_answer;
 #[cfg(test)]
 mod live_keys_tests;
+#[cfg(all(test, feature = "webui"))]
+mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
