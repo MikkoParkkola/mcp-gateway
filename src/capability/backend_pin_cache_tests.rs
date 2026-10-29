@@ -88,7 +88,7 @@ async fn a_first_registration_on_a_shared_executor_meets_the_gate() {
     assert!(err.to_string().contains("must be pinned"), "{err}");
 }
 
-/// MIK-7814: the gateway's outer response cache keys on the request's epoch
+/// The gateway's outer response cache keys on the request's epoch
 /// snapshot. A snapshot taken after a replacement must key differently from
 /// one taken before it, so it can never read the old definition's answer. (A
 /// snapshot taken before is ordered before the replacement and may still read
@@ -134,7 +134,7 @@ fn a_snapshot_after_a_replacement_never_keys_the_old_outer_answer() {
     );
 }
 
-/// MIK-7814: every pinned capability shipped in this repository loads with a
+/// Every pinned capability shipped in this repository loads with a
 /// fingerprint that a second load and a clone reproduce exactly, so the
 /// admission check never refuses a pinned file as loaded.
 #[tokio::test]
@@ -187,7 +187,7 @@ async fn every_shipped_pinned_capability_keeps_its_fingerprint() {
     assert!(checked > 100, "only {checked} pinned files found");
 }
 
-/// MIK-7814: two verified definitions of one name, both pinned, that differ
+/// Two verified definitions of one name, both pinned, that differ
 /// only in their arguments. Admission passes both, so only the fingerprint in
 /// the cache key keeps the second from reading the first's answer.
 #[cfg(unix)]
