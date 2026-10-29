@@ -200,3 +200,48 @@ impl Drop for Witnessed<'_, '_> {
 #[cfg(all(test, feature = "cost-governance"))]
 #[path = "refund_waiter_tests.rs"]
 mod refund_waiter_tests;
+
+#[cfg(test)]
+mod pre_send_tests {
+    use super::{PreSendExit, mark_dispatched, settle_pre_send};
+    use crate::gateway::authz::AllowAll;
+    use crate::gateway::meta_mcp::authz_tests::ctx;
+    use crate::gateway::meta_mcp::dispatch_log::PreSend;
+
+    /// A refusal exit marks the call refused; a later send, or an answer
+    /// served from a stored or cached result, makes it a call again.
+    #[tokio::test]
+    async fn a_refusal_marks_the_call_and_a_send_or_served_answer_clears_it() {
+        let allow = AllowAll;
+        let caller = ctx(&allow);
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Refused,
+            "refused before its backend"
+        );
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+            mark_dispatched(&caller, ("s", "t"));
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Clear,
+            "a send after a refusal is a call"
+        );
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+            settle_pre_send(&caller, PreSendExit::Served(("s", "t")));
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Clear,
+            "a served answer is a call"
+        );
+    }
+}
