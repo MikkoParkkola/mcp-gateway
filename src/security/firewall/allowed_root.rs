@@ -387,6 +387,65 @@ pub(crate) fn validate_rule(i: usize, rule: &super::FirewallRule) -> Result<(), 
     Ok(())
 }
 
+/// Best-effort load warnings for folder rules (L9, L10, R22d). None refuses
+/// the config: the per-call refusals stay the guarantee. Each names key
+/// paths and rule names, never a value.
+pub(crate) fn warn_at_load(config: &crate::config::Config) {
+    let firewall = &config.security.firewall;
+    if !firewall.enabled {
+        return;
+    }
+    let covers = |rule: &super::FirewallRule, server: &str| {
+        rule.servers.as_ref().is_none_or(|globs| {
+            globs
+                .iter()
+                .any(|g| glob::Pattern::new(g).is_ok_and(|p| p.matches(server)))
+        })
+    };
+    for (i, rule) in firewall.rules.iter().enumerate() {
+        let (Some(roots), Some(args)) = (&rule.allowed_roots, &rule.path_args) else {
+            continue;
+        };
+        let path = format!("security.firewall.rules[{i}]");
+        for (j, root) in roots.iter().enumerate() {
+            if expand_root(root).is_some_and(|r| std::fs::canonicalize(r).is_err()) {
+                tracing::warn!(
+                    "{path}.allowed_roots[{j}] does not resolve now; every call this rule \
+                     covers is refused until it does"
+                );
+            }
+        }
+        let capabilities = &config.capabilities.name;
+        if covers(rule, capabilities) {
+            tracing::warn!(
+                "{path} covers the capabilities backend {capabilities:?}: its calls will be \
+                 refused; confine CLI capabilities with capabilities.files"
+            );
+        }
+        let declared: Vec<PathArg> = args
+            .iter()
+            .filter_map(|a| compile_path_arg(a).ok())
+            .collect();
+        for (name, backend) in &config.backends {
+            if !covers(rule, name) {
+                continue;
+            }
+            for secret in &backend.secrets {
+                let owned = secret.inject_key.as_str();
+                let overlaps = secret.inject_as == crate::secret_injection::InjectTarget::Argument
+                    && declared.iter().any(|arg| arg.segments[0] == owned);
+                if overlaps {
+                    tracing::warn!(
+                        "secret {:?} of backends.{name} owns {owned:?}, a declared argument in \
+                         {path}.path_args: covered calls are refused",
+                        secret.name
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "allowed_root_tests.rs"]
 mod tests;
