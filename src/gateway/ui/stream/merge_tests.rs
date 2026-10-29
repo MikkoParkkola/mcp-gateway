@@ -409,11 +409,18 @@ async fn a_truncated_log_whose_counter_restarts_resets_and_drops_no_row() {
 async fn a_continuation_under_the_same_generation_is_not_a_reset() {
     let fake = Fake::new(5, 64);
     let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    let (heads, reads) = (*fake.heads.lock().unwrap(), *fake.reads.lock().unwrap());
     fake.append(false);
     fake.append(false);
     let out = collect(&mut merge, 2).await;
     assert!(!out.contains(&Out::Reset));
     assert_eq!(ids(&out), vec![6, 7]);
+    assert_eq!(*fake.heads.lock().unwrap(), heads, "no head read");
+    assert_eq!(
+        *fake.reads.lock().unwrap(),
+        reads,
+        "no page read: no rescan"
+    );
 }
 
 #[tokio::test(start_paused = true)]

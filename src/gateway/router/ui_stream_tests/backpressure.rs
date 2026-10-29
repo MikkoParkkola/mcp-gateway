@@ -103,6 +103,11 @@ async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
         tokio::time::sleep(Duration::from_millis(300)).await;
     }
     assert_eq!(hub.open_streams(), 1, "still blocked, not yet timed out");
+    assert_eq!(
+        hub.sends_in_progress(),
+        1,
+        "a send is pending: real backpressure"
+    );
     let out = Request::builder()
         .method("POST")
         .uri("/dashboard/logout")
