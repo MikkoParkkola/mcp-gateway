@@ -142,6 +142,9 @@ struct CompiledRule {
     except: Vec<verdict::CompiledException>,
     #[allow(dead_code)]
     reason: Option<String>,
+    /// The folder part of a rule carrying `allowed_roots`; such a rule
+    /// decides only its own findings, never a content finding.
+    root: Option<allowed_root::CompiledRoot>,
 }
 
 /// Verdict from the firewall for a single tool invocation.
@@ -266,7 +269,15 @@ impl Firewall {
         config: FirewallConfig,
         transition_tracker: Option<Arc<TransitionTracker>>,
     ) -> Self {
-        let rules = config.rules.iter().map(compile_rule).collect();
+        let rules = config
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, rule)| CompiledRule {
+                root: allowed_root::compile(i, rule),
+                ..compile_rule(rule)
+            })
+            .collect();
         let response_scanner = ResponseScanner::new();
         let input_scanner = input_scanner::InputScanner::new();
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());

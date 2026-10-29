@@ -331,6 +331,44 @@ pub(crate) fn expand_root(root: &str) -> Option<std::path::PathBuf> {
     expanded.is_absolute().then_some(expanded)
 }
 
+/// A rule's folder part, compiled once: its identity, each root after `~`
+/// expansion, and its path arguments.
+#[derive(Debug, Clone)]
+pub(crate) struct CompiledRoot {
+    /// The rule's `reason`, else `rules[i]`: what a refusal names.
+    pub(crate) identity: String,
+    /// `None` for a root that cannot be expanded (refused at load).
+    pub(crate) roots: Vec<Option<std::path::PathBuf>>,
+    /// `None` when the folder keys have a shape the load refuses; such a
+    /// rule refuses every call it covers rather than checking nothing.
+    pub(crate) args: Option<Vec<PathArg>>,
+}
+
+/// The folder part of rule `i`, if it has one.
+pub(crate) fn compile(i: usize, rule: &super::FirewallRule) -> Option<CompiledRoot> {
+    if rule.allowed_roots.is_none() && rule.path_args.is_none() {
+        return None;
+    }
+    let roots = rule
+        .allowed_roots
+        .iter()
+        .flatten()
+        .map(|r| expand_root(r))
+        .collect();
+    let args = rule
+        .path_args
+        .as_ref()
+        .filter(|args| {
+            !args.is_empty() && rule.allowed_roots.as_ref().is_some_and(|r| !r.is_empty())
+        })
+        .and_then(|args| args.iter().map(|a| compile_path_arg(a).ok()).collect());
+    Some(CompiledRoot {
+        identity: rule.reason.clone().unwrap_or_else(|| format!("rules[{i}]")),
+        roots,
+        args,
+    })
+}
+
 /// The finding types no rule's `scan` may list: only the folder check
 /// produces them.
 const OUTPUT_ONLY: [super::ScanType; 2] = [
