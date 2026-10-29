@@ -387,6 +387,9 @@ fn r_fwstamp_redaction_keeps_the_counted_text() {
                 action: FirewallAction::Warn,
                 reason: None,
                 scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
             }],
             ..FirewallConfig::default()
         },

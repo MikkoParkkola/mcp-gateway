@@ -336,6 +336,7 @@ impl Services {
         let targets = [ResponsePolicyTarget {
             server: subject.backend.to_owned(),
             tool: subject.name.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         // The firewall audit names the caller: a subscription owner is keyed
         // for that record (MIK-8697 §16.12).
@@ -348,6 +349,10 @@ impl Services {
             external_tool: subject.name,
             subject: None,
             trace_id: None,
+            // The subscription holds its owner's record principal, not an API
+            // key name, so the key is not known here: the strongest outcome
+            // over every named key applies, which can only block more.
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         match firewall.check_response_artifact(
             data,
