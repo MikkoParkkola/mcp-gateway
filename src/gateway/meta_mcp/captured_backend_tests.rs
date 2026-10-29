@@ -106,7 +106,7 @@ async fn a_catalogue_read_mints_what_the_captured_backend_asks_for() {
     );
     let served = meta.catalogue_credential_for(&captured, caller).await;
     assert_eq!(
-        served.map(|(credential, binding)| (credential.headers, binding)),
+        served.map(|(credential, binding)| (credential.headers.to_vec(), binding)),
         Some((Vec::new(), None)),
         "the captured backend propagates nothing: the reload must not mint for it"
     );

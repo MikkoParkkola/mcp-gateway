@@ -80,7 +80,7 @@ pub(super) async fn forward_sanitized(
                 &route.backend,
                 id,
                 Some(sanitized_params),
-                (&propagation.headers, propagation.identity_key.as_deref()),
+                (propagation.lent(), propagation.identity_key.as_deref()),
             ),
         ),
     ))

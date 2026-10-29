@@ -420,7 +420,9 @@ fn a_direct_route_credential_is_wiped_on_drop() {
     ) -> &zeroize::Zeroizing<Vec<(String, String)>> {
         &propagation.headers
     }
-    let pinned: fn(&super::direct_preflight::Propagation) -> _ = stored;
+    let pinned: for<'a> fn(
+        &'a super::direct_preflight::Propagation,
+    ) -> &'a zeroize::Zeroizing<Vec<(String, String)>> = stored;
     let empty: zeroize::Zeroizing<Vec<(String, String)>> = zeroize::Zeroizing::default();
     assert!(
         empty.is_empty(),
