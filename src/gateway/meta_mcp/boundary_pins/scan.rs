@@ -241,10 +241,22 @@ impl Walker<'_> {
             return;
         }
         let saved = self.place.clone();
+        // A `#[path = "../x.rs"]` include names the file by where it lives,
+        // not by the route the declaring module took to it.
+        let mut real = PathBuf::new();
+        for part in path.components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    real.pop();
+                }
+                std::path::Component::CurDir => {}
+                part => real.push(part),
+            }
+        }
         self.place = Place {
-            file: path
+            file: real
                 .strip_prefix(self.crate_root)
-                .unwrap_or(path)
+                .unwrap_or(&real)
                 .to_string_lossy()
                 // The pinned data keys files with `/`; Windows paths use `\`.
                 .replace('\\', "/"),
