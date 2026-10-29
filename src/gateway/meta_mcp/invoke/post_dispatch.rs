@@ -133,6 +133,8 @@ impl MetaMcp {
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
         if e.is_pre_dispatch() {
+            // The backend never saw it: refused before its backend.
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
             if let Some(mut reservation) = idem_reservation.take() {
                 reservation.release();
             }

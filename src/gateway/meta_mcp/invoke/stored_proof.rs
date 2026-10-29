@@ -121,6 +121,8 @@ impl crate::gateway::meta_mcp::MetaMcp {
         })
         .and_then(|()| self.judge_bindings(&view, &deferred.bindings));
         if let Err(error) = judged {
+            // Refused at the serving point: nothing replayed, nothing sent.
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
             return Break(crate::protocol::JsonRpcResponse::error(
                 deferred.response.id.clone(),
                 error.to_rpc_code(),

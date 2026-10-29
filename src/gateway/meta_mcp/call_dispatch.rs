@@ -275,9 +275,13 @@ impl MetaMcp {
             match destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)
                 .await
             {
-                GateOutcome::Refuse(response) => return *response,
+                GateOutcome::Refuse(response) => {
+                    super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
+                    return *response;
+                }
                 GateOutcome::RefuseUnasked(response) => {
                     invoke::ask_refund(&caller); // MIK-8353 3d
+                    super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
                     return *response;
                 }
                 GateOutcome::Proceed => false,
@@ -286,6 +290,7 @@ impl MetaMcp {
 
         // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
+            super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
             return refusal;
         }
         // A capability account has no route-stage verdict, so its busy
@@ -489,6 +494,7 @@ impl MetaMcp {
             None => {
                 // Settled when the call returns.
                 invoke::ask_refund(caller);
+                super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
                 Err(self.no_such_meta_tool(tool_name, caller))
             }
         };
