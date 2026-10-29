@@ -39,7 +39,9 @@ fn in_child(name: &str) -> bool {
         Some(stdout) => {
             stdout
                 .lines()
-                .filter(|line| line.starts_with("BASELINE"))
+                // libtest prints `test <name> ... ` on the line the row's
+                // output starts on, so the tag is found anywhere in a line.
+                .filter_map(|line| line.find("BASELINE\t").map(|at| &line[at..]))
                 .for_each(|line| println!("{line}"));
             true
         }
@@ -112,7 +114,10 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
 
 /// A router whose one backend, at `url`, has a required per-user binding
 /// minted by the fixed-token strategy, so each caller's slot is lent-only.
-async fn gateway(url: String, minted: &'static str) -> (axum::Router, tempfile::TempDir) {
+async fn gateway(
+    url: String,
+    minted: &'static str,
+) -> (axum::Router, (tempfile::TempDir, tempfile::TempDir)) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
         BackendConfig {
@@ -136,14 +141,33 @@ async fn gateway(url: String, minted: &'static str) -> (axum::Router, tempfile::
     ));
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     assert!(registry.register(backend), "the backend registers");
-    let meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
     meta.set_identity_propagation(Arc::new(FixedTokenMint { token: minted }));
+    // A required per-user mint is audited, and refused without a log.
+    let log_dir = tempfile::tempdir().expect("a log directory");
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: log_dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "baseline".to_string(),
+                ..crate::security::transparency_log::TransparencyLogConfig::default()
+            },
+        ))
+        .expect("the transparency log opens"),
+    );
+    meta.enable_transparency_log(Arc::clone(&log));
     let auth = crate::config::AuthConfig::default();
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = registry;
     state_mut.meta_mcp = Arc::new(meta);
-    (super::create_router(state), store)
+    state_mut.transparency_log = Some(log);
+    (super::create_router(state), (log_dir, store))
 }
 
 fn caller() -> VerifiedIdentity {
@@ -177,7 +201,7 @@ async fn direct_call(len: usize, name: &str) {
     }
     let minted = token(len);
     let (url, sends) = peer().await;
-    let (router, _store) = gateway(url, minted).await;
+    let (router, _dirs) = gateway(url, minted).await;
     let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
     // Warm: the slot starts and lists once outside the measurement.
@@ -237,8 +261,8 @@ async fn client_only(len: usize, name: &str) {
     };
     let _ = send().await;
     let (_, scanned, census) = scan_dispatch(minted.as_bytes(), send).await;
-    let sent = sends.load(std::sync::atomic::Ordering::SeqCst) - 1;
-    report("client only", len, scanned, census, sent);
+    let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - 1;
+    report("client only", len, scanned, census, requests);
 }
 
 #[tokio::test]
