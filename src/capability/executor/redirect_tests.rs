@@ -224,17 +224,26 @@ async fn a_refused_redirect_in_an_unvouched_cell_records_no_refusal() {
 }
 
 /// A streaming body cannot be cloned for a retry, so the send takes its
-/// single-attempt path; a hop the redirect decision rejects there records
-/// `refused` too.
+/// single-attempt path; both refused hops record `refused` there too, each
+/// answering as its kind does.
 #[tokio::test]
 async fn a_single_attempt_rejected_redirect_records_refused() {
+    let error = Box::pin(single_attempt_refused("http://10.255.255.1/")).await;
+    assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error:?}");
+    let error = Box::pin(single_attempt_refused("http://93.184.215.14/")).await;
+    assert!(matches!(error, crate::Error::Transport(_)), "{error:?}");
+}
+
+/// One single-attempt send (a streaming body) redirected to `location`: it
+/// must record `refused`; the error it answers.
+async fn single_attempt_refused(location: &'static str) -> crate::Error {
     use crate::gateway::delivery_facts;
     let app = axum::Router::new().route(
         "/",
-        axum::routing::post(|| async {
+        axum::routing::post(move || async move {
             (
                 axum::http::StatusCode::FOUND,
-                [(axum::http::header::LOCATION, "http://10.255.255.1/")],
+                [(axum::http::header::LOCATION, location)],
             )
         }),
     );
@@ -260,14 +269,14 @@ async fn a_single_attempt_rejected_redirect_records_refused() {
     })
     .await;
     let error = outcome.expect_err("the redirect is refused");
-    assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error:?}");
     let mut fields = serde_json::Map::new();
     delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
     assert_eq!(
         fields.get("response_effect"),
         Some(&"refused".into()),
-        "{error}"
+        "{location}: {error}"
     );
+    error
 }
 
 /// The single-attempt path treats a refused redirect as the retry path does:
@@ -361,8 +370,18 @@ async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
         client.get("http://capability-fixture.test/"),
     ))
     .await;
-    assert!(ok, "premise: the redirect is followed");
+    assert!(ok, "premise: the send succeeds");
     assert_ne!(effect, Some("refused".into()));
+    // Success alone would also accept an unfollowed 302: the body is /ok's.
+    let body = client
+        .get("http://capability-fixture.test/")
+        .send()
+        .await
+        .expect("sent")
+        .text()
+        .await
+        .expect("body");
+    assert_eq!(body, "ok", "the redirect was not followed to /ok");
 }
 
 /// Negative control: an ordinary transport failure (nothing listening) is
@@ -379,4 +398,73 @@ async fn an_ordinary_transport_failure_records_no_refusal() {
     .await;
     assert!(!ok, "premise: the send fails");
     assert_ne!(effect, Some("refused".into()));
+}
+
+/// How a composite treats the refused redirect step it ran.
+enum StepEnd {
+    /// A later step recovered: the refusal is absorbed.
+    Absorbed,
+    /// The composite ends on this step's refusal.
+    Terminal,
+}
+
+/// A composite plan (its own cell, unvouched) that runs one step (a fresh,
+/// vouched cell) sending to a loopback listener that redirects to
+/// `location`, then ends as `end` says: the plan's `response_effect`.
+async fn composite_with_refused_step(
+    location: &'static str,
+    end: StepEnd,
+) -> Option<serde_json::Value> {
+    use crate::gateway::delivery_facts;
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(move || async move {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, location.to_string())],
+            )
+        }),
+    );
+    let port = serve(app).await;
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let url = format!("http://127.0.0.1:{port}/");
+    let facts = delivery_facts::scope(async {
+        delivery_facts::unvouched();
+        let outcome = delivery_facts::step(async {
+            tokio::time::timeout(
+                crate::test_wait::HANG_BOUND,
+                super::send_with_retry(client.get(&url), "test", true, &health),
+            )
+            .await
+            .expect("bounded")
+        })
+        .await;
+        let error = outcome.expect_err("the redirect is refused");
+        match end {
+            StepEnd::Absorbed => {
+                delivery_facts::step_absorbed();
+                delivery_facts::composite_ended(None);
+            }
+            StepEnd::Terminal => delivery_facts::composite_ended(Some(&error)),
+        }
+        delivery_facts::snapshot()
+    })
+    .await;
+    let mut fields = serde_json::Map::new();
+    delivery_facts::record_fields(facts.as_ref(), false, &mut fields);
+    fields.get("response_effect").cloned()
+}
+
+/// A refused redirect in a composite's step that a later step absorbs leaves
+/// the plan unrefused; one the composite ends on marks the plan refused. Both
+/// refused hops.
+#[tokio::test]
+async fn a_refused_redirect_step_marks_the_plan_only_when_it_ends_it() {
+    for location in ["http://10.255.255.1/", "http://93.184.215.14/"] {
+        let absorbed = Box::pin(composite_with_refused_step(location, StepEnd::Absorbed)).await;
+        assert_ne!(absorbed, Some("refused".into()), "{location}: absorbed");
+        let terminal = Box::pin(composite_with_refused_step(location, StepEnd::Terminal)).await;
+        assert_eq!(terminal, Some("refused".into()), "{location}: terminal");
+    }
 }
