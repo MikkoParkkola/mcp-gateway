@@ -253,6 +253,34 @@ async fn iso_t2_managed_listeners_each_queue_and_deliver_only_their_own_change()
         0,
         "u2 saw nothing of it"
     );
+    // And the other way round: u2's change is u2's alone.
+    assert!(
+        rig.peer.push_tools_changed(1),
+        "premise: u2's stream is open"
+    );
+    assert!(
+        fan_out_next(&rig.f, &mut rig.intake).await,
+        "u2's notice was read"
+    );
+    let u2_stamp = format!("vault:{}", rig.grants.binding("u2"));
+    let mut rows: Vec<_> = queued(&rig.f).into_iter().map(|r| (r.1, r.2)).collect();
+    rows.sort();
+    assert_eq!(
+        rows,
+        [
+            ("sub_u1_pt".to_owned(), Some(stamp)),
+            ("sub_u2_pt".to_owned(), Some(u2_stamp)),
+        ],
+        "u2's change queued for u2 alone, under u2's grant"
+    );
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        match rig.posts[1].load(Ordering::SeqCst) {
+            0 => std::ops::ControlFlow::Continue("u2 not yet sent to".to_owned()),
+            _ => std::ops::ControlFlow::Break(()),
+        }
+    })
+    .await
+    .expect("u2's change is delivered to u2");
     delivery.abort();
 }
 
@@ -297,15 +325,14 @@ async fn iso_t2_a_change_observed_under_the_old_grant_is_not_delivered_after_rot
         rig.peer.push_tools_changed(0),
         "premise: the old stream is still open"
     );
+    // The close and the reopen are separate connections: either may be
+    // reported first.
+    let mut ends = [rig.peer.next().await, rig.peer.next().await];
+    ends.sort_by_key(|s| format!("{s:?}"));
     assert_eq!(
-        rig.peer.next().await,
-        Some(Stream::Closed(0)),
-        "the old run ended"
-    );
-    assert_eq!(
-        rig.peer.next().await,
-        Some(Stream::Opened(0)),
-        "reopened under the new grant"
+        ends,
+        [Some(Stream::Closed(0)), Some(Stream::Opened(0))],
+        "the old run ended and u1 reopened under the new grant"
     );
     assert!(
         rig.peer.push_tools_changed(0),
