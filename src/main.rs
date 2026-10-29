@@ -661,5 +661,7 @@ pub fn write_discovered_to_config(
 #[path = "main_discovered_config.rs"]
 mod discovered_config;
 #[cfg(test)]
+mod test_source_text;
+#[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;
