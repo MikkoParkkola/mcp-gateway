@@ -59,10 +59,11 @@ impl Routes {
         let safe = dir.path().join("safe");
         let yaml = format!(
             "backends:\n  fs:\n    command: \"sh {}\"\nmeta_mcp:\n  surfaced_tools:\n    - \
-             {{server: fs, tool: read_file}}\nsecurity:\n  firewall:\n    enabled: true\n    \
+             {{server: fs, tool: read_file}}\nsecurity:\n  firewall:\n    enabled: true\n    audit_log: \"{}\"\n    \
              rules:\n      - {{match: \"read_*\", servers: [\"fs\"], action: block, \
              allowed_roots: [\"{}\"], path_args: [\"path?\", \"paths[]?\"]}}\n",
             script.display(),
+            dir.path().join("audit.ndjson").display(),
             safe.display()
         );
         let path = dir.path().join("gateway.yaml");
@@ -105,6 +106,11 @@ impl Routes {
     /// Every `tools/call` line the backend has received.
     pub(super) fn received(&self) -> String {
         std::fs::read_to_string(&self.log).unwrap_or_default()
+    }
+
+    /// Every audit row the production firewalls wrote.
+    pub(super) fn audited(&self) -> String {
+        std::fs::read_to_string(self.dir.path().join("audit.ndjson")).unwrap_or_default()
     }
 
     /// One JSON-RPC `method` call on `uri` through the router.
