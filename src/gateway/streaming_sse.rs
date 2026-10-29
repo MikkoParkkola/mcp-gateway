@@ -17,8 +17,9 @@ use tracing::warn;
 
 use super::{NotificationMultiplexer, STREAMING_TARGET};
 use crate::gateway::auth::live::{Delivery, delivery};
+use crate::gateway::health_metrics::RpcError;
 use crate::gateway::health_metrics::clock::{Clock, rescoped};
-use crate::gateway::health_metrics::layers::{Sample, StreamAccounted};
+use crate::gateway::health_metrics::layers::{Sample, StreamAccounted, count_framed};
 use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
 use crate::gateway::streaming::Decision;
 
@@ -683,7 +684,13 @@ where
                         .extensions()
                         .get::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>()
                         .cloned();
+                    // Read before `terminal_frame` consumes the response.
+                    let (status, marker) = (
+                        emitted.status().as_u16(),
+                        emitted.extensions().get::<RpcError>().copied(),
+                    );
                     let frame = terminal_frame(emitted).await;
+                    count_framed(status, marker, frame == UNFRAMEABLE_FRAME);
                     if let Some(carried) = &carried {
                         crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
                     }

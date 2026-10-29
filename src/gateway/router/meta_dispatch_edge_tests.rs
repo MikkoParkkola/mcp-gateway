@@ -31,7 +31,7 @@ async fn a_body_that_fails_to_read_is_a_parse_error() {
         "connection reset",
     ))]);
     let request = axum::extract::Request::new(Body::from_stream(failing));
-    let Err((status, body)) = read_body(request).await else {
+    let Err(super::helpers::RpcHttp { status, body, .. }) = read_body(request).await else {
         panic!("a failing body must not read");
     };
     assert_eq!(status, StatusCode::BAD_REQUEST);

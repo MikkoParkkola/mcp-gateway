@@ -438,7 +438,14 @@ mod tests {
             register(&continuation, &payload.hold_key, &minted);
             let body = json!({"jsonrpc": "2.0", "id": 1,
                               "result": {"resultType": "input_required", "requestState": resealed}});
-            let frame = crate::gateway::outbound::answer_value(None, None, body, None, None);
+            let frame = crate::gateway::outbound::answer_value(
+                None,
+                None,
+                body,
+                None,
+                None,
+                crate::gateway::health_metrics::Origin::Gateway,
+            );
             let response =
                 crate::gateway::outbound::to_http(frame, axum::http::StatusCode::OK, "");
             response

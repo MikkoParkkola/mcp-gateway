@@ -14,6 +14,7 @@ use serde_json::Value;
 use super::{
     Admission, Guard, OutboundFrame, Payload, RejectionAudit, admission, answer_value, recorded,
 };
+use crate::gateway::health_metrics::Origin;
 use crate::protocol::JsonRpcNotification;
 use crate::security::TransparencyLogger;
 use crate::security::tenant_reads::ReadAttribution;
@@ -122,6 +123,7 @@ impl StdioReads {
             value,
             request,
             hidden,
+            Origin::Gateway,
         );
         recorded(frame, self.log.as_ref()).await
     }

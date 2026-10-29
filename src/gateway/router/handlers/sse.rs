@@ -20,7 +20,8 @@ use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::gateway::outbound::{OutboundReply, gateway_reply, stream_reply};
 use crate::gateway::router::AppState;
 use crate::gateway::router::helpers::{
-    attach_session_header, build_http_error_response, build_http_response, session_capacity_refusal,
+    RpcHttp, attach_session_header, build_http_error_response, build_http_response,
+    session_capacity_refusal,
 };
 use crate::gateway::session_id::SessionId;
 use crate::gateway::streaming::{
@@ -94,10 +95,7 @@ fn get_era_refusal(state: &AppState, headers: &HeaderMap) -> Option<axum::respon
 
 /// Why a GET cannot open a stream at all: streaming is off, or the client does
 /// not accept an event stream.
-fn stream_request_refusal(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Option<(StatusCode, axum::Json<serde_json::Value>)> {
+fn stream_request_refusal(state: &AppState, headers: &HeaderMap) -> Option<RpcHttp> {
     if !state.streaming_config.enabled {
         return Some(build_http_error_response(
             None,

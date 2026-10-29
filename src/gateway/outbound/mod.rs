@@ -28,6 +28,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
+use crate::gateway::health_metrics::Origin;
 use crate::protocol::{JsonRpcNotification, JsonRpcResponse};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict};
 
@@ -115,6 +116,9 @@ pub(crate) struct OutboundFrame {
     /// the stdio writer as it takes the frame. A frame replaced, withheld or
     /// dropped before then carries none of them away, so they release.
     holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
+    /// Who wrote an error in an [`Payload::Answer`] value, whose frame no
+    /// longer carries the flag a [`Payload::Response`] does.
+    origin: Origin,
 }
 
 impl OutboundFrame {
@@ -129,7 +133,14 @@ impl OutboundFrame {
             key: None,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
         }
+    }
+
+    /// This frame, its error (if any) written by `origin`.
+    pub(crate) fn written_by(mut self, origin: Origin) -> Self {
+        self.origin = origin;
+        self
     }
 
     /// The verdict; `None` when unassessed or within the rule.
@@ -195,6 +206,7 @@ impl OutboundFrame {
             key: self.key,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
         }
     }
 
@@ -209,6 +221,7 @@ impl OutboundFrame {
             key: self.key,
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+            origin: Origin::Gateway,
         }
     }
 
@@ -318,14 +331,16 @@ pub(crate) fn answer_value(
     body: Value,
     request: Option<&Value>,
     hidden: Option<&ReadAttribution>,
+    origin: Origin,
 ) -> OutboundFrame {
     #[cfg(feature = "firewall")]
     if let Some(guard) = guard {
-        return judge::delivered(guard, key, Payload::Answer(body), request, hidden);
+        return judge::delivered(guard, key, Payload::Answer(body), request, hidden)
+            .written_by(origin);
     }
     #[cfg(not(feature = "firewall"))]
     let _ = (guard, key, request, hidden);
-    OutboundFrame::unjudged(Payload::Answer(body))
+    OutboundFrame::unjudged(Payload::Answer(body)).written_by(origin)
 }
 
 /// Judge a frame that is withheld, not replaced, when blocked.

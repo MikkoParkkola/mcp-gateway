@@ -23,6 +23,7 @@ pub struct SemVer {
 
 impl SemVer {
     /// Parse `MAJOR.MINOR.PATCH[-PRERELEASE][+BUILD]`.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.split_once('+').map_or(s, |(version, _)| version);
         let (core, pre) = match s.split_once('-') {
@@ -52,6 +53,7 @@ impl SemVer {
     }
 
     /// The same version with its prerelease dropped: `4.0.0-beta.1` -> `4.0.0`.
+    #[must_use]
     pub fn release(&self) -> Self {
         Self {
             pre: Vec::new(),

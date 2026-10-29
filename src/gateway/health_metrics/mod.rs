@@ -38,6 +38,32 @@ pub(crate) struct RpcError {
     pub(crate) origin: Origin,
 }
 
+impl RpcError {
+    /// The error `frame` carries, written by a backend exactly when its
+    /// off-wire flag says a transport returned it.
+    pub(crate) fn of_frame(frame: &crate::protocol::JsonRpcResponse) -> Option<Self> {
+        let error = frame.error.as_ref()?;
+        let origin = if frame.from_backend {
+            Origin::Backend
+        } else {
+            Origin::Gateway
+        };
+        Some(Self {
+            code: error.code,
+            origin,
+        })
+    }
+
+    /// The error in an answer rendered as a JSON value, written by `origin`.
+    pub(crate) fn of_value(answer: &serde_json::Value, origin: Origin) -> Option<Self> {
+        let code = answer.get("error")?.get("code")?.as_i64()?;
+        Some(Self {
+            code: i32::try_from(code).ok()?,
+            origin,
+        })
+    }
+}
+
 /// The `kind` label of `mcp_gateway_errors_total`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ErrorKind {

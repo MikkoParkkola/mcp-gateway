@@ -20,9 +20,9 @@ use crate::security::audit::{
 use crate::security::transparency_log::CorrelationKey;
 
 use super::super::AppState;
-use super::super::helpers::build_http_error_response;
+use super::super::helpers::{RpcHttp, build_http_error_response};
 
-type Answer = (StatusCode, Json<Value>);
+type Answer = RpcHttp;
 
 /// The slot the inner handler fills once the body is JSON with
 /// `"method": "tools/call"`, before the envelope is validated (D2-a), so a
@@ -210,29 +210,42 @@ async fn audited_call_judged(
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let (((status, Json(body)), hidden), trace) =
-        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
-            let inner = Box::pin(crate::gateway::outbound::read_scoped(
-                guard.clone(),
-                super::backend_handler_inner(
-                    Arc::clone(&state),
-                    name.clone(),
-                    request,
-                    &mut call,
-                    &mut reads,
-                ),
-            ));
-            let ((answer, hidden), notes) =
-                crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-            let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
-            ((answer, hidden), trace)
-        })
-        .await;
+    let (
+        (
+            RpcHttp {
+                status,
+                body: Json(body),
+                origin,
+            },
+            hidden,
+        ),
+        trace,
+    ) = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
+        let inner = Box::pin(crate::gateway::outbound::read_scoped(
+            guard.clone(),
+            super::backend_handler_inner(
+                Arc::clone(&state),
+                name.clone(),
+                request,
+                &mut call,
+                &mut reads,
+            ),
+        ));
+        let ((answer, hidden), notes) =
+            crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+        let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
+        ((answer, hidden), trace)
+    })
+    .await;
     if status == StatusCode::ACCEPTED {
         // An accepted notification: the gateway's own placeholder, sent
         // with no body (MIK-7759), carries nothing to judge.
         return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
-            (status, Json(body)),
+            RpcHttp {
+                status,
+                body: Json(body),
+                origin,
+            },
         ));
     }
     let mut frame = crate::gateway::outbound::answer_value(
@@ -241,6 +254,7 @@ async fn audited_call_judged(
         body,
         reads.params.as_ref(),
         hidden.as_ref(),
+        origin,
     );
     // MIK-7669: the delivery record the meta route writes (`judged_answer`),
     // after the judge and with the answer's `tenant_read` fields in it. The
@@ -336,7 +350,7 @@ pub(super) async fn record(
     answer: Answer,
     notes: DispatchNotes,
 ) -> Answer {
-    let (status, Json(body)) = &answer;
+    let (status, Json(body)) = (&answer.status, &answer.body);
     // MIK-8361: a withheld call's one record is `denied` with its refusal's
     // code, whatever it answered the caller (the missing name's answer).
     let outcome = call

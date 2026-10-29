@@ -246,6 +246,7 @@ pub(crate) fn delivered(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     }
 }
 
@@ -281,6 +282,7 @@ pub(crate) fn admit(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     })
 }
 
@@ -332,6 +334,7 @@ pub(crate) fn admit_stream_item(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     })
 }
 

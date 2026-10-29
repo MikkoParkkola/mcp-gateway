@@ -11,13 +11,11 @@
 //! whether a retry presents a newer token.
 
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
-use axum::Json;
 use axum::http::StatusCode;
-use serde_json::Value;
 use tracing::error;
 
 use super::super::AppState;
-use super::super::helpers::build_http_response;
+use super::super::helpers::{RpcHttp, build_http_response};
 use super::{record_client_failure, settle_direct_failure};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
@@ -50,7 +48,7 @@ impl DirectFailure<'_> {
         ),
         error: crate::Error,
         call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> RpcHttp {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
                 managed.after_upstream_401(error).await

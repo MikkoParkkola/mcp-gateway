@@ -11,6 +11,7 @@ use axum::http::{HeaderValue, StatusCode, header::CONTENT_TYPE};
 use axum::response::IntoResponse;
 
 use super::{OutboundFrame, Payload};
+use crate::gateway::health_metrics::RpcError;
 use crate::protocol::JsonRpcResponse;
 
 impl OutboundFrame {
@@ -150,6 +151,11 @@ pub(crate) fn to_http(
             .map(crate::gateway::meta_mcp::sealed_hold::carried),
         _ => None,
     };
+    let marker = match &frame.payload {
+        Payload::Response(answer) => RpcError::of_frame(answer),
+        Payload::Answer(answer) => RpcError::of_value(answer, frame.origin),
+        _ => None,
+    };
     let mut response = match frame.ticket {
         None => match frame.payload {
             Payload::Response(answer) => axum::Json(answer).into_response(),
@@ -161,6 +167,9 @@ pub(crate) fn to_http(
     };
     *response.status_mut() = status;
     crate::gateway::router::helpers::attach_session_header(response.headers_mut(), session_id);
+    if let Some(marker) = marker {
+        response.extensions_mut().insert(marker);
+    }
     if let Some(carried) = carried {
         response.extensions_mut().insert(carried);
     }

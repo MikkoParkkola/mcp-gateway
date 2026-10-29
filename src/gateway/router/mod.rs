@@ -14,7 +14,7 @@ use axum::{
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
 use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
-use super::health_metrics::layers::latency_layer;
+use super::health_metrics::layers::{error_layer, latency_layer};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
@@ -586,6 +586,24 @@ fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
     }
 }
 
+/// RFC 9728 protected-resource metadata, unauthenticated: clients fetch it
+/// before they hold a token.
+fn protected_resource_route(state: &Arc<AppState>, bind_origin: Option<String>) -> Router {
+    Router::new()
+        .route(
+            routes::PROTECTED_RESOURCE,
+            get(
+                move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
+                    let bind_origin = bind_origin.clone();
+                    async move {
+                        well_known::oauth_protected_resource_handler(state, bind_origin).await
+                    }
+                },
+            ),
+        )
+        .with_state(Arc::clone(state))
+}
+
 /// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
@@ -624,21 +642,7 @@ pub(crate) fn create_router_with_accounts(
         well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
     let origin_policy = Arc::new(origin_guard::OriginPolicy::from_live(&state.live_config));
     let pin_source = Arc::clone(&state.live_config);
-    let protected_resource_route =
-        Router::new()
-            .route(
-                routes::PROTECTED_RESOURCE,
-                get({
-                    let bind_origin = bind_origin.clone();
-                    move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
-                        let bind_origin = bind_origin.clone();
-                        async move {
-                            well_known::oauth_protected_resource_handler(state, bind_origin).await
-                        }
-                    }
-                }),
-            )
-            .with_state(Arc::clone(&state));
+    let protected_resource_route = protected_resource_route(&state, bind_origin);
 
     #[allow(unused_mut)]
     let mut routes = Router::new()
@@ -654,8 +658,7 @@ pub(crate) fn create_router_with_accounts(
         .route(routes::API_COSTS, get(backend_handlers::costs_handler))
         .route(
             routes::MCP,
-            post(handlers::meta_mcp_handler)
-                .layer(middleware::from_fn(latency_layer))
+            timed_post(handlers::meta_mcp_handler)
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
@@ -663,7 +666,7 @@ pub(crate) fn create_router_with_accounts(
         // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
         .route(
             routes::MCP_BACKEND,
-            post(backend_handlers::backend_handler).layer(middleware::from_fn(latency_layer)),
+            timed_post(backend_handlers::backend_handler),
         )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
@@ -759,10 +762,26 @@ pub(crate) fn create_router_with_accounts(
         origin_policy,
         origin_guard::origin_guard_middleware,
     ));
+    outermost(app, pin_source)
+}
 
-    // Added last so it runs first, on every route merged above and the
-    // fallback, whether or not the route authenticates (ADR-023).
+/// The layers added last, so they run first on every route merged above and
+/// the fallback, whether or not the route authenticates. The generation is
+/// pinned before anything else runs (ADR-023); the error count wraps that, so
+/// it sees the final answer of every route, authentication's and the admin
+/// routes' refusals included.
+fn outermost(app: Router, pin_source: Arc<crate::config_reload::LiveConfig>) -> Router {
     app.layer(middleware::from_fn_with_state(pin_source, pin_generation))
+        .layer(middleware::from_fn(error_layer))
+}
+
+/// A `POST` route whose calls leave an added-latency sample.
+fn timed_post<H, T>(handler: H) -> axum::routing::MethodRouter<Arc<AppState>>
+where
+    H: axum::handler::Handler<T, Arc<AppState>>,
+    T: 'static,
+{
+    post(handler).layer(middleware::from_fn(latency_layer))
 }
 
 /// Pin the published generation on a request before anything else runs. Every

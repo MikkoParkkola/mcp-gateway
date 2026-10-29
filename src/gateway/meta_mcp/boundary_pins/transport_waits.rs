@@ -64,10 +64,10 @@ impl Sink for Impls {
             return;
         };
         if test_only(&block.attrs)
-            || !trait_path
+            || trait_path
                 .segments
                 .last()
-                .is_some_and(|s| s.ident == "Transport")
+                .is_none_or(|s| s.ident != "Transport")
         {
             return;
         }
