@@ -190,6 +190,9 @@ mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+/// Secret injection applies on the direct route as through gateway_invoke.
+#[cfg(test)]
+mod secret_injection_direct_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;

@@ -153,16 +153,6 @@ impl MetaMcp {
         self
     }
 
-    /// Attach a secret injector for credential brokering.
-    #[must_use]
-    pub fn with_secret_injector(
-        mut self,
-        injector: crate::secret_injection::SecretInjector,
-    ) -> Self {
-        self.secret_injector = injector;
-        self
-    }
-
     /// Enable idempotency support with a background cleanup task.
     ///
     /// Called unconditionally from the boot path; while the cache is `None`
