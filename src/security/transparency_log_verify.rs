@@ -45,6 +45,11 @@ pub struct VerifyResult {
     pub segments_expired: usize,
     /// Findings that do not fail the verdict (archive mode, a trailing seal).
     pub warnings: Vec<String>,
+    /// An entry this pass parsed carried a signature (any `sig` key). Set
+    /// before an entry is checked, so a failed chain still reports it: a
+    /// caller verifying without the key refuses on it, whatever another,
+    /// earlier read of the log found.
+    pub signed_entry_seen: bool,
 }
 
 /// Whether tail completeness is checked against `<path>.hwm`.
@@ -365,6 +370,7 @@ impl<'a> Stream<'a> {
                         format!("{}: line {}: invalid JSON: {e}", file.display(), ln + 1),
                     )
                 })?;
+                self.result.signed_entry_seen |= is_signed_entry(&entry);
                 let counter =
                     field_u64(&entry, "counter").ok_or_else(|| missing(ln + 1, "counter"))?;
                 if let Some(next) = sealed_here {

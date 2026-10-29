@@ -53,7 +53,8 @@ fn run_audit_verify(
     // Fail closed on the root danger: a log that WAS signed, verified
     // without a secret, would silently degrade to hash-only and pass a
     // stale-sig forgery with exit 0 — regardless of why the secret is
-    // absent (no config discovered, wrong config, unset env).
+    // absent (no config discovered, wrong config, unset env). This check
+    // refuses early; the verifying pass below is the guard that holds.
     if !signed {
         match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
             Ok(true) => {
@@ -84,6 +85,16 @@ fn run_audit_verify(
         }
         Err(e) => {
             eprintln!("Error reading log: {e}");
+            ExitCode::FAILURE
+        }
+        // The pass itself saw a signature it could not check: refuse, however
+        // the check above came out. Records written between that check and
+        // this pass are covered only here.
+        Ok(result) if !signed && result.signed_entry_seen => {
+            eprintln!(
+                "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
+                log_path.display()
+            );
             ExitCode::FAILURE
         }
         Ok(result) if result.ok => {
