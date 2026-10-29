@@ -57,6 +57,8 @@
 /// A backend's `allowed_tools` narrowed between a task's intake and its run.
 #[cfg(feature = "firewall")]
 mod allowed_tools_task;
+#[cfg(feature = "firewall")]
+mod live_key_tasks;
 mod support;
 
 /// A gateway refusal inside a task worker's dispatch is tied to its task.
