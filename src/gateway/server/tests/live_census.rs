@@ -11,8 +11,9 @@
 //! unwinds, and the disarmed path is one atomic load. The table is a fixed
 //! static array (linear probing, tombstones never reused), so recording
 //! cannot re-enter the allocator. A census reads blocks other threads may be
-//! freeing, so while one runs, every free waits for it: a block is never
-//! read after it was returned.
+//! freeing, so a census and a free exclude each other: a free waits for a
+//! census to end, and a census waits for any free already under way to
+//! forget its block. A block is never read after it was returned.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -29,6 +30,9 @@ static ARMED: AtomicBool = AtomicBool::new(false);
 static OVERFLOW: AtomicBool = AtomicBool::new(false);
 /// Set while a census reads blocks; every free waits until it clears.
 static READING: AtomicBool = AtomicBool::new(false);
+/// Frees forgetting a block right now. A census waits for these to finish
+/// before it reads, so no free that saw `READING` clear overlaps the read.
+static FREEING: AtomicUsize = AtomicUsize::new(0);
 /// What the census saw: how many censuses ran, and the most copies one found.
 static TAKEN: AtomicU64 = AtomicU64::new(0);
 static MOST: AtomicU64 = AtomicU64::new(0);
@@ -64,10 +68,25 @@ pub(super) fn on_free(ptr: *mut u8) {
     if ptr.is_null() || !ARMED.load(Ordering::Acquire) {
         return;
     }
-    while READING.load(Ordering::Acquire) {
-        std::hint::spin_loop();
+    // Announce the free, then look: a census that raised `READING` first is
+    // waited out; one raising it after this sees `FREEING` and waits for the
+    // block to be forgotten. Both sides are `SeqCst`, so one always sees the
+    // other.
+    loop {
+        FREEING.fetch_add(1, Ordering::SeqCst);
+        if !READING.load(Ordering::SeqCst) {
+            break;
+        }
+        FREEING.fetch_sub(1, Ordering::SeqCst);
+        while READING.load(Ordering::SeqCst) {
+            std::hint::spin_loop();
+        }
     }
-    let ptr = ptr as usize;
+    forget(ptr as usize);
+    FREEING.fetch_sub(1, Ordering::SeqCst);
+}
+
+fn forget(ptr: usize) {
     let mut slot = start_slot(ptr);
     for _ in 0..SLOTS {
         match PTRS[slot].load(Ordering::Acquire) {
@@ -107,9 +126,14 @@ pub(super) fn take(holds: impl Fn(*const u8, usize) -> bool) {
         return;
     }
     while READING
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::Relaxed)
         .is_err()
     {
+        std::hint::spin_loop();
+    }
+    // A free that announced itself before `READING` rose finishes forgetting
+    // its block first; every later one waits.
+    while FREEING.load(Ordering::SeqCst) != 0 {
         std::hint::spin_loop();
     }
     let mut copies = 0u64;
