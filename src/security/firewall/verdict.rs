@@ -96,22 +96,22 @@ impl FirewallVerdict {
 
 pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // The guarantee is the load: `FirewallConfig::validate` refuses an invalid
-    // glob while the firewall is on. Should one get here anyway, it matches no
-    // tool. That backstop fails safe for an `allow` rule and open for a `block`
-    // rule, which is acceptable only because the load refusal comes first.
+    // glob while the firewall is on. Should one get here anyway (an embedder
+    // that skips the load), the rule is a refused shape, below.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
     let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
     // The scopes are refused at load too: an empty `servers` or `keys` list,
-    // a scope glob that does not parse, or an exception setting no field. A
-    // shape that got here anyway fails closed: the rule blocks its finding
-    // types on every call it matches by tool. Covering no call would not do:
+    // a glob that does not parse (`match` or a scope's), or an exception
+    // setting no field. A shape that got here anyway fails closed: the rule
+    // blocks its finding types on every call. Covering no call would not do:
     // a later `allow` rule would then decide, and neither would keeping a
     // `warn` or `allow` rule's action.
     let unparsed = |glob: Option<&String>| glob.is_some_and(|g| glob::Pattern::new(g).is_err());
-    let refused_shape = rule
-        .servers
-        .as_ref()
-        .is_some_and(|l| l.is_empty() || l.iter().any(|g| unparsed(Some(g))))
+    let refused_shape = pattern.is_none()
+        || rule
+            .servers
+            .as_ref()
+            .is_some_and(|l| l.is_empty() || l.iter().any(|g| unparsed(Some(g))))
         || rule.keys.as_ref().is_some_and(Vec::is_empty)
         || rule.except.iter().flatten().any(|entry| {
             (entry.server.is_none() && entry.tool.is_none() && entry.key.is_none())
@@ -120,7 +120,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
         });
     if refused_shape {
         return CompiledRule {
-            pattern,
+            pattern: glob::Pattern::new("*").ok(),
             action: FirewallAction::Block,
             scans: rule.scan.clone(),
             servers: None,
