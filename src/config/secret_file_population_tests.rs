@@ -144,6 +144,11 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          back is owner-only",
     ),
     (
+        "src/config_reload/replace_audit.rs",
+        "reads gateway.yaml under the config lock only to hash it for a recovery intent's base \
+         revision; the bytes are hashed, never kept or logged",
+    ),
+    (
         "src/control_plane/export.rs",
         "audit export cursor and log; no secret, append-only",
     ),
