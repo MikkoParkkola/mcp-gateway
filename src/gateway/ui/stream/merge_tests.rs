@@ -437,3 +437,17 @@ async fn lag_recoveries_do_not_rescan_hidden_rows_they_already_passed() {
         .div_ceil(PAGE);
     assert!(reads <= pages + 1, "{reads} page reads for {pages} pages");
 }
+
+#[tokio::test(start_paused = true)]
+async fn rows_past_the_captured_head_then_a_lag_recovery_are_neither_lost_nor_repeated() {
+    let fake = Fake::new(0, 4);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), Some(LogCursor::default())).await;
+    // All six land after the head was captured, so the first catch-up page
+    // holds only rows past it; the live receiver then lags and recovers.
+    for _ in 0..6 {
+        fake.append(false);
+    }
+    let out = collect(&mut merge, 6).await;
+    assert_eq!(ids(&out), (1..=6).collect::<Vec<_>>());
+    assert!(merge.lag_recoveries() >= 1);
+}
