@@ -139,7 +139,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
     };
     assert!(store.settle("a", now, dead, Ok(now), ROOMY).is_err());
     let due = store
-        .due(now + super::SETTLE_RETRY, &HashSet::new(), ROOMY)
+        .due(now + super::super::SETTLE_RETRY, &HashSet::new(), ROOMY)
         .expect("io");
     assert_eq!(
         due.ready.len(),
@@ -150,7 +150,7 @@ fn a_failed_settlement_ignores_an_older_dead_letter_under_the_same_id() {
 
 #[test]
 fn revive_moves_a_dead_letter_back_only_while_it_is_the_one_scanned() {
-    use super::Revived;
+    use super::super::Revived;
     let dir = tempfile::tempdir().expect("dir");
     let now = Utc::now();
     let store = open_with(dir.path(), now, &["s1"]);
