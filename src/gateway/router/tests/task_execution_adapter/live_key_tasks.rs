@@ -22,6 +22,10 @@ fn remove_key_a(keys: &mut Vec<crate::config::ApiKeyConfig>) {
     keys.retain(|k| k.name != "principal-a");
 }
 
+#[expect(
+    clippy::ptr_arg,
+    reason = "shares the edit table's signature with the removals, which need the Vec"
+)]
 fn narrow_key_a(keys: &mut Vec<crate::config::ApiKeyConfig>) {
     for key in keys.iter_mut().filter(|k| k.name == "principal-a") {
         key.backends = vec![FORBIDDEN_BACKEND.to_owned()];

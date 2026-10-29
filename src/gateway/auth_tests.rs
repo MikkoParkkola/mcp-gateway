@@ -634,7 +634,7 @@ fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
         ))))
         .body(Body::empty())
         .expect("request builds");
-    try_dashboard_bootstrap(state, &**state.live_config.generation().auth(), &request)
+    try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
         .expect("a bootstrap link is always answered here")
         .status()
 }

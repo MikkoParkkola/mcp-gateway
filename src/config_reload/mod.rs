@@ -220,7 +220,7 @@ impl LiveConfig {
     pub fn new(config: Config) -> Self {
         use rand::RngExt;
         let key: [u8; 32] = rand::rng().random();
-        let key = key.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let key = hex::encode(key);
         let auth = crate::gateway::auth::ResolvedAuthConfig::from_config(&config.auth, &key);
         Self::from_prepared(Generation::prepare_startup(config, Arc::new(auth)))
     }

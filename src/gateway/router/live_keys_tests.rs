@@ -37,15 +37,17 @@ fn auth(keys: Vec<ApiKeyConfig>) -> AuthConfig {
 
 /// The YAML for `keys`, as an operator writes it.
 fn file_text(keys: &[ApiKeyConfig]) -> String {
+    use std::fmt::Write as _;
     let mut text = String::from("auth:\n  enabled: true\n  api_keys:\n");
     for k in keys {
-        text.push_str(&format!(
-            "    - name: {}\n      key_sha256: \"{}\"\n      backends: [\"*\"]\n",
-            k.name,
-            k.key_sha256.as_deref().expect("a digest")
-        ));
+        let digest = k.key_sha256.as_deref().expect("a digest");
+        let _ = write!(
+            text,
+            "    - name: {}\n      key_sha256: \"{digest}\"\n      backends: [\"*\"]\n",
+            k.name
+        );
         if let Some(at) = k.expires_at {
-            text.push_str(&format!("      expires_at: \"{}\"\n", at.to_rfc3339()));
+            let _ = writeln!(text, "      expires_at: \"{}\"", at.to_rfc3339());
         }
     }
     text

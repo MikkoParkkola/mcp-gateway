@@ -504,9 +504,8 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let pinned = match live::pinned_auth(&request) {
-        Ok(pinned) => pinned,
-        Err(refused) => return refused,
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
     };
     let auth_config = &*pinned;
 
@@ -614,9 +613,8 @@ async fn authenticate_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let pinned = match live::pinned_auth(&request) {
-        Ok(pinned) => pinned,
-        Err(refused) => return refused,
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
     };
     let auth_config = &*pinned;
     let path = request.uri().path();

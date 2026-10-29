@@ -57,6 +57,7 @@ pub(crate) struct Bound {
 
 impl Bound {
     /// Bound by an expiry alone.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn until(not_after: Option<SystemTime>) -> Self {
         Self {
@@ -363,7 +364,7 @@ impl DashboardBootstrap {
     }
 
     /// Like [`Self::rearm`], with a wall-clock cap for the session it opens.
-    #[cfg(any(test, feature = "webui"))]
+    #[cfg(test)]
     pub(crate) fn rearm_until(&self, not_after: Option<SystemTime>) -> String {
         self.rearm_bound(Bound::until(not_after))
     }

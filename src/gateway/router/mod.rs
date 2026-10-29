@@ -161,10 +161,10 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
-#[cfg(test)]
-mod live_keys_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
+#[cfg(test)]
+mod live_keys_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -756,6 +756,14 @@ async fn pin_generation(
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
     next.run(request).await
+}
+
+impl AppState {
+    /// The process's record key: resolved once at startup, the same in every
+    /// generation, so any generation's copy is this one.
+    pub(crate) fn record_key(&self) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
+        self.live_config.generation().auth().shared_record_key()
+    }
 }
 
 /// The refusal for a request that reached a reader without a pinned

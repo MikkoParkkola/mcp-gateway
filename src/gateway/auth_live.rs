@@ -339,21 +339,23 @@ fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
 
 /// The key table and `auth` settings of the generation the router pinned on
 /// `request`, so a reload mid-request never changes which keys judge it.
-/// Fail closed: a request without a pin is refused, never judged by the
-/// current generation.
+/// `None` without a pin: the caller refuses with [`unpinned`], never judging
+/// by the current generation.
 pub(super) fn pinned_auth(
     request: &axum::http::Request<axum::body::Body>,
-) -> Result<std::sync::Arc<super::ResolvedAuthConfig>, axum::response::Response> {
-    use axum::response::IntoResponse as _;
+) -> Option<std::sync::Arc<super::ResolvedAuthConfig>> {
     crate::gateway::router::pinned_generation(request.extensions())
         .map(|generation| std::sync::Arc::clone(generation.auth()))
-        .ok_or_else(|| {
-            (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                crate::gateway::router::UNPINNED,
-            )
-                .into_response()
-        })
+}
+
+/// The fail-closed answer to a request that reached authentication unpinned.
+pub(super) fn unpinned() -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        crate::gateway::router::UNPINNED,
+    )
+        .into_response()
 }
 
 #[cfg(test)]

@@ -29,9 +29,8 @@ fn observe(
         ))))
         .body(Body::empty())
         .expect("request builds");
-    let response =
-        try_dashboard_bootstrap(state, &**state.live_config.generation().auth(), &request)
-            .expect("a bootstrap link is always answered here");
+    let response = try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
+        .expect("a bootstrap link is always answered here");
     let status = response.status();
     let mut headers: Vec<(String, String)> = response
         .headers()
@@ -216,9 +215,8 @@ fn r7b_no_admin_credential_keeps_its_401_for_a_browser() {
         .header("sec-fetch-dest", "document")
         .body(Body::empty())
         .expect("request builds");
-    let response =
-        try_dashboard_bootstrap(&state, &**state.live_config.generation().auth(), &request)
-            .expect("answered");
+    let response = try_dashboard_bootstrap(&state, state.live_config.generation().auth(), &request)
+        .expect("answered");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(
         response

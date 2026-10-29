@@ -208,6 +208,10 @@ impl ResolvedAuthConfig {
     }
 
     /// The record key clients minted here are keyed with (MIK-8697 §16.11).
+    pub(crate) fn shared_record_key(&self) -> Arc<RecordPrincipalKey> {
+        Arc::clone(&self.record_key)
+    }
+
     pub(crate) fn record_key(&self) -> &RecordPrincipalKey {
         &self.record_key
     }

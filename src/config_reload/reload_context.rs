@@ -634,16 +634,14 @@ impl ReloadContext {
 
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        // The key table resolves against the candidate overlay, published with
-        // it below; every other `auth` setting is the running one.
-        let generation = Arc::new(self.live_config.prepare(new_config, &overlay).map_err(
-            |reason| {
-                format!(
-                    "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and \
-                     no configuration was published."
-                )
-            },
-        )?);
+        // Keys resolve against the candidate overlay; the rest of `auth` runs on.
+        let prepared = self.live_config.prepare(new_config, &overlay);
+        let generation = Arc::new(prepared.map_err(|reason| {
+            format!(
+                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                 configuration was published."
+            )
+        })?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
