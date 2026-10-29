@@ -237,6 +237,23 @@ async fn pin_a_required_backends_unavailable_read_is_no_view() {
     );
 }
 
+/// Arm the Meta-MCP with one routing profile, `name`, that limits nothing.
+fn with_profile(name: &'static str) -> impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp) {
+    move |meta| {
+        let configs = std::collections::HashMap::from([(
+            name.to_string(),
+            crate::routing_profile::RoutingProfileConfig::default(),
+        )]);
+        let placeholder = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        let owned = std::mem::replace(meta, placeholder);
+        *meta = owned.with_profile_registry(crate::routing_profile::ProfileRegistry::from_config(
+            &configs, name,
+        ));
+    }
+}
+
 /// R7: after a rotation, a `gateway_set_profile` switch reads its caller's
 /// new view for the change notice. That refresh must run the account
 /// re-check first, so a publish of the old binding after it is judged
@@ -245,7 +262,7 @@ async fn pin_a_required_backends_unavailable_read_is_no_view() {
 /// a session holding a listener record, which this fixture does not open.
 #[tokio::test]
 async fn r7_a_set_profile_refresh_rechecks_the_account_first() {
-    let fx = Arc::new(fixture().await);
+    let fx = Arc::new(fixture_armed(&Binding::Connected, with_profile("research")).await);
     let old = fill_old(&fx, 1).await;
     rotate(&fx, &old).await;
     let fired = publish_old_after_revalidate(&fx, &old, |_| {});
@@ -253,7 +270,7 @@ async fn r7_a_set_profile_refresh_rechecks_the_account_first() {
         &fx,
         2,
         "tools/call",
-        json!({"name": "gateway_set_profile", "arguments": {"profile": "default"}}),
+        json!({"name": "gateway_set_profile", "arguments": {"profile": "research"}}),
     )
     .await;
     assert!(
