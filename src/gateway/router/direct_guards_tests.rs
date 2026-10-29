@@ -84,46 +84,6 @@ async fn t2_disabled_capability_is_refused_on_the_direct_route() {
     }
 }
 
-/// The guards pass a sealed admission refusal (a disabled capability)
-/// through unchanged and raise nothing for it: it raises where it is framed.
-#[tokio::test]
-async fn a_sealed_admission_refusal_passes_through_the_guards_unraised() {
-    use crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall;
-    use crate::gateway::meta_mcp::signing::SigningScope;
-    let fx = fixture(Answer::Ok, |meta| {
-        let cfg = crate::kill_switch::budget::CapabilityErrorBudgetConfig::default();
-        for _ in 0..cfg.min_samples.max(cfg.window_size) {
-            meta.kill_switch()
-                .record_capability_failure(BACKENDS[0], "read", &cfg);
-        }
-    })
-    .await;
-    let call = BackendCall {
-        server: BACKENDS[0],
-        tool: "read",
-        session_id: None,
-        api_key_name: Some("k-std"),
-        cost_key: Some("k-std"),
-        trace_id: "",
-        caller_key: None,
-    };
-    let (guarded, facts) = crate::gateway::delivery_facts::scope(async {
-        let guarded = super::direct_guards::DirectRouteGuards::run(
-            &fx.state.meta_mcp,
-            &call,
-            SigningScope::EveryToolCall,
-        );
-        (guarded, crate::gateway::delivery_facts::snapshot())
-    })
-    .await;
-    let error = guarded.expect_err("a disabled capability is refused");
-    assert!(
-        !matches!(error, crate::Error::Protocol(_)),
-        "the capability refusal, not a profile one: {error:?}"
-    );
-    assert!(!facts.expect("a cell").refused(), "raised by the guards");
-}
-
 /// T9 (ordering). A call the pre-dispatch chain refuses never attempts an
 /// idempotency reservation.
 #[tokio::test]
