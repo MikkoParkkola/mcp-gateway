@@ -200,12 +200,18 @@ impl MetaMcp {
         }
 
         let (delivered, effect) = if evaluation.policy.enforcement_applied {
+            // A rebuilt round is raised here; a malformed round and a whole
+            // withhold are both Withheld, raised once where they are delivered.
             let (delivered, rebuilt) =
                 Self::context_integrity_delivered_result(&evaluation, &result);
-            if let Some(rebuilt) = rebuilt {
-                crate::gateway::delivery_facts::raise(rebuilt);
-            }
-            (delivered, GateEffect::Enforced)
+            let effect = match rebuilt {
+                Some(ResponseEffect::Rewritten) => {
+                    crate::gateway::delivery_facts::raise(ResponseEffect::Rewritten);
+                    GateEffect::Enforced
+                }
+                _ => GateEffect::Withheld,
+            };
+            (delivered, effect)
         } else {
             (result, GateEffect::PassedThrough)
         };
