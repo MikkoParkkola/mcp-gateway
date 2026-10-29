@@ -239,6 +239,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
     ),
     (
+        "src/personal_accounts/commit.rs",
+        "creates a commit's scratch file owner-only (0600, create_new) to write it; reads no secret file",
+    ),
+    (
         "src/personal_accounts/migration_source.rs",
         "own stricter check: fstat, exactly 0600 (R5)",
     ),
@@ -291,6 +295,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/security/firewall/audit.rs",
         "append-only audit log; no secret",
+    ),
+    (
+        "src/security/transparency_log.rs",
+        "the logger's bounded reads of its own audit log files (the tail at open); no secret",
     ),
     (
         "src/security/transparency_log_anchor.rs",
@@ -374,10 +382,10 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Whether a source file's non-test code has a raw read or write. The body
-/// is cut at the first inline `#[cfg(test)] mod name {`, not at any
-/// `#[cfg(test)]` item: a test-only `use` or constant near the top must not
-/// hide the production reads after it. Comment lines are skipped.
+/// Whether a source file's non-test code has a raw read or write. Each
+/// `#[cfg(test)]` item is left out by its own extent (an early test module
+/// or test-only `use` never hides the production code after it). Comment
+/// lines are skipped.
 fn has_raw_io(text: &str) -> bool {
     static RAW: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
@@ -385,14 +393,8 @@ fn has_raw_io(text: &str) -> bool {
         )
         .expect("pattern")
     });
-    static INLINE_TEST_MOD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub\s*(?:\([^)]*\))?\s*)?mod\s+\w+\s*\{")
-            .expect("pattern")
-    });
-    let body = INLINE_TEST_MOD
-        .find(text)
-        .map_or(text, |m| &text[..m.start()]);
-    body.lines()
+    crate::test_source_text::production_text(text)
+        .lines()
         .any(|line| !line.trim_start().starts_with("//") && RAW.is_match(line))
 }
 
