@@ -250,9 +250,9 @@ async fn run_dispatched(
                 .readmit(&call, &caller, (session_id.as_deref(), &generation))
                 .await
         } else {
-            // The intake's own judgement, not an empty one: the inner scope
-            // shadows the worker's, so an empty one would switch off the
-            // playbook and backend-instance guards this task was admitted under.
+            // The intake's own judgement, which the dispatch compares against;
+            // it also stands as the enclosing scope's, so an empty inner one
+            // would keep the same guards (`with_judged`).
             Ok((call.arguments.clone(), intent.owned.judged()))
         };
         let (arguments, judged) = match readmitted {
