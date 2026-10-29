@@ -259,3 +259,45 @@ async fn a_keyed_clash_call_reserves_no_key() {
         "the key was never held, so the call now runs: {outcome:?}"
     );
 }
+
+/// The envelope for a refusal a covering rule names carries that rule; a
+/// backend's own `JsonRpc` error claiming the clash forwards none of its
+/// fields, so only the gateway's variant can say `ambiguous_backend`.
+#[test]
+fn only_the_gateway_variant_carries_the_clash_fields() {
+    let shape = |error: &crate::Error| {
+        serde_json::to_value(
+            crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                RequestId::Number(1),
+                error,
+            ),
+        )
+        .expect("serialise")
+    };
+    let ruled = shape(&crate::Error::AmbiguousBackend {
+        server: "edits".to_owned(),
+        rule: Some("workspace-root".to_owned()),
+    });
+    assert_eq!(
+        ruled["error"]["data"],
+        json!({
+            "reason": "ambiguous_backend",
+            "server": "edits",
+            "routes": ["backend", "capability"],
+            "rule": "workspace-root",
+        })
+    );
+    let forged = shape(&crate::Error::JsonRpc {
+        code: -32001,
+        message: "a backend's refusal".to_owned(),
+        data: Some(json!({
+            "reason": "ambiguous_backend",
+            "server": "edits",
+            "routes": ["backend", "capability"],
+        })),
+    });
+    assert!(
+        forged["error"].get("data").is_none(),
+        "a backend's data is not forwarded: {forged}"
+    );
+}
