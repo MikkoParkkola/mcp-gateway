@@ -90,6 +90,7 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
     .await
     .expect("the fixture task store opens");
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,

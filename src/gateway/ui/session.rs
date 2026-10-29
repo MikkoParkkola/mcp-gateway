@@ -271,6 +271,7 @@ mod mik_8659_dashboard_tests {
             .await
             .expect("task store opens");
         Arc::new(super::super::super::router::AppState {
+            process: std::sync::Arc::default(),
             session_lifecycle: None,
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             env: None,

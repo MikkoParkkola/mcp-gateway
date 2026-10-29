@@ -16,7 +16,10 @@ pub(super) async fn test_router_app_state_with_meta(
     backend: Arc<Backend>,
     configure: impl FnOnce(&mut MetaMcp),
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     configure(&mut meta);
@@ -43,6 +46,7 @@ pub(super) async fn test_router_app_state_with_meta(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -96,7 +100,10 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
@@ -138,6 +145,7 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,

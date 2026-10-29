@@ -143,6 +143,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         meta.set_firewall(f.firewall.clone());
     }
     let app = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: f.session_lifecycle,
         env: None,

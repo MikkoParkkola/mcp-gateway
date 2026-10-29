@@ -162,6 +162,7 @@ async fn make_app_state(
     let (task_service, task_executor, store_dir) = task_runtime(&subscriptions).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
@@ -253,6 +254,7 @@ async fn make_app_state_with_reload(
 
     (
         Arc::new(AppState {
+            process: std::sync::Arc::default(),
             continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
             session_lifecycle: None,
             env: None,
