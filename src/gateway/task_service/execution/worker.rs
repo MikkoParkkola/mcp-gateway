@@ -218,7 +218,14 @@ async fn run_dispatched(
     crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
     // A queued dispatch is judged by the generation current now (ADR-023).
     let generation = state.generation();
-    let authorizer = state.authorizer(intent.owned.authorizer(), &generation);
+    // K15: the key that queued this task, as the current table holds it. A
+    // refusal is the dispatch's answer below, before anything is sent.
+    let (rejudged, key_refused) = match state.rejudge(intent.owned.authorizer(), &generation) {
+        Ok(rejudged) => (rejudged, None),
+        Err(refused) => (None, Some(refused)),
+    };
+    let owned_authorizer = rejudged.as_ref().unwrap_or(intent.owned.authorizer());
+    let authorizer = state.authorizer(owned_authorizer, &generation);
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);
@@ -239,6 +246,9 @@ async fn run_dispatched(
     let meta = state.meta_mcp();
     // The pin covers the readmission as well as the dispatch.
     let dispatch = meta.with_surfaced_pin(&call.tool, recorded, async {
+        if let Some(refused) = key_refused {
+            return *refused;
+        }
         // A task whose intake judged nothing (sanitising was off, or nothing
         // was exempt) is re-admitted under this step's generation, as a resume
         // is, so one admitted while sanitising was off is sanitised if a reload
