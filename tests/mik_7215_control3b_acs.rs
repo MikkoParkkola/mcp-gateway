@@ -64,6 +64,10 @@ const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 /// The `TempDir` is returned because the task store holds its directory for the
 /// life of the service: dropping it here would delete the records under a state
 /// the test is still posting to. Callers bind it for the whole test.
+#[allow(
+    clippy::too_many_lines,
+    reason = "builds every AppState field by hand, so each new field grows it"
+)]
 async fn app_state_with_log() -> (
     tempfile::TempDir,
     Arc<AppState>,
@@ -140,6 +144,7 @@ async fn app_state_with_log() -> (
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         env: None,
         meta_mcp,

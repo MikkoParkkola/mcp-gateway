@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::cli_support::is_format_char;
+use crate::cli_support::display_text;
 
 /// Characters kept of a reported name or version. Counted in characters, so
 /// a multibyte name is never cut inside one.
@@ -18,7 +18,7 @@ pub(super) fn package(info: Option<&Value>) -> Value {
     let field = |key: &str| {
         info.and_then(|info| info.get(key))
             .and_then(Value::as_str)
-            .and_then(display_text)
+            .and_then(|raw| display_text(raw, CAP))
     };
     let (name, version) = (field("name"), field("version"));
     if name.is_none() && version.is_none() {
@@ -32,22 +32,6 @@ pub(super) fn package(info: Option<&Value>) -> Value {
         "source": "reported_by_server",
         "truncated": truncated,
     })
-}
-
-/// `raw` without controls (Cc), formats (Cf: bidi overrides, zero-width
-/// marks) or line and paragraph separators (Zl, Zp), trimmed and capped, with
-/// whether the cap cut it; `None` when nothing is left. A server picks these
-/// strings, so they must not be able to reorder or hide what is shown.
-fn display_text(raw: &str) -> Option<(String, bool)> {
-    let kept: String = raw
-        .chars()
-        .filter(|&c| !(c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}')))
-        .collect();
-    let kept = kept.trim();
-    if kept.is_empty() {
-        return None;
-    }
-    Some((kept.chars().take(CAP).collect(), kept.chars().count() > CAP))
 }
 
 #[cfg(test)]

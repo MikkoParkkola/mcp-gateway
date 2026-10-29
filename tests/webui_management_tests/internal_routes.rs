@@ -626,9 +626,10 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+const GROUPS: [&[Row]; 2] = [control_plane::ROWS, gateway_rows::ROWS];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -799,6 +800,8 @@ async fn internal_routes_refuse_every_other_method() {
 
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]

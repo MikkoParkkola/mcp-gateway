@@ -3,6 +3,7 @@
 
 use std::sync::OnceLock;
 
+use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
@@ -39,6 +40,13 @@ pub(super) struct ClientSession {
     /// by creation: a session that only POSTs holds no stream, so age alone
     /// would reap it mid-use and the next request would start a fresh one.
     pub(super) last_active: RwLock<Instant>,
+    /// The wall-clock time of the same touch as `last_active`, for display:
+    /// `last_active` is monotonic and cannot be shown. Set only by
+    /// [`ClientSession::touch`], so the two never disagree about which
+    /// request was the last. `None` when the clock could not be read.
+    pub(super) last_seen: RwLock<Option<DateTime<Utc>>>,
+    /// What the peer says it is. Display only; see [`ReportedName`].
+    pub(super) reported_name: ReportedName,
     /// The identity that created this session.
     ///
     /// A session id arrives in a header the caller controls, so without this a
@@ -68,7 +76,42 @@ pub(super) struct ClientSession {
     pub(super) provisional_stream: std::sync::atomic::AtomicBool,
 }
 
+/// Characters kept of a client's self-reported name.
+const REPORTED_NAME_CAP: usize = 64;
+
+/// The name the client gave in `initialize` (`clientInfo.name`), cleaned.
+///
+/// Self-asserted and unverified: the peer picks it, so it is display text and
+/// never an identity. Nothing that decides access, routing, audit or
+/// attribution may read it. The inner value is private to this module and its
+/// one getter is called by the listing in `streaming_roster.rs` alone, so a
+/// new reader has to come through that door.
+#[derive(Debug, Default)]
+pub(super) struct ReportedName(RwLock<Option<String>>);
+
+impl ReportedName {
+    /// Replace the name with `raw`, cleaned as display text and capped. A
+    /// name that cleans to nothing clears it.
+    pub(super) fn set(&self, raw: &str) {
+        *self.0.write() =
+            crate::cli_support::display_text(raw, REPORTED_NAME_CAP).map(|(text, _cut)| text);
+    }
+
+    /// The cleaned name, for the listing.
+    pub(super) fn get(&self) -> Option<String> {
+        self.0.read().clone()
+    }
+}
+
 impl ClientSession {
+    /// A request used this session now: the idle clock restarts and the
+    /// wall-clock `last_seen` moves with it, under the one write lock.
+    pub(super) fn touch(&self) {
+        let mut active = self.last_active.write();
+        *active = Instant::now();
+        *self.last_seen.write() = crate::clock::utc_now().ok();
+    }
+
     /// Hold `credential`. A different credential is a different caller, so
     /// what the session was last told no longer describes it: every record is
     /// cleared under a new floor and the next attach takes a fresh baseline

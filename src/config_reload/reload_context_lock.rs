@@ -35,7 +35,12 @@ impl ReloadContext {
         )]
         tokio::time::timeout(wait, self.registry.lock_reload())
             .await
-            .map_err(|_| ConfigWriteError::Busy)
+            .map_err(|_| {
+                // Every caller returns on this error and none reaches
+                // `note_refused_lock`, so the skip is tallied exactly once.
+                self.reporting.tally.skipped();
+                ConfigWriteError::Busy
+            })
     }
 
     /// Run the file load on its own thread and wait for it without holding a
@@ -111,12 +116,16 @@ impl ReloadContext {
                 self.reload_owed
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 refusals.reload_applied();
+                self.reporting.tally.applied();
             }
-            Err(refusal) => refusals.record(
-                crate::config_reload::refusals::RefusalKind::Reload,
-                None,
-                refusal,
-            ),
+            Err(refusal) => {
+                refusals.record(
+                    crate::config_reload::refusals::RefusalKind::Reload,
+                    None,
+                    refusal,
+                );
+                self.reporting.tally.refused();
+            }
         }
         outcome
     }
@@ -143,8 +152,11 @@ impl ReloadContext {
     }
 
     /// A refused lock may still have restored gateway.yaml (its journal then
-    /// could not be removed): owe the reload back to the restored bytes.
+    /// could not be removed): owe the reload back to the restored bytes. Also
+    /// the one place a skipped reload is tallied: every entry point that could
+    /// not take the lock comes through here.
     pub(super) fn note_refused_lock(&self) {
+        self.reporting.tally.skipped();
         if crate::config_persistence::journal::take_restored(&self.config_path) {
             self.reload_owed
                 .store(true, std::sync::atomic::Ordering::SeqCst);

@@ -116,6 +116,7 @@ async fn test_stdio_initialize_produces_valid_response() {
     .expect("the fixture task store opens");
 
     let _state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,

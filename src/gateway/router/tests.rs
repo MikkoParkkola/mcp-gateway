@@ -189,6 +189,7 @@ async fn test_router_app_state_with(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -251,6 +252,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -419,6 +421,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     task_service.store.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,

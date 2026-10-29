@@ -9,6 +9,7 @@ src/config_reload/mod.rs	apply_patch	statement	Lifecycle	getx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	registerx1
 src/config_reload/mod.rs	apply_patch	statement	Lifecycle	removex1
+src/config_reload/refusals.rs	startup_refusals	statement	Admin	allx1
 src/config_reload/reload_context.rs	new	statement	Lifecycle	enforce_destinationsx1
 src/config_reload/reload_context.rs	reload_outcome	statement	Lifecycle	lock_reloadx1
 src/config_reload/reload_context_lock.rs	load_off_worker	statement	Lifecycle	reload_read_slotx1
@@ -72,4 +73,3 @@ src/home_dir.rs	-	item	the one place the platform lookups are called
 src/gateway/ui/overview.rs	backends_by_name	statement	Admin	allx1
 src/config_reload/override_audit.rs	drain	statement	Lifecycle	lock_reloadx1
 src/config_reload/override_audit.rs	in_effect	statement	Lifecycle	allx1
-src/gateway/ui/refusals.rs	refusals	statement	Admin	allx1

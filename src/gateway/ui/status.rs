@@ -6,7 +6,7 @@
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{AppState, call_windows, uptime_secs};
+use super::{AppState, call_windows};
 
 /// Which of the two views a caller gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +36,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
             "server_count": total,
             "healthy_count": healthy,
             "degraded_count": total - healthy,
-            "uptime_secs": uptime_secs(),
+            "uptime_secs": state.process.uptime_secs(),
             "version": env!("CARGO_PKG_VERSION"),
         });
     }
@@ -102,7 +102,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
     json!({
         "server_count": total,
         "tool_count": tool_count,
-        "uptime_secs": uptime_secs(),
+        "uptime_secs": state.process.uptime_secs(),
         "version": env!("CARGO_PKG_VERSION"),
         "circuit_breakers": {
             "closed": cb_closed,
