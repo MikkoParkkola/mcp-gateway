@@ -62,8 +62,10 @@ function send(res, status, headers, body) {
 // next, a list of {status, retryAfter} answers for the coming connects), send
 // (the raw body is written to the open stream), end (the open stream ends) and
 // log (every connect with its headers, and whether it has closed). Channels are
-// per test, since every worker shares this server. Without the cookie the
-// stream answers 404, as before.
+// per test, since every worker shares this server. The log records whether
+// Authorization and a session cookie were sent, never their values. Without
+// the cookie the stream is held open and never says hello, so the shell stays
+// quiet and no reconnect timer runs in specs that do not drive it.
 const channels = new Map();
 const channel = (name) => {
   if (!channels.has(name)) channels.set(name, { conns: [], open: null, next: [], requireBearer: null });
@@ -91,11 +93,16 @@ async function streamControl(req, res, name, verb) {
 
 function streamOpen(req, res, name) {
   const ch = channel(name);
-  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: req.headers.authorization ?? null, cookie: req.headers.cookie ?? '', closed: false };
+  const auth = req.headers.authorization ?? null;
+  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: auth !== null, sessionCookie: /(?:^|;\s*)session=/.test(req.headers.cookie ?? ''), status: 200, closed: false };
   ch.conns.push(conn);
-  if (ch.requireBearer && conn.authorization !== `Bearer ${ch.requireBearer}`) return send(res, 401, { 'content-type': 'application/json' }, '{}');
+  if (ch.requireBearer && auth !== `Bearer ${ch.requireBearer}`) {
+    conn.status = 401;
+    return send(res, 401, { 'content-type': 'application/json' }, '{}');
+  }
   const scripted = ch.next.shift();
   if (scripted) {
+    conn.status = scripted.status;
     const headers = scripted.retryAfter ? { 'retry-after': String(scripted.retryAfter) } : {};
     return send(res, scripted.status, headers, '');
   }
@@ -111,7 +118,11 @@ function handle(req, res) {
   const control = path.match(/^\/__stream\/([\w-]+)\/(setup|send|end|log)$/);
   if (control) return streamControl(req, res, control[1], control[2]);
   const held = (req.headers.cookie ?? '').match(/(?:^|;\s*)fixture-stream=([\w-]+)/);
-  if (path === '/ui/api/stream' && get && held) return streamOpen(req, res, held[1]);
+  if (path === '/ui/api/stream' && get) {
+    if (held) return streamOpen(req, res, held[1]);
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-fixture-root': HERE });
+    return res.flushHeaders(); // held open, never a hello
+  }
   if (path === '/ui' || path === '/ui/classic') {
     // axum's get() route: another method answers 405.
     if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');

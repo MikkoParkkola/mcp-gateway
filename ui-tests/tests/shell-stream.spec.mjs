@@ -156,9 +156,10 @@ test('ST5 a key-only sign-in opens the stream with the bearer', async ({ page, r
   await page.locator('#signin-key').fill(KEY);
   await page.keyboard.press('Enter');
   await expect(page.locator('#signin')).toBeHidden();
-  await expect.poll(async () => (await stream.log()).filter((c) => c.authorization === `Bearer ${KEY}`).length).toBe(1);
+  // The channel answers 401 to anything but this exact bearer, so a 200 proves it was sent.
+  await expect.poll(async () => (await stream.log()).filter((c) => c.authorization && c.status === 200).length).toBe(1);
   // No session cookie: only the bearer could have opened it.
-  for (const c of await stream.log()) expect(c.cookie).not.toMatch(/session=/);
+  for (const c of await stream.log()) expect(c.sessionCookie).toBe(false);
   await stream.send(HELLO);
   await expect(page.locator(INDICATOR)).toHaveText('Live');
 });
@@ -242,16 +243,149 @@ test('ST9b a later hello clears Updates unavailable and says so', async ({ page,
   expect(said.indexOf('Updates resumed.')).toBeGreaterThan(said.indexOf('Updates unavailable'));
 });
 
-test('ST9c a 404 first connect shows nothing and never reconnects', async ({ page, request }, testInfo) => {
+test('ST9c a 404 first connect shows Updates unavailable and retries at the 30 s ceiling', async ({ page, request }, testInfo) => {
   await pausedAt1402(page);
-  const stream = await heldStream(page, request, testInfo, { next: [{ status: 404 }] });
+  const stream = await heldStream(page, request, testInfo, { next: [{ status: 404 }, { status: 404 }] });
+  const asked = [];
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/ui/api/stream') asked.push(r.url()); });
   await withFixturePages(page);
   await page.goto('/ui/servers/status');
   await shellReady(page);
   await expect.poll(stream.connects).toBe(1);
-  await page.clock.runFor(31_000); // past the longest backoff
-  await page.evaluate(() => null);
-  expect(await stream.connects()).toBe(1);
+  await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
+  await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE);
+  for (const n of [1, 2]) {
+    await page.clock.runFor(29_999);
+    await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
+    expect(asked.length).toBe(n);
+    await page.clock.runFor(2);
+    await expect.poll(stream.connects).toBe(n + 1);
+  }
+  await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE); // never told it is live
+});
+
+/** Drop an open stream and wait for its stale state. */
+async function drop(page, stream) {
+  await stream.end();
+  await expect(page.locator(STALE)).toHaveCount(1);
+}
+
+test('ST10 a page opened while the stream is down shows the stale state, and the reconnect clears it', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await drop(page, stream);
+  await page.locator('nav.route-nav a[href="/ui/gateway"]').click();
+  await expect(page.locator('#content')).toContainText('gateway - status');
+  await expect(page.locator(`${STALE} h2`)).toHaveText(/^Updates stopped at .+ · reconnecting$/);
+  await page.clock.runFor(1000);
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
   await expect(page.locator(STALE)).toHaveCount(0);
-  await expect(page.locator(INDICATOR)).toBeHidden();
+});
+
+test('ST11 a restore resumes with the last event id, and its hello clears a stale state from before', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await stream.send(frame('status', { server_count: 3 }, 'b1.s9.r1'));
+  await drop(page, stream);
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  await page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  await expect.poll(stream.connects).toBe(2);
+  expect((await stream.log())[1].lastEventId).toBe('b1.s9.r1');
+  await expect(page.locator(STALE)).toHaveCount(1); // still down until a hello
+  await expect(page.locator(INDICATOR)).not.toHaveText('Live');
+  await stream.send(HELLO);
+  await expect(page.locator(STALE)).toHaveCount(0);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+});
+
+test('ST12 the reconnect waits for the hello retry hint when it is the largest', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  const asked = [];
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/ui/api/stream') asked.push(r.url()); });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await shellReady(page);
+  await expect.poll(stream.connects).toBe(1);
+  await stream.send(`retry: 7000\nevent: hello\ndata: ${JSON.stringify({ kinds: ['status'] })}\n\n`);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+  await drop(page, stream);
+  await page.clock.runFor(6999);
+  await page.evaluate(() => null);
+  expect(asked.length).toBe(1);
+  await page.clock.runFor(2);
+  await expect.poll(stream.connects).toBe(2);
+});
+
+test('ST13 a reconnect clears only the stale banner the stream set, never one a screen set', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/tools/status'); // this screen marks its own data stale (T6)
+  await shellReady(page);
+  await expect(page.locator(STALE)).toHaveCount(1);
+  await expect.poll(stream.connects).toBe(1);
+  await stream.send(HELLO);
+  await stream.end();
+  await expect(page.locator(INDICATOR)).toHaveText(/^Updates stopped/);
+  await page.clock.runFor(1000);
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+  await expect(page.locator(STALE)).toHaveCount(1); // the screen owns it
+});
+
+test('ST14 below the phone breakpoint the indicator is hidden visually, not removed', async ({ page, request }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  const box = await page.locator(INDICATOR).evaluate((n) => {
+    const r = n.getBoundingClientRect();
+    return { display: getComputedStyle(n).display, w: r.width, h: r.height };
+  });
+  expect(box.display).not.toBe('none');
+  expect(box.w * box.h).toBeLessThanOrEqual(1);
+});
+
+test('ST15 a frame larger than 64 KiB is a drop: stale state, then a reconnect', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await stream.send(`event: status\ndata: "${'x'.repeat(70 * 1024)}`); // never ends
+  await expect(page.locator(STALE)).toHaveCount(1);
+  await expect.poll(async () => (await stream.log())[0].closed).toBe(true);
+  await page.clock.runFor(1000);
+  await expect.poll(stream.connects).toBe(2);
+});
+
+test('ST16 the parser reads CRLF frames, skips keep-alives, joins data lines and joins a split frame', async ({ page, request }, testInfo) => {
+  await recordEvents(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await stream.send('event: status\r\nid: b1.s2.r1\r\ndata: {"crlf":1}\r\n\r\n');
+  await stream.send(': keep-alive\n\n');
+  await stream.send('event: status\nid: b1.s3.r1\ndata: {"lines":\ndata: 2}\n\n');
+  await stream.send('event: status\nid: b1.s4.r1\nda');
+  await stream.send('ta: {"split":3}\n\n');
+  await expect.poll(() => seen(page, 'gateway-status')).toEqual([{ crlf: 1 }, { lines: 2 }, { split: 3 }]);
+});
+
+test('ST17 every hello, first and after a reconnect, is a gateway-hello event', async ({ page, request }, testInfo) => {
+  await page.addInitScript(() => {
+    window.__hellos = [];
+    addEventListener('gateway-hello', (ev) => window.__hellos.push(ev.detail));
+  });
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  const hello = { kinds: ['status', 'reload'], head: 'b1.s1.r1' };
+  await expect.poll(() => page.evaluate(() => window.__hellos)).toEqual([hello]);
+  await drop(page, stream);
+  await page.clock.runFor(1000);
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
+  await expect.poll(() => page.evaluate(() => window.__hellos)).toEqual([hello, hello]);
 });
