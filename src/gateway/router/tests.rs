@@ -170,7 +170,10 @@ async fn test_router_app_state_with(
     streaming_config: StreamingConfig,
     config: crate::config::Config,
 ) -> (Arc<AppState>, FixtureDir) {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
@@ -232,7 +235,10 @@ pub(super) async fn test_router_app_state() -> (Arc<AppState>, FixtureDir) {
 }
 
 async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, FixtureDir) {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -381,7 +387,10 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
     config: crate::config::Config,
 ) -> (Arc<AppState>, FixtureDir) {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(

@@ -569,3 +569,14 @@ mod tests {
         }
     }
 }
+
+/// How a start resolves its slot's era.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EraResolution {
+    /// Discard and probe under the slot cache's lock: nothing else serves
+    /// from the slot while it starts.
+    Shared,
+    /// Probe without the lock and install at the publish: the transport being
+    /// replaced still serves from the slot (a build-first restart).
+    Deferred,
+}

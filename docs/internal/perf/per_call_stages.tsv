@@ -479,6 +479,7 @@ src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and pla
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	http_invoke_tiny	on the HTTP gateway_invoke path (S3, MIK-8488)
 src/gateway/meta_mcp/invoke/send.rs	admit_send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	count_use	http_invoke_tiny	inside admit_send on the HTTP gateway_invoke path: the invocation stats and ranker counters
+src/gateway/meta_mcp/invoke/send.rs	relay_egress	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	settle_lost_round	-	on-path, untimed: lost dispatch rounds (a send with no answer) only; the timed rows are answered

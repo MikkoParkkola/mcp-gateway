@@ -12,11 +12,15 @@
 //! - Which tools it applies to (glob patterns, or `["*"]` for all)
 //! - The credential type (API key, bearer token, basic auth, custom header)
 //! - Where the credential value comes from (`{env.VAR}`, `{keychain.SERVICE}`, literal)
-//! - Where to inject: into the tool arguments, HTTP headers, or query parameters
+//! - Where to inject: into the tool arguments or HTTP headers (a query parameter is refused)
 //!
-//! At dispatch time, [`SecretInjector::inject`] resolves each matching rule and
-//! merges the credential into the outbound request. Header overwrites are enforced:
-//! injected values always replace agent-supplied values with the same key.
+//! A backend applies its own rules where its tool call is sent
+//! (`Backend::request_attempted`, which every route passes through): each
+//! matching rule is resolved by the gateway's shared resolver and merged into
+//! the copy of the call that is sent, through `inject_rules`.
+//! [`SecretInjector::inject`] applies the same function over a map of rules.
+//! Injected values always replace caller-supplied values with the same key. A
+//! `query` rule is refused: the gateway sends no secret in a URL.
 //!
 //! # Security properties
 //!
@@ -211,26 +215,18 @@ impl SecretInjector {
     /// Drop from `arguments` the keys [`Self::inject`] sets for `backend:tool`
     /// whatever the caller sent, since the value the caller put there never
     /// leaves the gateway. A rule whose credential resolves empty (injection
-    /// skips it) or fails keeps the caller's value in view.
-    #[cfg(feature = "firewall")]
+    /// skips it) or fails keeps the caller's value in view. The send path
+    /// reads a backend's own rules ([`strip_overwritten`]); this keyed form
+    /// is the flip tests'.
+    #[cfg(all(test, feature = "firewall"))]
     pub(crate) fn strip_overwritten(
         &self,
         backend: &str,
         tool: &str,
         arguments: &mut serde_json::Value,
     ) {
-        let (Some(rules), Some(obj)) = (self.rules.get(backend), arguments.as_object_mut()) else {
-            return;
-        };
-        for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
-            if !self
-                .resolver
-                .resolve(&rule.value)
-                .is_ok_and(|v| !v.is_empty())
-            {
-                continue;
-            }
-            drop_caller_value(rule, obj);
+        if let Some(rules) = self.rules.get(backend) {
+            strip_overwritten(rules, &self.resolver, tool, arguments);
         }
     }
 
@@ -249,121 +245,15 @@ impl SecretInjector {
         tool: &str,
         arguments: serde_json::Value,
     ) -> crate::Result<InjectionResult> {
-        let Some(rules) = self.rules.get(backend) else {
-            return Ok(InjectionResult {
+        match self.rules.get(backend) {
+            Some(rules) => inject_rules(rules, &self.resolver, backend, tool, arguments),
+            None => Ok(InjectionResult {
                 arguments,
                 headers: HashMap::new(),
                 injected_count: 0,
                 injected_names: Vec::new(),
-            });
-        };
-
-        let mut args = arguments;
-        let mut headers: HashMap<String, String> = HashMap::new();
-        let mut injected_names: Vec<String> = Vec::new();
-
-        // Every key a matching rule owns loses the caller's value up front,
-        // whatever its credential resolves to now. The firewall check strips
-        // the same keys from its own copy on the strength of an earlier
-        // resolution; if the credential changed in between and a rule skips,
-        // a value the check never saw must not be forwarded (MIK-7888). Doing
-        // it before the loop also keeps a skipping rule from deleting what an
-        // earlier rule on the same key injected.
-        if let Some(obj) = args.as_object_mut() {
-            for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
-                drop_caller_value(rule, obj);
-            }
+            }),
         }
-
-        for rule in rules {
-            if !tool_matches_rule(tool, &rule.tools) {
-                continue;
-            }
-
-            // Resolve the credential value
-            let resolved_value = self.resolver.resolve(&rule.value).map_err(|e| {
-                warn!(
-                    backend = backend,
-                    credential = %rule.name,
-                    error = %e,
-                    "Failed to resolve credential"
-                );
-                crate::Error::Config(format!(
-                    "Failed to resolve credential '{}' for backend '{}': {e}",
-                    rule.name, backend
-                ))
-            })?;
-
-            // Skip injection if the rule value itself is empty; an unset or empty
-            // {env.X} already failed above (C4).
-            if resolved_value.is_empty() {
-                warn!(
-                    backend = backend,
-                    credential = %rule.name,
-                    "Credential resolved to empty value, skipping injection"
-                );
-                continue;
-            }
-
-            match rule.inject_as {
-                InjectTarget::Argument => {
-                    // Inject into the tool arguments JSON object
-                    if let Some(obj) = args.as_object_mut() {
-                        // Overwrite protection: always set, never let agent override
-                        obj.insert(
-                            rule.inject_key.clone(),
-                            serde_json::Value::String(resolved_value),
-                        );
-                    }
-                }
-                InjectTarget::Header => {
-                    // Inject as an HTTP header (overwrite any existing agent-supplied header)
-                    headers.insert(rule.inject_key.clone(), resolved_value);
-                }
-                InjectTarget::Query => {
-                    // Query parameters are injected as headers with a special prefix
-                    // that the transport layer can recognize and append to the URL.
-                    // For now, we inject as a special argument key.
-                    if let Some(obj) = args.as_object_mut() {
-                        obj.insert(
-                            format!("__query_{}", rule.inject_key),
-                            serde_json::Value::String(resolved_value),
-                        );
-                    }
-                }
-            }
-
-            injected_names.push(rule.name.clone());
-
-            // Audit log: credential injected
-            info!(
-                backend = backend,
-                tool = tool,
-                credential = %rule.name,
-                credential_type = ?rule.credential_type,
-                inject_as = ?rule.inject_as,
-                inject_key = %rule.inject_key,
-                "Secret injected"
-            );
-        }
-
-        let injected_count = injected_names.len();
-        if injected_count > 0 {
-            debug!(
-                backend = backend,
-                tool = tool,
-                count = injected_count,
-                credentials = ?injected_names,
-                "Secret injection complete"
-            );
-        }
-
-        Ok(InjectionResult {
-            arguments: args,
-            headers,
-            injected_count,
-            injected_names,
-        })
     }
 
     /// Update rules for a backend (for hot-reload support).
@@ -401,6 +291,165 @@ impl SecretInjector {
                 })
                 .collect()
         })
+    }
+}
+
+/// [`SecretInjector::inject`] over one backend's `rules`, resolved by
+/// `resolver`: what a backend's own send applies.
+///
+/// # Errors
+///
+/// As [`SecretInjector::inject`].
+pub(crate) fn inject_rules(
+    rules: &[CredentialRule],
+    resolver: &SecretResolver,
+    backend: &str,
+    tool: &str,
+    arguments: serde_json::Value,
+) -> crate::Result<InjectionResult> {
+    let mut args = arguments;
+    let mut headers: HashMap<String, String> = HashMap::new();
+    let mut injected_names: Vec<String> = Vec::new();
+
+    // Every key a matching rule owns loses the caller's value up front,
+    // whatever its credential resolves to now. The firewall check strips
+    // the same keys from its own copy on the strength of an earlier
+    // resolution; if the credential changed in between and a rule skips,
+    // a value the check never saw must not be forwarded (MIK-7888). Doing
+    // it before the loop also keeps a skipping rule from deleting what an
+    // earlier rule on the same key injected.
+    drop_owned(rules, tool, &mut args);
+
+    for rule in rules {
+        if !tool_matches_rule(tool, &rule.tools) {
+            continue;
+        }
+
+        // Resolve the credential value
+        let resolved_value = resolver.resolve(&rule.value).map_err(|e| {
+            warn!(
+                backend = backend,
+                credential = %rule.name,
+                error = %e,
+                "Failed to resolve credential"
+            );
+            crate::Error::Config(format!(
+                "Failed to resolve credential '{}' for backend '{}': {e}",
+                rule.name, backend
+            ))
+        })?;
+
+        // Skip injection if the rule value itself is empty; an unset or empty
+        // {env.X} already failed above (C4).
+        if resolved_value.is_empty() {
+            warn!(
+                backend = backend,
+                credential = %rule.name,
+                "Credential resolved to empty value, skipping injection"
+            );
+            continue;
+        }
+
+        // Each refusal names the backend and the rule, never the value.
+        let refusal = |why: &str| {
+            crate::Error::Config(format!(
+                "backend '{backend}' secret rule '{}' {why}: the rule is not applied",
+                rule.name
+            ))
+        };
+        match rule.inject_as {
+            InjectTarget::Argument => {
+                // Overwrite protection: always set, never let agent override.
+                // Arguments that are not an object cannot carry it, and are
+                // never sent without it.
+                let Some(obj) = args.as_object_mut() else {
+                    return Err(refusal(
+                        "injects an argument, but the call's arguments are not an object",
+                    ));
+                };
+                obj.insert(
+                    rule.inject_key.clone(),
+                    serde_json::Value::String(resolved_value),
+                );
+            }
+            InjectTarget::Header => {
+                // Checked before the audit line, so a refused call is never
+                // recorded as injected.
+                if reqwest::header::HeaderValue::from_str(&resolved_value).is_err() {
+                    return Err(refusal(
+                        "resolved to a value that is not a valid HTTP header value",
+                    ));
+                }
+                // Overwrites any header of the same name the call carries.
+                headers.insert(rule.inject_key.clone(), resolved_value);
+            }
+            // The gateway sends no secret in a URL, and none in the arguments
+            // in a URL parameter's place. Config load refuses the rule first.
+            InjectTarget::Query => return Err(refusal("injects into a URL query parameter")),
+        }
+
+        injected_names.push(rule.name.clone());
+
+        // Audit log: credential injected
+        info!(
+            backend = backend,
+            tool = tool,
+            credential = %rule.name,
+            credential_type = ?rule.credential_type,
+            inject_as = ?rule.inject_as,
+            inject_key = %rule.inject_key,
+            "Secret injected"
+        );
+    }
+
+    let injected_count = injected_names.len();
+    if injected_count > 0 {
+        debug!(
+            backend = backend,
+            tool = tool,
+            count = injected_count,
+            credentials = ?injected_names,
+            "Secret injection complete"
+        );
+    }
+
+    Ok(InjectionResult {
+        arguments: args,
+        headers,
+        injected_count,
+        injected_names,
+    })
+}
+
+/// Drop from `arguments` the keys `rules` set for `tool` whatever the caller
+/// sent, for the relay check. A rule whose credential resolves empty
+/// (injection skips it) or fails keeps the caller's value in view.
+#[cfg(feature = "firewall")]
+pub(crate) fn strip_overwritten(
+    rules: &[CredentialRule],
+    resolver: &SecretResolver,
+    tool: &str,
+    arguments: &mut serde_json::Value,
+) {
+    let Some(obj) = arguments.as_object_mut() else {
+        return;
+    };
+    for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+        if !resolver.resolve(&rule.value).is_ok_and(|v| !v.is_empty()) {
+            continue;
+        }
+        drop_caller_value(rule, obj);
+    }
+}
+
+/// Drop from `arguments` every key a rule in `rules` owns for `tool`, whatever
+/// its credential resolves to: the copy a backend's mirror headers are read
+/// from never holds a caller's value for a key the gateway overwrites.
+pub(crate) fn drop_owned(rules: &[CredentialRule], tool: &str, arguments: &mut serde_json::Value) {
+    if let Some(obj) = arguments.as_object_mut() {
+        for rule in rules.iter().filter(|r| tool_matches_rule(tool, &r.tools)) {
+            drop_caller_value(rule, obj);
+        }
     }
 }
 

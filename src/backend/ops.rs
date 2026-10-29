@@ -173,6 +173,32 @@ impl Backend {
         headers
     }
 
+    /// The params and headers a call is sent with: this backend's `secrets:`
+    /// rules applied, and the arguments its tool's schema declares mirrored.
+    ///
+    /// The keys the rules own are dropped before the mirror reads the
+    /// arguments, and the values are added after it, so neither a caller's
+    /// value for such a key nor the secret is mirrored into a header.
+    /// Synchronous, so nothing it builds is held in the send's future.
+    ///
+    /// SEP-2243 (MIK-7214.HEADER.5): the mirror sits here, not in each
+    /// dispatcher, because every tools/call — the MCP provider, meta-MCP
+    /// invoke, the router's direct backend route — funnels through
+    /// [`Self::request_attempted`], so a per-caller mirror would leave the
+    /// siblings unmirrored.
+    fn outbound(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<super::secret_send::Outbound> {
+        let secrets = self.prepare_secrets(method, params)?;
+        let headers =
+            self.param_header_set(method, secrets.params.as_ref(), extra_headers, identity_key);
+        Ok(secrets.apply(headers))
+    }
+
     /// This request's resend decision: the permission the transport carries,
     /// and the retry policy this layer may resend under.
     ///
@@ -309,16 +335,13 @@ impl Backend {
         // would leave the sibling route forwarding the caller's token.
         let params = substitute_progress_token(params);
 
-        // SEP-2243 (MIK-7214.HEADER.5): mirror the arguments a tool's schema
-        // declares onto `Mcp-Param-*` headers. This sits here, not in each
-        // dispatcher, because every tools/call — the MCP provider, meta-MCP
-        // invoke, the router's direct backend route — funnels through this one
-        // function, so a per-caller mirror would leave the siblings unmirrored.
-        // The caller's own credential, before this call's argument mirrors
-        // join it: a slot's start lends only the credential.
+        // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both
+        // here because every route's tools/call passes through. Resolved
+        // before the call is admitted, so a value that does not resolve holds
+        // no permit. The caller's own credential is taken first, before the
+        // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
-        let extra_headers =
-            self.param_header_set(method, params.as_ref(), extra_headers, identity_key);
+        let (params, extra_headers) = self.outbound(method, params, extra_headers, identity_key)?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +

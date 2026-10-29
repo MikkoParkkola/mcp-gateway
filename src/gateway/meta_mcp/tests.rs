@@ -19,6 +19,9 @@ use crate::gateway::trace;
 #[path = "cache_read_only_tests.rs"]
 mod cache_read_only;
 
+#[path = "secret_capability_tests.rs"]
+mod secret_capability;
+
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 

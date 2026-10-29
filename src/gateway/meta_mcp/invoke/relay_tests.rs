@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! COLLUDE.1 §13.3 M12, and the shared outbound builder.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -52,23 +51,24 @@ impl crate::transport::Transport for Seen {
 /// post-injection params would refuse the call; the backend still gets it.
 #[tokio::test]
 async fn relay_audit_has_no_injected_secret() {
-    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let rule: crate::secret_injection::CredentialRule =
+        serde_json::from_value(json!({"name": "token", "value": PROSE, "inject_key": "token"}))
+            .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
-        crate::config::BackendConfig::default(),
+        crate::config::BackendConfig {
+            secrets: vec![rule],
+            ..crate::config::BackendConfig::default()
+        },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
     assert!(registry.register(backend));
-    let rule: crate::secret_injection::CredentialRule =
-        serde_json::from_value(json!({"name": "token", "value": PROSE, "inject_key": "token"}))
-            .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -84,7 +84,7 @@ async fn relay_audit_has_no_injected_secret() {
         )
         .keyed_for_test(),
     );
-    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
@@ -109,24 +109,25 @@ async fn relay_audit_has_no_injected_secret() {
 /// leaves the gateway, so the relay check does not read it either.
 #[tokio::test]
 async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
-    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
+    )
+    .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
-        crate::config::BackendConfig::default(),
+        crate::config::BackendConfig {
+            secrets: vec![rule],
+            ..crate::config::BackendConfig::default()
+        },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
     assert!(registry.register(backend));
-    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
-        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
-    )
-    .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -142,7 +143,7 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
         )
         .keyed_for_test(),
     );
-    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
@@ -640,6 +641,86 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
     assert_eq!(delivered, recorded);
     assert_eq!(delivered["_meta"]["keep"], 1, "{delivered}");
     assert_eq!(delivered["cacheScope"], "private", "{delivered}");
+}
+
+/// The relay check reads the rules of the backend the call was judged on.
+/// A reload that replaced that backend with one holding no rule must not
+/// bring a caller value its rule overwrites back into the check.
+#[tokio::test]
+async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
+    )
+    .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
+    let alpha = |secrets| {
+        Arc::new(crate::backend::Backend::new(
+            "alpha",
+            crate::config::BackendConfig {
+                secrets,
+                ..crate::config::BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ))
+    };
+    let judged = alpha(vec![rule]);
+    assert!(registry.register(Arc::clone(&judged)));
+    // The reload: same name, no rule.
+    let reloaded = alpha(Vec::new());
+    assert!(registry.register(Arc::clone(&reloaded)));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
+    let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
+    firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
+
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
+    let arguments = json!({"token": PROSE});
+    let retry = OutboundRetry::default();
+    let check = |backend| {
+        let egress = Egress {
+            arguments: &arguments,
+            backend: Some(backend),
+            inbound_meta: None,
+            prompt_cache_key: None,
+            retry: &retry,
+        };
+        meta.relay_refusal(
+            bob.relay_caller(None),
+            ("", "bob"),
+            ("alpha", "send"),
+            &egress,
+        )
+    };
+    assert!(
+        check(&reloaded).is_some(),
+        "premise: the caller's text is a relay the check refuses"
+    );
+    assert!(
+        check(&judged).is_none(),
+        "the check read rules other than the judged backend's"
+    );
 }
 
 #[path = "relay_delivery_tests.rs"]

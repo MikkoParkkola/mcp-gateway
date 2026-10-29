@@ -274,6 +274,9 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "nudge_surfaced",
         "resolve_unwarmed",
         "with_membership",
+        // A constructor, as `new` is: it installs the secret resolver the
+        // registry stamps on each backend, and reads no backend.
+        "with_secret_resolver",
         "get",
         "all",
         "statuses",
