@@ -124,6 +124,9 @@ pub struct Firewall {
     response_observer: response_observer::ResponseObserver,
     /// Backend and capability views the folder check reads at check time.
     registries: allowed_root::Registries,
+    /// The filesystem, clock and pool replacements a row sets.
+    #[cfg(test)]
+    seams: allowed_root::Seams,
 }
 
 /// A compiled firewall rule with a pre-processed glob pattern.
@@ -305,6 +308,8 @@ impl Firewall {
             #[cfg(test)]
             response_observer: response_observer::ResponseObserver::default(),
             registries: allowed_root::Registries::default(),
+            #[cfg(test)]
+            seams: allowed_root::Seams::default(),
         }
     }
 

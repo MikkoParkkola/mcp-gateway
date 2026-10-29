@@ -231,4 +231,8 @@ pub enum ScanType {
     /// A declared path argument resolves outside every allowed root of the
     /// rule that covers the call. Output-only: no rule's `scan` may list it.
     PathOutsideRoot,
+    /// A call a root rule covers was refused without a path judgement; the
+    /// description names the reason code, the rule and the argument, never a
+    /// value. Output-only: no rule's `scan` may list it.
+    RootRefused,
 }

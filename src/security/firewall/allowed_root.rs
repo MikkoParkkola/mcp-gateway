@@ -11,7 +11,7 @@
 //! rows can be written against them, and `root_check` decides nothing yet.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
@@ -40,6 +40,79 @@ pub(crate) struct Registries {
     pub(crate) capabilities: Option<CapabilitySlot>,
 }
 
+/// One filesystem read the folder check makes. Every read in one call is
+/// given that call's deadline.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ResolveOp {
+    /// `symlink_metadata` on one component: never follows a link.
+    Metadata(std::path::PathBuf),
+    /// `canonicalize` on an existing prefix or a root.
+    Canonicalize(std::path::PathBuf),
+    /// `read_dir` on a checked component's parent.
+    ReadDir(std::path::PathBuf),
+}
+
+/// What a component is, as `symlink_metadata` saw it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryKind {
+    Directory,
+    File,
+    Symlink,
+}
+
+/// The answer to one [`ResolveOp`], in the same order.
+#[derive(Debug)]
+pub(crate) enum Resolved {
+    Kind(EntryKind),
+    Path(std::path::PathBuf),
+    /// Each entry's name, or the error reading it: an entry error is never
+    /// dropped, so an unreadable directory is never seen as empty.
+    Entries(Vec<std::io::Result<std::ffi::OsString>>),
+}
+
+/// The filesystem as the folder check reads it. Production reads the real
+/// one; a row substitutes a gated or failing one per firewall.
+pub(crate) trait Resolve: Send + Sync {
+    fn resolve(&self, op: &ResolveOp, deadline: Instant) -> std::io::Result<Resolved>;
+}
+
+/// The instant the remaining budget is computed from, before each read.
+pub(crate) trait Clock: Send + Sync {
+    fn now(&self) -> Instant;
+}
+
+/// Per-firewall replacements for the filesystem, the clock and the resolver
+/// pool, so a multi-thread row sees them (never thread-local).
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(crate) struct Seams {
+    pub(crate) resolver: Option<Arc<dyn Resolve>>,
+    pub(crate) clock: Option<Arc<dyn Clock>>,
+    /// Resolver threads this firewall owns instead of the process pool.
+    pub(crate) pool: Option<usize>,
+}
+
+#[cfg(test)]
+impl super::Firewall {
+    /// Read the filesystem through `resolver` instead of the real one.
+    pub(crate) fn with_resolver(mut self, resolver: Arc<dyn Resolve>) -> Self {
+        self.seams.resolver = Some(resolver);
+        self
+    }
+
+    /// Compute the remaining budget from `clock` instead of the system's.
+    pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.seams.clock = Some(clock);
+        self
+    }
+
+    /// Give this firewall its own pool of `threads` resolvers.
+    pub(crate) fn with_resolver_pool(mut self, threads: usize) -> Self {
+        self.seams.pool = Some(threads);
+        self
+    }
+}
+
 /// What `rescan` is looking at: the dispatched arguments, or a bridge retry's
 /// answers. The folder check runs on the arguments only; content scanning runs
 /// on both.
@@ -64,8 +137,9 @@ pub(crate) struct PathArg {
 }
 
 /// Why a covered call was refused without a path judgement. Stable and
-/// machine-readable; never carries a path value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// machine-readable; never carries a path value. The audit row's `reason`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum RootReason {
     NotAbsolute,
     NotNormalised,

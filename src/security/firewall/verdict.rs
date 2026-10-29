@@ -78,7 +78,8 @@ impl FirewallVerdict {
                 | ScanType::PathTraversal
                 | ScanType::SqlInjection
                 | ScanType::MemoryPoisoning
-                | ScanType::PathOutsideRoot => true,
+                | ScanType::PathOutsideRoot
+                | ScanType::RootRefused => true,
             }
         })
     }
