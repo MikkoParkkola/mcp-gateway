@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every production `impl Transport for ..` runs each sending method's body
-//! inside `backend_wait(..)`, so `mcp_gateway_added_latency_seconds`
+//! inside `backend_request(..)` (which also marks the answer as a backend's)
+//! or `backend_wait(..)`, so `mcp_gateway_added_latency_seconds`
 //! subtracts the time a call waits on a backend's transport. The impl is the
 //! one place every backend request and notification passes, whoever calls it
 //! and under whatever name the transport is held; a new transport fails here
@@ -26,8 +27,8 @@ const SENDING: [&str; 5] = [
     "notify_with_headers",
 ];
 
-/// The helper that measures a backend wait.
-const WRAPPER: &str = "backend_wait";
+/// The helpers that measure a backend wait.
+const WRAPPERS: [&str; 2] = ["backend_request", "backend_wait"];
 
 /// The production transports. A new one is a reviewed addition here, and
 /// keeps the scan from passing because it found nothing.
@@ -38,14 +39,14 @@ const TRANSPORTS: [&str; 4] = [
     "WebSocketTransport",
 ];
 
-/// The body is exactly `backend_wait(..).await`.
+/// The body is exactly `backend_request(..).await` or `backend_wait(..).await`.
 fn wrapped(block: &syn::Block) -> bool {
     let [syn::Stmt::Expr(syn::Expr::Await(awaited), None)] = block.stmts.as_slice() else {
         return false;
     };
     matches!(awaited.base.as_ref(), syn::Expr::Call(call)
         if matches!(call.func.as_ref(), syn::Expr::Path(p)
-            if p.path.segments.last().is_some_and(|s| s.ident == WRAPPER)))
+            if p.path.segments.last().is_some_and(|s| WRAPPERS.iter().any(|w| s.ident == w))))
 }
 
 #[derive(Default)]
@@ -97,7 +98,7 @@ fn every_transport_send_is_measured_as_backend_wait() {
     assert_eq!(impls.found, expected, "the production transports changed");
     assert!(
         impls.unwrapped.is_empty(),
-        "sending methods not run inside {WRAPPER}:\n{}",
+        "sending methods not run inside {WRAPPERS:?}:\n{}",
         impls.unwrapped.join("\n")
     );
 }
