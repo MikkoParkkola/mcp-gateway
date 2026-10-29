@@ -4798,8 +4798,8 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/metrics/series` | hidden | admin only; windowed call counters for the charts (ADR-017) |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
 | `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
-| `/ui/api/tools/call` | hidden | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run |  |
 | `/ui/api/stream` | hidden | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/tools/call` | hidden | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run |  |
 | `/ui/assets/{file}` | hidden | none: the UI's own files, not an integration surface |  |
 ### Library items
 
