@@ -341,7 +341,9 @@ impl Backend {
             tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
         // Boxed: the fill's state is large, and every caller of this (and of
         // its callers) would otherwise carry it inline (clippy large_futures).
-        Box::pin(select(&entry).get_or_fetch_shared_then(
+        // Log lines decided on under the cache's write guard, written after it.
+        let pending_logs = std::sync::Mutex::new(None);
+        let stored = Box::pin(select(&entry).get_or_fetch_shared_then(
             self.cache_ttl,
             |mark| {
                 fill_scope(mark, async {
@@ -419,7 +421,10 @@ impl Backend {
                 // Only this accepted store's own set and verdicts (F13,
                 // #1441).
                 if let Some(prepared) = prepared {
-                    self.store_prepared(&entry, identity_key, truncated, prepared);
+                    let logs = self.store_prepared(&entry, identity_key, truncated, prepared);
+                    *pending_logs
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(logs);
                 }
                 // The only place a guard reaches `Stored`: a voided store
                 // drops it unrun, still `Drained`, and so stamps (F13).
@@ -440,7 +445,14 @@ impl Backend {
             },
             on_abandon,
         ))
-        .await
+        .await;
+        let logs = pending_logs
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(logs) = logs {
+            logs.emit();
+        }
+        stored
     }
 
     /// # Errors

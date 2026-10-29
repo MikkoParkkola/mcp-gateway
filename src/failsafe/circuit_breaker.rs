@@ -378,7 +378,6 @@ impl CircuitBreaker {
             CircuitState::Closed => {
                 self.failures.store(0, Ordering::Relaxed);
                 self.successes.store(0, Ordering::Relaxed);
-                info!(backend = %self.name, "Circuit breaker closed");
             }
             CircuitState::Open => {
                 // Record the trip. The rich, structured "Circuit breaker opened"
@@ -388,14 +387,19 @@ impl CircuitBreaker {
                 // duplicate log line.
                 self.trips_count.fetch_add(1, Ordering::Relaxed);
                 self.last_trip_ms.store(trip_ms, Ordering::Relaxed);
-                debug!(backend = %self.name, "Circuit breaker state → Open");
             }
             CircuitState::HalfOpen => {
                 self.successes.store(0, Ordering::Relaxed);
-                debug!(backend = %self.name, "Circuit breaker half-open");
             }
         }
         drop(state);
+        // After the release: status readers take the state lock, and a log
+        // sink that stops reading must not hold them up.
+        match new_state {
+            CircuitState::Closed => info!(backend = %self.name, "Circuit breaker closed"),
+            CircuitState::Open => debug!(backend = %self.name, "Circuit breaker state → Open"),
+            CircuitState::HalfOpen => debug!(backend = %self.name, "Circuit breaker half-open"),
+        }
         self.observer.call(HealthChange {
             backend: self.name.clone(),
             from: old_state,
