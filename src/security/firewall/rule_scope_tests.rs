@@ -436,6 +436,23 @@ fn an_exception_setting_no_field_makes_its_rule_block() {
     assert_eq!(request(&fw, "a"), FirewallAction::Block);
 }
 
+/// A scope glob that does not parse is refused the same way: a block rule
+/// keeps blocking, and an allow rule's broken exception does not widen it.
+#[test]
+fn a_scope_glob_that_does_not_parse_makes_its_rule_block() {
+    for rules in [
+        json!([{"match": "*", "servers": ["["], "action": "block"}, {"match": "*", "action": "allow"}]),
+        json!([{"match": "*", "action": "allow", "except": [{"server": "["}]}]),
+        json!([{"match": "*", "action": "allow", "except": [{"tool": "["}]}]),
+    ] {
+        assert_eq!(
+            request(&firewall(&rules), "a"),
+            FirewallAction::Block,
+            "{rules}"
+        );
+    }
+}
+
 /// Covering no call would not fail closed: a later `allow` rule would decide.
 /// The refused rule still takes the finding first.
 #[test]
