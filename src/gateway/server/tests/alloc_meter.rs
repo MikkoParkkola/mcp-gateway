@@ -185,13 +185,20 @@ fn holds_marker(ptr: *const u8, size: usize) -> bool {
         return false;
     }
     SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: `start + at` stays below `size` for the block and below `len`
-    // for the needle, so every address is inside the live block or the
-    // `'static` marker.
+    // SAFETY: the needle is a `'static` marker of `len` initialized bytes, so
+    // it is read as a plain slice; only the block needs `read_byte`.
     #[allow(unsafe_code)]
-    let byte = |base: *const u8, at: usize| unsafe { read_byte(base.add(at)) };
-    (0..=size - needle.len)
-        .any(|start| (0..needle.len).all(|at| byte(ptr, start + at) == byte(needle.ptr, at)))
+    let marker = unsafe { std::slice::from_raw_parts(needle.ptr, needle.len) };
+    // SAFETY: `start + at` stays below `size`, so every address is inside the
+    // live block.
+    #[allow(unsafe_code)]
+    let byte = |at: usize| unsafe { read_byte(ptr.add(at)) };
+    (0..=size - marker.len()).any(|start| {
+        marker
+            .iter()
+            .enumerate()
+            .all(|(at, &expected)| byte(start + at) == expected)
+    })
 }
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
