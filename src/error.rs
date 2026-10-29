@@ -11,7 +11,100 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// MCP Gateway errors
+///
+/// Non-exhaustive: a release may add a variant, so a `match` outside this
+/// crate needs a wildcard arm. Listing every variant is not enough:
+///
+/// ```compile_fail,E0004
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///     }
+/// }
+/// ```
+///
+/// The same arms with a wildcard compile:
+///
+/// ```
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///         _ => false,
+///     }
+/// }
+/// ```
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Configuration error
     #[error("Configuration error: {0}")]
@@ -310,6 +403,22 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A gateway decision refused this call: the operator kill switch, a
+    /// capability disable, attestation, a spend limit.
+    ///
+    /// Gateway-owned, like [`Error::ResponseFirewallRefused`]: only
+    /// `Error::gateway_refused` builds it, so a peer's error never carries it.
+    /// It reads exactly as the [`Error::JsonRpc`] it replaces (same code, same
+    /// text), so the wire is unchanged; the variant is what tells the place
+    /// that delivers it that this answer is a refusal (`delivery_facts::outlet`).
+    #[error("JSON-RPC error {code}: {message}")]
+    GatewayRefused {
+        /// Error code
+        code: i32,
+        /// Error message
+        message: String,
+    },
+
     /// A CLI capability refused the credential it was given (MIK-7782: gws
     /// exits 2 with a JSON error whose code is 401).
     ///
@@ -383,6 +492,14 @@ impl Error {
             code,
             message: message.into(),
             data: None,
+        }
+    }
+
+    /// A refusal a gateway decision made: see [`Error::GatewayRefused`].
+    pub(crate) fn gateway_refused(code: i32, message: impl Into<String>) -> Self {
+        Self::GatewayRefused {
+            code,
+            message: message.into(),
         }
     }
 
@@ -469,6 +586,7 @@ impl Error {
     pub fn to_rpc_code(&self) -> i32 {
         match self {
             Self::JsonRpc { code, .. }
+            | Self::GatewayRefused { code, .. }
             | Self::JsonRpcRetryable { code, .. }
             | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
@@ -617,3 +735,7 @@ mod rpc_code_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "error_non_exhaustive_tests.rs"]
+mod non_exhaustive_tests;

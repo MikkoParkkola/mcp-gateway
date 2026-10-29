@@ -70,7 +70,10 @@ async fn send(state: &Arc<AppState>, proof: Proof, body: &Value) -> Value {
 }
 
 /// A gateway with `/mcp` public (auth on) or with authentication off.
-async fn gateway(auth_on: bool, mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway(
+    auth_on: bool,
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = if auth_on {
         let mut auth = two_principal_auth();
         auth.public_paths.push("/mcp".to_string());

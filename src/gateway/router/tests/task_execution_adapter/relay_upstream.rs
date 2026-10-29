@@ -106,14 +106,20 @@ impl UpstreamRecovery for Recovery {
 
 /// The suite's state with the upstream fixture whose follow-up query answers
 /// `answer`, and `key-a`'s task started and queried at least once.
-async fn followed(answer: Value) -> (Arc<AppState>, tempfile::TempDir) {
+async fn followed(answer: Value) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store, _task) =
         followed_with(Arc::new(move || UpstreamAnswer::Completed(answer.clone()))).await;
     (state, store)
 }
 
 /// [`followed`], with the query answering whatever `answering` returns.
-async fn followed_with(answering: Answering) -> (Arc<AppState>, tempfile::TempDir, String) {
+async fn followed_with(
+    answering: Answering,
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {

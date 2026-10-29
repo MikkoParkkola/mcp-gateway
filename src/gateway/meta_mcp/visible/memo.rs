@@ -444,11 +444,19 @@ pub(crate) fn changed_instance(backend: &crate::backend::Backend) -> Option<Stri
 /// Run a task's dispatch with what its submit judged (MIK-8154 C2e, F2), so
 /// the run refuses a playbook or backend reloaded between submit and run. Not
 /// a memo: a task's visibility is judged live, however long it runs.
-pub(crate) fn with_judged<F: std::future::Future>(
-    judged: Judged,
-    dispatch: F,
-) -> impl std::future::Future<Output = F::Output> {
-    WORKER_JUDGED.scope(judged, dispatch)
+///
+/// An empty `judged` keeps the enclosing judgement, read when the returned
+/// future first runs (not when this is called): a wrapper with nothing to add
+/// must never switch off the guards an outer one holds. Only a wholly empty
+/// judgement inherits; one that names a playbook or an instance replaces the
+/// enclosing one whole.
+pub(crate) async fn with_judged<F: std::future::Future>(judged: Judged, dispatch: F) -> F::Output {
+    let judged = if judged.is_empty() {
+        WORKER_JUDGED.try_with(Clone::clone).unwrap_or(judged)
+    } else {
+        judged
+    };
+    WORKER_JUDGED.scope(judged, dispatch).await
 }
 
 /// Record `judged` for `(server, tool)` in the open request's memo unless an

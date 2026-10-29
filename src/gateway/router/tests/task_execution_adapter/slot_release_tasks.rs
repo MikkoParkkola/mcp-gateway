@@ -53,7 +53,12 @@ fn deadline(state: &Arc<AppState>, id: &str) -> u64 {
 async fn parked_task(
     key: &str,
     ttl_ms: Option<u64>,
-) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+) -> (
+    Arc<MockBackend>,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let mut config = crate::config::Config::default();
     if let Some(ttl) = ttl_ms {
@@ -263,7 +268,13 @@ async fn run(cell: Cell) -> Option<String> {
 
 /// A playbook task (TTL 60 s) completed with its step's sealed question in
 /// the result.
-async fn completed_playbook_task(key: &str) -> (Arc<AppState>, tempfile::TempDir, String) {
+async fn completed_playbook_task(
+    key: &str,
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let mut config = crate::config::Config::default();
     config.tasks.default_ttl_ms = 60_000;
@@ -656,7 +667,9 @@ async fn b5_a_resume_cancelled_in_either_window_gives_the_slot_back() {
 /// execution admission stores it), answered over SSE and dropped unread, then
 /// repeated as JSON. Returns the state once the replay has delivered the
 /// stored question without a second backend call.
-async fn replay_after_a_dropped_sse_answer(key: &str) -> (Arc<AppState>, tempfile::TempDir) {
+async fn replay_after_a_dropped_sse_answer(
+    key: &str,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, dir) = state_with(&mock).await;
     state.meta_mcp.set_playbook_engine(asking_playbook());

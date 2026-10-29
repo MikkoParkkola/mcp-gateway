@@ -456,22 +456,6 @@ fn verify_with_live_appender_passes() {
 }
 
 #[test]
-fn signed_entry_only_in_sealed_segment_refuses_hash_only_verify() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
-    rotate_n(&l, &path, 1);
-    drop(l);
-    // Strip every sig from the active file: only `.0` holds one.
-    let stripped = lines(&path).into_iter().fold(String::new(), |acc, mut v| {
-        v.as_object_mut().unwrap().remove("sig");
-        acc + &v.to_string() + "\n"
-    });
-    std::fs::write(&path, stripped).unwrap();
-    assert!(log_contains_signed_entry(&path).unwrap());
-}
-
-#[test]
 fn caller_cannot_append_segment_event() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
@@ -646,3 +630,6 @@ fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     );
     assert_nothing_dated_zero(&path);
 }
+
+#[path = "transparency_log_rotation_signature_tests.rs"]
+mod signature_tests;

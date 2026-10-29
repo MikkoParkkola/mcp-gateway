@@ -117,7 +117,10 @@ async fn a_lock_that_cannot_be_taken_refuses_the_write() {
 /// behaviour-selecting flag is an enum.
 #[test]
 fn public_config_writers_take_a_mode_not_a_bool() {
-    let source = include_str!("../config_persistence.rs");
+    let source = concat!(
+        include_str!("../config_persistence.rs"),
+        include_str!("../config_persistence_scratch.rs")
+    );
     let signatures: Vec<&str> = source
         .match_indices("pub fn ")
         .map(|(at, _)| {

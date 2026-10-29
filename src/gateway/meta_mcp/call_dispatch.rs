@@ -318,6 +318,10 @@ impl MetaMcp {
             if let Err(error) =
                 self.refuse_chained_task(tool_name, &arguments, (caller.scope(), session_id))
             {
+                // The delivered refusal of the task submission.
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
                 return invoke::refused_submit_answer(&caller, id, &error);
             }
             return self
@@ -441,7 +445,9 @@ impl MetaMcp {
             // plan that runs no step delivers nothing of this request's either.
             Some(MetaArm::Execute) => {
                 crate::gateway::delivery_facts::unvouched();
-                self.code_mode_execute(&arguments, session_id, caller).await
+                let result = self.code_mode_execute(&arguments, session_id, caller).await;
+                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                result
             }
             Some(MetaArm::ListServers) => {
                 self.revalidate_caller_slots(Self::proof_of(caller)).await;
@@ -474,7 +480,9 @@ impl MetaMcp {
             Some(MetaArm::WebhookStatus) => self.webhook_status(),
             Some(MetaArm::RunPlaybook) => {
                 crate::gateway::delivery_facts::unvouched();
-                self.run_playbook(&arguments, caller).await
+                let result = self.run_playbook(&arguments, caller).await;
+                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                result
             }
             Some(MetaArm::KillServer) => self.kill_server(&arguments),
             Some(MetaArm::ReviveServer) => self.revive_server(&arguments),

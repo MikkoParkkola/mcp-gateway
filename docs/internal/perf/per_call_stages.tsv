@@ -232,6 +232,7 @@ src/gateway/meta_mcp/invoke/gate.rs	count_meta_denial	http_invoke_tiny	on the HT
 src/gateway/meta_mcp/invoke/gate.rs	fill_marks	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill marks)
 src/gateway/meta_mcp/invoke/gate.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
+src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's visibility judgement)
 src/gateway/meta_mcp/invoke/gate.rs	invisible_call	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's whole-call gate)
@@ -242,6 +243,8 @@ src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	http_invoke_tiny
 src/gateway/meta_mcp/invoke/gate.rs	shared_verdict	http_invoke_tiny	on the HTTP gateway_invoke path (the shared catalogue verdict)
 src/gateway/meta_mcp/invoke/gate.rs	withheld_gate	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
+src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	-	on-path, untimed: a withheld name only (session profile, invocation policy); the timed rows withhold nothing
+src/gateway/meta_mcp/invoke/gate.rs	withheld_for	-	on-path, untimed: a withheld name only; the timed rows withhold nothing
 src/gateway/meta_mcp/invoke/gateway_writes.rs	built_task_envelope	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
 src/gateway/meta_mcp/invoke/gateway_writes.rs	claims	-	on-path, untimed: only when a stored task is delivered (tasks/get, a repeat, a notification); a plain timed invoke stores nothing
 src/gateway/meta_mcp/invoke/gateway_writes.rs	decode_entry	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
@@ -478,6 +481,8 @@ src/gateway/meta_mcp/invoke/relay_seams_record.rs	seam_fingerprints	-	gateway_ex
 src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and playbook plan answers only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	http_invoke_tiny	on the HTTP gateway_invoke path (S3, MIK-8488)
 src/gateway/meta_mcp/invoke/send.rs	admit_send	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/send.rs	count_use	http_invoke_tiny	inside admit_send on the HTTP gateway_invoke path: the invocation stats and ranker counters
+src/gateway/meta_mcp/invoke/send.rs	relay_egress	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	settle_lost_round	-	on-path, untimed: lost dispatch rounds (a send with no answer) only; the timed rows are answered
@@ -515,6 +520,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	-	on-path, unti
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	http_invoke_tiny	the HTTP request prelude: opens or resumes the session the request runs under (MIK-8504)
+src/gateway/router/handlers/dispatch_intake_session.rs	record_client_name	-	on-path, untimed: runs on an HTTP `initialize` only (one JSON pointer read and one short sanitize under a read lock); the timed rows carry no initialize
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	capture	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	view_subject	http_invoke_tiny	on the HTTP gateway_invoke path (the successful tools/call arm); also tools/list and subscriptions/listen
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	http_invoke_tiny	the HTTP tools/call arm

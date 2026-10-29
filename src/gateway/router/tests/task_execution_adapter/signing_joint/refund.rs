@@ -55,7 +55,9 @@ fn assert_single_use(kind: &str, served: &Value, fourth: &Value) {
 }
 
 /// The signed fixture with one task worker, so a held dispatch saturates it.
-async fn signed_saturated_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn signed_saturated_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut config = crate::config::Config::default();
     config.tasks.max_workers = 1;
     let (mut state, store) =

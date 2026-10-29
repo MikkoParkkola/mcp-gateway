@@ -375,12 +375,17 @@ async fn a_plan_step_refused_before_dispatch_is_recorded_and_reauthorized() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
-    let held = Arc::clone(&state);
+    // Weak: the executor keeps the barrier, so a strong share would keep the
+    // state, its task store and the store's test directory alive past the test.
+    let held = Arc::downgrade(&state);
     let withheld = std::sync::atomic::AtomicBool::new(false);
     state
         .task_executor
         .barrier_on_publication(Arc::new(move || {
-            if !withheld.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            // Gone only after the test has finished, when withholding is moot.
+            if let Some(held) = held.upgrade()
+                && !withheld.swap(true, std::sync::atomic::Ordering::SeqCst)
+            {
                 withhold(&held, TOOL);
             }
         }))
@@ -455,10 +460,14 @@ async fn a_plan_step_refused_after_dispatch_is_recorded_and_reauthorized() {
 async fn state_with_record_budget(
     mock: &Arc<MockBackend>,
     record_bytes: usize,
-) -> (Arc<AppState>, tempfile::TempDir, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (state, first) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
-    let dir = tempfile::tempdir().expect("a private task-store directory");
+    let dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let limits = crate::gateway::task_service::StoreLimits {
         record_bytes,
         ..crate::gateway::task_service::StoreLimits::default()
@@ -472,6 +481,9 @@ async fn state_with_record_budget(
     )
     .await
     .expect("the small-budget task store opens");
+    // The store holds a share of its directory, so a worker's late write
+    // cannot land while the test removes it.
+    service.store.keep_test_dir(Arc::clone(&dir));
     (app.tasks, app.task_executor) = (service, executor);
     (Arc::new(app), first, dir)
 }

@@ -61,7 +61,7 @@ async fn refusal(
     credential_principal: Option<&str>,
 ) -> (String, usize) {
     let custody = custody_with(&[]);
-    let (meta, dispatches) = gateway_in(
+    let (_log, meta, dispatches) = gateway_in(
         &[(BACKEND, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -150,7 +150,7 @@ async fn anonymous_caller_on_a_sole_operator_deployment_is_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn operator_without_identity_is_refused_on_a_propagation_backend() {
     let custody = custody_with(&[]);
-    let (meta, dispatches) = gateway_in(
+    let (_log, meta, dispatches) = gateway_in(
         &[(BACKEND, Bind::Propagation(external_cfg()))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),

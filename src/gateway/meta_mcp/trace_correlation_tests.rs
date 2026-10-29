@@ -11,6 +11,7 @@
 //! the literal string `"unknown"` — indistinguishable from every other
 //! stateless call in the same window.
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -60,8 +61,9 @@ impl Transport for OkTransport {
 }
 
 /// A `MetaMcp` with one backend and a real, file-backed transparency logger.
-/// Returns the log's path so a test can read back what was actually written.
-fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
+/// Returns the log's [`TempLog`] first, so a caller's `let (_log, ..)` drops it
+/// last, and its path, so a test can read back what was actually written.
+fn meta_with_transparency_log() -> (TempLog, MetaMcp, std::path::PathBuf) {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "srv",
@@ -72,9 +74,8 @@ fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
     backend.set_transport_for_test(Arc::new(OkTransport));
     let _ = registry.register(backend);
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_path_buf();
-    std::mem::forget(file); // kept alive for the test; reclaimed at process exit
+    let log = TempLog::new();
+    let path = log.path().to_path_buf();
 
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
@@ -86,7 +87,7 @@ fn meta_with_transparency_log() -> (MetaMcp, std::path::PathBuf) {
 
     let mut meta = MetaMcp::new(registry);
     meta.enable_transparency_log(logger);
-    (meta, path)
+    (log, meta, path)
 }
 
 fn ctx() -> MetaMcpCallerContext<'static> {
@@ -125,7 +126,7 @@ const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
 
 #[tokio::test]
 async fn ac_control_3_a_trace_id_in_meta_is_the_correlation_key_not_the_session() {
-    let (meta, log_path) = meta_with_transparency_log();
+    let (_log, meta, log_path) = meta_with_transparency_log();
     let args = json!({
         "server": "srv",
         "tool": "read",
@@ -156,7 +157,7 @@ async fn ac_control_3_a_trace_id_in_meta_is_the_correlation_key_not_the_session(
 async fn ac_control_3_no_trace_id_falls_back_to_the_session_id() {
     // Regression guard for a legacy caller that never sends `_meta.traceparent`:
     // the fallback this control replaces must keep working.
-    let (meta, log_path) = meta_with_transparency_log();
+    let (_log, meta, log_path) = meta_with_transparency_log();
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
     meta.invoke_tool(&args, Some("legacy-session-2"), &ctx())
@@ -182,7 +183,7 @@ async fn ac_control_3a_minted_trace_id_is_the_key_when_nothing_else_is() {
     //
     // The invoke path already mints a trace id for its own tracing scope, so a
     // real key is in hand at the moment the placeholder used to fire.
-    let (meta, log_path) = meta_with_transparency_log();
+    let (_log, meta, log_path) = meta_with_transparency_log();
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
     let result = meta
@@ -215,7 +216,7 @@ async fn ac_control_3a_empty_modern_session_is_not_a_correlation_key() {
     // `Some("")`, not `None` (`router/handlers.rs`, `declares_modern_by_header`).
     // Keyed on that, every stateless call without `_meta` correlates as the one
     // fingerprint of "", which is the shared placeholder CONTROL.3a removed.
-    let (meta, log_path) = meta_with_transparency_log();
+    let (_log, meta, log_path) = meta_with_transparency_log();
     let args = json!({ "server": "srv", "tool": "read", "arguments": {} });
 
     let result = meta

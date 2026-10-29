@@ -58,9 +58,7 @@ impl MetaMcp {
         } else {
             self.admit_target(&call)
         }
-        .map_err(|refusal| {
-            self.profile_refusal_as_undefined((server, tool), session_id, refusal)
-        })?;
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
@@ -204,7 +202,7 @@ impl MetaMcp {
         match verdict {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
-                crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
+                crate::attestation::AttestationMode::Enforce => Err(Error::gateway_refused(
                     -32002,
                     format!("Attestation rejected at {boundary}: {rejection}"),
                 )),
@@ -229,7 +227,7 @@ impl MetaMcp {
         if self.attestation_validator.is_some()
             && self.attestation_mode == crate::attestation::AttestationMode::Enforce
         {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32002,
                 "Attestation rejected: multi-step plans carry no attestation in 4.0.0; \
                  call each tool with its own token",
@@ -450,7 +448,13 @@ impl MetaMcp {
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
-        if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+        if round
+            && matches!(
+                delivered.1,
+                super::super::response_security::GateEffect::Enforced
+                    | super::super::response_security::GateEffect::Withheld
+            )
+        {
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)

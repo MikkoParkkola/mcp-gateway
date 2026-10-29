@@ -32,6 +32,8 @@ mod descriptor_gate;
 mod era;
 mod fill_check;
 mod identity_slots;
+#[cfg(test)]
+mod logging_scan_tests;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
@@ -48,6 +50,7 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+mod secret_send;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
@@ -75,7 +78,7 @@ pub(crate) use era::removed_method_refusal_message;
 // listing that neither caches nor commits verdicts.
 #[cfg(feature = "webui")]
 pub(crate) use era::start_detached_http;
-pub(crate) use input_keys::Lens;
+pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
 #[cfg(test)]
@@ -109,6 +112,10 @@ pub struct Backend {
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
     runtime_plan: Option<RuntimePlan>,
+    /// Runs of `server_state`, so a row can prove how many backends the
+    /// Overview evaluated.
+    #[cfg(all(test, feature = "webui"))]
+    server_state_evaluations: std::sync::atomic::AtomicUsize,
     /// Per-identity transport/session pool (MIK-6735). Always holds the
     /// canonical [`PoolKey::Shared`] slot; gains one [`PoolKey::PerUser`] slot
     /// per caller identity when identity propagation is configured, whatever
@@ -284,6 +291,10 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Resolves this backend's `secrets:` values; stamped by its registry.
+    /// Unstamped, a call a rule applies to is refused: it never resolves
+    /// against the process environment in place of the gateway's own.
+    secret_resolver: std::sync::OnceLock<Arc<crate::secrets::SecretResolver>>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,

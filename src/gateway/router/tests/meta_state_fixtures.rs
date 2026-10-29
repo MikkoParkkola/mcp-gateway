@@ -15,8 +15,11 @@ use super::{
 pub(super) async fn test_router_app_state_with_meta(
     backend: Arc<Backend>,
     configure: impl FnOnce(&mut MetaMcp),
-) -> (Arc<AppState>, tempfile::TempDir) {
-    let backends = Arc::new(BackendRegistry::new());
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     configure(&mut meta);
@@ -39,6 +42,7 @@ pub(super) async fn test_router_app_state_with_meta(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -86,21 +90,27 @@ pub(super) async fn test_router_app_state_with_meta(
 /// per-user credential without recording it on this route.
 pub(super) async fn test_router_app_state_minting_without_route_audit(
     backend: Arc<Backend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     use crate::identity_propagation::SignedAssertionStrategy;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     meta.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
-    // Meta-MCP side gets an audit sink (leaked tempfile — reclaimed at process
-    // exit); the DIRECT route deliberately does NOT (`transparency_log: None`).
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
+    // Meta-MCP side gets an audit sink, returned first so the caller drops it
+    // last; the DIRECT route deliberately does NOT (`transparency_log: None`).
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let path = log.path().to_string_lossy().to_string();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path,
@@ -130,6 +140,7 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -164,5 +175,5 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         task_executor,
         subscriptions,
     });
-    (state, store_dir)
+    (log, state, store_dir)
 }

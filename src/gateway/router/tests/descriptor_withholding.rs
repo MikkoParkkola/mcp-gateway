@@ -95,7 +95,7 @@ impl crate::transport::Transport for Upstream {
 pub(super) struct Env {
     pub(super) router: axum::Router,
     pub(super) upstream: Arc<Upstream>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 impl Env {

@@ -103,7 +103,7 @@ pub(super) fn plan_auth() -> AuthConfig {
 async fn off_gateway(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
         &plan_auth(),
         None,
@@ -131,7 +131,7 @@ async fn on_gateway_over_off(
     off: &Arc<AppState>,
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let relay_fw = Arc::new(
         Firewall::from_config(
             FirewallConfig {

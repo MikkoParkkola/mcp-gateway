@@ -61,7 +61,7 @@ fn request_binding(secret: &str) -> String {
 struct Fixture {
     router: axum::Router,
     seen: Seen,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 /// A required-passthrough backend behind auth with two same-label keys, whose

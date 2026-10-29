@@ -63,7 +63,9 @@ impl ReloadContext {
         let _reload_guard = self.lock_reload_within(wait).await?;
         // Written and reloaded through the target the lock resolved: one file,
         // even if a symlink at `path` is re-pointed meanwhile.
-        let locked = lock_config(path, deadline).await?;
+        let locked = lock_config(path, deadline)
+            .await
+            .inspect_err(|_| self.reporting.tally.skipped())?;
         locked.may_write(path)?;
         crate::config_persistence::write_config_with(
             &locked.target,

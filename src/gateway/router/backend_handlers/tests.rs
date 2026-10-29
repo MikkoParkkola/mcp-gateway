@@ -162,15 +162,15 @@ mod passthrough {
 mod identity_propagation_audit {
     use std::sync::Arc;
 
-    use tempfile::NamedTempFile;
+    use crate::security::transparency_log::temp::TempLog;
 
     use super::*;
     use crate::key_server::oidc::VerifiedIdentity;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    fn open_logger() -> (NamedTempFile, Arc<TransparencyLogger>) {
-        let file = NamedTempFile::new().expect("tempfile");
+    fn open_logger() -> (TempLog, Arc<TransparencyLogger>) {
+        let file = TempLog::new();
         let cfg = Arc::new(TransparencyLogConfig {
             enabled: true,
             path: file.path().to_string_lossy().to_string(),
@@ -484,7 +484,7 @@ mod identity_propagation_audit {
         // Parent: re-exec this exact test in an RLIMIT_FSIZE=0 child and
         // assert on what it observed.
         let exe = std::env::current_exe().expect("current test binary path");
-        let file = NamedTempFile::new().expect("tempfile");
+        let file = TempLog::new();
         let path = file.path().to_string_lossy().to_string();
         // A new log's open() writes its genesis record (#2275); open it here,
         // outside the size limit, so the child's open() only reads.

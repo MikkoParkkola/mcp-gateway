@@ -363,7 +363,8 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
@@ -512,6 +513,11 @@ impl MetaMcp {
             caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
+        if effect == super::super::response_security::GateEffect::Withheld {
+            // Per step in a composite: refused only while this request still
+            // vouches for the delivery, so a plan that goes on is not marked.
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         // The gates have run on the payload; the worker takes it, unminted.
         if let Some(withheld) = withheld
             && worker_clock::hand_to_worker(withheld, gated.clone())

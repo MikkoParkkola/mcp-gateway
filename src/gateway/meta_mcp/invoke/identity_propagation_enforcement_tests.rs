@@ -51,12 +51,12 @@ fn identity() -> VerifiedIdentity {
 // leave no audit entry at all.
 #[tokio::test]
 async fn gateway_invoke_route_audits_mint_and_refuse() {
-    use tempfile::NamedTempFile;
+    use crate::security::transparency_log::temp::TempLog;
 
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let file = NamedTempFile::new().expect("tempfile");
+    let file = TempLog::new();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -152,22 +152,25 @@ impl crate::transport::Transport for CapturingTransport {
 // Build a MetaMcp whose registry has one identity-required HTTP backend
 // ("mem") wired to a header-capturing transport, plus the signed-assertion
 // strategy. Returns the meta and the shared capture buffer.
-fn meta_with_capturing_backend() -> (MetaMcp, CapturedHeaders) {
-    let (m, captured, _identity) = meta_with_capturing_backend_full();
-    (m, captured)
+fn meta_with_capturing_backend() -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    CapturedHeaders,
+) {
+    let (log, m, captured, _identity) = meta_with_capturing_backend_full();
+    (log, m, captured)
 }
 
-/// A transparency logger backed by a leaked tempfile — kept alive for the
-/// whole test process so a `required`-backend mint has a durable audit sink
-/// (without one, the MIK-6740 fail-closed guard aborts the mint). Leaking is
-/// fine in a unit test: the file is reclaimed when the process exits.
-fn leaked_test_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
+/// A transparency logger in `log`'s temp dir, so a `required`-backend mint has a
+/// durable audit sink (without one, the MIK-6740 fail-closed guard aborts the
+/// mint). The caller keeps `log` alive until the logger is dropped.
+fn test_transparency_logger(
+    log: &crate::security::transparency_log::temp::TempLog,
+) -> Arc<crate::security::TransparencyLogger> {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file); // keep the on-disk file alive for the test
+    let path = log.path().to_string_lossy().to_string();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path,
@@ -181,21 +184,32 @@ fn leaked_test_transparency_logger() -> Arc<crate::security::TransparencyLogger>
 /// identity keys the transport received (MIK-6784). Wires a transparency log
 /// so a `required`-backend mint succeeds (the MIK-6740 fail-closed guard
 /// aborts a required mint when no audit sink is configured).
-fn meta_with_capturing_backend_full() -> (MetaMcp, CapturedHeaders, CapturedIdentityKeys) {
-    build_capturing_backend(true)
+fn meta_with_capturing_backend_full() -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    CapturedHeaders,
+    CapturedIdentityKeys,
+) {
+    let (log, m, captured, identity) = build_capturing_backend(true);
+    (log.expect("a log was asked for"), m, captured, identity)
 }
 
 /// Like [`meta_with_capturing_backend`] but with NO transparency log wired,
 /// so a `required`-backend mint must fail closed (MIK-6740 operator-misconfig
 /// guard).
 fn meta_with_capturing_backend_no_log() -> (MetaMcp, CapturedHeaders) {
-    let (m, captured, _identity) = build_capturing_backend(false);
+    let (_no_log, m, captured, _identity) = build_capturing_backend(false);
     (m, captured)
 }
 
 fn build_capturing_backend(
     with_transparency_log: bool,
-) -> (MetaMcp, CapturedHeaders, CapturedIdentityKeys) {
+) -> (
+    Option<crate::security::transparency_log::temp::TempLog>,
+    MetaMcp,
+    CapturedHeaders,
+    CapturedIdentityKeys,
+) {
     use crate::backend::Backend;
     use crate::config::{BackendConfig, TransportConfig};
 
@@ -226,10 +240,12 @@ fn build_capturing_backend(
     let mut m = MetaMcp::new(registry);
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     m.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
-    if with_transparency_log {
-        m.enable_transparency_log(leaked_test_transparency_logger());
+    // Returned first, so the callers' `let (log, ..)` drops it last.
+    let log = with_transparency_log.then(crate::security::transparency_log::temp::TempLog::new);
+    if let Some(log) = &log {
+        m.enable_transparency_log(test_transparency_logger(log));
     }
-    (m, captured, captured_identity)
+    (log, m, captured, captured_identity)
 }
 
 /// A backend that asks once and then completes.

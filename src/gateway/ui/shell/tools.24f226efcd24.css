@@ -39,3 +39,4 @@
 .tool-page-name { font: var(--type-title); font-family: var(--font-family-mono); letter-spacing: 0; overflow-wrap: anywhere; }
 .tool-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-4); margin: 0; }
 .tool-facts dd { margin: 0; }
+.tools-load { margin: 0 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-1); }

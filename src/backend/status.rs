@@ -215,7 +215,27 @@ impl Backend {
         &self,
         now: std::time::SystemTime,
     ) -> super::server_state::StateView {
+        #[cfg(all(test, feature = "webui"))]
+        self.server_state_evaluations.fetch_add(1, Ordering::SeqCst);
         super::server_state::decide(&self.state_inputs(), now)
+    }
+
+    /// Why the runtime policy refuses every start of this backend, or `None`
+    /// when it does not. The Overview uses it to list denied servers without
+    /// `status()`, which also sorts latency samples it never shows.
+    #[cfg(feature = "webui")]
+    pub(crate) fn startup_denial(&self) -> Option<&[crate::runtime::RuntimeDenyReason]> {
+        let plan = self.runtime_plan.as_ref()?;
+        // The planner fills `audit.denied_reasons` from `denied`, in order.
+        plan.is_denied()
+            .then_some(plan.audit.denied_reasons.as_slice())
+    }
+
+    /// How many times [`Self::server_state`] ran on this backend.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn server_state_evaluations_for_test(&self) -> usize {
+        self.server_state_evaluations
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Whether this backend loads only because its operator accepted sending

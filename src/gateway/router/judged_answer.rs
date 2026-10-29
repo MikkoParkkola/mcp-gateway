@@ -56,3 +56,46 @@ pub(in crate::gateway) async fn record_delivery(
     let stored = finalized.map(|_| refusal.clone());
     (frame.replaced_by(refusal), stored)
 }
+
+/// Record the delivery of an error `tools/call` returned already rendered (a
+/// refusal before dispatch), which skips the judged tail.
+///
+/// No scan saw it, so the record states only a refusal raised in the cell and
+/// omits both fields otherwise (A2). When the record's own write fails, the
+/// answer becomes the audit-unavailable refusal, sent with that refusal's
+/// status. A response with no `ErrorFrame` is returned as it is.
+pub(in crate::gateway) async fn record_error_exit(
+    meta: &MetaMcp,
+    response: axum::response::Response,
+    correlation: &ResponseCorrelation<'_>,
+    credential: DeliveryCredential,
+    session_id: &str,
+) -> axum::response::Response {
+    let Some(super::helpers::ErrorFrame { frame: rpc, trace }) = response
+        .extensions()
+        .get::<super::helpers::ErrorFrame>()
+        .cloned()
+    else {
+        return response;
+    };
+    crate::gateway::delivery_facts::unvouched();
+    let sent = rpc.error.as_ref().map(|e| (e.code, e.message.clone()));
+    let frame = OutboundFrame::unjudged(crate::gateway::outbound::Payload::Response(rpc));
+    let correlation = ResponseCorrelation {
+        trace_id: trace.as_deref(),
+        ..*correlation
+    };
+    let (frame, _) = record_delivery(meta, frame, &correlation, credential, None).await;
+    let recorded = frame
+        .response()
+        .and_then(|r| r.error.as_ref())
+        .map(|e| (e.code, e.message.clone()));
+    if recorded == sent {
+        return response;
+    }
+    let status = frame
+        .response()
+        .and_then(super::handlers::refusal_status)
+        .unwrap_or(response.status());
+    crate::gateway::outbound::to_http(frame, status, session_id)
+}

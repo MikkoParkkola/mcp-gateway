@@ -43,7 +43,7 @@ fn refusing_final_answer() -> ResponseContractConfig {
 async fn contract_state(
     log: Arc<crate::security::TransparencyLogger>,
     contract: Option<ResponseContractConfig>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,

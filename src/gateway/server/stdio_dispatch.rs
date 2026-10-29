@@ -89,6 +89,11 @@ impl Gateway {
             } else {
                 (method.clone(), Vec::new())
             };
+            // Set before the signing preflight, which can answer a withheld
+            // name as absent ahead of the route stage.
+            if backend_targets.len() == 1 {
+                crate::gateway::delivery_facts::lone_target();
+            }
             let response_targets = super::super::meta_mcp::response_security::meta_response_targets(
                 &external_tool,
                 &backend_targets,
@@ -618,6 +623,7 @@ impl Gateway {
                     &caller,
                 )
             {
+                crate::gateway::delivery_facts::outlet(&error);
                 break 'tool_call JsonRpcResponse::gateway_error(
                     Some(id),
                     error.to_rpc_code(),
@@ -732,6 +738,7 @@ impl Gateway {
                     }
                 }
                 Err(error) => {
+                    crate::gateway::delivery_facts::outlet(&error);
                     // MIK-8747: gateway-authored refusal data (the cross-era
                     // replay refusal) stays on the frame.
                     if let crate::Error::JsonRpc {

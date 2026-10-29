@@ -364,7 +364,11 @@ async fn dispatch(
         );
         let dispatched = crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
             Arc::clone(owned.dispatch_log()),
-            crate::gateway::meta_mcp::visible::memo::with_judged(judged, dispatched),
+            // Boxed: `with_judged` holds the whole dispatch inline, past the
+            // size this block may carry on the stack (`large_futures`).
+            Box::pin(crate::gateway::meta_mcp::visible::memo::with_judged(
+                judged, dispatched,
+            )),
         );
         tokio::select! {
             biased;

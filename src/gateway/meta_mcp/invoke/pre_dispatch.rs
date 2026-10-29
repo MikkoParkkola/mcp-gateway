@@ -300,11 +300,18 @@ impl MetaMcp {
                 .await
             }
         };
+        // An undeclared key is the delivered refusal; a composite step's is
+        // absorbed, so raised only while the cell is vouched.
+        if let Ok(Some(checked)) = &refusal
+            && checked.kind.refuses()
+        {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         let managed = caller_credential.managed.as_ref();
         self.seal_key_refusal(
             (caller, session_id),
             (server, tool),
-            refusal,
+            refusal.map(|checked| checked.map(|checked| checked.answer)),
             (managed, verified_identity, checked_at),
             idem_reservation,
         )

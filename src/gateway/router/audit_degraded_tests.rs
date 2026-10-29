@@ -63,7 +63,7 @@ struct Fixture {
     router: axum::Router,
     log: Arc<TransparencyLogger>,
     calls: Arc<AtomicUsize>,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 /// One logger, shared by the meta route and `AppState`, as the server wires it.

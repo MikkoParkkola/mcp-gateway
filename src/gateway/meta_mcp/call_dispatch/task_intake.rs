@@ -131,7 +131,7 @@ impl MetaMcp {
                 if let Some(refusal) =
                     self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
                 {
-                    return refusal;
+                    return refusal.deliver();
                 }
                 // Site 5 walks every recorded target (MIK-8406 PLANREPLAY.4). A
                 // pre-v5 row was refused above (-32003, task_replay.rs); a v5 row

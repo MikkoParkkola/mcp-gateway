@@ -398,7 +398,7 @@ async fn t15_a_two_target_task_answers_absent_when_either_target_is_withheld() {
 }
 
 /// Fixture state where every key reaches both backends, each a counted mock.
-async fn two_backend_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn two_backend_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut auth = two_principal_auth();
     for key in &mut auth.api_keys {
         key.backends.push(SECOND.to_string());

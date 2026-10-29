@@ -74,7 +74,7 @@ impl Who {
     }
 }
 
-async fn blocking_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn blocking_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) =
         crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
             .await;
@@ -270,7 +270,9 @@ async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
 }
 
 /// `blocking_state` with `source` as a relay source as well.
-async fn blocking_state_for(source: &str) -> (Arc<AppState>, tempfile::TempDir) {
+async fn blocking_state_for(
+    source: &str,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) =
         crate::gateway::router::tests::test_router_app_state_with_auth(&AuthConfig::default())
             .await;

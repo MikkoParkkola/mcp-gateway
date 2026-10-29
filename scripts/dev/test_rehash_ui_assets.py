@@ -21,8 +21,8 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent
 SCRIPT = HERE / "rehash_ui_assets.py"
 REAL_SHELL = HERE.parents[1] / "src/gateway/ui/shell"
-HASHED = re.compile(r"^(?P<stem>.+?)\.(?P<digest>[0-9a-f]{12})\.(?P<ext>css|js|woff2|svg|png)$")
-ASSET_EXTS = {"css", "js", "woff2", "svg", "png"}
+HASHED = re.compile(r"^(?P<stem>.+?)\.(?P<digest>[0-9a-f]{12})\.(?P<ext>css|js|json|woff2|svg|png)$")
+ASSET_EXTS = {"css", "js", "json", "woff2", "svg", "png"}
 TABLE = 'pub(super) const ASSETS: &[(&str, &[u8])] = &[\n];\n'
 
 
@@ -95,6 +95,24 @@ class RehashOrder(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(t.stale(), [])
 
+    def test_the_screen_manifest_names_are_rewritten(self):
+        # The document lists its screens in a JSON block the shell reads; those
+        # names follow their files like any tag's.
+        t = self.tree({
+            "index.html": '<script type="module" src="/ui/assets/shell.js"></script>\n'
+                          '<script type="application/json" id="screens">'
+                          '{"tools": {"js": "/ui/assets/tools.js", "css": "/ui/assets/tools.css"}}</script>\n',
+            "shell.js": "export const register = () => {};\n",
+            "tools.js": "import { register } from '/ui/assets/shell.js';\nregister();\n",
+            "tools.css": "a{}\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(t.stale(), [])
+        doc = (t.shell / "index.html").read_text()
+        for pattern in ("tools.*.js", "tools.*.css"):
+            self.assertIn(f'"/ui/assets/{next(t.shell.glob(pattern)).name}"', doc)
+
     def test_a_cycle_is_refused(self):
         t = self.tree({
             "index.html": "",
@@ -125,6 +143,38 @@ class RehashOrder(unittest.TestCase):
         before = sorted(p.name for p in t.shell.rglob("*") if p.is_file())
         self.assertEqual(t.run().returncode, 0)
         self.assertEqual(sorted(p.name for p in t.shell.rglob("*") if p.is_file()), before)
+
+    def test_changing_only_the_copy_renames_it_and_every_module_that_reaches_it(self):
+        t = self.tree({
+            "index.html": '<script type="module" src="/ui/assets/tools.js"></script>\n',
+            "tips.json": '{"a.status.b": {"title": "A", "text": "first"}}\n',
+            "tooltip.js": "export const tip = () => fetch('/ui/assets/tips.json');\n",
+            "tools.js": "import { tip } from '/ui/assets/tooltip.js';\ntip();\n",
+        })
+        self.assertEqual(t.run().returncode, 0)
+        self.assertEqual(t.stale(), [])
+
+        def names():
+            return {HASHED.match(p.name)["stem"]: p.name for p in t.shell.iterdir() if HASHED.match(p.name)}
+
+        before = names()
+        copy = t.shell / before["tips"]
+        copy.write_text(copy.read_text().replace("first", "second"))
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(t.stale(), [])
+        after = names()
+        for stem in ("tips", "tooltip", "tools"):
+            self.assertNotEqual(after[stem], before[stem], f"{stem} keeps its old name")
+        self.assertIn(f"/ui/assets/{after['tips']}", (t.shell / after["tooltip"]).read_text())
+        self.assertIn(f"/ui/assets/{after['tooltip']}", (t.shell / after["tools"]).read_text())
+        self.assertIn(f"/ui/assets/{after['tools']}", (t.shell / "index.html").read_text())
+        table = (t.root / "src/gateway/ui/shell.rs").read_text()
+        for stem in ("tips", "tooltip", "tools"):
+            self.assertIn(f'"{after[stem]}"', table)
+        settled = sorted(p.name for p in t.shell.iterdir())
+        self.assertEqual(t.run().returncode, 0)
+        self.assertEqual(sorted(p.name for p in t.shell.iterdir()), settled)
 
     def test_the_real_shell_is_already_hashed_and_stays_so(self):
         t = Tree({})

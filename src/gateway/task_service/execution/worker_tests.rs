@@ -31,7 +31,7 @@ pub(super) struct Fixture {
     pub(super) id: String,
     pub(super) revision: u64,
     pub(super) owner_digest: String,
-    _dir: tempfile::TempDir,
+    _dir: crate::gateway::router::tests::FixtureDir,
 }
 
 /// A freshly created working row, owned by [`OWNER`].
@@ -47,13 +47,16 @@ pub(super) async fn fixture_with(
     created_at: chrono::DateTime<chrono::Utc>,
     ttl_ms: u64,
 ) -> Fixture {
-    let dir = tempfile::tempdir().expect("a fixture store root");
+    let dir = Arc::new(tempfile::tempdir().expect("a fixture store root"));
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let service = Arc::new(
         TaskService::open(&dir.path().join("tasks"), StoreLimits::default(), admission)
             .await
             .expect("the fixture store opens"),
     );
+    // The store holds a share of its directory, so a worker still writing
+    // when the test ends cannot land mid-removal and leave the folder behind.
+    service.store.keep_test_dir(Arc::clone(&dir));
     let executor = TaskExecutor::new(
         Arc::clone(&service),
         Arc::new(SubscriptionRegistry::new(

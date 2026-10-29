@@ -119,7 +119,10 @@ impl crate::transport::Transport for Answer {
 /// The fixture state plus a `bench` backend with the failsafe rate limit and
 /// circuit breaker off: thousands of calls must all be dispatches, not
 /// refusals priced as calls.
-async fn bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::TempDir) {
+async fn bench_state() -> (
+    Arc<crate::gateway::router::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (state, store) = super::invoke_argument_copies::state().await;
     let mut failsafe = crate::config::FailsafeConfig::default();
     failsafe.rate_limit.enabled = false;
@@ -141,7 +144,10 @@ async fn bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::Temp
 /// [`bench_state`] with `search` surfaced from `bench`, so a row can time a
 /// call that resolves a surfaced name (the surfaced-tools reload reads that
 /// name through a request snapshot).
-async fn surfaced_bench_state() -> (Arc<crate::gateway::router::AppState>, tempfile::TempDir) {
+async fn surfaced_bench_state() -> (
+    Arc<crate::gateway::router::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (mut state, store) = bench_state().await;
     let inner = Arc::get_mut(&mut state).expect("bench state is not shared yet");
     inner.meta_mcp = Arc::new(

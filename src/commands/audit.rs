@@ -53,7 +53,8 @@ fn run_audit_verify(
     // Fail closed on the root danger: a log that WAS signed, verified
     // without a secret, would silently degrade to hash-only and pass a
     // stale-sig forgery with exit 0 — regardless of why the secret is
-    // absent (no config discovered, wrong config, unset env).
+    // absent (no config discovered, wrong config, unset env). This check
+    // refuses early; the verifying pass below is the guard that holds.
     if !signed {
         match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
             Ok(true) => {
@@ -70,6 +71,8 @@ fn run_audit_verify(
             }
         }
     }
+    #[cfg(all(test, unix))]
+    race_tests::between_passes();
     match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
         // Neither the log nor any sealed segment exists (D6: sealed segments
         // alone are still a log to verify).
@@ -82,6 +85,17 @@ fn run_audit_verify(
         }
         Err(e) => {
             eprintln!("Error reading log: {e}");
+            ExitCode::FAILURE
+        }
+        // The pass itself saw a signature it could not check: refuse, however
+        // the check above came out. Records written between that check and
+        // this pass are covered only here. A chain that failed is reported
+        // as a failure below, with this note added.
+        Ok(result) if !signed && result.signed_entry_seen && result.ok => {
+            eprintln!(
+                "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
+                log_path.display()
+            );
             ExitCode::FAILURE
         }
         Ok(result) if result.ok => {
@@ -112,6 +126,11 @@ fn run_audit_verify(
                 .error_message
                 .unwrap_or_else(|| "unknown error".to_string());
             eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+            if !signed && result.signed_entry_seen {
+                eprintln!(
+                    "note: the log has signed entries but no shared secret is configured; their HMAC was not checked."
+                );
+            }
             ExitCode::FAILURE
         }
     }
@@ -166,3 +185,7 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "audit_race_tests.rs"]
+mod race_tests;

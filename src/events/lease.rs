@@ -428,5 +428,13 @@ fn withdrawn() -> crate::Error {
 }
 
 #[cfg(test)]
+impl super::EventsHub {
+    /// How many keys hold a lease in this hub's store (LEASE-T0).
+    pub(crate) async fn held_leases(&self) -> usize {
+        self.leases.held.lock().await.len()
+    }
+}
+
+#[cfg(test)]
 #[path = "lease_tests.rs"]
 mod tests;

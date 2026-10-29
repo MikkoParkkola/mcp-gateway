@@ -48,7 +48,7 @@ impl MetaMcp {
         };
         let result = enforcer.check(tool, cost_key);
         if !result.allowed {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32003,
                 result
                     .block_reason
@@ -244,17 +244,6 @@ impl MetaMcp {
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
-        // A secret that cannot be injected refuses the call before its backend.
-        let injection = self
-            .secret_injector
-            .inject(server, tool, arguments)
-            .inspect_err(|_| {
-                super::audit::note_pre_send(
-                    crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
-                );
-            })?;
-        let arguments = injection.arguments;
-
         // The grant was decided at the authorization chokepoint, above the
         // caches. The definition is resolved again here only for the response
         // transform below, in one lookup so a reload cannot split it (#2236).
@@ -469,6 +458,7 @@ impl MetaMcp {
         let withheld = response.ingress_withheld;
         let mut result = response.result.unwrap_or(json!(null));
         // Raw receipt (inc3 R1): verify before anything reads the reply.
+        // A refused receipt is the delivered refusal of the backend's answer.
         self.chain_receive(
             chained,
             (
@@ -479,7 +469,8 @@ impl MetaMcp {
             ),
             challenge.as_deref(),
             chain,
-        )?;
+        )
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway

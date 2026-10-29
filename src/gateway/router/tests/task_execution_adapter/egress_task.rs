@@ -10,14 +10,16 @@ use super::support::*;
 use crate::gateway::egress_fixture::secret;
 use crate::security::firewall::{Firewall, FirewallConfig};
 
-async fn firewalled(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn firewalled(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = firewalled_state().await;
     register(&state, BACKEND, mock);
     (state, store)
 }
 
 /// The firewalled gateway with no backend registered yet.
-async fn firewalled_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn firewalled_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -207,7 +209,7 @@ async fn egress_an_a2a_agent_credential_is_screened_by_the_task_worker() {
 async fn ruled_state(
     action: crate::security::firewall::FirewallAction,
     log: Arc<crate::security::TransparencyLogger>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     use crate::security::firewall::FirewallRule;
     let firewall = Arc::new(
         Firewall::from_config(

@@ -28,13 +28,17 @@ struct Direct {
     router: axum::Router,
     custody: Custody,
     dispatches: Arc<Dispatches>,
-    _store: tempfile::TempDir,
-    _audit: tempfile::NamedTempFile,
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: crate::security::transparency_log::temp::TempLog,
+    /// The Meta-MCP's own audit log, behind `router`.
+    _meta_log: crate::security::transparency_log::temp::TempLog,
 }
 
 /// The direct route refuses to mint for a required backend (a managed one
 /// always is) without an audit sink, so the router state needs one.
-fn route_audit(file: &tempfile::NamedTempFile) -> Arc<crate::security::TransparencyLogger> {
+fn route_audit(
+    file: &crate::security::transparency_log::temp::TempLog,
+) -> Arc<crate::security::TransparencyLogger> {
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -52,7 +56,7 @@ async fn direct(steps: &[ProviderStep]) -> Direct {
         steps,
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (meta_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -63,7 +67,7 @@ async fn direct(steps: &[ProviderStep]) -> Direct {
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = Arc::clone(meta.backends.for_test());
     state_mut.meta_mcp = Arc::new(meta);
-    let audit = tempfile::NamedTempFile::new().expect("audit file");
+    let audit = crate::security::transparency_log::temp::TempLog::new();
     state_mut.transparency_log = Some(route_audit(&audit));
     Direct {
         router: create_router(state),
@@ -71,6 +75,7 @@ async fn direct(steps: &[ProviderStep]) -> Direct {
         dispatches,
         _store: store,
         _audit: audit,
+        _meta_log: meta_log,
     }
 }
 

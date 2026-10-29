@@ -175,7 +175,7 @@ pub(super) async fn gateway(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     gateway_armed(key, endpoint, alice, |meta| meta).await
 }
@@ -189,7 +189,7 @@ pub(super) async fn gateway_armed(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     gateway_with(key, endpoint, alice, Requirement::Required, arm).await
 }
@@ -212,7 +212,7 @@ pub(super) async fn gateway_with(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     let shape = (
         requirement,
@@ -238,7 +238,7 @@ pub(super) async fn gateway_shaped(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     let (router, sends, dirs, _, _) = build(key, endpoint, alice, shape, arm).await;
     (router, sends, dirs)
@@ -253,7 +253,7 @@ pub(super) async fn gateway_with_meta(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
     Arc<crate::gateway::router::AppState>,
     Hold,
 ) {
@@ -278,7 +278,7 @@ async fn build(
 ) -> (
     axum::Router,
     Arc<AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
     Arc<crate::gateway::router::AppState>,
     Hold,
 ) {
