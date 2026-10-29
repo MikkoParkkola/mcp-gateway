@@ -18,7 +18,7 @@
 //!   is (`repin.rs:20` against `lifecycle.rs:527`). Upstream fixture.
 //! - T05/T06 snapshot: after a replace, or after the last URI interest leaves,
 //!   `authorize_uri` reads live, not the old snapshot
-//!   (`upstream_listener.rs:361-391`). Upstream fixture.
+//!   (`add` and `hold` in `upstream_listener_interest.rs`). Upstream fixture.
 //! - T07 a re-subscribe that commits between a removal pass's judgement and
 //!   its delete survives (G3 generation check). Needs the R1 pass pause.
 //! - T08 debug-build lock-order assert on every deleting path. R1 only.
