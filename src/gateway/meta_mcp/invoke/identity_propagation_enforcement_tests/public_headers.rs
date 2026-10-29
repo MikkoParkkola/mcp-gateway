@@ -99,6 +99,14 @@ async fn the_credential_call_hands_out_a_value_wiped_on_drop() {
         .expect("resolve ok");
     let marker = minted_value(&returned.0);
 
+    // The plain copy an embedder makes, for this call's own minted value.
+    let copy = returned.0.to_vec();
+    let ((), control) = scan_frees(marker, || drop(copy));
+    assert!(
+        control.hits >= 1,
+        "positive control: a plain copy freed unwiped was not seen: {control:?}"
+    );
+
     let watched = value_buffer(&returned.0);
     let ((), scanned) = scan_frees_watching(marker, watched, || drop(returned));
     assert_wiped("resolve_propagation_credential", scanned);
