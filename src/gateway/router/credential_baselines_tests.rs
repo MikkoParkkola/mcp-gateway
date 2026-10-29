@@ -87,26 +87,47 @@ enum Peer {
     Hangs,
 }
 
+/// What a `Hangs` peer reports: the hung call arrived, and its handler
+/// ended because the gateway dropped the call.
+#[derive(Default)]
+struct Hang {
+    arrived: tokio::sync::Notify,
+    released: tokio::sync::Notify,
+}
+
+/// Wakes `released` when the hung handler is dropped.
+struct Released(Arc<Hang>);
+
+impl Drop for Released {
+    fn drop(&mut self) {
+        self.0.released.notify_one();
+    }
+}
+
 /// A streamable HTTP MCP peer on loopback that takes a census on every
 /// request it serves, then answers as `behaviour` says. Returns its URL, a
-/// send counter, and the switch that arms `FailsOnce` and `Hangs` (off for
-/// the warm-up).
+/// send counter, the switch that arms `FailsOnce` and `Hangs` (off for the
+/// warm-up), and what a hung call reports.
 async fn peer(
     behaviour: Peer,
 ) -> (
     String,
     Arc<std::sync::atomic::AtomicUsize>,
     Arc<std::sync::atomic::AtomicBool>,
+    Arc<Hang>,
 ) {
     use axum::response::IntoResponse as _;
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hang = Arc::new(Hang::default());
     let counted = Arc::clone(&sends);
     let switch = Arc::clone(&armed);
+    let hung = Arc::clone(&hang);
     let app = axum::Router::new().fallback(
         move |_headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
             let switch = Arc::clone(&switch);
+            let hung = Arc::clone(&hung);
             async move {
                 take_census();
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -118,6 +139,8 @@ async fn peer(
                             return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
                         }
                         Peer::Hangs if method == "tools/call" => {
+                            let _released = Released(Arc::clone(&hung));
+                            hung.arrived.notify_one();
                             std::future::pending::<()>().await;
                         }
                         Peer::Answers | Peer::Hangs => {}
@@ -145,7 +168,7 @@ async fn peer(
         .expect("bind");
     let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
     tokio::spawn(async move { axum::serve(listener, app).await });
-    (url, sends, armed)
+    (url, sends, armed, hang)
 }
 
 /// A router whose one backend, at `url`, has a required per-user binding
@@ -306,7 +329,7 @@ async fn measure(row: Row, len: usize, name: &str) {
     }
     let minted = (row.minted)(len);
     let marker = token(len).as_bytes();
-    let (url, sends, armed) = peer(row.peer).await;
+    let (url, sends, armed, hang) = peer(row.peer).await;
     let (router, _dirs) = gateway(url, minted).await;
     // Warm: the slot starts and lists once outside the measurement. A row
     // whose mint is refused warms into the same refusal; the warm-up's
@@ -317,17 +340,18 @@ async fn measure(row: Row, len: usize, name: &str) {
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
     let ((status, answer), scanned, census) = scan_dispatch(marker, || async {
         if row.peer == Peer::Hangs {
-            // Dropped mid-send, then a moment for what the drop frees.
-            let dropped = tokio::time::timeout(
-                std::time::Duration::from_millis(300),
-                post(&router, &row.uri, &row.body),
-            )
-            .await;
-            assert!(
-                dropped.is_err(),
-                "premise: the hung call was dropped, not answered"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            // Dropped once the peer holds it, then measured until the peer's
+            // handler ends: the client has closed the connection by then.
+            tokio::select! {
+                answered = post(&router, &row.uri, &row.body) => {
+                    panic!("premise: the hung call was dropped, not answered: {answered:?}")
+                }
+                () = hang.arrived.notified() => {}
+            }
+            // A guard against a hang, never expected to elapse.
+            tokio::time::timeout(std::time::Duration::from_secs(30), hang.released.notified())
+                .await
+                .expect("the peer's handler ends once the call is dropped");
             (axum::http::StatusCode::REQUEST_TIMEOUT, Value::Null)
         } else {
             post(&router, &row.uri, &row.body).await
@@ -504,7 +528,7 @@ async fn client_only(len: usize, name: &str) {
         return;
     }
     let minted = token(len);
-    let (url, sends, _armed) = peer(Peer::Answers).await;
+    let (url, sends, _armed, _hang) = peer(Peer::Answers).await;
     let client = reqwest::Client::new();
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
