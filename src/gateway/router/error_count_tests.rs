@@ -295,7 +295,7 @@ fn a_gateway_refusal_on_the_direct_route_counts_by_its_code() {
     assert_eq!(
         errors(&text, want.label()),
         1,
-        "{counts:?}: {status} {code}"
+        "{counts:?}: {status} {marker:?}"
     );
 }
 
