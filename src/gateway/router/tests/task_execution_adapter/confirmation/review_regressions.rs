@@ -125,7 +125,7 @@ async fn a_replayed_accept_inside_the_active_window_is_in_flight_not_a_dead_gran
     // redemption spent by the call that is still committing, so this can only
     // be answered by the admission entry that call already owns.
     let replayed = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        crate::test_wait::HANG_BOUND,
         post(&state, "key-a", accepted.clone()),
     )
     .await
@@ -415,8 +415,11 @@ async fn c2_a_cancel_behind_a_non_terminal_move_is_retried_at_the_current_revisi
 
 /// Moves the record again at the instant a lost cancel is about to retry, so
 /// the retry itself conflicts: the one race `cancel_lost_the_revision` bounds.
+/// It holds the state weakly: the executor keeps its observer, so a strong
+/// share would keep the state, its task store and the store's test directory
+/// alive past the test.
 struct MoveOnRetry {
-    state: Arc<AppState>,
+    state: std::sync::Weak<AppState>,
     owner: String,
     event: parking_lot::Mutex<Option<crate::gateway::task_service::TaskTransition>>,
 }
@@ -431,9 +434,12 @@ impl crate::gateway::task_service::CommitObserver for MoveOnRetry {
         let Some(event) = self.event.lock().take() else {
             return;
         };
-        let current = self.state.tasks.get(&self.owner, id).unwrap();
-        self.state
-            .task_executor
+        // Gone only after the test has finished, when the move is moot.
+        let Some(app) = self.state.upgrade() else {
+            return;
+        };
+        let current = app.tasks.get(&self.owner, id).unwrap();
+        app.task_executor
             .commit_transition(TransitionWrite::Settle {
                 principal: &self.owner,
                 id,
@@ -487,7 +493,7 @@ async fn cancel_that_loses_twice(
         .await
         .unwrap_or_else(|_| panic!("a status message commits on the working row"));
     state.task_executor.observe_commits(Arc::new(MoveOnRetry {
-        state: Arc::clone(&state),
+        state: Arc::downgrade(&state),
         owner: owner.clone(),
         event: parking_lot::Mutex::new(Some(second_move)),
     })

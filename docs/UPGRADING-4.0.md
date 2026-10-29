@@ -4798,6 +4798,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
 | `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/status` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none |  |
+| `/ui/api/stream` | hidden | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/assets/{file}` | hidden | none: the UI's own files, not an integration surface |  |
 ### Library items
 

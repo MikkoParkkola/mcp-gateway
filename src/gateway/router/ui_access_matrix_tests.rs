@@ -319,6 +319,10 @@ fn paths() -> Vec<&'static str> {
     paths
 }
 
+/// Routes the matrix cannot probe: a server-sent event stream's body never
+/// ends. The stream's own refusals and caps are pinned in `ui_stream_tests`.
+const STREAMED: &[&str] = &[routes::UI_STREAM];
+
 /// Routes whose successful answer is scoped to the caller: their body is
 /// pinned too, so a widened scope moves a cell.
 const SCOPED: &[&str] = &[
@@ -732,6 +736,7 @@ fn every_ui_api_path_is_in_the_matrix() {
         .copied()
         .filter(|p| p.starts_with("/ui/api/") || *p == routes::DASHBOARD)
         .filter(|p| cfg!(feature = "cost-governance") || *p != routes::UI_COSTS)
+        .filter(|p| !STREAMED.contains(p))
         .collect();
     let mut probed = paths();
     owned.sort_unstable();

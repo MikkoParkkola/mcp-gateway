@@ -33,6 +33,7 @@ mod refusals;
 pub(crate) mod session;
 mod shell;
 mod status;
+pub(crate) mod stream;
 
 use crate::gateway::routes;
 use std::sync::Arc;
@@ -94,7 +95,8 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(events::events_router())
         .merge(import::import_router())
         .merge(discovery::discovery_router())
-        .merge(history::history_router());
+        .merge(history::history_router())
+        .merge(stream::stream_router());
 
     #[cfg(feature = "cost-governance")]
     let router = router.route(routes::UI_COSTS, get(costs));
@@ -372,6 +374,18 @@ tr:hover td{{background:var(--bg3);}}
 }
 
 // ── Existing handlers (tools / config / reload) ─────────────────────
+
+/// MIK-8786: the auth facts the page decides from, stated in both views of
+/// `GET /ui/api/status`: whether authentication is on, and whether this caller
+/// is signed in and is an admin. Three booleans about the caller, none about
+/// backends; an anonymous caller already learns on/off from 401 versus 200.
+fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
+    json!({
+        "enabled": state.auth_config.enabled,
+        "signed_in": client.is_some_and(|c| c.authenticated),
+        "admin": is_admin(client),
+    })
+}
 
 /// `GET /ui/api/tools` — flat list of all cached tools across servers.
 async fn tools(

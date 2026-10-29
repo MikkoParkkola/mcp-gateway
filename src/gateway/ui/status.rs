@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! `GET /ui/api/status`: gateway health, shaped by who is asking, with the
-//! caller's `access` report.
+//! `GET /ui/api/status`, shaped by who is asking, with the caller's `access`
+//! report; its payload is the one the live stream sends: one builder, so the
+//! two cannot drift.
 
 use std::sync::Arc;
 
@@ -11,21 +12,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::guard::Guard;
-use super::{access_report, call_windows, is_admin, uptime_secs};
-use crate::gateway::auth::AuthenticatedClient;
-use crate::gateway::router::AppState;
-
-/// The auth facts the page decides from, stated in both views of
-/// `GET /ui/api/status`: whether authentication is on, and whether this caller
-/// is signed in and is an admin. Three booleans about the caller, none about
-/// backends; an anonymous caller already learns on/off from 401 versus 200.
-fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
-    json!({
-        "enabled": state.auth_config.enabled,
-        "signed_in": client.is_some_and(|c| c.authenticated),
-        "admin": is_admin(client),
-    })
-}
+use super::{AppState, access_report, auth_facts, call_windows, is_admin, uptime_secs};
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 pub(super) async fn status(
@@ -42,7 +29,31 @@ pub(super) async fn status(
         guard.identity.as_ref(),
     );
     let client = guard.client;
-    let auth = auth_facts(&state, client.as_ref());
+    let view = if is_admin(client.as_ref()) {
+        StatusView::Full
+    } else {
+        StatusView::CountsOnly
+    };
+    let mut body = status_body(&state, view);
+    body["auth"] = auth_facts(&state, client.as_ref());
+    // An auth-on caller with no credential gets no `access` member at all.
+    if let Some(access) = access {
+        body["access"] = access;
+    }
+    Json(body)
+}
+
+/// Which of the two views a caller gets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum StatusView {
+    /// Every server row: admin callers.
+    Full,
+    /// Counts only: every other caller.
+    CountsOnly,
+}
+
+/// The status body without the caller's `auth` member, which the caller adds.
+pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
@@ -50,8 +61,19 @@ pub(super) async fn status(
     let backends = state.backends.all();
     let total = backends.len();
 
-    if !is_admin(client.as_ref()) {
-        return with_access(redacted(&backends, &auth), access);
+    if view == StatusView::CountsOnly {
+        // Redacted view: counts only, no names/details
+        let healthy = backends
+            .iter()
+            .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
+            .count();
+        return json!({
+            "server_count": total,
+            "healthy_count": healthy,
+            "degraded_count": total - healthy,
+            "uptime_secs": uptime_secs(),
+            "version": env!("CARGO_PKG_VERSION"),
+        });
     }
 
     // Full admin view
@@ -106,14 +128,13 @@ pub(super) async fn status(
         .iter()
         .map(|s| crate::counters::Filter::Server(&s.name))
         .collect();
-    let (windows, counts_since) = call_windows(&state, &labels);
+    let (windows, counts_since) = call_windows(state, &labels);
     for (server, (day, prev)) in servers.iter_mut().zip(windows) {
         server.calls_24h = day;
         server.calls_prev_24h = prev;
     }
 
-    with_access(
-        json!({
+    json!({
         "server_count": total,
         "tool_count": tool_count,
         "uptime_secs": uptime_secs(),
@@ -125,36 +146,7 @@ pub(super) async fn status(
         },
         "servers": servers,
         "counts_since": counts_since,
-        "auth": auth,
-        }),
-        access,
-    )
-}
-
-/// The view for a caller who is not an admin: counts only, no names or details.
-fn redacted(backends: &[Arc<crate::backend::Backend>], auth: &Value) -> Value {
-    let total = backends.len();
-    let healthy = backends
-        .iter()
-        .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
-        .count();
-    json!({
-        "server_count": total,
-        "healthy_count": healthy,
-        "degraded_count": total - healthy,
-        "uptime_secs": uptime_secs(),
-        "version": env!("CARGO_PKG_VERSION"),
-        "auth": auth,
     })
-}
-
-/// `answer` with the caller's `access` report, when it has one: an auth-on
-/// caller with no credential gets no `access` member at all.
-fn with_access(mut answer: Value, access: Option<Value>) -> Json<Value> {
-    if let (Some(access), Some(object)) = (access, answer.as_object_mut()) {
-        object.insert("access".to_string(), access);
-    }
-    Json(answer)
 }
 
 #[derive(Debug, Serialize)]
@@ -187,3 +179,7 @@ struct ServerStatus {
     /// credentials in cleartext.
     cleartext_credentials_accepted: bool,
 }
+
+#[cfg(test)]
+#[path = "status_tests.rs"]
+mod tests;

@@ -190,6 +190,9 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Servers, Tab::Status)],
         true,
     ),
+    // The live stream checks the held credential itself (401 without one)
+    // and backs no tab: the shell opens it on every page.
+    row(routes::UI_STREAM, Get, Open, &[], false),
     row(
         routes::UI_OVERVIEW,
         Get,

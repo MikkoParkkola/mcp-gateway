@@ -18,7 +18,7 @@ const PUBLIC: &str = "https://gw.example";
 const HANDOFF: &str = "/dashboard/handoff";
 
 /// An HTTPS `public_url` in front of this plain-HTTP loopback listener.
-async fn behind_https_front() -> (Arc<AppState>, tempfile::TempDir) {
+async fn behind_https_front() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, dir) = fixture().await;
     reload(&state, |c| c.server.public_url = Some(PUBLIC.to_string()));
     (state, dir)

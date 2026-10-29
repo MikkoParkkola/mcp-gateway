@@ -19,7 +19,7 @@ use crate::config::{AuthConfig, Config};
 
 const BEARER: &str = "live-view-bearer";
 
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
