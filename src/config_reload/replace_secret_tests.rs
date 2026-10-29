@@ -175,6 +175,66 @@ async fn a_refused_compute_discards_the_entries() {
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
 
+/// A files store that counts the entries it is asked to create.
+struct Counting {
+    inner: FilesStore,
+    creates: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl SecretStore for Counting {
+    fn kind(&self) -> StoreKind {
+        self.inner.kind()
+    }
+    fn limit(&self) -> usize {
+        self.inner.limit()
+    }
+    fn probe(&self) -> Result<(), StoreError> {
+        self.inner.probe()
+    }
+    fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        self.inner.exists(name)
+    }
+    fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        self.creates
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.create(name, value)
+    }
+    fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.inner.delete(name)
+    }
+}
+
+/// API8.7 (U8 PR b): a save whose compute refuses creates no store entry at
+/// all, not one created and then discarded: the compute runs before any
+/// entry exists.
+#[tokio::test]
+async fn a_refused_compute_creates_no_entry() {
+    let (dir, path, ctx) = setup();
+    let creates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let store = Counting {
+        inner: FilesStore::new(dir.path()),
+        creates: Arc::clone(&creates),
+    };
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(|_, _| Err("no".to_owned())),
+        replaced: Replaced::Discard,
+        secrets: Some(step(dir.path(), Arc::new(store))),
+    };
+
+    let failure = replace_detached(ctx, save, WAIT)
+        .await
+        .expect_err("refused");
+
+    assert!(matches!(failure, ReplaceError::Refused(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    assert_eq!(
+        creates.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "an entry was created for a save its compute refused"
+    );
+}
+
 #[tokio::test]
 async fn a_refused_reload_restores_the_original_and_discards() {
     let (dir, path, ctx) = setup();
