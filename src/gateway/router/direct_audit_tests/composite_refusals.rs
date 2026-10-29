@@ -88,8 +88,9 @@ async fn a_playbook_continuing_past_a_late_refusal_records_no_refused() {
     assert!(record.get("response_effect").is_none(), "{record}");
 }
 
-/// Row 4 at the route: under `retry` every attempt is refused, the retries
-/// run out and the playbook carries on to its report: no refused.
+/// Row 4 at the route: under `retry` the late refusal follows the send, so
+/// the step is not sent again; the playbook carries on to its report: no
+/// refused.
 #[tokio::test]
 async fn a_playbook_retrying_past_a_late_refusal_records_no_refused() {
     let fx = chained().await;
@@ -99,7 +100,11 @@ async fn a_playbook_retrying_past_a_late_refusal_records_no_refused() {
         body.to_string().contains("steps_failed"),
         "premise: the report was delivered: {status} {body}"
     );
-    assert_eq!(fx.calls.load(Ordering::SeqCst), 2, "premise: retried");
+    assert_eq!(
+        fx.calls.load(Ordering::SeqCst),
+        1,
+        "premise: a step refused after its send is not sent again"
+    );
     let record = last_delivery(&fx);
     assert!(record.get("response_effect").is_none(), "{record}");
 }
