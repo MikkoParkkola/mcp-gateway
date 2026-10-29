@@ -554,11 +554,15 @@ async fn a_contract_annotation_records_annotated() {
         forbidden_patterns: Vec::new(),
         action_mode: None,
     };
-    for (tool, expected) in [
+    let cases = [
         ("undeclared", "annotated"),
         ("declared", "annotated"),
         ("roomy", "delivered"),
-    ] {
+    ];
+    // Every case's effect is collected and compared at once, so a failure
+    // shows each branch's answer, not only the first that differs.
+    let mut effects = Vec::new();
+    for (tool, expected) in cases {
         let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
             crate::backend::BackendRegistry::new(),
         ));
@@ -594,6 +598,11 @@ async fn a_contract_annotation_records_annotated() {
             expected == "annotated",
             "premise {tool}: the gate's annotation"
         );
-        assert_eq!(effect, expected, "{tool}");
+        effects.push((tool, effect));
     }
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|&(tool, effect)| (tool, json!(effect)))
+        .collect();
+    assert_eq!(effects, expected);
 }
