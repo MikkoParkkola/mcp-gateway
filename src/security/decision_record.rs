@@ -196,6 +196,12 @@ impl Noted {
                 .as_ref()
                 .and_then(|checks| checks.allow.clone())
                 .unwrap_or((DecisionKind::DefaultAllow, None)),
+            // Kani's assert macros drop the message, so `outcome` reads as
+            // unused in its build only.
+            #[cfg_attr(
+                kani,
+                allow(unused_variables, reason = "used only in the debug_assert message")
+            )]
             (None, Refused::Yes(outcome)) => {
                 // Every debug build, integration tests included; never a
                 // release build, which records `unrecorded` instead.
