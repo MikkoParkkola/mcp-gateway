@@ -172,6 +172,7 @@ impl Resolve for Stepping {
 }
 
 use super::tree::{Fx, target};
+use crate::security::firewall::Firewall;
 use serde_json::{Value, json};
 
 /// `fx` with `seams` applied to its firewall.

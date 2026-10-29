@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::super::*;
 use super::tree::{Fx, Seen, root_rule, seen};
-use crate::security::firewall::{FirewallRule, RuleException};
+use crate::security::firewall::{FirewallRule, RuleException, ScanType};
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 
 fn keyed<'a>(key: KeyOf<'a>) -> RuleTarget<'a> {

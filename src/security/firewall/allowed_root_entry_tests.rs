@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use super::super::*;
 use super::tree::{Fx, Seen, both, code, root_rule, seen, target};
-use crate::security::firewall::FirewallVerdict;
+use crate::security::firewall::{FirewallVerdict, ScanType};
 
 const SENTINEL: &str = "SENTINEL-8939-q7";
 
