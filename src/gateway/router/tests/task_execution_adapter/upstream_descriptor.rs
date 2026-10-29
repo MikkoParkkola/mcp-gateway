@@ -273,7 +273,7 @@ async fn armed_fixture() -> (
     Arc<CountedUpstream>,
     Arc<FakeRecovery>,
     Arc<Stages>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let (state, store) = fixture_state(&two_principal_auth()).await;
     let transport = CountedUpstream::new();

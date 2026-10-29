@@ -91,7 +91,7 @@ async fn a_spend_refusal_after_a_refresh(slot: Slot) -> Refused {
     // The schema check off, so no argument-key fill adds an effect of its own
     // (mF-account survived run 38177519271 that way).
     super::gateway::SCHEMA_OFF.with(|off| off.set(true));
-    let (mut meta, dispatches) = gateway(
+    let (_log, mut meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,

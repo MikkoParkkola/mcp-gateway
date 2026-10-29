@@ -45,7 +45,14 @@ fn single_user() -> AuthConfig {
 /// A single-user gateway with an account-bound (`required`) backend whose
 /// operator holds a grant, and with `optional`, a non-required propagation
 /// backend beside it.
-fn gateway(optional: bool) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
+fn gateway(
+    optional: bool,
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+    super::Custody,
+) {
     let custody = custody_with(&[(operator_key(), grant(OPERATOR_TOKEN, u64::MAX))]);
     let mut binds = vec![(REQUIRED, Bind::Account(WORK))];
     if optional {
@@ -55,7 +62,7 @@ fn gateway(optional: bool) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
         };
         binds.push((OPTIONAL, Bind::Propagation(cfg)));
     }
-    let (meta, dispatches) = gateway_in(
+    let (log, meta, dispatches) = gateway_in(
         &binds,
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -63,7 +70,7 @@ fn gateway(optional: bool) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
         ServeMode::Http,
         single_user(),
     );
-    (meta, dispatches, custody)
+    (log, meta, dispatches, custody)
 }
 
 /// Every request that reached a backend (the `required` one is the only one).
@@ -115,7 +122,7 @@ fn names_backend(listing: &Value, backend: &str) -> bool {
 /// path, naming it answers "not found", and nothing reaches it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn anonymous_caller_gets_no_tools_from_a_required_backend() {
-    let (meta, dispatches, _custody) = gateway(false);
+    let (_log, meta, dispatches, _custody) = gateway(false);
     let anonymous = caller_as(None, Some(""));
 
     let named = meta
@@ -142,7 +149,7 @@ async fn anonymous_caller_gets_no_tools_from_a_required_backend() {
 /// never served to a caller whose fetch would not carry its identity.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn anonymous_caller_is_not_served_a_required_backends_shared_snapshot() {
-    let (meta, dispatches, _custody) = gateway(false);
+    let (_log, meta, dispatches, _custody) = gateway(false);
     let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
@@ -172,7 +179,7 @@ async fn anonymous_caller_is_not_served_a_required_backends_shared_snapshot() {
 /// backend on every tool-discovery path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn optional_backend_and_operator_views_are_unchanged() {
-    let (meta, _dispatches, _custody) = gateway(true);
+    let (_log, meta, _dispatches, _custody) = gateway(true);
     let anonymous = caller_as(None, Some(""));
     let listed = meta
         .list_tools(&json!({"server": OPTIONAL}), None, &anonymous)
@@ -199,7 +206,7 @@ async fn optional_backend_and_operator_views_are_unchanged() {
 /// still gets the count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() {
-    let (meta, _dispatches, _custody) = gateway(false);
+    let (_log, meta, _dispatches, _custody) = gateway(false);
     let backend = meta.backends.for_test().get(REQUIRED).expect("registered");
     let seeded = backend
         .get_tools_for_binding(None, &[])
@@ -247,7 +254,7 @@ async fn list_servers_counts_a_required_backend_only_for_a_caller_with_a_view() 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_a_grant() {
     let custody = custody_with(&[]);
-    let (meta, _dispatches) = gateway_in(
+    let (_log, meta, _dispatches) = gateway_in(
         &[(REQUIRED, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -284,7 +291,7 @@ async fn list_servers_does_not_count_a_required_backend_for_an_operator_without_
 /// is `stored`, with the shared snapshot filled, and the custody it read.
 async fn operator_row(stored: crate::personal_accounts::GrantRecord) -> (Value, super::Custody) {
     let custody = custody_with(&[(operator_key(), stored)]);
-    let (meta, _dispatches) = gateway_in(
+    let (_log, meta, _dispatches) = gateway_in(
         &[(REQUIRED, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),

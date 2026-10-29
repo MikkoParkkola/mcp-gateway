@@ -8,6 +8,7 @@
 //! `identity_key` differed, the call would read a cold slot and be forwarded
 //! unchecked; these rows fail in exactly that case.
 
+use crate::security::transparency_log::temp::TempLog;
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -115,15 +116,13 @@ struct Gateway {
     router: axum::Router,
     alpha: Seen,
     shared: Seen,
-    _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: [TempLog; 2],
 }
 
 /// A logger on `file`. A per-user mint is refused without an audit sink, so
 /// the fixture needs one on each route that mints.
-pub(super) fn transparency_logger(
-    file: &tempfile::NamedTempFile,
-) -> Arc<crate::security::TransparencyLogger> {
+pub(super) fn transparency_logger(file: &TempLog) -> Arc<crate::security::TransparencyLogger> {
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -168,10 +167,7 @@ async fn gateway() -> Gateway {
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let (meta_audit, route_audit) = (
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-    );
+    let (meta_audit, route_audit) = (TempLog::new(), TempLog::new());
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.set_identity_propagation(Arc::new(PerIdentityMint));
     meta.enable_transparency_log(transparency_logger(&meta_audit));

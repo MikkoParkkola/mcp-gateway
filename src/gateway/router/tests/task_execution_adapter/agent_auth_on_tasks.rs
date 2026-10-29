@@ -14,7 +14,12 @@ use super::helpers::{ReleasedOnDrop, assert_only_its_own_task, assert_receives_n
 /// agents A and B registered; returns their tokens.
 async fn auth_on_agents(
     mock: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir, String, String) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+    String,
+) {
     let mut auth = two_principal_auth();
     auth.public_paths = vec!["/mcp".to_string()];
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());

@@ -111,6 +111,8 @@ fn required_stateless() -> IdentityPropagationConfig {
 /// loosening the guard for everybody.
 #[tokio::test]
 async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slot() {
+    // The audit log, first so it drops after the gateway that writes to it.
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let wire = one_answer_wire(PLAIN_STATELESS_TOOL);
     let registry = Arc::new(BackendRegistry::new());
     let backend = cold_backend_on(
@@ -143,9 +145,7 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
     // must never reach a caller without a durable audit record — so omitting it
     // would make every row below pass for that reason rather than the one under
     // test. The premise check beneath is what turns that into a failure here.
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
     let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {

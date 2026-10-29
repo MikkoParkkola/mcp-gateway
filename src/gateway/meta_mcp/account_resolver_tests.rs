@@ -69,7 +69,7 @@ async fn alice_and_bob_dispatch_only_their_own_token_on_one_descriptor() {
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -147,7 +147,7 @@ async fn one_provider_two_descriptor_ids_stay_separate_accounts() {
         ),
     ]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[
             ("work-mail", Bind::Account(WORK)),
             ("personal-mail", Bind::Account(PERSONAL)),
@@ -193,7 +193,7 @@ async fn one_provider_two_descriptor_ids_stay_separate_accounts() {
 async fn missing_verified_principal_refuses_with_zero_backend_calls() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -244,7 +244,7 @@ async fn missing_verified_principal_refuses_with_zero_backend_calls() {
 async fn registered_managed_backend_without_installed_strategy_refuses_with_zero_backend_calls() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[
             // The trap: a valid, unrelated external-control backend, whose
             // presence installs the process-wide signed-assertion strategy.
@@ -296,7 +296,7 @@ async fn revocation_between_lease_and_release_refuses_at_the_recheck() {
     let custody = custody_with(&[(alice.clone(), grant(ALICE_WORK_TOKEN, FRESH))]);
     let (gate, barrier) = gated(custody.installed());
     let installed = Arc::clone(&gate) as Arc<dyn crate::personal_accounts::AccountCustody>;
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -368,7 +368,7 @@ async fn expired_grant_is_refreshed_through_real_custody_before_dispatch() {
         ROTATED_TOKEN,
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -407,7 +407,7 @@ async fn expired_grant_is_refreshed_through_real_custody_before_dispatch() {
 async fn mixed_external_and_managed_backends_select_their_own_strategy() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[
             ("partner", Bind::Propagation(external_cfg())),
             ("mail", Bind::Account(WORK)),
@@ -479,7 +479,7 @@ async fn alice_and_bob_dispatch_concurrently_only_their_own_token() {
     ]);
     let installed =
         rendezvous(custody.installed(), 2) as Arc<dyn crate::personal_accounts::AccountCustody>;
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -536,7 +536,7 @@ async fn alice_and_bob_dispatch_concurrently_only_their_own_token() {
 async fn verified_but_unconnected_principal_refuses_actionably_with_zero_backend_calls() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -605,7 +605,7 @@ async fn a_grant_from_a_changed_descriptor_is_fenced_before_dispatch() {
         grant_from_before_the_edit(ALICE_WORK_TOKEN, FRESH),
     )]);
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
@@ -649,7 +649,7 @@ async fn an_expired_grant_from_a_changed_descriptor_is_fenced_before_refresh() {
         ROTATED_TOKEN,
     );
     let installed = custody.installed();
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,

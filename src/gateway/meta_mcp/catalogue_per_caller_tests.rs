@@ -60,11 +60,13 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
 }
 
 /// Let `meta` mint for a verified caller: [`PerIdentityMint`] plus the durable
-/// audit log a `required` mint refuses to run without.
-pub(super) fn install_minting(meta: &mut MetaMcp) {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
+/// audit log a `required` mint refuses to run without, in `log`. The caller
+/// creates `log` before `meta`, so it drops after the logger.
+pub(super) fn install_minting(
+    meta: &mut MetaMcp,
+    log: &crate::security::transparency_log::temp::TempLog,
+) {
+    let path = log.path().to_string_lossy().to_string();
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -171,15 +173,20 @@ const STATIC_TOOL: &str = "gateway_static_ledger";
 /// without one — a mint must never reach a caller without a durable audit
 /// record — so omitting it would make every case below pass for that reason
 /// rather than for the one under test.
-async fn per_identity_gateway() -> (MetaMcp, Arc<PerIdentityCatalogue>) {
-    per_identity_gateway_logging_to(None).await
+/// The log comes first, so a caller's `let (_log, ..)` drops it last.
+async fn per_identity_gateway() -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<PerIdentityCatalogue>,
+) {
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let (meta, wire) = per_identity_gateway_logging_to(&log.path().to_string_lossy()).await;
+    (log, meta, wire)
 }
 
-/// The same fixture, optionally writing its transparency log to a known path so
-/// a case can count the records a request produced.
-async fn per_identity_gateway_logging_to(
-    log_path: Option<&str>,
-) -> (MetaMcp, Arc<PerIdentityCatalogue>) {
+/// The same fixture, writing its transparency log to `log_path` so a case can
+/// count the records a request produced.
+async fn per_identity_gateway_logging_to(log_path: &str) -> (MetaMcp, Arc<PerIdentityCatalogue>) {
     let registry = Arc::new(BackendRegistry::new());
 
     let wire = Arc::new(PerIdentityCatalogue {
@@ -244,15 +251,7 @@ async fn per_identity_gateway_logging_to(
     let mut meta = MetaMcp::new(registry)
         .with_profile_registry(ProfileRegistry::from_config(&configs, "open"));
 
-    let path = log_path.map_or_else(
-        || {
-            let file = tempfile::NamedTempFile::new().expect("tempfile");
-            let path = file.path().to_string_lossy().to_string();
-            std::mem::forget(file);
-            path
-        },
-        str::to_string,
-    );
+    let path = log_path.to_string();
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -304,7 +303,7 @@ pub(super) async fn listed_for(
 /// fix for the first from becoming a blanket loosening of the isolation guard.
 #[tokio::test]
 async fn each_identity_sees_its_own_catalogue_and_no_one_elses() {
-    let (meta, wire) = per_identity_gateway().await;
+    let (_log, meta, wire) = per_identity_gateway().await;
     let alpha_id = identity("alpha");
     let beta_id = identity("beta");
 
@@ -423,11 +422,10 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// simply broken.
 #[tokio::test]
 async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
 
-    let (meta, _wire) = per_identity_gateway_logging_to(Some(&path)).await;
+    let (meta, _wire) = per_identity_gateway_logging_to(&path).await;
 
     let anonymous = listed_for(&meta, &super::anonymous_caller()).await;
     let after_anonymous = audit_actions(&path);
