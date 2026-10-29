@@ -693,11 +693,12 @@ fn native_tool_argument_names_are_pinned_for_the_folder_exemption() {
     names.dedup();
     let pinned = [
         "arguments",
-        "chain",
-        "detail",
         "explain",
+        "include_all_keys",
+        "include_all_sessions",
         "limit",
         "name",
+        "nonce",
         "profile",
         "query",
         "role",
