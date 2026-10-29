@@ -193,6 +193,11 @@ pub struct ReloadContext {
     /// the reload lock reloads before its own work. Cleared only by an
     /// accepted reload, so a reload that fails is retried, never forgotten.
     pub(super) reload_owed: std::sync::atomic::AtomicBool,
+    /// Where an audited gateway's recovery intents go, set once at start
+    /// from the audit posture: every in-gateway holder of the config lock
+    /// appends one before it recovers a crashed write or pays an owed
+    /// reload.
+    pub(super) recovery_audit: parking_lot::Mutex<Option<Box<dyn replace::IntentSink>>>,
     /// gateway.yaml as this gateway resolved it at start, through any
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
@@ -266,6 +271,7 @@ impl ReloadContext {
             config_path,
             trusted_config,
             reload_owed: std::sync::atomic::AtomicBool::new(false),
+            recovery_audit: parking_lot::Mutex::new(None),
             live_config,
             registry,
             failsafe_config,

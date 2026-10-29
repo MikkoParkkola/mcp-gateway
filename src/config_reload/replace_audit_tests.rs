@@ -189,3 +189,44 @@ async fn an_intent_failure_writes_nothing() {
     assert!(!running_has_b(&ctx));
     assert_eq!(recorder.kinds(), [IntentKind::Save]);
 }
+
+/// W29 to W31: the file-watch reload, the API reload and the admin tool all
+/// reload through `reload_outcome`, the reader lock's one in-gateway holder.
+/// On an audited gateway a pending journal gets its recovery intent first.
+#[tokio::test]
+async fn a_reload_appends_its_recovery_intent_first() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let recorder = Recorder::new(&path, false);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+
+    ctx.reload_outcome().await.expect("the reload goes ahead");
+
+    let seen = recorder.seen.lock().expect("lock");
+    let kinds: Vec<_> = seen.iter().map(|s| s.intent.kind).collect();
+    assert_eq!(kinds, [IntentKind::Recovery]);
+    assert!(
+        seen[0].journal_pending,
+        "the reload recovered before its intent"
+    );
+    assert_eq!(seen[0].file, NEXT, "the reload recovered before its intent");
+}
+
+/// The same paths with a failing intent: nothing is recovered or reloaded.
+#[tokio::test]
+async fn a_reload_whose_recovery_intent_fails_changes_nothing() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    let recorder = Recorder::new(&path, true);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+
+    assert!(ctx.reload_outcome().await.is_err());
+
+    assert_eq!(read(&path), NEXT, "the crashed bytes were recovered");
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the journal was settled"
+    );
+    assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
+    assert_eq!(recorder.kinds(), [IntentKind::Recovery]);
+}

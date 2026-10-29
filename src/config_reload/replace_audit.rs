@@ -73,6 +73,13 @@ pub(crate) async fn replace_audited(
 }
 
 impl ReloadContext {
+    /// Audit this gateway's recoveries through `sink`, from its posture at
+    /// start.
+    pub(crate) fn set_recovery_audit(&self, sink: Box<dyn IntentSink>) {
+        // Red-first stub: kept, not yet consulted by the reload path.
+        *self.recovery_audit.lock() = Some(sink);
+    }
+
     /// With anything pending (a crashed write's journal, or a reload owed
     /// after a failed one), append the recovery's own intent, then recover
     /// and pay the reload. A refused intent recovers and reloads nothing;
