@@ -95,17 +95,10 @@ fn registry_backend(name: &str, served: &Arc<AtomicUsize>) -> Arc<Backend> {
     backend
 }
 
-/// The stable reason a refusal carries, wherever it surfaced.
+/// The stable reason a refusal carries: the clash's own, or none.
 fn reason(outcome: &crate::Result<Value>) -> Option<String> {
-    match outcome {
-        Err(crate::Error::JsonRpc {
-            data: Some(data), ..
-        }) => data
-            .get("reason")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        _ => None,
-    }
+    matches!(outcome, Err(crate::Error::AmbiguousBackend { .. }))
+        .then(|| "ambiguous_backend".to_owned())
 }
 
 /// RUNCLASH.1, red first. The registry backend `edits` is registered, then a
@@ -140,18 +133,29 @@ async fn a_call_judged_on_a_backend_is_not_sent_to_a_same_named_capability() {
         Some("ambiguous_backend"),
         "a name that is both routes must be refused, not dispatched: {outcome:?}"
     );
-    let Err(crate::Error::JsonRpc {
-        code,
-        data: Some(data),
-        ..
-    }) = &outcome
-    else {
+    // The envelope a client receives, as the shaper every transport answers
+    // through builds it: the agreed code, the plain message, the fixed data.
+    let Err(error) = &outcome else {
         unreachable!("checked above");
     };
-    assert_eq!(*code, -32001);
+    let wire = serde_json::to_value(
+        crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+            RequestId::Number(7),
+            error,
+        ),
+    )
+    .expect("serialise the envelope");
+    assert_eq!(wire["error"]["code"], -32001, "{wire}");
     assert_eq!(
-        data,
-        &json!({"reason": "ambiguous_backend", "server": "edits", "routes": ["backend", "capability"]}),
+        wire["error"]["message"],
+        "Backend name 'edits' is both a configured backend and the capability backend; the \
+         call was refused because the checks judged one and dispatch would reach the other. \
+         Restart the gateway, then rename one of them if the clash remains.",
+        "the gateway's own text, with no prefix: {wire}"
+    );
+    assert_eq!(
+        wire["error"]["data"],
+        json!({"reason": "ambiguous_backend", "server": "edits", "routes": ["backend", "capability"]}),
         "no rule is named when none covers the call"
     );
     assert_eq!(
@@ -209,4 +213,49 @@ async fn a_backend_with_no_same_named_capability_still_runs() {
         .await;
     assert_eq!(reason(&outcome), None, "{outcome:?}");
     assert_eq!(served.load(Ordering::SeqCst), 1, "{outcome:?}");
+}
+
+/// The refusal comes before an idempotency key is reserved: the same keyed
+/// call is refused as the clash again (not as a call in flight or a replay),
+/// and once the clash is gone the same key reaches the registry backend.
+#[tokio::test]
+async fn a_keyed_clash_call_reserves_no_key() {
+    let served = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(registry_backend("edits", &served)));
+    let mut meta = MetaMcp::new(registry);
+    meta.enable_idempotency(
+        Arc::new(crate::idempotency::IdempotencyCache::new()),
+        Duration::from_secs(300),
+    );
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    meta.set_capabilities(capability_backend("edits", &dir).await);
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("clash-key".to_owned()),
+        ..Default::default()
+    };
+    let keyed = crate::gateway::meta_mcp::MetaMcpCallerContext {
+        retry: &retry,
+        ..caller()
+    };
+    let call = json!({"server": "edits", "tool": "read", "arguments": {}});
+
+    for attempt in 1..=2 {
+        let outcome = meta.invoke_tool(&call, None, &keyed).await;
+        assert_eq!(
+            reason(&outcome).as_deref(),
+            Some("ambiguous_backend"),
+            "attempt {attempt}: {outcome:?}"
+        );
+    }
+
+    let other = tempfile::TempDir::new().expect("temp dir");
+    meta.set_capabilities(capability_backend("caps", &other).await);
+    let outcome = meta.invoke_tool(&call, None, &keyed).await;
+    assert_eq!(reason(&outcome), None, "{outcome:?}");
+    assert_eq!(
+        served.load(Ordering::SeqCst),
+        1,
+        "the key was never held, so the call now runs: {outcome:?}"
+    );
 }

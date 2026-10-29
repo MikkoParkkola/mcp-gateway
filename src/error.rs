@@ -87,6 +87,22 @@ pub enum Error {
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
 
+    /// A name that is both a registry backend and the capability backend: the
+    /// checks judge the registry backend while dispatch would reach the
+    /// capability, so the call takes neither route. Gateway-authored only, so
+    /// its fixed data reaches the client (a backend's error data does not).
+    #[error(
+        "Backend name '{server}' is both a configured backend and the capability backend; \
+         the call was refused because the checks judged one and dispatch would reach the \
+         other. Restart the gateway, then rename one of them if the clash remains."
+    )]
+    AmbiguousBackend {
+        /// The clashing name.
+        server: String,
+        /// The policy rule covering the call, when one does.
+        rule: Option<String>,
+    },
+
     /// The backend could not take the request: it would not start, its
     /// concurrency limit closed, its tools could not be read in time.
     ///
@@ -473,7 +489,9 @@ impl Error {
             | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
             Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
-            Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
+            Self::BackendNotFound(_) | Self::ToolNotFound(_) | Self::AmbiguousBackend { .. } => {
+                -32001
+            }
             Self::AuditUnavailable => -32005,
             Self::CliCredentialRefused { .. } => {
                 crate::security::http_diagnostics::CLI_UNAUTHORIZED

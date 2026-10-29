@@ -756,6 +756,19 @@ pub(crate) fn error_response_preserving_status(
             crate::Error::AuditUnavailable => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
             })),
+            // Gateway-authored, so its fixed fields go out whole: the reason
+            // a client branches on and the two routes the name resolves to.
+            crate::Error::AmbiguousBackend { server, rule } => {
+                let mut data = serde_json::json!({
+                    "reason": "ambiguous_backend",
+                    "server": server,
+                    "routes": ["backend", "capability"],
+                });
+                if let Some(rule) = rule {
+                    data["rule"] = serde_json::json!(rule);
+                }
+                Some(data)
+            }
             // A gateway-authored refusal may carry a recovery payload the
             // client needs: MRTR.9 names the capability an input request would
             // have required and MRTR.9a the mode, which is the difference

@@ -507,30 +507,16 @@ impl MetaMcp {
     // ========================================================================
 }
 
-/// A name that is both a registry backend and the capability backend: the
-/// checks judge the registry backend while dispatch would reach the
-/// capability, so the call takes neither route. `rule` names the policy rule
+/// The refusal of a name that is both a registry backend and the capability
+/// backend (see [`Error::AmbiguousBackend`]). `rule` names the policy rule
 /// covering the call, when one does.
 pub(super) fn ambiguous_backend(server: &str, rule: Option<&str>) -> Error {
     tracing::warn!(
         server,
         "refused: the name is both a configured backend and the capability backend"
     );
-    let mut data = json!({
-        "reason": "ambiguous_backend",
-        "server": server,
-        "routes": ["backend", "capability"],
-    });
-    if let Some(rule) = rule {
-        data["rule"] = json!(rule);
-    }
-    Error::JsonRpc {
-        code: -32001,
-        message: format!(
-            "Backend name '{server}' is both a configured backend and the capability backend; \
-             the call was refused because the checks judged one and dispatch would reach the \
-             other. Restart the gateway, then rename one of them if the clash remains."
-        ),
-        data: Some(data),
+    Error::AmbiguousBackend {
+        server: server.to_owned(),
+        rule: rule.map(str::to_owned),
     }
 }

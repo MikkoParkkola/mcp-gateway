@@ -116,3 +116,42 @@ async fn a_reload_adding_an_unrelated_backend_still_applies() {
     let registered = registry.get("other");
     assert!(registered.is_some(), "the new backend is registered");
 }
+
+/// RUNCLASH.2, modified arm: a backend already running under the attached
+/// capability's name (what a reload before this check could leave) is not
+/// replaced by a reload that changes it.
+#[tokio::test]
+async fn a_reload_modifying_a_backend_under_the_capability_name_is_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, config("renamed", &["a", "edits"])).expect("write");
+    let registry = Arc::new(BackendRegistry::new());
+    let ctx = context(&path, &registry);
+
+    let modified = config("renamed", &["a", "edits"]).replace(
+        "  edits:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+        "  edits:\n    http_url: \"http://127.0.0.1:10/mcp\"\n",
+    );
+    write_owner_only(&path, modified).expect("write");
+    let refused = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the clash is refused");
+    assert_clash_refused(&refused, &registry);
+}
+
+/// RUNCLASH.3 control: removing the backend that holds the capability's name
+/// is not refused, so an operator can always clear an existing clash.
+#[tokio::test]
+async fn a_reload_removing_the_clashing_backend_still_applies() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, config("renamed", &["a", "edits"])).expect("write");
+    let registry = Arc::new(BackendRegistry::new());
+    let ctx = context(&path, &registry);
+
+    write_owner_only(&path, config("renamed", &["a"])).expect("write");
+    ctx.reload_outcome()
+        .await
+        .expect("removing the clashing backend applies");
+}
