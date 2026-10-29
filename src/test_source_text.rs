@@ -19,7 +19,7 @@ pub(crate) fn production_text(text: &str) -> String {
     let mut out = text.as_bytes().to_vec();
     let mut from = 0;
     while let Some(at) = code[from..].find(MARK).map(|p| p + from) {
-        match item_end(code.as_bytes(), at + MARK.len()) {
+        match item_end(code.as_bytes(), text.as_bytes(), at + MARK.len()) {
             Some(end) => {
                 blank(&mut out, at, end);
                 from = end;
@@ -35,7 +35,9 @@ pub(crate) fn production_text(text: &str) -> String {
 /// a variant, an arm), after a block at its own level that nothing continues
 /// (`else`, a method call, `?`), or just before the bracket that closes the
 /// item's parent (a last field with no comma). `None` when the text ends first.
-fn item_end(code: &[u8], start: usize) -> Option<usize> {
+/// `text` is the original, to tell a masked literal or comment after a block
+/// (which ends the item) from plain whitespace.
+fn item_end(code: &[u8], text: &[u8], start: usize) -> Option<usize> {
     let mut depth = 0_usize;
     let mut i = start;
     while i < code.len() {
@@ -47,6 +49,10 @@ fn item_end(code: &[u8], start: usize) -> Option<usize> {
                 depth -= 1;
                 if depth == 0 {
                     let next = code[i + 1..].iter().position(|c| !c.is_ascii_whitespace());
+                    let gap = &text[i + 1..next.map_or(code.len(), |n| i + 1 + n)];
+                    if gap.iter().any(|c| !c.is_ascii_whitespace()) {
+                        return Some(i + 1);
+                    }
                     let rest = next.map_or(&[][..], |n| &code[i + 1 + n..]);
                     match rest.first() {
                         Some(b';' | b',') => return Some(i + 1 + next.unwrap_or(0) + 1),
@@ -70,7 +76,7 @@ fn continues_with_else(rest: &[u8]) -> bool {
     rest.starts_with(b"else")
         && !rest
             .get(4)
-            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_')
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || !c.is_ascii())
 }
 
 fn blank(out: &mut [u8], from: usize, to: usize) {
