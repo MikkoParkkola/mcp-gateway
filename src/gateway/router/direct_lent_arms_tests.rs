@@ -67,19 +67,20 @@ async fn peer() -> (String, Seen) {
     (url, seen)
 }
 
-/// Whether the gateway sanitizes input, which selects the direct route's
-/// sanitizing `tools/call` arm.
+/// Which `tools/call` arm the direct route takes: a `passthrough` backend's
+/// call goes out through the plain forward, any other through the sanitizing
+/// one, whatever `sanitize_input` says.
 #[derive(Clone, Copy)]
-enum Sanitizing {
-    Off,
-    On,
+enum Guarded {
+    Passthrough,
+    Sanitized,
 }
 
 /// A router whose one backend, at `url`, has a required per-user binding
 /// minted as a signed assertion, so each caller's slot is lent-only.
 async fn gateway(
     url: String,
-    sanitizing: Sanitizing,
+    guarded: Guarded,
 ) -> (axum::Router, (tempfile::TempDir, tempfile::TempDir)) {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("a key"));
     let backend = Arc::new(crate::backend::Backend::new(
@@ -98,6 +99,7 @@ async fn gateway(
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
             }),
+            passthrough: matches!(guarded, Guarded::Passthrough),
             ..BackendConfig::r2_off()
         },
         &FailsafeConfig::default(),
@@ -130,11 +132,6 @@ async fn gateway(
     state_mut.backends = registry;
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(log);
-    if matches!(sanitizing, Sanitizing::On) {
-        state_mut
-            .live_config
-            .edit(|c| c.security.sanitize_input = true);
-    }
     (super::create_router(state), (log_dir, store))
 }
 
@@ -164,8 +161,9 @@ async fn post_direct(router: &axum::Router, body: &Value) -> (StatusCode, Value)
     )
 }
 
-/// Each direct-route entry arm (the plain `tools/call`, the sanitizing
-/// `tools/call`, and `forward_plain` by way of `tools/list`) reaches a
+/// Each direct-route entry arm (the plain `tools/call` of a passthrough
+/// backend, the sanitizing `tools/call`, and `forward_plain` by way of
+/// `tools/list`) reaches a
 /// required per-user backend over its real lent-only transport and is
 /// served, every request carrying the caller's minted assertion. An arm that
 /// lends a credential without its send check is refused by the transport.
@@ -175,13 +173,13 @@ async fn every_direct_route_arm_lends_the_checked_loan() {
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
     let list = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/list"});
     let arms = [
-        ("plain tools/call", Sanitizing::Off, &call, MARKER),
-        ("sanitizing tools/call", Sanitizing::On, &call, MARKER),
-        ("forward_plain tools/list", Sanitizing::Off, &list, TOOL),
+        ("plain tools/call", Guarded::Passthrough, &call, MARKER),
+        ("sanitizing tools/call", Guarded::Sanitized, &call, MARKER),
+        ("forward_plain tools/list", Guarded::Sanitized, &list, TOOL),
     ];
-    for (arm, sanitizing, body, expected) in arms {
+    for (arm, guarded, body, expected) in arms {
         let (url, seen) = peer().await;
-        let (router, _dirs) = gateway(url, sanitizing).await;
+        let (router, _dirs) = gateway(url, guarded).await;
 
         let (status, answer) = post_direct(&router, body).await;
 

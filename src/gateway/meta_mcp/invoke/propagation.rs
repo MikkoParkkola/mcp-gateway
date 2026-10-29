@@ -198,15 +198,21 @@ impl MetaMcp {
                 None,
             ));
         };
-        let cred = self
+        let mut cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
         let unproven = cred
             .cache_binding
             .is_none()
             .then(|| super::stored_proof::unminted_refusal(server));
+        // Moved, not cloned: no second copy of the caller's secret is left
+        // behind outside the zeroizing holder.
+        let lent = crate::transport::LentCredential {
+            headers: std::mem::take(&mut cred.headers).into(),
+            check: cred.check.take(),
+        };
         Ok((
-            (cred.lent(), cred.cache_binding, cred.managed),
+            (lent, cred.cache_binding, cred.managed),
             cred.attempted,
             unproven,
         ))
