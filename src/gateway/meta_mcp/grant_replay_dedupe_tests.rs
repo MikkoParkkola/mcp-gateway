@@ -64,7 +64,7 @@ async fn poll_as(
     })
     .await;
     written.expect("the slot's records are written");
-    refusal
+    refusal.map(super::task_replay::StoredAnswer::into_response)
 }
 
 #[tokio::test]

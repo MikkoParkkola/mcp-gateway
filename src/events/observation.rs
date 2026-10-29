@@ -27,6 +27,15 @@ pub(crate) fn run_fence(generation: u128) -> String {
     format!("{RUN_FENCE_PREFIX}{}", lease_stamp(generation))
 }
 
+/// Whether `stamp` has the form [`lease_stamp`] writes: 32 lowercase hex
+/// digits. Anything else in a marked fence names no lease.
+fn is_lease_stamp(stamp: &str) -> bool {
+    stamp.len() == 32
+        && stamp
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// The marker on a leased run's fence (see [`run_fence`]).
 pub(crate) const RUN_FENCE_PREFIX: &str = "lease:";
 
@@ -171,7 +180,10 @@ impl super::EventsHub {
             PropagationStrategyKind::Passthrough => match fence {
                 // A fence not marked as a leased run's names no lease: no
                 // stamp, so it never matches a lease held now.
-                Some(fence) => fence.strip_prefix(RUN_FENCE_PREFIX).map(str::to_owned),
+                Some(fence) => fence
+                    .strip_prefix(RUN_FENCE_PREFIX)
+                    .filter(|stamp| is_lease_stamp(stamp))
+                    .map(str::to_owned),
                 None => self
                     .leases
                     .held_generation(&super::lease::LeaseKey {

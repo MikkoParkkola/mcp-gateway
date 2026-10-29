@@ -196,6 +196,281 @@ pub(crate) fn count(records: &[serde_json::Value], level: &str, text: &str) -> u
         .count()
 }
 
+/// The guard's rule for one file's text: it installs a scoped subscriber but
+/// never reaches the keeper. Read from the parsed file, not its text, so only
+/// code counts. An install is a path `…subscriber::with_default` or
+/// `…subscriber::set_default`, or a bare call of a name imported from under
+/// `subscriber` (directly, renamed, or by a glob). A keeper is a path or import
+/// naming `keep_interest_open`, `test_log_capture` or `error_capture`.
+/// Comments, doc comments, block comments, string literals and URLs are not
+/// paths, so none of them can satisfy or trigger the guard. A macro whose body
+/// is comma-separated expressions (`assert!`, `vec!`, `format!`) is visited the
+/// same way; any other macro is walked token by token, identifiers joined by
+/// `::` read as a path and literals skipped.
+fn misses_keeper(text: &str) -> bool {
+    parsed_misses_keeper(text).unwrap_or_else(|e| panic!("does not parse: {e}"))
+}
+
+/// [`misses_keeper`], with a parse failure returned, so the tree guard can
+/// name the file.
+fn parsed_misses_keeper(text: &str) -> syn::Result<bool> {
+    let file = syn::parse_file(text)?;
+    let mut seen = Seen::default();
+    syn::visit::Visit::visit_file(&mut seen, &file);
+    let imported_install = seen
+        .imported_installs
+        .iter()
+        .any(|name| seen.bare_names.contains(name));
+    Ok((seen.install || imported_install) && !seen.keeper)
+}
+
+const KEEPERS: [&str; 3] = ["keep_interest_open", "test_log_capture", "error_capture"];
+const INSTALLS: [&str; 2] = ["with_default", "set_default"];
+
+#[derive(Default)]
+struct Seen {
+    install: bool,
+    keeper: bool,
+    /// Local names bound to an install by an import under `subscriber`
+    /// (a renamed import of `with_default`, or a glob).
+    imported_installs: std::collections::BTreeSet<String>,
+    /// Every one-segment name the file uses, in code or in a macro's tokens.
+    bare_names: std::collections::BTreeSet<String>,
+}
+
+impl Seen {
+    /// The idents of one path, in order, judged as code.
+    fn judge(&mut self, idents: &[String]) {
+        self.keeper |= idents.iter().any(|i| KEEPERS.contains(&i.as_str()));
+        self.install |= idents
+            .windows(2)
+            .any(|pair| pair[0] == "subscriber" && INSTALLS.contains(&pair[1].as_str()));
+        if let [only] = idents {
+            self.bare_names.insert(only.clone());
+        }
+    }
+
+    /// One `use` tree under the segments `prefix`.
+    fn import(&mut self, prefix: &mut Vec<String>, tree: &syn::UseTree) {
+        let under_subscriber = prefix.last().is_some_and(|last| last == "subscriber");
+        match tree {
+            syn::UseTree::Path(p) => {
+                self.keeper |= KEEPERS.iter().any(|k| p.ident == k);
+                prefix.push(p.ident.to_string());
+                self.import(prefix, &p.tree);
+                prefix.pop();
+            }
+            syn::UseTree::Name(n) => {
+                self.keeper |= KEEPERS.iter().any(|k| n.ident == k);
+                if under_subscriber && INSTALLS.iter().any(|k| n.ident == k) {
+                    self.imported_installs.insert(n.ident.to_string());
+                }
+            }
+            syn::UseTree::Rename(r) => {
+                self.keeper |= KEEPERS.iter().any(|k| r.ident == k);
+                if under_subscriber && INSTALLS.iter().any(|k| r.ident == k) {
+                    self.imported_installs.insert(r.rename.to_string());
+                }
+            }
+            syn::UseTree::Glob(_) if under_subscriber => {
+                self.imported_installs
+                    .extend(INSTALLS.iter().map(|name| (*name).to_owned()));
+            }
+            syn::UseTree::Glob(_) => {}
+            syn::UseTree::Group(g) => g.items.iter().for_each(|t| self.import(prefix, t)),
+        }
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for Seen {
+    fn visit_path(&mut self, path: &'ast syn::Path) {
+        let idents: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
+        self.judge(&idents);
+        syn::visit::visit_path(self, path);
+    }
+
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        self.import(&mut Vec::new(), &item.tree);
+    }
+
+    /// A body of comma-separated expressions is visited as code. Any other
+    /// body is walked token by token: each run of identifiers joined by `::`
+    /// is judged as a path, and a literal (a string) is skipped.
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let parser = syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(args) = mac.parse_body_with(parser) {
+            args.iter().for_each(|arg| self.visit_expr(arg));
+        } else {
+            let buffer = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+            let mut run = Vec::new();
+            self.walk(buffer.begin(), &mut run);
+            self.judge(&run);
+        }
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+impl Seen {
+    /// Every token from `cursor` on: identifiers joined by `::` gather into
+    /// `run`, judged as one path when anything else breaks the run.
+    fn walk(&mut self, mut cursor: syn::buffer::Cursor<'_>, run: &mut Vec<String>) {
+        while !cursor.eof() {
+            if let Some((ident, next)) = cursor.ident() {
+                run.push(ident.to_string());
+                cursor = next;
+                continue;
+            }
+            if let Some((punct, next)) = cursor.punct()
+                && punct.as_char() == ':'
+            {
+                cursor = next;
+                continue;
+            }
+            let path = std::mem::take(run);
+            self.judge(&path);
+            if let Some((inside, _, _, next)) = cursor.any_group() {
+                let mut inner = Vec::new();
+                self.walk(inside, &mut inner);
+                let inner_path = std::mem::take(&mut inner);
+                self.judge(&inner_path);
+                cursor = next;
+            } else if let Some((_, next)) = cursor.token_tree() {
+                cursor = next;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// A keeper named only in a line or doc comment does not count: the file is
+/// flagged.
+#[test]
+fn a_keeper_named_only_in_a_comment_is_flagged() {
+    let line = "fn t() {\n    // reaches crate::test_log_capture first\n    \
+                tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(misses_keeper(line), "a line comment satisfied the guard");
+    let doc = "/// Uses test_log_capture.\nfn t() {\n    \
+               let _g = tracing::subscriber::set_default(s);\n}\n";
+    assert!(misses_keeper(doc), "a doc comment satisfied the guard");
+}
+
+/// A real keeper call passes.
+#[test]
+fn a_real_keeper_call_passes() {
+    let text = "fn t() {\n    crate::test_log_capture::keep_interest_open();\n    \
+                tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(!misses_keeper(text));
+}
+
+/// A keeper named only in a trailing or an inner-doc comment does not
+/// count either.
+#[test]
+fn a_keeper_in_a_trailing_or_inner_doc_comment_is_flagged() {
+    let trailing = "fn t() {\n    tracing::subscriber::with_default(s, || {}); \
+                    // test_log_capture\n}\n";
+    assert!(
+        misses_keeper(trailing),
+        "a trailing comment satisfied the guard"
+    );
+    let inner = "//! Reaches test_log_capture.\nfn t() {\n    \
+                 tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        misses_keeper(inner),
+        "an inner-doc comment satisfied the guard"
+    );
+}
+
+/// A URL is code, not a comment: an install after one on the same line is
+/// seen, and so is a keeper.
+#[test]
+fn a_url_on_the_line_hides_neither_install_nor_keeper() {
+    let install = "fn t() {\n    let _g = (\"https://x\", \
+                   tracing::subscriber::set_default(s));\n}\n";
+    assert!(
+        misses_keeper(install),
+        "an install after a URL escaped the guard"
+    );
+    let keeper = "fn t() {\n    let _u = \"https://x\"; \
+                  crate::test_log_capture::keep_interest_open();\n    \
+                  tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(!misses_keeper(keeper), "a keeper after a URL was not seen");
+}
+
+/// A keeper named only in a block comment or a string literal does not
+/// count: neither is code.
+#[test]
+fn a_keeper_in_a_block_comment_or_a_string_is_flagged() {
+    let block = "fn t() {\n    /* test_log_capture */\n    \
+                 tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(misses_keeper(block), "a block comment satisfied the guard");
+    let string = "fn t() {\n    let _why = \"keep_interest_open\";\n    \
+                  tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        misses_keeper(string),
+        "a string literal satisfied the guard"
+    );
+}
+
+/// An install imported from under `subscriber` and called bare is an
+/// install: directly, renamed, or by a glob. A keeper import satisfies it.
+#[test]
+fn an_imported_install_is_an_install() {
+    let direct = "use tracing::subscriber::with_default;\nfn t() {\n    \
+                  with_default(s, || {});\n}\n";
+    assert!(misses_keeper(direct), "a direct import escaped the guard");
+    // Split inside the import keyword so the release coverage grade, which
+    // reads raw text for a renaming tracing import, does not take this
+    // fixture for one.
+    let renamed = concat!(
+        "u",
+        "se tracing::subscriber::{set_default as scoped};\nfn t() {\n    \
+         let _g = scoped(s);\n}\n"
+    );
+    assert!(misses_keeper(renamed), "a renamed import escaped the guard");
+    let glob = "use tracing::subscriber::*;\nfn t() {\n    with_default(s, || {});\n}\n";
+    assert!(misses_keeper(glob), "a glob import escaped the guard");
+    let kept = "use crate::test_log_capture::keep_interest_open;\n\
+                use tracing::subscriber::with_default;\nfn t() {\n    \
+                keep_interest_open();\n    with_default(s, || {});\n}\n";
+    assert!(!misses_keeper(kept), "a keeper import was not seen");
+}
+
+/// A macro's body is code: an expression macro is visited as expressions,
+/// any other macro token by token, and a string inside either is not code.
+#[test]
+fn a_macro_body_is_read_as_code_and_its_strings_are_not() {
+    let expression = "fn t() {\n    assert!(tracing::subscriber::with_default(s, || true));\n}\n";
+    assert!(
+        misses_keeper(expression),
+        "an install in an expression macro escaped"
+    );
+    let tokens = "fn t() {\n    run!(@scoped tracing::subscriber::with_default(s, f));\n}\n";
+    assert!(misses_keeper(tokens), "an install in a token macro escaped");
+    let quoted = "fn t() {\n    run!(@why \"keep_interest_open\" \
+                  tracing::subscriber::with_default(s, f));\n}\n";
+    assert!(
+        misses_keeper(quoted),
+        "a string in a token macro satisfied the guard"
+    );
+}
+
+/// A file that does not parse is an error, not a pass.
+#[test]
+fn unparseable_source_is_an_error() {
+    assert!(parsed_misses_keeper("fn (").is_err());
+}
+
+/// An install that is only commented out is not an install.
+#[test]
+fn a_commented_out_install_is_ignored() {
+    let text = "fn t() {\n    // tracing::subscriber::with_default(s, || {});\n}\n";
+    assert!(
+        !misses_keeper(text),
+        "a commented-out install triggered the guard"
+    );
+}
+
 /// MIK-8254 guard: every test file that installs its own scoped subscriber
 /// also keeps callsite interest open, so the next capture cannot bring the
 /// flake back. Lexical by design: a file that names `subscriber::with_default`
@@ -217,22 +492,27 @@ fn every_scoped_log_capture_keeps_interest_open() {
     let mut files = Vec::new();
     walk(&root.join("src"), &mut files);
     walk(&root.join("tests"), &mut files);
-    let installs = ["subscriber::with_default(", "subscriber::set_default("];
-    let keeps = ["keep_interest_open", "test_log_capture", "error_capture"];
-    let mut missing: Vec<String> = files
-        .iter()
-        .filter_map(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
-            let installs_one = installs.iter().any(|needle| text.contains(needle));
-            let keeps_one = keeps.iter().any(|needle| text.contains(needle));
-            (installs_one && !keeps_one).then(|| {
-                path.strip_prefix(root)
-                    .unwrap_or(path)
-                    .display()
-                    .to_string()
-            })
-        })
-        .collect();
+    let mut missing = Vec::new();
+    let mut unparseable = Vec::new();
+    for path in &files {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string();
+        match parsed_misses_keeper(&text) {
+            Ok(true) => missing.push(rel),
+            Ok(false) => {}
+            Err(e) => unparseable.push(format!("{rel}: {e}")),
+        }
+    }
+    assert!(
+        unparseable.is_empty(),
+        "the guard reads parsed files, and these do not parse: {unparseable:#?}"
+    );
     missing.sort();
     // A second keeper, pasted inline, is the duplication this family removed:
     // a static Once that installs a global Registry, outside the one keeper.
