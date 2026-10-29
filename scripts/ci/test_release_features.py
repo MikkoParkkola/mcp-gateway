@@ -36,6 +36,11 @@ def main() -> int:
     # A dependency feature of the same name is not this crate's feature.
     dep = {"features": {"a": ["dep:sandbox-fixtures", "x/sandbox-fixtures"], "sandbox-fixtures": []}}
     assert release_features(dep) == ["a"], release_features(dep)
+    # An optional dependency with an implicit feature would be missing from the list.
+    implicit = {"features": {"a": [], "sandbox-fixtures": []}, "dependencies": {"x": {"version": "1", "optional": True}}}
+    assert refuses(implicit), "an implicit optional-dependency feature was accepted"
+    named = {"features": {"a": ["dep:x"], "sandbox-fixtures": []}, "dependencies": {"x": {"version": "1", "optional": True}}}
+    assert release_features(named) == ["a"], release_features(named)
 
     # The real manifest: every non-default, non-test-only feature is listed.
     real = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))

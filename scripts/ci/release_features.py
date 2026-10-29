@@ -40,6 +40,20 @@ def enabled(features: dict, name: str) -> set[str]:
 
 def release_features(manifest: dict) -> list[str]:
     features = manifest.get("features") or {}
+    # An optional dependency named nowhere as `dep:x` gets an implicit feature
+    # that is not in [features], so this list would silently leave it out of
+    # the release build that --all-features used to cover.
+    refs = {e for enables in features.values() for e in enables}
+    tables = [manifest.get("dependencies") or {}]
+    tables += [t.get("dependencies") or {} for t in (manifest.get("target") or {}).values()]
+    implicit = sorted(
+        name
+        for table in tables
+        for name, spec in table.items()
+        if isinstance(spec, dict) and spec.get("optional") and f"dep:{name}" not in refs
+    )
+    if implicit:
+        raise SystemExit(f"release-features: optional dependencies without a dep: feature: {implicit}")
     # A renamed test-only feature must not slip into release unnoticed.
     gone = TEST_ONLY.difference(features)
     if features and gone:
