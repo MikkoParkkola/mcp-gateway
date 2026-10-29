@@ -198,10 +198,61 @@ pub(crate) fn apply_roots(
     (content_action, Vec::new())
 }
 
-/// `path_args` entries suggested from a tool's input schema. Inert in this
-/// commit: suggests nothing.
-pub(crate) fn suggest_path_args(_input_schema: &Value) -> Vec<String> {
-    Vec::new()
+/// Argument names the suggester treats as paths (design section 7).
+const PATH_NAMES: [&str; 16] = [
+    "path",
+    "paths",
+    "file",
+    "files",
+    "filename",
+    "file_path",
+    "filepath",
+    "dir",
+    "directory",
+    "folder",
+    "source",
+    "destination",
+    "src",
+    "dst",
+    "target",
+    "root",
+];
+
+/// `path_args` entries suggested from a tool's input schema, sorted by name:
+/// a string property, or an array of strings (`name[]`), whose name is a
+/// path name or ends in `_path`, `_file` or `_dir`, marked `?` when the
+/// schema does not require it. It enforces nothing; the screen asks the
+/// operator to confirm.
+pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
+    let Some(properties) = input_schema["properties"].as_object() else {
+        return Vec::new();
+    };
+    let required: Vec<&str> = input_schema["required"]
+        .as_array()
+        .map(|r| r.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let mut suggested: Vec<String> = properties
+        .iter()
+        .filter(|(name, _)| {
+            PATH_NAMES.contains(&name.as_str())
+                || ["_path", "_file", "_dir"].iter().any(|s| name.ends_with(s))
+        })
+        .filter_map(|(name, schema)| {
+            let array = match schema["type"].as_str() {
+                Some("string") => false,
+                Some("array") if schema["items"]["type"] == "string" => true,
+                _ => return None,
+            };
+            let mark = if required.contains(&name.as_str()) {
+                ""
+            } else {
+                "?"
+            };
+            Some(format!("{name}{}{mark}", if array { "[]" } else { "" }))
+        })
+        .collect();
+    suggested.sort();
+    suggested
 }
 
 /// The string-only half of the check: is `value` a normalised absolute native

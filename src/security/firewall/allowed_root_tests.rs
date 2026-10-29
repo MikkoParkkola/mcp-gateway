@@ -477,7 +477,8 @@ fn s1_reference_schemas_suggest_exactly_the_path_arguments() {
     all.dedup();
     assert_eq!(all, ["destination", "path", "paths[]", "source"]);
     let (_, move_file) = &reference_schemas()[10];
-    assert_eq!(suggest_path_args(move_file), ["source", "destination"]);
+    // Sorted by name: schema property order is not kept by every JSON map.
+    assert_eq!(suggest_path_args(move_file), ["destination", "source"]);
 }
 
 /// S2: a schema with no path-like property suggests nothing [keep].
