@@ -430,3 +430,39 @@ async fn an_empty_secret_step_counts_as_none() {
     assert_eq!(read(&path), START);
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
+
+/// The writer writes a reference double-quoted, escapes included: one that
+/// holds a backslash (every Windows path does) is read back by the real
+/// config loader as the same reference, and resolves to the stored bytes.
+#[tokio::test]
+async fn a_reference_with_a_backslash_round_trips_through_the_loader() {
+    let (dir, path, ctx) = setup();
+    let store_dir = dir.path().join("we\\ird");
+    std::fs::create_dir_all(&store_dir).expect("store dir");
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(|_| Ok(with_slot())),
+        replaced: Replaced::Discard,
+        secrets: Some(step(dir.path(), Arc::new(FilesStore::new(&store_dir)))),
+    };
+
+    replace_detached(Arc::clone(&ctx), save, WAIT)
+        .await
+        .expect("the save stands");
+
+    let written = read(&path);
+    let doc: crate::yaml::Value = crate::yaml::from_str(&written).expect("parses");
+    let reference = doc["backends"]["b"]["env"]["K"]
+        .as_str()
+        .expect("a reference");
+    assert!(
+        reference.contains('\\'),
+        "the backslash was lost: {reference}"
+    );
+    let loaded = crate::config::Config::load(Some(&path)).expect("the loader reads it");
+    assert_eq!(
+        loaded.backends["b"].env.get("K").map(String::as_bytes),
+        Some(VALUE),
+        "the reference no longer names the stored entry"
+    );
+}
