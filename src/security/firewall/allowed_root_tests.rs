@@ -6,6 +6,8 @@
 use super::*;
 use serde_json::json;
 
+#[path = "allowed_root_locality_tests.rs"]
+mod locality;
 #[path = "allowed_root_fs_tests.rs"]
 mod tree;
 
