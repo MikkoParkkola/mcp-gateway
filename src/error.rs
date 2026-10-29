@@ -16,15 +16,29 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have reached the \
      backend, so it was not re-sent; reconcile at the backend before running it again";
 
-/// `error`'s text for a chain or playbook step result, with [`MAY_HAVE_RUN`]
-/// appended when the step may have acted. The one place both loops word it.
+/// Whether a step that failed with `error` is reported as one that may have
+/// run: the error is not raised before the send ([`Error::is_pre_dispatch`]),
+/// is not a gateway refusal (`Forbidden`, whose caller-facing reason stays
+/// neutral, A3), and is not a sealed account offer or a marked account
+/// refusal (their text is the gateway's own: it goes out as written, and a
+/// marked refusal's text is read back). The one rule both loops and an aborted
+/// playbook use.
 ///
-/// A gateway refusal (`Forbidden`) keeps its text unchanged: it is the
-/// caller-facing reason a policy gate gave, which stays neutral (A3), and the
-/// gates that raise it decide before the call. [`Error::outcome_undetermined`]
-/// still reads `true` for it; only the note is withheld.
+/// A step not reported this way has not been shown never to have run: a
+/// `Forbidden` reads `false` from `is_pre_dispatch` (the conservative answer,
+/// until its construction sites are proven pre-send), and the absence of the
+/// note is inconclusive, never "not run".
+pub(crate) fn reports_may_have_run(error: &Error) -> bool {
+    error.outcome_undetermined()
+        && !matches!(error, Error::Forbidden { .. })
+        && crate::personal_accounts::refusal::offer_data(error).is_none()
+        && crate::personal_accounts::refusal::marked(error).is_none()
+}
+
+/// `error`'s text for a chain or playbook step result, with [`MAY_HAVE_RUN`]
+/// appended when [`reports_may_have_run`] holds. The one place both loops word it.
 pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
-    if error.outcome_undetermined() && !matches!(error, Error::Forbidden { .. }) {
+    if reports_may_have_run(error) {
         format!("{text}; {MAY_HAVE_RUN}")
     } else {
         text
@@ -428,6 +442,13 @@ impl Error {
     /// holds to a reviewed list of files. The gateway-sealed transient (a
     /// busy custody, MIK-8428) earns it the same way, decided by its seal and
     /// never its text; `Config` stays out, as it is also raised after a send.
+    ///
+    /// This is also the public check for whether a failed call may have run:
+    /// `false` means the request may have reached the backend, so a chain or
+    /// playbook step that failed this way was not re-sent, and a caller should
+    /// reconcile with the backend before running it again. A gateway refusal
+    /// (`Forbidden`) reads `false` too, the conservative answer until its
+    /// construction sites are proven pre-send.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
         crate::personal_accounts::refusal::transient_data(self).is_some()
@@ -473,6 +494,50 @@ impl Error {
     #[must_use]
     pub(crate) fn outcome_undetermined(&self) -> bool {
         !self.is_pre_dispatch()
+    }
+
+    /// This error with [`MAY_HAVE_RUN`] appended to its message when
+    /// [`reports_may_have_run`] holds and the variant carries text of its own.
+    /// Variant, code, status and data are unchanged; a variant with no text of
+    /// ours (`Io`, `Http`, a firewall refusal) is returned as it is, and a
+    /// caller reads it through `!is_pre_dispatch()`.
+    #[must_use]
+    pub(crate) fn with_may_have_run(self) -> Self {
+        if !reports_may_have_run(&self) {
+            return self;
+        }
+        let note = |text: String| format!("{text}; {MAY_HAVE_RUN}");
+        match self {
+            Self::Config(m) => Self::Config(note(m)),
+            Self::BackendTimeout(m) => Self::BackendTimeout(note(m)),
+            Self::Transport(m) => Self::Transport(note(m)),
+            Self::TransportPermanent(m) => Self::TransportPermanent(note(m)),
+            Self::Protocol(m) => Self::Protocol(note(m)),
+            Self::OAuth(m) => Self::OAuth(note(m)),
+            Self::Tls(m) => Self::Tls(note(m)),
+            Self::Internal(m) => Self::Internal(note(m)),
+            Self::JsonRpc {
+                code,
+                message,
+                data,
+            } => Self::JsonRpc {
+                code,
+                message: note(message),
+                data,
+            },
+            Self::JsonRpcRetryable {
+                code,
+                message,
+                status,
+                data,
+            } => Self::JsonRpcRetryable {
+                code,
+                message: note(message),
+                status,
+                data,
+            },
+            other => other,
+        }
     }
 
     /// The gateway's own limiter or slot admission refused: the backend was
@@ -688,6 +753,16 @@ mod rpc_code_tests {
         assert_eq!(
             step_failure_text(&refused, refused.to_string()),
             "step not permitted for this caller"
+        );
+        let offer = crate::personal_accounts::refusal::offer_error(
+            -32042,
+            "Connect your work account to continue.".into(),
+            serde_json::json!({"schema_version": "accounts.v1", "account_id": "work"}),
+        );
+        assert_eq!(
+            step_failure_text(&offer, "Connect your work account to continue.".into()),
+            "Connect your work account to continue.",
+            "a sealed offer's text is kept as written"
         );
         let unsent = Error::TransportConnect("refused".into());
         assert_eq!(

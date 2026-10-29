@@ -228,63 +228,81 @@ async fn a_lost_round_after_a_retried_refusal_ends_the_step() {
     assert_eq!(result.steps_failed, vec!["charge"]);
 }
 
-/// MIK-9042.PLAY.4: under `abort`, a step that may have run ends the plan with
-/// an error a caller can read without a crate-private method: it is a
-/// `Transport` error (a lost round) whose text ends with the may-have-run
-/// sentence. A refusal and a tool's own `isError` answer keep their type.
+/// MIK-9042.PLAY.4: under `abort`, a step that may have run ends the plan
+/// with its own error, variant, code and data unchanged; a variant carrying
+/// text gains the may-have-run sentence, and one without text (`Io`) is read
+/// through `!is_pre_dispatch()`. A refusal, a sealed account offer and a step
+/// never sent keep their text.
 #[tokio::test]
-async fn an_aborted_step_that_may_have_run_says_so_in_its_error() {
-    let cases: Vec<Case> = vec![
+async fn an_aborted_step_keeps_its_error_and_says_it_may_have_run() {
+    async fn aborted(error: fn() -> crate::Error) -> crate::Error {
+        let invoker = Scripted::new(vec![answer(error)]);
+        engine(ErrorStrategy::Abort)
+            .execute("pay", json!({}), &invoker)
+            .await
+            .expect_err("abort ends the plan")
+    }
+    let marked: Vec<Case> = vec![
         ("BackendTimeout", || {
             crate::Error::BackendTimeout("no answer".into())
-        }),
-        ("Io", || {
-            crate::Error::Io(std::io::Error::other("broken pipe"))
         }),
         ("JsonRpcRetryable 500", || retryable_answer(500)),
         ("JsonRpc", || crate::Error::JsonRpc {
             code: -32602,
             message: "invalid params".into(),
-            data: None,
+            data: Some(json!({"detail": "kept"})),
         }),
     ];
-    for (what, error) in cases {
-        let invoker = Scripted::new(vec![answer(error)]);
-        let returned = engine(ErrorStrategy::Abort)
-            .execute("pay", json!({}), &invoker)
-            .await
-            .expect_err("abort ends the plan");
-        assert!(
-            matches!(returned, crate::Error::Transport(_)),
-            "{what}: {returned:?}"
+    for (what, error) in marked {
+        let returned = aborted(error).await;
+        assert_eq!(
+            std::mem::discriminant(&returned),
+            std::mem::discriminant(&error()),
+            "{what}: the variant changed: {returned:?}"
         );
+        assert_eq!(returned.to_rpc_code(), error().to_rpc_code(), "{what}");
         assert!(
             returned.to_string().ends_with(crate::error::MAY_HAVE_RUN),
             "{what}: {returned}"
         );
+        assert!(!returned.is_pre_dispatch(), "{what}");
     }
-    let refusal = Scripted::new(vec![answer(|| crate::Error::Forbidden {
+    let detail = aborted(|| crate::Error::JsonRpc {
+        code: -32602,
+        message: "invalid params".into(),
+        data: Some(json!({"detail": "kept"})),
+    })
+    .await;
+    assert!(
+        matches!(&detail, crate::Error::JsonRpc { data: Some(d), .. } if d == &json!({"detail": "kept"})),
+        "data is unchanged: {detail:?}"
+    );
+    let io = aborted(|| crate::Error::Io(std::io::Error::other("broken pipe"))).await;
+    assert!(matches!(io, crate::Error::Io(_)), "{io:?}");
+    assert!(!io.is_pre_dispatch(), "an Io failure reads as may-have-run");
+    let refused = aborted(|| crate::Error::Forbidden {
         code: -32003,
         status: 403,
         message: "step not permitted for this caller".into(),
-    })]);
-    let returned = engine(ErrorStrategy::Abort)
-        .execute("pay", json!({}), &refusal)
-        .await
-        .expect_err("abort ends the plan");
+    })
+    .await;
+    assert_eq!(refused.to_string(), "step not permitted for this caller");
+    let offer_text = "Connect your work account to continue.";
+    let offer = aborted(|| {
+        crate::personal_accounts::refusal::offer_error(
+            -32042,
+            "Connect your work account to continue.".into(),
+            json!({"schema_version": "accounts.v1", "account_id": "work"}),
+        )
+    })
+    .await;
     assert!(
-        matches!(returned, crate::Error::Forbidden { .. }),
-        "a refusal keeps its type: {returned:?}"
+        matches!(&offer, crate::Error::JsonRpc { message, .. } if message == offer_text),
+        "a sealed offer's text is kept as written: {offer:?}"
     );
-    let unsent = Scripted::new(vec![answer(|| {
-        crate::Error::TransportConnect("connection refused".into())
-    })]);
-    let returned = engine(ErrorStrategy::Abort)
-        .execute("pay", json!({}), &unsent)
-        .await
-        .expect_err("abort makes one attempt");
-    assert!(
-        matches!(returned, crate::Error::TransportConnect(_)),
-        "a step never sent is not marked as may-have-run: {returned:?}"
+    let unsent = aborted(|| crate::Error::TransportConnect("connection refused".into())).await;
+    assert_eq!(
+        unsent.to_string(),
+        crate::Error::TransportConnect("connection refused".into()).to_string()
     );
 }
