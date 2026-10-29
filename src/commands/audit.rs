@@ -70,6 +70,8 @@ fn run_audit_verify(
             }
         }
     }
+    #[cfg(all(test, unix))]
+    race_tests::between_passes();
     match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
         // Neither the log nor any sealed segment exists (D6: sealed segments
         // alone are still a log to verify).
@@ -166,3 +168,7 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
         }
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "audit_race_tests.rs"]
+mod race_tests;
