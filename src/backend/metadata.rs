@@ -592,12 +592,15 @@ impl Backend {
             return Ok(held);
         }
         let limit = self.config.timeout;
-        let fill = self.tools_fill(
+        // Boxed: the fill's future is large, and inline it would make every
+        // check's future large, the fresh hit above included; boxed, only a
+        // check that really fetches pays for it.
+        let fill = Box::pin(self.tools_fill(
             binding,
             headers.into(),
             FillBound::CallTimeout(limit),
             stale_hit,
-        );
+        ));
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
             tokio::time::timeout(self.tools_fill_bound(), fill)
