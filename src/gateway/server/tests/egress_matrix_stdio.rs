@@ -544,6 +544,37 @@ async fn a_screened_notification_leaves_the_answers_facts_alone() {
     assert_eq!(row["response_findings"], json!([]), "{row}");
 }
 
+/// The operator kill switch refuses a stdio `gateway_invoke`: the wire answer
+/// is unchanged, and the delivery records `refused`.
+#[tokio::test]
+async fn a_killed_stdio_call_records_refused() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let backend = Arc::new(Planted::with_text(
+        "tools/call",
+        Part::ResultText,
+        "plain".into(),
+    ));
+    let (mut meta, _firewall) = stdio_on(Arc::clone(&backend), Setup::Default).await;
+    let (_dir, log) = temp_log(None);
+    Arc::get_mut(&mut meta)
+        .expect("the only handle")
+        .enable_transparency_log(Arc::clone(&log));
+    meta.kill_switch().kill("alpha");
+    let body = send(&meta, "tools/call", Part::ResultText).await;
+    let answer: Value = serde_json::from_str(&body).expect("one JSON answer");
+    assert_eq!(answer["error"]["code"], -32000, "pin: {body}");
+    assert_eq!(
+        answer["error"]["message"],
+        "JSON-RPC error -32000: Server 'alpha' is currently disabled by operator kill switch",
+        "pin: {body}"
+    );
+    let rows = delivery_rows(&log).await;
+    let [row] = rows.as_slice() else {
+        panic!("one delivery record: {rows:?}");
+    };
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}
+
 /// The stdio twin of the HTTP row: every member the gateway adds to a
 /// backend's answer is a row of the member table. A listing is merged from
 /// the gateway's own entries and every backend's, so the backend's entry is

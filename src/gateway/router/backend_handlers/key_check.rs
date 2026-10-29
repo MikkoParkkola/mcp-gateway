@@ -82,7 +82,15 @@ pub(super) async fn key_refusal(
             .meta_mcp
             .remember_caller_slot(backend, proof, identity_key);
         match verdict {
-            Ok(CatalogueVerdict::Withholds | CatalogueVerdict::Lacks) => return Some(absent()),
+            // A withheld entry (descriptor, schema) is the gateway refusing the
+            // call, as the meta gate records it; a lacked name is not.
+            Ok(CatalogueVerdict::Withholds) => {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+                return Some(absent());
+            }
+            Ok(CatalogueVerdict::Lacks) => return Some(absent()),
             Ok(CatalogueVerdict::Offers | CatalogueVerdict::Unknown) => {}
             Err(e) => return Some(failed.clone().answer((None, None), e, &call).await),
         }
@@ -106,6 +114,10 @@ pub(super) async fn key_refusal(
             };
             match verdict {
                 Ok(CatalogueVerdict::Withholds) => {
+                    // As above: the withheld entry is refused, answered absent.
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
                     ((identity_key, headers.clone()), Lens::Withheld)
                 }
                 _ => ((identity_key, headers.clone()), Lens::Catalogue),
@@ -115,7 +127,12 @@ pub(super) async fn key_refusal(
     let checked = backend.catalogue_refusal(slot, tool, arguments, lens);
     match checked.await {
         Ok(None) => None,
-        Ok(Some(text)) => {
+        Ok(Some(crate::backend::KeyAnswer { kind, text })) => {
+            if kind.refuses() {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
             let result = json!({ "content": [{ "type": "text", "text": text }], "isError": true });
             let mut response = JsonRpcResponse::success(id.clone(), result);
             // The text lists the backend's own parameter names, which no
