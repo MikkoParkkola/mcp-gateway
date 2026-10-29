@@ -472,3 +472,134 @@ async fn a_reference_with_a_backslash_round_trips_through_the_loader() {
         "the reference no longer names the stored entry"
     );
 }
+
+/// How the second create goes wrong.
+#[derive(Clone, Copy)]
+enum SecondCreate {
+    Errs,
+    Panics,
+}
+
+/// A files store whose second create fails, after the first has stored.
+struct FailsSecond {
+    inner: FilesStore,
+    creates: std::sync::atomic::AtomicUsize,
+    how: SecondCreate,
+}
+
+impl SecretStore for FailsSecond {
+    fn kind(&self) -> StoreKind {
+        self.inner.kind()
+    }
+    fn limit(&self) -> usize {
+        self.inner.limit()
+    }
+    fn probe(&self) -> Result<(), StoreError> {
+        self.inner.probe()
+    }
+    fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        self.inner.exists(name)
+    }
+    fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        if self
+            .creates
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            match self.how {
+                SecondCreate::Errs => {
+                    return Err(StoreError::Failed("the second create fails".to_owned()));
+                }
+                SecondCreate::Panics => panic!("the second create dies"),
+            }
+        }
+        self.inner.create(name, value)
+    }
+    fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.inner.delete(name)
+    }
+}
+
+/// The slots for `K` and `J` under backend `b`'s env.
+fn two_slot_save(dir: &Path, store: Arc<dyn SecretStore + Send + Sync>) -> Replace {
+    let slot = |k: &str| {
+        SlotId(
+            ["backends", "b", "env", k]
+                .map(|s| Segment::Key(s.to_owned()))
+                .to_vec(),
+        )
+    };
+    let text = format!(
+        "{NEXT}    env:\n      K: {}\n      J: {}\n",
+        Template::placeholder_for(&slot("K")),
+        Template::placeholder_for(&slot("J"))
+    );
+    let template =
+        Template::from_placeholders(text.into_bytes(), &[slot("K"), slot("J")]).expect("two slots");
+    let value = |field: &str| NewSecretOwned {
+        field: field.to_owned(),
+        value: WipedBytes::new(VALUE.to_vec()),
+    };
+    Replace {
+        expected: Expected::Any,
+        compute: Box::new(move |_| Ok(template)),
+        replaced: Replaced::Discard,
+        secrets: Some(SecretStep {
+            vault: vault(dir),
+            store,
+            values: vec![value("backends.b.env.K"), value("backends.b.env.J")],
+        }),
+    }
+}
+
+/// The window W1 opened: entries exist, the file is not yet renamed. A
+/// second secret that fails, by error or by panic, leaves no first entry
+/// behind and the file as it was.
+#[tokio::test]
+async fn a_second_secret_that_fails_leaves_no_first_entry() {
+    for how in [SecondCreate::Errs, SecondCreate::Panics] {
+        let (dir, path, ctx) = setup();
+        let store = FailsSecond {
+            inner: FilesStore::new(dir.path()),
+            creates: std::sync::atomic::AtomicUsize::new(0),
+            how,
+        };
+
+        let result = replace_detached(ctx, two_slot_save(dir.path(), Arc::new(store)), WAIT).await;
+
+        assert!(result.is_err(), "the save stood");
+        assert_eq!(read(&path), START);
+        assert_eq!(
+            live_entries(dir.path()),
+            Vec::<String>::new(),
+            "the first entry was left behind"
+        );
+    }
+}
+
+/// Entries exist and filling them in fails (a slot inside single quotes
+/// reads back as another string): refused, the entries removed, the file
+/// as it was.
+#[tokio::test]
+async fn a_fill_that_fails_after_the_entries_removes_them() {
+    let (dir, path, ctx) = setup();
+    let template = || {
+        let text = format!(
+            "{NEXT}    env:\n      K: '{}'\n",
+            Template::placeholder_for(&k_slot())
+        );
+        Template::from_placeholders(text.into_bytes(), &[k_slot()]).expect("a bare slot")
+    };
+
+    let failure = replace_detached(
+        ctx,
+        secret_save(dir.path(), Expected::Any, move |_| Ok(template())),
+        WAIT,
+    )
+    .await
+    .expect_err("the fill refuses");
+
+    assert!(matches!(failure, ReplaceError::Refused(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    assert_eq!(live_entries(dir.path()), Vec::<String>::new());
+}
