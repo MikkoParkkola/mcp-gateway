@@ -270,3 +270,6 @@ async fn r2_a_cold_fill_publish_of_the_old_grant_after_a_rotation_is_not_indexed
 
 #[path = "slot_verdict_g2_managed_http_held_view_more_tests.rs"]
 mod more;
+
+#[path = "slot_verdict_g2_managed_http_held_view_writer_tests.rs"]
+mod writers;
