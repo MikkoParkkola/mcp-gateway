@@ -137,3 +137,74 @@ fn only_an_authorization_refusal_is_recorded_at_dispatch() {
         "only Forbidden"
     );
 }
+
+/// A caller with no signing, nonce or task: the backstop's settle is a no-op.
+fn caller() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        signing: None,
+        execution: None,
+        credential_principal: None,
+        record_principal: crate::gateway::record_principal::RecordPrincipal::none(),
+        authentication: crate::gateway::meta_mcp::Authentication::Anonymous,
+        credential_kind: crate::security::audit::CredentialKind::None,
+        is_modern: false,
+        protocol_revision: None,
+        authorizer: &crate::gateway::authz::AllowAll,
+        api_key_name: None,
+        agent_id: None,
+        agent_declared: None,
+        grant_subject: None,
+        stdio_nonce: None,
+        caller_key: None,
+        verified_identity: None,
+        is_admin: false,
+        surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
+        input_capabilities: crate::protocol::meta::Declared::NONE,
+        retry: &crate::protocol::mrtr::NO_RETRY,
+        confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        task: None,
+        era: crate::protocol::meta::Era::Legacy,
+        channel: &crate::gateway::input_bridge::NoClientChannel,
+    }
+}
+
+/// The delivery effect a playbook step's dispatch-time `refusal` leaves when
+/// the backstop is the only site that sees it: no composite, no outlet.
+async fn backstop_effect(refusal: Error) -> serde_json::Value {
+    use crate::gateway::delivery_facts::{record_fields, scope, snapshot};
+    let meta = crate::gateway::meta_mcp::MetaMcp::new(std::sync::Arc::new(
+        crate::backend::BackendRegistry::new(),
+    ));
+    scope(async {
+        let answer = crate::playbook::in_step(
+            0,
+            meta.backstop(("alpha", "read"), &caller(), None, refusal),
+        )
+        .await;
+        assert!(answer.is_err(), "premise: the refusal stands");
+        let mut fields = serde_json::Map::new();
+        record_fields(snapshot().as_ref(), false, &mut fields);
+        fields["response_effect"].clone()
+    })
+    .await
+}
+
+/// The backstop exists for a refusal site that records nothing itself: here
+/// it is the only recorder, so an authorization refusal records refused.
+#[tokio::test]
+async fn the_backstop_alone_records_a_steps_authorization_refusal() {
+    let refused = backstop_effect(Error::Forbidden {
+        code: -32003,
+        status: 403,
+        message: "refused".to_owned(),
+    })
+    .await;
+    assert_eq!(refused, "refused");
+}
+
+/// Any other error at the same point records nothing.
+#[tokio::test]
+async fn the_backstop_records_nothing_for_a_non_authorization_error() {
+    let effect = backstop_effect(Error::AuditUnavailable).await;
+    assert_eq!(effect, "delivered");
+}
