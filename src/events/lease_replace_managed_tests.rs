@@ -154,3 +154,88 @@ fn queued(f: &Fixture) -> Vec<(String, String, Option<String>)> {
         })
         .collect()
 }
+
+/// Two users, `u1` and `u2`, each with a minted listener open on `pt`.
+struct Rig {
+    peer: TwoTokenPeer,
+    f: Fixture,
+    grants: Arc<Grants>,
+    intake: tokio::sync::mpsc::Receiver<crate::events::fanout::SourceEvent>,
+    /// Connections each user's callback has seen.
+    posts: [Arc<AtomicUsize>; 2],
+    _listening: ListenersAndBackend,
+}
+
+async fn two_managed_users() -> Rig {
+    let tokens = [token(Some(in_an_hour())), token(Some(in_an_hour() + 60))].map(|t| t.to_string());
+    let mut peer = two_token_peer(tokens.clone()).await;
+    let f = managed_fixture(&peer);
+    let grants = Grants::new(tokens);
+    f.hub
+        .set_listener_mint(Arc::clone(&grants) as Arc<dyn ListenerMint>);
+    let (url1, posts1) = counting_callback().await;
+    let (url2, posts2) = counting_callback().await;
+    subscribe_to(&f, "u1", "pt", "u1", &url1);
+    subscribe_to(&f, "u2", "pt", "u2", &url2);
+    let listening = parked_listener(&f).await;
+    let intake = f.hub.take_intake();
+    let mut opened = [peer.next().await, peer.next().await];
+    opened.sort_by_key(|s| format!("{s:?}"));
+    assert_eq!(
+        opened,
+        [Some(Stream::Opened(0)), Some(Stream::Opened(1))],
+        "premise: each user's listener opened under their own minted token"
+    );
+    Rig {
+        peer,
+        f,
+        grants,
+        intake,
+        posts: [posts1, posts2],
+        _listening: listening,
+    }
+}
+
+/// ISO-T2, end to end: each managed-account user's own change reaches only
+/// their own row, stamped with their own grant, and is delivered to their own
+/// callback; the other user's callback is never touched by it.
+#[tokio::test]
+async fn iso_t2_managed_listeners_each_queue_and_deliver_only_their_own_change() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    let _admits = forced_verdict::answer(AccessVerdict::Admits);
+    let mut rig = two_managed_users().await;
+    assert!(
+        rig.peer.push_tools_changed(0),
+        "premise: u1's stream is open"
+    );
+    assert!(
+        fan_out_next(&rig.f, &mut rig.intake).await,
+        "u1's notice was read"
+    );
+    let rows = queued(&rig.f);
+    let stamp = format!("vault:{}", rig.grants.binding("u1"));
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.1.as_str(), r.2.as_deref()))
+            .collect::<Vec<_>>(),
+        [("sub_u1_pt", Some(stamp.as_str()))],
+        "u1's change queued for u1 alone, under u1's grant"
+    );
+    let services = Arc::clone(rig.f.hub.runtime.services.get().expect("services"));
+    let worker = Arc::clone(&rig.f.hub);
+    let delivery = tokio::spawn(async move { worker.deliver_forever(&services).await });
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        match rig.posts[0].load(Ordering::SeqCst) {
+            0 => std::ops::ControlFlow::Continue("u1 not yet sent to".to_owned()),
+            _ => std::ops::ControlFlow::Break(()),
+        }
+    })
+    .await
+    .expect("u1's change is delivered to u1");
+    assert_eq!(
+        rig.posts[1].load(Ordering::SeqCst),
+        0,
+        "u2 saw nothing of it"
+    );
+    delivery.abort();
+}
