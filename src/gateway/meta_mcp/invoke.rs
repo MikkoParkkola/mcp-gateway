@@ -329,6 +329,9 @@ mod f13_bridge_tests;
 mod captured_invoke_tests;
 
 #[cfg(test)]
+mod runtime_name_clash_tests;
+
+#[cfg(test)]
 mod cancel_settles_tests;
 
 #[cfg(test)]
