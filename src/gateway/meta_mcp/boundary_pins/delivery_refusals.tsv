@@ -119,6 +119,7 @@ src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
 src/gateway/router/backend_handlers.rs	firewall_refusal	relay_refusal	1	recorded	403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers.rs	firewall_refusal	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
+src/gateway/router/backend_handlers.rs	guard_tool_call	firewall_refusal	1	feeds	builds the request-firewall or relay refusal guard_tool_call returns, recorded at its own sites in firewall_refusal
 src/gateway/router/backend_handlers.rs	guard_tool_call	key_refusal	1	recorded	raised above it in this fn (direct withheld call)
 src/gateway/router/backend_handlers.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	audit_unavailable_refusal	1	not-a-decision	the audit sink failed
