@@ -433,11 +433,11 @@ fn a_capped_session_ends_at_its_cap() {
 fn k13_tables(
     secret: &str,
 ) -> (
-    super::ResolvedAuthConfig,
-    super::QuotaPrincipal,
-    super::ResolvedAuthConfig,
+    crate::gateway::auth::ResolvedAuthConfig,
+    crate::gateway::auth::QuotaPrincipal,
+    crate::gateway::auth::ResolvedAuthConfig,
 ) {
-    let with = super::ResolvedAuthConfig::from_config(
+    let with = crate::gateway::auth::ResolvedAuthConfig::from_config(
         &crate::config::AuthConfig {
             enabled: true,
             api_keys: vec![crate::config::ApiKeyConfig {
@@ -455,7 +455,7 @@ fn k13_tables(
         .validate_token(secret)
         .and_then(|client| client.quota_principal)
         .expect("the key has a quota identity");
-    let without = super::ResolvedAuthConfig::from_config(
+    let without = crate::gateway::auth::ResolvedAuthConfig::from_config(
         &crate::config::AuthConfig::default(),
         crate::gateway::record_principal::TEST_RECORD_KEY,
     );
