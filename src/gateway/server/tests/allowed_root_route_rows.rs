@@ -90,3 +90,30 @@ async fn i3_execute_chain_second_step_confines_the_path() {
     let answer = routes.post("/mcp", "tools/call", chain(&inside)).await;
     assert_inside(&routes, "I3b", &answer, &inside);
 }
+
+/// The stdio route stage: `gateway_invoke` over the stdio dispatch, through
+/// the production meta-MCP firewall, confines the path the same way.
+#[tokio::test]
+async fn stdio_route_stage_confines_the_path() {
+    let routes = Routes::new().await;
+    let policy = std::sync::Arc::new(crate::security::ToolPolicy::default());
+    let mtls = std::sync::Arc::new(crate::mtls::MtlsPolicy::from_config(
+        &crate::mtls::MtlsConfig::default(),
+    ));
+    let send = |path: String| {
+        let request = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "fs", "tool": "read_file", "arguments": {"path": path}}}});
+        let (meta, policy, mtls) = (&routes.meta, &policy, &mtls);
+        async move {
+            super::super::Gateway::dispatch_single(meta, policy, mtls, &request, "stdio-8939")
+                .await
+                .expect("a request is answered")
+        }
+    };
+    let (inside, outside) = (routes.path("safe/f"), routes.path("outside/f"));
+    let answer = send(outside.clone()).await;
+    assert_outside(&routes, "stdio", &answer, &outside);
+    let answer = send(inside.clone()).await;
+    assert_inside(&routes, "stdio", &answer, &inside);
+}
