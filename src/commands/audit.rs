@@ -89,8 +89,9 @@ fn run_audit_verify(
         }
         // The pass itself saw a signature it could not check: refuse, however
         // the check above came out. Records written between that check and
-        // this pass are covered only here.
-        Ok(result) if !signed && result.signed_entry_seen => {
+        // this pass are covered only here. A chain that failed is reported
+        // as a failure below, with this note added.
+        Ok(result) if !signed && result.signed_entry_seen && result.ok => {
             eprintln!(
                 "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
                 log_path.display()
@@ -125,6 +126,11 @@ fn run_audit_verify(
                 .error_message
                 .unwrap_or_else(|| "unknown error".to_string());
             eprintln!("✗ Chain verification FAILED at counter {at}: {msg}");
+            if !signed && result.signed_entry_seen {
+                eprintln!(
+                    "note: the log has signed entries but no shared secret is configured; their HMAC was not checked."
+                );
+            }
             ExitCode::FAILURE
         }
     }

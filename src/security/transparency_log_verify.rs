@@ -31,7 +31,9 @@ pub use session::show_session_entries;
 /// Result of a chain-integrity verification pass.
 #[derive(Debug, Default)]
 pub struct VerifyResult {
-    /// `true` when every entry in the log passed all checks.
+    /// `true` when every entry in the log passed all checks. Without a
+    /// secret those checks are hash-only: a caller verifying without the key
+    /// must also refuse on [`Self::signed_entry_seen`].
     pub ok: bool,
     /// Number of entries checked.
     pub entries_checked: usize,
@@ -66,6 +68,7 @@ pub enum VerifyMode {
 ///
 /// Does **not** authenticate the per-entry HMAC `sig`; use
 /// [`verify_log_signed`] when a shared secret is configured (MIK-6700).
+/// [`VerifyResult::signed_entry_seen`] says whether it skipped any.
 ///
 /// # Errors
 ///
