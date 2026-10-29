@@ -41,6 +41,13 @@ impl MetaMcp {
         self.capabilities.read().clone()
     }
 
+    /// The live capability slot, shared with the firewall's folder check.
+    pub(in crate::gateway) fn capability_slot(
+        &self,
+    ) -> Arc<parking_lot::RwLock<Option<Arc<CapabilityBackend>>>> {
+        Arc::clone(&self.capabilities)
+    }
+
     /// Return the full `Tool` objects for all dynamically promoted tools in a session.
     ///
     /// Promotion entries are stored as `"server:tool"` strings.  Each is resolved
