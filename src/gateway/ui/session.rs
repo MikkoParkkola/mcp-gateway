@@ -364,4 +364,60 @@ mod mik_8659_dashboard_tests {
             "unauthenticated admin key is refused by the auth check"
         );
     }
+
+    #[tokio::test]
+    async fn an_api_key_client_with_no_bindable_identity_mints_no_link() {
+        use std::sync::Arc;
+        let secret = "k13-unbindable-admin-secret";
+        let auth = crate::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![crate::config::ApiKeyConfig {
+                key: None,
+                key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+                expires_at: None,
+                name: "k".to_owned(),
+                rate_limit: 0,
+                backends: vec!["*".to_owned()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+                kind: crate::config::ApiKeyKind::Shared,
+                ..Default::default()
+            }],
+            ..crate::config::AuthConfig::default()
+        };
+        let auth_config = Arc::new(
+            crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+                &auth,
+                &crate::config::EnvOverlay::none(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("fixture auth resolves"),
+        );
+        let real = auth_config
+            .validate_token(secret)
+            .expect("admin key validates");
+        // K13: an API-key client with no quota identity cannot bind the link
+        // to its key, so the mint fails closed rather than minting a link no
+        // reload can end.
+        let unbindable = crate::gateway::auth::AuthenticatedClient {
+            quota_principal: None,
+            principal: real.principal.clone(),
+            ..real
+        };
+        let store_dir = tempfile::tempdir().expect("task store dir");
+        let state = t1f_app_state(&auth_config, store_dir.path()).await;
+        let response = super::dashboard_link(
+            axum::extract::State(Arc::clone(&state)),
+            axum::extract::Extension(state.live_config.generation()),
+            Some(axum::extract::Extension(unbindable)),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "an unbindable API-key client minted a link"
+        );
+    }
 }
