@@ -63,7 +63,7 @@ async fn i6_capability_calls_are_refused_before_the_executor() {
 
 /// R43: with a capability backend attached under the config backend's name
 /// `fs`, a covered call is refused `ambiguous_backend` with the shared
-/// envelope (code -32001, the rule named) and reaches neither route.
+/// envelope (code -32001, reason, server, routes) and reaches neither route.
 /// Control: before the capability is attached the call reaches `fs`.
 #[tokio::test]
 async fn r43_a_name_both_routes_answer_is_ambiguous() {
@@ -93,9 +93,11 @@ async fn r43_a_name_both_routes_answer_is_ambiguous() {
         json!(["backend", "capability"]),
         "R43: {answer}"
     );
+    // The one call site refuses every such name clash at resolve, before any
+    // rule is looked at, so no rule is named (lead ruling 2026-10-29).
     assert!(
-        error["data"]["rule"].is_string(),
-        "R43: the rule is named: {answer}"
+        error["data"].get("rule").is_none(),
+        "R43: the name-clash check names no rule: {answer}"
     );
     assert_eq!(
         routes.received(),
