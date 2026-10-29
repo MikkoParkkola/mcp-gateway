@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Baselines: how many copies of a caller's credential a dispatch keeps alive
-//! at the send, and how many it frees unwiped. Measurement rows, not limits:
-//! each writes one line to the file named by `MCPGW_BASELINE_OUT` (when set)
-//! and asserts only its premises. The numbers set the budgets the copy and
-//! wipe work is judged by.
+//! at the send, and how many it frees unwiped. Each row writes one line to the
+//! file named by `MCPGW_BASELINE_OUT` (when set), asserts its premises, and
+//! holds its path to a [`Ceiling`]: today's counts, so any added copy or
+//! unwiped free fails the row. Work that removes a copy lowers the ceiling.
 //!
 //! The peer is a real loopback HTTP server in this process; its handler takes
 //! the live census while the gateway is mid-send. The HTTP client's own
@@ -245,6 +245,34 @@ async fn post(router: &axum::Router, uri: &str, body: &Value) -> (axum::http::St
     )
 }
 
+/// The most a path may reach: unwiped frees, and live copies at the send.
+/// Both counts were identical for 40 B and 600 B tokens on every measured
+/// run, so a ceiling at today's count has no slack to absorb an added copy.
+#[derive(Clone, Copy)]
+struct Ceiling {
+    unwiped_frees: u64,
+    live_at_send: u64,
+}
+
+const fn ceiling(unwiped_frees: u64, live_at_send: u64) -> Ceiling {
+    Ceiling {
+        unwiped_frees,
+        live_at_send,
+    }
+}
+
+/// Fail when `scanned` or `census` passes `ceiling`.
+fn hold(label: &str, len: usize, ceiling: Ceiling, scanned: Scanned, census: Census) {
+    assert!(
+        scanned.hits <= ceiling.unwiped_frees && census.most_live_copies <= ceiling.live_at_send,
+        "{label} ({len} B): {} unwiped frees (ceiling {}), {} live at the send (ceiling {})",
+        scanned.hits,
+        ceiling.unwiped_frees,
+        census.most_live_copies,
+        ceiling.live_at_send
+    );
+}
+
 /// What a baseline row does: its label, the request, and where it goes.
 struct Row {
     label: &'static str,
@@ -259,6 +287,7 @@ struct Row {
     because: Option<&'static str>,
     /// How the peer treats the measured call.
     peer: Peer,
+    ceiling: Ceiling,
 }
 
 fn plain(len: usize) -> &'static str {
@@ -322,6 +351,7 @@ async fn measure(row: Row, len: usize, name: &str) {
     }
     let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - before;
     report(row.label, len, scanned, census, requests);
+    hold(row.label, len, row.ceiling, scanned, census);
 }
 
 /// A modern request: the protocol header a call sends requires the same
@@ -343,6 +373,7 @@ fn call_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        ceiling: ceiling(5, 5),
     }
 }
 
@@ -355,6 +386,7 @@ fn list_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        ceiling: ceiling(6, 7),
     }
 }
 
@@ -367,6 +399,7 @@ fn refused_row() -> Row {
         served: false,
         because: Some("not-listed"),
         peer: Peer::Answers,
+        ceiling: ceiling(1, 0),
     }
 }
 
@@ -379,6 +412,7 @@ fn failed_mint_row() -> Row {
         served: false,
         because: Some("invalid"),
         peer: Peer::Answers,
+        ceiling: ceiling(1, 0),
     }
 }
 
@@ -395,6 +429,7 @@ fn meta_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        ceiling: ceiling(5, 6),
     }
 }
 
@@ -410,6 +445,7 @@ fn discovery_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        ceiling: ceiling(1, 0),
     }
 }
 
@@ -419,6 +455,7 @@ fn retry_row() -> Row {
     Row {
         label: "direct tools/list, retried after a 503",
         peer: Peer::FailsOnce,
+        ceiling: ceiling(10, 7),
         ..list_row()
     }
 }
@@ -428,6 +465,7 @@ fn cancelled_row() -> Row {
         label: "direct tools/call, dropped mid-send",
         served: false,
         peer: Peer::Hangs,
+        ceiling: ceiling(7, 5),
         ..call_row()
     }
 }
@@ -486,6 +524,7 @@ async fn client_only(len: usize, name: &str) {
     let (_, scanned, census) = scan_dispatch(minted.as_bytes(), send).await;
     let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - 1;
     report("client only", len, scanned, census, requests);
+    hold("client only", len, ceiling(1, 1), scanned, census);
 }
 
 #[tokio::test]
