@@ -308,9 +308,18 @@ impl LiveConfig {
     ///
     /// When the preparation refuses `config`.
     pub fn set(&self, config: Config) {
-        let prepared = self
-            .prepare(config, &crate::config::EnvOverlay::none())
-            .expect("the config prepares");
+        let published = self.generation();
+        // An edit that leaves `auth` as published keeps the published key
+        // table: a fixture seeded with an auth of its own, then reloading an
+        // unrelated section, keeps its keys.
+        let same_auth = serde_json::to_value(&config.auth).ok()
+            == serde_json::to_value(&published.config().auth).ok();
+        let prepared = if same_auth {
+            Generation::prepare_startup(config, Arc::clone(published.auth()))
+        } else {
+            self.prepare(config, &crate::config::EnvOverlay::none())
+                .expect("the config prepares")
+        };
         self.publish(Arc::new(prepared));
     }
 
