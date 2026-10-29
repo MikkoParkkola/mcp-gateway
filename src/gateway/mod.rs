@@ -186,6 +186,7 @@ pub mod test_helpers {
     /// A live config for a fixture whose auth (`auth`) differs from
     /// `config.auth`: the key table and record key it judges with are
     /// `auth`'s, as a gateway's are the ones it resolved at startup.
+    /// For `tests/` only, not a stable API.
     #[must_use]
     pub fn live_config(
         config: crate::config::Config,
