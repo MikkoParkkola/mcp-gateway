@@ -81,9 +81,9 @@ struct Shared {
     /// Test seam: the watcher handover probe.
     #[cfg(test)]
     probe: super::probe::PublishProbe,
-    /// Sends in progress: begun after the first credential check and not yet
-    /// written or given up, whether waiting for room or re-checking.
-    in_progress: std::sync::atomic::AtomicUsize,
+    /// Sends whose channel reservation is outstanding right now. Credential
+    /// checks outside the reservation wait do not count.
+    awaiting_room: std::sync::atomic::AtomicUsize,
 }
 
 /// Caps, the watcher's lifetime and its published state.
@@ -103,15 +103,15 @@ impl Default for StreamHub {
     }
 }
 
-/// Counts one send as in progress until it drops.
-pub(super) struct SendInProgress {
+/// Counts one outstanding channel reservation until it drops.
+pub(super) struct RoomWait {
     shared: Arc<Shared>,
 }
 
-impl Drop for SendInProgress {
+impl Drop for RoomWait {
     fn drop(&mut self) {
         self.shared
-            .in_progress
+            .awaiting_room
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -137,7 +137,7 @@ impl StreamHub {
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
                 probe: super::probe::PublishProbe::default(),
-                in_progress: std::sync::atomic::AtomicUsize::new(0),
+                awaiting_room: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
     }
@@ -176,20 +176,20 @@ impl StreamHub {
         self.shared.hang_validation.store(on, SeqCst);
     }
 
-    /// Sends in progress right now.
+    /// Sends waiting for room in their channel right now.
     #[cfg(test)]
-    pub(crate) fn sends_in_progress(&self) -> usize {
+    pub(crate) fn sends_awaiting_room(&self) -> usize {
         self.shared
-            .in_progress
+            .awaiting_room
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Count one send as in progress until the returned token drops.
-    pub(super) fn send_started(&self) -> SendInProgress {
+    /// Count one outstanding reservation until the returned token drops.
+    pub(super) fn room_wait_started(&self) -> RoomWait {
         self.shared
-            .in_progress
+            .awaiting_room
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        SendInProgress {
+        RoomWait {
             shared: Arc::clone(&self.shared),
         }
     }

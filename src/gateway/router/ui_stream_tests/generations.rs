@@ -151,12 +151,16 @@ async fn a_stream_stuck_in_a_send_revives_a_dead_watcher() {
     // Nobody reads: `hello` fills the channel and the next frame is stuck.
     let _stuck = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     for _ in 0..100 {
-        if hub.sends_in_progress() == 1 {
+        if hub.sends_awaiting_room() == 1 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
-    assert_eq!(hub.sends_in_progress(), 1, "the stream is stuck in a send");
+    assert_eq!(
+        hub.sends_awaiting_room(),
+        1,
+        "the stream is stuck in a send"
+    );
     let dead = hub.kill_watcher_for_test().expect("a watcher is running");
     assert!(yield_until(|| dead.is_finished()).await);
     let before = hub.probe().watchers_started();

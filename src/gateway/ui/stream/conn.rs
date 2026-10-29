@@ -84,15 +84,22 @@ impl Conn {
         // A fixed cadence: a slow lookup delays one tick, never the schedule.
         let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let _in_progress = self.state.dashboard_bootstrap.stream_hub().send_started();
-        let permit = loop {
-            tokio::select! {
-                done = &mut room => match done {
-                    Ok(Ok(permit)) => break permit,
-                    Ok(Err(_)) => return Err(End::ClientGone),
-                    Err(_) => return Err(End::WriteStalled),
-                },
-                _ = recheck.tick() => self.upkeep().await?,
+        let permit = {
+            // Counted only while the reservation is outstanding.
+            let _waiting = self
+                .state
+                .dashboard_bootstrap
+                .stream_hub()
+                .room_wait_started();
+            loop {
+                tokio::select! {
+                    done = &mut room => match done {
+                        Ok(Ok(permit)) => break permit,
+                        Ok(Err(_)) => return Err(End::ClientGone),
+                        Err(_) => return Err(End::WriteStalled),
+                    },
+                    _ = recheck.tick() => self.upkeep().await?,
+                }
             }
         };
         self.require_entitled().await?;

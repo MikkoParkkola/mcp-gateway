@@ -104,9 +104,9 @@ async fn a_blocked_write_cannot_stretch_the_credential_recheck() {
     }
     assert_eq!(hub.open_streams(), 1, "still blocked, not yet timed out");
     assert_eq!(
-        hub.sends_in_progress(),
+        hub.sends_awaiting_room(),
         1,
-        "a send is pending: real backpressure"
+        "a channel reservation is pending: real backpressure"
     );
     let out = Request::builder()
         .method("POST")
