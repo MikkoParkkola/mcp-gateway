@@ -92,6 +92,29 @@ pub(crate) fn root_check(
     }
 }
 
+/// The refusal for a call whose secret injection would rewrite what the
+/// folder check judged: a covering root rule declares an argument whose
+/// top-level key a matching secret rule owns (`a` over a declared `a.b`).
+/// Keyed on ownership, not on what is written: injection drops the
+/// caller's value for an owned key even when the credential is empty.
+pub(crate) fn injection_refusal(
+    firewall: &super::super::Firewall,
+    target: RuleTarget<'_>,
+    owned: &[String],
+) -> Option<String> {
+    covering(firewall, target).into_iter().find_map(|rule| {
+        let argument = match &rule.root.args {
+            None => None,
+            Some(args) => Some(args.iter().find(|a| owned.contains(&a.segments[0]))?),
+        };
+        let argument = argument.map_or_else(String::new, |a| format!(", argument {}", arg_name(a)));
+        Some(format!(
+            "injected_path_argument: rule {}{argument}",
+            rule.root.identity
+        ))
+    })
+}
+
 /// The root rules that apply to `target` under any candidate key, each
 /// once, in rule order: the branch's own coverage, restated nowhere.
 fn covering<'a>(firewall: &'a super::super::Firewall, target: RuleTarget<'a>) -> Vec<Covering<'a>> {

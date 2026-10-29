@@ -185,6 +185,22 @@ pub(crate) struct RootOutcome {
 mod check;
 pub(crate) use check::{apply_roots, root_check};
 
+impl super::Firewall {
+    /// The refusal text, `injected_path_argument: rule ..., argument ...`,
+    /// when secret injection on this call would rewrite a declared path
+    /// argument of a covering root rule; `None` otherwise.
+    pub(crate) fn injected_path_refusal(
+        &self,
+        target: RuleTarget<'_>,
+        owned: &[String],
+    ) -> Option<String> {
+        if !self.config.enabled || owned.is_empty() {
+            return None;
+        }
+        check::injection_refusal(self, target, owned)
+    }
+}
+
 #[path = "allowed_root_resolve.rs"]
 mod resolve;
 
