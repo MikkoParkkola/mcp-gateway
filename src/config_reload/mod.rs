@@ -298,10 +298,26 @@ impl LiveConfig {
     ///
     /// When the preparation refuses `config`.
     pub fn set(&self, config: Config) {
-        let running = Arc::clone(self.generation().auth());
-        let prepared = Generation::prepare(config, &crate::config::EnvOverlay::none(), &running)
+        let prepared = self
+            .prepare(config, &crate::config::EnvOverlay::none())
             .expect("the config prepares");
         self.publish(Arc::new(prepared));
+    }
+
+    /// Build the generation for `config` against what this process runs:
+    /// its startup config and the published key table's running settings.
+    /// The one way to a generation after startup (a source pin holds this).
+    ///
+    /// # Errors
+    ///
+    /// The reason `config` cannot be published, naming the setting.
+    pub fn prepare(
+        &self,
+        config: Config,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Generation, String> {
+        let published = self.generation();
+        Generation::prepare(config, overlay, (&*self.running, &**published.auth()))
     }
 
     /// Publish a prepared generation in one swap.
@@ -365,6 +381,8 @@ mod replica_restart_tests;
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(test)]
+mod live_keys_reload_tests;
 #[cfg(test)]
 mod live_sections_tests;
 
