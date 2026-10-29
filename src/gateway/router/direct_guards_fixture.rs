@@ -382,14 +382,13 @@ pub(crate) use egress::{
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
+pub(crate) use quota::fixture_with_secrets;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
-#[cfg(feature = "webui")]
-pub(crate) use requests::with_admin;
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
@@ -542,7 +541,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
@@ -634,12 +633,7 @@ fn fixture_auth() -> AuthConfig {
         ],
         ..Default::default()
     };
-    if WITH_ADMIN.with(std::cell::Cell::get) {
-        auth.api_keys.push(ApiKeyConfig {
-            admin: true,
-            ..key("k-admin")
-        });
-    }
+    requests::admin_key(&mut auth);
     if WITH_BEARER.with(std::cell::Cell::get) {
         auth.bearer_token = Some(BEARER_SECRET.to_string());
         auth.api_keys.push(key("bearer"));

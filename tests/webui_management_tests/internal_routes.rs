@@ -344,15 +344,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
-    // src/gateway/ui/tool_call.rs (call; admin-only, and an empty body is
-    // refused before anything runs)
-    row(
-        "/ui/api/tools/call",
-        Method::POST,
-        "/ui/api/tools/call",
-        Payload::None,
-        [401, 403, 403, 400],
-    ),
     // src/gateway/ui/refusals.rs:24 (refusals; admin-only read, the codes the
     // design requires: the auth layer refuses an unauthenticated caller, the
     // handler refuses any non-admin, an admin reads the list)
@@ -635,9 +626,10 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+const GROUPS: [&[Row]; 2] = [control_plane::ROWS, gateway_rows::ROWS];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -808,6 +800,8 @@ async fn internal_routes_refuse_every_other_method() {
 
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]

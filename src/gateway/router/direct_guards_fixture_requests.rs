@@ -151,13 +151,14 @@ pub(crate) async fn send_with_headers(
     (status, serde_json::from_slice(&body).unwrap())
 }
 
-/// Any fixture builder, run with the admin key `k-admin` added (the web UI's
+/// The admin key `k-admin`, added while `WITH_ADMIN` is set (the web UI's
 /// tool route runs only for an admin); off by default, so no other row's key
-/// set changes. Only the web UI's rows call it.
-#[cfg(feature = "webui")]
-pub(crate) async fn with_admin<T, F: std::future::Future<Output = T>>(build: F) -> T {
-    super::WITH_ADMIN.with(|s| s.set(true));
-    let fx = build.await;
-    super::WITH_ADMIN.with(|s| s.set(false));
-    fx
+/// set changes.
+pub(super) fn admin_key(auth: &mut crate::config::AuthConfig) {
+    if super::WITH_ADMIN.with(std::cell::Cell::get) {
+        auth.api_keys.push(crate::config::ApiKeyConfig {
+            admin: true,
+            ..super::key("k-admin")
+        });
+    }
 }

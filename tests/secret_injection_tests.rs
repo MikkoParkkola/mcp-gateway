@@ -453,11 +453,17 @@ fn inject_query_type() {
     )]);
 
     let injector = SecretInjector::new(rules);
-    let result = injector.inject("api", "search", json!({})).unwrap();
-
-    // Query params injected as __query_ prefixed argument
-    assert_eq!(result.arguments["__query_apikey"], "query-key-123");
-    assert_eq!(result.injected_count, 1);
+    // The gateway sends no secret in a URL, and none in the arguments in a
+    // URL parameter's place: a query rule is refused, naming it, never its value.
+    let error = injector
+        .inject("api", "search", json!({}))
+        .expect_err("a query rule is refused")
+        .to_string();
+    assert!(
+        error.contains("'api_key'") && error.contains("URL query parameter"),
+        "{error}"
+    );
+    assert!(!error.contains("query-key-123"), "{error}");
 }
 
 // ── literal value (no env/keychain) ───────────────────────────────────
