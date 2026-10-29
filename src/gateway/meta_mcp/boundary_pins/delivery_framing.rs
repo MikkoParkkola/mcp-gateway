@@ -68,6 +68,9 @@ const PENDING: [&str; 1] = ["capability-refusals"];
 struct Found {
     builders: std::collections::BTreeMap<String, usize>,
     refusals: std::collections::BTreeMap<String, usize>,
+    /// Each `Error::Forbidden` site (file, function), with whether each
+    /// literal there carries the code `INVALID_REQUEST`.
+    forbidden: std::collections::BTreeMap<String, std::collections::BTreeSet<bool>>,
 }
 
 /// A function that builds or answers a refusal, by its name: `*refusal`,
@@ -165,6 +168,15 @@ impl Sink for Found {
             && is_error_variant(&literal.path, "Forbidden")
         {
             note(&mut self.refusals, "Error::Forbidden{}");
+            let invalid_request = literal.fields.iter().any(|field| {
+                matches!(&field.member, syn::Member::Named(name) if name == "code")
+                    && matches!(&field.expr, syn::Expr::Path(code)
+                        if code.path.segments.last().is_some_and(|s| s.ident == "INVALID_REQUEST"))
+            });
+            self.forbidden
+                .entry(format!("{}\t{func}", at.file))
+                .or_default()
+                .insert(invalid_request);
         }
         if let syn::Expr::Path(path) = expr
             && is_error_variant(&path.path, "ResponseFirewallRefused")
@@ -271,5 +283,111 @@ fn every_refusal_site_is_classified() {
             text.contains(&format!("\tpending:{slug}\t")),
             "pending:{slug} has no rows left; delete it from PENDING"
         );
+    }
+}
+
+/// How `delivery_facts::outlet` treats a delivered `Error::Forbidden`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Outlet {
+    /// An authorization decision about the caller: records `refused`, unless
+    /// the code it forwards is `INVALID_REQUEST` (`authorize_invocation`
+    /// passes on the authorizer's code), which the outlet reads at run time.
+    Raises,
+    /// A malformed name (`INVALID_REQUEST`): not a decision, records nothing.
+    Exempt,
+}
+
+/// Every `Error::Forbidden` built in `src/`, by file and function. A new site
+/// fails until it is listed here, whatever its code.
+const FORBIDDEN: [(&str, Outlet); 17] = [
+    ("src/backend/ops.rs\tlend_to_slot", Outlet::Raises),
+    ("src/backend/pool.rs\trefuse_shared_start", Outlet::Raises),
+    (
+        "src/gateway/meta_mcp/caller_forward.rs\tscope_refusal",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/chokepoint.rs\trecheck_target",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/chokepoint.rs\trescan_outbound",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/chokepoint.rs\troute_request_scan",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/gate.rs\tcheck_call_level_policy",
+        Outlet::Exempt,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/policy.rs\tauthorize_invocation",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/relay.rs\trelay_refusal",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/relay_catalogue.rs\tcatalogue_refusal",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/playbook_invoker.rs\tstep_not_permitted",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/search/chain_exec.rs\tstep_failure",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/task_replay/judging.rs\tauthorize_stored",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/visibility.rs\tadmin_capability_rule",
+        Outlet::Raises,
+    ),
+    (
+        "src/gateway/meta_mcp/visibility.rs\tmay_invoke_before_grants",
+        Outlet::Raises,
+    ),
+    (
+        "src/playbook/engine/mod.rs\tchecked_arguments",
+        Outlet::Raises,
+    ),
+    (
+        "src/playbook/engine/mod.rs\texecute_definition",
+        Outlet::Raises,
+    ),
+];
+
+/// The outlet's code check is safe only with this list: every `Forbidden`
+/// site is classified, and the exempt ones are exactly the sites whose
+/// literals all carry `INVALID_REQUEST`.
+#[test]
+fn every_forbidden_site_is_raised_or_exempt() {
+    let found = found().forbidden;
+    let listed: std::collections::BTreeMap<&str, Outlet> = FORBIDDEN.into_iter().collect();
+    let have: Vec<&str> = found.keys().map(String::as_str).collect();
+    let want: Vec<&str> = listed.keys().copied().collect();
+    assert_eq!(
+        have, want,
+        "Forbidden sites changed; classify each in FORBIDDEN"
+    );
+    for (site, codes) in &found {
+        let exempt = codes.iter().all(|invalid| *invalid);
+        assert!(
+            codes.len() == 1,
+            "{site}: mixes INVALID_REQUEST with other codes; split it"
+        );
+        let expected = if exempt {
+            Outlet::Exempt
+        } else {
+            Outlet::Raises
+        };
+        assert_eq!(listed[site.as_str()], expected, "{site}");
     }
 }

@@ -242,10 +242,19 @@ pub(crate) fn refused<E>(error: E) -> E {
 }
 
 /// Where an error becomes the delivered frame: a refusal a gateway decision
-/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`; any other error
-/// raises nothing.
+/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`, and so does an
+/// authorization refusal ([`crate::Error::Forbidden`]), a decision about the
+/// caller wherever it was built, except a malformed name's
+/// (`INVALID_REQUEST`), which is not a decision. Every `Forbidden` site is
+/// listed in `boundary_pins/delivery_framing.rs`. Any other error raises
+/// nothing.
 pub(crate) fn outlet(error: &crate::Error) {
-    if matches!(error, crate::Error::GatewayRefused { .. }) {
+    let refused = match error {
+        crate::Error::GatewayRefused { .. } => true,
+        crate::Error::Forbidden { code, .. } => *code != crate::error::rpc_codes::INVALID_REQUEST,
+        _ => false,
+    };
+    if refused {
         raise(ResponseEffect::Refused);
     }
 }

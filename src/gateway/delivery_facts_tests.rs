@@ -96,6 +96,27 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
     .await;
 }
 
+/// A delivered authorization refusal records refused wherever it was built;
+/// a malformed name's `Forbidden` (`INVALID_REQUEST`) is no decision.
+#[tokio::test]
+async fn a_delivered_forbidden_is_refused_unless_it_is_a_malformed_name() {
+    let forbidden = |code| crate::Error::Forbidden {
+        code,
+        status: 403,
+        message: "no".into(),
+    };
+    scope(async {
+        super::outlet(&forbidden(-32001));
+        assert_eq!(recorded(false)["response_effect"], "refused");
+    })
+    .await;
+    scope(async {
+        super::outlet(&forbidden(crate::error::rpc_codes::INVALID_REQUEST));
+        assert_eq!(recorded(false)["response_effect"], "delivered");
+    })
+    .await;
+}
+
 /// Every production site that reads an answer back out of a store, as
 /// `(needle, file, occurrences, why its delivery cannot state "delivered"
 /// with no findings)`. A served stored answer is not this request's, so it
