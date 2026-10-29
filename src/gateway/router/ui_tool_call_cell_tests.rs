@@ -336,7 +336,8 @@ async fn t29_the_send_point_admits_only_the_gated_call() {
 /// The backend's catalogue is cold and its list waits on a gate the test
 /// releases only after the route answered, so the call cannot reach its send
 /// before the deadline: the deadline wins every time.
-/// Mutant: the deadline never claims the call (it answers "may have run").
+/// Mutants: the deadline never claims the call (it answers "may have run");
+/// the deadline aborts the claimed call (no delivery record).
 #[tokio::test]
 async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
     use axum::body::Body;
@@ -388,6 +389,18 @@ async fn t32_a_deadline_that_wins_the_race_sends_nothing() {
         tokio::task::yield_now().await;
     }
     assert_eq!(sent(&fx), 0, "nothing was sent after the release either");
+    // The claimed call reaches its send claim, which refuses it: the call's
+    // delivery record says refused, as every other refusal of a UI call does.
+    for _ in 0..4096 {
+        if records(&fx)
+            .iter()
+            .any(|r| r.get("response_effect").is_some())
+        {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert_refused_delivery(&fx);
 }
 
 /// The internal dispatch's delivery records (the only records carrying a

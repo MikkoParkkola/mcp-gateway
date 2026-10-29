@@ -147,9 +147,9 @@ pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -
         identity: parts.extensions.get::<VerifiedIdentity>().cloned(),
         detail: detail.clone(),
     };
-    let abort = spawn_call(&state, &ui_call, internal, permit, answered, follow_up);
+    spawn_call(&state, &ui_call, internal, permit, answered, follow_up);
     let Ok(answer) = tokio::time::timeout(deadline(), answer).await else {
-        return past_deadline(&ui_call, &abort, detail);
+        return past_deadline(&ui_call, detail);
     };
     let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let outcome = ui_call.outcome();
@@ -243,15 +243,12 @@ fn admit(
 }
 
 /// The 504. The deadline and the send race through one atomic claim: when
-/// the deadline wins nothing is ever sent and the task is stopped (not run);
-/// when the send won first it runs on (may have run).
-fn past_deadline(
-    ui_call: &UiCall,
-    abort: &tokio::task::AbortHandle,
-    detail: Map<String, Value>,
-) -> Response {
+/// the deadline wins nothing is ever sent (not run); when the send won first
+/// it runs on (may have run). Either way the task is left to finish: a call
+/// the deadline claimed reaches its send claim, which refuses it, so its
+/// delivery record says refused.
+fn past_deadline(ui_call: &UiCall, detail: Map<String, Value>) -> Response {
     let (disposition, message) = if ui_call.cancel() {
-        abort.abort();
         (Disposition::NotRun, "no answer in time; nothing was run")
     } else {
         (
@@ -312,10 +309,11 @@ fn spawn_call(
     ),
     answered: tokio::sync::oneshot::Sender<Option<Value>>,
     follow_up: FollowUp,
-) -> tokio::task::AbortHandle {
+) {
     let state = Arc::clone(state);
     let ui_call = Arc::clone(ui_call);
-    let task = tokio::spawn(async move {
+    // Detached: the route's deadline never stops it (see `past_deadline`).
+    drop(tokio::spawn(async move {
         let _permit = permit;
         let reply = ui_call
             .scope(crate::gateway::router::meta_mcp_handler(
@@ -347,8 +345,7 @@ fn spawn_call(
                 status,
             );
         }
-    });
-    task.abort_handle()
+    }));
 }
 
 /// The status and disposition of a call, from what the dispatch recorded.
