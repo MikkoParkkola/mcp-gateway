@@ -33,6 +33,25 @@ fn remove_key_b(keys: Keys) -> Keys {
     without(keys, "principal-b")
 }
 
+/// key-a re-issued under a new secret that keeps its name and states its old
+/// principal explicitly: the stored principal matches, the credential does
+/// not.
+fn replace_key_a_keeping_its_principal(keys: Keys) -> Keys {
+    keys.into_iter()
+        .map(|mut key| {
+            if key.name == "principal-a" {
+                key.key_sha256 = Some(crate::config::api_key_digest_spec(b"key-a-reissued"));
+                key.principal = Some(
+                    crate::gateway::auth::principal_of("key-a")
+                        .storage_form()
+                        .to_owned(),
+                );
+            }
+            key
+        })
+        .collect()
+}
+
 fn narrow_key_a(keys: Keys) -> Keys {
     keys.into_iter()
         .map(|mut key| {
@@ -73,6 +92,10 @@ async fn k15_a_queued_task_of_a_removed_or_narrowed_key_is_refused_at_dispatch()
     for (label, edit) in [
         ("removed", remove_key_a as fn(Keys) -> Keys),
         ("narrowed", narrow_key_a),
+        (
+            "re-issued, principal kept",
+            replace_key_a_keeping_its_principal,
+        ),
     ] {
         let mock = MockBackend::answering(Answer::ok());
         let (state, _store) = state_with(&mock).await;
@@ -113,33 +136,41 @@ async fn k15_a_queued_task_of_a_kept_key_runs() {
 #[tokio::test]
 async fn k15_a_continuation_after_its_key_is_removed_is_refused() {
     use crate::gateway::task_service::execution::resume_seams::{ResumePoint, pause_at_for_test};
-    let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
-    let (state, _store) = state_with(&mock).await;
-    let id = parked(&state, "k15-continued").await;
-    std::assert_eq!(mock.calls(), 1, "premise: the first round ran");
-    let pause = pause_at_for_test(ResumePoint::BeforeRedeem);
-    let resuming = {
-        let (state, id) = (Arc::clone(&state), id.clone());
-        tokio::spawn(async move {
-            post(
-                &state,
-                "key-a",
-                update(2, &id, json!({ "confirm": answer() })),
-            )
+    for (label, edit) in [
+        ("removed", remove_key_a as fn(Keys) -> Keys),
+        (
+            "re-issued, principal kept",
+            replace_key_a_keeping_its_principal,
+        ),
+    ] {
+        let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
+        let (state, _store) = state_with(&mock).await;
+        let id = parked(&state, &format!("k15-continued-{label}")).await;
+        std::assert_eq!(mock.calls(), 1, "{label}: premise: the first round ran");
+        let pause = pause_at_for_test(ResumePoint::BeforeRedeem);
+        let resuming = {
+            let (state, id) = (Arc::clone(&state), id.clone());
+            tokio::spawn(async move {
+                post(
+                    &state,
+                    "key-a",
+                    update(2, &id, json!({ "confirm": answer() })),
+                )
+                .await
+            })
+        };
+        tokio::time::timeout(crate::test_wait::HANG_BOUND, pause.reached())
             .await
-        })
-    };
-    tokio::time::timeout(crate::test_wait::HANG_BOUND, pause.reached())
-        .await
-        .expect("the resume worker reached the point before redeeming");
-    reload_keys(&state, remove_key_a);
-    pause.release();
-    drop(pause);
-    let _ = resuming.await;
-    let record = settled(&state, &id).await;
-    std::assert_eq!(
-        mock.calls(),
-        1,
-        "the continuation reached the backend: {record}"
-    );
+            .expect("the resume worker reached the point before redeeming");
+        reload_keys(&state, edit);
+        pause.release();
+        drop(pause);
+        let _ = resuming.await;
+        let record = settled(&state, &id).await;
+        std::assert_eq!(
+            mock.calls(),
+            1,
+            "{label}: the continuation reached the backend: {record}"
+        );
+    }
 }
