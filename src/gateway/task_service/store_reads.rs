@@ -4,7 +4,10 @@
 //! upstream reads, the descriptor-fit probe and the test-only readers. Moved
 //! out of `store.rs` unchanged; they take no ordering lock and write nothing.
 
-use super::*;
+use super::{
+    StoreError, TaskStatus, TaskStore, UPSTREAM_VERSION, UpstreamRecord, owned, serialize, targets,
+    widest_handle_reservation,
+};
 
 impl TaskStore {
     /// The owner-scoped upstream descriptor of one committed row, with the
