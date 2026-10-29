@@ -4,7 +4,10 @@
 //! removing it, which ends an idle task. Moved from `upstream_listener.rs`
 //! for the file-size ceiling.
 
-use super::*;
+use std::sync::Arc;
+
+use super::{ListenerKey, UpstreamListeners, admit};
+use crate::events::upstream_need::{Full, Interest, Need};
 
 impl UpstreamListeners {
     /// Count one more live key for `backend`, starting its task when it is

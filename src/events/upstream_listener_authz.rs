@@ -4,7 +4,7 @@
 //! may run or is over budget, and whether a URI is authorized. Moved from
 //! `upstream_listener.rs` for the file-size ceiling.
 
-use super::*;
+use super::{FAILED_LOOKUP, ListenerKey, MAX_PER_USER_LISTENERS, UpstreamListeners};
 use crate::events::types::RpcError;
 use crate::events::upstream_need::Verdict;
 
