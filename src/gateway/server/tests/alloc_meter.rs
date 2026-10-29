@@ -102,11 +102,18 @@ static SCAN_WATCH_FREED: AtomicBool = AtomicBool::new(false);
 /// padding), and reading those as `u8` in Rust is undefined. An `asm!` output
 /// is always an initialized value, so this read is defined whatever the byte
 /// is. The free scan arms only on these two targets.
+///
+/// # Safety
+///
+/// `at` must be readable for one byte for the whole call: inside a live block
+/// this allocator handed out and has not yet returned, or inside the
+/// `'static` marker. The instruction loads one byte and writes nothing.
 #[allow(unsafe_code)]
-fn read_byte(at: *const u8) -> u8 {
+unsafe fn read_byte(at: *const u8) -> u8 {
     let word: u32;
-    // SAFETY: `at` lies inside a live block this allocator handed out and has
-    // not yet returned; the instruction loads one byte and writes nothing.
+    // SAFETY: the caller's contract above; see the Rust Reference's rules
+    // for inline assembly: an output operand holds the value the
+    // instruction produced, which is initialized.
     #[cfg(target_arch = "x86_64")]
     unsafe {
         std::arch::asm!(
@@ -177,8 +184,11 @@ fn holds_marker(ptr: *const u8, size: usize) -> bool {
         return false;
     }
     SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: `start + at` stays below `size` for the block and below `len`
+    // for the needle, so every address is inside the live block or the
+    // `'static` marker.
     #[allow(unsafe_code)]
-    let byte = |base: *const u8, at: usize| read_byte(unsafe { base.add(at) });
+    let byte = |base: *const u8, at: usize| unsafe { read_byte(base.add(at)) };
     (0..=size - needle.len)
         .any(|start| (0..needle.len).all(|at| byte(ptr, start + at) == byte(needle.ptr, at)))
 }
