@@ -210,6 +210,23 @@ fn a_rename_gap_inside_the_listing_still_finds_the_sealed_segment() {
     );
 }
 
+/// The race itself: segment 3 vanishes before it is measured, and
+/// retention removes segment 2 before anything could list again. A later
+/// listing would show nothing older and read a hole as the start of the
+/// log; the listing that found segment 3 still had segment 2, so it is a
+/// hole.
+#[test]
+fn a_hole_raced_by_retention_is_still_a_hole() {
+    let (_dir, log) = log_with(&[2, 3], Some(4));
+    let (three, two) = (sealed_path(&log, 3), sealed_path(&log, 2));
+    super::seam::after_older_listed(move || {
+        std::fs::remove_file(&three).unwrap();
+        std::fs::remove_file(&two).unwrap();
+    });
+    let err = older_segment(&log, Some(4)).expect_err("a hole, not the start of the log");
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+}
+
 /// The sealed segments move between the listing's two reads three times in
 /// a row: a busy log, `Interrupted`, never a listing that may miss one.
 #[test]
