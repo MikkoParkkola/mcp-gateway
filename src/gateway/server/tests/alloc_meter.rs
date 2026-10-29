@@ -16,7 +16,8 @@
 //!    whole lib-test binary, so every other test in the crate runs through it.
 //!    When no scope is open the cost is one relaxed thread-local `bool` read,
 //!    one relaxed atomic `bool` load (the process-wide mode, MIK-8412) and a
-//!    forward to `System`. No lock, no buffer, no allocation, no
+//!    forward to `System`. Every block is handed out zeroed (and a grown
+//!    tail zeroed), so the free scan never reads a byte no one wrote. No lock, no buffer, no allocation, no
 //!    initialiser — the cells are `const`-initialised, so touching them cannot
 //!    allocate and cannot register a destructor.
 //! 2. **Deallocation is never counted and never touches the cells.** The
@@ -75,8 +76,17 @@ static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
 /// to the allocator. A hit is a copy of the marker returned still holding it,
 /// that is, never wiped. Process-wide, because a block is freed on whatever
 /// thread drops it, so only an isolated child may arm it.
-static SCAN_MARKER: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
-static SCAN_LEN: AtomicUsize = AtomicUsize::new(0);
+/// The armed marker. Pointer and length are published together as one
+/// record, set once per arming and never freed, so a free racing a re-arm
+/// never pairs one marker's address with another's length.
+struct Needle {
+    ptr: *const u8,
+    len: usize,
+}
+static SCAN_NEEDLE: AtomicPtr<Needle> = AtomicPtr::new(std::ptr::null_mut());
+/// Searches running now, on any thread: teardown waits for them before it
+/// reads the counts.
+static SCAN_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
 static SCAN_HITS: AtomicU64 = AtomicU64::new(0);
 /// Blocks searched while armed (large enough to hold the marker), so a row
 /// can tell "no block held it" from "no block was freed".
@@ -89,29 +99,50 @@ static SCAN_WATCH_FREED: AtomicBool = AtomicBool::new(false);
 
 /// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
 /// included) holds the armed marker. Reads only the block and the marker,
-/// never allocates, never unwinds.
+/// never allocates, never unwinds. Every block this allocator hands out is
+/// initialized (zeroed on allocation, a grown tail zeroed on reallocation),
+/// so every byte read here has a defined value.
 fn holds_marker(ptr: *const u8, size: usize) -> bool {
-    let len = SCAN_LEN.load(Ordering::Acquire);
-    if SCAN_MARKER.load(Ordering::Acquire).is_null() || len == 0 || size < len {
-        return false;
-    }
-    SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
-    marker_in(ptr, size)
+    marker_in(ptr, size, true)
 }
 
 /// [`holds_marker`] without counting the search: the census's view.
-fn marker_in(ptr: *const u8, size: usize) -> bool {
-    let marker = SCAN_MARKER.load(Ordering::Acquire);
-    let len = SCAN_LEN.load(Ordering::Acquire);
-    if marker.is_null() || len == 0 || size < len {
-        return false;
-    }
-    // Bytes are read one at a time through `read_volatile`: part of a block
-    // may never have been written (a vector's spare capacity), and a volatile
-    // read keeps the compiler from assuming anything about it.
-    #[allow(unsafe_code)]
-    let byte = |base: *const u8, at: usize| unsafe { std::ptr::read_volatile(base.add(at)) };
-    (0..=size - len).any(|start| (0..len).all(|at| byte(ptr, start + at) == byte(marker, at)))
+fn census_holds(ptr: *const u8, size: usize) -> bool {
+    marker_in(ptr, size, false)
+}
+
+/// Search one block for the armed needle; `count` adds the search to the
+/// free scan's tally of blocks searched.
+fn marker_in(ptr: *const u8, size: usize, count: bool) -> bool {
+    SCAN_INFLIGHT.fetch_add(1, Ordering::SeqCst);
+    let needle = SCAN_NEEDLE.load(Ordering::SeqCst);
+    let held = if needle.is_null() {
+        false
+    } else {
+        // SAFETY: a published needle is leaked, never freed, and points at a
+        // `'static` marker of `len` bytes.
+        #[allow(unsafe_code)]
+        let needle = unsafe { &*needle };
+        if size < needle.len {
+            false
+        } else {
+            if count {
+                SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
+            }
+            // SAFETY: the caller passes a block this allocator handed out and
+            // has not yet returned, `size` bytes long, all initialized.
+            #[allow(unsafe_code)]
+            let (block, marker) = unsafe {
+                (
+                    std::slice::from_raw_parts(ptr, size),
+                    std::slice::from_raw_parts(needle.ptr, needle.len),
+                )
+            };
+            block.windows(marker.len()).any(|window| window == marker)
+        }
+    };
+    SCAN_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+    held
 }
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
@@ -149,7 +180,8 @@ fn record(bytes: usize) {
 unsafe impl GlobalAlloc for MeteredSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
-        let block = unsafe { System.alloc(layout) };
+        // Zeroed, so the free scan never reads a byte no one wrote.
+        let block = unsafe { System.alloc_zeroed(layout) };
         super::live_census::on_alloc(block, layout.size());
         block
     }
@@ -174,6 +206,11 @@ unsafe impl GlobalAlloc for MeteredSystem {
         // be returned), recorded again at its new place and size.
         super::live_census::on_free(ptr);
         let moved = unsafe { System.realloc(ptr, layout, new_size) };
+        if !moved.is_null() && new_size > layout.size() {
+            // The grown tail is zeroed too: every byte of every block stays
+            // initialized.
+            unsafe { std::ptr::write_bytes(moved.add(layout.size()), 0, new_size - layout.size()) };
+        }
         super::live_census::on_alloc(
             if moved.is_null() { ptr } else { moved },
             if moved.is_null() {
@@ -426,9 +463,13 @@ struct ScanScope;
 
 impl Drop for ScanScope {
     fn drop(&mut self) {
-        SCAN_MARKER.store(std::ptr::null_mut(), Ordering::SeqCst);
-        SCAN_LEN.store(0, Ordering::SeqCst);
+        SCAN_NEEDLE.store(std::ptr::null_mut(), Ordering::SeqCst);
         SCAN_WATCH.store(std::ptr::null_mut(), Ordering::SeqCst);
+        // A search that loaded the needle before it was withdrawn finishes
+        // before the counts are read.
+        while SCAN_INFLIGHT.load(Ordering::SeqCst) != 0 {
+            std::hint::spin_loop();
+        }
     }
 }
 
@@ -446,14 +487,17 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
         "a free-scan marker must be at least {MIN_MARKER} bytes"
     );
     assert!(
-        SCAN_MARKER.load(Ordering::SeqCst).is_null(),
+        SCAN_NEEDLE.load(Ordering::SeqCst).is_null(),
         "free scans must not nest"
     );
     SCAN_HITS.store(0, Ordering::SeqCst);
     SCAN_SEARCHED.store(0, Ordering::SeqCst);
     SCAN_WATCH_FREED.store(false, Ordering::SeqCst);
-    SCAN_LEN.store(marker.len(), Ordering::SeqCst);
-    SCAN_MARKER.store(marker.as_ptr().cast_mut(), Ordering::SeqCst);
+    let needle = Box::leak(Box::new(Needle {
+        ptr: marker.as_ptr(),
+        len: marker.len(),
+    }));
+    SCAN_NEEDLE.store(needle, Ordering::SeqCst);
     ScanScope
 }
 
@@ -519,7 +563,7 @@ pub(crate) struct Census {
 /// from a probe point (for example inside a fake backend's handler, mid-send).
 /// Does nothing unless a [`scan_dispatch`] is running.
 pub(crate) fn take_census() {
-    super::live_census::take(marker_in);
+    super::live_census::take(census_holds);
 }
 
 /// Run an awaited body with the free scan and the live census armed on
