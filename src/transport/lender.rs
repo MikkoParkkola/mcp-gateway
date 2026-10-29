@@ -43,9 +43,9 @@ pub(crate) type SendCheck =
 /// and a lent-only slot refuses a loan without one.
 #[derive(Clone, Default)]
 pub(crate) struct LentCredential {
-    /// Wiped on drop, as the lender's own copy is. This covers the loan
-    /// only: the resolved `CallerCredential` and the per-send header lists
-    /// built from a loan are plain vectors.
+    /// Wiped on drop, as the lender's own copy and the resolved
+    /// `CallerCredential` are. The per-send header lists built from a loan
+    /// are plain vectors.
     pub(crate) headers: Zeroizing<Vec<(String, String)>>,
     pub(crate) check: Option<SendCheck>,
 }

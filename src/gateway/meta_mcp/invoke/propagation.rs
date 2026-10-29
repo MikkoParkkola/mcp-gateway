@@ -208,7 +208,7 @@ impl MetaMcp {
         // Moved, not cloned: no second copy of the caller's secret is left
         // behind outside the zeroizing holder.
         let lent = crate::transport::LentCredential {
-            headers: std::mem::take(&mut cred.headers).into(),
+            headers: std::mem::take(&mut cred.headers),
             check: cred.check.take(),
         };
         Ok((
@@ -299,7 +299,7 @@ impl MetaMcp {
             (expiry, &cred.headers),
         );
         CallerCredential {
-            headers: cred.headers,
+            headers: cred.headers.into(),
             cache_binding: Some(cred.cache_binding),
             managed,
             attempted: false,

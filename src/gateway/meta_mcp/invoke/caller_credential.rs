@@ -18,9 +18,9 @@
 /// impl — header names are shown, values are replaced with `<redacted>`.
 #[derive(Default)]
 pub(super) struct CallerCredential {
-    /// Per-request outbound headers (empty = none). Never logged verbatim —
+    /// Per-request outbound headers (empty = none), wiped on drop. Never logged verbatim —
     /// see the redacting `Debug` impl below.
-    pub(super) headers: Vec<(String, String)>,
+    pub(super) headers: zeroize::Zeroizing<Vec<(String, String)>>,
     /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
     /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
     pub(super) cache_binding: Option<String>,
@@ -45,7 +45,7 @@ impl CallerCredential {
     /// slot takes them.
     pub(super) fn lent(&self) -> crate::transport::LentCredential {
         crate::transport::LentCredential {
-            headers: self.headers.clone().into(),
+            headers: self.headers.clone(),
             check: self.check.clone(),
         }
     }

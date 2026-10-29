@@ -633,3 +633,15 @@ async fn the_mint_attaches_the_send_check_to_what_it_lends() {
     let check = lent.check.expect("the mint attaches a send check");
     assert_eq!(check().await, Ok(()), "a fresh credential passes its check");
 }
+
+/// The resolved credential holds its headers in the zeroizing type, as the
+/// loans built from it do: a change back to a plain `Vec` fails to build.
+#[test]
+fn a_caller_credentials_headers_are_wiped_on_drop() {
+    type Held = zeroize::Zeroizing<Vec<(String, String)>>;
+    fn stored(credential: &super::caller_credential::CallerCredential) -> &Held {
+        &credential.headers
+    }
+    let pinned: fn(&super::caller_credential::CallerCredential) -> &Held = stored;
+    let _ = pinned;
+}
