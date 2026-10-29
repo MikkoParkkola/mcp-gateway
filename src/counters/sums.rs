@@ -87,30 +87,35 @@ impl CounterStore {
                 .map(|counts| counts[metric.index()])
                 .sum()
         };
-        let mut rows: Vec<PairRow> = inner
+        // Rank on borrowed labels; only the rows kept are cloned.
+        let mut ranked: Vec<(&(String, String), u64, u64)> = inner
             .caller_server
             .labels
             .iter()
-            .map(|((caller, server), series)| PairRow {
-                caller: caller.clone(),
-                server: server.clone(),
-                calls: sum(series, Metric::Calls),
-                blocks: sum(series, Metric::Blocks),
+            .map(|(pair, series)| {
+                (
+                    pair,
+                    sum(series, Metric::Calls),
+                    sum(series, Metric::Blocks),
+                )
             })
-            .filter(|row| row.calls > 0 || row.blocks > 0)
+            .filter(|&(_, calls, blocks)| calls > 0 || blocks > 0)
             .collect();
-        rows.sort_by(|a, b| {
-            b.calls
-                .cmp(&a.calls)
-                .then_with(|| a.caller.cmp(&b.caller))
-                .then_with(|| a.server.cmp(&b.server))
-        });
-        let rest = rows.split_off(rows.len().min(n));
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let rest = ranked.split_off(ranked.len().min(n));
         TopPairs {
             more_count: rest.len(),
-            more_calls: rest.iter().map(|row| row.calls).sum(),
+            more_calls: rest.iter().map(|row| row.1).sum(),
             overflow_calls: sum(&inner.caller_server.overflow, Metric::Calls),
-            rows,
+            rows: ranked
+                .into_iter()
+                .map(|((caller, server), calls, blocks)| PairRow {
+                    caller: caller.clone(),
+                    server: server.clone(),
+                    calls,
+                    blocks,
+                })
+                .collect(),
         }
     }
 
@@ -141,29 +146,32 @@ impl CounterStore {
             .into_iter()
             .filter(|b| (b + 1) * HALF > since)
             .collect();
+        // Labels the store does not hold are read from their dimension's
+        // overflow alone, so one walk answers all of them.
+        let mut unheld: Vec<(&Series, CallWindows)> = Vec::new();
         let counts = labels
             .iter()
             .map(|&label| {
                 let Some(read) = Read::of(&inner, label) else {
                     return (None, None);
                 };
-                #[cfg(test)]
-                self.window_walks
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let current_known = read.holds_all(&current, now_bucket);
-                let prev_known = mapped && read.holds_all(&previous, now_bucket);
-                (
-                    if current_known {
-                        read.sum(&current)
-                    } else {
-                        None
-                    },
-                    if prev_known {
-                        read.sum(&previous)
-                    } else {
-                        None
-                    },
-                )
+                let walk = || {
+                    #[cfg(test)]
+                    self.window_walks
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    read.windows(&current, mapped.then_some(previous.as_slice()), now_bucket)
+                };
+                if read.series.is_some() {
+                    return walk();
+                }
+                if let Some((_, known)) =
+                    unheld.iter().find(|(o, _)| std::ptr::eq(*o, read.overflow))
+                {
+                    return *known;
+                }
+                let answer = walk();
+                unheld.push((read.overflow, answer));
+                answer
             })
             .collect();
         WindowSums { since, counts }
@@ -198,6 +206,18 @@ impl<'a> Read<'a> {
                 held_after: None,
             }),
         }
+    }
+
+    /// The label's calls over the current buckets and over the previous
+    /// date's (`None` when they could not be mapped), each `None` where it
+    /// could be low.
+    fn windows(&self, current: &[u64], previous: Option<&[u64]>, now_bucket: u64) -> CallWindows {
+        let day = |buckets: &[u64]| {
+            self.holds_all(buckets, now_bucket)
+                .then(|| self.sum(buckets))
+                .flatten()
+        };
+        (day(current), previous.and_then(day))
     }
 
     /// Whether the label held bucket `b`, after its admission bucket.
