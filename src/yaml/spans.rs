@@ -151,10 +151,10 @@ fn open(frames: &mut [Frame], mapping: bool, own: bool) -> Frame {
 /// Byte positions of the parser's markers: its own byte offset when it gives
 /// one, else counted from its character index. Nothing is allocated per
 /// character, so a large file costs no more memory than its text.
-struct Bytes<'a>(&'a str);
+pub(super) struct Bytes<'a>(pub(super) &'a str);
 
 impl Bytes<'_> {
-    fn byte(&self, marker: Marker) -> Result<usize, Error> {
+    pub(super) fn byte(&self, marker: Marker) -> Result<usize, Error> {
         let text = self.0;
         let at = match marker.byte_offset() {
             Some(b) => Some(b).filter(|&b| text.is_char_boundary(b)),
@@ -169,7 +169,7 @@ impl Bytes<'_> {
         at.ok_or_else(|| Error::message("a parser position the text cannot hold"))
     }
 
-    fn range(&self, start: Marker, end: Marker) -> Result<Range<usize>, Error> {
+    pub(super) fn range(&self, start: Marker, end: Marker) -> Result<Range<usize>, Error> {
         let (start, end) = (self.byte(start)?, self.byte(end)?);
         if start > end {
             return Err(Error::message("a parser span that ends before it starts"));
