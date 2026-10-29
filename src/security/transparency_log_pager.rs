@@ -88,9 +88,13 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
 /// page that steps over it.
 pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Option<(u64, u64)>> {
     let Some(seq) = segment else { return Ok(None) };
-    let Some(older) = list_segments(log)?.into_iter().rev().find(|s| s.seq < seq) else {
+    let listed = list_segments(log)?;
+    let Some(older) = listed.iter().rev().find(|s| s.seq < seq).cloned() else {
         return Ok(None);
     };
+    // Decided from this listing, not a later one: retention racing a later
+    // listing could make a hole look like the start of the log.
+    let older_kept = listed.iter().any(|s| s.seq < older.seq);
     if older.seq + 1 != seq {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
@@ -108,7 +112,7 @@ pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Opti
         // Gone since listed. Retention removes the oldest first: with nothing
         // older kept, the log ends here; otherwise it is a hole.
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            if list_segments(log)?.iter().any(|s| s.seq < older.seq) {
+            if older_kept {
                 Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     format!("log segment {} vanished below kept segments", older.seq),

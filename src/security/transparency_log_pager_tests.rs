@@ -210,6 +210,24 @@ fn a_rename_gap_inside_the_listing_still_finds_the_sealed_segment() {
     );
 }
 
+/// The sealed segments move between the listing's two reads three times in
+/// a row: a busy log, `Interrupted`, never a listing that may miss one.
+#[test]
+fn a_listing_moved_three_times_is_interrupted() {
+    fn arm(log: PathBuf, n: u64) {
+        super::seam::after_sealed_listed(move || {
+            std::fs::write(sealed_path(&log, 10 + n), segment(10 + n, 0)).unwrap();
+            if n < 2 {
+                arm(log, n + 1);
+            }
+        });
+    }
+    let (_dir, log) = log_with(&[3], Some(4));
+    arm(log.clone(), 0);
+    let err = position(&log, None).err().expect("a busy log");
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}");
+}
+
 /// The older segment goes between being found and being measured. With an
 /// even older one kept, that is a hole, not the end of the log.
 #[test]
@@ -287,10 +305,19 @@ const ALLOWED_LINES: &[(&str, &str)] = &[(
     "std::fs::File::open(dir)?.sync_all()?;",
 )];
 
+/// Whether `text` imports the pager or the segment module inside a grouped
+/// `transparency_log::{...}` import, under any alias.
+fn groups_segment_modules(text: &str) -> bool {
+    text.match_indices("transparency_log::{").any(|(at, _)| {
+        let group = &text[at..];
+        let group = &group[..group.find('}').unwrap_or(group.len())];
+        group.contains("pager") || group.contains("segments")
+    })
+}
+
 /// The production part of a source file: the text with each inline test
 /// module's block removed, so the code after one is still scanned. Braces
-/// are counted plainly; a test module with an unbalanced brace in a string
-/// only hides more of itself.
+/// are counted plainly; a block that never closes leaves the file whole.
 fn production_text(text: &str) -> String {
     const MARK: &str = "#[cfg(test)]";
     let mut out = String::new();
@@ -312,20 +339,25 @@ fn production_text(text: &str) -> String {
         let block = &rest[i..];
         let open = block.find('{').expect("an inline module has a block");
         let mut depth = 0_usize;
-        let mut end = block.len();
+        let mut end = None;
         for (at, c) in block[open..].char_indices() {
             match c {
                 '{' => depth += 1,
                 '}' => {
                     depth -= 1;
                     if depth == 0 {
-                        end = open + at + 1;
+                        end = Some(open + at + 1);
                         break;
                     }
                 }
                 _ => {}
             }
         }
+        // A block that never closes (a brace inside a string, say): scan
+        // the file whole rather than hide what follows.
+        let Some(end) = end else {
+            return text.to_string();
+        };
         rest = &block[end..];
     }
     out.push_str(rest);
@@ -405,7 +437,7 @@ fn only_the_listed_files_open_log_segments_by_name() {
         let source = std::fs::read_to_string(file).unwrap();
         let text = production_text(&source);
         let text = text.as_str();
-        if !READER_TOKENS.iter().any(|t| text.contains(t)) {
+        if !READER_TOKENS.iter().any(|t| text.contains(t)) && !groups_segment_modules(text) {
             continue;
         }
         let rel = file
