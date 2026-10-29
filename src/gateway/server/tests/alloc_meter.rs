@@ -16,8 +16,8 @@
 //!    whole lib-test binary, so every other test in the crate runs through it.
 //!    When no scope is open the cost is one relaxed thread-local `bool` read,
 //!    one relaxed atomic `bool` load (the process-wide mode, MIK-8412) and a
-//!    forward to `System`. Every block is handed out zeroed (and a grown
-//!    tail zeroed), so the free scan never reads a byte no one wrote. No lock, no buffer, no allocation, no
+//!    forward to `System`; with no free scan armed, a free adds two atomic
+//!    loads. No lock, no buffer, no allocation, no
 //!    initialiser — the cells are `const`-initialised, so touching them cannot
 //!    allocate and cannot register a destructor.
 //! 2. **Deallocation is never counted and never touches the cells.** The
@@ -97,52 +97,102 @@ static SCAN_SEARCHED: AtomicU64 = AtomicU64::new(0);
 static SCAN_WATCH: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 static SCAN_WATCH_FREED: AtomicBool = AtomicBool::new(false);
 
-/// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
-/// included) holds the armed marker. Reads only the block and the marker,
-/// never allocates, never unwinds. Every block this allocator hands out is
-/// initialized (zeroed on allocation, a grown tail zeroed on reallocation),
-/// so every byte read here has a defined value.
-fn holds_marker(ptr: *const u8, size: usize) -> bool {
-    marker_in(ptr, size, true)
+/// One byte at `at`, read through inline assembly. A block's bytes may be
+/// uninitialized as far as Rust is concerned (spare capacity, a struct's
+/// padding), and reading those as `u8` in Rust is undefined. An `asm!` output
+/// is always an initialized value, so this read is defined whatever the byte
+/// is. The free scan arms only on these two targets.
+#[allow(unsafe_code)]
+fn read_byte(at: *const u8) -> u8 {
+    let word: u32;
+    // SAFETY: `at` lies inside a live block this allocator handed out and has
+    // not yet returned; the instruction loads one byte and writes nothing.
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        std::arch::asm!(
+            "movzx {w:e}, byte ptr [{p}]",
+            w = out(reg) word,
+            p = in(reg) at,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        std::arch::asm!(
+            "ldrb {w:w}, [{p}]",
+            w = out(reg) word,
+            p = in(reg) at,
+            options(nostack, preserves_flags, readonly)
+        );
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = at;
+        word = 0;
+    }
+    word as u8
 }
 
-/// [`holds_marker`] without counting the search: the census's view.
-fn census_holds(ptr: *const u8, size: usize) -> bool {
-    marker_in(ptr, size, false)
-}
+/// Whether the free scan can read bytes on this target.
+const SCAN_SUPPORTED: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
 
-/// Search one block for the armed needle; `count` adds the search to the
-/// free scan's tally of blocks searched.
-fn marker_in(ptr: *const u8, size: usize, count: bool) -> bool {
-    SCAN_INFLIGHT.fetch_add(1, Ordering::SeqCst);
-    let needle = SCAN_NEEDLE.load(Ordering::SeqCst);
-    let held = if needle.is_null() {
-        false
-    } else {
-        // SAFETY: a published needle is leaked, never freed, and points at a
-        // `'static` marker of `len` bytes.
-        #[allow(unsafe_code)]
-        let needle = unsafe { &*needle };
-        if size < needle.len {
-            false
-        } else {
-            if count {
-                SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
-            }
-            // SAFETY: the caller passes a block this allocator handed out and
-            // has not yet returned, `size` bytes long, all initialized.
-            #[allow(unsafe_code)]
-            let (block, marker) = unsafe {
-                (
-                    std::slice::from_raw_parts(ptr, size),
-                    std::slice::from_raw_parts(needle.ptr, needle.len),
-                )
-            };
-            block.windows(marker.len()).any(|window| window == marker)
-        }
+/// Register one allocator callback's scan work, if a scan is armed. Teardown
+/// waits for every registered callback, so a hit or a watched free it records
+/// is counted before the results are read. The armed state is checked again
+/// after registering, so a callback that raced a teardown records nothing.
+fn scan_enter() -> bool {
+    let armed = || {
+        !SCAN_NEEDLE.load(Ordering::SeqCst).is_null()
+            || !SCAN_WATCH.load(Ordering::SeqCst).is_null()
     };
+    if !armed() {
+        return false;
+    }
+    SCAN_INFLIGHT.fetch_add(1, Ordering::SeqCst);
+    if armed() {
+        true
+    } else {
+        SCAN_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+        false
+    }
+}
+
+fn scan_leave() {
     SCAN_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
-    held
+}
+
+/// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
+/// included) holds the armed marker. Call between [`scan_enter`] and
+/// [`scan_leave`]. Never allocates, never unwinds.
+fn holds_marker(ptr: *const u8, size: usize) -> bool {
+    search(ptr, size, true)
+}
+
+/// [`holds_marker`] without adding to the blocks-searched tally: the live
+/// census's view.
+fn census_holds(ptr: *const u8, size: usize) -> bool {
+    search(ptr, size, false)
+}
+
+fn search(ptr: *const u8, size: usize, count: bool) -> bool {
+    let needle = SCAN_NEEDLE.load(Ordering::SeqCst);
+    if needle.is_null() {
+        return false;
+    }
+    // SAFETY: a published needle is leaked, never freed, and points at a
+    // `'static` marker of `len` bytes.
+    #[allow(unsafe_code)]
+    let needle = unsafe { &*needle };
+    if size < needle.len {
+        return false;
+    }
+    if count {
+        SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
+    }
+    #[allow(unsafe_code)]
+    let byte = |base: *const u8, at: usize| read_byte(unsafe { base.add(at) });
+    (0..=size - needle.len)
+        .any(|start| (0..needle.len).all(|at| byte(ptr, start + at) == byte(needle.ptr, at)))
 }
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
@@ -180,8 +230,7 @@ fn record(bytes: usize) {
 unsafe impl GlobalAlloc for MeteredSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
-        // Zeroed, so the free scan never reads a byte no one wrote.
-        let block = unsafe { System.alloc_zeroed(layout) };
+        let block = unsafe { System.alloc(layout) };
         super::live_census::on_alloc(block, layout.size());
         block
     }
@@ -201,41 +250,40 @@ unsafe impl GlobalAlloc for MeteredSystem {
         record(new_size);
         // Searched before the move, counted only if the block did move: a
         // block grown in place was not returned.
-        let held = holds_marker(ptr, layout.size());
+        let armed = scan_enter();
+        let held = armed && holds_marker(ptr, layout.size());
         // Forgotten before the call (a census must not read it once it may
         // be returned), recorded again at its new place and size.
         super::live_census::on_free(ptr);
         let moved = unsafe { System.realloc(ptr, layout, new_size) };
-        if !moved.is_null() && new_size > layout.size() {
-            // The grown tail is zeroed too: every byte of every block stays
-            // initialized.
-            unsafe { std::ptr::write_bytes(moved.add(layout.size()), 0, new_size - layout.size()) };
+        if moved.is_null() {
+            super::live_census::on_alloc(ptr, layout.size());
+        } else {
+            super::live_census::on_alloc(moved, new_size);
         }
-        super::live_census::on_alloc(
-            if moved.is_null() { ptr } else { moved },
-            if moved.is_null() {
-                layout.size()
-            } else {
-                new_size
-            },
-        );
-        if !moved.is_null() && moved != ptr {
-            if held {
-                SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+        if armed {
+            if !moved.is_null() && moved != ptr {
+                if held {
+                    SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+                }
+                if ptr == SCAN_WATCH.load(Ordering::SeqCst) {
+                    SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
+                }
             }
-            if ptr == SCAN_WATCH.load(Ordering::Acquire) {
-                SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
-            }
+            scan_leave();
         }
         moved
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if !ptr.is_null() && ptr == SCAN_WATCH.load(Ordering::Acquire) {
-            SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
-        }
-        if holds_marker(ptr, layout.size()) {
-            SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+        if scan_enter() {
+            if !ptr.is_null() && ptr == SCAN_WATCH.load(Ordering::SeqCst) {
+                SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
+            }
+            if holds_marker(ptr, layout.size()) {
+                SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+            }
+            scan_leave();
         }
         super::live_census::on_free(ptr);
         unsafe { System.dealloc(ptr, layout) }
@@ -475,8 +523,10 @@ impl Drop for ScanScope {
         SCAN_WATCH.store(std::ptr::null_mut(), Ordering::SeqCst);
         // A search that loaded the needle before it was withdrawn finishes
         // before the counts are read.
+        // Teardown runs as ordinary test code, so it may yield; the
+        // callbacks it waits on hold no lock and finish on their own.
         while SCAN_INFLIGHT.load(Ordering::SeqCst) != 0 {
-            std::hint::spin_loop();
+            std::thread::yield_now();
         }
     }
 }
@@ -490,6 +540,10 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
     assert!(
         std::env::var_os(CHILD_ENV).is_some(),
         "a free scan runs only in an isolated child: it sees every thread's frees"
+    );
+    assert!(
+        SCAN_SUPPORTED,
+        "the free scan reads bytes through inline asm on x86_64 and aarch64 only"
     );
     assert!(
         marker.len() >= MIN_MARKER,
