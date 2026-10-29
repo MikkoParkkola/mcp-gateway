@@ -185,6 +185,22 @@ pub(super) async fn audited_call(
     crate::gateway::meta_mcp::sealed_hold::scoped(Box::pin(judged)).await
 }
 
+/// The credential `request` presented, as the delivery record names it.
+fn presented_credential(
+    request: &axum::http::Request<axum::body::Body>,
+) -> (
+    crate::security::audit::CredentialKind,
+    crate::gateway::record_principal::InternalPrincipal,
+) {
+    let client = request
+        .extensions()
+        .get::<crate::gateway::auth::AuthenticatedClient>();
+    (
+        crate::security::audit::CredentialKind::of(client),
+        client.map(|c| c.principal.clone()).unwrap_or_default(),
+    )
+}
+
 async fn audited_call_judged(
     state: Arc<AppState>,
     name: String,
@@ -192,62 +208,42 @@ async fn audited_call_judged(
 ) -> crate::gateway::outbound::OutboundReply {
     // MIK-8672: captured before the request moves on, so a refusal in any later stage still names the
     // presented credential; a local, not an Option, so the writer below cannot be reached without it.
-    let presented = request
-        .extensions()
-        .get::<crate::gateway::auth::AuthenticatedClient>()
-        .map(|c| {
-            (
-                crate::security::audit::CredentialKind::of(Some(c)),
-                c.principal.clone(),
-            )
-        });
-    let (credential_kind, principal) = presented.unwrap_or((
-        crate::security::audit::CredentialKind::of(None),
-        crate::gateway::record_principal::InternalPrincipal::default(),
-    ));
+    let (credential_kind, principal) = presented_credential(&request);
     let mut call = None;
     let mut reads = DirectReads::default();
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let (
-        (
-            RpcHttp {
-                status,
-                body: Json(body),
-                origin,
-            },
-            hidden,
-        ),
-        trace,
-    ) = crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
-        let inner = Box::pin(crate::gateway::outbound::read_scoped(
-            guard.clone(),
-            super::backend_handler_inner(
-                Arc::clone(&state),
-                name.clone(),
-                request,
-                &mut call,
-                &mut reads,
-            ),
-        ));
-        let ((answer, hidden), notes) =
-            crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
-        let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
-        ((answer, hidden), trace)
-    })
-    .await;
-    if status == StatusCode::ACCEPTED {
+    let ((answer, hidden), trace) =
+        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
+            let inner = Box::pin(crate::gateway::outbound::read_scoped(
+                guard.clone(),
+                super::backend_handler_inner(
+                    Arc::clone(&state),
+                    name.clone(),
+                    request,
+                    &mut call,
+                    &mut reads,
+                ),
+            ));
+            let ((answer, hidden), notes) =
+                crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(inner).await;
+            let (answer, trace) = record_traced(&state, &name, call.take(), answer, notes).await;
+            ((answer, hidden), trace)
+        })
+        .await;
+    if answer.status == StatusCode::ACCEPTED {
         // An accepted notification: the gateway's own placeholder, sent
         // with no body (MIK-7759), carries nothing to judge.
         return crate::gateway::outbound::gateway_reply(super::super::helpers::bodiless_accepted(
-            RpcHttp {
-                status,
-                body: Json(body),
-                origin,
-            },
+            answer,
         ));
     }
+    let RpcHttp {
+        status,
+        body: Json(body),
+        origin,
+    } = answer;
     let mut frame = crate::gateway::outbound::answer_value(
         guard.as_deref(),
         reads.key.as_deref(),

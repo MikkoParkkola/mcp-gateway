@@ -18,12 +18,14 @@ const RESIDENT_HELP: &str =
     "Resident set size. Linux only (read from /proc/self/statm); absent on other systems.";
 
 /// Set the active-session gauge to `count`, at scrape time.
+#[allow(clippy::cast_precision_loss)] // session counts are far below 2^53
 pub(crate) fn record_sessions(count: usize) {
     telemetry_metrics::gauge!(SESSIONS).set(count as f64);
 }
 
 /// Set the start-time gauge from the process start; unset when the host clock
 /// could not be read at start.
+#[allow(clippy::cast_precision_loss)] // Unix seconds stay below 2^53 until year 285 million
 pub(crate) fn record_start_time(wall: Option<DateTime<Utc>>) {
     if let Some(wall) = wall {
         telemetry_metrics::gauge!(START_TIME).set(wall.timestamp() as f64);

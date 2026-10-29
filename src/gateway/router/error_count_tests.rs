@@ -14,8 +14,7 @@ use axum::routing::post;
 use serde_json::json;
 use tower::ServiceExt;
 
-use super::direct_guards_fixture::{Answer, fixture};
-use super::direct_guards_fixture_requests::{post_direct, send};
+use super::direct_guards_fixture::{Answer, fixture, post_direct, send};
 use super::helpers::{build_error_response, build_response};
 use crate::gateway::health_metrics::layers::error_layer;
 use crate::gateway::health_metrics::{Origin, RpcError, error_kind};

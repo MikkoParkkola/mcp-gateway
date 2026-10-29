@@ -341,7 +341,7 @@ mod emitted_document_tests {
     use serde_json::{Value, json};
 
     use super::{Payload, emitted_document};
-    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
+    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId, WireMeta};
 
     /// The member names of `doc` and of its `error` object.
     fn key_set(doc: &Value) -> Vec<String> {
