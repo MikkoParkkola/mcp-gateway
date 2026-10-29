@@ -6,10 +6,10 @@ src/backend/input_keys.rs	held_verdict	blocked_tool_refusal	1	not-delivered	pred
 src/backend/input_keys.rs	judge_keys	undeclared_key_refusal	1	feeds	the undeclared-key answer (KeyAnswerKind::Refused) its callers raise
 src/backend/input_keys.rs	undeclared_key_refusal_held	blocked_tool_refusal	1	feeds	a descriptor-withheld answer (KeyAnswerKind::Withheld) its callers raise
 src/backend/input_keys.rs	undeclared_key_refusal_inner	blocked_tool_refusal	2	feeds	a descriptor-withheld answer (KeyAnswerKind::Withheld) its callers raise
+src/backend/lend.rs	lend_to_slot	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/lifecycle.rs	start_entry_as	refuse_shared_start	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/metadata.rs	get_cached_list_for	refuse_shared_start	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/ops.rs	blocked_call_refusal	blocked_tool_refusal	1	feeds	the backend's send backstop for a withheld tool
-src/backend/ops.rs	lend_to_slot	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/ops.rs	notify_with_headers	blocked_call_refusal	1	no-record	a notification to a backend; notifications carry no delivery record
 src/backend/ops.rs	request_attempted	blocked_call_refusal	1	composite-or-replay	the send backstop: every route's gate withholds the name first (raised there); reached only by a name the gates missed
 src/backend/pool.rs	refuse_shared_start	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet

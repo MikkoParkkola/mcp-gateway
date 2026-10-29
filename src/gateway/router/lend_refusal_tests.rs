@@ -33,6 +33,7 @@ impl IdentityPropagation for EmptyMint {
         Ok(PropagatedCredential {
             headers: vec![],
             expires_at: i64::MAX,
+            expiry_synthetic: false,
             cache_binding: format!("{}@{}", identity.subject, backend.audience),
             subject_key: identity.subject.clone(),
             audience: backend.audience.clone(),
