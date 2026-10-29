@@ -64,3 +64,27 @@ fn l10_unresolvable_root_is_warned_not_refused() {
         "a resolving root is quiet: {quiet}"
     );
 }
+
+/// R22d: a root rule whose `servers` glob covers the capabilities backend is
+/// warned at load, since its capability calls will be refused; control: a
+/// rule scoped to the config backend is not.
+#[test]
+fn r22d_root_rule_covering_capabilities_is_warned() {
+    let dir = tempfile::tempdir().expect("root");
+    let root = dir.path().to_string_lossy().into_owned();
+    let yaml = |servers: &str| {
+        format!(
+            "capabilities:\n  name: caps\nbackends:\n  fs:\n    command: \"true\"\nsecurity:\n  \
+             firewall:\n    enabled: true\n    rules:\n      - {{match: \"read_file\", \
+             servers: [{servers}], action: block, allowed_roots: [\"{root}\"], path_args: \
+             [\"path\"]}}\n"
+        )
+    };
+    let warned = load_warnings(&yaml("\"*\""));
+    assert!(
+        warned.contains("confine CLI capabilities with capabilities.files"),
+        "the warning says what to do: {warned}"
+    );
+    let quiet = load_warnings(&yaml("\"fs\""));
+    assert!(!quiet.contains("capabilities.files"), "{quiet}");
+}
