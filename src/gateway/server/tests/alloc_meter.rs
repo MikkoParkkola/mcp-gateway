@@ -141,9 +141,6 @@ unsafe fn read_byte(at: *const u8) -> u8 {
     word.to_le_bytes()[0]
 }
 
-/// Whether the free scan can read bytes on this target.
-const SCAN_SUPPORTED: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
-
 /// Register one allocator callback's scan work, if a scan is armed. Teardown
 /// waits for every registered callback, so a hit or a watched free it records
 /// is counted before the results are read. The armed state is checked again
@@ -197,13 +194,20 @@ fn search(ptr: *const u8, size: usize, count: bool) -> bool {
     if count {
         SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
     }
-    // SAFETY: `start + at` stays below `size` for the block and below `len`
-    // for the needle, so every address is inside the live block or the
-    // `'static` marker.
+    // SAFETY: the needle is a `'static` marker of `len` initialized bytes, so
+    // it is read as a plain slice; only the block needs `read_byte`.
     #[allow(unsafe_code)]
-    let byte = |base: *const u8, at: usize| unsafe { read_byte(base.add(at)) };
-    (0..=size - needle.len)
-        .any(|start| (0..needle.len).all(|at| byte(ptr, start + at) == byte(needle.ptr, at)))
+    let marker = unsafe { std::slice::from_raw_parts(needle.ptr, needle.len) };
+    // SAFETY: `start + at` stays below `size`, so every address is inside the
+    // live block.
+    #[allow(unsafe_code)]
+    let byte = |at: usize| unsafe { read_byte(ptr.add(at)) };
+    (0..=size - marker.len()).any(|start| {
+        marker
+            .iter()
+            .enumerate()
+            .all(|(at, &expected)| byte(start + at) == expected)
+    })
 }
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
@@ -552,9 +556,9 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
         std::env::var_os(CHILD_ENV).is_some(),
         "a free scan runs only in an isolated child: it sees every thread's frees"
     );
-    if !SCAN_SUPPORTED {
-        panic!("the free scan reads bytes through inline asm on x86_64 and aarch64 only");
-    }
+    // Compiled only where `read_byte` has no instruction to read with.
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    panic!("the free scan reads bytes through inline asm on x86_64 and aarch64 only");
     assert!(
         marker.len() >= MIN_MARKER,
         "a free-scan marker must be at least {MIN_MARKER} bytes"
