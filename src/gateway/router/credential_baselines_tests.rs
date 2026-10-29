@@ -75,18 +75,51 @@ fn report(path: &str, len: usize, scanned: Scanned, census: Census, sends: usize
     }
 }
 
+/// How the peer treats `tools/call`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Peer {
+    /// Answers every call.
+    Answers,
+    /// Answers the first measured call with HTTP 503, then answers.
+    FailsOnce,
+    /// Never answers a call: the gateway's call is dropped mid-send.
+    Hangs,
+}
+
 /// A streamable HTTP MCP peer on loopback that takes a census on every
-/// request it serves, then answers. Returns its URL and a send counter.
-async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+/// request it serves, then answers as `behaviour` says. Returns its URL, a
+/// send counter, and the switch that arms `FailsOnce` and `Hangs` (off for
+/// the warm-up).
+async fn peer(
+    behaviour: Peer,
+) -> (
+    String,
+    Arc<std::sync::atomic::AtomicUsize>,
+    Arc<std::sync::atomic::AtomicBool>,
+) {
+    use axum::response::IntoResponse as _;
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let counted = Arc::clone(&sends);
+    let switch = Arc::clone(&armed);
     let app = axum::Router::new().fallback(
         move |_headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
+            let switch = Arc::clone(&switch);
             async move {
                 take_census();
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let method = message["method"].as_str().unwrap_or_default().to_owned();
+                if method == "tools/call" && switch.load(std::sync::atomic::Ordering::SeqCst) {
+                    match behaviour {
+                        Peer::Answers => {}
+                        Peer::FailsOnce => {
+                            switch.store(false, std::sync::atomic::Ordering::SeqCst);
+                            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+                        }
+                        Peer::Hangs => std::future::pending::<()>().await,
+                    }
+                }
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
                 let result = match method.as_str() {
                     "server/discover" => json!({
@@ -100,7 +133,7 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
                     "tools/call" => json!({"content": [{"type": "text", "text": "ok"}]}),
                     _ => json!({}),
                 };
-                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result}))
+                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
             }
         },
     );
@@ -109,7 +142,7 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
         .expect("bind");
     let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
     tokio::spawn(async move { axum::serve(listener, app).await });
-    (url, sends)
+    (url, sends, armed)
 }
 
 /// A router whose one backend, at `url`, has a required per-user binding
@@ -221,6 +254,8 @@ struct Row {
     /// For a refused row, text its refusal must carry, so a refusal for some
     /// other reason (a malformed request) cannot stand in for it.
     because: Option<&'static str>,
+    /// How the peer treats the measured call.
+    peer: Peer,
 }
 
 fn plain(len: usize) -> &'static str {
@@ -239,7 +274,7 @@ async fn measure(row: Row, len: usize, name: &str) {
     }
     let minted = (row.minted)(len);
     let marker = token(len).as_bytes();
-    let (url, sends) = peer().await;
+    let (url, sends, armed) = peer(row.peer).await;
     let (router, _dirs) = gateway(url, minted).await;
     // Warm: the slot starts and lists once outside the measurement. A row
     // whose mint is refused warms into the same refusal; the warm-up's
@@ -247,8 +282,26 @@ async fn measure(row: Row, len: usize, name: &str) {
     let warm = direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}}));
     let _ = post(&router, &format!("/mcp/{BACKEND}"), &warm).await;
     let before = sends.load(std::sync::atomic::Ordering::SeqCst);
-    let ((status, answer), scanned, census) =
-        scan_dispatch(marker, || post(&router, &row.uri, &row.body)).await;
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let ((status, answer), scanned, census) = scan_dispatch(marker, || async {
+        if row.peer == Peer::Hangs {
+            // Dropped mid-send, then a moment for what the drop frees.
+            let dropped = tokio::time::timeout(
+                std::time::Duration::from_millis(300),
+                post(&router, &row.uri, &row.body),
+            )
+            .await;
+            assert!(
+                dropped.is_err(),
+                "premise: the hung call was dropped, not answered"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            (axum::http::StatusCode::REQUEST_TIMEOUT, Value::Null)
+        } else {
+            post(&router, &row.uri, &row.body).await
+        }
+    })
+    .await;
     let served = status == axum::http::StatusCode::OK
         && answer.get("error").is_none()
         && answer["result"]["isError"] != json!(true);
@@ -286,6 +339,7 @@ fn call_row() -> Row {
         minted: plain,
         served: true,
         because: None,
+        peer: Peer::Answers,
     }
 }
 
@@ -297,6 +351,7 @@ fn list_row() -> Row {
         minted: plain,
         served: true,
         because: None,
+        peer: Peer::Answers,
     }
 }
 
@@ -308,6 +363,7 @@ fn refused_row() -> Row {
         minted: plain,
         served: false,
         because: Some("not-listed"),
+        peer: Peer::Answers,
     }
 }
 
@@ -319,6 +375,7 @@ fn failed_mint_row() -> Row {
         minted: invalid,
         served: false,
         because: Some("invalid"),
+        peer: Peer::Answers,
     }
 }
 
@@ -334,6 +391,39 @@ fn meta_row() -> Row {
         minted: plain,
         served: true,
         because: None,
+        peer: Peer::Answers,
+    }
+}
+
+fn discovery_row() -> Row {
+    Row {
+        label: "meta gateway_search_tools",
+        uri: "/mcp".to_string(),
+        body: direct(
+            "tools/call",
+            json!({"name": "gateway_search_tools", "arguments": {"query": TOOL}}),
+        ),
+        minted: plain,
+        served: true,
+        because: None,
+        peer: Peer::Answers,
+    }
+}
+
+fn retry_row() -> Row {
+    Row {
+        label: "direct tools/call, retried after a 503",
+        peer: Peer::FailsOnce,
+        ..call_row()
+    }
+}
+
+fn cancelled_row() -> Row {
+    Row {
+        label: "direct tools/call, dropped mid-send",
+        served: false,
+        peer: Peer::Hangs,
+        ..call_row()
     }
 }
 
@@ -356,6 +446,12 @@ baseline!(baseline_failed_mint_long, failed_mint_row(), LONG);
 baseline!(baseline_failed_mint_short, failed_mint_row(), SHORT);
 baseline!(baseline_meta_call_long, meta_row(), LONG);
 baseline!(baseline_meta_call_short, meta_row(), SHORT);
+baseline!(baseline_discovery_long, discovery_row(), LONG);
+baseline!(baseline_discovery_short, discovery_row(), SHORT);
+baseline!(baseline_retry_long, retry_row(), LONG);
+baseline!(baseline_retry_short, retry_row(), SHORT);
+baseline!(baseline_cancelled_long, cancelled_row(), LONG);
+baseline!(baseline_cancelled_short, cancelled_row(), SHORT);
 
 /// The HTTP client alone: the same `Authorization` header sent by a bare
 /// client to the same peer. Its frees and live copies are the client's share,
@@ -365,7 +461,7 @@ async fn client_only(len: usize, name: &str) {
         return;
     }
     let minted = token(len);
-    let (url, sends) = peer().await;
+    let (url, sends, _armed) = peer(Peer::Answers).await;
     let client = reqwest::Client::new();
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
