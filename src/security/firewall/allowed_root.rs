@@ -206,14 +206,63 @@ pub(crate) fn suggest_path_args(_input_schema: &Value) -> Vec<String> {
 
 /// The string-only half of the check: is `value` a normalised absolute native
 /// path the gateway can judge exactly as the backend receives it? `None` when
-/// it is; otherwise the refusal reason. Inert in this commit: accepts all.
-pub(crate) fn precheck(_value: &str) -> Option<RootReason> {
-    None
+/// it is; otherwise the refusal reason.
+///
+/// Segments are the raw string split on the platform's separators, never
+/// `Path::components()`, which silently drops an interior `.`. On Windows a
+/// trailing dot or space, and an 8.3 short name (`~` then a digit), are
+/// refused too: Windows strips or expands them, so each could open a name
+/// the gateway did not check (W18). A file really named with `~1` is refused
+/// there, a stated limit.
+pub(crate) fn precheck(value: &str) -> Option<RootReason> {
+    if cfg!(windows) && value.starts_with(r"\\.\") {
+        return Some(RootReason::DevicePath);
+    }
+    if !std::path::Path::new(value).is_absolute() {
+        return Some(RootReason::NotAbsolute);
+    }
+    if value.contains('\0') {
+        return Some(RootReason::NotNormalised);
+    }
+    let separators: &[char] = if cfg!(windows) { &['/', '\\'] } else { &['/'] };
+    let unnormalised = value.split(separators).any(|segment| {
+        segment == "." || segment == ".." || (cfg!(windows) && windows_alias(segment))
+    });
+    unnormalised.then_some(RootReason::NotNormalised)
 }
 
-/// Compile one `path_args` entry. Inert in this commit: compiles nothing.
-pub(crate) fn compile_path_arg(_entry: &str) -> Result<PathArg, String> {
-    Err("not a path argument".to_string())
+/// A segment Windows resolves to another name: a trailing dot or space, or
+/// an 8.3 short name.
+fn windows_alias(segment: &str) -> bool {
+    let short_name = segment
+        .split('~')
+        .skip(1)
+        .any(|after| after.starts_with(|c: char| c.is_ascii_digit()));
+    segment.ends_with(['.', ' ']) || short_name
+}
+
+/// Compile one `path_args` entry: `segment ("." segment)* ("[]")? ("?")?`,
+/// where a segment is `[A-Za-z0-9_-]+`.
+pub(crate) fn compile_path_arg(entry: &str) -> Result<PathArg, String> {
+    let (body, optional) = entry
+        .strip_suffix('?')
+        .map_or((entry, false), |b| (b, true));
+    let (body, array) = body.strip_suffix("[]").map_or((body, false), |b| (b, true));
+    let segments: Vec<String> = body.split('.').map(str::to_string).collect();
+    let valid = |s: &String| {
+        !s.is_empty()
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    };
+    if segments.iter().all(valid) {
+        Ok(PathArg {
+            segments,
+            array,
+            optional,
+        })
+    } else {
+        Err("not a path argument".to_string())
+    }
 }
 
 #[cfg(test)]
