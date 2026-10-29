@@ -187,7 +187,7 @@ impl EventsHub {
         tokio::spawn(async move { hub.deliver_forever(&services).await });
         // C8: a revocation re-checks the per-user listeners at once. Weak, so
         // the watch never keeps a dropped hub alive.
-        let (weak, mut changed) = (Arc::downgrade(self), super::CREDENTIALS_CHANGED.subscribe());
+        let (weak, changed) = (Arc::downgrade(self), super::CREDENTIALS_CHANGED.subscribe());
         tokio::spawn(watch_credentials(weak, changed));
         // After a restart the upstream state is rebuilt from the store.
         let hub = Arc::clone(self);
