@@ -297,14 +297,17 @@ fn l5_load_errors_never_print_the_value() {
     assert!(!err.contains("SENTINEL-8939"), "value leaked: {err}");
 }
 
-/// L6: path_outside_root is output-only and no rule's scan may list it.
+/// L6: path_outside_root and root_refused are output-only, and no rule's
+/// scan may list either (root_refused: lead D8, agreed by consol4).
 #[test]
 fn l6_path_outside_root_is_not_listable_in_scan() {
-    assert_refused(
-        "{match: \"*\", action: block, scan: [path_outside_root]}",
-        "security.firewall.rules[0].scan",
-        "output-only",
-    );
+    for output_only in ["path_outside_root", "root_refused"] {
+        assert_refused(
+            &format!("{{match: \"*\", action: block, scan: [{output_only}]}}"),
+            "security.firewall.rules[0].scan",
+            "output-only",
+        );
+    }
 }
 
 /// L7, L8: a root rule's scan must be empty, and its action warn or block.
