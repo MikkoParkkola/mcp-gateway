@@ -354,14 +354,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
-    // src/gateway/ui/gateway_status.rs (gateway; admin-only read, like refusals)
-    row(
-        "/ui/api/gateway",
-        Method::GET,
-        "/ui/api/gateway",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
     // src/gateway/ui/mod.rs:520 (config)
     row(
         "/ui/api/config",
@@ -634,9 +626,11 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+/// Every row: this table, then the control-plane and gateway groups beside it.
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter()
+        .chain(control_plane::ROWS)
+        .chain(gateway_rows::ROWS)
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -807,6 +801,8 @@ async fn internal_routes_refuse_every_other_method() {
 
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]
