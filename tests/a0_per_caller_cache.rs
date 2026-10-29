@@ -169,8 +169,8 @@ impl Setup {
     }
 }
 
-/// A gateway with idempotency ON and the counting backend registered. The
-/// `TempDir` holds the task store and must outlive the test.
+/// A gateway with idempotency ON and the counting backend; the `TempDir` must outlive it.
+#[allow(clippy::too_many_lines, reason = "builds every AppState field by hand")]
 async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config {
         auth: setup.auth,
@@ -219,6 +219,7 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         env: None,
         meta_mcp,

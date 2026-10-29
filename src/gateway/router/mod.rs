@@ -53,6 +53,8 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+mod process_facts;
+pub use process_facts::{ProcessFacts, ProcessStart};
 mod view_judge;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
@@ -154,6 +156,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "webui"))]
+mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
@@ -440,6 +444,9 @@ pub struct AppState {
     /// without lifecycle wiring — tests and any embedder that does not run
     /// the reaper — in which case tracking and sweeping are both no-ops.
     pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
+    /// When this process started and what it recorded while starting. Set
+    /// where server start builds the state; the web UI's uptime counts from it.
+    pub process: Arc<ProcessFacts>,
 }
 
 /// Create the router.
