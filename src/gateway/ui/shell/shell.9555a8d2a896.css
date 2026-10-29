@@ -866,7 +866,8 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
   .menu { display: grid; place-items: center; width: 44px; height: 44px; font-size: 18px; color: var(--color-text-primary); background: none; border: 0; }
   .mbrand { display: flex; align-items: center; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; font-size: 15px; }
   .top .who { display: none; }
-  .top .stream { display: none; } /* the page banner carries a drop on a phone */
+  /* Hidden visually on a phone, where the page banner carries a drop; still in the accessibility tree. */
+  .top .stream { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .top .signout { display: none; }
   .menu-open .side-signout:not([hidden]) { display: flex; justify-content: center; margin: 16px; }
   .top .search { width: 44px; height: 44px; border: 0; padding: 0; justify-content: center; }

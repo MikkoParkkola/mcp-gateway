@@ -1041,8 +1041,7 @@ const runTab = (spec, route, into) => {
   livePage = { into, show };
   // A page drawn while the stream is down gets the stale state once its tab has drawn.
   const markStale = (drawn) => {
-    const down = streamStale();
-    if (down) show('stale', down);
+    if (guardHolds(guard)) markPageStale({ into, show });
     return drawn;
   };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
@@ -1401,6 +1400,8 @@ export async function refreshCounts() {
 
 /** Reconnect waits: one second at first, doubling to thirty at most. */
 const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
+/** A frame still unfinished past this many characters ends the stream as a drop. */
+const STREAM_FRAME_MAX = 64 * 1024;
 
 /**
  * The one live stream of this document, GET /ui/api/stream, read through
@@ -1410,23 +1411,54 @@ const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
  * open from a hello, dropped after an open stream ends (with `since`, when),
  * and unavailable when the first connect failed, until the next hello.
  */
-const stream = { gen: 0, abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null };
+const STREAM_FRESH = { lastId: null, hintMs: 0, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null, banner: null };
+const stream = { gen: 0, abort: null, timer: null, ...STREAM_FRESH };
 /** The page shown now and its banner, for the stale state on a drop. */
 let livePage = null;
 
-/** Open the stream, closing any earlier one first. */
+/** Open the stream for this identity, closing any earlier one first. */
 function openStream() {
   closeStream();
   connect(stream.gen);
 }
 
-/** Close the stream on purpose: no stale state and no reconnect follow. */
-function closeStream() {
+/** Stop the connection and its timer; what it knew (last id, phase, banner) stays. */
+function suspendStream() {
   stream.gen++;
   stream.abort?.abort();
   clearTimeout(stream.timer);
-  Object.assign(stream, { abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null });
+  Object.assign(stream, { abort: null, timer: null });
+}
+
+/** Reconnect after a restore from the back/forward cache, resuming from the last id. */
+function resumeStream() {
+  suspendStream();
+  connect(stream.gen);
+}
+
+/** Close the stream on purpose: no stale state and no reconnect follow. */
+function closeStream() {
+  suspendStream();
+  Object.assign(stream, STREAM_FRESH);
   drawStream();
+}
+
+/** Mark a page stale for the stream, unless a stale banner already shows there. */
+function markPageStale(page) {
+  const down = streamStale();
+  if (!down || !page?.into.isConnected) return;
+  const current = () => page.into.querySelector(':scope > .state[data-banner]');
+  if (current()?.dataset.state === 'stale') return; // the screen or the stream marked it already
+  page.show('stale', down);
+  const node = current();
+  if (node?.dataset.state === 'stale') stream.banner = { node, show: page.show, into: page.into };
+}
+
+/** Take away the stale banner the stream set, and only while it is still the one showing. */
+function clearPageStale() {
+  const mine = stream.banner;
+  stream.banner = null;
+  if (mine?.node.isConnected && mine.into.querySelector(':scope > .state[data-banner]') === mine.node) mine.show(null);
 }
 
 /** The stale banner options while the stream is down, else null. */
@@ -1454,7 +1486,7 @@ async function connect(gen) {
   const abort = new AbortController();
   stream.abort = abort;
   const epoch = authEpoch;
-  let retryAfterMs = 0;
+  let floorMs = 0;
   try {
     const reply = await fetch('/ui/api/stream', { credentials: 'same-origin', cache: 'no-store', headers, signal: abort.signal });
     if (gen !== stream.gen) return;
@@ -1463,9 +1495,9 @@ async function connect(gen) {
       if (epoch === authEpoch) showSignIn();
       return;
     }
-    // A first answer of 404 is a gateway without the stream: nothing to wait for.
-    if (reply.status === 404 && stream.phase === 'idle') return;
-    if (reply.status === 503) retryAfterMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
+    // A 404 is a gateway without the stream, or one not yet upgraded: ask again rarely.
+    if (reply.status === 404) floorMs = STREAM_WAIT_MS.most;
+    if (reply.status === 503) floorMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
     if (reply.ok && reply.body) await readStream(reply.body, gen);
   } catch {
     // No answer, or the read broke off; a close on purpose has moved `gen` on.
@@ -1475,10 +1507,10 @@ async function connect(gen) {
   if (stream.phase === 'open' || stream.phase === 'idle') {
     Object.assign(stream, stream.phase === 'open' ? { phase: 'dropped', since: new Date() } : { phase: 'unavailable' });
     drawStream();
-    if (livePage?.into.isConnected) livePage.show('stale', streamStale());
+    markPageStale(livePage);
   }
-  // Retry-After is a floor: the backoff still grows under it.
-  const wait = Math.max(stream.wait, retryAfterMs);
+  // The wait is the largest of the backoff, the hello retry hint and a Retry-After or 404 floor.
+  const wait = Math.max(stream.wait, stream.hintMs, floorMs);
   stream.wait = Math.min(stream.wait * 2, STREAM_WAIT_MS.most);
   stream.timer = setTimeout(() => { if (gen === stream.gen) connect(gen); }, wait);
 }
@@ -1494,12 +1526,16 @@ async function readStream(body, gen) {
     const blocks = buffer.split(/\r?\n\r?\n/);
     buffer = blocks.pop();
     for (const block of blocks) streamFrame(parseFrame(block));
+    if (buffer.length > STREAM_FRAME_MAX) {
+      stream.abort?.abort(); // ends the connection; the caller treats it as a drop
+      return;
+    }
   }
 }
 
 /** One frame: its event (message when unnamed), id and joined data lines. Comments drop out. */
 function parseFrame(block) {
-  const frame = { event: 'message', id: null, data: [] };
+  const frame = { event: 'message', id: null, retry: null, data: [] };
   for (const line of block.split(/\r?\n/)) {
     if (!line || line.startsWith(':')) continue;
     const at = line.indexOf(':');
@@ -1508,24 +1544,23 @@ function parseFrame(block) {
     if (field === 'event') frame.event = value;
     else if (field === 'id') frame.id = value;
     else if (field === 'data') frame.data.push(value);
+    else if (field === 'retry' && /^\d+$/.test(value)) frame.retry = Number(value);
   }
   return { ...frame, data: frame.data.join('\n') };
 }
 
 function streamFrame(frame) {
   if (frame.id) stream.lastId = frame.id;
+  if (frame.retry !== null) stream.hintMs = frame.retry; // the gateway jitters it on purpose
   if (frame.event === 'hello') {
-    const was = streamStale();
     Object.assign(stream, { phase: 'open', since: null, wait: STREAM_WAIT_MS.first });
     drawStream();
-    // Only a stale state the stream set is cleared: another banner stays.
-    const page = livePage?.into;
-    if (was && page?.isConnected && page.querySelector(':scope > .state[data-banner][data-state="stale"]')) livePage.show(null);
-    return;
+    clearPageStale(); // only the banner the stream set; a screen keeps its own
   }
-  // The status the page shows and an applied reload, for screens to follow.
-  // The To do count is not in a status frame, so refreshCounts() is not run here.
-  if (frame.event !== 'status' && frame.event !== 'reload') return;
+  // Hello on every connect, the status the page shows and an applied reload, for
+  // screens to follow. The To do count is not in a status frame, so refreshCounts()
+  // is not run here.
+  if (frame.event !== 'hello' && frame.event !== 'status' && frame.event !== 'reload') return;
   let detail;
   try {
     detail = JSON.parse(frame.data);
@@ -1800,9 +1835,10 @@ function boot() {
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
   for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
-  addEventListener('pagehide', closeStream);
+  // Leaving keeps the last id and any stale state, so a restore resumes and its hello clears it.
+  addEventListener('pagehide', suspendStream);
   addEventListener('pageshow', (ev) => {
-    if (ev.persisted && !document.body.classList.contains('signed-out')) openStream();
+    if (ev.persisted && !document.body.classList.contains('signed-out')) resumeStream();
   });
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();

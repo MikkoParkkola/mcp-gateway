@@ -115,7 +115,7 @@ test('ST3 the reconnect sends the last event id, and its hello clears the stale 
   await expect.poll(() => seen(page, 'gateway-reload')).toEqual([{ generation: 2 }]); // both frames read
   await stream.end();
   await expect(page.locator(STALE)).toHaveCount(1);
-  await page.clock.runFor(1000); // the first backoff
+  await page.clock.runFor(3000); // the hello retry hint, above the first backoff
   await expect.poll(stream.connects).toBe(2);
   expect((await stream.log())[1].lastEventId).toBe('b1.s4.r2');
   await stream.send(HELLO);
@@ -278,7 +278,7 @@ test('ST10 a page opened while the stream is down shows the stale state, and the
   await page.locator('nav.route-nav a[href="/ui/gateway"]').click();
   await expect(page.locator('#content')).toContainText('gateway - status');
   await expect(page.locator(`${STALE} h2`)).toHaveText(/^Updates stopped at .+ · reconnecting$/);
-  await page.clock.runFor(1000);
+  await page.clock.runFor(3000); // the hello retry hint, above the first backoff
   await expect.poll(stream.connects).toBe(2);
   await stream.send(HELLO);
   await expect(page.locator(STALE)).toHaveCount(0);
@@ -331,7 +331,7 @@ test('ST13 a reconnect clears only the stale banner the stream set, never one a 
   await stream.send(HELLO);
   await stream.end();
   await expect(page.locator(INDICATOR)).toHaveText(/^Updates stopped/);
-  await page.clock.runFor(1000);
+  await page.clock.runFor(3000); // the hello retry hint, above the first backoff
   await expect.poll(stream.connects).toBe(2);
   await stream.send(HELLO);
   await expect(page.locator(INDICATOR)).toHaveText('Live');
@@ -357,7 +357,7 @@ test('ST15 a frame larger than 64 KiB is a drop: stale state, then a reconnect',
   await stream.send(`event: status\ndata: "${'x'.repeat(70 * 1024)}`); // never ends
   await expect(page.locator(STALE)).toHaveCount(1);
   await expect.poll(async () => (await stream.log())[0].closed).toBe(true);
-  await page.clock.runFor(1000);
+  await page.clock.runFor(3000); // the hello retry hint, above the first backoff
   await expect.poll(stream.connects).toBe(2);
 });
 
@@ -384,7 +384,7 @@ test('ST17 every hello, first and after a reconnect, is a gateway-hello event', 
   const hello = { kinds: ['status', 'reload'], head: 'b1.s1.r1' };
   await expect.poll(() => page.evaluate(() => window.__hellos)).toEqual([hello]);
   await drop(page, stream);
-  await page.clock.runFor(1000);
+  await page.clock.runFor(3000); // the hello retry hint, above the first backoff
   await expect.poll(stream.connects).toBe(2);
   await stream.send(HELLO);
   await expect.poll(() => page.evaluate(() => window.__hellos)).toEqual([hello, hello]);
