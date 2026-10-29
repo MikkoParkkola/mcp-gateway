@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! T5/T6: the asset table's names are honest content hashes, and nothing
-//! the shell serves reaches outside this origin.
+//! the shell serves reaches outside this origin. T7: the tooltip copy is one
+//! of those assets, served as JSON.
 
 use super::*;
 
@@ -116,21 +117,22 @@ fn t6_the_shell_references_nothing_off_origin() {
         DOCUMENT.contains(r#"<script type="module" src="/ui/assets/shell."#),
         "the shell's module is loaded from the asset table"
     );
-    // Every asset is named by the document or by a stylesheet it loads
-    // (the fonts), so none ships unused.
-    let stylesheets: Vec<String> = ASSETS
+    // Every asset is named by the document, by a stylesheet it loads (the
+    // fonts), or by a script it loads (an imported module, fetched copy), so
+    // none ships unused.
+    let referrers: Vec<String> = ASSETS
         .iter()
         .filter(|(n, _)| {
-            std::path::Path::new(n)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+            std::path::Path::new(n).extension().is_some_and(|ext| {
+                ext.eq_ignore_ascii_case("css") || ext.eq_ignore_ascii_case("js")
+            })
         })
         .map(|(_, b)| String::from_utf8_lossy(b).into_owned())
         .collect();
     for (name, _) in ASSETS {
         let reference = format!("/ui/assets/{name}");
         assert!(
-            DOCUMENT.contains(&reference) || stylesheets.iter().any(|css| css.contains(&reference)),
+            DOCUMENT.contains(&reference) || referrers.iter().any(|text| text.contains(&reference)),
             "{name} is linked"
         );
     }
@@ -170,9 +172,95 @@ fn t6c_an_asset_type_follows_its_extension() {
         ("a.1.woff2", "font/woff2"),
         ("a.1.svg", "image/svg+xml"),
         ("a.1.png", "image/png"),
+        ("a.1.json", "application/json"),
         ("a.1.html", "application/octet-stream"),
         ("noext", "application/octet-stream"),
     ] {
         assert_eq!(content_type(file), want, "{file}");
     }
+}
+
+#[tokio::test]
+async fn t7_the_tooltip_copy_is_a_hashed_json_asset() {
+    let names: Vec<&str> = ASSETS
+        .iter()
+        .map(|(n, _)| *n)
+        .filter(|n| {
+            n.starts_with("tips.")
+                && std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+        })
+        .collect();
+    assert_eq!(names.len(), 1, "one tooltip copy asset: {names:?}");
+    let name = names[0];
+    let bytes = ASSETS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, b)| *b)
+        .unwrap_or_default();
+    let digest = crate::hashing::sha256_hex(bytes);
+    assert_eq!(name, format!("tips.{}.json", &digest[..12]));
+    let response = asset(Path(name.to_owned())).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers
+            .get(header::CONTENT_TYPE)
+            .map(axum::http::HeaderValue::as_bytes),
+        Some(&b"application/json"[..])
+    );
+    assert_eq!(
+        headers
+            .get(header::X_CONTENT_TYPE_OPTIONS)
+            .map(axum::http::HeaderValue::as_bytes),
+        Some(&b"nosniff"[..])
+    );
+}
+
+/// Every "load N tools" the shipped Tools screen or tooltip copy says, as N.
+fn load_counts(text: &str) -> Vec<u64> {
+    text.match_indices("load ")
+        .filter_map(|(i, m)| {
+            let rest = &text[i + m.len()..];
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            let after = &rest[digits.len()..];
+            if digits.is_empty() || !after.starts_with(" tools") {
+                None
+            } else {
+                digits.parse().ok()
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn t8_the_meta_tool_count_on_screen_is_the_gateways() {
+    // The Tools screen and its tooltip say how many tools agents load up front.
+    // That is the gateway's own meta-tool count, so a copied number fails here
+    // the day a meta-tool is added or removed.
+    let mut seen = 0;
+    for (name, bytes) in ASSETS
+        .iter()
+        .filter(|(n, _)| n.starts_with("tools.") || n.starts_with("tips."))
+    {
+        for n in load_counts(&String::from_utf8_lossy(bytes)) {
+            assert_eq!(
+                n,
+                crate::honest_task_tokens::README_META_TOOLS,
+                "{name} says agents load {n} tools"
+            );
+            seen += 1;
+        }
+    }
+    assert!(
+        seen >= 2,
+        "the screen and its copy both state the count ({seen} found)"
+    );
+}
+
+#[test]
+fn t8a_the_count_reader_finds_a_planted_number() {
+    assert_eq!(load_counts("Agents load 12 tools and"), vec![12]);
+    assert_eq!(load_counts("load the tools"), Vec::<u64>::new());
 }
