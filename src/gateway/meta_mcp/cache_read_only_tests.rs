@@ -354,26 +354,34 @@ async fn a_capability_not_declared_read_only_is_never_served_from_cache() {
     );
 }
 
-/// R15: dispatch picks the capability before a registry backend of the same
-/// name (dispatch.rs:248), so the gate must too. The backend declares `toggle`
-/// read-only; the capability `toggle` does not.
+/// R15: a capability backend sharing a registry backend's name is refused
+/// before the cache gate, so neither declaration decides: the backend declares
+/// `toggle` read-only and the capability `toggle` does not, and no call is
+/// served or cached. Config load refuses the pair; this is the runtime clash.
 #[tokio::test]
-async fn a_capability_shadowing_a_backend_is_judged_by_its_own_declaration() {
+async fn a_capability_sharing_a_backends_name_is_refused_before_the_cache() {
     let fx = backend("capabilities", "toggle", ann(READ_ONLY), true).await;
     let meta = fx.meta();
     let hits = counting_capability(&meta, "toggle", "  read_only: false\n").await;
-    invoke(&meta, "capabilities", "toggle").await;
-    invoke(&meta, "capabilities", "toggle").await;
+    for attempt in 1..=2 {
+        let outcome = meta
+            .invoke_tool(
+                &json!({"server": "capabilities", "tool": "toggle", "arguments": {}}),
+                Some("session-1"),
+                &allow_all_ctx_named(Some("alice"), None),
+            )
+            .await;
+        assert!(
+            matches!(outcome, Err(crate::Error::AmbiguousBackend { .. })),
+            "attempt {attempt} is refused as the clash, not served: {outcome:?}"
+        );
+    }
     assert_eq!(
         hits.load(Ordering::SeqCst),
-        2,
-        "the backend's declaration admitted the capability"
-    );
-    assert_eq!(
-        fx.calls(),
         0,
-        "the capability, not the backend, serves the call"
+        "the capability is not called"
     );
+    assert_eq!(fx.calls(), 0, "the backend is not called");
 }
 
 /// R16: with no capability and no backend there is nothing to declare, so
