@@ -180,60 +180,162 @@ fn caller() -> VerifiedIdentity {
     }
 }
 
-async fn post_direct(router: &axum::Router, body: &Value) -> axum::http::StatusCode {
+/// POST `body` to `uri` as the verified caller, with the modern protocol
+/// headers a meta call needs; returns the status and the parsed answer.
+async fn post(router: &axum::Router, uri: &str, body: &Value) -> (axum::http::StatusCode, Value) {
     let mut request = axum::http::Request::builder()
         .method("POST")
-        .uri(format!("/mcp/{BACKEND}"))
+        .uri(uri)
         .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28");
+    if let Some(method) = body["method"].as_str() {
+        request = request.header("mcp-method", method);
+    }
+    if let Some(name) = body["params"]["name"].as_str() {
+        request = request.header("mcp-name", name);
+    }
+    let mut request = request
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
     request.extensions_mut().insert(caller());
     let response = router.clone().oneshot(request).await.expect("an answer");
     let status = response.status();
-    let _ = to_bytes(response.into_body(), usize::MAX).await;
-    status
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
 }
 
-/// A direct-route `tools/call` on a required per-user backend.
-async fn direct_call(len: usize, name: &str) {
+/// What a baseline row does: its label, the request, and where it goes.
+struct Row {
+    label: &'static str,
+    uri: String,
+    body: Value,
+    /// The minted value: the token itself, or a variant the mint must refuse.
+    minted: fn(usize) -> &'static str,
+    /// Whether the measured request is served (premise), or refused.
+    served: bool,
+}
+
+fn plain(len: usize) -> &'static str {
+    token(len)
+}
+
+/// A minted value no header may carry: header validation refuses it after
+/// the strategy produced it.
+fn invalid(len: usize) -> &'static str {
+    Box::leak(format!("{}\nx", token(len)).into_boxed_str())
+}
+
+async fn measure(row: Row, len: usize, name: &str) {
     if in_child(name) {
         return;
     }
-    let minted = token(len);
+    let minted = (row.minted)(len);
+    let marker = token(len).as_bytes();
     let (url, sends) = peer().await;
     let (router, _dirs) = gateway(url, minted).await;
-    let call = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+    // Warm: the slot starts and lists once outside the measurement. A row
+    // whose mint is refused warms into the same refusal; the warm-up's
+    // outcome is not a premise.
+    let warm = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
-    // Warm: the slot starts and lists once outside the measurement.
-    assert_eq!(
-        post_direct(&router, &call).await,
-        axum::http::StatusCode::OK
-    );
+    let _ = post(&router, &format!("/mcp/{BACKEND}"), &warm).await;
     let before = sends.load(std::sync::atomic::Ordering::SeqCst);
-    let (status, scanned, census) =
-        scan_dispatch(minted.as_bytes(), || post_direct(&router, &call)).await;
+    let ((status, answer), scanned, census) =
+        scan_dispatch(marker, || post(&router, &row.uri, &row.body)).await;
+    let served = status == axum::http::StatusCode::OK
+        && answer.get("error").is_none()
+        && answer["result"]["isError"] != json!(true);
     assert_eq!(
-        status,
-        axum::http::StatusCode::OK,
-        "premise: the call was served"
+        served, row.served,
+        "premise: {} served={served}: {status} {answer}",
+        row.label
     );
-    let sent = sends.load(std::sync::atomic::Ordering::SeqCst) - before;
-    assert!(
-        census.taken >= 1,
-        "premise: a census ran mid-send: {census:?}"
-    );
-    report("direct tools/call", len, scanned, census, sent);
+    let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - before;
+    report(row.label, len, scanned, census, requests);
 }
 
-#[tokio::test]
-async fn baseline_direct_call_long() {
-    direct_call(LONG, "baseline_direct_call_long").await;
+fn direct(method: &str, params: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 }
 
-#[tokio::test]
-async fn baseline_direct_call_short() {
-    direct_call(SHORT, "baseline_direct_call_short").await;
+fn call_row() -> Row {
+    Row {
+        label: "direct tools/call",
+        uri: format!("/mcp/{BACKEND}"),
+        body: direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}})),
+        minted: plain,
+        served: true,
+    }
 }
+
+fn list_row() -> Row {
+    Row {
+        label: "direct tools/list",
+        uri: format!("/mcp/{BACKEND}"),
+        body: direct("tools/list", json!({})),
+        minted: plain,
+        served: true,
+    }
+}
+
+fn refused_row() -> Row {
+    Row {
+        label: "direct refused (tool not listed)",
+        uri: format!("/mcp/{BACKEND}"),
+        body: direct("tools/call", json!({"name": "not-listed", "arguments": {}})),
+        minted: plain,
+        served: false,
+    }
+}
+
+fn failed_mint_row() -> Row {
+    Row {
+        label: "failed mint (invalid header)",
+        uri: format!("/mcp/{BACKEND}"),
+        body: direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}})),
+        minted: invalid,
+        served: false,
+    }
+}
+
+fn meta_row() -> Row {
+    Row {
+        label: "meta gateway_invoke",
+        uri: "/mcp".to_string(),
+        body: direct(
+            "tools/call",
+            json!({"name": "gateway_invoke",
+                "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}}),
+        ),
+        minted: plain,
+        served: true,
+    }
+}
+
+macro_rules! baseline {
+    ($name:ident, $row:expr, $len:expr) => {
+        #[tokio::test]
+        async fn $name() {
+            measure($row, $len, stringify!($name)).await;
+        }
+    };
+}
+
+baseline!(baseline_direct_call_long, call_row(), LONG);
+baseline!(baseline_direct_call_short, call_row(), SHORT);
+baseline!(baseline_direct_list_long, list_row(), LONG);
+baseline!(baseline_direct_list_short, list_row(), SHORT);
+baseline!(baseline_refused_long, refused_row(), LONG);
+baseline!(baseline_refused_short, refused_row(), SHORT);
+baseline!(baseline_failed_mint_long, failed_mint_row(), LONG);
+baseline!(baseline_failed_mint_short, failed_mint_row(), SHORT);
+baseline!(baseline_meta_call_long, meta_row(), LONG);
+baseline!(baseline_meta_call_short, meta_row(), SHORT);
 
 /// The HTTP client alone: the same `Authorization` header sent by a bare
 /// client to the same peer. Its frees and live copies are the client's share,
