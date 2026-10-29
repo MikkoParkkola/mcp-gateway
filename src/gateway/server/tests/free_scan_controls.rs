@@ -9,7 +9,7 @@ use std::hint::black_box;
 
 use zeroize::Zeroizing;
 
-use super::alloc_meter::{MIN_MARKER, isolate, scan_frees};
+use super::alloc_meter::{MIN_MARKER, isolate, scan_dispatch, scan_frees, take_census};
 
 /// A marker no other test writes, longer than any inline storage.
 const MARKER: &[u8] =
@@ -85,5 +85,28 @@ fn a_wiped_holder_that_grew_leaves_its_old_block() {
     assert!(
         scanned.hits >= 1,
         "the block a growing holder left behind was not seen: {scanned:?}"
+    );
+}
+
+/// The live census counts every block alive at the census that holds the
+/// marker, wiped-on-drop holders included: three live copies are three.
+#[tokio::test]
+async fn the_census_counts_live_copies_wiped_or_not() {
+    if isolate(&test_path("the_census_counts_live_copies_wiped_or_not")) {
+        return;
+    }
+    let ((), _, census) = scan_dispatch(MARKER, || async {
+        let plain = black_box(marker());
+        let other = black_box(MARKER.to_vec());
+        let wiped = black_box(Zeroizing::new(MARKER.to_vec()));
+        take_census();
+        drop((plain, other, wiped));
+    })
+    .await;
+    assert_eq!(census.taken, 1, "premise: one census ran: {census:?}");
+    assert!(!census.overflow, "the block table overflowed: {census:?}");
+    assert_eq!(
+        census.most_live_copies, 3,
+        "three live copies, one wiped on drop: {census:?}"
     );
 }

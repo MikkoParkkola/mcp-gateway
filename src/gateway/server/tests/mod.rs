@@ -21,6 +21,7 @@ mod invoke_argument_copies;
 mod is_connected_count;
 #[cfg(feature = "firewall")]
 mod judge_allocations;
+mod live_census;
 mod mik8488_alloc_probe;
 mod per_call_timing;
 mod signing_nonce_allocations;

@@ -91,12 +91,21 @@ static SCAN_WATCH_FREED: AtomicBool = AtomicBool::new(false);
 /// included) holds the armed marker. Reads only the block and the marker,
 /// never allocates, never unwinds.
 fn holds_marker(ptr: *const u8, size: usize) -> bool {
+    let len = SCAN_LEN.load(Ordering::Acquire);
+    if SCAN_MARKER.load(Ordering::Acquire).is_null() || len == 0 || size < len {
+        return false;
+    }
+    SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
+    marker_in(ptr, size)
+}
+
+/// [`holds_marker`] without counting the search: the census's view.
+fn marker_in(ptr: *const u8, size: usize) -> bool {
     let marker = SCAN_MARKER.load(Ordering::Acquire);
     let len = SCAN_LEN.load(Ordering::Acquire);
     if marker.is_null() || len == 0 || size < len {
         return false;
     }
-    SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
     // Bytes are read one at a time through `read_volatile`: part of a block
     // may never have been written (a vector's spare capacity), and a volatile
     // read keeps the compiler from assuming anything about it.
@@ -140,12 +149,16 @@ fn record(bytes: usize) {
 unsafe impl GlobalAlloc for MeteredSystem {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
-        unsafe { System.alloc(layout) }
+        let block = unsafe { System.alloc(layout) };
+        super::live_census::on_alloc(block, layout.size());
+        block
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
         record(layout.size());
-        unsafe { System.alloc_zeroed(layout) }
+        let block = unsafe { System.alloc_zeroed(layout) };
+        super::live_census::on_alloc(block, layout.size());
+        block
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
@@ -157,7 +170,18 @@ unsafe impl GlobalAlloc for MeteredSystem {
         // Searched before the move, counted only if the block did move: a
         // block grown in place was not returned.
         let held = holds_marker(ptr, layout.size());
+        // Forgotten before the call (a census must not read it once it may
+        // be returned), recorded again at its new place and size.
+        super::live_census::on_free(ptr);
         let moved = unsafe { System.realloc(ptr, layout, new_size) };
+        super::live_census::on_alloc(
+            if moved.is_null() { ptr } else { moved },
+            if moved.is_null() {
+                layout.size()
+            } else {
+                new_size
+            },
+        );
         if !moved.is_null() && moved != ptr {
             if held {
                 SCAN_HITS.fetch_add(1, Ordering::Relaxed);
@@ -176,6 +200,7 @@ unsafe impl GlobalAlloc for MeteredSystem {
         if holds_marker(ptr, layout.size()) {
             SCAN_HITS.fetch_add(1, Ordering::Relaxed);
         }
+        super::live_census::on_free(ptr);
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -476,4 +501,59 @@ pub(crate) fn scan_frees_watching<T>(
     let value = body();
     drop(scope);
     (value, scanned())
+}
+
+/// What the live census saw during a scanned dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Census {
+    /// Censuses taken (each [`take_census`] call while armed).
+    pub(crate) taken: u64,
+    /// The most live blocks holding the marker that one census found: copies
+    /// alive at once, wiped on drop or not.
+    pub(crate) most_live_copies: u64,
+    /// The block table filled up; the counts are then a lower bound.
+    pub(crate) overflow: bool,
+}
+
+/// Count, now, every live block holding the armed marker. A test calls this
+/// from a probe point (for example inside a fake backend's handler, mid-send).
+/// Does nothing unless a [`scan_dispatch`] is running.
+pub(crate) fn take_census() {
+    super::live_census::take(marker_in);
+}
+
+/// Run an awaited body with the free scan and the live census armed on
+/// `marker`, the future constructed inside. Returns the body's value, what
+/// the free scan saw, and what the censuses taken during it saw.
+pub(crate) async fn scan_dispatch<F, Fut>(
+    marker: &'static [u8],
+    make: F,
+) -> (Fut::Output, Scanned, Census)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    /// Disarms the census on unwind as well.
+    struct CensusScope;
+    impl Drop for CensusScope {
+        fn drop(&mut self) {
+            super::live_census::disarm();
+        }
+    }
+    let scope = arm_scan(marker);
+    super::live_census::arm();
+    let census = CensusScope;
+    let value = make().await;
+    drop(census);
+    drop(scope);
+    let (taken, most_live_copies, overflow) = super::live_census::result();
+    (
+        value,
+        scanned(),
+        Census {
+            taken,
+            most_live_copies,
+            overflow,
+        },
+    )
 }
