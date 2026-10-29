@@ -50,7 +50,9 @@ fn item_end(code: &[u8], start: usize) -> Option<usize> {
                     let rest = next.map_or(&[][..], |n| &code[i + 1 + n..]);
                     match rest.first() {
                         Some(b';' | b',') => return Some(i + 1 + next.unwrap_or(0) + 1),
-                        Some(b'.' | b'?') => {}
+                        // `..` after a block starts a range, the next item.
+                        Some(b'.') if rest.get(1) != Some(&b'.') => {}
+                        Some(b'?') => {}
                         _ if continues_with_else(rest) => {}
                         _ => return Some(i + 1),
                     }
