@@ -1,0 +1,1 @@
+src/gateway/server/stdio_tasks.rs	default_auth	1	standard	borderline	default_auth	Builds the auth stdio's generations judge listeners with, from the default auth config so the gateway's own auth is never resolved there; a mistake would silently judge stdio listeners against the wrong key table or turn stdio tasks off on an unresolvable key.
