@@ -51,6 +51,7 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+mod secret_send;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
@@ -291,6 +292,10 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Resolves this backend's `secrets:` values; stamped by its registry.
+    /// Unstamped, a call a rule applies to is refused: it never resolves
+    /// against the process environment in place of the gateway's own.
+    secret_resolver: std::sync::OnceLock<Arc<crate::secrets::SecretResolver>>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,

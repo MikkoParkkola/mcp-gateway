@@ -1,0 +1,13 @@
+src/gateway/router/handlers/dispatch_intake_session.rs	record_client_name	1	Keeps the display-only client name on its own session; nothing reads it to decide access, routing or attribution.
+src/gateway/router/process_facts.rs	now	1	Reads the clock for the process start shown on the Gateway page; decides nothing.
+src/gateway/router/process_facts.rs	new	1	Builds the start facts the Gateway page shows; decides nothing.
+src/gateway/router/process_facts.rs	uptime_secs	1	Elapsed seconds since start, for display; decides nothing.
+src/gateway/router/process_facts.rs	started_at	1	Start time, for display; decides nothing.
+src/gateway/router/process_facts.rs	upgrade	1	The version change recorded at start, for display; decides nothing.
+src/gateway/router/process_facts.rs	record_refused_at_start	1	Stores the start-time refusal snapshot for display; decides nothing.
+src/gateway/router/process_facts.rs	refused_at_start	1	Reads that snapshot for display; decides nothing.
+src/gateway/router/process_facts.rs	default	1	Start facts for a state built without a server start; decides nothing.
+src/gateway/router/process_facts.rs	host_name	1	The host name resolved at start, for display; decides nothing.
+src/gateway/router/process_facts.rs	resolve_host_name	1	Reads the host name from the environment or kernel, for display; decides nothing.
+src/gateway/router/process_facts.rs	node_name	1	The kernel node name, for display; decides nothing.
+src/gateway/router/process_facts.rs	node_name	2	No node name off Unix; decides nothing.
