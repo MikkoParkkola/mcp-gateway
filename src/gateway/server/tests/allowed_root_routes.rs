@@ -27,7 +27,7 @@ while IFS= read -r line; do
     *'"method":"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fs","version":"0"}}}\n' "$id" ;;
     *'"method":"tools/list"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"read_file","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},{"name":"read_multiple_files","inputSchema":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}}}}}]}}\n' "$id" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"read_file","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"a":{"type":"object"}}}},{"name":"read_multiple_files","inputSchema":{"type":"object","properties":{"paths":{"type":"array","items":{"type":"string"}}}}}]}}\n' "$id" ;;
     *'"method":"tools/call"'*)
       printf '%s\n' "$line" >> __LOG__
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"ok"}]}}\n' "$id" ;;
@@ -164,7 +164,13 @@ impl Routes {
         let bytes = to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("body");
-        serde_json::from_slice(&bytes)
-            .unwrap_or_else(|_| json!({"raw": String::from_utf8_lossy(&bytes)}))
+        let text = String::from_utf8_lossy(&bytes);
+        // A streamable-HTTP answer may come as one server-sent event: the
+        // JSON-RPC message is its `data:` line.
+        let message = text
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap_or(&text);
+        serde_json::from_str(message).unwrap_or_else(|_| json!({"raw": text}))
     }
 }
