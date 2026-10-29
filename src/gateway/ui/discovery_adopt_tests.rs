@@ -342,3 +342,20 @@ fn a_key_the_serializer_quotes_is_adopted() {
     let config = crate::config::Config::from_file_text(&out).expect("loads");
     assert_eq!(config.backends["tool"].env["X: Y"], reference);
 }
+
+/// Keys whose bytes the placeholder escapes (`~`, Unicode, both quotes),
+/// and two keys that would collide if `~` itself were not escaped: each
+/// reference lands under its own key.
+#[test]
+fn escaped_keys_each_take_their_own_reference() {
+    let keys = ["T~1", "ключ", "say \"hi\"", "it's", "X~3aY", "X:Y"];
+    let slots: Vec<(bool, String)> = keys.iter().map(|k| (false, (*k).to_owned())).collect();
+    let references: Vec<String> = (0..keys.len())
+        .map(|n| format!("file:/secrets/k{n}"))
+        .collect();
+    let out = run("backends: {}\n", &slots, &references, stdio_backend(), &[]).expect("spliced");
+    let config = crate::config::Config::from_file_text(&out).expect("loads");
+    for (key, reference) in keys.iter().zip(&references) {
+        assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
+    }
+}

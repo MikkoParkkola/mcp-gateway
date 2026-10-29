@@ -296,6 +296,54 @@ async fn a_reload_dropped_mid_recovery_keeps_the_lock_and_the_sink() {
     );
 }
 
+/// A crashed write whose config is gone: the recovery intent names the
+/// empty revision, and the recovery goes ahead.
+#[tokio::test]
+async fn a_missing_config_is_recorded_as_the_empty_revision() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    std::fs::remove_file(&path).expect("remove the config");
+    let recorder = Recorder::new(&path, false);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+
+    drop(ctx.reload_outcome().await);
+
+    let seen = recorder.seen.lock().expect("lock");
+    assert_eq!(seen.len(), 1, "one recovery intent");
+    assert_eq!(seen[0].intent.base, FileRevision::of(b""));
+    assert!(
+        !journal::journal_path(&path).exists(),
+        "nothing was recovered"
+    );
+}
+
+/// A crashed write whose config cannot be read (here a directory stands
+/// in its place): no intent is appended and nothing is recovered.
+#[tokio::test]
+async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    std::fs::remove_file(&path).expect("remove the config");
+    std::fs::create_dir(&path).expect("a directory in its place");
+    let recorder = Recorder::new(&path, false);
+    ctx.set_recovery_audit(Box::new(recorder.clone()));
+
+    let skipped = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the reload is skipped");
+
+    assert!(skipped.contains("for the recovery's record"), "{skipped}");
+    assert!(
+        recorder.kinds().is_empty(),
+        "an intent named a revision never read"
+    );
+    assert!(
+        journal::journal_path(&path).exists(),
+        "the journal was settled"
+    );
+}
+
 /// Every `.rs` file under `dir`, test files excluded.
 fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("list src") {
