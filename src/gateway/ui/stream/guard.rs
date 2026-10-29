@@ -74,6 +74,14 @@ struct Shared {
     /// aborted (the last guard's drop) or finished; an aborted watcher's
     /// guard drops with it, so the lock never outlives a cancellable watcher.
     /// Waiting for it is cancel-safe, unlike a chain of join handles.
+    ///
+    /// Release is bounded by cancellation: the retire path always aborts the
+    /// old watcher, which takes effect at its next await. What runs under the
+    /// lock is `status_body`, which takes only short in-memory locks and none
+    /// of them is held across a log write (see the commit that moved the
+    /// breaker and descriptor-gate log lines after their guards drop,
+    /// 42af5031f). A watcher stuck in synchronous code with no await is the
+    /// one case abort cannot interrupt.
     publish_lock: Arc<tokio::sync::Mutex<()>>,
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
