@@ -30,7 +30,7 @@ struct Fixture {
     state: Arc<AppState>,
     id: String,
     revision: u64,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 /// A freshly created working row owned by [`OWNER`], beside a live host.

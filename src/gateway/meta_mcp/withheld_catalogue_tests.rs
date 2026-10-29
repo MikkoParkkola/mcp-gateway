@@ -74,7 +74,14 @@ impl crate::transport::Transport for Listing {
 
 /// A multi-user gateway whose per-user backend holds `shared` in the shared
 /// slot and `caller` (the tool with that schema, or no tool) in alpha's.
-fn gateway(caller: Option<&Value>, shared: &Value) -> MetaMcp {
+/// A gateway and its audit log. Fields drop in declaration order, so the log
+/// goes after the `MetaMcp` that writes to it.
+struct Gateway {
+    meta: MetaMcp,
+    _log: crate::security::transparency_log::temp::TempLog,
+}
+
+fn gateway(caller: Option<&Value>, shared: &Value) -> Gateway {
     let backend = Arc::new(Backend::new(
         BACKEND,
         BackendConfig {
@@ -108,14 +115,15 @@ fn gateway(caller: Option<&Value>, shared: &Value) -> MetaMcp {
     backend.store_shared_tools_for_test(shared_tools);
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut meta = MetaMcp::new(registry);
-    install_minting(&mut meta);
+    install_minting(&mut meta, &log);
     meta.set_multi_user(true);
     // alpha's catalogue, as alpha's own fill leaves it (stored and indexed).
     let alpha = identity("alpha");
     let proof = MetaMcp::proof_of(&identified_caller(&alpha));
     meta.seed_caller_catalogue_for_test(BACKEND, proof, BINDING, caller_tools);
-    meta
+    Gateway { meta, _log: log }
 }
 
 /// `gateway_list_tools` for `BACKEND` as alpha.
@@ -142,8 +150,8 @@ fn entry<'a>(listed: &'a Value, name: &str) -> Option<&'a Value> {
 /// exactly as where its catalogue lacks it. RED on base.
 #[tokio::test]
 async fn row10_caller_invalid_schema_is_listed_as_absent() {
-    let withheld = listing(&gateway(Some(&invalid()), &valid())).await;
-    let absent = listing(&gateway(None, &valid())).await;
+    let withheld = listing(&gateway(Some(&invalid()), &valid()).meta).await;
+    let absent = listing(&gateway(None, &valid()).meta).await;
     assert!(
         entry(&absent, SIBLING).is_some(),
         "premise: the caller's sibling is not listed: {absent}"
@@ -162,7 +170,7 @@ async fn row10_caller_invalid_schema_is_listed_as_absent() {
 /// shows the tool, with the caller's schema where it shows one.
 #[tokio::test]
 async fn row10_caller_valid_schema_is_listed_from_the_callers_view() {
-    let listed = listing(&gateway(Some(&valid()), &invalid())).await;
+    let listed = listing(&gateway(Some(&valid()), &invalid()).meta).await;
     let shown = entry(&listed, TOOL)
         .unwrap_or_else(|| panic!("row 10 control: the caller's valid tool is hidden: {listed}"));
     if let Some(schema) = shown.get("inputSchema") {
@@ -201,12 +209,12 @@ async fn row10b_the_disabled_list_omits_a_schema_withheld_tool() {
             .as_array()
             .is_some_and(|all| all.iter().any(|e| e["capability"] == TOOL))
     };
-    let control = disabled_listing(&gateway(Some(&valid()), &valid()));
+    let control = disabled_listing(&gateway(Some(&valid()), &valid()).meta);
     assert!(
         named(&control),
         "premise: the valid disabled tool is not named: {control}"
     );
-    let withheld = disabled_listing(&gateway(Some(&invalid()), &invalid()));
+    let withheld = disabled_listing(&gateway(Some(&invalid()), &invalid()).meta);
     assert!(
         !named(&withheld),
         "row 10b: a schema-withheld tool is named: {withheld}"
@@ -240,13 +248,13 @@ async fn miss_text(meta: &MetaMcp) -> String {
 /// (valid for the caller) is suggested.
 #[tokio::test]
 async fn row10c_a_miss_never_suggests_a_tool_the_callers_schema_withholds() {
-    let control = miss_text(&gateway(Some(&valid()), &valid())).await;
+    let control = miss_text(&gateway(Some(&valid()), &valid()).meta).await;
     assert!(
         control.contains(TOOL) && control.contains("reaf"),
         "premise: the miss does not suggest the caller's valid tool: {control}"
     );
-    let withheld = miss_text(&gateway(Some(&invalid()), &valid())).await;
-    let absent = miss_text(&gateway(None, &valid())).await;
+    let withheld = miss_text(&gateway(Some(&invalid()), &valid()).meta).await;
+    let absent = miss_text(&gateway(None, &valid()).meta).await;
     assert_eq!(
         withheld, absent,
         "row 10c: withheld {withheld} vs absent {absent}"

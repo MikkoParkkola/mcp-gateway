@@ -128,7 +128,7 @@ struct Gateway {
     /// The served task executor: its store's committed rows (MIK-8406).
     tasks: Arc<crate::gateway::task_service::TaskExecutor>,
     /// The task store's directory, kept for the gateway's lifetime.
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     _dir: tempfile::TempDir,
 }
 

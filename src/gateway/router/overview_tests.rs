@@ -65,7 +65,10 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on, one admin and one standard key, and `servers` registered
 /// backends named `name-NNN` (`long` pads each name to 200 characters).
-async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture(
+    servers: usize,
+    long: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
