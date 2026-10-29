@@ -241,8 +241,7 @@ async fn measure(row: Row, len: usize, name: &str) {
     // Warm: the slot starts and lists once outside the measurement. A row
     // whose mint is refused warms into the same refusal; the warm-up's
     // outcome is not a premise.
-    let warm = json!({"jsonrpc": "2.0", "id": 0, "method": "tools/call",
-        "params": {"name": TOOL, "arguments": {"q": "x"}}});
+    let warm = direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}}));
     let _ = post(&router, &format!("/mcp/{BACKEND}"), &warm).await;
     let before = sends.load(std::sync::atomic::Ordering::SeqCst);
     let ((status, answer), scanned, census) =
@@ -259,7 +258,13 @@ async fn measure(row: Row, len: usize, name: &str) {
     report(row.label, len, scanned, census, requests);
 }
 
-fn direct(method: &str, params: Value) -> Value {
+/// A modern request: the protocol header a call sends requires the same
+/// version and the client's capabilities in the params' `_meta`.
+fn direct(method: &str, mut params: Value) -> Value {
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
+    });
     json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
 }
 
