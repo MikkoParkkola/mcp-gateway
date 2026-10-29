@@ -535,6 +535,12 @@ async fn noting_a_counted_member_raises_annotated() {
 /// on both branches that write them (no contract declared; a declared
 /// contract violated), and an answer the declared contract admits stays
 /// `delivered`: each noted contract member is counted where it is written.
+///
+/// "No contract declared" annotates by design, not by accident: with
+/// `fail_closed` on, a tool with no declared contract is itself a violation,
+/// and in observe mode (`action_mode` off) the gate writes
+/// `_contract_violation: true` and `_contract_reason: "no_contract_declared"`
+/// through `write_contract` (src/gateway/meta_mcp/invoke/policy.rs:527-547).
 #[tokio::test]
 async fn a_contract_annotation_records_annotated() {
     use std::sync::Arc;
