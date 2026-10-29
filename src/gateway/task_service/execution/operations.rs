@@ -77,7 +77,8 @@ impl TaskExecutor {
     /// stage.
     ///
     /// An observer that reaches the `AppState` (or anything else that owns
-    /// this executor) must hold it weakly and upgrade when it fires. The
+    /// this executor) must hold it weakly and upgrade when it fires, returning
+    /// without acting when the upgrade fails: the owner is gone. The
     /// executor keeps its observer, so a strong share is a cycle that is never
     /// freed: the state, its task store and the store's directory outlive the
     /// caller. In #4311 two tests left a task-store folder behind on every run
@@ -217,8 +218,9 @@ impl TaskExecutor {
     /// because a hook failure is a store failure and this seam is a barrier.
     ///
     /// A barrier that reaches the `AppState` (or anything else that owns this
-    /// executor) must hold it weakly and upgrade when it fires: the store
-    /// keeps the barrier, so a strong share is a cycle that is never freed, and
+    /// executor or its store) must hold it weakly and upgrade when it fires,
+    /// returning without acting when the upgrade fails: the store keeps the
+    /// barrier, so a strong share is a cycle that is never freed, and
     /// the state, its task store and the store's directory outlive the test.
     /// In #4311 a test left a task-store folder behind on every run this way.
     #[cfg(test)]
