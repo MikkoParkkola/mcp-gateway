@@ -255,13 +255,36 @@ async fn lease_t2b_a_notice_read_under_the_old_token_is_never_stamped_with_the_n
     );
     // Whatever the old stream still yields must not carry the narrow token's
     // generation. A replace that closed it leaves nothing to read.
-    if peer.push_tools_changed(0) {
-        fan_out_next(&f, &mut intake).await;
-    }
-    let stamps = outbox_stamps(&f);
+    // The replace ends the session read under the wide token and reopens
+    // under the narrow one; the peer sees both, in either order.
+    let mut after = vec![peer.next().await, peer.next().await];
+    after.sort_by_key(|s| format!("{s:?}"));
+    assert_eq!(
+        after,
+        [Some(Stream::Closed(0)), Some(Stream::Opened(1))],
+        "premise: the replace reopened under the narrow token"
+    );
     assert!(
-        !stamps.contains(&Some(narrow_stamp)),
-        "a notice read under the wide token was stamped with the narrow one: {stamps:?}"
+        !peer.push_tools_changed(0),
+        "the wide stream is gone: nothing more is read under the wide token"
+    );
+    // Control: a notice read under the narrow token is stamped as read.
+    assert!(
+        peer.push_tools_changed(1),
+        "premise: the narrow stream is open"
+    );
+    assert!(
+        fan_out_next(&f, &mut intake).await,
+        "the narrow notice was read"
+    );
+    // The outbox is a directory, read in no set order.
+    let mut stamps = outbox_stamps(&f);
+    stamps.sort();
+    let mut want = vec![Some(wide_stamp), Some(narrow_stamp)];
+    want.sort();
+    assert_eq!(
+        stamps, want,
+        "each notice carries the lease it was read under"
     );
 }
 
@@ -327,11 +350,23 @@ async fn a_passthrough_stamp_comes_only_from_a_leased_runs_fence() {
         Some(stamp_now(&f)),
         "no fence: the lease held now"
     );
+    let stamp = "0123456789abcdef0123456789abcdef";
     assert_eq!(
-        lease_of(Some("lease:00ab")),
-        Some("00ab".to_owned()),
+        lease_of(Some(format!("lease:{stamp}").as_str())),
+        Some(stamp.to_owned()),
         "a leased run's own generation"
     );
+    for malformed in [
+        "lease:00ab",
+        "lease:0123456789ABCDEF0123456789ABCDEF",
+        "lease:",
+    ] {
+        assert_eq!(
+            lease_of(Some(malformed)),
+            None,
+            "{malformed}: not a generation"
+        );
+    }
     assert_eq!(
         lease_of(Some("binding-7")),
         None,
