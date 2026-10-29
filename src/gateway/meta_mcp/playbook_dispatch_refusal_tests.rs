@@ -95,12 +95,7 @@ async fn run(
             ctx(&RefusesArguments),
         ))
         .await;
-        delivery_facts::record_fields(
-            delivery_facts::snapshot().as_ref(),
-            false,
-            false,
-            &mut fields,
-        );
+        delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
         serde_json::to_value(&response).expect("response is JSON")
     })
     .await;

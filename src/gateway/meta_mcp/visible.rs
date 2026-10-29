@@ -578,12 +578,13 @@ mod withholding_tests {
             Withholding::Refused,
             Withholding::Schema,
             Withholding::Descriptor,
+            Withholding::Unselected,
             Withholding::Lacked,
             Withholding::Absent,
         ] {
             let policy = match reason {
                 Withholding::Refused | Withholding::Schema | Withholding::Descriptor => true,
-                Withholding::Lacked | Withholding::Absent => false,
+                Withholding::Unselected | Withholding::Lacked | Withholding::Absent => false,
             };
             assert_eq!(reason.is_policy(), policy, "{reason:?}");
         }

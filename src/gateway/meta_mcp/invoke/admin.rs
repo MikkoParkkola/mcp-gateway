@@ -504,12 +504,7 @@ mod cost_report_refusal_tests {
                 .get_cost_report(&args, Some("own"), &anonymous_caller())
                 .await;
             let mut fields = serde_json::Map::new();
-            delivery_facts::record_fields(
-                delivery_facts::snapshot().as_ref(),
-                false,
-                false,
-                &mut fields,
-            );
+            delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
             (answer, fields.get("response_effect").cloned())
         })
         .await
