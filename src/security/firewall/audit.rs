@@ -70,7 +70,11 @@ impl From<&Finding> for AuditFinding {
             scan_type: finding.scan_type,
             severity: finding.severity,
             location: finding.location,
-            reason: None,
+            // A root refusal words its code first ("<code>: rule ..."); the
+            // row keeps the code, a closed enum, never the text.
+            reason: (finding.scan_type == super::ScanType::RootRefused)
+                .then(|| finding.description.split(':').next().unwrap_or_default())
+                .and_then(|code| serde_json::from_value(serde_json::Value::from(code)).ok()),
         }
     }
 }

@@ -140,7 +140,7 @@ pub(crate) struct PathArg {
 
 /// Why a covered call was refused without a path judgement. Stable and
 /// machine-readable; never carries a path value. The audit row's `reason`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RootReason {
     NotAbsolute,
