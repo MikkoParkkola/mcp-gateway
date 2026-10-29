@@ -462,21 +462,6 @@ pub(crate) fn scan_frees<T>(marker: &'static [u8], body: impl FnOnce() -> T) -> 
     (value, scanned())
 }
 
-/// [`scan_frees`] for an awaited body, the future constructed inside the scan.
-pub(crate) async fn scan_frees_async<F, Fut>(
-    marker: &'static [u8],
-    make: F,
-) -> (Fut::Output, Scanned)
-where
-    F: FnOnce() -> Fut,
-    Fut: std::future::Future,
-{
-    let scope = arm_scan(marker);
-    let value = make().await;
-    drop(scope);
-    (value, scanned())
-}
-
 /// [`scan_frees`], also watching the block at `watched` (for example the
 /// heap buffer of the returned credential's value): [`Scanned::watched_freed`]
 /// says whether that exact block was freed while the scan ran, so a zero-hit

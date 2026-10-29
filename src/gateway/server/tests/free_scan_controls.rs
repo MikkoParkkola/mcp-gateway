@@ -71,11 +71,17 @@ fn a_wiped_holder_that_grew_leaves_its_old_block() {
     if isolate(&test_path("a_wiped_holder_that_grew_leaves_its_old_block")) {
         return;
     }
-    let ((), scanned) = scan_frees(MARKER, || {
+    let (moved, scanned) = scan_frees(MARKER, || {
         let mut held = Zeroizing::new(MARKER.to_vec());
-        held.reserve(64 * MARKER.len());
+        let before = held.as_ptr();
+        // Far past any allocator's in-place growth: the buffer must move, and
+        // the move frees the old block still holding the marker.
+        held.reserve(1 << 22);
+        let moved = held.as_ptr() != before;
         drop(black_box(held));
+        moved
     });
+    assert!(moved, "premise: the holder's buffer moved when it grew");
     assert!(
         scanned.hits >= 1,
         "the block a growing holder left behind was not seen: {scanned:?}"
