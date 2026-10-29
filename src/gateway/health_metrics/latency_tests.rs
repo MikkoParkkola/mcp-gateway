@@ -86,7 +86,7 @@ fn a_backend_wait_is_subtracted() {
 
 #[test]
 fn a_call_with_no_backend_adds_the_whole_time() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         let route = app(|| async {
             tokio::time::sleep(BACKEND).await;
             "ok"
@@ -116,7 +116,7 @@ fn two_parallel_waits_count_once() {
 
 #[test]
 fn time_held_on_a_semaphore_stays_added_latency() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         let held = Arc::new(tokio::sync::Semaphore::new(0));
         let release = Arc::clone(&held);
         tokio::spawn(async move {
@@ -142,14 +142,14 @@ fn a_fill_in_a_carried_task_is_subtracted_and_an_uncarried_one_is_not() {
     let fill = || async {
         backend_wait(tokio::time::sleep(BACKEND)).await;
     };
-    let (_, with) = metered(async {
+    let ((), with) = metered(async {
         let route = app(move || async move {
             tokio::spawn(carried(fill())).await.expect("joined");
             "ok"
         });
         route.oneshot(post_mcp()).await.expect("answer");
     });
-    let (_, without) = metered(async {
+    let ((), without) = metered(async {
         let route = app(move || async move {
             tokio::spawn(fill()).await.expect("joined");
             "ok"
@@ -162,7 +162,7 @@ fn a_fill_in_a_carried_task_is_subtracted_and_an_uncarried_one_is_not() {
 
 #[test]
 fn a_client_that_goes_away_mid_wait_leaves_one_sample() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         let route = app(|| async {
             backend_wait(tokio::time::sleep(BACKEND * 10)).await;
             "ok"
@@ -176,7 +176,7 @@ fn a_client_that_goes_away_mid_wait_leaves_one_sample() {
 
 #[test]
 fn a_buffered_sse_answer_leaves_one_sample() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         let route = app(|| async {
             (
                 [(axum::http::header::CONTENT_TYPE, "text/event-stream")],
@@ -190,7 +190,7 @@ fn a_buffered_sse_answer_leaves_one_sample() {
 
 #[test]
 fn a_stream_accounted_answer_is_left_to_its_stream() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         let route = app(|| async {
             let mut response = "ok".into_response();
             response.extensions_mut().insert(StreamAccounted);
@@ -203,7 +203,7 @@ fn a_stream_accounted_answer_is_left_to_its_stream() {
 
 #[test]
 fn only_this_metric_renders_buckets() {
-    let (_, text) = metered(async {
+    let ((), text) = metered(async {
         telemetry_metrics::histogram!("some_other_seconds").record(1.0);
         let route = app(|| async { "ok" });
         route.oneshot(post_mcp()).await.expect("answer");
@@ -294,7 +294,7 @@ mod streams {
 
     #[test]
     fn a_stream_dropped_before_its_first_poll_leaves_one_sample() {
-        let (_, text) = metered(async {
+        let ((), text) = metered(async {
             let (response, _tx) = open(Arc::new(tokio::sync::Semaphore::new(1))).await;
             drop(response);
         });
@@ -303,7 +303,7 @@ mod streams {
 
     #[test]
     fn a_stream_dropped_right_after_its_terminal_event_leaves_one_sample() {
-        let (_, text) = metered(async {
+        let ((), text) = metered(async {
             let (response, _tx) = open(Arc::new(tokio::sync::Semaphore::new(1))).await;
             read_all(response).await;
         });

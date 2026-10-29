@@ -347,7 +347,7 @@ mod streams {
 
     #[test]
     fn a_stream_ending_in_an_error_counts_it_once() {
-        let (_, text) = counted(async {
+        let ((), text) = counted(async {
             let answer = build_error_response(None, -32602, "bad", "", StatusCode::OK);
             read_all(open(answer).await).await;
         });
@@ -356,7 +356,7 @@ mod streams {
 
     #[test]
     fn a_substituted_terminal_frame_counts_as_internal() {
-        let (_, text) = counted(async {
+        let ((), text) = counted(async {
             let unframeable = (StatusCode::OK, "plain text, not json").into_response();
             read_all(open(unframeable).await).await;
         });
@@ -365,7 +365,7 @@ mod streams {
 
     #[test]
     fn a_stream_dropped_before_its_terminal_event_counts_no_error() {
-        let (_, text) = counted(async {
+        let ((), text) = counted(async {
             let answer = build_error_response(None, -32602, "bad", "", StatusCode::OK);
             drop(open(answer).await);
         });
@@ -374,7 +374,7 @@ mod streams {
 
     #[test]
     fn the_error_layer_leaves_a_stream_to_count_its_own() {
-        let (_, text) = counted(async {
+        let ((), text) = counted(async {
             let route = Router::new()
                 .route(
                     "/",

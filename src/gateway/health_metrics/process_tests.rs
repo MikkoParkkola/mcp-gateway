@@ -81,7 +81,9 @@ fn the_start_gauge_equals_the_process_start_wall_time() {
         .lines()
         .find_map(|l| l.strip_prefix(START_TIME)?.strip_prefix(' ')?.parse().ok())
         .expect("a start-time sample");
-    assert_eq!(value, wall.timestamp() as f64);
+    #[allow(clippy::cast_precision_loss)] // Unix seconds are far below 2^53
+    let expected = wall.timestamp() as f64;
+    assert_eq!(value, expected);
 }
 
 #[test]
