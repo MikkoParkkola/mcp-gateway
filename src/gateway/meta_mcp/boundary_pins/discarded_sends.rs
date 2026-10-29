@@ -76,21 +76,37 @@ const SITES: [(&str, Fate); 15] = [
     ),
 ];
 
+/// Per site: every send, and the sends nested inside a `discarded(..)` call.
 #[derive(Default)]
 struct Found {
-    sends: std::collections::BTreeSet<String>,
-    discarded: std::collections::BTreeSet<String>,
+    sends: std::collections::BTreeMap<String, usize>,
+    wrapped: std::collections::BTreeMap<String, usize>,
+}
+
+fn is_send(expr: &syn::Expr) -> bool {
+    matches!(expr, syn::Expr::MethodCall(call) if SENDS.contains(&call.method.to_string().as_str()))
+}
+
+/// Counts the sends under one expression.
+struct Sends(usize);
+
+impl<'ast> syn::visit::Visit<'ast> for Sends {
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if is_send(expr) {
+            self.0 += 1;
+        }
+        syn::visit::visit_expr(self, expr);
+    }
 }
 
 impl Sink for Found {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
         let Some(func) = &at.func else { return };
         let site = format!("{}\t{func}", at.file);
-        if let syn::Expr::MethodCall(call) = expr
-            && SENDS.contains(&call.method.to_string().as_str())
-        {
-            self.sends.insert(site);
-        } else if let syn::Expr::Call(call) = expr
+        if is_send(expr) {
+            *self.sends.entry(site.clone()).or_default() += 1;
+        }
+        if let syn::Expr::Call(call) = expr
             && let syn::Expr::Path(path) = &*call.func
             && path
                 .path
@@ -98,24 +114,34 @@ impl Sink for Found {
                 .last()
                 .is_some_and(|s| s.ident == "discarded")
         {
-            self.discarded.insert(site);
+            let mut inside = Sends(0);
+            for arg in &call.args {
+                syn::visit::Visit::visit_expr(&mut inside, arg);
+            }
+            *self.wrapped.entry(site).or_default() += inside.0;
         }
     }
 }
 
+/// Per send, not per function: in a function that drops its error every send
+/// sits inside `discarded(..)`, and in one that delivers it none does. The
+/// check is per function, so an error dropped further up the call chain is
+/// not seen; every drop today is at the send site.
 #[test]
 fn every_send_that_drops_its_error_runs_in_a_discarded_cell() {
     let mut found = Found::default();
     walk(crate_root(), &ROOTS, &mut found).expect("the crate walks");
     let listed: std::collections::BTreeMap<&str, Fate> = SITES.into_iter().collect();
-    let have: Vec<&str> = found.sends.iter().map(String::as_str).collect();
+    let have: Vec<&str> = found.sends.keys().map(String::as_str).collect();
     let want: Vec<&str> = listed.keys().copied().collect();
     assert_eq!(have, want, "send sites changed; classify each in SITES");
     for (site, fate) in listed {
+        let sends = found.sends[site];
+        let wrapped = found.wrapped.get(site).copied().unwrap_or(0);
+        let expected = if fate == Fate::Dropped { sends } else { 0 };
         assert_eq!(
-            found.discarded.contains(site),
-            fate == Fate::Dropped,
-            "{site}: a send that drops its error runs in a discarded cell, and only such a send"
+            wrapped, expected,
+            "{site}: {sends} sends, {wrapped} in a discarded cell"
         );
     }
 }
