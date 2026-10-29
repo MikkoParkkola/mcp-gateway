@@ -14,6 +14,8 @@
 mod admission_allocations;
 pub(crate) mod alloc_meter;
 #[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_capability_rows;
+#[cfg(all(unix, feature = "firewall"))]
 mod allowed_root_route_rows;
 #[cfg(all(unix, feature = "firewall"))]
 mod allowed_root_routes;
