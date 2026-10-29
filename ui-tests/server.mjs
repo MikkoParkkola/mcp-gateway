@@ -94,7 +94,7 @@ async function streamControl(req, res, name, verb) {
 function streamOpen(req, res, name) {
   const ch = channel(name);
   const auth = req.headers.authorization ?? null;
-  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: auth !== null, sessionCookie: /(?:^|;\s*)session=/.test(req.headers.cookie ?? ''), status: 200, closed: false };
+  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: auth !== null, sessionCookie: /(?:^|;\s*)mcp_gateway_session=/.test(req.headers.cookie ?? ''), status: 200, closed: false };
   ch.conns.push(conn);
   if (ch.requireBearer && auth !== `Bearer ${ch.requireBearer}`) {
     conn.status = 401;

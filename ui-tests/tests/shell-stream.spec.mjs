@@ -389,3 +389,110 @@ test('ST17 every hello, first and after a reconnect, is a gateway-hello event', 
   await stream.send(HELLO);
   await expect.poll(() => page.evaluate(() => window.__hellos)).toEqual([hello, hello]);
 });
+
+test('ST18 a drop while a screen banner holds the slot leaves it, and the hello clears nothing', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/servers/status'); // this screen shows a server banner (T11)
+  await shellReady(page);
+  const screenBanner = page.locator('#content [data-state="server"]');
+  await expect(screenBanner).toHaveCount(1);
+  await expect.poll(stream.connects).toBe(1);
+  await stream.send(HELLO);
+  await stream.end();
+  await expect(page.locator(INDICATOR)).toHaveText(/^Updates stopped/); // the top bar carries the drop
+  await expect(screenBanner).toHaveCount(1);
+  await expect(page.locator(STALE)).toHaveCount(0);
+  await page.clock.runFor(3000);
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+  await expect(screenBanner).toHaveCount(1);
+});
+
+test('ST19 a stale banner the screen claims while the stream set it is the screen to clear', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/tools/status'); // this screen marks its own data stale (T6)
+  await shellReady(page);
+  await page.evaluate(() => window.toolsShow(null)); // the screen clears its own first
+  await expect(page.locator(STALE)).toHaveCount(0);
+  await expect.poll(stream.connects).toBe(1);
+  await stream.send(HELLO);
+  await drop(page, stream);
+  await page.evaluate(() => window.toolsShow('stale')); // the screen says its data is stale too
+  await page.clock.runFor(3000);
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+  await expect(page.locator(STALE)).toHaveCount(1);
+});
+
+/** A completed frame over the cap: never dispatched, a drop, then a reconnect. */
+async function oversizedFrameIsADrop(page, request, testInfo, payload) {
+  await recordEvents(page);
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await stream.send(`event: status\nid: b1.s8.r1\ndata: ${JSON.stringify({ big: payload })}\n\n`);
+  await expect(page.locator(STALE)).toHaveCount(1);
+  await expect.poll(async () => (await stream.log())[0].closed).toBe(true);
+  expect(await seen(page, 'gateway-status')).toEqual([]);
+  await page.clock.runFor(3000);
+  await expect.poll(stream.connects).toBe(2);
+}
+
+test('ST15b a completed frame over 64 KiB is a drop and is never dispatched', async ({ page, request }, testInfo) => {
+  await oversizedFrameIsADrop(page, request, testInfo, 'x'.repeat(70 * 1000));
+});
+
+test('ST15c the cap counts UTF-8 bytes: 34,000 two-byte characters are a drop', async ({ page, request }, testInfo) => {
+  const payload = 'é'.repeat(34_000); // 34,000 characters, under 64 KiB; 68,000 bytes, over it
+  expect(payload.length).toBeLessThan(64 * 1024);
+  expect(Buffer.byteLength(payload)).toBeGreaterThan(64 * 1024);
+  await oversizedFrameIsADrop(page, request, testInfo, payload);
+});
+
+test('ST20 several failed first connects keep the banner, and the waits grow', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo, { next: [{ status: 500 }, { status: 500 }, { status: 500 }] });
+  const asked = [];
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/ui/api/stream') asked.push(r.url()); });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await shellReady(page);
+  await expect.poll(stream.connects).toBe(1);
+  for (const [n, wait] of [[1, 1000], [2, 2000], [3, 4000]]) {
+    await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
+    await page.clock.runFor(wait - 1);
+    await page.evaluate(() => null); // one round trip, so a request made in that run has been reported
+    expect(asked.length).toBe(n);
+    await page.clock.runFor(2);
+    await expect.poll(stream.connects).toBe(n + 1);
+  }
+  await expect(page.locator(STALE)).toHaveCount(1);
+});
+
+test('ST21 signing out while a reconnect waits cancels it', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  await drop(page, stream); // a reconnect is now pending
+  await page.locator('.top .signout').click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await page.clock.runFor(31_000);
+  await page.evaluate(() => null);
+  expect(await stream.connects()).toBe(1);
+});
+
+test('ST22 a session cookie alone opens the stream', async ({ page, request }, testInfo) => {
+  const url = `http://127.0.0.1:${process.env.UI_TESTS_PORT ?? 4173}`;
+  await page.context().addCookies([{ name: 'mcp_gateway_session', value: 'fixture', url }]);
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  const [conn] = await stream.log();
+  expect(conn.sessionCookie).toBe(true);
+  expect(conn.authorization).toBe(false);
+});
