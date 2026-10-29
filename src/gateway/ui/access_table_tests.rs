@@ -10,8 +10,10 @@ use super::{PAGES, ROWS, TABS, Verb};
 use crate::gateway::routes;
 
 /// The (path, verb) pairs the router answers, read from the pinned matrix:
-/// every cell an admin key gets that is not 405, for a registered verb.
+/// every cell an admin key gets that is not 405, for a registered verb; plus
+/// the live stream, which the matrix cannot probe (its body never ends).
 fn registered() -> BTreeSet<(String, Verb)> {
+    let stream = (routes::UI_STREAM.to_string(), Verb::Get);
     include_str!("../router/ui_access_matrix.tsv")
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -28,6 +30,7 @@ fn registered() -> BTreeSet<(String, Verb)> {
                 .then(|| (path.to_string(), verb))
         })
         .filter(|(path, _)| cfg!(feature = "cost-governance") || path != routes::UI_COSTS)
+        .chain(std::iter::once(stream))
         .collect()
 }
 
