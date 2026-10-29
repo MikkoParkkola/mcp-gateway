@@ -7,7 +7,7 @@
 
 use super::*;
 
-/// MIK-7939 D6.RELAY.3/.9: a `tasks/get` answer is the gateway's task
+/// D6.RELAY.3/.9: a `tasks/get` answer is the gateway's task
 /// envelope around the stored result. Only the delivered slot is the
 /// backend's text: the envelope's `statusMessage` is not receipted.
 #[tokio::test]
@@ -32,7 +32,7 @@ async fn a_task_envelope_receipts_only_its_delivered_slot() {
     );
 }
 
-/// MIK-7939 (B04b-1 design, task envelope): an envelope with no delivered
+/// B04b-1 design, task envelope: an envelope with no delivered
 /// slot keeps the receipt staged from the stored slot, also when a final
 /// check rewrote the envelope in place (as the rebuild does).
 #[tokio::test]
@@ -55,7 +55,7 @@ async fn a_rewritten_slotless_envelope_keeps_the_stored_receipt() {
     );
 }
 
-/// MIK-7939 D6.RELAY.3 (impl review): a task-augmented `gateway_invoke`
+/// D6.RELAY.3 (impl review): a task-augmented `gateway_invoke`
 /// replay answers with the task envelope the gateway built
 /// (`BeginOutcome::into_response`), read as one whatever the method's shape:
 /// its `statusMessage` is not receipted, the stored result is. A backend
