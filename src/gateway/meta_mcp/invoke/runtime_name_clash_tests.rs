@@ -98,9 +98,12 @@ fn registry_backend(name: &str, served: &Arc<AtomicUsize>) -> Arc<Backend> {
 /// The stable reason a refusal carries, wherever it surfaced.
 fn reason(outcome: &crate::Result<Value>) -> Option<String> {
     match outcome {
-        Err(crate::Error::JsonRpc { data: Some(data), .. }) => {
-            data.get("reason").and_then(Value::as_str).map(str::to_owned)
-        }
+        Err(crate::Error::JsonRpc {
+            data: Some(data), ..
+        }) => data
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         _ => None,
     }
 }
@@ -137,7 +140,12 @@ async fn a_call_judged_on_a_backend_is_not_sent_to_a_same_named_capability() {
         Some("ambiguous_backend"),
         "a name that is both routes must be refused, not dispatched: {outcome:?}"
     );
-    let Err(crate::Error::JsonRpc { code, data: Some(data), .. }) = &outcome else {
+    let Err(crate::Error::JsonRpc {
+        code,
+        data: Some(data),
+        ..
+    }) = &outcome
+    else {
         unreachable!("checked above");
     };
     assert_eq!(*code, -32001);

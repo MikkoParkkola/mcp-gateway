@@ -5,6 +5,7 @@
 //! reload that renames `capabilities.name` leaves the capability attached
 //! under its old name; load validation compares the new name only.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,7 +18,7 @@ const BACKEND: &str = "    http_url: \"http://127.0.0.1:9/mcp\"\n";
 fn config(capabilities: &str, backends: &[&str]) -> String {
     let mut yaml = format!("capabilities:\n  name: {capabilities}\nbackends:\n");
     for name in backends {
-        yaml.push_str(&format!("  {name}:\n{BACKEND}"));
+        let _ = write!(yaml, "  {name}:\n{BACKEND}");
     }
     yaml
 }
@@ -60,12 +61,15 @@ fn assert_clash_refused(refused: &str, registry: &BackendRegistry) {
 async fn a_reload_adding_a_backend_under_the_capability_name_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, &config("edits", &["a"])).expect("write");
+    write_owner_only(&path, config("edits", &["a"])).expect("write");
     let registry = Arc::new(BackendRegistry::new());
     let ctx = context(&path, &registry);
 
-    write_owner_only(&path, &config("renamed", &["a", "edits"])).expect("write");
-    let refused = ctx.reload_outcome().await.expect_err("the clash is refused");
+    write_owner_only(&path, config("renamed", &["a", "edits"])).expect("write");
+    let refused = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the clash is refused");
     assert_clash_refused(&refused, &registry);
 }
 
@@ -76,14 +80,19 @@ async fn a_reload_adding_a_backend_under_the_capability_name_is_refused() {
 async fn a_rename_then_a_clashing_add_in_the_next_reload_is_refused() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, &config("edits", &["a"])).expect("write");
+    write_owner_only(&path, config("edits", &["a"])).expect("write");
     let registry = Arc::new(BackendRegistry::new());
     let ctx = context(&path, &registry);
 
-    write_owner_only(&path, &config("renamed", &["a"])).expect("write");
-    ctx.reload_outcome().await.expect("the rename alone is accepted");
-    write_owner_only(&path, &config("renamed", &["a", "edits"])).expect("write");
-    let refused = ctx.reload_outcome().await.expect_err("the clash is refused");
+    write_owner_only(&path, config("renamed", &["a"])).expect("write");
+    ctx.reload_outcome()
+        .await
+        .expect("the rename alone is accepted");
+    write_owner_only(&path, config("renamed", &["a", "edits"])).expect("write");
+    let refused = ctx
+        .reload_outcome()
+        .await
+        .expect_err("the clash is refused");
     assert_clash_refused(&refused, &registry);
 }
 
@@ -92,12 +101,14 @@ async fn a_rename_then_a_clashing_add_in_the_next_reload_is_refused() {
 async fn a_reload_adding_an_unrelated_backend_still_applies() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, &config("edits", &["a"])).expect("write");
+    write_owner_only(&path, config("edits", &["a"])).expect("write");
     let registry = Arc::new(BackendRegistry::new());
     let ctx = context(&path, &registry);
 
-    write_owner_only(&path, &config("edits", &["a", "other"])).expect("write");
-    ctx.reload_outcome().await.expect("an unrelated add applies");
+    write_owner_only(&path, config("edits", &["a", "other"])).expect("write");
+    ctx.reload_outcome()
+        .await
+        .expect("an unrelated add applies");
     #[allow(
         clippy::disallowed_methods,
         reason = "Test: reads the registry the reload applied"

@@ -400,6 +400,25 @@ impl ReloadContext {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
 
+    /// The capabilities section applies only at restart, so the attached
+    /// capability backend keeps its name through a reload that renames it. A
+    /// backend registered under that name would be judged as itself and
+    /// answered by the capability; load refuses the pair, and so does this.
+    fn capability_name_clash(&self, patch: &ConfigPatch) -> Option<String> {
+        let cap = self.capabilities.as_ref()?;
+        let (name, _) = patch
+            .backends_added
+            .iter()
+            .chain(&patch.backends_modified)
+            .find(|(name, _)| *name == cap.name)?;
+        Some(format!(
+            "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
+             backend, and a capabilities.name change applies only at restart. Restart first, \
+             or rename the backend. No backend was started or stopped, and no configuration \
+             was published."
+        ))
+    }
+
     /// Reload the config file and return a structured outcome for callers/UI.
     ///
     /// # Errors
@@ -632,23 +651,8 @@ impl ReloadContext {
             ));
         }
 
-        // The capabilities section applies only at restart, so the attached
-        // capability backend keeps its name through a reload that renames it.
-        // A backend registered under that name would be judged as itself and
-        // answered by the capability; load refuses the pair, and so does this.
-        if let Some(cap) = &self.capabilities
-            && let Some((name, _)) = patch
-                .backends_added
-                .iter()
-                .chain(&patch.backends_modified)
-                .find(|(name, _)| *name == cap.name)
-        {
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
-                 backend, and a capabilities.name change applies only at restart. Restart \
-                 first, or rename the backend. No backend was started or stopped, and no \
-                 configuration was published."
-            ));
+        if let Some(refusal) = self.capability_name_clash(&patch) {
+            return Err(refusal);
         }
 
         // Every view this config compiles to is built before `apply_patch`, so a
