@@ -448,6 +448,7 @@ pub(crate) mod seams {
     thread_local! {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_READMIT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
@@ -531,6 +532,21 @@ pub(crate) mod seams {
     /// Called where a task worker starts its dispatch.
     pub(crate) fn task_dispatch_starts() {
         if let Some(hook) = BEFORE_TASK_DISPATCH.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a task worker on this thread has
+    /// re-admitted its call: between the re-admission's judgement and the run
+    /// (the C2e6 row).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn after_readmit(hook: impl FnOnce() + 'static) {
+        AFTER_READMIT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a task worker's re-admission has succeeded.
+    pub(crate) fn readmitted() {
+        if let Some(hook) = AFTER_READMIT.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
     }

@@ -603,8 +603,8 @@ src/transport/stdio_env.rs	configure_child_environment	1	critical	d	configure_ch
 src/transport/stdio.rs	drop	1	critical	c	ProgressRegistrationGuard::drop	Deregisters a progress token only for the registration's owner
 src/transport/stdio.rs	handle_response	1	critical	d	StdioTransport::handle_response	Refuses a peer request on the response stream; delivers a response only to the pending id
 src/transport/stdio.rs	register_progress_token	1	critical	c	StdioTransport::register_progress_token	Fails closed on a colliding token, so one call's progress cannot reach another call
-src/transport/stdio.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
-src/transport/stdio.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
+src/transport/stdio_start.rs	start	1	critical	d	StdioTransport::start	Refuses invalid quoting or an empty command before spawn; applies the scrubbed environment
+src/transport/stdio_start.rs	spawn_command	1	critical	d	StdioTransport::spawn_command	Refuses invalid quoting or an empty command before spawn; builds the child with the scrubbed environment
 src/oauth/client/destination.rs	with_destination	1	standard	borderline	OAuthClient::with_destination	Installs the backend destination policy and the owned refresh route; a mistake leaves the Configured policy in place and silently skips the SSRF refusals.
 src/oauth/client/destination.rs	cleartext_refusal	1	standard	borderline	cleartext_refusal	Builds the cleartext refusal with the SSRF_BLOCKED prefix is_ssrf_refusal matches; dropping it would turn the refusal into a generic error callers walk past into a login.
 src/oauth/client/grants.rs	try_client_credentials	1	critical	a	OAuthClient::try_client_credentials	Performs the client-credentials grant and publishes the issued credential.
