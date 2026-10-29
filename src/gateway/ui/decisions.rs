@@ -334,15 +334,20 @@ fn capability_changes(backend: &CapabilityBackend) -> Option<Vec<CapabilityChang
 /// refusal whose record's counter is below it has left the log. Counters, not times: a refusal is timed when it is
 /// evaluated, which can be long before the append that places it.
 fn retention_edge(path: &Path) -> Option<u64> {
-    use crate::security::transparency_log::segments::{list_segments, read_first_line};
+    use std::io::BufRead as _;
+
+    use crate::security::transparency_log::{pager, segments::list_segments};
     // With every sealed segment expired (disk-full recovery does that), the
-    // active file holds the oldest kept record.
-    let oldest = list_segments(path)
-        .ok()?
-        .into_iter()
-        .min_by_key(|s| s.seq)
-        .map_or_else(|| path.to_path_buf(), |s| s.path);
-    let first: Value = serde_json::from_str(&read_first_line(&oldest).ok()??).ok()?;
+    // active file holds the oldest kept record. Opened through the pager, so
+    // a rotation between the listing and the open reads the segment it named;
+    // retention removing it meanwhile answers `None`, an edge not known.
+    let oldest = match list_segments(path).ok()?.into_iter().map(|s| s.seq).min() {
+        Some(seq) => seq,
+        None => pager::position(path, None).ok()?.segment,
+    };
+    let file = pager::open_segment(path, oldest, || {}).ok()??;
+    let line = std::io::BufReader::new(file).lines().next()?.ok()?;
+    let first: Value = serde_json::from_str(&line).ok()?;
     first.get("counter")?.as_u64()
 }
 
