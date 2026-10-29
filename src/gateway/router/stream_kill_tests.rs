@@ -82,7 +82,7 @@ struct Fixture {
     state: Arc<super::AppState>,
     calls: Arc<AtomicUsize>,
     gate: Arc<Semaphore>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 impl Fixture {

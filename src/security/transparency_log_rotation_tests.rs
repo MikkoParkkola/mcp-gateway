@@ -456,22 +456,6 @@ fn verify_with_live_appender_passes() {
 }
 
 #[test]
-fn signed_entry_only_in_sealed_segment_refuses_hash_only_verify() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
-    rotate_n(&l, &path, 1);
-    drop(l);
-    // Strip every sig from the active file: only `.0` holds one.
-    let stripped = lines(&path).into_iter().fold(String::new(), |acc, mut v| {
-        v.as_object_mut().unwrap().remove("sig");
-        acc + &v.to_string() + "\n"
-    });
-    std::fs::write(&path, stripped).unwrap();
-    assert!(log_contains_signed_entry(&path).unwrap());
-}
-
-#[test]
 fn caller_cannot_append_segment_event() {
     let dir = tempfile::tempdir().unwrap();
     let path = log_path(&dir);
@@ -647,90 +631,5 @@ fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     assert_nothing_dated_zero(&path);
 }
 
-/// Verify without the key, as a copied set: the `.hwm` a signed logger
-/// keeps cannot be read without its key, and is not what these rows test.
-fn keyless(path: &Path) -> VerifyResult {
-    verify_segments(path, &cfg(path, 12, false), VerifyMode::Archive).unwrap()
-}
-
-/// The verifying pass reports a signature it read: a signed log checked
-/// without the key passes its hash chain and says it saw one.
-#[test]
-fn a_keyless_pass_reports_the_signatures_it_read() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
-    append(&l, 0);
-    drop(l);
-    let r = keyless(&path);
-    assert!(r.ok, "{:?}", r.error_message);
-    assert!(r.signed_entry_seen);
-
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    append(&l, 0);
-    drop(l);
-    assert!(!keyless(&path).signed_entry_seen, "an unsigned log");
-}
-
-/// A chain that fails at its first line still reports the signature on
-/// that line: a broken chain cannot hide one.
-#[test]
-fn a_failed_pass_still_reports_a_signature() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, true)).unwrap();
-    append(&l, 0);
-    drop(l);
-    let mut all = lines(&path);
-    all[0]["entry_hash"] = "not-the-hash".into();
-    let body = all
-        .iter()
-        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
-    std::fs::write(&path, body).unwrap();
-    let r = keyless(&path);
-    assert!(!r.ok);
-    assert!(r.signed_entry_seen);
-}
-
-/// A `sig` key with no usable value still claims a signature, so it counts.
-#[test]
-fn an_empty_signature_still_counts_as_signed() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    append(&l, 0);
-    drop(l);
-    rewrite_line(&path, 1, |v| v["sig"] = serde_json::Value::Null);
-    assert!(keyless(&path).signed_entry_seen);
-}
-
-/// The only signed entry is the live file's first line, rejected by the
-/// seam check before any per-entry check runs: the pass still reports the
-/// signature, because it is noted when the line is parsed.
-#[test]
-fn a_signature_rejected_before_its_checks_is_still_reported() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = log_path(&dir);
-    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
-    rotate_n(&l, &path, 1);
-    drop(l);
-    let mut all = lines(&path);
-    all[0]["sig"] = "unchecked".into();
-    all[0]["prev_segment_seq"] = 99.into();
-    let body = all
-        .iter()
-        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
-    std::fs::write(&path, body).unwrap();
-
-    let r = keyless(&path);
-
-    assert!(!r.ok);
-    let msg = r.error_message.clone().unwrap_or_default();
-    assert!(
-        msg.contains("prev_segment_seq"),
-        "rejected by the seam check: {msg}"
-    );
-    assert!(r.signed_entry_seen);
-}
+#[path = "transparency_log_rotation_signature_tests.rs"]
+mod signature_tests;

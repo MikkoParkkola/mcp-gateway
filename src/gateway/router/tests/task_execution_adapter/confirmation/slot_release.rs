@@ -19,7 +19,7 @@ async fn logged(
 ) -> (
     Arc<AppState>,
     Arc<crate::security::TransparencyLogger>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     let dir = tempfile::tempdir().expect("a private log directory");
     let log = logger(&dir, AuditFailurePolicy::FailClosed);

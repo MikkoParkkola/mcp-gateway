@@ -3,14 +3,14 @@
 //! Fail-closed audit hardening: `audit_identity_propagation` unit tests.
 use std::sync::Arc;
 
-use tempfile::NamedTempFile;
+use crate::security::transparency_log::temp::TempLog;
 
 use super::*;
 use crate::security::TransparencyLogger;
 use crate::security::transparency_log::TransparencyLogConfig;
 
-fn open_logger() -> (NamedTempFile, Arc<TransparencyLogger>) {
-    let file = NamedTempFile::new().expect("tempfile");
+fn open_logger() -> (TempLog, Arc<TransparencyLogger>) {
+    let file = TempLog::new();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -79,6 +79,18 @@ async fn mint_audit_on_a_stalled_disk_is_bounded_and_fail_closed() {
     );
     assert!(logger.is_stalled());
     release.release();
+    // The released write still runs on a blocking thread. Wait for it to clear
+    // the stall, so it lands before this test's log folder is dropped; a write
+    // that outlived the test recreated the folder and left it behind.
+    crate::test_wait::wait_until(std::time::Duration::from_secs(30), || async {
+        if logger.is_stalled() {
+            std::ops::ControlFlow::Continue("still stalled".to_string())
+        } else {
+            std::ops::ControlFlow::Break(())
+        }
+    })
+    .await
+    .expect("the released write clears the stall");
 }
 
 // Fail-closed contract: a genuine transparency-log write failure MUST
@@ -140,7 +152,7 @@ async fn mint_write_failure_is_fail_closed() {
     // Parent: re-exec this exact test in an RLIMIT_FSIZE=0 child and
     // assert on what it observed.
     let exe = std::env::current_exe().expect("current test binary path");
-    let file = NamedTempFile::new().expect("tempfile");
+    let file = TempLog::new();
     let path = file.path().to_string_lossy().to_string();
     // A new log's open() writes its genesis record (#2275); open it here,
     // outside the size limit, so the child's open() only reads.
