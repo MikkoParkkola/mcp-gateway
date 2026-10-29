@@ -203,7 +203,7 @@ impl<S: LogSource> LogMerge<S> {
             return self.delivered.clone();
         };
         let pick = |d: &Option<LogPart>, r: &Option<LogPart>| match (d, r) {
-            (Some(d), Some(r)) if r.n > d.n => Some(r.clone()),
+            (Some(d), Some(r)) if r.counter > d.counter => Some(r.clone()),
             (None, r) => r.clone(),
             (d, _) => d.clone(),
         };
