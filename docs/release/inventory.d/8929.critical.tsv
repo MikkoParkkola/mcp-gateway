@@ -1,1 +1,3 @@
 src/gateway/router/backend_handlers/direct_audit.rs	record_traced	1	standard	borderline	record_traced	Decides the one trace a direct call is recorded under and hands it to the delivery record; a mistake silently leaves the delivery joining no invocation record.
+src/gateway/router/judged_answer.rs	record_error_exit	1	standard	borderline	record_error_exit	Records the /mcp error exit's delivery: refused when the cell holds a refusal, no effect otherwise; a mistake records a refusal as delivered or claims an effect for bytes no scan saw.
+src/gateway/router/helpers.rs	trace_error_frame	1	standard	borderline	trace_error_frame	Puts the refusal record's trace on the /mcp error frame; a mistake leaves the delivery record joining no invocation record.
