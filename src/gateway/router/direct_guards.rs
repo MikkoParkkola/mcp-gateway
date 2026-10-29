@@ -233,7 +233,11 @@ impl DirectRouteGuards {
             && !response.excludes_client_accounting()
             && let Some(client) = client
         {
-            state.auth_config.record_client_success(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_success(client);
         }
         Ok(response)
     }

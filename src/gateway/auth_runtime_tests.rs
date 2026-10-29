@@ -159,12 +159,12 @@ async fn rejected_credentials_create_no_store_entry() {
     )
     .with_runtime(Arc::clone(&runtime));
     let state = AuthState {
-        auth_config: Arc::new(resolved),
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(resolved),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
     };

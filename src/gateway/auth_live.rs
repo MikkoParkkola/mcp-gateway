@@ -115,7 +115,11 @@ pub(crate) async fn current_caller(
         identity,
         agent: agent.clone(),
     };
-    if !state.auth_config.enabled {
+    // A held credential has no request: it is judged by the key table
+    // current at this delivery, so a key removed by reload stops here.
+    let generation = state.live_config.generation();
+    let auth_config = generation.auth();
+    if !auth_config.enabled {
         return Some(found(anonymous_client(), None));
     }
     let credential = credential?;
@@ -137,7 +141,7 @@ pub(crate) async fn current_caller(
         ) == SessionCheck::Valid)
             .then(|| found(dashboard_client(), None));
     };
-    if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
+    if let Some((client, _)) = auth_config.validate_token_with_origin(token) {
         return Some(found(client, None));
     }
     match key_server_credential(state, token).await {
@@ -332,6 +336,25 @@ fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
         .as_u64()
 }
 
+/// The key table and `auth` settings of the generation the router pinned on
+/// `request`, so a reload mid-request never changes which keys judge it.
+/// Fail closed: a request without a pin is refused, never judged by the
+/// current generation.
+pub(super) fn pinned_auth(
+    request: &axum::http::Request<axum::body::Body>,
+) -> Result<Arc<super::ResolvedAuthConfig>, axum::response::Response> {
+    use axum::response::IntoResponse as _;
+    crate::gateway::router::pinned_generation(request.extensions())
+        .map(|generation| Arc::clone(generation.auth()))
+        .ok_or_else(|| {
+            (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                crate::gateway::router::UNPINNED,
+            )
+                .into_response()
+        })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -377,15 +400,15 @@ mod tests {
             ..crate::config::AuthConfig::default()
         };
         AuthState {
-            auth_config: Arc::new(super::super::ResolvedAuthConfig::from_config(
-                &config,
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )),
             key_server: Some(key_server),
             dashboard_bootstrap: Arc::new(super::super::DashboardBootstrap::new()),
             tls_enabled: false,
-            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                Arc::new(super::super::ResolvedAuthConfig::from_config(
+                    &config,
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,

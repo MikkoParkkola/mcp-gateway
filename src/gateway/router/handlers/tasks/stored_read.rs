@@ -55,7 +55,7 @@ pub(super) async fn prepare_stored_read_with_policy(
         caller,
         authorizer,
         &caller_key,
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     state
         .meta_mcp

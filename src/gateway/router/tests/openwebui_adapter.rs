@@ -69,7 +69,13 @@ accounts:
         crate::gateway::record_principal::TEST_RECORD_KEY,
     ));
     let (mut state, _store) = test_router_app_state_with(StreamingConfig::default(), config).await;
-    Arc::get_mut(&mut state).unwrap().auth_config = auth;
+    {
+        let seat = Arc::get_mut(&mut state).unwrap();
+        seat.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*seat.live_config.get()).clone(),
+            auth,
+        ));
+    }
     let router = create_router(state);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -254,7 +260,13 @@ accounts:
     .expect("two configured adapters are an adapter deployment");
     let (mut state, _store) =
         test_router_app_state_with(StreamingConfig::default(), config.clone()).await;
-    Arc::get_mut(&mut state).unwrap().auth_config = auth;
+    {
+        let seat = Arc::get_mut(&mut state).unwrap();
+        seat.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*seat.live_config.get()).clone(),
+            auth,
+        ));
+    }
     let router = create_router(state);
 
     let now = std::time::SystemTime::now()

@@ -326,15 +326,15 @@ fn auth_off_multiplexer() -> Arc<NotificationMultiplexer> {
     let mux = make_multiplexer();
     let config = crate::config::AuthConfig::default();
     mux.set_authorizer(crate::gateway::auth::AuthState {
-        auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
-            &config,
-            crate::gateway::record_principal::TEST_RECORD_KEY,
-        )),
         key_server: None,
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &config,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, std::sync::Arc::default()),
     });

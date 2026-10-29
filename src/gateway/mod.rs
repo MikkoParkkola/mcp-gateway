@@ -188,14 +188,12 @@ pub mod test_helpers {
     #[must_use]
     pub fn auth_state(config: &crate::config::AuthConfig, record_key: &str) -> super::AuthState {
         super::AuthState {
-            auth_config: std::sync::Arc::new(super::ResolvedAuthConfig::from_config(
-                config, record_key,
-            )),
             key_server: None,
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,
-            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                std::sync::Arc::new(super::ResolvedAuthConfig::from_config(config, record_key)),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,

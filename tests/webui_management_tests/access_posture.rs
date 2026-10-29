@@ -483,10 +483,15 @@ async fn a_reload_does_not_change_request_time_authentication() {
     let (mut state, _store) = make_app_state(None, Some(config_path.clone())).await;
     {
         let s = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
-        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(
-            &startup.auth,
-            crate::record_key::RECORD_KEY,
-        ));
+        {
+            s.live_config = std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+                (*s.live_config.get()).clone(),
+                Arc::new(ResolvedAuthConfig::from_config(
+                    &startup.auth,
+                    crate::record_key::RECORD_KEY,
+                )),
+            ));
+        }
         s.live_config = Arc::clone(&live_config);
     }
     let router = create_router(Arc::clone(&state));

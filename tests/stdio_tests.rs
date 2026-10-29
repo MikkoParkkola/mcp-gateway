@@ -125,7 +125,6 @@ async fn test_stdio_initialize_produces_valid_response() {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config,
         key_server: None,
         tool_policy,
         mtls_policy,
@@ -140,8 +139,9 @@ async fn test_stdio_initialize_produces_valid_response() {
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
             flags_off::flags_off(&Config::default()),
+            auth_config,
         )),
         export_status: None,
         transparency_log: None,

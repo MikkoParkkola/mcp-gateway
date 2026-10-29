@@ -11,7 +11,7 @@ use tracing::warn;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
 use super::{
-    AuthState, DashboardBootstrap, Now, Redeem, Redemption, SessionLimits,
+    AuthState, DashboardBootstrap, Now, Redeem, Redemption, ResolvedAuthConfig, SessionLimits,
     bearer_unauthorized_response, cookie_secure, session_cookie,
 };
 
@@ -22,6 +22,7 @@ use super::{
 /// worth being able to see in one screen.
 pub(super) fn try_dashboard_bootstrap(
     state: &AuthState,
+    auth_config: &ResolvedAuthConfig,
     request: &Request<Body>,
 ) -> Option<Response> {
     if request.uri().path() != "/dashboard" {
@@ -102,8 +103,8 @@ pub(super) fn try_dashboard_bootstrap(
         // mechanically required — demanding one refused every API-key-only
         // operator over a token the exchange would not have used. A RESTRICTED
         // key does not count: the session it opens carries admin.
-        let has_admin_credential = state.auth_config.bearer_token.is_some()
-            || state.auth_config.api_keys().iter().any(|k| k.admin);
+        let has_admin_credential =
+            auth_config.bearer_token.is_some() || auth_config.api_keys().iter().any(|k| k.admin);
         if !has_admin_credential {
             auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap unusable: no admin credential is configured");

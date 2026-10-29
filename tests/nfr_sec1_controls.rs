@@ -471,11 +471,16 @@ async fn control_5_a_modern_caller_whose_circuit_is_open_is_refused() {
     );
     // The gate itself refuses, not only the route that consults it.
     assert!(
-        !app.auth_config.check_client_circuit_breaker(
-            &app.auth_config
-                .validate_token("k")
-                .expect("the tripped key")
-        ),
+        !app.live_config
+            .generation()
+            .auth()
+            .check_client_circuit_breaker(
+                &app.live_config
+                    .generation()
+                    .auth()
+                    .validate_token("k")
+                    .expect("the tripped key")
+            ),
         "the breaker must refuse the client whose failures tripped it"
     );
 

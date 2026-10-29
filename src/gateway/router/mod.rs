@@ -351,8 +351,6 @@ pub struct AppState {
     pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
-    /// Authentication configuration (static keys)
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Single-use value that opens the dashboard from the link `serve` prints.
     pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Listeners on open `subscriptions/listen` streams.
@@ -490,7 +488,6 @@ async fn readyz(
 /// budget — logic and ordering are unchanged.
 fn build_auth_state(state: &Arc<AppState>) -> AuthState {
     AuthState {
-        auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),

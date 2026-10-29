@@ -15,7 +15,10 @@ use crate::gateway::router::tests::test_router_app_state;
 #[tokio::test]
 async fn an_anonymous_task_submit_is_judged_without_allocating() {
     let (state, _store) = test_router_app_state().await;
-    assert!(!state.auth_config.enabled, "premise: authentication is off");
+    assert!(
+        !state.live_config.generation().auth().enabled,
+        "premise: authentication is off"
+    );
     let request = json!({
         "jsonrpc": "2.0", "id": 9, "method": "tools/call",
         "params": {"name": "gateway_invoke", "task": {"ttl": 60000}, "arguments": {}},

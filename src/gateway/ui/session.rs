@@ -92,7 +92,9 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
-        let envelope = AuditEnvelope::ok(dashboard_session_who(state.auth_config.record_key()));
+        let envelope = AuditEnvelope::ok(dashboard_session_who(
+            state.live_config.generation().auth().record_key(),
+        ));
         let written = log
             .append_bounded(move |l| {
                 l.append_admin_action("admin_ui", fields, &envelope)
@@ -123,6 +125,7 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 /// link would be refused at redemption. Replaces any unused value.
 pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> Response {
     let Some(Extension(client)) = client.filter(|Extension(c)| {
@@ -138,7 +141,8 @@ pub(super) async fn dashboard_link(
     // not the live file, so a reload cannot split them. A key that is not
     // found cannot prove its expiry, so it may not mint: fail closed.
     let not_after = if client.api_key_identity().is_some() {
-        let keys = state.auth_config.api_keys();
+        // The table that authenticated this request: its pinned generation.
+        let keys = generation.auth().api_keys();
         let Some(key) = keys
             .iter()
             // By the credential, not the name: two keys may share a name
@@ -231,12 +235,12 @@ mod mik_8659_dashboard_tests {
         let gateway_key_pair =
             Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"));
         let authorizer = crate::gateway::auth::AuthState {
-            auth_config: Arc::clone(auth_config),
             key_server: None,
             dashboard_bootstrap: Arc::default(),
             tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(crate::config::Config::default()),
+                Arc::clone(auth_config),
             )),
             agent_auth: agent_auth.clone(),
         };
@@ -263,7 +267,6 @@ mod mik_8659_dashboard_tests {
             multiplexer,
             proxy_manager,
             streaming_config,
-            auth_config: Arc::clone(auth_config),
             key_server: None,
             tool_policy: Arc::new(crate::security::ToolPolicy::default()),
             mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -280,8 +283,9 @@ mod mik_8659_dashboard_tests {
             agent_identity_config: crate::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(crate::config::Config::default()),
+                Arc::clone(auth_config),
             )),
             export_status: None,
             transparency_log: None,
@@ -341,6 +345,7 @@ mod mik_8659_dashboard_tests {
         let state = t1f_app_state(&auth_config, store_dir.path()).await;
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
+            axum::extract::Extension(state.live_config.generation()),
             Some(axum::extract::Extension(unauthenticated)),
         )
         .await;

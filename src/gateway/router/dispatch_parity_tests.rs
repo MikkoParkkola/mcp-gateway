@@ -95,7 +95,9 @@ async fn poll(fx: &Fx, key: &str, arguments: Value) -> Value {
     use crate::events::watch_source::{Charge, CredentialUse, Target};
     let client = fx
         .state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .client_for_key(key, crate::gateway::auth::principal_of(key).storage_form())
         .expect("the fixture key is live");
     let target = Target {

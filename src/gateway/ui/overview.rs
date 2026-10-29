@@ -54,6 +54,7 @@ fn clip_field(value: &Value) -> Value {
 /// here, and an unauthenticated caller never reaches it (401 upstream).
 pub(super) async fn overview(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     client: Option<Extension<AuthenticatedClient>>,
 ) -> Response {
     let client = client.map(|Extension(c)| c);
@@ -82,7 +83,7 @@ pub(super) async fn overview(
     }
     body.insert(
         "checklist".into(),
-        json!({ "has_key": !state.auth_config.api_keys().is_empty() }),
+        json!({ "has_key": !generation.auth().api_keys().is_empty() }),
     );
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
