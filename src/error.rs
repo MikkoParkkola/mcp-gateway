@@ -565,6 +565,8 @@ impl Error {
             | Self::AuthorizationPending { .. }
             | Self::Tls(_)
             | Self::JsonRpc { .. }
+            // Built only by `gateway_refused`: a gateway decision.
+            | Self::GatewayRefused { .. }
             | Self::CliCredentialRefused { .. }
             | Self::Io(_)
             | Self::Json(_)
