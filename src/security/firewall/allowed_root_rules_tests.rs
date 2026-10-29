@@ -194,3 +194,29 @@ fn r39_native_tools_are_not_covered() {
         "the same rule covers a backend tool"
     );
 }
+
+/// R32 (response half): a warn root rule does not soften a credential
+/// finding in a covered call's answer; root rules decide only their own
+/// findings. Control: no root rule, the same answer blocks too.
+#[test]
+fn r32_warn_root_rule_does_not_soften_a_response_credential() {
+    let token = format!("ghp_{}", "abcdefghijklmnopqrstuvwxyz1234567890");
+    let answer = || json!({"content": [{"type": "text", "text": format!("key {token}")}]});
+    let fx = Fx::new(&["path"], FirewallAction::Warn);
+    let verdict = fx
+        .fw
+        .check_response("s1", "fs", "read_file", &mut answer(), "c");
+    assert!(
+        verdict
+            .findings
+            .iter()
+            .any(|f| f.scan_type == ScanType::Credentials),
+        "the trigger is real: {verdict:?}"
+    );
+    assert_eq!(verdict.action, FirewallAction::Block, "{verdict:?}");
+    let bare = Fx::with_rules(|_| Vec::new());
+    let control = bare
+        .fw
+        .check_response("s1", "fs", "read_file", &mut answer(), "c");
+    assert_eq!(control.action, FirewallAction::Block, "{control:?}");
+}
