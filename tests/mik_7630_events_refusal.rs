@@ -6,8 +6,10 @@
 //! `backend.<x>.resource_updated|resources_changed|prompts_changed`.
 //!
 //! Refused: A2A (it has no resource or prompt capabilities; its
-//! `tools_changed` is offered, MIK-8835) and identity propagation. The
-//! SSE-handshake HTTP transport offers the events since MIK-8835. An unset key
+//! `tools_changed` is offered, MIK-8835) and a backend reached with one
+//! person's own login on a multi-user gateway (`per_user_credential`). An
+//! identity-propagating backend is observed per subscriber, so it is offered.
+//! The SSE-handshake HTTP transport offers the events since MIK-8835. An unset key
 //! is judged at connect, so an unreachable one answers the backend error. The refusal is
 //! `-32014` with `data.feature = "backendEvents"` and `data.reason`; it is
 //! answered only to a caller who may reach the backend, so it cannot be used
@@ -52,13 +54,20 @@ fn refusal_config(root: &Path) -> Value {
                 "audience": "https://idp.example", "session_mode": "per_user"},
         },
         "fine": {"http_url": format!("{DEAD}/mcp"), "streamable_http": true},
+        "personal": {
+            "http_url": format!("{DEAD}/mcp"),
+            "streamable_http": true,
+            "oauth": {"enabled": true},
+        },
         "off": {"http_url": format!("{DEAD}/sse"), "enabled": false},
     });
     cfg["auth"]["api_keys"] = json!([
         key(
             "alice",
             ALICE,
-            &["hooks", "sse", "plain", "agent", "idp", "fine", "off"]
+            &[
+                "hooks", "sse", "plain", "agent", "idp", "fine", "personal", "off"
+            ]
         ),
         key("carol", CAROL, &["hooks"]),
     ]);
@@ -82,7 +91,12 @@ async fn subscribe(gw: &Gateway, key: &str, name: &str) -> Value {
 async fn ineligible_backends_refuse_upstream_events_with_the_reason() {
     let dir = tempfile::tempdir().expect("tempdir");
     let gw = Gateway::start(dir.path(), refusal_config(dir.path())).await;
-    let cases = [("agent", "a2a_no_such_capability")];
+    let cases = [
+        ("agent", "a2a_no_such_capability"),
+        // Two keys make this gateway multi-user: a backend reached with one
+        // person's own OAuth login still cannot be observed for anyone else.
+        ("personal", "per_user_credential"),
+    ];
     for (backend, reason) in cases {
         for kind in ["resource_updated", "resources_changed", "prompts_changed"] {
             let name = format!("backend.{backend}.{kind}");

@@ -148,10 +148,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "audit export cursor and log; no secret, append-only",
     ),
     (
-        "src/control_plane/export_segments.rs",
-        "reads sealed audit log segments for export; no secret",
-    ),
-    (
         "src/control_plane/store/file_io.rs",
         "collections read through read_guarded_file (I4); raw opens are the generation probe, the 0600 writer and a dir sync",
     ),
@@ -220,10 +216,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
-    ),
-    (
-        "src/gateway/ui/activity/seek.rs",
-        "reads audit log segments to find one receipt; hash-only, no secret",
     ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
