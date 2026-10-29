@@ -218,5 +218,6 @@ mod auth;
 mod backpressure;
 mod frames;
 mod generations;
+mod handover;
 mod identity;
 mod load;

@@ -75,6 +75,9 @@ struct Shared {
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
+    /// Test seam: the watcher handover probe.
+    #[cfg(test)]
+    probe: super::probe::PublishProbe,
     /// Sends currently waiting for room in their channel.
     waiting: std::sync::atomic::AtomicUsize,
 }
@@ -127,6 +130,8 @@ impl StreamHub {
                 snapshot: watch::channel(Snapshot::default()).0,
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
+                #[cfg(test)]
+                probe: super::probe::PublishProbe::default(),
                 waiting: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
@@ -259,6 +264,8 @@ impl StreamHub {
     /// Publish what the watcher saw this tick. Generations rise only on a
     /// change; `uptime_secs` never counts as one.
     pub(super) fn observe(&self, full: Value, counts: Value, reloaded: bool) {
+        #[cfg(test)]
+        self.shared.probe.before_publish();
         self.shared.snapshot.send_if_modified(|s| {
             let full_changed = !same_ignoring_uptime(&s.full, &full);
             let counts_changed = !same_ignoring_uptime(&s.counts, &counts);
@@ -271,6 +278,14 @@ impl StreamHub {
             let was_fresh = std::mem::replace(&mut s.fresh, true);
             changed || reloaded || !was_fresh
         });
+        #[cfg(test)]
+        self.shared.probe.after_publish();
+    }
+
+    /// The handover probe (tests only).
+    #[cfg(test)]
+    pub(crate) fn probe(&self) -> &super::probe::PublishProbe {
+        &self.shared.probe
     }
 }
 

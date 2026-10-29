@@ -26,6 +26,12 @@ pub(super) fn spawn(state: &Arc<AppState>, retiring: Option<JoinHandle<()>>) -> 
 
 /// Run until aborted (the last stream's guard aborts it).
 async fn run(state: Arc<AppState>, retiring: Option<JoinHandle<()>>) {
+    #[cfg(test)]
+    state
+        .dashboard_bootstrap
+        .stream_hub()
+        .probe()
+        .watcher_started();
     if let Some(old) = retiring {
         // Aborted already, so this returns at its next await point.
         let _ = old.await;

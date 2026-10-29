@@ -14,6 +14,8 @@ mod id;
     reason = "the log-kind merge loop is wired to the Activity source when that lands"
 )]
 mod merge;
+#[cfg(test)]
+mod probe;
 mod sent;
 mod watcher;
 
