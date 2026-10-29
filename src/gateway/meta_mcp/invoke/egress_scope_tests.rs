@@ -89,3 +89,22 @@ fn the_backend_and_key_cross_product_reaches_a_notification() {
         "withheld: (alpha, k1) could have sent it"
     );
 }
+
+/// E2: the capability provider is held apart from the registry, and a rule
+/// scoped to its name still reaches an answer of unnamed origin.
+#[test]
+fn a_block_scoped_to_the_capability_backend_applies_to_a_notification() {
+    let meta = meta_with(&json!([
+        {"match": "*", "scan": ["credentials"], "action": "block", "servers": ["caps"]},
+        {"match": "*", "scan": ["credentials"], "action": "allow"},
+    ]));
+    meta.set_capabilities(Arc::new(crate::capability::CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    )));
+    let screen = meta.notification_screen("caller", "session");
+    assert!(
+        !screen.admit(&mut progress()),
+        "withheld: the capability backend could have sent it"
+    );
+}

@@ -241,11 +241,14 @@ impl MetaMcp {
             // Names only: no backend is contacted or dispatched to and no
             // credential resolved; the class row in
             // `boundary_pins/scoped_backends_classes.tsv` pins this one caller.
+            // The capability provider is held apart from the registry, and is
+            // a backend a rule's `servers` can name like any other.
             let names: Vec<String> = self
                 .backends
                 .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Visibility)
                 .iter()
                 .map(|b| b.name.clone())
+                .chain(self.get_capabilities().map(|cap| cap.name.clone()))
                 .collect();
             for target in targets
                 .iter()
