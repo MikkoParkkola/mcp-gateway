@@ -5,7 +5,8 @@
 
 use super::*;
 
-/// A non-admin gets counts only: no backend name and no other field.
+/// A non-admin gets counts only, plus its own `access` report (which pages and
+/// tabs it may open, with fixed reasons): no backend name and no other field.
 #[tokio::test]
 async fn ui_status_redacts_for_a_non_admin() {
     for (fixture, caller) in [
@@ -31,6 +32,7 @@ async fn ui_status_redacts_for_a_non_admin() {
         assert_eq!(
             keys,
             [
+                "access",
                 "auth",
                 "degraded_count",
                 "healthy_count",
