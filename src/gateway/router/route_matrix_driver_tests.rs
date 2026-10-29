@@ -25,9 +25,9 @@ pub(crate) mod response;
 mod step;
 #[path = "route_matrix_driver_task_tests.rs"]
 mod task_submit;
-pub(crate) use resend::{
-    direct_spend_then_resend, invoke_relay_then_resend, surfaced_admission_then_resend,
-};
+#[cfg(feature = "cost-governance")]
+pub(crate) use resend::direct_spend_then_resend;
+pub(crate) use resend::{invoke_relay_then_resend, surfaced_admission_then_resend};
 pub(crate) use task_submit::{
     Surfacing, task_submit_authorized_before_x14, task_submit_read_as, task_submit_surfaced,
     task_submit_ungranted,
