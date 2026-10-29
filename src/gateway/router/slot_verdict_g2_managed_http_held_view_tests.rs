@@ -61,23 +61,36 @@ async fn rotate(fx: &Fx, old: &str) -> String {
     new
 }
 
-/// Register a seam hook that publishes `old` for the operator through the
-/// production writer, and return the flag it sets when it fires.
-fn publish_old_after_revalidate(
+/// Send `method` with `params` as request `id`, paused at the end of its
+/// account re-check (the `after_revalidate` pause point). While it is held,
+/// `before` runs and the test publishes `old` for the operator through the
+/// production writer; then the request finishes. Returns whether the
+/// re-check was reached, and the answer. A request that never runs the
+/// re-check finishes unpaused, and nothing is published.
+async fn publish_old_at_recheck(
     fx: &Arc<Fx>,
     old: &str,
-    before: impl FnOnce(&Fx) + 'static,
-) -> Arc<std::sync::atomic::AtomicBool> {
-    let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let (fx, old, flag) = (Arc::clone(fx), old.to_owned(), Arc::clone(&fired));
-    seams::after_revalidate(move || {
-        before(&fx);
-        let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
-        fx.meta
-            .remember_caller_slot(&backend, operator_proof(), Some(&old));
-        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    (id, method, params): (u64, &'static str, Value),
+    before: impl FnOnce(&Fx),
+) -> (bool, Value) {
+    let (reached, release) = seams::after_revalidate();
+    let mut request = tokio::spawn({
+        let fx = Arc::clone(fx);
+        async move { rpc(&fx, id, method, params).await }
     });
-    fired
+    tokio::select! {
+        () = reached.notified() => {}
+        answer = &mut request => {
+            seams::disarm_revalidate();
+            return (false, answer.expect("the request"));
+        }
+    }
+    before(fx);
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    fx.meta
+        .remember_caller_slot(&backend, operator_proof(), Some(old));
+    release.notify_one();
+    (true, request.await.expect("the request"))
 }
 
 /// Every JSON value inside `value`, with JSON carried as a string (a meta
@@ -111,6 +124,38 @@ fn server_entry(answer: &Value, server: &str) -> Value {
         .unwrap_or_else(|| panic!("premise: gateway_list_servers lists {server}: {answer}"))
 }
 
+/// The positive half: the grant's current binding has its slot attached,
+/// a real `gateway_list_tools` fill establishes it, and a
+/// `gateway_list_servers` after it knows the backend's tools. A rule that
+/// hides every per-user view fails here.
+async fn current_grant_lists(fx: &Fx, id: u64, row: &str) {
+    let current = current_binding(fx).await;
+    fx.gateway.rearm_operator_slot_at_for_test(&current);
+    let filled = rpc(
+        fx,
+        id,
+        "tools/call",
+        json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+    )
+    .await;
+    let answer = list_servers(fx, id + 1).await;
+    let entry = server_entry(&answer, BACKEND);
+    assert_eq!(
+        entry.get("tools_known"),
+        Some(&json!(true)),
+        "{row}: the current grant's catalogue did not list after its fill: {entry} (fill: {filled})"
+    );
+}
+
+/// A `gateway_list_servers` call as request `id`.
+fn list_servers_call(id: u64) -> (u64, &'static str, Value) {
+    (
+        id,
+        "tools/call",
+        json!({"name": "gateway_list_servers", "arguments": {}}),
+    )
+}
+
 async fn list_servers(fx: &Fx, id: u64) -> Value {
     rpc(
         fx,
@@ -132,10 +177,9 @@ async fn r1_a_publish_of_the_old_grant_after_the_listings_check_is_not_listed() 
     let fx = Arc::new(fixture().await);
     let old = fill_old(&fx, 1).await;
     rotate(&fx, &old).await;
-    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
-    let answer = list_servers(&fx, 2).await;
+    let (fired, answer) = publish_old_at_recheck(&fx, &old, list_servers_call(2), |_| {}).await;
     assert!(
-        fired.load(std::sync::atomic::Ordering::SeqCst),
+        fired,
         "premise: the after_revalidate seam fired and the old publish ran"
     );
     let entry = server_entry(&answer, BACKEND);
@@ -144,6 +188,7 @@ async fn r1_a_publish_of_the_old_grant_after_the_listings_check_is_not_listed() 
         Some(&json!(false)),
         "R1: gateway_list_servers presented the old grant's catalogue after the rotation: {entry}"
     );
+    current_grant_lists(&fx, 3, "R1").await;
 }
 
 /// R2 through `remember_caller_slot`: a `gateway_list_tools` fill resolved

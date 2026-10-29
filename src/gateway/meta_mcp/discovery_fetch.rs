@@ -193,7 +193,7 @@ impl MetaMcp {
             }
         }
         #[cfg(test)]
-        super::visible::seams::revalidated();
+        super::visible::seams::revalidated().await;
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue

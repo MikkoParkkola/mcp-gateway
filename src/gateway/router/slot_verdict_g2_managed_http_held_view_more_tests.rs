@@ -46,13 +46,13 @@ async fn r5_a_busy_recheck_hides_per_user_tools_for_the_request() {
     fx.gateway.fail_custody_for_test(true);
     // Custody recovers inside the seam, so the listing's own reads after the
     // re-check succeed and only the re-check saw busy.
-    let fired = publish_old_after_revalidate(&fx, &old, |fx| {
+    let (fired, answer) = publish_old_at_recheck(&fx, &old, list_servers_call(2), |fx| {
         fx.gateway.fail_custody_for_test(false);
-    });
-    let answer = list_servers(&fx, 2).await;
+    })
+    .await;
     fx.gateway.fail_custody_for_test(false);
     assert!(
-        fired.load(std::sync::atomic::Ordering::SeqCst),
+        fired,
         "premise: the after_revalidate seam fired and the old publish ran"
     );
     assert_eq!(
@@ -66,20 +66,15 @@ async fn r5_a_busy_recheck_hides_per_user_tools_for_the_request() {
         Some(&json!(false)),
         "R5: a busy re-check let the old grant's published catalogue list: {entry}"
     );
-    fx.gateway.rearm_operator_slot_at_for_test(&new);
-    let next = rpc(&fx, 3, "tools/list", json!({})).await;
-    assert!(
-        surfaced_on(&next, BACKEND)
-            .iter()
-            .any(|t| !is_shared_schema(t)),
-        "R5: the next request with custody available did not show the current grant's tools: {next}"
-    );
+    assert_ne!(new, old, "premise: the rotated binding");
+    // The next requests, custody available: the current grant's view lists.
+    current_grant_lists(&fx, 3, "R5").await;
 }
 
 /// H1 setup: the old slot held and current, a `tools/list` parked before its
 /// account pre-pass (its re-check has read the held binding), `between` run
 /// in that window, then the listing finished.
-async fn listing_with_prepass_window(between: impl AsyncFnOnce(&Fx)) -> Value {
+async fn listing_with_prepass_window(between: impl AsyncFnOnce(&Fx)) -> (Arc<Fx>, Value) {
     let fx = Arc::new(fixture().await);
     fill_old(&fx, 1).await;
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
@@ -93,14 +88,14 @@ async fn listing_with_prepass_window(between: impl AsyncFnOnce(&Fx)) -> Value {
     release.notify_one();
     let answer = listing.await.expect("the listing");
     fx.gateway.fail_custody_for_test(false);
-    answer
+    (fx, answer)
 }
 
 /// H1a: re-check reads the old binding, the grant is revoked, the pre-pass
 /// reads no view: the listing is cold, never the old catalogue. RED on base.
 #[tokio::test]
 async fn h1_a_prepass_that_reads_no_view_after_the_recheck_lists_cold() {
-    let answer = listing_with_prepass_window(async |fx: &Fx| {
+    let (fx, answer) = listing_with_prepass_window(async |fx: &Fx| {
         fx.gateway.revoke_operator_grant().await;
     })
     .await;
@@ -108,13 +103,15 @@ async fn h1_a_prepass_that_reads_no_view_after_the_recheck_lists_cold() {
         surfaced_on(&answer, BACKEND).is_empty(),
         "H1a: a pre-pass that read no view served the held old catalogue: {answer}"
     );
+    fx.gateway.reconnect_operator_grant_for_test().await;
+    current_grant_lists(&fx, 3, "H1a").await;
 }
 
 /// H1b: re-check reads the old binding, the pre-pass read is busy: the
 /// listing is cold for that request. RED on base.
 #[tokio::test]
 async fn h1_a_busy_prepass_after_the_recheck_lists_cold() {
-    let answer = listing_with_prepass_window(async |fx: &Fx| {
+    let (fx, answer) = listing_with_prepass_window(async |fx: &Fx| {
         fx.gateway.fail_custody_for_test(true);
     })
     .await;
@@ -122,6 +119,7 @@ async fn h1_a_busy_prepass_after_the_recheck_lists_cold() {
         surfaced_on(&answer, BACKEND).is_empty(),
         "H1b: a busy pre-pass served the held catalogue unchecked: {answer}"
     );
+    current_grant_lists(&fx, 3, "H1b").await;
 }
 
 /// H2: the re-check sees the revoke and records no view; a racing publish
@@ -132,10 +130,10 @@ async fn h2_a_publish_racing_a_seen_revoke_is_not_served() {
     let fx = Arc::new(fixture().await);
     let old = fill_old(&fx, 1).await;
     fx.gateway.revoke_operator_grant().await;
-    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
-    let answer = rpc(&fx, 2, "tools/list", json!({})).await;
+    let (fired, answer) =
+        publish_old_at_recheck(&fx, &old, (2, "tools/list", json!({})), |_| {}).await;
     assert!(
-        fired.load(std::sync::atomic::Ordering::SeqCst),
+        fired,
         "premise: the after_revalidate seam fired and the old publish ran"
     );
     assert!(
@@ -265,20 +263,14 @@ async fn r7_a_set_profile_refresh_rechecks_the_account_first() {
     let fx = Arc::new(fixture_armed(&Binding::Connected, with_profile("research")).await);
     let old = fill_old(&fx, 1).await;
     rotate(&fx, &old).await;
-    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
-    let set = rpc(
-        &fx,
-        2,
-        "tools/call",
-        json!({"name": "gateway_set_profile", "arguments": {"profile": "research"}}),
-    )
-    .await;
+    let call = json!({"name": "gateway_set_profile", "arguments": {"profile": "research"}});
+    let (fired, set) = publish_old_at_recheck(&fx, &old, (2, "tools/call", call), |_| {}).await;
     assert!(
         set.get("error").is_none() && set.pointer("/result/isError") != Some(&json!(true)),
         "premise: the profile switch succeeded, so its refresh runs: {set}"
     );
     assert!(
-        fired.load(std::sync::atomic::Ordering::SeqCst),
+        fired,
         "R7: the set_profile refresh ran no account re-check (the after_revalidate seam never fired): {set}"
     );
 }
@@ -325,10 +317,15 @@ async fn r6_tools_resolve_does_not_resolve_an_old_publish_after_its_recheck() {
     let fx = Arc::new(fixture().await);
     let old = fill_old(&fx, 1).await;
     rotate(&fx, &old).await;
-    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
-    let answer = rpc(&fx, 2, "tools/resolve", json!({"name": TOOL})).await;
+    let (fired, answer) = publish_old_at_recheck(
+        &fx,
+        &old,
+        (2, "tools/resolve", json!({"name": TOOL})),
+        |_| {},
+    )
+    .await;
     assert!(
-        fired.load(std::sync::atomic::Ordering::SeqCst),
+        fired,
         "R6b: tools/resolve ran no account re-check (the after_revalidate seam never fired): {answer}"
     );
     assert!(
