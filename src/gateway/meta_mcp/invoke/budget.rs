@@ -115,7 +115,7 @@ impl MetaMcp {
 
     /// The identity-grant fallback subject for `grant_key`: only an API key's
     /// name may be passed (MIK-8518); every other credential passes `None`.
-    pub(in crate::gateway::meta_mcp) fn grant_subject_from_api_key(
+    pub(in crate::gateway) fn grant_subject_from_api_key(
         grant_key: Option<&str>,
     ) -> Option<GrantSubject> {
         grant_key.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))

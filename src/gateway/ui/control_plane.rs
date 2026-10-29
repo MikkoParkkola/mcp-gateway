@@ -39,7 +39,8 @@ use mutations::{
     actor_from_client, mutate_grant, mutate_policy, mutation_disabled_reason, resolve_decision,
 };
 use snapshot::{
-    ControlPlaneApiResponse, ControlPlaneResponseFlags, local_runtime_snapshot, local_shadow_radar,
+    ControlPlaneApiResponse, ControlPlaneResponseFlags, caller_grant_subject,
+    local_runtime_snapshot, local_shadow_radar,
 };
 #[cfg(test)]
 use snapshot::{
@@ -131,19 +132,23 @@ async fn control_plane_snapshot(
     // it always stood; admission here derives the actor.
     // A row that asks for anything but the read view is refused here, so a
     // table edit cannot change this route without changing this handler.
-    let actor = match guard.admit_control_plane(|client, identity, check| match check {
-        CpCheck::Read => Ok(actor_from_client(
-            client,
-            identity,
-            &generation.config().control_plane.role_mapping,
-        )),
-        CpCheck::Action(_) | CpCheck::FromBody(_) => Err(Box::new(
-            super::guard::Refused::AdminRequired.into_response(),
-        )),
-    }) {
-        Ok(actor) => actor,
-        Err(refused) => return *refused,
-    };
+    let (actor, grant_subject) =
+        match guard.admit_control_plane(|client, identity, check| match check {
+            CpCheck::Read => Ok((
+                actor_from_client(
+                    client,
+                    identity,
+                    &generation.config().control_plane.role_mapping,
+                ),
+                caller_grant_subject(client, identity),
+            )),
+            CpCheck::Action(_) | CpCheck::FromBody(_) => Err(Box::new(
+                super::guard::Refused::AdminRequired.into_response(),
+            )),
+        }) {
+            Ok(admitted) => admitted,
+            Err(refused) => return *refused,
+        };
     let client = guard.client;
     // Grant status is judged against the time; on a clock before 1970 it
     // cannot be, so the view is refused rather than guessed (MIK-8202).
@@ -154,8 +159,12 @@ async fn control_plane_snapshot(
         )
         .into_response();
     };
-    let (snapshot, store_read_degraded) =
-        local_runtime_snapshot((&state, &generation), client.as_ref(), &actor, now);
+    let (snapshot, store_read_degraded) = local_runtime_snapshot(
+        (&state, &generation),
+        client.as_ref(),
+        (&actor, grant_subject.as_ref()),
+        now,
+    );
     let shadow_radar = local_shadow_radar(&state).await;
 
     let Some(view) = snapshot.read_only_view(&actor) else {

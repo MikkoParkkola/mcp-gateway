@@ -19,6 +19,7 @@ use crate::discovery::shadow::{
     ShadowEnterpriseBoundary, ShadowScanReport, ShadowScanSummary,
 };
 use crate::hashing::canonical_json_sha256;
+use crate::identity_grants::GrantSubject;
 use crate::trust::TrustCard;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -32,9 +33,14 @@ use std::sync::Arc;
 pub(super) fn local_runtime_snapshot(
     (state, generation): (&AppState, &crate::config_reload::Generation),
     client: Option<&AuthenticatedClient>,
-    actor: &ControlPlaneActor,
+    (actor, grant_subject): (&ControlPlaneActor, Option<&GrantSubject>),
     now: chrono::DateTime<chrono::Utc>,
 ) -> (ControlPlaneSnapshot, bool) {
+    // A caller that may not read every principal's rows is scoped here, at
+    // the source, so every field derived from the snapshot (the view, the
+    // decision queue, counts, coverage) sees only its own grants and events.
+    let all_principals =
+        ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadAllPrincipals).allowed;
     let mut snapshot = ControlPlaneSnapshot::default();
     snapshot.users.push(ControlPlaneUser {
         user_id: actor.actor_id.clone(),
@@ -103,7 +109,14 @@ pub(super) fn local_runtime_snapshot(
     // "grants" governance view reflects actual local grants instead of an empty
     // table (MIK-6558). Status is derived from revocation/expiry; local grants
     // have no "requested" state, so an active grant reads as Approved.
-    for grant in state.meta_mcp.identity_grant_rows() {
+    // Scoped before projection, which drops the subject ownership is judged
+    // by; a caller with no grant subject owns no grants.
+    for grant in state
+        .meta_mcp
+        .identity_grant_rows()
+        .into_iter()
+        .filter(|grant| all_principals || grant_subject == Some(&grant.subject))
+    {
         snapshot
             .grants
             .push(control_plane_grant_from_identity(grant, now));
@@ -118,8 +131,30 @@ pub(super) fn local_runtime_snapshot(
         .control_plane_store
         .as_ref()
         .is_some_and(|store| merge_store_into_snapshot(store.as_ref(), &mut snapshot));
+    // Only the events the caller performed: an event about one of its grants
+    // could belong to an earlier owner of that grant id.
+    if !all_principals {
+        snapshot
+            .audit_events
+            .retain(|event| event.actor_id == actor.actor_id);
+    }
 
     (snapshot, store_read_degraded)
+}
+
+/// The grant subject a UI caller owns grants under, with dispatch's
+/// precedence: the verified identity's, else an API key's fallback subject.
+pub(super) fn caller_grant_subject(
+    client: Option<&AuthenticatedClient>,
+    identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
+) -> Option<GrantSubject> {
+    identity
+        .and_then(crate::gateway::grant_subject_from_verified_identity)
+        .or_else(|| {
+            crate::gateway::MetaMcp::grant_subject_from_api_key(
+                client.and_then(AuthenticatedClient::api_key_identity),
+            )
+        })
 }
 
 /// Fill a runtime snapshot's `audit_events` from the store's tamper-evident
