@@ -9,7 +9,6 @@ use crate::error::rpc_codes::INVALID_REQUEST;
 use serde_json::Value;
 
 use super::super::MetaMcp;
-#[cfg(feature = "firewall")]
 use crate::gateway::delivery_facts::Part;
 use crate::gateway::delivery_facts::ResponseEffect;
 use crate::protocol::{JsonRpcError, JsonRpcResponse};
@@ -121,7 +120,7 @@ impl MetaMcp {
         // A `tools/call` result passed the content gates at dispatch, on
         // every route, with the tool's own capability flags; running them
         // again would audit it twice. Every other answer meets them here.
-        if at.content == ContentChecks::Here && self.content_refuses(at, result) {
+        if at.content == ContentChecks::Here && self.content_refuses(at, Part::Result, result) {
             return EgressOutcome::Refused;
         }
         let snapshot = self.relay_snapshot(result);
@@ -136,7 +135,7 @@ impl MetaMcp {
     /// no text message refuses.
     fn scan_error(&self, error: &mut JsonRpcError, at: &Egress<'_>) -> EgressOutcome {
         let fields = serde_json::json!({"message": error.message, "data": error.data});
-        if self.content_refuses(at, &fields) {
+        if self.content_refuses(at, Part::Error, &fields) {
             return EgressOutcome::Refused;
         }
         #[cfg(feature = "firewall")]
@@ -175,13 +174,13 @@ impl MetaMcp {
     /// The content inspection and context integrity on every decoded string
     /// and key of `value`: decoded, not serialized, so escaping cannot hide a
     /// quoted credential or a newline-split instruction.
-    fn content_refuses(&self, at: &Egress<'_>, value: &Value) -> bool {
+    fn content_refuses(&self, at: &Egress<'_>, part: Part, value: &Value) -> bool {
         let mut text = String::new();
         decoded_text(value, &mut text);
         let (server, tool) = (at.correlation.external_server, at.correlation.external_tool);
         let trace_id = at.correlation.session_id;
         if self
-            .inspect_backend_text((server, tool, trace_id), &text)
+            .inspect_backend_text((server, tool, trace_id), &text, part)
             .is_err()
         {
             return true;
@@ -475,7 +474,7 @@ impl MetaMcp {
             "method": notification.method,
             "params": notification.params,
         });
-        if self.content_refuses(at, &fields) {
+        if self.content_refuses(at, Part::Result, &fields) {
             return EgressOutcome::Refused;
         }
         #[cfg(feature = "firewall")]
@@ -655,7 +654,7 @@ impl MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        if self.content_refuses(&at, value)
+        if self.content_refuses(&at, Part::Result, value)
             || self.firewall_result(value, &at) == EgressOutcome::Refused
         {
             tracing::warn!("Egress scan: discovery response refused");
@@ -696,7 +695,8 @@ impl MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        self.content_refuses(&at, value)
+        // A key refusal: the gateway's error answer.
+        self.content_refuses(&at, Part::Error, value)
     }
 }
 

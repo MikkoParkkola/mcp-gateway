@@ -11,24 +11,20 @@
 use std::sync::Arc;
 
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
-use dashmap::DashMap;
-use governor::{
-    RateLimiter,
-    clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
-};
 use tracing::{debug, warn};
 
 use super::middleware::{
     bearer_unauthorized_response, circuit_open_response, rate_limited_response,
 };
 use crate::config::CircuitBreakerConfig;
-use crate::failsafe::CircuitBreaker;
 use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
 pub(crate) mod live;
+
+#[path = "auth_runtime.rs"]
+pub(crate) mod runtime;
 use live::key_server_credential;
 #[path = "auth_quota.rs"]
 mod quota;
@@ -56,9 +52,6 @@ pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handof
 /// child included: code moved into a child module keeps the target a log
 /// filter already names.
 const AUTH_TARGET: &str = module_path!();
-
-/// Type alias for our rate limiter
-type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 /// Short, non-reversible fingerprint of a secret for log correlation (CWE-532).
 ///
@@ -143,12 +136,11 @@ pub struct ResolvedAuthConfig {
     api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
-    /// Rate limiters per client, keyed by credential (`client_state_key`).
-    rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
     /// Optional client circuit-breaker policy shared across per-client breaker instances.
     client_circuit_breaker: Option<CircuitBreakerConfig>,
-    /// Circuit breakers per client, keyed by credential (`client_state_key`).
-    client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// Per-client rate-limit buckets and circuit breakers, keyed by credential
+    /// (`client_state_key`): one store shared by every config built over it.
+    runtime: Arc<runtime::AuthRuntime>,
     /// The record key every client minted here computes its record principal
     /// with (MIK-8697 §16): resolved once at startup and injected, never picked.
     record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
@@ -375,7 +367,7 @@ impl AuthenticatedClient {
 
         // If allowlist is set, ONLY tools in the list are permitted
         if let Some(ref allowed) = self.allowed_tools
-            && !Self::matches_any_pattern(allowed, tool, &qualified)
+            && !crate::config::tool_pattern_matches(allowed, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
@@ -385,7 +377,7 @@ impl AuthenticatedClient {
 
         // If denylist is set, tools in the list are blocked
         if let Some(ref denied) = self.denied_tools
-            && Self::matches_any_pattern(denied, tool, &qualified)
+            && crate::config::tool_pattern_matches(denied, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
@@ -394,20 +386,6 @@ impl AuthenticatedClient {
         }
 
         Ok(())
-    }
-
-    /// Check if a tool name matches any pattern in the list.
-    /// Supports exact match and glob suffix patterns (e.g., `"search_*"`).
-    fn matches_any_pattern(patterns: &[String], tool: &str, qualified: &str) -> bool {
-        patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                // Glob pattern: check prefix match on both tool and qualified name
-                tool.starts_with(prefix) || qualified.starts_with(prefix)
-            } else {
-                // Exact match on both tool and qualified name
-                tool == pattern || qualified == pattern
-            }
-        })
     }
 }
 

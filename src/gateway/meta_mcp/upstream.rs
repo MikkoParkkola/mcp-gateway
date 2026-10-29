@@ -616,6 +616,9 @@ impl MetaMcp {
             crate::security::tenant_reads::note_attribution(raw_read);
             (error, crate::gateway::task_service::ErrorAuthor::Peer)
         } else {
+            // The firewall replaced the peer's error: the settlement record
+            // says refused, and only this branch notes it.
+            super::invoke::audit::note_refusal(&Err(crate::Error::ResponseFirewallRefused));
             tracing::warn!(
                 server,
                 tool,

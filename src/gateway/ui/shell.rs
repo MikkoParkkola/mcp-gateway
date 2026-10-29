@@ -37,12 +37,32 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.54b46a7583fd.css",
-        include_bytes!("shell/shell.54b46a7583fd.css"),
+        "shell.30f973ab3f5e.js",
+        include_bytes!("shell/shell.30f973ab3f5e.js"),
     ),
     (
-        "shell.686a802f184b.js",
-        include_bytes!("shell/shell.686a802f184b.js"),
+        "shell.5f16263b163b.css",
+        include_bytes!("shell/shell.5f16263b163b.css"),
+    ),
+    (
+        "tips.7c43dc6560cf.json",
+        include_bytes!("shell/tips.7c43dc6560cf.json"),
+    ),
+    (
+        "tools.24f226efcd24.css",
+        include_bytes!("shell/tools.24f226efcd24.css"),
+    ),
+    (
+        "tools.dba0a0e6d440.js",
+        include_bytes!("shell/tools.dba0a0e6d440.js"),
+    ),
+    (
+        "tooltip.5251c22696fd.css",
+        include_bytes!("shell/tooltip.5251c22696fd.css"),
+    ),
+    (
+        "tooltip.deb27f374db3.js",
+        include_bytes!("shell/tooltip.deb27f374db3.js"),
     ),
 ];
 
@@ -96,6 +116,7 @@ fn content_type(file: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         Some("svg") => "image/svg+xml",
         Some("png") => "image/png",
+        Some("json") => "application/json",
         _ => "application/octet-stream",
     }
 }

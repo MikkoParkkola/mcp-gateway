@@ -110,6 +110,8 @@ mod direct_continuation_tests;
 #[cfg(test)]
 mod direct_explicit_cancel_tests;
 #[cfg(test)]
+mod direct_guards_effect_tests;
+#[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
@@ -117,6 +119,8 @@ mod direct_guards_fixture_a2a;
 mod direct_guards_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
+#[cfg(test)]
+mod direct_log_escape_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
@@ -174,6 +178,12 @@ mod meta_fingerprint_tests;
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A backend's protocol directives reach the client only where allowed.
+#[cfg(test)]
+mod protocol_member_scope_tests;
+/// A backend's gateway-only members never reach the client.
+#[cfg(test)]
+mod reserved_member_ingress_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
@@ -253,6 +263,9 @@ mod stored_read_order_tests;
 /// MIK-8392 STORED.2: stored single-call results need a live account.
 #[cfg(test)]
 mod stored_replay_liveness_tests;
+/// A UI write's admin record outlives a client cancel with its handler.
+#[cfg(all(test, feature = "webui"))]
+mod ui_audit_cancel_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.

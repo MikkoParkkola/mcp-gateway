@@ -175,3 +175,110 @@ async fn a_record_still_observed_as_it_was_is_sent() {
         "not buried"
     );
 }
+
+/// A bearer token that expires at `exp`, as a lease takes it.
+fn token_until(exp: u64) -> zeroize::Zeroizing<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let part = |s: &str| URL_SAFE_NO_PAD.encode(s);
+    zeroize::Zeroizing::new(format!(
+        "Bearer {}.{}.sig",
+        part(r#"{"alg":"RS256"}"#),
+        part(&format!(r#"{{"sub":"p","exp":{exp}}}"#))
+    ))
+}
+
+/// Lease `pt` for `person()` until `exp`; the key it is held under.
+async fn leased(hub: &EventsHub, services: &Services, exp: u64) -> crate::events::lease::LeaseKey {
+    let config = services.live.get();
+    let obs = crate::events::observation::binding(&config, "pt")
+        .expect("per-user")
+        .observe(&person())
+        .expect("observed");
+    let key = crate::events::lease::LeaseKey {
+        backend: "pt".into(),
+        obs,
+    };
+    hub.leases
+        .install(key.clone(), token_until(exp), u64::MAX, 0)
+        .await
+        .expect("leased");
+    key
+}
+
+/// A record read under one lease and still queued when the lease is
+/// replaced is buried at its delivery attempt, and nothing reaches the
+/// callback: it was never authorized by the new token.
+#[tokio::test]
+async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    let key = leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_replaced");
+    hub.leases
+        .install(key, token_until(now + 7200), u64::MAX, 0)
+        .await
+        .expect("replaced");
+    hub.attempt(&services, "evt_replaced").await;
+    let dead = hub.store.dead_letter_by_id("evt_replaced").expect("buried");
+    assert_eq!(dead.reason, "observation_changed");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// The same once the lease is past its deadline, before any expiry sweep.
+#[tokio::test]
+async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let exp = crate::clock::unix_secs().expect("clock") + 120;
+    leased(&hub, &services, exp).await;
+    queued_observed(&hub, &services, port, "evt_expired");
+    let _clock = crate::clock::test_clock::at_secs(exp);
+    hub.attempt(&services, "evt_expired").await;
+    let dead = hub.store.dead_letter_by_id("evt_expired").expect("buried");
+    assert_eq!(dead.reason, "observation_changed");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// Control for the two rows above: a record read under a lease that is
+/// still held and unexpired is sent, so their burials come from the replace
+/// and the deadline, not from leased records never being deliverable.
+#[tokio::test]
+async fn a_record_read_under_a_held_lease_is_sent() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_held");
+    hub.attempt(&services, "evt_held").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while accepted.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(accepted.load(Ordering::SeqCst) >= 1, "sent");
+    assert!(
+        hub.store.dead_letter_by_id("evt_held").is_none(),
+        "not buried"
+    );
+}

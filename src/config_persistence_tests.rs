@@ -113,6 +113,7 @@ fn the_write_path_never_parks_the_thread_it_runs_on() {
     let needle = concat!("thread::", "sleep");
     let source = concat!(
         include_str!("config_persistence.rs"),
+        include_str!("config_persistence_scratch.rs"),
         include_str!("config_persistence_atomic.rs")
     );
     let sleeps: Vec<&str> = source
@@ -678,4 +679,44 @@ fn record_url_render_golden() {
         "----- BEGIN url_render.txt -----\n{}----- END url_render.txt -----\n",
         url_render_report()
     );
+}
+
+/// Under `Refuse` an existing comment-free file the
+/// splice cannot edit (flow-style `backends`) is refused, not re-serialised:
+/// the message says its layout would change, names `--force`, quotes no file
+/// text, and the file is byte-identical.
+#[test]
+fn refuse_turns_down_a_comment_free_edit_it_cannot_make_in_place() {
+    const FLOW: &str = "server: {port: 39401}\nbackends: {alpha: {command: x-cmd}}\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, FLOW).expect("write");
+    let error = edit_config(&path, CommentLoss::Refuse, |c| {
+        c.backends.get_mut("alpha").expect("alpha").description = "new".into();
+        Ok(())
+    })
+    .expect_err("refused");
+    assert!(error.starts_with("Not saved:"), "{error}");
+    assert!(
+        error.contains("layout") && error.contains("--force"),
+        "{error}"
+    );
+    assert!(!error.contains("x-cmd"), "quotes the file: {error}");
+    assert_eq!(std::fs::read_to_string(&path).expect("read"), FLOW);
+}
+
+/// `Rewrite` (`--force`) still rewrites the same file.
+#[test]
+fn rewrite_still_rewrites_a_file_it_cannot_edit_in_place() {
+    const FLOW: &str = "server: {port: 39401}\nbackends: {alpha: {command: x-cmd}}\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, FLOW).expect("write");
+    edit_config(&path, CommentLoss::Rewrite, |c| {
+        c.backends.get_mut("alpha").expect("alpha").description = "new".into();
+        Ok(())
+    })
+    .expect("rewritten");
+    let config = Config::load_literal(Some(&path)).expect("loads");
+    assert_eq!(config.backends["alpha"].description, "new");
 }

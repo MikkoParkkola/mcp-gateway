@@ -31,6 +31,21 @@ pub(super) enum Extra {
     /// Message signing on, scoped by the posture (`gateway_invoke` only,
     /// every `tools/call` under [`Extra::Hardened`]).
     Signing,
+    /// Tool `t` declares one argument, `q`, and no other.
+    DeclaredKeys,
+    /// Tool `t` is listed with an input schema that is not an object, so the
+    /// catalogue withholds it.
+    InvalidSchema,
+    /// Context integrity enforces and denies every finding, so an answer
+    /// carrying an injected instruction is withheld whole.
+    ContextIntegrityDenies,
+    /// The meta layer's own request firewall, as the gateway arms it beside
+    /// the router's: the dispatch chokepoint rescans with it.
+    #[cfg(feature = "firewall")]
+    MetaRequestFirewall,
+    /// Context integrity enforces and strips every finding, so an answer
+    /// carrying an injected instruction is rebuilt without it.
+    ContextIntegrityStrips,
 }
 
 impl Setup {
@@ -93,8 +108,18 @@ fn signed(meta: &mut MetaMcp, posture: crate::security::SecurityPosture) {
 /// `meta` with the meta-layer switches in `extras` turned on: attestation,
 /// then signing scoped by the posture [`Extra::Hardened`] selects.
 pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
+    if extras.contains(&Extra::ContextIntegrityDenies) {
+        meta = meta.with_context_integrity_kernel(enforcing_kernel(
+            crate::context_integrity::ContextIntegrityDecisionKind::Deny,
+        ));
+    }
     if extras.contains(&Extra::Attestation) {
         meta = attested(meta);
+    }
+    if extras.contains(&Extra::ContextIntegrityStrips) {
+        meta = meta.with_context_integrity_kernel(enforcing_kernel(
+            crate::context_integrity::ContextIntegrityDecisionKind::Strip,
+        ));
     }
     if extras.contains(&Extra::Signing) {
         let posture = if extras.contains(&Extra::Hardened) {
@@ -104,7 +129,52 @@ pub(super) fn arm_extras(mut meta: MetaMcp, extras: &[Extra]) -> MetaMcp {
         };
         signed(&mut meta, posture);
     }
+    #[cfg(feature = "firewall")]
+    if extras.contains(&Extra::MetaRequestFirewall) {
+        let firewall = crate::security::firewall::Firewall::from_config(
+            crate::security::firewall::FirewallConfig {
+                enabled: true,
+                scan_requests: true,
+                ..crate::security::firewall::FirewallConfig::default()
+            },
+            None,
+        )
+        .with_continuations(meta.continuation());
+        meta.set_firewall(Some(Arc::new(firewall)));
+    }
     meta
+}
+
+/// Tool `t`'s listed input schema under the cell's [`Extra`] switches.
+pub(super) fn listed_schema(extras: &[Extra]) -> serde_json::Value {
+    if extras.contains(&Extra::InvalidSchema) {
+        serde_json::json!("not a schema")
+    } else if extras.contains(&Extra::DeclaredKeys) {
+        serde_json::json!({"type": "object", "properties": {"q": {"type": "string"}},
+                           "additionalProperties": false})
+    } else {
+        serde_json::json!({"type": "object"})
+    }
+}
+
+/// A context-integrity kernel that enforces `kind` for every finding kind.
+fn enforcing_kernel(
+    kind: crate::context_integrity::ContextIntegrityDecisionKind,
+) -> crate::context_integrity::ContextIntegrityKernel {
+    use crate::context_integrity::{
+        ContextIntegrityKernel, ContextIntegrityPolicy, ContextIntegrityPolicyMode,
+    };
+    ContextIntegrityKernel::new(ContextIntegrityPolicy {
+        mode: ContextIntegrityPolicyMode::Enforce,
+        untrusted_instruction_decision: kind,
+        guarded_material_decision: kind,
+        personal_data_decision: kind,
+        destructive_instruction_decision: kind,
+        tool_poisoning_decision: kind,
+        high_risk_action_decision: kind,
+        allow_benign_read_only: true,
+        non_bypassable: false,
+    })
 }
 
 /// Whether both routes have a transparency log (T21).

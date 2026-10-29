@@ -148,6 +148,14 @@ impl CredentialSource for Minted {
                     return Err(refused);
                 }
             };
+            // The mint's contract: nothing minted is a refusal. Held here too,
+            // because a per-user slot of a required binding takes this send's
+            // credential as the subscriber's own and adds none of its own.
+            if grant.headers.is_empty() {
+                return Err(crate::Error::Transport(
+                    "the listener's mint lent no credential".to_owned(),
+                ));
+            }
             if !run.admits(grant.fence.as_deref()) {
                 return Err(crate::Error::Transport(
                     "the listener's grant moved; its run ends".to_owned(),
@@ -198,20 +206,33 @@ impl CredentialSource for Leased {
     }
 }
 
+/// What one listener run sends with, and what it stamps its occurrences
+/// with: a minted run's fence, or a leased run's generation.
+pub(super) struct RunCredential {
+    pub credential: ListenerCredential,
+    pub fence: Option<Arc<RunFence>>,
+    /// The lease generation a leased run sends under, read once at its
+    /// start: the run stamps what it reads with it, and ends when the lease
+    /// moves.
+    pub lease: Option<u128>,
+}
+
 /// What a listener of `key` sends with: the shared credential for a shared
 /// key; for a per-user key its subscriber's own, leased (passthrough) or
 /// minted (every other strategy). `None` when a per-user key has none to
 /// be had now (no lease, no stored identity, no mint wired): it then does
 /// not run, and never falls back to the gateway's credential. A minted
-/// credential comes with its run's fence.
-pub(super) fn for_key(
-    key: &ListenerKey,
-    hub: &Weak<EventsHub>,
-) -> Option<(ListenerCredential, Option<Arc<RunFence>>)> {
+/// credential comes with its run's fence, a leased one with its generation.
+pub(super) fn for_key(key: &ListenerKey, hub: &Weak<EventsHub>) -> Option<RunCredential> {
     let Some(obs) = &key.obs else {
-        return Some((ListenerCredential::shared(), None));
+        return Some(RunCredential {
+            credential: ListenerCredential::shared(),
+            fence: None,
+            lease: None,
+        });
     };
     let mut fence = None;
+    let mut leased = None;
     let live = hub.upgrade()?;
     let config = live.runtime.services.get()?.live.get();
     let binding = super::observation::binding(&config, &key.backend)?;
@@ -222,6 +243,7 @@ pub(super) fn for_key(
                 obs: obs.clone(),
             };
             let generation = live.leases.held_generation(&lease)?;
+            leased = Some(generation);
             Arc::new(Leased {
                 hub: hub.clone(),
                 key: lease,
@@ -251,7 +273,11 @@ pub(super) fn for_key(
         identity_key: Some(obs.clone()),
         source: Some(source),
     };
-    Some((credential, fence))
+    Some(RunCredential {
+        credential,
+        fence,
+        lease: leased,
+    })
 }
 
 #[cfg(test)]

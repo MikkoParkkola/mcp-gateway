@@ -23,9 +23,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{
     CachePrincipal, augment_with_predictions, augment_with_trace, response_cache_key_for,
 };
-use crate::gateway::recovery::{
-    MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
-};
+use crate::gateway::recovery::{MetaSurface, RecoveryContext, recovery_for_surface};
 use crate::idempotency::IdempotencyReservation;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
@@ -40,12 +38,13 @@ pub(super) fn attach_tool_error_recovery(
     // (schema validation, executor failure) it sets `isError: true`
     // in the JSON value without propagating a Rust `Err`.  Attach a
     // recovery hint so the LLM has structured guidance to fix the
-    // call — but only when the `recovery` field is not already set.
+    // call — but only when the gateway has not set `_recovery` already;
+    // a backend's own `recovery` is its data and does not count.
     if value
         .get("isError")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
-        && value.get("recovery").is_none()
+        && value.get("_recovery").is_none()
     {
         let detail = value
             .get("content")
@@ -70,9 +69,16 @@ pub(super) fn attach_tool_error_recovery(
             },
             surface,
         );
-        let value = attach_recovery(value, hint);
         // MIK-7939: the hint is the gateway's text, never a receipt's.
-        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        let mut value = value;
+        if let Ok(hint) = serde_json::to_value(hint) {
+            super::gateway_writes::insert_noted(
+                super::gateway_writes::Layer::Value,
+                &["_recovery"],
+                &mut value,
+                hint,
+            );
+        }
         value
     } else {
         value
@@ -172,17 +178,12 @@ impl MetaMcp {
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).
         // `_cost_suggestion` — present when a cheaper alternative exists.
-        if !cost_warnings.is_empty()
-            && let Some(obj) = result.as_object_mut()
-        {
-            obj.insert(
-                "_cost_warnings".to_string(),
-                serde_json::json!(cost_warnings),
-            );
-            super::gateway_writes::note(
+        if !cost_warnings.is_empty() {
+            super::gateway_writes::insert_noted(
                 super::gateway_writes::Layer::Value,
                 &["_cost_warnings"],
                 result,
+                serde_json::json!(cost_warnings),
             );
         }
 
@@ -195,21 +196,17 @@ impl MetaMcp {
                     suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
                     // Never point a caller at a tool it could not call (A3).
                     && self.admits_tool_named(&suggestion.alternative, caller.scope(), session_id)
-                    && let Some(obj) = result.as_object_mut()
                 {
-                    obj.insert(
-                        "_cost_suggestion".to_string(),
+                    super::gateway_writes::insert_noted(
+                        super::gateway_writes::Layer::Value,
+                        &["_cost_suggestion"],
+                        result,
                         serde_json::json!({
                             "message": suggestion.reason,
                             "alternative": suggestion.alternative,
                             "savings_per_call": suggestion.savings_per_call,
                             "alternative_cost": suggestion.alternative_cost,
                         }),
-                    );
-                    super::gateway_writes::note(
-                        super::gateway_writes::Layer::Value,
-                        &["_cost_suggestion"],
-                        result,
                     );
                 }
             }
@@ -364,7 +361,8 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
@@ -513,6 +511,11 @@ impl MetaMcp {
             caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
+        if effect == super::super::response_security::GateEffect::Withheld {
+            // Per step in a composite: refused only while this request still
+            // vouches for the delivery, so a plan that goes on is not marked.
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         // The gates have run on the payload; the worker takes it, unminted.
         if let Some(withheld) = withheld
             && worker_clock::hand_to_worker(withheld, gated.clone())

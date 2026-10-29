@@ -481,3 +481,76 @@ fn the_private_create_helpers_make_owner_only_results() {
     crate::private_fs::create_dir_private(&sub).unwrap();
     assert_owner_only("WINACL-T3 create_dir_private", &sub, true);
 }
+
+/// Table rows for the cross-process lock sidecars: every `fs_lock`
+/// constructor leaves an owner-only sidecar, one row each so a constructor
+/// that regresses fails on its own. The folder is a plain temporary one,
+/// since the lock refuses a folder that hands Everyone write access.
+mod lock_sidecars {
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use crate::fs_lock::{Attempt, ExclusiveFileLock};
+    use crate::private_fs::test_support::assert_owner_only;
+
+    const POLL: Duration = Duration::from_millis(10);
+
+    /// Take the lock at a fresh sidecar with `take`, release it, and check
+    /// the sidecar is owner-only.
+    fn row(row: &str, take: impl FnOnce(&Path)) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.lock");
+        take(&path);
+        assert_owner_only(row, &path, false);
+    }
+
+    #[test]
+    fn try_acquire_makes_an_owner_only_sidecar() {
+        row("WINACL-T4 fs_lock try_acquire", |path| {
+            drop(ExclusiveFileLock::try_acquire(path).unwrap());
+        });
+    }
+
+    #[test]
+    fn acquire_makes_an_owner_only_sidecar() {
+        row("WINACL-T5 fs_lock acquire", |path| {
+            drop(ExclusiveFileLock::acquire(path).unwrap());
+        });
+    }
+
+    #[test]
+    fn acquire_until_makes_an_owner_only_sidecar() {
+        row("WINACL-T6 fs_lock acquire_until", |path| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            drop(ExclusiveFileLock::acquire_until(path, POLL, deadline).unwrap());
+        });
+    }
+
+    #[test]
+    fn try_lease_makes_an_owner_only_sidecar() {
+        row(
+            "WINACL-T7 fs_lock try_lease",
+            |path| match ExclusiveFileLock::try_lease(path).unwrap() {
+                Attempt::Taken(lock) => drop(lock),
+                Attempt::Held => panic!("WINACL-T7: a fresh sidecar read as held"),
+                Attempt::Refused(error) => panic!("WINACL-T7: {error}"),
+            },
+        );
+    }
+
+    #[test]
+    fn lease_makes_an_owner_only_sidecar() {
+        row("WINACL-T8 fs_lock lease", |path| {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            drop(
+                runtime
+                    .block_on(ExclusiveFileLock::lease(path, POLL, deadline))
+                    .unwrap(),
+            );
+        });
+    }
+}

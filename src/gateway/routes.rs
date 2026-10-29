@@ -76,6 +76,10 @@ owned_routes! {
     /// Start-once preview of a server before it is added. Its own
     /// prefix, so it can never shadow a backend name under `/ui/api/backends`.
     UI_PREVIEWS = "/ui/api/previews",
+    /// Servers named in other MCP clients' config files on this host.
+    UI_DISCOVERY = "/ui/api/discovery",
+    /// One of those servers made a disabled backend.
+    UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.

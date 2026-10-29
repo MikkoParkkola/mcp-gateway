@@ -105,9 +105,9 @@ fn splice(original: &str, block: &str) -> Option<String> {
     };
     // Only an empty or block-style mapping is edited; flow style such as
     // `backends: {a: ...}` is left to the full rewrite.
-    let after_key = lines[header]["backends:".len()..].trim_start();
+    let after_key = lines[header]["backends:".len()..].trim_start_matches(BLANKS);
     let comment = after_key.find('#').map_or("", |at| &after_key[at..]);
-    let head = match after_key[..after_key.len() - comment.len()].trim() {
+    let head = match after_key[..after_key.len() - comment.len()].trim_matches(BLANKS) {
         "" | "{}" => format!(
             "backends:{}{comment}",
             if comment.is_empty() { "" } else { " " }
@@ -124,8 +124,8 @@ fn splice(original: &str, block: &str) -> Option<String> {
         .unwrap_or(header);
     let child_indent = lines[header + 1..end]
         .iter()
-        .find(|l| indented(l) && !l.trim_start().starts_with('#'))
-        .map_or("  ", |l| &l[..l.len() - l.trim_start().len()]);
+        .find(|l| indented(l) && !l.trim_start_matches(BLANKS).starts_with('#'))
+        .map_or("  ", |l| &l[..l.len() - l.trim_start_matches(BLANKS).len()]);
 
     let mut out: Vec<Line> = (0..header).map(Line::Kept).collect();
     out.push(Line::Replaced(header, head));
@@ -146,7 +146,7 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
     let lines: Vec<&str> = original.lines().collect();
     let indented = |line: &str| line.starts_with([' ', '\t']);
     let content = |line: &str| {
-        let t = line.trim_start();
+        let t = line.trim_start_matches(BLANKS);
         !t.is_empty() && !t.starts_with('#')
     };
     let header = lines.iter().position(|l| l.starts_with("backends:"))?;
@@ -155,7 +155,7 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         .position(|l| !l.is_empty() && !indented(l) && !l.starts_with('#'))
         .map_or(lines.len(), |i| header + 1 + i);
     let child = lines[header + 1..end].iter().find(|l| content(l))?;
-    let depth = child.len() - child.trim_start().len();
+    let depth = child.len() - child.trim_start_matches(BLANKS).len();
     let names_entry = |line: &str| {
         let Some(rest) = line.get(depth..) else {
             return false;
@@ -163,13 +163,18 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         if rest.starts_with([' ', '\t']) {
             return false;
         }
-        rest.split_once(':')
-            .is_some_and(|(key, _)| key.trim().trim_matches(|c| c == '"' || c == '\'') == name)
+        rest.split_once(':').is_some_and(|(key, _)| {
+            key.trim_matches(BLANKS)
+                .trim_matches(|c| c == '"' || c == '\'')
+                == name
+        })
     };
     let start = (header + 1..end).find(|&i| names_entry(lines[i]))?;
     // The entry runs to the next line at the child depth or shallower.
     let next = (start + 1..end)
-        .find(|&i| content(lines[i]) && lines[i].len() - lines[i].trim_start().len() <= depth)
+        .find(|&i| {
+            content(lines[i]) && lines[i].len() - lines[i].trim_start_matches(BLANKS).len() <= depth
+        })
         .unwrap_or(end);
     // Give back the blank and comment lines that lead whatever follows.
     let mut stop = next;
@@ -184,7 +189,7 @@ fn remove_entry(original: &str, name: &str) -> Option<String> {
         .enumerate()
         .any(|(k, l)| !(start..stop).contains(&(header + 1 + k)) && content(l));
     if emptied {
-        let after_key = lines[header]["backends:".len()..].trim_start();
+        let after_key = lines[header]["backends:".len()..].trim_start_matches(BLANKS);
         let empty = if after_key.starts_with('#') {
             format!("backends: {{}} {after_key}")
         } else if after_key.is_empty() {
@@ -238,12 +243,16 @@ fn inline_comment(line: &str) -> Option<&str> {
 
 /// Columns of indent before `line`'s first non-blank character.
 fn depth(line: &str) -> usize {
-    line.len() - line.trim_start().len()
+    line.len() - line.trim_start_matches(BLANKS).len()
 }
+
+/// YAML's blanks: a space or a tab. Any other Unicode space is content,
+/// never indentation or padding (one rule for every in-place edit).
+const BLANKS: [char; 2] = [' ', '\t'];
 
 /// Whether `line` holds YAML content: neither blank nor a comment line.
 fn content(line: &str) -> bool {
-    let t = line.trim_start();
+    let t = line.trim_start_matches(BLANKS);
     !t.is_empty() && !t.starts_with('#')
 }
 
@@ -254,16 +263,32 @@ fn key_at(line: &str, at: usize) -> Option<&str> {
         return None;
     }
     let (key, _) = rest.split_once(':')?;
-    Some(key.trim().trim_matches(|c| c == '"' || c == '\''))
+    Some(
+        key.trim_matches(BLANKS)
+            .trim_matches(|c| c == '"' || c == '\''),
+    )
 }
 
 /// The end of the lines the key at `start` spans inside `..end`: up to the
 /// next content line at its depth or shallower, less the blank and comment
-/// lines that lead that next line.
+/// lines that lead that next line. A block list may sit at its key's own
+/// depth (`key:` then `- item`, as the gateway's own YAML writes it); a block
+/// mapping has no key there, so those items are the key's. An item line's
+/// own span never takes the sibling item at its depth.
 fn key_span(lines: &[&str], start: usize, end: usize) -> usize {
     let at = depth(lines[start]);
+    let item = |line: &str| {
+        line[at..]
+            .strip_prefix('-')
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+    };
+    let owns_items = !item(lines[start]);
     let next = (start + 1..end)
-        .find(|&i| content(lines[i]) && depth(lines[i]) <= at)
+        .find(|&i| {
+            let shallow = depth(lines[i]) < at;
+            let sibling = depth(lines[i]) == at && !(owns_items && item(lines[i]));
+            content(lines[i]) && (shallow || sibling)
+        })
         .unwrap_or(end);
     let mut stop = next;
     while stop > start + 1 && !content(lines[stop - 1]) {
@@ -323,7 +348,7 @@ fn edit_block(
         let value_text = &lines[line][colon + 1..];
         let comment = inline_comment(value_text);
         let value = &value_text[..value_text.len() - comment.map_or(0, str::len)];
-        let block = value.trim().is_empty();
+        let block = value.trim_matches(BLANKS).is_empty();
         // The scanner only proposes a comment; the parser decides. A tag,
         // anchor or flow collection can hide a quote from the scanner, and
         // then the "comment" is the rest of the old value: carrying it would
@@ -371,7 +396,10 @@ fn edit_entry(original: &str, name: &str, old: &Mapping, new: &Mapping) -> Optio
     let header = lines.iter().position(|l| l.starts_with("backends:"))?;
     let after_key = &lines[header]["backends:".len()..];
     let comment = inline_comment(after_key).map_or(0, str::len);
-    if !after_key[..after_key.len() - comment].trim().is_empty() {
+    if !after_key[..after_key.len() - comment]
+        .trim_matches(BLANKS)
+        .is_empty()
+    {
         return None;
     }
     let end = (header + 1..lines.len())
@@ -470,9 +498,9 @@ pub(super) fn with_backends_edited(
     // replaces a same-named one). A removal among several is what a stale
     // `config` looks like after another writer added a backend, and under
     // `Splice::One` an extra addition is what it looks like after another
-    // writer removed one. Either takes the ordinary path:
-    // refused when comments would be lost, otherwise the full rewrite, last
-    // writer wins (MIK-8042 tracks a base-revision check).
+    // writer removed one. Either takes the ordinary path: refused under
+    // `CommentLoss::Refuse`, otherwise the full rewrite, last writer wins
+    // (a base-revision check for these writes is not built yet).
     if names.len() > 1
         && (scope == super::Splice::One || names.iter().any(|n| !config.backends.contains_key(n)))
     {
@@ -493,11 +521,13 @@ pub(super) fn with_backends_edited(
     matches!((value(&done), value(config)), (Some(a), Some(b)) if a == b).then_some(text)
 }
 
-/// The refusal for a write that would drop the comments in `text`. Any `#`
-/// counts: a false one only refuses a write the splice could not keep. It
-/// names line numbers only: a `#` inside a quoted value (`TOKEN: "#secret"`)
-/// would otherwise put a credential into an API answer.
-pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
+/// The refusal for a write that cannot be made in place in `text`. A file
+/// with comments is told which lines a rewrite would drop; any `#` counts, so
+/// a false one only refuses a write the splice could not keep. It names line
+/// numbers only: a `#` inside a quoted value (`TOKEN: "#secret"`) would
+/// otherwise put a credential into an API answer. A file without comments is
+/// told its layout would change.
+pub(super) fn not_in_place(path: &std::path::Path, text: &str) -> String {
     const SHOWN: usize = 5;
     let comments: Vec<String> = text
         .lines()
@@ -505,6 +535,15 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         .filter(|(_, l)| l.contains('#'))
         .map(|(n, _)| format!("line {}", n + 1))
         .collect();
+    if comments.is_empty() {
+        return format!(
+            "Not saved: the change cannot be made in place in {} (flow style, an anchor or \
+             alias, or the file changed since it was read), and a full rewrite would change \
+             the file's layout. Edit the file by hand, or use the CLI with `--force` to \
+             rewrite the file.",
+            path.display()
+        );
+    }
     let rest = comments.len().saturating_sub(SHOWN);
     let more = if rest == 0 {
         String::new()
@@ -519,6 +558,36 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         path.display(),
         comments[..comments.len().min(SHOWN)].join("; ")
     )
+}
+
+/// [`edit_text`]'s refusal when the edit cannot be made as a splice: the file
+/// would have to be re-serialised, which loses its layout (ADR-024).
+#[cfg(feature = "webui")]
+pub(crate) const NOT_IN_PLACE: &str = "the change cannot be made in place";
+/// [`edit_text`]'s refusal when `text` does not parse as a config.
+#[cfg(feature = "webui")]
+const UNREADABLE: &str = "the config does not parse";
+/// [`edit_text`]'s refusal when the edited config does not validate.
+#[cfg(feature = "webui")]
+const INVALID: &str = "the edited config is not valid";
+
+/// `text` with `edit` applied to the one backend it changes, as a splice
+/// that keeps every other byte, or a refusal: never a re-serialisation, so
+/// a comment-free file is refused rather than rewritten (ADR-024). `edit`'s
+/// own error comes back as it is; every other refusal is a fixed string
+/// that quotes nothing from the file.
+#[cfg(feature = "webui")]
+pub(crate) fn edit_text(
+    text: &str,
+    edit: impl FnOnce(&mut Config) -> Result<(), &'static str>,
+) -> Result<String, &'static str> {
+    let before = Config::from_file_text(text).map_err(|_| UNREADABLE)?;
+    let mut after = before.clone();
+    edit(&mut after)?;
+    after
+        .validate_with_env(&after.env_overlay())
+        .map_err(|_| INVALID)?;
+    with_backends_edited(text, &before, &after, super::Splice::One).ok_or(NOT_IN_PLACE)
 }
 
 #[cfg(test)]

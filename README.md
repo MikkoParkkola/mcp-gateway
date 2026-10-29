@@ -192,8 +192,8 @@ sequential-thinking, like filesystem, recommend Node.js 24 or later:
   throwaway profile (`--isolated`); do not point them at your everyday browser profile.
 
 `mcp-gateway list` shows what is configured. `mcp-gateway remove <name>` removes one. `add` and `remove`
-keep the comments in `gateway.yaml`; when a change cannot keep them, the command refuses and names
-the lines, and `--force` rewrites the file without them.
+edit `gateway.yaml` in place, keeping its comments and layout; when a change cannot be made in place,
+the command refuses (naming any comment lines a rewrite would drop), and `--force` rewrites the file.
 
 #### Option C: hand-write `gateway.yaml`
 

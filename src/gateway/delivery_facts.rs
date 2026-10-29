@@ -10,6 +10,12 @@
 //! replay) clears `vouched`. The effect is the strongest one raised, so the
 //! order the sites run in cannot lower it.
 //!
+//! A tools/call naming one target sets `lone_target` where the target is
+//! parsed; an answer re-worded as an absent name then raises `Refused` through
+//! `withheld`, which does so only for such a call while the cell is still
+//! vouched, so a composite step answered absent never marks a plan that still
+//! delivers.
+//!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
 //! saw. Outside a cell every setter is a no-op and the recorder omits both.
@@ -30,8 +36,6 @@ pub(crate) enum ResponseEffect {
     /// Delivered with a gateway annotation added (findings, contract notes).
     Annotated,
     /// Delivered with bytes the gateway changed.
-    // Only the firewall's egress scan rewrites.
-    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     Rewritten,
     /// Not delivered: the gateway answered with a refusal.
     Refused,
@@ -48,9 +52,7 @@ impl ResponseEffect {
     }
 }
 
-/// Which part of the answer a scan judged. Only the firewall's egress scan
-/// judges a part.
-#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+/// Which part of the answer a scan judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Part {
     Result,
@@ -82,6 +84,19 @@ pub(crate) struct DeliveryFacts {
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
+    lone_target: bool,
+    /// Whether a composite's latest step ended in a gateway refusal the
+    /// composite has not carried on past.
+    last_step: LastStep,
+}
+
+/// How a composite's latest step ended, for the composite's own record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastStep {
+    /// No step, a served step, or one the composite carried on past.
+    Settled,
+    /// Refused by the gateway, and nothing has carried on past it.
+    Refused,
 }
 
 impl Default for DeliveryFacts {
@@ -91,6 +106,8 @@ impl Default for DeliveryFacts {
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
+            lone_target: false,
+            last_step: LastStep::Settled,
         }
     }
 }
@@ -102,11 +119,57 @@ tokio::task_local! {
     static FACTS: RefCell<DeliveryFacts>;
 }
 
+impl DeliveryFacts {
+    /// Whether a gateway refusal was raised in this cell.
+    pub(crate) fn refused(&self) -> bool {
+        self.effect == ResponseEffect::Refused
+    }
+}
+
 /// Run `future` with a fresh cell open: one delivery.
 pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
     FACTS
         .scope(RefCell::new(DeliveryFacts::default()), future)
         .await
+}
+
+/// Run one composite step in a cell of its own, as [`scope`] does, and note
+/// on the composite's cell whether this step ended in a gateway refusal.
+/// Only the latest step's note is kept: a later step replaces it.
+pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
+    let (output, refused) = FACTS
+        .scope(RefCell::new(DeliveryFacts::default()), async {
+            let output = future.await;
+            let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
+            (output, refused)
+        })
+        .await;
+    with(|facts| {
+        facts.last_step = if refused {
+            LastStep::Refused
+        } else {
+            LastStep::Settled
+        };
+    });
+    output
+}
+
+/// The composite carried on past its latest step's failure (a playbook's
+/// `continue`, or its `retry` once attempts run out): that step's refusal is
+/// no longer what the composite can end on.
+pub(crate) fn step_absorbed() {
+    with(|facts| facts.last_step = LastStep::Settled);
+}
+
+/// The composite ends with `error` (`None`: it succeeded). It records
+/// `refused` when it ends with an error while its latest step's refusal still
+/// stands: the step it ends on was refused.
+pub(crate) fn composite_ended(error: Option<&crate::Error>) {
+    with(|facts| {
+        if error.is_some() && facts.last_step == LastStep::Refused {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
 }
 
 /// Run `f` with the facts suspended: a scan of a value that is not delivered
@@ -137,14 +200,47 @@ pub(crate) fn refused<E>(error: E) -> E {
     error
 }
 
+/// Where an error becomes the delivered frame: a refusal a gateway decision
+/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`; any other error
+/// raises nothing.
+pub(crate) fn outlet(error: &crate::Error) {
+    if matches!(error, crate::Error::GatewayRefused { .. }) {
+        raise(ResponseEffect::Refused);
+    }
+}
+
+/// This delivery answers a tools/call that names exactly one target.
+pub(crate) fn lone_target() {
+    with(|facts| facts.lone_target = true);
+}
+
+/// The call was answered as an absent name for a policy reason: refused, but
+/// only for a one-target call this request still vouches for. A composite is
+/// unvouched before any step runs, so a step answered absent raises nothing.
+pub(crate) fn withheld() {
+    with(|facts| {
+        if facts.lone_target && facts.vouched {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
+}
+
+/// The gateway refused this delivery's answer at a site that also runs per
+/// step in a composite: raised only while the cell is still vouched.
+pub(crate) fn refused_while_vouched() {
+    with(|facts| {
+        if facts.vouched {
+            facts.effect = facts.effect.max(ResponseEffect::Refused);
+        }
+    });
+}
+
 /// A scanner returned a verdict on a non-empty `part` of this delivery.
-#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) fn scanned() {
     with(|facts| facts.scanned = true);
 }
 
 /// A scanner found `kind` (from its closed set) at `severity` in `part`.
-#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(crate) fn found(kind: String, severity: Severity, part: Part) {
     with(|facts| {
         facts.scanned = true;
@@ -167,14 +263,13 @@ pub(crate) fn unvouched() {
 ///
 /// `facts` is the cell's snapshot (`None` outside a cell: both omitted).
 /// `frame_refused` is whether the delivered frame is the gateway's own
-/// refusal, and `annotated` whether the gateway added a counted annotation:
-/// both are read off what is actually sent, so no later rebuild can hide
-/// them. An unvouched delivery still records a refusal this request made,
-/// and omits everything else.
+/// refusal, read off what is actually sent, so no later rebuild can hide
+/// it. A counted annotation raises `Annotated` in the cell where the gateway
+/// notes it. An unvouched delivery still records a refusal this request
+/// made, and omits everything else.
 pub(crate) fn record_fields(
     facts: Option<&DeliveryFacts>,
     frame_refused: bool,
-    annotated: bool,
     fields: &mut Map<String, Value>,
 ) {
     let Some(facts) = facts else {
@@ -183,9 +278,6 @@ pub(crate) fn record_fields(
     let mut effect = facts.effect;
     if frame_refused {
         effect = effect.max(ResponseEffect::Refused);
-    }
-    if annotated {
-        effect = effect.max(ResponseEffect::Annotated);
     }
     if !facts.vouched {
         if effect == ResponseEffect::Refused {
@@ -222,3 +314,11 @@ pub(crate) fn record_fields(
 #[cfg(test)]
 #[path = "delivery_facts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_withheld_tests.rs"]
+mod withheld_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_composite_tests.rs"]
+mod composite_tests;

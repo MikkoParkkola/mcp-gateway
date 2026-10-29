@@ -127,24 +127,31 @@ async fn an_unopenable_claim_capture_path_boots_without_capture() {
 }
 
 /// Response inspection in action mode blocks HIGH/CRITICAL findings; in
-/// observe mode it only logs. The mode the operator chose is the one installed.
+/// observe mode it only logs; `enabled: false` turns it off, action mode
+/// included. The mode the operator chose is the one installed.
 #[tokio::test]
 async fn response_inspection_installs_the_configured_mode() {
+    use crate::security::response_inspect::ResponseInspectionMode as Mode;
     let _log = info_logging();
-    let mut action = Config::default();
-    action.security.response_inspection.enabled = true;
-    action.security.response_inspection.action_mode = true;
-    assert!(
-        built(action).await.response_inspection_action_mode,
-        "action mode must make inspection findings block"
-    );
-
-    let mut observe = Config::default();
-    observe.security.response_inspection.enabled = true;
-    observe.security.response_inspection.action_mode = false;
-    assert!(
-        !built(observe).await.response_inspection_action_mode,
-        "observe mode must not block"
+    for (enabled, action_mode, want) in [
+        (true, true, Mode::Action),
+        (true, false, Mode::Observe),
+        (false, false, Mode::Off),
+        (false, true, Mode::Off),
+    ] {
+        let mut config = Config::default();
+        config.security.response_inspection.enabled = enabled;
+        config.security.response_inspection.action_mode = action_mode;
+        assert_eq!(
+            built(config).await.response_inspection,
+            want,
+            "enabled: {enabled}, action_mode: {action_mode}"
+        );
+    }
+    assert_eq!(
+        built(Config::default()).await.response_inspection,
+        Mode::Observe,
+        "the default is unchanged"
     );
 }
 

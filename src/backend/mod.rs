@@ -75,7 +75,7 @@ pub(crate) use era::removed_method_refusal_message;
 // listing that neither caches nor commits verdicts.
 #[cfg(feature = "webui")]
 pub(crate) use era::start_detached_http;
-pub(crate) use input_keys::Lens;
+pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
 #[cfg(test)]
@@ -92,6 +92,7 @@ pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
+pub(crate) use registry::PER_USER_SESSIONS;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
 };
@@ -121,6 +122,9 @@ pub struct Backend {
     /// Written when a fill stores into the slot, removed with the entry
     /// (`retire`), so an entry lives exactly as long as its slot.
     caller_slots: DashMap<String, caller_slots::CallerSlot>,
+    /// Woken when a caller's own slot is recorded or a cold view published,
+    /// so a listing waiting on another's lease serves its result.
+    caller_slot_stored: tokio::sync::Notify,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
@@ -130,6 +134,14 @@ pub struct Backend {
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
     after_reprobe_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing whose claim found the view taken pauses before
+    /// it looks for the running lease, so a publish can land in between.
+    #[cfg(test)]
+    pub(crate) before_lease_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing's claims pause before its account pre-pass, so a
+    /// row can let the step's deadline cut the pre-pass short.
+    #[cfg(test)]
+    pub(crate) before_listing_prepass: crate::test_pause::Slot,
     /// Test-only: a stored read that won a cold claim pauses before it
     /// resolves (MIK-8392 C3, C4, L1, L1b).
     #[cfg(test)]
@@ -575,6 +587,11 @@ pub(crate) mod tests;
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
 
+/// A backend's gateway-only members are gone at ingress.
+#[cfg(test)]
+#[path = "reserved_ingress_tests.rs"]
+mod reserved_ingress_tests;
+
 #[cfg(test)]
 #[path = "silence_resend_tests.rs"]
 mod silence_resend_tests;
@@ -622,6 +639,10 @@ mod era_start_own_probe_tests;
 #[cfg(test)]
 #[path = "era_per_slot_tests.rs"]
 mod era_per_slot_tests;
+
+#[cfg(test)]
+#[path = "era_lent_reprobe_tests.rs"]
+mod era_lent_reprobe_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

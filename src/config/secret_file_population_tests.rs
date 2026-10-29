@@ -111,6 +111,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (
+        "src/config_persistence_scratch.rs",
+        "the scratch-and-rename writer: creates its scratch file owner-only (0600 / owner-only DACL)",
+    ),
+    (
         "src/config_persistence_atomic.rs",
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
@@ -216,10 +220,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
-    ),
-    (
-        "src/gateway/ui/activity/reader.rs",
-        "reads audit log segments for the Activity list; hash-only, no secret",
     ),
     (
         "src/gateway/ui/activity/seek.rs",
@@ -345,7 +345,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
-        "src/trust/provenance_public.rs",
+        "src/trust/provenance_public_cli.rs",
         "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
     ),
     (

@@ -422,6 +422,9 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
                 "class": class,
                 "class_source": class_source,
                 "destructive": hints.and_then(|a| a.destructive_hint) == Some(true),
+                // A name the gateway would never call cannot be ticked: copied
+                // into `allowed_tools`, a trailing `*` would read as a pattern.
+                "selectable": crate::security::validate_tool_name(&tool.name).is_ok(),
             })
         })
         .collect();

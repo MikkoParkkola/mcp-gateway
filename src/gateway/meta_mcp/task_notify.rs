@@ -86,7 +86,7 @@ impl MetaMcp {
                 super::grant_audit::slot_result(self.transparency_logger.as_ref(), async {
                     let withheld = stored.is_none_or(refused);
                     let mut params = match stored {
-                        Some(task) if !withheld => serde_json::to_value(task.task.wire()).ok(),
+                        Some(task) if !withheld => Some(task.delivered_wire()),
                         _ => None,
                     };
                     // The stored output meets the egress scan again at send, as

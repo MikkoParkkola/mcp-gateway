@@ -54,7 +54,7 @@ fn in_an_hour() -> u64 {
 struct Fixture {
     hub: Arc<EventsHub>,
     config: Arc<crate::config::Config>,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 fn fixture() -> Fixture {
@@ -80,11 +80,7 @@ fn fixture_with(yaml: &str) -> Fixture {
         credentials: LiveCredentials::default(),
         record_key: Some(crate::gateway::record_principal::test_key_arc()),
     }));
-    Fixture {
-        hub,
-        config,
-        _dir: dir,
-    }
+    Fixture { hub, config, dir }
 }
 
 /// Commit `principal`'s row on `backend`, observed as `subject`; its handle.
@@ -450,39 +446,7 @@ async fn a_per_user_listener_handshakes_with_the_leased_token_alone() {
          strategy: passthrough\n      audience: https://pt\n      session_mode: per_user\n"
     ));
     let handle = subscribe(&f, "p", "pt", "p");
-    let registry = Arc::new(crate::backend::BackendRegistry::new());
-    let backend = Arc::new(crate::backend::Backend::new(
-        "pt",
-        f.config.backends["pt"].clone(),
-        &crate::config::FailsafeConfig::default(),
-        std::time::Duration::from_secs(60),
-    ));
-    assert!(registry.register(Arc::clone(&backend)));
-    let listeners = crate::events::upstream_listener::UpstreamListeners::new(
-        registry,
-        Arc::downgrade(&f.hub),
-        Arc::new(std::collections::BTreeSet::new),
-    );
-    f.hub
-        .register_source(Arc::new(crate::events::backend_source::BackendSource {
-            names: Arc::new(|| vec!["pt".to_owned()]),
-            upstream: Some(crate::events::backend_source::Upstream {
-                listeners: Arc::clone(&listeners),
-                ineligible: Arc::new(std::collections::BTreeSet::new),
-            }),
-        }));
-    let source = f
-        .hub
-        .source(crate::events::types::SourceKind::BackendNotification)
-        .expect("registered");
-    let key = lease_key(&f, "p");
-    let name = "backend.pt.tools_changed";
-    let lifecycle =
-        crate::events::backend_source::backend_key(Some(&key.obs), name, &json!({})).expect("key");
-    source
-        .on_first_subscriber(&lifecycle, "p", name, &json!({}))
-        .await
-        .expect("parked");
+    let (_listeners, backend) = parked_listener(&f).await;
     f.hub
         .lease(
             Some("p"),
@@ -684,3 +648,81 @@ async fn a_per_user_a2a_tools_subscription_is_refused() {
         Some(&json!("a2a_no_such_capability"))
     );
 }
+
+/// ISO-T6, the fallback's bound: with no revocation signal, a subscriber who
+/// lost access is revoked by the worker's sweep within its 30-second period,
+/// and not before it, so the row pins the cadence and not merely "eventually".
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn iso_t6_the_sweep_revokes_a_lost_subscriber_within_its_period() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    let f = fixture();
+    let _ = subscribe(&f, "p", "pt", "p");
+    let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
+    let worker = Arc::clone(&f.hub);
+    // The worker sweeps once as it starts, while the subscriber still has access.
+    let admits = forced_verdict::answer(AccessVerdict::Admits);
+    tokio::spawn(async move { worker.deliver_forever(&services).await });
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    assert_eq!(f.hub.store.subscriptions().len(), 1, "admitted at start");
+    drop(admits);
+    let _refused = forced_verdict::answer(AccessVerdict::Refuses);
+    tokio::time::sleep(std::time::Duration::from_secs(28)).await;
+    assert_eq!(
+        f.hub.store.subscriptions().len(),
+        1,
+        "29 s in: the next sweep has not run, and nothing else revoked it"
+    );
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    assert!(
+        f.hub.store.subscriptions().is_empty(),
+        "31 s in: the sweep at 30 s revoked it"
+    );
+}
+
+/// The listener map and `pt`'s backend; both live as long as the test.
+type ListenersAndBackend = (
+    Arc<crate::events::upstream_listener::UpstreamListeners>,
+    Arc<crate::backend::Backend>,
+);
+
+/// Register `pt` and the backend-notification source on `f`'s hub, and park
+/// `p`'s `tools_changed` listener until a lease starts it.
+async fn parked_listener(f: &Fixture) -> ListenersAndBackend {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "pt",
+        f.config.backends["pt"].clone(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    assert!(registry.register(Arc::clone(&backend)));
+    let listeners = crate::events::upstream_listener::UpstreamListeners::new(
+        registry,
+        Arc::downgrade(&f.hub),
+        Arc::new(std::collections::BTreeSet::new),
+    );
+    f.hub
+        .register_source(Arc::new(crate::events::backend_source::BackendSource {
+            names: Arc::new(|| vec!["pt".to_owned()]),
+            upstream: Some(crate::events::backend_source::Upstream {
+                listeners: Arc::clone(&listeners),
+                ineligible: Arc::new(std::collections::BTreeSet::new),
+            }),
+        }));
+    let source = f
+        .hub
+        .source(crate::events::types::SourceKind::BackendNotification)
+        .expect("registered");
+    let key = lease_key(f, "p");
+    let name = "backend.pt.tools_changed";
+    let lifecycle =
+        crate::events::backend_source::backend_key(Some(&key.obs), name, &json!({})).expect("key");
+    source
+        .on_first_subscriber(&lifecycle, "p", name, &json!({}))
+        .await
+        .expect("parked");
+    (listeners, backend)
+}
+
+#[path = "lease_replace_tests.rs"]
+mod replace;

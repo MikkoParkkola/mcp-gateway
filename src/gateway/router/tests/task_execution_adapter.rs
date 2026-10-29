@@ -54,7 +54,14 @@
 //! Both are compile limits, not behaviour findings, and the receipt reports them
 //! under a separate heading for exactly that reason.
 
+/// A backend's `allowed_tools` narrowed between a task's intake and its run.
+#[cfg(feature = "firewall")]
+mod allowed_tools_task;
 mod support;
+
+/// A gateway refusal inside a task worker's dispatch is tied to its task.
+#[cfg(feature = "firewall")]
+mod dispatch_refusal_task;
 
 #[cfg(feature = "firewall")]
 mod egress_task;
@@ -134,6 +141,8 @@ mod provide_input_guards;
 mod query_serialization;
 mod refusals;
 mod replay_policy;
+/// No backend-planted gateway member in a task result or a replay.
+mod reserved_members_task;
 mod result_shapes;
 mod settlement;
 /// MIK-7116.MIN.1 gap 1: the settlement record of a recovered upstream task.

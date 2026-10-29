@@ -18,6 +18,21 @@ use crate::protocol::era::PeerEra;
 use crate::transport::upstream_tap::{KindSet, NoteKind, UpstreamNote};
 
 impl State<'_> {
+    /// What this run stamps on what it emits and on the tools debt it
+    /// leaves: a minted run's grant binding, or a leased run's marked
+    /// generation. `None` for a shared run.
+    /// Whether this is a leased run.
+    pub(super) fn leased(&self) -> bool {
+        self.lease.is_some()
+    }
+
+    pub(super) fn binding(&self) -> Option<String> {
+        self.fence
+            .as_ref()
+            .and_then(|run| run.binding())
+            .or_else(|| self.lease.map(crate::events::observation::run_fence))
+    }
+
     /// Route one projected frame. `true` when the stream is over.
     pub(super) fn note(&mut self, note: UpstreamNote, from_pending: bool) -> bool {
         match note {
@@ -38,7 +53,7 @@ impl State<'_> {
                         let mut debt = self.shared.tools.lock();
                         debt.due.get_or_insert(Instant::now() + TICK);
                         debt.unannounced = true;
-                        debt.fence = self.fence.as_ref().and_then(|run| run.binding());
+                        debt.fence = self.binding();
                     }
                 } else if self.shared.need.lock().emits(kind, uri.as_deref()) {
                     self.coalescer.offer(kind, uri, Instant::now());
@@ -151,7 +166,7 @@ impl State<'_> {
                     occurred_at,
                     data: json!({}),
                     lifecycle_key,
-                    fence: self.fence.as_ref().and_then(|run| run.binding()),
+                    fence: self.binding(),
                 });
             } else {
                 hub.backend_tools_changed(&self.shared.name);
@@ -197,7 +212,7 @@ impl State<'_> {
                 occurred_at,
                 data,
                 lifecycle_key,
-                fence: self.fence.as_ref().and_then(|run| run.binding()),
+                fence: self.binding(),
             });
         }
         false

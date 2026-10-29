@@ -17,7 +17,7 @@ const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "src/transport/http/client.rs",
         "build",
         "hands previous().len() to transport's own decider evaluate_redirect_for, \
-         whose count is pinned by transport/http/tests.rs (evaluate_redirect_hop_cap_stops)",
+         whose count is pinned by transport/http/tests/origin_checks.rs (evaluate_redirect_hop_cap_stops)",
     ),
     (
         "delegation",

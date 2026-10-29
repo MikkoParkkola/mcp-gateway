@@ -8,7 +8,7 @@
 
 pub(crate) mod account_bindings;
 mod account_refs;
-mod backend_add;
+pub(crate) mod backend_add;
 mod backend_config;
 mod backend_debug;
 mod backend_ownership;
@@ -34,6 +34,7 @@ mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
+mod per_user_headers_posture;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
@@ -59,6 +60,9 @@ use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+#[cfg(feature = "webui")]
+pub(crate) use pattern_grammar::check_backend_allowed_tools;
+pub(crate) use pattern_grammar::tool_pattern_matches;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};

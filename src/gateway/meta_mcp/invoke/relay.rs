@@ -168,6 +168,9 @@ impl MetaMcp {
             caller,
             super::nonce_settle::PreSendExit::ReleaseKey(reservation),
         );
+        // The delivered refusal; a composite step's is absorbed, so raised
+        // only while the cell is vouched.
+        crate::gateway::delivery_facts::refused_while_vouched();
         Err(refused)
     }
 
@@ -213,6 +216,8 @@ impl super::BridgeDispatcher<'_> {
             return Ok(());
         };
         let message = refused.to_string();
+        // The exchange ends with this refusal (read first at the call site).
+        crate::gateway::delivery_facts::refused_while_vouched();
         *self.relay_refused.lock() = Some(refused);
         Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message })
     }
@@ -567,7 +572,7 @@ impl MetaMcp {
         let Some(result) = replay.result.as_ref() else {
             return;
         };
-        if matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
+        if crate::gateway::meta_mcp::is_composite_meta_tool(tool_name) {
             replay::stage_plan_replay(self, caller.relay_caller(session_id));
             return;
         }
@@ -605,8 +610,14 @@ impl MetaMcp {
     ) -> Value {
         let mut recorded = prompt.clone();
         delivered_form(&mut recorded);
-        let (classified, _) =
-            self.apply_context_integrity(server, tool, api_key_name, trace_id, recorded.clone());
+        // The classified copy is never delivered: it raises no effect on this
+        // delivery and notes no gateway write. Its audit classes stay noted,
+        // since they describe the text the client does receive (RELAY.5).
+        let (classified, _) = crate::gateway::delivery_facts::suspended(|| {
+            super::gateway_writes::suspended(|| {
+                self.apply_context_integrity(server, tool, api_key_name, trace_id, recorded.clone())
+            })
+        });
         let Some(verdict) = classified.get("_context_integrity") else {
             return recorded;
         };
