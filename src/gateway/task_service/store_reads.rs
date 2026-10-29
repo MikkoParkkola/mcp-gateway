@@ -81,7 +81,7 @@ impl TaskStore {
         });
         candidate.version = candidate.version.max(UPSTREAM_VERSION);
         let budget = self.0.limits.record_bytes;
-        // And once cancelled (MIK-7642): see `targets::cancelled_bytes`. Measured
+        // And once cancelled: see `targets::cancelled_bytes`. Measured
         // at the widest instant chrono can encode, so no real cancel's
         // timestamp is wider, and no clock is read.
         Ok(serialize(&candidate)?.len() <= budget
@@ -109,7 +109,7 @@ impl TaskStore {
             .and_then(|entry| entry.record.upstream.clone())
     }
 
-    /// MIK-8204 S5: the committed rows, the ones `get` can return (not
+    /// The committed rows, the ones `get` can return (not
     /// capacity occupancy, which also counts reserved and sealed files).
     #[cfg(test)]
     pub(crate) fn committed_count_for_test(&self) -> usize {
