@@ -23,15 +23,76 @@ use crate::yaml::{Value, ValueSpan};
 
 use super::eol::{Line, render};
 
-/// The field a secret slot belongs to: its dotted path, the same text as the
-/// secret's `NewSecretOwned::field`.
+/// One step from a node to a child: a mapping key, or a position in a block
+/// sequence.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct SlotId(pub(crate) String);
+pub(crate) enum Segment {
+    Key(String),
+    Index(usize),
+}
 
-/// The keys from the document root to one existing scalar field. Each segment
-/// is a key the file already holds, so a runtime backend name is a segment.
+/// The field a secret slot belongs to: its path from the root. The one path
+/// type for slots, secret-step fields and patches.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct SlotId(pub(crate) Vec<Segment>);
+
+impl SlotId {
+    /// The one string form, the secret's `NewSecretOwned::field`: keys joined
+    /// by `.`, a position as `[n]`. Unambiguous because every key segment is
+    /// a plain key (letters, digits, `_`, `-`); nothing parses it back.
+    pub(crate) fn display(&self) -> String {
+        let mut out = String::new();
+        for segment in &self.0 {
+            match segment {
+                Segment::Key(key) => {
+                    if !out.is_empty() {
+                        out.push('.');
+                    }
+                    out.push_str(key);
+                }
+                Segment::Index(at) => out.push_str(&format!("[{at}]")),
+            }
+        }
+        out
+    }
+}
+
+/// The path from the document root to one field.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FieldPath(pub(crate) Vec<String>);
+pub(crate) struct FieldPath(pub(crate) Vec<Segment>);
+
+impl FieldPath {
+    /// The slot a secret at this path fills.
+    pub(crate) fn slot(&self) -> SlotId {
+        SlotId(self.0.clone())
+    }
+
+    /// The path as mapping keys alone, or `None` when it steps into a
+    /// sequence.
+    fn keys(&self) -> Option<Vec<String>> {
+        self.0
+            .iter()
+            .map(|segment| match segment {
+                Segment::Key(key) => Some(key.clone()),
+                Segment::Index(_) => None,
+            })
+            .collect()
+    }
+}
+
+/// A finite float: NaN and the infinities have no YAML form a reload reads
+/// back as the same number.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct FiniteF64(f64);
+
+impl FiniteF64 {
+    pub(crate) fn new(value: f64) -> Option<Self> {
+        value.is_finite().then_some(Self(value))
+    }
+}
+
+// No NaN is ever held, so equality is total.
+impl Eq for FiniteF64 {}
 
 /// A value a field is set to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,23 +100,65 @@ pub(crate) enum Scalar {
     Str(String),
     Int(i64),
     Bool(bool),
+    Num(FiniteF64),
 }
 
-/// One change to one existing field.
+/// One change to one field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Change {
     Set(Scalar),
     /// The field becomes a slot the byte writer fills with a store reference.
     Secret(SlotId),
+    /// The field's key is deleted.
+    Remove,
 }
 
 /// Why an edit was refused. Nothing is written for any of them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ComputeRefusal {
     /// The edit cannot be proven in place: the caller offers a patch instead.
-    Unprovable { reason: String },
+    Unprovable { code: GiveUp, reason: String },
     /// The template's slots and the save's secret values name different fields.
     SlotMismatch,
+}
+
+/// A stable, machine-readable cause for `Unprovable`, carried into the patch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GiveUp {
+    /// A line the edit would delete carries operator text.
+    Comment,
+    /// A flow collection where a block one is needed.
+    Flow,
+    /// An anchor, alias or tag on a node the edit touches.
+    Anchor,
+    /// A parent written as an inline empty collection (`{}`, `[]`).
+    InlineEmpty,
+    /// A sequence written as `~`, `null` or `[]`.
+    NullSequence,
+    /// A key on an element's dash line would be removed.
+    DashLine,
+    /// Reordering, deleting, or skipping sequence elements.
+    SequenceShape,
+    /// A path segment is not a plain key.
+    NotPlainKey,
+    /// The file or the edit is outside what the proofs cover.
+    Other,
+}
+
+impl GiveUp {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Comment => "comment",
+            Self::Flow => "flow",
+            Self::Anchor => "anchor",
+            Self::InlineEmpty => "inline_empty",
+            Self::NullSequence => "null_sequence",
+            Self::DashLine => "dash_line",
+            Self::SequenceShape => "sequence_shape",
+            Self::NotPlainKey => "not_plain_key",
+            Self::Other => "other",
+        }
+    }
 }
 
 /// New file bytes, with the byte range of each secret slot still to fill.
@@ -110,7 +213,10 @@ impl Template {
         let text = String::from_utf8(out).map_err(|_| ComputeRefusal::SlotMismatch)?;
         let doc: Value = crate::yaml::from_str(&text).map_err(|_| ComputeRefusal::SlotMismatch)?;
         for (id, _) in &self.slots {
-            let at_path = id.0.split('.').fold(&doc, |node, key| &node[key]);
+            let at_path = id.0.iter().fold(&doc, |node, segment| match segment {
+                Segment::Key(key) => &node[key.as_str()],
+                Segment::Index(at) => &node[*at],
+            });
             if at_path.as_str() != Some(refs[id].as_str()) {
                 return Err(ComputeRefusal::SlotMismatch);
             }
@@ -139,7 +245,7 @@ pub(crate) fn edit_in_place(
     for (path, change) in changes {
         // A slot is named by its own field's path, never another's.
         if let Change::Secret(id) = change
-            && id.0 != path.0.join(".")
+            && *id != path.slot()
         {
             return Err(ComputeRefusal::SlotMismatch);
         }
@@ -149,6 +255,9 @@ pub(crate) fn edit_in_place(
             Change::Set(Scalar::Int(n)) => n.to_string(),
             Change::Set(Scalar::Bool(b)) => b.to_string(),
             Change::Secret(id) => quoted_placeholder(id),
+            Change::Set(Scalar::Num(_)) | Change::Remove => {
+                return Err(unprovable("not supported yet"));
+            }
         };
         let line = lines[field.line];
         let text = format!(
@@ -185,7 +294,12 @@ pub(crate) fn edit_in_place(
 }
 
 fn unprovable(reason: &str) -> ComputeRefusal {
+    give_up(GiveUp::Other, reason)
+}
+
+fn give_up(code: GiveUp, reason: &str) -> ComputeRefusal {
     ComputeRefusal::Unprovable {
+        code,
         reason: reason.to_owned(),
     }
 }
@@ -267,10 +381,16 @@ fn locate(
     spans: &[ValueSpan],
     path: &FieldPath,
 ) -> Result<Located, ComputeRefusal> {
-    if !path.0.iter().all(|s| plain_key(s)) {
-        return Err(unprovable("a path segment is not a plain key"));
+    let Some(keys) = path.keys() else {
+        return Err(unprovable("not supported yet"));
+    };
+    if !keys.iter().all(|s| plain_key(s)) {
+        return Err(give_up(
+            GiveUp::NotPlainKey,
+            "a path segment is not a plain key",
+        ));
     }
-    let mut found = spans.iter().filter(|s| s.path == path.0);
+    let mut found = spans.iter().filter(|s| s.path == keys);
     let (Some(span), None) = (found.next(), found.next()) else {
         return Err(unprovable("the field is not one scalar value in the file"));
     };
@@ -298,7 +418,7 @@ fn locate(
 /// The text a secret slot holds until the writer fills it: unique per path,
 /// so a slot can only ever be read back under its own field.
 fn placeholder(id: &SlotId) -> String {
-    format!("__mcpgw_slot_{}__", id.0)
+    format!("__mcpgw_slot_{}__", id.display())
 }
 
 /// The placeholder as the scalar text written into the file.
@@ -306,14 +426,17 @@ fn quoted_placeholder(id: &SlotId) -> String {
     crate::yaml::double_quoted(&placeholder(id))
 }
 
-/// The value `change` gives its field in the expected document.
-fn expected_value(change: &Change) -> Value {
-    match change {
+/// The value `change` gives its field in the expected document; `None` for
+/// a removal.
+fn expected_value(change: &Change) -> Option<Value> {
+    Some(match change {
         Change::Set(Scalar::Str(s)) => Value::from(s.as_str()),
         Change::Set(Scalar::Int(n)) => Value::from(*n),
         Change::Set(Scalar::Bool(b)) => Value::from(*b),
+        Change::Set(Scalar::Num(n)) => Value::from(n.0),
         Change::Secret(id) => Value::from(placeholder(id)),
-    }
+        Change::Remove => return None,
+    })
 }
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
@@ -324,14 +447,20 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
         return false;
     };
     for (path, change) in changes {
+        let Some(keys) = path.keys() else {
+            return false;
+        };
         let mut node = &mut want;
-        for key in &path.0 {
+        for key in &keys {
             let Some(next) = node.as_mapping_mut().and_then(|m| m.get_mut(key.as_str())) else {
                 return false;
             };
             node = next;
         }
-        *node = expected_value(change);
+        let Some(value) = expected_value(change) else {
+            return false;
+        };
+        *node = value;
     }
     crate::yaml::from_str::<Value>(edited).is_ok_and(|got| got == want)
 }
