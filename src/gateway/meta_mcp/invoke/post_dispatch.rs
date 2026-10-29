@@ -519,7 +519,12 @@ impl MetaMcp {
             return Err(unbindable_continuation(server, tool));
         }
         result = gated;
-        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        // A dispatch error the backend never saw, answered as a tool result,
+        // is the gateway's text: no receipt names the backend for it.
+        if super::audit::pre_send_now() != crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
+        {
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        }
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::super::response_security::chain_after_gates(
             effect,

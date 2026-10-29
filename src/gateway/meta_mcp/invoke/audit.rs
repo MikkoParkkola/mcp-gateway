@@ -121,6 +121,14 @@ pub(super) fn note_pre_send(pre_send: crate::gateway::meta_mcp::dispatch_log::Pr
     note(|notes| notes.pre_send = pre_send);
 }
 
+/// Whether this call has so far been refused before its backend; `Clear`
+/// outside a call's scope.
+pub(super) fn pre_send_now() -> crate::gateway::meta_mcp::dispatch_log::PreSend {
+    NOTES
+        .try_with(|notes| notes.borrow().pre_send)
+        .unwrap_or_default()
+}
+
 /// Note that the backend dispatch failed with `error`, though the caller will
 /// get a tool result.
 pub(super) fn note_dispatch_failure(error: &Error) {

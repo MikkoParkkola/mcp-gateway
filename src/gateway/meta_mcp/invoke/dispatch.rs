@@ -244,7 +244,15 @@ impl MetaMcp {
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
-        let injection = self.secret_injector.inject(server, tool, arguments)?;
+        // A secret that cannot be injected refuses the call before its backend.
+        let injection = self
+            .secret_injector
+            .inject(server, tool, arguments)
+            .inspect_err(|_| {
+                super::audit::note_pre_send(
+                    crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+                );
+            })?;
         let arguments = injection.arguments;
 
         // The grant was decided at the authorization chokepoint, above the
