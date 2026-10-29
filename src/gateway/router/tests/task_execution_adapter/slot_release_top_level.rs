@@ -9,7 +9,12 @@ use super::support::*;
 /// A keyed top-level `gateway_invoke` call answered over SSE and dropped unread, with its retry body.
 async fn dropped_top_level_question(
     key: &str,
-) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, Value) {
+) -> (
+    Arc<MockBackend>,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    Value,
+) {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, dir) = state_with(&mock).await;
     let body = keyed(

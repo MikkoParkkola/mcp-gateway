@@ -62,7 +62,9 @@ fn key_for_alpha(kind: ApiKeyKind) -> AuthConfig {
 
 /// The fixture with signing on under `posture`, through the production entry
 /// point. `hardened` refuses a shared key, so its caller holds a personal one.
-async fn signed_state(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir) {
+async fn signed_state(
+    posture: SecurityPosture,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let kind = match posture {
         SecurityPosture::Hardened => ApiKeyKind::Personal,
         SecurityPosture::Standard => ApiKeyKind::Shared,

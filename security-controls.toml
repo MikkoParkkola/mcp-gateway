@@ -61,6 +61,10 @@ module = "src/security/transparency_log_signature.rs"
 reason = "names an audit entry's signature state for display (valid, invalid, signed_unverifiable, unsigned) through the existing hash and HMAC checks; it reads, it refuses no request"
 
 [[coverage.not_a_control]]
+module = "src/security/transparency_log_temp.rs"
+reason = "compiled only under cfg(test): keeps a test's audit log and its sidecar files inside one temp dir; it never ships and refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/posture.rs"
 reason = "the security.posture switch raises other controls' settings at load; it refuses no request, and the controls it raises have their own rows"
 

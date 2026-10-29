@@ -29,6 +29,10 @@ pub struct DashboardBootstrap {
     /// unused: at most one, since the bootstrap value it comes from is single use.
     #[cfg(feature = "webui")]
     handoff: Mutex<Option<Handoff>>,
+    /// The UI live stream's caps and shared watcher: one per gateway, and it
+    /// lives here because every gateway builds exactly one of these.
+    #[cfg(feature = "webui")]
+    stream: crate::gateway::ui::stream::StreamHub,
 }
 
 /// How long a handoff code may wait to be entered on the public origin.
@@ -168,7 +172,15 @@ impl DashboardBootstrap {
             sessions: Mutex::new(HashMap::new()),
             #[cfg(feature = "webui")]
             handoff: Mutex::new(None),
+            #[cfg(feature = "webui")]
+            stream: crate::gateway::ui::stream::StreamHub::new(),
         }
+    }
+
+    /// The UI live stream's hub.
+    #[cfg(feature = "webui")]
+    pub(crate) fn stream_hub(&self) -> &crate::gateway::ui::stream::StreamHub {
+        &self.stream
     }
 
     /// The value to print, while it remains unused.

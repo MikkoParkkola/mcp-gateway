@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use tempfile::NamedTempFile;
+use crate::security::transparency_log::temp::TempLog;
 
 use super::*;
 
@@ -56,7 +56,7 @@ fn read_entries(path: &Path) -> Vec<serde_json::Value> {
 #[test]
 fn basic_write_and_verify_passes() {
     // GIVEN: a fresh transparency log
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
 
     // WHEN: several entries are written
@@ -75,7 +75,7 @@ fn basic_write_and_verify_passes() {
 #[test]
 fn tampered_response_hash_breaks_verification() {
     // GIVEN: a log with two entries
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
     write_entry(&logger, "sess-2", "a");
     write_entry(&logger, "sess-2", "b");
@@ -96,7 +96,7 @@ fn tampered_response_hash_breaks_verification() {
 #[test]
 fn deleted_middle_entry_breaks_verification() {
     // GIVEN: a log with three entries
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
     write_entry(&logger, "sess-3", "x");
     write_entry(&logger, "sess-3", "y");
@@ -120,7 +120,7 @@ fn deleted_middle_entry_breaks_verification() {
 #[test]
 fn show_session_filters_correctly() {
     // GIVEN: a log with entries for two different sessions
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
     logger
         .log_invocation("alpha", "c", "s", "t", "sha256:rr", "sha256:pp")
@@ -146,7 +146,7 @@ fn show_session_filters_correctly() {
 #[test]
 fn recovery_continues_chain_correctly() {
     // GIVEN: a log with two entries written by a first logger instance
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     {
         let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
         write_entry(&logger, "sess-r", "1");
@@ -177,7 +177,7 @@ fn recovery_continues_chain_correctly() {
 #[test]
 fn hmac_signature_present_when_secret_configured() {
     // GIVEN: a logger with a shared_secret
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_with_sig(tmp.path())).unwrap();
     write_entry(&logger, "sess-sig", "1");
 
@@ -202,7 +202,7 @@ fn hmac_signature_present_when_secret_configured() {
 #[test]
 fn no_sig_when_secret_empty() {
     // GIVEN: a logger without a shared_secret
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
     write_entry(&logger, "sess-nosig", "1");
 
@@ -221,7 +221,7 @@ fn no_sig_when_secret_empty() {
 
 #[test]
 fn first_entry_prev_hash_is_genesis() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp.path())).unwrap();
     write_entry(&logger, "sess-g", "1");
 
@@ -235,7 +235,7 @@ fn first_entry_prev_hash_is_genesis() {
 
 #[test]
 fn verify_empty_file_passes() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     // File is empty; nothing to verify.
     let result = verify_log(tmp.path()).unwrap();
     assert!(result.ok);
@@ -246,7 +246,7 @@ fn verify_empty_file_passes() {
 
 #[test]
 fn verify_and_show_after_mixed_sessions() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let logger = TransparencyLogger::open(cfg_with_sig(tmp.path())).unwrap();
 
     for i in 0..5u64 {
@@ -282,7 +282,7 @@ fn verify_and_show_after_mixed_sessions() {
 // closes) yet FAILS verify_log_signed.
 #[test]
 fn rechained_forgery_with_stale_sig_fails_signed_verify() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_with_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -332,7 +332,7 @@ fn rechained_forgery_with_stale_sig_fails_signed_verify() {
 // HMAC.1: an intact signed log passes verify_log_signed.
 #[test]
 fn intact_signed_log_passes_signed_verify() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_with_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -361,7 +361,7 @@ fn write_entries(path: &Path, entries: &[serde_json::Value]) {
 // HMAC.1: stripping the sig cannot bypass the check under a configured secret.
 #[test]
 fn stripped_sig_fails_signed_verify() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_with_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -380,7 +380,7 @@ fn stripped_sig_fails_signed_verify() {
 // signed verify even though the hash chain (which strips key_id) still holds.
 #[test]
 fn altered_key_id_fails_signed_verify() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_with_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -402,7 +402,7 @@ fn altered_key_id_fails_signed_verify() {
 // signed verify — a signed entry must carry a key_id.
 #[test]
 fn stripped_key_id_fails_signed_verify() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_with_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -424,7 +424,7 @@ fn stripped_key_id_fails_signed_verify() {
 #[test]
 fn log_contains_signed_entry_detects_signed_and_unsigned() {
     // Signed log.
-    let tmp_s = NamedTempFile::new().unwrap();
+    let tmp_s = TempLog::new();
     let logger = TransparencyLogger::open(cfg_with_sig(tmp_s.path())).unwrap();
     write_entry(&logger, "sess", "1");
     drop(logger);
@@ -434,7 +434,7 @@ fn log_contains_signed_entry_detects_signed_and_unsigned() {
     );
 
     // Unsigned log.
-    let tmp_u = NamedTempFile::new().unwrap();
+    let tmp_u = TempLog::new();
     let logger = TransparencyLogger::open(cfg_no_sig(tmp_u.path())).unwrap();
     write_entry(&logger, "sess", "1");
     drop(logger);
@@ -448,7 +448,7 @@ fn log_contains_signed_entry_detects_signed_and_unsigned() {
 // checked via verify_log or verify_log_signed with an empty secret.
 #[test]
 fn unsigned_log_backward_compatible() {
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let cfg = cfg_no_sig(tmp.path());
     let logger = TransparencyLogger::open(cfg.clone()).unwrap();
     write_entry(&logger, "sess", "1");
@@ -468,7 +468,7 @@ fn recover_chain_state_finds_last_entry_without_reading_oversized_log() {
     // GIVEN: a log whose leading content alone exceeds the tail-scan
     // window (MAX_TAIL_SCAN_BYTES), followed by one well-formed entry as
     // the final line.
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     let padding_line = "x".repeat(1024);
     let mut content = String::new();
     for _ in 0..(5 * 1024) {
@@ -507,7 +507,7 @@ fn recover_chain_state_finds_last_entry_without_reading_oversized_log() {
 #[test]
 fn bounded_read_to_string_rejects_oversized_file_without_loading_it() {
     // GIVEN: a file larger than an artificially small read bound
-    let tmp = NamedTempFile::new().unwrap();
+    let tmp = TempLog::new();
     std::fs::write(tmp.path(), "x".repeat(100)).unwrap();
 
     // WHEN: the bound is smaller than the file

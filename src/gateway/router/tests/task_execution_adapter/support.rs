@@ -140,7 +140,9 @@ pub(super) fn three_principal_auth() -> AuthConfig {
 /// * `Config::default()` has `server.modern_protocol = true`
 ///   (`config/mod.rs:1236`), so the modern era these requests declare is served
 ///   rather than refused.
-pub(super) async fn fixture_state(auth: &AuthConfig) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn fixture_state(
+    auth: &AuthConfig,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     test_router_app_state_with_auth(auth).await
 }
 
@@ -149,7 +151,7 @@ pub(super) async fn fixture_state(auth: &AuthConfig) -> (Arc<AppState>, tempfile
 pub(super) async fn agent_fixture_state(
     auth: &AuthConfig,
     agent_auth: crate::gateway::oauth::AgentAuthState,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     super::super::meta_fixture::test_router_app_state_with_agent_auth(auth, agent_auth).await
 }
 
@@ -177,7 +179,9 @@ pub(super) fn register(state: &Arc<AppState>, name: &str, mock: &Arc<MockBackend
 /// Rows that also need a backend the credential cannot reach register
 /// [`FORBIDDEN_BACKEND`] themselves, so a row that never uses it is not carrying
 /// a fixture it does not exercise.
-pub(super) async fn state_with(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn state_with(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = fixture_state(&two_principal_auth()).await;
     register(&state, BACKEND, mock);
     (state, store)
