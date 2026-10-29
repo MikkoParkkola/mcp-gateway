@@ -172,6 +172,9 @@ impl MetaMcp {
             caller,
             super::nonce_settle::PreSendExit::ReleaseKey(reservation),
         );
+        // The delivered refusal; a composite step's is absorbed, so raised
+        // only while the cell is vouched.
+        crate::gateway::delivery_facts::refused_while_vouched();
         Err(refused)
     }
 
@@ -218,6 +221,8 @@ impl super::BridgeDispatcher<'_> {
             return Ok(());
         };
         let message = refused.to_string();
+        // The exchange ends with this refusal (read first at the call site).
+        crate::gateway::delivery_facts::refused_while_vouched();
         *self.relay_refused.lock() = Some(refused);
         Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message })
     }

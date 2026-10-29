@@ -127,7 +127,10 @@ impl LiveHost {
             let arguments = request
                 .pointer_mut("/params/arguments")
                 .map_or(serde_json::Value::Null, serde_json::Value::take);
-            Ok((arguments, Judged::default()))
+            // What `sanitize_exempt` recorded while judging, as the exempt
+            // branch returns: a playbook's digest is recorded whether or not
+            // the call is exempt, and the run compares against it.
+            Ok((arguments, crate::gateway::meta_mcp::visible::memo::judged()))
         })
         .await
     }
