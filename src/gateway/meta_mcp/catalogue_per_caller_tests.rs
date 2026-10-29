@@ -594,6 +594,7 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
          below is measuring a cold fill rather than a stale one"
     );
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
 
     let second = MetaMcp::backend_tools_for_discovery(
@@ -741,6 +742,7 @@ async fn a_shared_slot_withholding_every_tool_still_refreshes_past_its_ttl() {
     );
     assert_eq!(wire.fetches.load(std::sync::atomic::Ordering::SeqCst), 1);
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
     let served = MetaMcp::backend_tools_for_discovery(
         &backend,
