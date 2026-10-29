@@ -626,11 +626,10 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane and gateway groups beside it.
+const GROUPS: [&[Row]; 2] = [control_plane::ROWS, gateway_rows::ROWS];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter()
-        .chain(control_plane::ROWS)
-        .chain(gateway_rows::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
