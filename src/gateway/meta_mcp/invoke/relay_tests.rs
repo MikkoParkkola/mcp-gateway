@@ -690,7 +690,7 @@ impl crate::transport::Transport for Unreachable {
 
 /// `alpha` on `transport`, under a relay firewall over `alpha:*`, with
 /// `injector`.
-fn relay_meta(
+fn alpha_relay_meta(
     transport: Arc<dyn crate::transport::Transport>,
     injector: crate::secret_injection::SecretInjector,
 ) -> MetaMcp {
@@ -740,7 +740,7 @@ async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
         "alpha".to_string(),
         vec![rule],
     )]));
-    let meta = relay_meta(Arc::new(Seen(Arc::clone(&seen))), injector);
+    let meta = alpha_relay_meta(Arc::new(Seen(Arc::clone(&seen))), injector);
     let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
     let invoked =
         Box::pin(meta.invoke_tool_sourced(&call, None, &ctx(&AllowAll), "t".to_owned())).await;
@@ -760,7 +760,7 @@ async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
 /// result, is the gateway's text: no receipt names the backend for it.
 #[tokio::test]
 async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
-    let meta = relay_meta(
+    let meta = alpha_relay_meta(
         Arc::new(Unreachable),
         crate::secret_injection::SecretInjector::new(HashMap::new()),
     );
