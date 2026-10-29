@@ -194,3 +194,33 @@ async fn e5b_a_carried_resolution_whose_fill_failed_is_read_again() {
     })
     .await;
 }
+
+/// A resolution whose fill already failed in this request is answered by the
+/// gateway itself, before the backend (the verdict's carried fill failure):
+/// the invocation is marked refused before its backend, so a task never takes
+/// that answer for the backend's, and the backend is never asked.
+#[tokio::test]
+async fn a_carried_fill_failure_is_refused_before_the_backend() {
+    use crate::gateway::STDIO_CREDENTIAL_PRINCIPAL;
+    use crate::gateway::meta_mcp::account_resolver_fixture::caller_as;
+    use crate::gateway::meta_mcp::dispatch_log::PreSend;
+    use crate::gateway::server::account_bindings::ServeMode;
+    let mut gateway =
+        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
+    let meta = gateway.take_meta();
+    let caller = caller_as(None, Some(STDIO_CREDENTIAL_PRINCIPAL));
+    let args =
+        serde_json::json!({"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}});
+    let invoked = in_request(async {
+        carry(&meta, Some(crate::Error::json_rpc(-32603, "fill failed"))).await;
+        meta.invoke_tool_sourced(&args, None, &caller, "trace-fill".to_owned())
+            .await
+    })
+    .await;
+    assert_eq!(
+        invoked.pre_send,
+        PreSend::Refused,
+        "the gateway answered the failed fill: {:?}",
+        invoked.outcome.as_ref().err()
+    );
+}
