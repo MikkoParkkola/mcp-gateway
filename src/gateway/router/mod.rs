@@ -14,6 +14,7 @@ use axum::{
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
 use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+use super::health_metrics::layers::latency_layer;
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
@@ -646,12 +647,16 @@ pub(crate) fn create_router_with_accounts(
         .route(
             routes::MCP,
             post(handlers::meta_mcp_handler)
+                .layer(middleware::from_fn(latency_layer))
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
         // No sub-path alias: one with a wildcard tail never served, because
         // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
-        .route(routes::MCP_BACKEND, post(backend_handlers::backend_handler))
+        .route(
+            routes::MCP_BACKEND,
+            post(backend_handlers::backend_handler).layer(middleware::from_fn(latency_layer)),
+        )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             routes::SSE,

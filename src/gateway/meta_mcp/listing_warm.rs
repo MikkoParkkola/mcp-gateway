@@ -15,6 +15,7 @@ use super::MetaMcp;
 use super::account_outcome::AccountWrites;
 use super::scoped_backends::Unscoped;
 use super::visibility::InvokeScope;
+use crate::gateway::health_metrics::clock::{backend_wait, carried};
 
 /// The longest a listing waits for the fills it starts or finds: half the
 /// MCP TypeScript SDK's default request timeout (60 s), so a cold listing
@@ -87,7 +88,7 @@ impl MetaMcp {
                 {
                     Some(Pending::Fill(
                         fill.backend_bound(),
-                        tokio::spawn(fill.run()),
+                        tokio::spawn(carried(fill.run())),
                     ))
                 } else {
                     #[cfg(test)]
@@ -124,7 +125,10 @@ impl MetaMcp {
                 Pending::Fill(_, fill) => {
                     let _ = fill.await;
                 }
-                Pending::Leased(backend, id) => backend.wait_cold_lease(&id).await,
+                // Another reader's fill on a backend: waiting on it is backend wait.
+                Pending::Leased(backend, id) => {
+                    backend_wait(backend.wait_cold_lease(&id)).await;
+                }
             }
         });
         let deadline = ceiling.min(started + bound.min(LISTING_DEADLINE_CAP));

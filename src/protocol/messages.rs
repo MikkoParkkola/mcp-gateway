@@ -78,6 +78,11 @@ pub struct JsonRpcResponse {
     /// wire, so no caller can set it.
     #[serde(skip)]
     pub(crate) egress_scanned: bool,
+    /// Server-owned: a backend's transport returned this frame, so an error
+    /// in it is the backend's even when it reuses a gateway code. Set only
+    /// by `backend_request`; never on the wire, so no caller can set it.
+    #[serde(skip)]
+    pub(crate) from_backend: bool,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
@@ -113,6 +118,7 @@ impl JsonRpcResponse {
             confirmation_refusal: false,
             delivery_refusal: false,
             egress_scanned: false,
+            from_backend: false,
             chain_source: super::ChainSource::NotEligible,
             chain_upstream: None,
             invocation_trace: None,
