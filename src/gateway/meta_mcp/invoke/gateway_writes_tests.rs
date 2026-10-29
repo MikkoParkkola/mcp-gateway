@@ -554,15 +554,16 @@ async fn a_contract_annotation_records_annotated() {
         forbidden_patterns: Vec::new(),
         action_mode: None,
     };
+    // (tool, the effect, the reason the gate writes: `None` writes none).
     let cases = [
-        ("undeclared", "annotated"),
-        ("declared", "annotated"),
-        ("roomy", "delivered"),
+        ("undeclared", "annotated", Some("no_contract_declared")),
+        ("declared", "annotated", Some("max_bytes_exceeded")),
+        ("roomy", "delivered", None),
     ];
     // Every case's effect is collected and compared at once, so a failure
     // shows each branch's answer, not only the first that differs.
     let mut effects = Vec::new();
-    for (tool, expected) in cases {
+    for (tool, _, reason) in cases {
         let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
             crate::backend::BackendRegistry::new(),
         ));
@@ -577,7 +578,7 @@ async fn a_contract_annotation_records_annotated() {
             .into(),
             ..Default::default()
         });
-        let (effect, annotated) = crate::gateway::delivery_facts::scope(async {
+        let (effect, written) = crate::gateway::delivery_facts::scope(async {
             let mut result = json!({"content": [{"type": "text", "text": "longer than one byte"}]});
             meta.apply_response_contract_gate("alpha", tool, "t-1", &mut result)
                 .expect("observe mode annotates");
@@ -589,20 +590,55 @@ async fn a_contract_annotation_records_annotated() {
             );
             (
                 fields["response_effect"].clone(),
-                result.get("_contract_violation").is_some(),
+                (
+                    result.get("_contract_violation").cloned(),
+                    result.get("_contract_reason").cloned(),
+                ),
             )
         })
         .await;
+        // Premise: each case reached the branch it names.
+        let annotation = reason.map(|reason| (json!(true), json!(reason)));
         assert_eq!(
-            annotated,
-            expected == "annotated",
+            written,
+            annotation.map_or((None, None), |(v, r)| (Some(v), Some(r))),
             "premise {tool}: the gate's annotation"
         );
         effects.push((tool, effect));
     }
     let expected: Vec<_> = cases
         .iter()
-        .map(|&(tool, effect)| (tool, json!(effect)))
+        .map(|&(tool, effect, _)| (tool, json!(effect)))
         .collect();
     assert_eq!(effects, expected);
+}
+
+/// Each contract member is counted on its own: noting either one alone
+/// makes the delivery `annotated`, so neither can lose its counted status
+/// behind the other (the gate always writes both together).
+#[tokio::test]
+async fn each_contract_member_alone_records_annotated() {
+    let value = json!({"_contract_violation": true, "_contract_reason": "r"});
+    let mut effects = Vec::new();
+    for path in [CONTRACT_VIOLATION, CONTRACT_REASON] {
+        let effect = crate::gateway::delivery_facts::scope(async {
+            note(Layer::Value, path, &value);
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields["response_effect"].clone()
+        })
+        .await;
+        effects.push((path[0], effect));
+    }
+    assert_eq!(
+        effects,
+        [
+            ("_contract_violation", json!("annotated")),
+            ("_contract_reason", json!("annotated")),
+        ]
+    );
 }
