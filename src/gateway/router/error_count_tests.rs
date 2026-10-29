@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use super::direct_guards_fixture::{Answer, fixture, post_direct, send};
 use super::helpers::{RpcHttp, build_error_response, build_response};
 use crate::gateway::health_metrics::layers::error_layer;
-use crate::gateway::health_metrics::{Origin, RpcError, error_kind};
+use crate::gateway::health_metrics::{Origin, RpcError};
 use crate::gateway::outbound::{OutboundFrame, Payload, to_http};
 use crate::protocol::JsonRpcResponse;
 
@@ -277,26 +277,19 @@ fn a_backend_timeout_counts_as_backend_not_internal() {
     assert_eq!(all(&text), [0, 0, 0, 1]);
 }
 
+/// A call the backend cannot serve is answered as a tool result marked
+/// `isError` (HTTP 200, no JSON-RPC error): the client got a result, not an
+/// error from the gateway, so no kind moves.
 #[test]
-fn a_gateway_refusal_on_the_direct_route_counts_by_its_code() {
+fn a_tool_result_marked_is_error_counts_no_error() {
     let ((status, body), text) = counted(async {
         let fx = fixture(Answer::Ok, |_| {}).await;
         post_direct(&fx, "alpha", "k-deny", "read", json!({}), None, None).await
     });
-    // A 403 or 429 refusal on this route carries the body `{}` and no code,
-    // so it counts by its status; one with a code counts by the code.
-    let marker = body["error"]["code"].as_i64().map(|code| RpcError {
-        code: i32::try_from(code).expect("a code"),
-        origin: Origin::Gateway,
-    });
-    let want = error_kind(status.as_u16(), marker).expect("a refusal is an error");
-    let counts = all(&text);
-    assert_eq!(counts.iter().sum::<u64>(), 1, "{counts:?}");
-    assert_eq!(
-        errors(&text, want.label()),
-        1,
-        "{counts:?}: {status} {marker:?}"
-    );
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["result"]["isError"], true, "{body}");
+    assert!(body.get("error").is_none(), "{body}");
+    assert_eq!(all(&text), [0, 0, 0, 0]);
 }
 
 #[test]
