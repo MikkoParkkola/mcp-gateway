@@ -197,6 +197,7 @@ src/gateway/meta_mcp/invoke/egress.rs	bind	http_invoke_tiny	bound to the authent
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses	-	on-path, untimed: error frames and non-tools/call answers; a tools/call result met these checks at dispatch
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses_value	-	on-path, untimed: undeclared-key refusals only; the timed arguments are declared
 src/gateway/meta_mcp/invoke/egress.rs	decoded_text	-	on-path, untimed: the egress content check's text walk, on error frames and non-tools/call answers only
+src/gateway/meta_mcp/invoke/egress.rs	expand_targets	http_invoke_tiny	inside firewall_result on the HTTP gateway_invoke path (firewall builds): copies the answer's targets; only a backend-less target expands
 src/gateway/meta_mcp/invoke/egress.rs	firewall_outcome	-	on-path, untimed: only frames a configured firewall instance judges; the harness routes configure none for this scan
 src/gateway/meta_mcp/invoke/egress.rs	firewall_result	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan of every result)
 src/gateway/meta_mcp/invoke/egress.rs	for_method	http_invoke_tiny	on the HTTP gateway_invoke path (ContentChecks::for_method, per answer)

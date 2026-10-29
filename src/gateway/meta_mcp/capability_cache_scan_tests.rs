@@ -78,6 +78,9 @@ fn gateway(port: u16) -> MetaMcp {
         action: FirewallAction::Warn,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }];
     let config = FirewallConfig {
         enabled: true,
@@ -108,6 +111,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
         let targets = [ResponsePolicyTarget {
             server: CAPS.to_string(),
             tool: TOOL.to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let response = meta.finalize_content(
             response,
@@ -121,6 +125,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
                     external_tool: "gateway_invoke",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: ChainSource::NotEligible,

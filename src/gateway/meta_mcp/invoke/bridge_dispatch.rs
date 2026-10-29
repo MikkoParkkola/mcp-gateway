@@ -176,6 +176,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         let targets = [crate::security::response_policy::ResponsePolicyTarget {
             server: self.server.to_owned(),
             tool: self.tool.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = crate::security::response_policy::ResponseCorrelation {
             session_id: self.session_id.unwrap_or_default(),
@@ -184,6 +185,8 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
             subject: None,
             trace_id: None,
+            // The caller is known here: its proven API key, or none.
+            key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)

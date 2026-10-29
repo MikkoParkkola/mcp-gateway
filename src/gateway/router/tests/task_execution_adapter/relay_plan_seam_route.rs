@@ -472,6 +472,9 @@ async fn a_redacted_field_is_no_steps_text() {
                     action: crate::security::firewall::FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
