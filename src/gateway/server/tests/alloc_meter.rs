@@ -20,9 +20,10 @@
 //!    initialiser — the cells are `const`-initialised, so touching them cannot
 //!    allocate and cannot register a destructor.
 //! 2. **Deallocation is never counted and never touches the cells.** The
-//!    checkpoint asks for allocated bytes, never net bytes, so `dealloc` has
-//!    nothing to do but forward — which also removes the thread-teardown
-//!    hazard entirely on that path.
+//!    checkpoint asks for allocated bytes, never net bytes, so `dealloc` only
+//!    forwards — which also removes the thread-teardown hazard entirely on
+//!    that path. The one exception is the free scan (MIK-9070): one atomic
+//!    load, and a search of the block only while a marker is armed.
 //! 3. **Failure is silent, never a panic.** A panic raised inside the
 //!    allocator is not recoverable in any useful way. `try_with` losing a
 //!    record during teardown drops the record.
@@ -34,7 +35,7 @@
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 thread_local! {
     /// Whether THIS thread is inside an open measurement scope.
@@ -68,6 +69,32 @@ static WIDE_CALLS: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGEST: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// The free scan (MIK-9070): while a marker is armed, every block freed, and
+/// every block a reallocation moves, is searched for it before it goes back
+/// to the allocator. A hit is a copy of the marker returned still holding it,
+/// that is, never wiped. Process-wide, because a block is freed on whatever
+/// thread drops it, so only an isolated child may arm it.
+static SCAN_MARKER: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
+static SCAN_LEN: AtomicUsize = AtomicUsize::new(0);
+static SCAN_HITS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
+/// included) holds the armed marker. Reads only the block and the marker,
+/// never allocates, never unwinds.
+fn holds_marker(ptr: *const u8, size: usize) -> bool {
+    let marker = SCAN_MARKER.load(Ordering::Acquire);
+    let len = SCAN_LEN.load(Ordering::Acquire);
+    if marker.is_null() || len == 0 || size < len {
+        return false;
+    }
+    // Bytes are read one at a time through `read_volatile`: part of a block
+    // may never have been written (a vector's spare capacity), and a volatile
+    // read keeps the compiler from assuming anything about it.
+    #[allow(unsafe_code)]
+    let byte = |base: *const u8, at: usize| unsafe { std::ptr::read_volatile(base.add(at)) };
+    (0..=size - len).any(|start| (0..len).all(|at| byte(ptr, start + at) == byte(marker, at)))
+}
 
 /// Nothing below allocates, so recording cannot re-enter the allocator.
 fn record(bytes: usize) {
@@ -118,10 +145,20 @@ unsafe impl GlobalAlloc for MeteredSystem {
         // allocator for four blocks, and hiding three of them is exactly the
         // blindness the positive control exists to detect.
         record(new_size);
-        unsafe { System.realloc(ptr, layout, new_size) }
+        // Searched before the move, counted only if the block did move: a
+        // block grown in place was not returned.
+        let held = holds_marker(ptr, layout.size());
+        let moved = unsafe { System.realloc(ptr, layout, new_size) };
+        if held && !moved.is_null() && moved != ptr {
+            SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+        }
+        moved
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if holds_marker(ptr, layout.size()) {
+            SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+        }
         unsafe { System.dealloc(ptr, layout) }
     }
 }
@@ -339,4 +376,60 @@ fn the_process_wide_meter_refuses_outside_a_child() {
         .build()
         .expect("runtime")
         .block_on(measure_async_process_wide(|| async {}));
+}
+
+/// Disarms the free scan on drop, so an unwind through the scanned body
+/// cannot leave every later free in the process being searched.
+struct ScanScope;
+
+impl Drop for ScanScope {
+    fn drop(&mut self) {
+        SCAN_MARKER.store(std::ptr::null_mut(), Ordering::SeqCst);
+        SCAN_LEN.store(0, Ordering::SeqCst);
+    }
+}
+
+/// The shortest marker a free scan accepts: longer than any inline storage, so
+/// a copy can only live in a heap block the scan sees.
+pub(crate) const MIN_MARKER: usize = 64;
+
+fn arm_scan(marker: &'static [u8]) -> ScanScope {
+    assert!(
+        std::env::var_os(CHILD_ENV).is_some(),
+        "a free scan runs only in an isolated child: it sees every thread's frees"
+    );
+    assert!(
+        marker.len() >= MIN_MARKER,
+        "a free-scan marker must be at least {MIN_MARKER} bytes"
+    );
+    assert!(
+        SCAN_MARKER.load(Ordering::SeqCst).is_null(),
+        "free scans must not nest"
+    );
+    SCAN_HITS.store(0, Ordering::SeqCst);
+    SCAN_LEN.store(marker.len(), Ordering::SeqCst);
+    SCAN_MARKER.store(marker.as_ptr().cast_mut(), Ordering::SeqCst);
+    ScanScope
+}
+
+/// Run `body` with the free scan armed on `marker`; returns its value and the
+/// number of blocks returned to the allocator still holding the marker while
+/// it ran. `marker` is `'static` so the scan's own needle is never freed.
+pub(crate) fn scan_frees<T>(marker: &'static [u8], body: impl FnOnce() -> T) -> (T, u64) {
+    let scope = arm_scan(marker);
+    let value = body();
+    drop(scope);
+    (value, SCAN_HITS.load(Ordering::SeqCst))
+}
+
+/// [`scan_frees`] for an awaited body, the future constructed inside the scan.
+pub(crate) async fn scan_frees_async<F, Fut>(marker: &'static [u8], make: F) -> (Fut::Output, u64)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future,
+{
+    let scope = arm_scan(marker);
+    let value = make().await;
+    drop(scope);
+    (value, SCAN_HITS.load(Ordering::SeqCst))
 }
