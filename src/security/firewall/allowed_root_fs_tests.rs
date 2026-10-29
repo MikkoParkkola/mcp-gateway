@@ -72,6 +72,14 @@ impl Fx {
     }
 
     pub(super) fn with_rules(rules: impl FnOnce(String) -> Vec<FirewallRule>) -> Self {
+        Self::build(rules, |_| {})
+    }
+
+    /// [`Self::with_rules`], with `tweak` applied to the config first.
+    pub(super) fn build(
+        rules: impl FnOnce(String) -> Vec<FirewallRule>,
+        tweak: impl FnOnce(&mut FirewallConfig),
+    ) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         for sub in ["safe", "outside"] {
             std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
@@ -82,10 +90,11 @@ impl Fx {
         let registry = Arc::new(BackendRegistry::new());
         assert!(registry.register(backend("fs", stdio())));
         let slot: CapabilitySlot = Arc::new(parking_lot::RwLock::new(None));
-        let config = FirewallConfig {
+        let mut config = FirewallConfig {
             rules: rules(safe),
             ..FirewallConfig::default()
         };
+        tweak(&mut config);
         let fw = Firewall::from_config(config, None)
             .with_registries(Arc::clone(&registry), Arc::clone(&slot));
         Self {
@@ -269,4 +278,201 @@ fn r9_r15_refused_shapes_name_their_code() {
         ),
         Seen::Allowed
     );
+}
+
+fn many(args: &[&str], action: FirewallAction) -> Fx {
+    Fx::with_rules(|safe| vec![root_rule("read_multiple_files", &[safe], args, action)])
+}
+
+fn refused(reason: RootReason) -> Seen {
+    Seen::Refused(code(reason))
+}
+
+/// R1b: eight inside paths in one array are all checked and allowed;
+/// R17: one outside element refuses the call.
+#[test]
+fn r1b_r17_array_values_each_checked() {
+    let fx = many(&["paths[]"], FirewallAction::Block);
+    let inside: Vec<String> = (0..8).map(|i| fx.path(&format!("safe/n{i}"))).collect();
+    let call = |paths: &[String]| both(&fx, "read_multiple_files", &json!({"paths": paths}));
+    assert_eq!(call(&inside), Seen::Allowed);
+    let mut one_out = inside;
+    one_out[3] = fx.path("outside/f");
+    assert_eq!(call(&one_out), Seen::Outside(FirewallAction::Block));
+}
+
+/// R18: a nested `a.b` argument is judged; its sibling keys are not.
+#[test]
+fn r18_nested_argument_outside() {
+    let fx = Fx::new(&["opts.target"], FirewallAction::Block);
+    let call = |p: &str| {
+        both(
+            &fx,
+            "read_file",
+            &json!({"opts": {"target": fx.path(p), "note": "/outside/f"}}),
+        )
+    };
+    assert_eq!(call("safe/f"), Seen::Allowed);
+    assert_eq!(call("outside/f"), Seen::Outside(FirewallAction::Block));
+}
+
+/// R19 (both, warn): the wrong type is refused; control: the right type.
+#[test]
+fn r19_wrong_type_is_refused() {
+    let wrong = code(RootReason::WrongType);
+    let got = both_warn(&["path"], |_| json!({"path": {"nested": "/x"}}));
+    assert_eq!(got, Seen::Refused(wrong.clone()));
+    let fx = many(&["paths[]"], FirewallAction::Block);
+    let mixed = json!({"paths": [fx.path("safe/f"), 3]});
+    assert_eq!(
+        both(&fx, "read_multiple_files", &mixed),
+        Seen::Refused(wrong)
+    );
+    let right = json!({"paths": [fx.path("safe/f")]});
+    assert_eq!(both(&fx, "read_multiple_files", &right), Seen::Allowed);
+}
+
+/// R20 (both, warn): a declared argument omitted without `?` is refused;
+/// R21, R21b [keep]: omitted with `?` it is allowed.
+#[test]
+fn r20_r21_omission_follows_the_optional_mark() {
+    let got = both_warn(&["path"], |_| json!({"other": 1}));
+    assert_eq!(got, refused(RootReason::MissingArgument));
+    let fx = Fx::new(&["path?"], FirewallAction::Block);
+    assert_eq!(both(&fx, "read_file", &json!({"other": 1})), Seen::Allowed);
+    let fx = many(&["paths[]?"], FirewallAction::Block);
+    assert_eq!(both(&fx, "read_multiple_files", &json!({})), Seen::Allowed);
+}
+
+/// R27: under `warn` an outside path passes with the root finding.
+#[test]
+fn r27_warn_passes_outside_with_a_finding() {
+    let fx = Fx::new(&["path"], FirewallAction::Warn);
+    let args = json!({"path": fx.path("outside/f")});
+    assert_eq!(
+        both(&fx, "read_file", &args),
+        Seen::Outside(FirewallAction::Warn)
+    );
+    let sender = fx.sender();
+    let verdict = fx.fw.check_request_keyed(
+        "s1",
+        target("read_file"),
+        &args,
+        "c",
+        "id-1",
+        sender.as_deref(),
+    );
+    assert!(verdict.allowed, "warn lets it through: {verdict:?}");
+}
+
+/// R29: `scan_requests: false` switches content scanning off, never the
+/// folder check.
+#[test]
+fn r29_scan_requests_off_still_checks() {
+    let fx = Fx::build(
+        |safe| {
+            vec![root_rule(
+                "read_file",
+                &[safe],
+                &["path"],
+                FirewallAction::Block,
+            )]
+        },
+        |config| config.scan_requests = false,
+    );
+    assert_eq!(
+        both(&fx, "read_file", &json!({"path": fx.path("safe/f")})),
+        Seen::Allowed
+    );
+    assert_eq!(
+        both(&fx, "read_file", &json!({"path": fx.path("outside/f")})),
+        Seen::Outside(FirewallAction::Block)
+    );
+}
+
+/// R31 (both, warn): a root that does not resolve refuses every call, so a
+/// broken rule never degrades to a warning. Control: R1's resolving root.
+#[test]
+fn r31_unresolvable_root_refuses() {
+    for action in [FirewallAction::Block, FirewallAction::Warn] {
+        let fx = Fx::with_rules(|safe| {
+            let gone = format!("{safe}-missing");
+            vec![root_rule("read_file", &[gone], &["path"], action)]
+        });
+        let got = both(&fx, "read_file", &json!({"path": fx.path("safe/f")}));
+        assert_eq!(got, refused(RootReason::RootUnresolvable), "{action:?}");
+    }
+}
+
+/// R13c: `/outside/link -> /safe/sub`, value `/outside/link/../secret`: the
+/// `..` is refused before any link is read.
+#[cfg(unix)]
+#[test]
+fn r13c_dot_dot_through_a_link_is_not_normalised() {
+    let got = both_warn(&["path"], |fx| {
+        std::fs::create_dir_all(fx.dir.path().join("safe/sub")).expect("mkdir");
+        let link = fx.dir.path().join("outside/link");
+        if !link.exists() {
+            std::os::unix::fs::symlink(fx.dir.path().join("safe/sub"), &link).expect("link");
+        }
+        json!({"path": fx.path("outside/link/../secret")})
+    });
+    assert_eq!(got, refused(RootReason::NotNormalised));
+}
+
+/// R6: a link inside pointing outside is outside; R30 [keep]: a root that is
+/// itself a link is judged by its target.
+#[cfg(unix)]
+#[test]
+fn r6_r30_links_are_judged_by_their_targets() {
+    let fx = Fx::new(&["path"], FirewallAction::Block);
+    let out = fx.dir.path().join("outside/f");
+    std::os::unix::fs::symlink(&out, fx.dir.path().join("safe/out")).expect("link");
+    assert_eq!(
+        both(&fx, "read_file", &json!({"path": fx.path("safe/out")})),
+        Seen::Outside(FirewallAction::Block)
+    );
+    assert_eq!(
+        both(&fx, "read_file", &json!({"path": fx.path("safe/f")})),
+        Seen::Allowed
+    );
+
+    let linked = Fx::with_rules(|safe| {
+        let root = format!("{safe}-link");
+        std::os::unix::fs::symlink(&safe, &root).expect("root link");
+        vec![root_rule(
+            "read_file",
+            &[root],
+            &["path"],
+            FirewallAction::Block,
+        )]
+    });
+    let real = linked.path("safe/f");
+    assert_eq!(
+        both(&linked, "read_file", &json!({"path": real})),
+        Seen::Allowed
+    );
+}
+
+/// R33 (both, warn): a dangling link inside is `dangling_link`, never absent,
+/// so a write through it is refused; R33b: a link loop is `unresolvable`.
+#[cfg(unix)]
+#[test]
+fn r33_r33b_broken_links_are_refused() {
+    let dangling = both_warn(&["path"], |fx| {
+        let link = fx.dir.path().join("safe/dangle");
+        if std::fs::symlink_metadata(&link).is_err() {
+            std::os::unix::fs::symlink(fx.dir.path().join("outside/new.txt"), &link).expect("link");
+        }
+        json!({"path": fx.path("safe/dangle")})
+    });
+    assert_eq!(dangling, refused(RootReason::DanglingLink));
+    let looped = both_warn(&["path"], |fx| {
+        let link = fx.dir.path().join("safe/loop");
+        if std::fs::symlink_metadata(&link).is_err() {
+            std::os::unix::fs::symlink(&link, &link).expect("loop");
+        }
+        json!({"path": fx.path("safe/loop/x")})
+    });
+    assert_eq!(looped, refused(RootReason::Unresolvable));
 }
