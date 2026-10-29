@@ -108,16 +108,15 @@ async fn k1_a_key_added_by_reload_is_accepted_on_the_next_call() {
     reload_keys(&state, dir.path(), &[key(KEPT, None), key(ADDED, None)]).await;
 
     for path in ["/mcp", "/mcp/absent"] {
-        assert_ne!(
-            status(&state, path, ADDED).await,
-            StatusCode::UNAUTHORIZED,
-            "{path}: a key added by reload was refused"
-        );
-        assert_ne!(
-            status(&state, path, KEPT).await,
-            StatusCode::UNAUTHORIZED,
-            "{path}: the kept key stopped working"
-        );
+        for (secret, what) in [(ADDED, "a key added by reload"), (KEPT, "the kept key")] {
+            let got = status(&state, path, secret).await;
+            // Accepted means past authentication: neither refused nor a
+            // server error, which would also not be a 401.
+            assert!(
+                got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+                "{path}: {what} was not accepted: {got}"
+            );
+        }
     }
 }
 

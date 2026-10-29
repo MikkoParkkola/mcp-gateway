@@ -427,3 +427,82 @@ fn a_capped_session_ends_at_its_cap() {
         SessionCheck::Expired
     );
 }
+
+/// K13 at the store: a key table holding `secret` as an admin key, its quota
+/// identity, and a table without it.
+fn k13_tables(
+    secret: &str,
+) -> (
+    super::ResolvedAuthConfig,
+    super::QuotaPrincipal,
+    super::ResolvedAuthConfig,
+) {
+    let with = super::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig {
+            enabled: true,
+            api_keys: vec![crate::config::ApiKeyConfig {
+                key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+                name: "k13".to_owned(),
+                backends: vec!["*".to_owned()],
+                admin: true,
+                ..Default::default()
+            }],
+            ..crate::config::AuthConfig::default()
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    let key = with
+        .validate_token(secret)
+        .and_then(|client| client.quota_principal)
+        .expect("the key has a quota identity");
+    let without = super::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    (with, key, without)
+}
+
+/// K13: a handoff code minted for a key is refused once the key is gone
+/// from the table; with the key present it redeems (control).
+#[cfg(feature = "webui")]
+#[test]
+fn a_handoff_code_ends_with_its_minting_key() {
+    let (with, key, without) = k13_tables("k13-handoff-secret");
+    let bound = || super::Bound {
+        not_after: None,
+        key: Some(key.clone()),
+    };
+    let store = DashboardBootstrap::new();
+    let now = super::Now::read();
+    let code = store.mint_handoff(now, bound());
+    assert!(
+        store.take_handoff(&code, now, &without).is_none(),
+        "a handoff code outlived its key"
+    );
+    let code = store.mint_handoff(now, bound());
+    assert!(store.take_handoff(&code, now, &with).is_some());
+}
+
+/// K13: an event delivery for a session minted by a key stops once the key
+/// is gone from the table it is judged by; with the key present it holds.
+#[test]
+fn an_event_delivery_ends_with_the_sessions_minting_key() {
+    let (with, key, without) = k13_tables("k13-delivery-secret");
+    let store = DashboardBootstrap::new();
+    let now = super::Now::read();
+    let limits = super::SessionLimits::default();
+    let handle = store.issue_session_until(
+        now,
+        &limits,
+        super::Bound {
+            not_after: None,
+            key: Some(key),
+        },
+    );
+    let digest = crate::hashing::sha256_hex(handle.as_bytes());
+    assert!(store.live_digest(&digest, now, &limits, &with));
+    assert!(
+        !store.live_digest(&digest, now, &limits, &without),
+        "an event delivery outlived the session's key"
+    );
+}
