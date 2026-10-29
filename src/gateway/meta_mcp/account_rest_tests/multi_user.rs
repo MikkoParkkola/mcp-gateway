@@ -44,7 +44,7 @@ async fn alice_and_bob_receive_their_own_account_credentials_on_a_multi_user_gat
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -100,7 +100,7 @@ async fn alice_and_bob_receive_their_own_account_credentials_on_a_multi_user_gat
 async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verified_caller() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(UNROUTABLE, "oauth:google", Some(WORK)),
@@ -144,7 +144,7 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
 /// MULTI-USER GATEWAY, AND THE LEGACY LOGIN IS NEVER TOUCHED.
 ///
 /// Same shape as `an_identical_second_request_from_alice_is_served_from_the_warm_cache`
-/// — explicit positive TTL, `localhost` base URL, no loopback relaxation so the
+/// — explicit positive TTL, fixture-host base URL, no loopback relaxation so the
 /// cache is live — but dispatched through the multi-user `CapabilityBackend`,
 /// which is where the isolation guard sits. A valid gateway-held `oauth:google`
 /// token is seeded as the TRAP: it is exactly the credential the guard exists to
@@ -152,10 +152,10 @@ async fn meta_mcp_multi_user_dispatch_reaches_the_account_boundary_for_a_verifie
 /// never present it, cached or not.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn alices_second_identical_request_hits_the_warm_cache_on_a_multi_user_gateway() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let backend = multi_user_caching_backend(
         &registry,
@@ -227,7 +227,7 @@ async fn a_multi_user_request_with_no_verified_identity_refuses_before_http() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -288,7 +288,7 @@ async fn a_multi_user_revoked_grant_refuses_before_http() {
         .await
         .expect("revocation must be applied");
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -321,7 +321,7 @@ async fn a_multi_user_gateway_still_refuses_a_capability_with_no_account_referen
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     // No `account:` line at all — the legacy gateway-held OAuth shape.
     let backend = backend_with(&registry, capability(&base_url(port), "oauth:google", None))
         .expect("a capability with no account reference registers as it always has");
@@ -360,7 +360,7 @@ async fn a_multi_user_shared_descriptor_is_still_refused_by_the_isolation_guard(
         grant(ALICE_PERSONAL_TOKEN, FRESH),
     )]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(PERSONAL, shared(PERSONAL))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(PERSONAL, shared(PERSONAL))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(PERSONAL)),
@@ -396,7 +396,7 @@ async fn a_multi_user_grant_subject_alone_does_not_authorize_a_managed_account()
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -431,7 +431,7 @@ async fn a_multi_user_grant_subject_alone_does_not_authorize_a_managed_account()
 /// presence of one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_multi_user_carried_credential_for_another_descriptor_refuses_before_http() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[
         (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH)),
         (
@@ -440,7 +440,7 @@ async fn a_multi_user_carried_credential_for_another_descriptor_refuses_before_h
         ),
     ]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(
+    let (_log, _meta, registry) = installed_gateway(
         &[(WORK, managed(WORK)), (PERSONAL, managed(PERSONAL))],
         &installed,
     );
@@ -481,10 +481,10 @@ async fn a_multi_user_carried_credential_for_another_descriptor_refuses_before_h
 /// and before the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_multi_user_carried_credential_for_another_caller_refuses_before_http() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = multi_user_caching_backend(
         &registry,
         None,
@@ -524,7 +524,7 @@ async fn a_multi_user_dispatch_with_invalid_arguments_acquires_no_credential() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability_requiring_argument(&base_url(port), "oauth:google", Some(WORK)),
@@ -581,12 +581,12 @@ async fn a_multi_user_dispatch_with_invalid_arguments_acquires_no_credential() {
 /// old token (served from cache) NOR the new one (silently re-resolved).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
     let seeded = grant(ALICE_WORK_TOKEN, FRESH);
     let custody = custody_with(&[(alice.clone(), seeded.clone())]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
@@ -648,12 +648,12 @@ async fn a_reconnected_grant_refuses_the_credential_prepared_under_the_old_one()
 /// than a cached reply, and the revoked token must never resurface.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_revoked_grant_is_replaced_by_its_successor_under_a_new_generation() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
     let seeded = grant(ALICE_WORK_TOKEN, FRESH);
     let custody = custody_with(&[(alice.clone(), seeded.clone())]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));

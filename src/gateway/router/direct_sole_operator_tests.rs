@@ -64,7 +64,7 @@ struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
     log_path: std::path::PathBuf,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 async fn fixture(auth: AuthConfig, binding: &Binding) -> Fx {

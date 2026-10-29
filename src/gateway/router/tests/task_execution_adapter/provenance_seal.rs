@@ -25,7 +25,9 @@ use crate::trust::provenance_public::{
 
 /// The suite's state with both provenance signers installed on the Meta-MCP
 /// before it is shared (as in `relay_settlement`).
-async fn dual_signed_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn dual_signed_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
@@ -169,10 +171,11 @@ async fn a_worker_task_with_a_public_scope_is_sealed_as_delivered() {
     std::assert_eq!(status_of(&settled), "completed", "{settled}");
     std::assert_eq!(mock.calls(), 1, "one dispatch ran the task");
     let delivered = delivered_result(&settled);
+    // A `tools/call` answer may not carry `cacheScope`: ingress removed it.
     std::assert_eq!(
-        delivered.get("cacheScope").and_then(Value::as_str),
-        Some("private"),
-        "the wire clamp delivers private: {delivered}"
+        delivered.get("cacheScope"),
+        None,
+        "ingress removed the backend's scope: {delivered}"
     );
     assert_sealed_bound(&delivered);
 }

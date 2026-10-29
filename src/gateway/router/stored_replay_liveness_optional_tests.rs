@@ -27,7 +27,7 @@ async fn optional_gateway(
 ) -> (
     axum::Router,
     Arc<std::sync::atomic::AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 ) {
     r6m_token_exchange::gateway_with(
         key,

@@ -65,7 +65,10 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on, one admin and one standard key, and `servers` registered
 /// backends named `name-NNN` (`long` pads each name to 200 characters).
-pub(super) async fn fixture(servers: usize, long: bool) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn fixture(
+    servers: usize,
+    long: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -314,7 +317,7 @@ async fn o3d_the_fold_sorts_on_the_full_name() {
 #[cfg(feature = "cost-governance")]
 pub(super) async fn worst_case() -> (
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     crate::clock::test_clock::Forced,
 ) {
     use crate::cost_accounting::config::CostGovernanceConfig;

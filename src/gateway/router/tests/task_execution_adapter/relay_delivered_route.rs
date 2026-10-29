@@ -32,7 +32,9 @@ fn stuffing() -> String {
 
 /// The suite's state with `mock` behind a surfaced `TOOL` and a `block` relay
 /// firewall over it.
-async fn surfaced_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn surfaced_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     surfaced_state_with(mock, None).await
 }
 
@@ -40,7 +42,7 @@ async fn surfaced_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::Te
 async fn surfaced_state_with(
     mock: &Arc<MockBackend>,
     kernel: Option<crate::context_integrity::ContextIntegrityKernel>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let config = FirewallConfig {
         collusion: CollusionConfig {
             action: CollusionAction::Block,

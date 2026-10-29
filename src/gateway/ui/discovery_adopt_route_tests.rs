@@ -76,7 +76,7 @@ fn stdio(name: &str, command: &str, env: &[(&str, &str)]) -> DiscoveredServer {
 /// A gateway over `text` in a temp dir, adopting from `finds`.
 struct Route {
     dir: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     state: Arc<AppState>,
     cache: Arc<DiscoveryCache>,
     clients: Arc<Clients>,
@@ -318,6 +318,114 @@ async fn a_change_that_cannot_be_spliced_leaves_file_and_store_as_they_were() {
     assert_eq!(body["error"], "not_in_place", "{body}");
     assert_eq!(route.bytes(), text.as_bytes());
     assert_eq!(route.entries(), 0, "the refused write's entry stayed");
+}
+
+/// An adopt whose client leaves after its writer started still lands, and
+/// the admin audit layer records it once, naming the caller: the write is
+/// paused between writing gateway.yaml and publishing its reload, the request
+/// is dropped there, then the reload goes on. The adopt route's row of the
+/// UI's cancel rows (`router::ui_audit_cancel_tests`), through the real layer.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cancelled_adopt_still_lands_and_records_its_caller() {
+    use tower::ServiceExt as _;
+    let mut route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let log = Arc::new(
+        crate::security::TransparencyLogger::open(Arc::new(
+            crate::security::transparency_log::TransparencyLogConfig {
+                enabled: true,
+                path: route
+                    .dir
+                    .path()
+                    .join("audit.jsonl")
+                    .to_string_lossy()
+                    .into_owned(),
+                key_id: "adopt-cancel".to_string(),
+                ..Default::default()
+            },
+        ))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    let (id, revision) = route.listed("tool").await;
+    let router = crate::gateway::ui::admin_audit::behind_admin_layer_for_test(
+        super::super::discovery_router_with(Arc::clone(&route.cache)),
+        &route.state,
+    )
+    .with_state(Arc::clone(&route.state));
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(crate::gateway::routes::UI_DISCOVERY_ADOPT)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::json!({"find_id": id, "revision": revision}).to_string(),
+        ))
+        .expect("a request");
+    request.extensions_mut().insert(client(true));
+    let admin_actions = || -> Vec<Value> {
+        std::fs::read_to_string(log.path())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry["event"] == "admin_action")
+            .collect()
+    };
+
+    let pause = crate::config_reload::arm_reload_pause(&route.config());
+    let metrics = tokio::runtime::Handle::current().metrics();
+    let baseline = metrics.num_alive_tasks();
+    let sent = tokio::spawn(async move { router.oneshot(request).await });
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, pause.reached.notified())
+        .await
+        .expect("the adopt reached its reload");
+    sent.abort();
+    assert!(
+        sent.await
+            .expect_err("the request was dropped")
+            .is_cancelled(),
+        "the client's request was cancelled before the reload went on"
+    );
+    pause.release.notify_one();
+
+    let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
+    while admin_actions().is_empty() || metrics.num_alive_tasks() > baseline {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the adopt never settled; the log holds {:#?}",
+            admin_actions()
+        );
+        tokio::task::yield_now().await;
+    }
+    let file = String::from_utf8(route.bytes()).expect("utf-8 config");
+    assert!(file.contains("tool"), "the adopt did not land: {file}");
+    let context = route
+        .state
+        .meta_mcp
+        .reload_context()
+        .expect("a reload context");
+    assert!(
+        context.live_config.get().backends.contains_key("tool"),
+        "the reload after the cancel did not publish the adopted backend"
+    );
+    let records = admin_actions();
+    assert_eq!(records.len(), 1, "exactly one record: {records:#?}");
+    let record = &records[0];
+    assert_eq!(
+        record["route"],
+        crate::gateway::routes::UI_DISCOVERY_ADOPT,
+        "{record}"
+    );
+    assert_eq!(
+        record["who"]["account"], "adopt-route",
+        "the caller is named: {record}"
+    );
+    assert!(
+        record["http_status"]
+            .as_u64()
+            .is_some_and(|status| (200..300).contains(&status)),
+        "the handler's own answer: {record}"
+    );
 }
 
 /// No gateway.yaml: nothing can be adopted into it (409).
