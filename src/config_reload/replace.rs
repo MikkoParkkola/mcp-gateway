@@ -221,6 +221,10 @@ pub(crate) async fn replace_detached(
         })
 }
 
+#[path = "replace_audit.rs"]
+mod audit;
+pub(crate) use audit::{Audit, Intent, IntentId, IntentKind, IntentSink, replace_audited};
+
 /// What happens to a replacement's new store entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
