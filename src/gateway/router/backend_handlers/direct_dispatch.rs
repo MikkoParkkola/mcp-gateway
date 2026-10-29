@@ -548,10 +548,22 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
         .await
 }
 
+/// The terminal arm, boxed: its future is too large to inline into the
+/// orchestrator that awaits it, so the orchestrator still ends on a plain
+/// `dispatch(..).await`.
+pub(super) fn dispatch<'a>(
+    scope: Scope<'a>,
+    envelope: &'a Envelope,
+    stages: (&'a Preflight, &'a Propagation),
+    admitted: Admitted<'a>,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = Rejection> + 'a>> {
+    Box::pin(dispatch_inline(scope, envelope, stages, admitted))
+}
+
 /// The terminal arm: dispatch, then answer. Settled, never dropped: an
 /// unsettled reservation releases the key and lets a retry re-execute a side
 /// effect (ADR-012 consequence 1).
-pub(super) async fn dispatch(
+async fn dispatch_inline(
     scope: Scope<'_>,
     envelope: &Envelope,
     stages: (&Preflight, &Propagation),
