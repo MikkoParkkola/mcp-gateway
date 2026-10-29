@@ -160,7 +160,7 @@ export const GLOSSARY = {
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
   },
-  stream: { stopped: 'Updates stopped', resumed: 'Updates resumed' },
+  stream: { live: 'Live', stopped: 'Updates stopped', resumed: 'Updates resumed' },
 };
 
 const unlistedStates = new Set();
@@ -1031,9 +1031,12 @@ const runTab = (spec, route, into) => {
   // Taken when the context is made: a screen holding on to it after the user moved
   // on, or after another identity signed in, announces nothing.
   const guard = { epoch: authEpoch, seq: renderSeq };
+  const show = screenBanner(into, route.page, guard);
+  // The live stream marks this page stale on a drop, through the same banner.
+  livePage = { into, show };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
-    show: screenBanner(into, route.page, guard),
+    show,
     // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
     // later: Retry reuses the render, so a failed attempt is told apart by its container.
     header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
@@ -1383,6 +1386,134 @@ export async function refreshCounts() {
   COUNT_SEEN.value = next;
 }
 
+// ---------------------------------------------------------------- live stream
+
+/** Reconnect waits: one second at first, doubling to thirty at most. */
+const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
+
+/**
+ * The one live stream of this document, GET /ui/api/stream, read through
+ * fetch: an EventSource cannot send the bearer that api() sends for a key
+ * held in memory. `gen` changes on every open and close, so a read or timer
+ * left from an earlier one does nothing. `open` is true from a hello until the
+ * stream drops; `since` is when it dropped, until the next hello.
+ */
+const stream = { gen: 0, abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, open: false, since: null };
+/** The page shown now and its banner, for the stale state on a drop. */
+let livePage = null;
+
+/** Open the stream, closing any earlier one first. */
+function openStream() {
+  closeStream();
+  connect(stream.gen);
+}
+
+/** Close the stream on purpose: no stale state and no reconnect follow. */
+function closeStream() {
+  stream.gen++;
+  stream.abort?.abort();
+  clearTimeout(stream.timer);
+  Object.assign(stream, { abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, open: false, since: null });
+  drawStream();
+}
+
+/** The top bar indicator: hidden, open (the live word) or down (the stale title). */
+function drawStream() {
+  const node = document.querySelector('.top .stream');
+  const kind = stream.open ? 'open' : stream.since ? 'down' : null;
+  node.hidden = !kind;
+  if (kind) node.dataset.stream = kind;
+  else delete node.dataset.stream;
+  node.textContent = kind === 'open' ? GLOSSARY.stream.live : kind ? staleTitle(stream.since) : '';
+}
+
+async function connect(gen) {
+  const headers = new Headers();
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  if (stream.lastId) headers.set('Last-Event-ID', stream.lastId);
+  const abort = new AbortController();
+  stream.abort = abort;
+  const epoch = authEpoch;
+  let retryAfterMs = 0;
+  try {
+    const reply = await fetch('/ui/api/stream', { credentials: 'same-origin', cache: 'no-store', headers, signal: abort.signal });
+    if (gen !== stream.gen) return;
+    // As api(): a 401 shows sign-in, unless a newer sign-in has happened since.
+    if (reply.status === 401) {
+      if (epoch === authEpoch) showSignIn();
+      return;
+    }
+    if (reply.status === 404) return; // a gateway without the stream: nothing to wait for
+    if (reply.status === 503) retryAfterMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
+    if (reply.ok && reply.body) await readStream(reply.body, gen);
+  } catch {
+    // No answer, or the read broke off; a close on purpose has moved `gen` on.
+  }
+  if (gen !== stream.gen) return;
+  if (stream.open) {
+    stream.open = false;
+    stream.since = new Date();
+    drawStream();
+    if (livePage?.into.isConnected) livePage.show('stale', { since: stream.since });
+  }
+  // Retry-After is a floor: the backoff still grows under it.
+  const wait = Math.max(stream.wait, retryAfterMs);
+  stream.wait = Math.min(stream.wait * 2, STREAM_WAIT_MS.most);
+  stream.timer = setTimeout(() => { if (gen === stream.gen) connect(gen); }, wait);
+}
+
+/** Read SSE frames (blank-line separated) until the body ends. */
+async function readStream(body, gen) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done || gen !== stream.gen) return;
+    buffer += value;
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop();
+    for (const block of blocks) streamFrame(parseFrame(block));
+  }
+}
+
+/** One frame: its event (message when unnamed), id and joined data lines. Comments drop out. */
+function parseFrame(block) {
+  const frame = { event: 'message', id: null, data: [] };
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(':')) continue;
+    const at = line.indexOf(':');
+    const field = at < 0 ? line : line.slice(0, at);
+    const value = at < 0 ? '' : line.slice(at + 1).replace(/^ /, '');
+    if (field === 'event') frame.event = value;
+    else if (field === 'id') frame.id = value;
+    else if (field === 'data') frame.data.push(value);
+  }
+  return { ...frame, data: frame.data.join('\n') };
+}
+
+function streamFrame(frame) {
+  if (frame.id) stream.lastId = frame.id;
+  if (frame.event === 'hello') {
+    const was = stream.since;
+    Object.assign(stream, { open: true, since: null, wait: STREAM_WAIT_MS.first });
+    drawStream();
+    // Only a stale state the stream set is cleared: another banner stays.
+    const page = livePage?.into;
+    if (was && page?.isConnected && page.querySelector(':scope > .state[data-banner][data-state="stale"]')) livePage.show(null);
+    return;
+  }
+  // The status the page shows and an applied reload, for screens to follow.
+  // The To do count is not in a status frame, so refreshCounts() is not run here.
+  if (frame.event !== 'status' && frame.event !== 'reload') return;
+  let detail;
+  try {
+    detail = JSON.parse(frame.data);
+  } catch {
+    return;
+  }
+  dispatchEvent(new CustomEvent(`gateway-${frame.event}`, { detail }));
+}
+
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   const epoch = authEpoch;
@@ -1486,6 +1617,7 @@ async function signOut() {
  * storage, a cookie or the URL), so a reload asks for it again.
  */
 function showSignIn() {
+  closeStream();
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
   paletteEl?.close(); // a modal palette would keep the key field inert
@@ -1579,6 +1711,7 @@ async function signIn(ev) {
   document.body.classList.remove('signed-out');
   showWho(auth);
   render();
+  openStream(); // a new identity: its own stream, with its own credentials
   refreshCounts();
   document.getElementById('content').focus({ preventScroll: true });
 }
@@ -1646,11 +1779,16 @@ function boot() {
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
   for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
+  addEventListener('pagehide', closeStream);
+  addEventListener('pageshow', (ev) => {
+    if (ev.persisted && !document.body.classList.contains('signed-out')) openStream();
+  });
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
   });
   render();
+  openStream();
   // The other screens load once the first paint is out, when the browser is idle,
   // so the palette lists their actions and settings and a later visit is instant.
   // Without paint timing they load after this first render instead; either way
