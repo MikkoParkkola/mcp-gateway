@@ -123,7 +123,9 @@ impl Sink for Calls {
                     .iter()
                     .map(|s| s.ident.to_string())
                     .collect();
-                if let Some(last) = segs.last() {
+                // A capitalised last segment is a tuple struct or variant
+                // being built (`ServerOf::Backend(server)`), not a call.
+                if let Some(last) = segs.last().filter(|s| !s.starts_with(char::is_uppercase)) {
                     self.by_fn.entry(key(at)).or_default().insert(last.clone());
                 }
                 if segs.ends_with(&["Firewall".to_string(), "from_config".to_string()]) {
