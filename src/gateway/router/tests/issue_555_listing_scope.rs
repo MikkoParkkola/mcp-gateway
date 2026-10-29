@@ -228,7 +228,7 @@ pub(super) enum Auth {
 pub(super) struct Fixture {
     pub(super) router: axum::Router,
     pub(super) state: Arc<crate::gateway::router::AppState>,
-    pub(super) store: tempfile::TempDir,
+    pub(super) store: crate::gateway::router::tests::FixtureDir,
     pub(super) caps: tempfile::TempDir,
 }
 

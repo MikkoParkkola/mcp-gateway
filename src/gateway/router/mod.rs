@@ -175,6 +175,8 @@ mod meta_fingerprint_tests;
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
+mod overview_sources_tests;
+#[cfg(all(test, feature = "webui"))]
 mod overview_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]

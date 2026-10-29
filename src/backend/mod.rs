@@ -109,6 +109,10 @@ pub struct Backend {
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
     runtime_plan: Option<RuntimePlan>,
+    /// Runs of `server_state`, so a row can prove how many backends the
+    /// Overview evaluated.
+    #[cfg(all(test, feature = "webui"))]
+    server_state_evaluations: std::sync::atomic::AtomicUsize,
     /// Per-identity transport/session pool (MIK-6735). Always holds the
     /// canonical [`PoolKey::Shared`] slot; gains one [`PoolKey::PerUser`] slot
     /// per caller identity when identity propagation is configured, whatever
