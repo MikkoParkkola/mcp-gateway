@@ -348,6 +348,19 @@ impl<'a> Stream<'a> {
         Ok(self.result)
     }
 
+    /// Parse one line, and note a signature on it before any check can
+    /// reject the entry, so a failed chain still reports it.
+    fn read_entry(&mut self, raw: &str, file: &Path, ln: usize) -> io::Result<Value> {
+        let entry: Value = serde_json::from_str(raw.trim()).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: line {}: invalid JSON: {e}", file.display(), ln + 1),
+            )
+        })?;
+        self.result.signed_entry_seen |= is_signed_entry(&entry);
+        Ok(entry)
+    }
+
     fn stream(&mut self, files: &[(Option<u64>, PathBuf)]) -> io::Result<Verdict> {
         let newest_sealed = files.iter().filter_map(|(s, _)| *s).next_back();
         // The previous file: its segment, path, and the seal it ended with.
@@ -367,13 +380,7 @@ impl<'a> Stream<'a> {
             let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
             let mut sealed_here: Option<u64> = None;
             for (ln, raw) in content.lines().filter(|l| !l.trim().is_empty()).enumerate() {
-                let entry: Value = serde_json::from_str(raw.trim()).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("{}: line {}: invalid JSON: {e}", file.display(), ln + 1),
-                    )
-                })?;
-                self.result.signed_entry_seen |= is_signed_entry(&entry);
+                let entry = self.read_entry(raw, file, ln)?;
                 let counter =
                     field_u64(&entry, "counter").ok_or_else(|| missing(ln + 1, "counter"))?;
                 if let Some(next) = sealed_here {
