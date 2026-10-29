@@ -547,3 +547,6 @@ fn a_field_after_a_sequence_or_a_collection_key_is_editable() {
 fn an_unused_anchor_on_the_value_is_unprovable() {
     assert_unprovable("a: &x 5\n", &[set_int("a", 6)]);
 }
+
+#[path = "config_persistence_keyedit_a2_tests.rs"]
+mod a2;
