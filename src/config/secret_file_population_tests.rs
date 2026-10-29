@@ -374,18 +374,30 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Files whose non-test code has a raw read or write. The body is cut at the
-/// first inline `#[cfg(test)] mod name {`, not at any `#[cfg(test)]` item: a
-/// test-only `use` or constant near the top must not hide the production reads
-/// after it. Comment lines are skipped.
-fn population(root: &Path) -> BTreeSet<String> {
-    let raw = regex::Regex::new(
-        r"fs::read\b|read_to_string|File::open|OpenOptions::new|fs::write|fs::copy|from_pem",
-    )
-    .expect("pattern");
-    let inline_test_mod =
+/// Whether a source file's non-test code has a raw read or write. The body
+/// is cut at the first inline `#[cfg(test)] mod name {`, not at any
+/// `#[cfg(test)]` item: a test-only `use` or constant near the top must not
+/// hide the production reads after it. Comment lines are skipped.
+fn has_raw_io(text: &str) -> bool {
+    static RAW: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"fs::read\b|read_to_string|File::open|OpenOptions::new|fs::write|fs::copy|from_pem",
+        )
+        .expect("pattern")
+    });
+    static INLINE_TEST_MOD: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub\s*(?:\([^)]*\))?\s*)?mod\s+\w+\s*\{")
-            .expect("pattern");
+            .expect("pattern")
+    });
+    let body = INLINE_TEST_MOD
+        .find(text)
+        .map_or(text, |m| &text[..m.start()]);
+    body.lines()
+        .any(|line| !line.trim_start().starts_with("//") && RAW.is_match(line))
+}
+
+/// Files whose non-test code has a raw read or write ([`has_raw_io`]).
+fn population(root: &Path) -> BTreeSet<String> {
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
     files
@@ -396,14 +408,48 @@ fn population(root: &Path) -> BTreeSet<String> {
                 return None;
             }
             let text = std::fs::read_to_string(&path).expect("read source");
-            let body = inline_test_mod
-                .find(&text)
-                .map_or(text.as_str(), |m| &text[..m.start()]);
-            body.lines()
-                .any(|line| !line.trim_start().starts_with("//") && raw.is_match(line))
-                .then(|| rel.to_string_lossy().replace('\\', "/"))
+            has_raw_io(&text).then(|| rel.to_string_lossy().replace('\\', "/"))
         })
         .collect()
+}
+
+/// A raw open placed after an early inline test module is production code
+/// and counts: the test module's own block is what is left out, not the
+/// rest of the file.
+#[test]
+fn a_raw_open_after_an_early_test_module_counts() {
+    let source = "\
+fn product() {}
+
+#[cfg(test)]
+pub(crate) mod seam {
+    pub(crate) fn hook() {}
+}
+
+pub fn reader(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+";
+    assert!(
+        has_raw_io(source),
+        "the open after the test module was not seen"
+    );
+}
+
+/// The test module's own raw I/O does not count.
+#[test]
+fn raw_io_inside_an_inline_test_module_does_not_count() {
+    let source = "\
+fn product() {}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() -> String {
+        std::fs::read_to_string(\"x\").unwrap()
+    }
+}
+";
+    assert!(!has_raw_io(source));
 }
 
 #[test]
