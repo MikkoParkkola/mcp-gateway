@@ -122,12 +122,12 @@ async fn peer(
     let hang = Arc::new(Hang::default());
     let counted = Arc::clone(&sends);
     let switch = Arc::clone(&armed);
-    let hung = Arc::clone(&hang);
+    let holder = Arc::clone(&hang);
     let app = axum::Router::new().fallback(
         move |_headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
             let switch = Arc::clone(&switch);
-            let hung = Arc::clone(&hung);
+            let holder = Arc::clone(&holder);
             async move {
                 take_census();
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -139,8 +139,8 @@ async fn peer(
                             return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
                         }
                         Peer::Hangs if method == "tools/call" => {
-                            let _released = Released(Arc::clone(&hung));
-                            hung.arrived.notify_one();
+                            let _released = Released(Arc::clone(&holder));
+                            holder.arrived.notify_one();
                             std::future::pending::<()>().await;
                         }
                         Peer::Answers | Peer::Hangs => {}
