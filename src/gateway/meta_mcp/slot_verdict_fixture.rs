@@ -8,6 +8,7 @@
 //! "dispatched, then answered the same way" (O2). Kept apart from
 //! `withheld_catalogue_tests.rs`, which #3807 is still changing.
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -175,7 +176,7 @@ pub(crate) struct PerUser {
     /// The shared upstream.
     pub(crate) shared: Arc<Asked>,
     pub(crate) mints: Arc<AtomicUsize>,
-    _audit: tempfile::NamedTempFile,
+    _audit: TempLog,
 }
 
 impl PerUser {
@@ -344,7 +345,7 @@ pub(crate) fn per_user_on(
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend), "fixture registration");
     let mut meta = MetaMcp::new(registry).with_surfaced_tools(surfaced.configs());
-    let audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let audit = TempLog::new();
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {

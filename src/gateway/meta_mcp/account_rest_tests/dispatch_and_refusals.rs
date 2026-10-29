@@ -19,7 +19,7 @@ async fn alice_and_bob_receive_their_own_account_credentials_from_one_rest_capab
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -64,7 +64,7 @@ async fn a_request_with_no_verified_identity_refuses_before_http() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -121,7 +121,7 @@ async fn a_revoked_grant_refuses_before_http() {
         .await
         .expect("revocation must be applied");
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(&base_url(port), "oauth:google", Some(WORK)),
@@ -149,7 +149,7 @@ async fn a_revoked_grant_refuses_before_http() {
 async fn an_unknown_account_reference_is_refused_at_registration() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
 
     // `.err().expect(..)` rather than `expect_err`: the Ok half is a production
     // backend that deliberately carries no `Debug`.
@@ -178,7 +178,7 @@ async fn a_provider_mismatch_is_refused_at_registration_and_at_execution() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let mismatched = capability(&base_url(port), "oauth:slack", Some(WORK));
 
     let registration = backend_with(&registry, mismatched.clone())
@@ -218,7 +218,7 @@ async fn a_shared_descriptor_keeps_the_legacy_gateway_held_token() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(PERSONAL, shared(PERSONAL))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(PERSONAL, shared(PERSONAL))], &installed);
 
     let dir = tempfile::tempdir().expect("tempdir");
     let storage = Arc::new(
@@ -273,7 +273,7 @@ async fn an_external_descriptor_and_a_managed_one_coexist_without_substitution()
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(
+    let (_log, _meta, registry) = installed_gateway(
         &[(WORK, managed(WORK)), (PERSONAL, external(PERSONAL))],
         &installed,
     );
@@ -337,7 +337,7 @@ async fn an_external_descriptor_and_a_managed_one_coexist_without_substitution()
 async fn meta_mcp_capability_dispatch_carries_the_verified_identity_to_the_account_boundary() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let backend = backend_with(
         &registry,
         capability(UNROUTABLE, "oauth:google", Some(WORK)),

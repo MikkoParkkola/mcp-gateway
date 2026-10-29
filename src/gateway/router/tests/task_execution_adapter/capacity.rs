@@ -37,7 +37,9 @@ use super::support::*;
 /// `max_workers = 1` is the barrier: with a single permit, a held dispatch means
 /// the executor is provably saturated for the duration of the hold, and every
 /// row below observes a real refusal rather than a contrived one.
-async fn saturated_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn saturated_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut config = crate::config::Config::default();
     config.tasks.max_workers = 1;
     let (state, store) =
