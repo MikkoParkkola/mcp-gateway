@@ -402,3 +402,19 @@ fn a_comment_only_file_takes_an_insert() {
         "# template\na:\n  b: 1\n"
     );
 }
+
+#[test]
+fn a_comment_only_file_without_a_final_newline_takes_an_insert() {
+    assert_eq!(
+        edited("# template", &[set_int("a.b", 1)]),
+        "# template\na:\n  b: 1"
+    );
+}
+
+#[test]
+fn a_crlf_file_with_an_unterminated_last_line_takes_an_insert() {
+    assert_eq!(
+        edited("a: 1\r\nb: 2", &[set_int("c", 3)]),
+        "a: 1\r\nb: 2\r\nc: 3"
+    );
+}

@@ -570,3 +570,7 @@ pub(super) fn drop_emptied(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "config_persistence_keyedit_shape_tests.rs"]
+mod tests;
