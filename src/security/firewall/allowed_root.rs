@@ -90,6 +90,8 @@ pub(crate) struct Seams {
     pub(crate) clock: Option<Arc<dyn Clock>>,
     /// Resolver threads this firewall owns instead of the process pool.
     pub(crate) pool: Option<usize>,
+    /// That pool, created on the firewall's first check.
+    pub(crate) own_pool: std::sync::OnceLock<Arc<resolve::Pool>>,
 }
 
 #[cfg(test)]
@@ -183,40 +185,94 @@ pub(crate) struct RootOutcome {
 mod check;
 pub(crate) use check::{apply_roots, root_check};
 
-/// Is `value` inside one of `roots`? Both sides canonical, compared by
-/// component; a missing remainder resolves through its deepest existing
-/// ancestor. Minimal form: the shared pool, deadline and look-alike check
-/// replace it in the next commit.
-fn judge(
-    _firewall: &super::Firewall,
-    roots: &[Option<std::path::PathBuf>],
-    value: &str,
-) -> Result<bool, RootReason> {
-    let mut canonical_roots = Vec::new();
-    for root in roots {
-        let root = root.as_ref().ok_or(RootReason::RootUnresolvable)?;
-        canonical_roots
-            .push(std::fs::canonicalize(root).map_err(|_| RootReason::RootUnresolvable)?);
+#[path = "allowed_root_resolve.rs"]
+mod resolve;
+
+/// One declared argument's values, to judge against its rule's roots.
+pub(crate) struct Item {
+    pub(crate) roots: Vec<Option<std::path::PathBuf>>,
+    pub(crate) values: Vec<String>,
+}
+
+/// A refusal that names no argument: the pool was full or the call's
+/// deadline passed.
+pub(crate) const NO_ARGUMENT: usize = usize::MAX;
+
+/// Judges one call's items on one resolver slot within one deadline. `Ok`
+/// holds, per item, whether every value is inside a root; `Err` the item it
+/// was refused on (or [`NO_ARGUMENT`]) and why.
+fn judge(firewall: &super::Firewall, items: Vec<Item>) -> Result<Vec<bool>, (usize, RootReason)> {
+    if items.is_empty() {
+        return Ok(Vec::new());
     }
-    let path = std::path::Path::new(value);
-    let mut existing = path;
-    let mut rest = Vec::new();
-    let resolved = loop {
-        match std::fs::canonicalize(existing) {
-            Ok(prefix) => break rest.iter().rev().fold(prefix, |p, c| p.join(c)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
-                    return Err(RootReason::Unresolvable);
-                };
-                rest.push(name);
-                existing = parent;
-            }
-            Err(_) => return Err(RootReason::Unresolvable),
-        }
+    let (io, clock, pool) = seams_of(firewall);
+    let deadline = clock.now() + ROOT_CHECK_DEADLINE;
+    let work = move || {
+        let mut walk = resolve::Walk::new(&*io, &*clock, deadline);
+        judge_items(&mut walk, &items)
     };
-    Ok(canonical_roots
-        .iter()
-        .any(|root| resolved.starts_with(root)))
+    let Some(answer) = pool.run(work) else {
+        return Err((NO_ARGUMENT, RootReason::ResolverBusy));
+    };
+    resolve::wait(&answer, ROOT_CHECK_DEADLINE).unwrap_or(Err((NO_ARGUMENT, RootReason::Timeout)))
+}
+
+fn judge_items(
+    walk: &mut resolve::Walk<'_>,
+    items: &[Item],
+) -> Result<Vec<bool>, (usize, RootReason)> {
+    let mut inside = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let at = |reason| (i, reason);
+        let mut roots = Vec::with_capacity(item.roots.len());
+        for root in &item.roots {
+            let root = root.as_ref().ok_or(at(RootReason::RootUnresolvable))?;
+            roots.push(walk.root(root).map_err(at)?);
+        }
+        let mut all = true;
+        for value in &item.values {
+            let resolved = walk.resolve(std::path::Path::new(value)).map_err(at)?;
+            if !roots.iter().any(|root| resolved.starts_with(root)) {
+                all = false;
+                break;
+            }
+        }
+        inside.push(all);
+    }
+    Ok(inside)
+}
+
+type Io = (Arc<dyn Resolve>, Arc<dyn Clock>, Arc<resolve::Pool>);
+
+/// The filesystem, clock and pool this firewall's checks use.
+#[cfg(not(test))]
+fn seams_of(_firewall: &super::Firewall) -> Io {
+    (
+        Arc::new(resolve::Real),
+        Arc::new(resolve::System),
+        resolve::Pool::shared(),
+    )
+}
+
+/// Under test each firewall owns its pool, so rows never share slots, and
+/// its seams replace the filesystem and the clock.
+#[cfg(test)]
+fn seams_of(firewall: &super::Firewall) -> Io {
+    let seams = &firewall.seams;
+    let pool = seams
+        .own_pool
+        .get_or_init(|| resolve::Pool::new(seams.pool.unwrap_or(RESOLVER_THREADS)));
+    (
+        seams
+            .resolver
+            .clone()
+            .unwrap_or_else(|| Arc::new(resolve::Real)),
+        seams
+            .clock
+            .clone()
+            .unwrap_or_else(|| Arc::new(resolve::System)),
+        Arc::clone(pool),
+    )
 }
 
 /// Argument names the suggester treats as paths (design section 7).

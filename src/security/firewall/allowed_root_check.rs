@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::super::verdict::{candidate_keys, rule_applies};
 use super::super::{Finding, FindingLocation, FirewallAction, ScanType};
-use super::{CompiledRoot, PathArg, RootOutcome, RootReason, RootRefusal, precheck};
+use super::{CompiledRoot, Item, PathArg, RootOutcome, RootReason, RootRefusal, precheck};
 use crate::security::Severity;
 use crate::security::response_policy::{RuleTarget, ServerOf};
 
@@ -44,7 +44,10 @@ pub(crate) fn root_check(
     if let Err(reason) = classify(firewall, server, backend) {
         return refuse(first.root, None, reason);
     }
-    let mut findings = Vec::new();
+    // Every value of every covering rule is extracted and prechecked first,
+    // then judged together: one resolver slot and one deadline per call.
+    let mut items = Vec::new();
+    let mut owners = Vec::new();
     for rule in &covering {
         let Some(args_of_rule) = &rule.root.args else {
             return refuse(rule.root, None, RootReason::RootUnresolvable);
@@ -55,22 +58,34 @@ pub(crate) fn root_check(
                 Ok(values) => values,
                 Err(reason) => return refuse(rule.root, Some(&name), reason),
             };
-            for value in values {
-                if let Some(reason) = precheck(value) {
-                    return refuse(rule.root, Some(&name), reason);
-                }
-                match super::judge(firewall, &rule.root.roots, value) {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        let finding = outside_finding(rule.root, &name);
-                        findings.push((finding, rule.action));
-                        break;
-                    }
-                    Err(reason) => return refuse(rule.root, Some(&name), reason),
-                }
+            if let Some(reason) = values.iter().find_map(|v| precheck(v)) {
+                return refuse(rule.root, Some(&name), reason);
             }
+            if values.is_empty() {
+                continue;
+            }
+            items.push(Item {
+                roots: rule.root.roots.clone(),
+                values: values.into_iter().map(str::to_string).collect(),
+            });
+            owners.push((rule, name));
         }
     }
+    let inside = match super::judge(firewall, items) {
+        Ok(inside) => inside,
+        Err((at, reason)) => {
+            let (rule, name) = owners
+                .get(at)
+                .map_or((first, None), |(r, n)| (*r, Some(n.as_str())));
+            return refuse(rule.root, name, reason);
+        }
+    };
+    let findings = owners
+        .iter()
+        .zip(inside)
+        .filter(|(_, inside)| !inside)
+        .map(|((rule, name), _)| (outside_finding(rule.root, name), rule.action))
+        .collect();
     RootOutcome {
         forced: None,
         findings,
