@@ -354,8 +354,16 @@ const CHILD_ENV: &str = "MCPGW_ALLOC_METER_CHILD";
 /// matched zero tests exits 0, and the parent would go green on a test that
 /// never ran — a case that can never fail is not a test.
 pub(crate) fn isolate(test_path: &str) -> bool {
+    isolate_reporting(test_path).is_some()
+}
+
+/// [`isolate`], handing the parent the child's stdout: `Some(stdout)` in the
+/// parent after the child passed, `None` in the child. A measurement row
+/// prints its numbers in the child and the parent echoes them, so they reach
+/// the run's log.
+pub(crate) fn isolate_reporting(test_path: &str) -> Option<String> {
     if std::env::var_os(CHILD_ENV).is_some() {
-        return false;
+        return None;
     }
     let exe = std::env::current_exe().expect("the running test binary must be locatable");
     let output = std::process::Command::new(exe)
@@ -373,7 +381,7 @@ pub(crate) fn isolate(test_path: &str) -> bool {
         stdout.contains("1 passed"),
         "isolated child for {test_path} did not run exactly one test\n--- child stdout ---\n{stdout}"
     );
-    true
+    Some(stdout)
 }
 
 /// Clears the process-wide flag on every exit, an unwind included.
