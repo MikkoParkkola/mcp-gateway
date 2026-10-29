@@ -234,7 +234,9 @@ impl Lines {
     /// value.
     pub(super) fn bytes_hold(&self, original: &str) -> bool {
         let orig: Vec<&str> = original.split_inclusive('\n').collect();
-        let split = |s: &str| s.split_at(s.trim_end_matches(['\n', '\r']).len());
+        fn split(s: &str) -> (&str, &str) {
+            s.split_at(s.trim_end_matches(['\n', '\r']).len())
+        }
         let mut last: Option<usize> = None;
         let count = self.lines.len();
         self.lines.iter().enumerate().all(|(n, (text, origin))| {
