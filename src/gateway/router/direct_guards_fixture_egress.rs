@@ -26,7 +26,7 @@ thread_local! {
 }
 
 /// The rule for each backend tool, scoped to the cell's API keys.
-/// `send_message` is the A2A backend's one tool (MIK-8139).
+/// `send_message` is the A2A backend's one tool.
 #[cfg(feature = "firewall")]
 pub(super) fn firewall_rules(
     action: crate::security::firewall::FirewallAction,
