@@ -404,6 +404,7 @@ fn settled(
     record.error_author = None;
     if targets.pre_send == crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
         && (fails || completes)
+        && keep_provenance(&task, &mut record)
     {
         record.error_author = Some(ErrorAuthor::Gateway);
         record.version = record.version.max(ERROR_AUTHOR_VERSION);

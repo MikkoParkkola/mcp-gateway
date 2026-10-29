@@ -91,13 +91,14 @@ async fn a_sent_plan_step_records_its_target() {
 #[tokio::test]
 async fn a_refused_single_call_settles_as_the_gateways_answer() {
     let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
+    let (state, store) = state_with(&mock).await;
     let withheld = Arc::clone(&state);
     crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
         withhold(&withheld, TOOL);
     });
     let created = post(&state, "key-a", task_invoke(1, "refused-single", json!({}))).await;
-    let row = settled_row(&state, &task_id(&created)).await;
+    let id = task_id(&created);
+    let row = settled_row(&state, &id).await;
     std::assert_eq!(mock.calls(), 0, "premise: nothing sent");
     std::assert_eq!(
         row.error_author,
@@ -108,6 +109,13 @@ async fn a_refused_single_call_settles_as_the_gateways_answer() {
         row.backend_result().is_none() && row.backend_error().is_none(),
         "the gateway's answer is not backend output"
     );
+    // On disk: a row this release creates is version 9 and stays so; the
+    // author needs version 6 or later, so no rollback boundary moves.
+    let file = store.path().join("tasks").join(format!("{id}.json"));
+    let value: Value = serde_json::from_slice(&std::fs::read(&file).expect("the row's file"))
+        .expect("the row is JSON");
+    std::assert_eq!(value["version"], json!(9), "{value}");
+    std::assert_eq!(value["errorAuthor"], json!("gateway"), "{value}");
 }
 
 /// Control: the same call, nothing withheld, keeps the backend's result.
