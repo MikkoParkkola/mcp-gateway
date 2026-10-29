@@ -492,9 +492,10 @@ impl Egressed {
     }
 }
 
-/// The targets a stored task is judged under: the calls that produced it, so
-/// a rule on the original tool governs every later read; the gateway's task
-/// read when the row recorded none.
+/// The targets a stored task is judged under: the calls planned or attempted
+/// for it (`Record::targets`, never proof that a backend ran), so a rule on
+/// the original tool governs every later read; the gateway's task read when
+/// the row recorded none.
 fn stored_targets(task: &crate::gateway::task_service::CommittedTask) -> Vec<ResponsePolicyTarget> {
     let recorded: Vec<_> = task
         .targets

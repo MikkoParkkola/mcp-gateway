@@ -516,7 +516,7 @@ pub(super) fn fallback_bytes(task: &Task, record: &Record) -> Result<usize, Stor
 /// Before a row is raised past [`TARGET_VERSION`], its calls must be stored on
 /// it: a legacy row names them only through its upstream descriptor, which a
 /// current version no longer consults, so raising it bare would read as
-/// "dispatched nothing" and skip the delivery check. `false` when a legacy row
+/// "nothing planned or attempted" and skip the delivery check. `false` when a legacy row
 /// has no call to keep: its authorship is then not recorded (fail closed).
 pub(super) fn keep_provenance(task: &crate::protocol::tasks::Task, record: &mut Record) -> bool {
     if record.version >= TARGET_VERSION {

@@ -264,10 +264,14 @@ pub(super) struct AdmissionRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Record {
     pub(super) version: u32,
-    /// Gateway-internal dispatch marker. Serialized even when false so a current
-    /// never-dispatched row is distinguishable from a legacy row that could not
-    /// record the fact. Absent on v1; `#[serde(default)]` loads that as false
-    /// without inventing a field on disk.
+    /// Gateway-internal dispatch marker: the worker reached the dispatch
+    /// funnel, never that a backend ran (a call the gateway refuses at its
+    /// gate settles on a dispatched row). Whether the row holds backend output
+    /// is said by `CommittedTask::backend_result` and `backend_error`.
+    /// Serialized even when false so a current never-dispatched row is
+    /// distinguishable from a legacy row that could not record the fact.
+    /// Absent on v1; `#[serde(default)]` loads that as false without
+    /// inventing a field on disk.
     #[serde(default)]
     pub(super) dispatched: bool,
     /// The durable upstream handle and its recovery descriptor. Absent on
@@ -285,9 +289,15 @@ pub(super) struct Record {
     /// with no round outstanding, so such a row serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) input_round: Option<InputRound>,
-    /// The backend calls this task made or will make, for re-authorizing a
-    /// stored result before it is delivered. Absent on rows written before
-    /// [`TARGET_VERSION`] and on rows that dispatched nothing.
+    /// The calls this task planned or attempted: a single call's, written at
+    /// creation; a plan's, merged at settlement from the steps it attempted.
+    /// A stored read re-checks access against each before it is delivered.
+    /// Never proof that a backend ran: a step refused before its backend stays
+    /// one, as attempted. Whether backend output is stored is said by
+    /// `CommittedTask::backend_result` and `backend_error`; a plan's record of
+    /// the steps a backend ran is its relay replay entry. Absent on rows
+    /// written before [`TARGET_VERSION`] and on a row with nothing planned or
+    /// attempted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) targets: Vec<Target>,
     /// Set when the row settled as the gateway's own bounded failure because
@@ -494,13 +504,14 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
-    /// The calls that produced this snapshot's result. A legacy row recorded
-    /// none; its one call is recovered from its upstream descriptor when it has
-    /// a consistent one, and is otherwise not known (empty).
+    /// The calls planned or attempted for this snapshot (`Record::targets`:
+    /// never proof that a backend ran). A legacy row recorded none; its one
+    /// call is recovered from its upstream descriptor when it has a
+    /// consistent one, and is otherwise not known (empty).
     pub(crate) targets: Vec<Target>,
     /// Whether the row was written by a gateway that records targets. An empty
-    /// list on such a row means nothing was dispatched; on an older row it
-    /// means the provenance is unavailable.
+    /// list on such a row means nothing was planned or attempted; on an older
+    /// row it means the provenance is unavailable.
     pub(crate) targets_recorded: bool,
     /// The row holds only the gateway's own bounded failure, no backend output.
     pub(crate) output_free: bool,
