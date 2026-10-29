@@ -507,7 +507,7 @@ fn placeholder(id: &SlotId) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-') {
             out.push(char::from(byte));
         } else {
-            out.push_str(&format!("~{byte:02x}"));
+            std::fmt::Write::write_fmt(&mut out, format_args!("~{byte:02x}")).ok();
         }
     }
     out.push_str("__");
