@@ -599,6 +599,7 @@ async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
 }
 
 #[cfg(test)]
+mod public_headers;
 mod resolution;
 
 /// The real mint attaches the per-send check, and the credential it lends
