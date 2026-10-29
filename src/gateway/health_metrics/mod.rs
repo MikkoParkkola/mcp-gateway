@@ -10,6 +10,10 @@ pub(crate) mod process;
 
 #[cfg(test)]
 mod classify_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod latency_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod process_tests;
 
 /// Help text for every health metric a recorder holds.
 #[cfg(feature = "metrics")]

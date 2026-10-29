@@ -176,6 +176,8 @@ mod mcp_nonce_witness_tests;
 mod mcp_refusal_kind_tests; // MIK-8353 3d-1: refusal kinds on the invoke path
 #[cfg(test)]
 mod meta_fingerprint_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod metrics_scrape_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;

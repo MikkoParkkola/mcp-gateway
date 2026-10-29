@@ -63,7 +63,7 @@ pub(crate) fn resident_memory_exposition() -> String {
 
 /// [`resident_memory_exposition`] reading `statm` at `path`, pages of `page` bytes.
 #[cfg(any(target_os = "linux", test))]
-fn exposition_from(path: &std::path::Path, page: u64) -> String {
+pub(super) fn exposition_from(path: &std::path::Path, page: u64) -> String {
     std::fs::read_to_string(path)
         .ok()
         .and_then(|text| resident_bytes(&text, page))
@@ -76,7 +76,7 @@ fn exposition_from(path: &std::path::Path, page: u64) -> String {
 
 /// The second field of a `statm` line (resident pages) times the page size.
 #[cfg(any(target_os = "linux", test))]
-fn resident_bytes(statm: &str, page: u64) -> Option<u64> {
+pub(super) fn resident_bytes(statm: &str, page: u64) -> Option<u64> {
     statm
         .split_whitespace()
         .nth(1)?
