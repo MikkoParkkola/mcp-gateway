@@ -136,8 +136,10 @@ async fn the_direct_route_applies_a_header_rule() {
 /// read fails the row: an unread store must not pass as a clean one. The one
 /// exception is a lock sidecar the live store holds: Windows refuses to read
 /// a file another handle has locked (`fs_lock::ExclusiveFileLock` is
-/// `LockFileEx` there). Every `fs_lock` sidecar in this crate is named
-/// `*.lock` and no store's data file is, so the skip is keyed on that name.
+/// `LockFileEx` there). The skip is keyed on the sidecars' names: every
+/// `fs_lock` lock file is `*.lock`, and the task store's lease is
+/// `store.lease` (task_service/store.rs, custody state, never a record); no
+/// store's data file has either name.
 #[cfg(feature = "firewall")]
 fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
@@ -156,15 +158,15 @@ fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     files
 }
 
-/// Whether `error` is Windows' lock violation (os error 33) on a `*.lock`
-/// sidecar.
+/// Whether `error` is Windows' lock violation (os error 33) on a lock
+/// sidecar: a `*.lock` file or the task store's `store.lease`.
 #[cfg(feature = "firewall")]
 fn locked_sidecar(path: &std::path::Path, error: &std::io::Error) -> bool {
-    cfg!(windows)
-        && error.raw_os_error() == Some(33)
-        && path
-            .extension()
-            .is_some_and(|extension| extension == "lock")
+    let sidecar = path
+        .extension()
+        .is_some_and(|extension| extension == "lock")
+        || path.file_name().is_some_and(|name| name == "store.lease");
+    cfg!(windows) && error.raw_os_error() == Some(33) && sidecar
 }
 
 /// Whether `bytes` holds `text`.
