@@ -694,3 +694,35 @@ async fn a_reference_longer_than_the_bound_is_refused_and_removed() {
     assert_eq!(read(&path), START);
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
+
+/// Two secrets for one field match one slot as sets but not as lists: the
+/// second entry would be named by no field, so the save is refused before
+/// any entry exists.
+#[tokio::test]
+async fn two_secrets_for_one_field_are_refused_before_any_entry() {
+    let (dir, path, ctx) = setup();
+    let creates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let store = Counting {
+        inner: FilesStore::new(dir.path()),
+        creates: Arc::clone(&creates),
+    };
+    let mut twice = step(dir.path(), Arc::new(store));
+    twice.values.push(NewSecretOwned {
+        field: "backends.b.env.K".to_owned(),
+        value: WipedBytes::new(VALUE.to_vec()),
+    });
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(|_| Ok(with_slot())),
+        replaced: Replaced::Discard,
+        secrets: Some(twice),
+    };
+
+    let failure = replace_detached(ctx, save, WAIT)
+        .await
+        .expect_err("refused");
+
+    assert!(matches!(failure, ReplaceError::Refused(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    assert_eq!(creates.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
