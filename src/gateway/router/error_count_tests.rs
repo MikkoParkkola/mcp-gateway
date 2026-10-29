@@ -264,6 +264,32 @@ fn an_answer_through_both_rpc_http_and_the_judge_counts_once() {
     assert_eq!(all(&text), [0, 0, 0, 1]);
 }
 
+/// A backend answering with its own `-32000`, forwarded verbatim: the
+/// backend's error whatever its code.
+#[test]
+fn a_forwarded_backend_minus_32000_counts_as_backend() {
+    let ((), text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32000), |_| {}).await;
+        post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await;
+    });
+    assert_eq!(all(&text), [0, 0, 0, 1]);
+}
+
+/// The gateway reports an unavailable backend with the same `-32000` its own
+/// throttles use; the error's variant, not the code, makes it the backend's.
+#[test]
+fn an_unavailable_backend_counts_as_backend() {
+    let ((), text) = counted(async {
+        let fx = fixture(
+            Answer::FailsWith(|| crate::Error::BackendUnavailable("alpha".to_string())),
+            |_| {},
+        )
+        .await;
+        post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await;
+    });
+    assert_eq!(all(&text), [0, 0, 0, 1]);
+}
+
 #[test]
 fn a_backend_timeout_counts_as_backend_not_internal() {
     let (_, text) = counted(async {

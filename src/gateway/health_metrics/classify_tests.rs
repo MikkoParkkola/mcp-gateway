@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The error-kind decision order: first match wins, so an answer whose
-//! status and code point at different kinds still gets exactly one.
+//! status and code point at different kinds still gets exactly one. The
+//! origin decides `backend`; the code `-32000` alone decides nothing.
 
 use super::{ErrorKind, Origin, RpcError, error_kind};
 
@@ -9,6 +10,13 @@ const fn gateway(code: i32) -> RpcError {
     RpcError {
         code,
         origin: Origin::Gateway,
+    }
+}
+
+const fn failure(code: i32) -> RpcError {
+    RpcError {
+        code,
+        origin: Origin::BackendFailure,
     }
 }
 
@@ -21,13 +29,25 @@ const fn backend(code: i32) -> RpcError {
 
 #[test]
 fn each_answer_gets_the_first_kind_that_matches() {
-    let rows: [(&str, u16, Option<RpcError>, Option<ErrorKind>); 16] = [
+    let rows: [(&str, u16, Option<RpcError>, Option<ErrorKind>); 19] = [
         ("success", 200, None, None),
         ("accepted notification", 202, None, None),
         (
             "backend failure the gateway reports",
             200,
+            Some(failure(-32000)),
+            Some(ErrorKind::Backend),
+        ),
+        (
+            "the gateway's own -32000, a throttle",
+            200,
             Some(gateway(-32000)),
+            Some(ErrorKind::Request),
+        ),
+        (
+            "a forwarded -32000",
+            200,
+            Some(backend(-32000)),
             Some(ErrorKind::Backend),
         ),
         (
@@ -43,10 +63,16 @@ fn each_answer_gets_the_first_kind_that_matches() {
             Some(ErrorKind::Backend),
         ),
         (
-            "503 carrying -32000",
+            "503 carrying a backend failure",
+            503,
+            Some(failure(-32000)),
+            Some(ErrorKind::Backend),
+        ),
+        (
+            "503 carrying the gateway's own -32000",
             503,
             Some(gateway(-32000)),
-            Some(ErrorKind::Backend),
+            Some(ErrorKind::Internal),
         ),
         ("no credential", 401, None, Some(ErrorKind::Auth)),
         (
