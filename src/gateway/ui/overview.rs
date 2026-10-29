@@ -31,13 +31,16 @@ use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
-use super::{admin_auth_required, is_admin, uptime_secs};
+use super::{admin_auth_required, is_admin};
 use crate::backend::Backend;
 use crate::config_reload::refusals::{Refusal, RefusalCode, RefusalKind, startup_refusal};
 use crate::counters::{CounterStore, Filter, Metric, Query, Window};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
-use crate::security::transparency_log::pager::{Tail, lines_newest_first, tail_window};
+use crate::security::transparency_log::pager::{
+    Tail, lines_newest_first, open_segment, tail_window_in,
+};
+use crate::security::transparency_log::segments::listing;
 
 /// Server rows shown; the rest fold into `servers.more`.
 const SERVER_ROWS: usize = 24;
@@ -169,7 +172,7 @@ fn kpi_and_servers(
         up.values().filter(|up| **up).count().into(),
     );
     kpi.insert("tools_total".into(), tools.into());
-    kpi.insert("uptime_secs".into(), uptime_secs().into());
+    kpi.insert("uptime_secs".into(), state.process.uptime_secs().into());
     kpi.insert("version".into(), env!("CARGO_PKG_VERSION").into());
     (kpi, server_list(source, &backends, &up, at), denied)
 }
@@ -522,19 +525,35 @@ fn limit_rows(_state: &AppState) -> Vec<Value> {
 /// rotated-out segment behind it. Otherwise an action may exist that was not
 /// read.
 fn last_actions(path: &std::path::Path) -> io::Result<Value> {
-    let mut end = match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => meta.len(),
-        // A directory reports length 0 on Windows and would read as an empty
-        // log; anything but a regular file is a log that cannot be read.
-        Ok(_) => return Err(io::Error::other("transparency log is not a file")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
-        Err(error) => return Err(error),
+    // The live segment, opened once: every window is read from this handle,
+    // so a rotation mid-read cannot hand later windows another file's bytes.
+    let files = listing(path)?;
+    let file = match files.active {
+        Some(seq) => open_segment(path, seq, || {})?,
+        None => None,
+    };
+    let mut end = match &file {
+        Some(file) => {
+            let meta = file.metadata()?;
+            // A directory reports length 0 on Windows and would read as an
+            // empty log; anything but a regular file cannot be read.
+            if !meta.is_file() {
+                return Err(io::Error::other("transparency log is not a file"));
+            }
+            meta.len()
+        }
+        // A log never written, or its live segment gone since it was listed:
+        // no rows from it, and not complete if anything is sealed behind it.
+        None => 0,
     };
     let mut scanned = 0u64;
     let mut skipped = false;
     let mut rows = Vec::new();
-    while end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES {
-        let (tail, window_len) = tail_window(path, end, ACTION_WINDOW_BYTES)?;
+    while let Some(file) = file
+        .as_ref()
+        .filter(|_| end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES)
+    {
+        let (tail, window_len) = tail_window_in(file, end, ACTION_WINDOW_BYTES)?;
         scanned += window_len;
         let Tail::Lines { start, .. } = &tail else {
             // One line longer than a window: skip past it rather than loop.
@@ -568,7 +587,7 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
         }
         end = *start;
     }
-    let rotated = !crate::security::transparency_log::segments::list_segments(path)?.is_empty();
+    let rotated = !files.sealed.is_empty();
     // A skipped line may have been a newer action than any row found, so any
     // skip makes the list incomplete, even with all five rows.
     let complete = !skipped && (rows.len() == ACTION_ROWS || (end == 0 && !rotated));
