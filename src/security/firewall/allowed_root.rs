@@ -484,6 +484,23 @@ pub(crate) fn warn_at_load(config: &crate::config::Config) {
     }
 }
 
+/// A rule on `tool` with `action` and every other field unset, for test
+/// fixtures that set one field on top.
+#[cfg(test)]
+pub(crate) fn plain_rule(tool: &str, action: FirewallAction) -> super::FirewallRule {
+    super::FirewallRule {
+        tool_match: tool.to_string(),
+        action,
+        reason: None,
+        scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
+        allowed_roots: None,
+        path_args: None,
+    }
+}
+
 #[cfg(test)]
 #[path = "allowed_root_tests.rs"]
 mod tests;

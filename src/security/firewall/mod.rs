@@ -30,6 +30,8 @@ use crate::transition::TransitionTracker;
 
 mod allowed_root;
 pub(crate) use allowed_root::ScanSubject;
+#[cfg(test)]
+pub(crate) use allowed_root::plain_rule;
 pub(crate) use allowed_root::warn_at_load as warn_folder_rules_at_load;
 pub mod anomaly;
 pub(crate) mod anomaly_config;
