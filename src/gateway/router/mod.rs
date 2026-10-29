@@ -13,7 +13,7 @@ use axum::{
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
-use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+use super::auth::{AuthState, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};

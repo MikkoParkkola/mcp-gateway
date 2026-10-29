@@ -30,7 +30,8 @@ fn redeem_body(
     }
     let request = request.body(Body::empty()).expect("request builds");
     let response =
-        try_dashboard_bootstrap(state, &request).expect("a bootstrap link is always answered here");
+        try_dashboard_bootstrap(state, &**state.live_config.generation().auth(), &request)
+            .expect("a bootstrap link is always answered here");
     let status = response.status();
     let body = futures::executor::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
         .expect("body");

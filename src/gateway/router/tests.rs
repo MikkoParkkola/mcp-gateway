@@ -387,7 +387,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
     let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
-        crate::config_reload::flags_off(config),
+        crate::config_reload::flags_off(config.clone()),
         Arc::clone(&auth_config),
     ));
     let subscriptions = test_subscriptions(&live_config, None, &agent_auth);

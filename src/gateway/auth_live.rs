@@ -342,10 +342,10 @@ fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
 /// current generation.
 pub(super) fn pinned_auth(
     request: &axum::http::Request<axum::body::Body>,
-) -> Result<Arc<super::ResolvedAuthConfig>, axum::response::Response> {
+) -> Result<std::sync::Arc<super::ResolvedAuthConfig>, axum::response::Response> {
     use axum::response::IntoResponse as _;
     crate::gateway::router::pinned_generation(request.extensions())
-        .map(|generation| Arc::clone(generation.auth()))
+        .map(|generation| std::sync::Arc::clone(generation.auth()))
         .ok_or_else(|| {
             (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
