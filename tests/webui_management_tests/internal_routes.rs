@@ -555,15 +555,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
-    // src/gateway/ui/decisions.rs (list_decisions; this fixture never starts
-    // the decision set, so the admin's answer is the 503 naming no source)
-    row(
-        "/ui/api/decisions",
-        Method::GET,
-        "/ui/api/decisions",
-        Payload::None,
-        [401, 403, 403, 503],
-    ),
     // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
     // so the admin's answer is the fixed invalid_body refusal)
     row(
@@ -635,9 +626,9 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+/// Every row: this table, then the control-plane and pending-decisions groups.
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter().chain(control_plane::ROWS).chain(pending::ROWS)
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -808,6 +799,8 @@ async fn internal_routes_refuse_every_other_method() {
 
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_decisions.rs"]
+mod pending;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]
