@@ -77,11 +77,12 @@ struct Shared {
     ///
     /// Release is bounded by cancellation: the retire path always aborts the
     /// old watcher, which takes effect at its next await. What runs under the
-    /// lock is `status_body`, which takes only short in-memory locks and none
-    /// of them is held across a log write (see the commit that moved the
-    /// breaker and descriptor-gate log lines after their guards drop,
-    /// 42af5031f). A watcher stuck in synchronous code with no await is the
-    /// one case abort cannot interrupt.
+    /// lock is `status_body`. Verified so far: the two sites fixed in
+    /// 42af5031f no longer log under the breaker state lock or the tools
+    /// cache guard. Other logging under writer-side locks is not yet
+    /// verified and belongs to the logging-under-lock sweep. A watcher stuck
+    /// in synchronous code with no await is the one case abort cannot
+    /// interrupt.
     publish_lock: Arc<tokio::sync::Mutex<()>>,
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
