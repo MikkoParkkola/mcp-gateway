@@ -5,7 +5,7 @@
 
 use super::{Error, MAY_HAVE_RUN, step_failure_text};
 
-/// MIK-7979: every `BackendUnavailable` is raised before the request is
+/// Every `BackendUnavailable` is raised before the request is
 /// sent, so it frees an idempotency key; a lost round does not.
 #[test]
 fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
@@ -14,7 +14,7 @@ fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
     assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
 }
 
-/// MIK-8428 Case A: the gateway-sealed transient is pre-dispatch (it is
+/// Case A: the gateway-sealed transient is pre-dispatch (it is
 /// built only before a send); a look-alike with the same code, text and
 /// data but no seal, as a backend could answer, is not. The seal decides,
 /// never the text.
@@ -172,7 +172,7 @@ fn a_refusal_keeps_the_peers_code_whichever_carriage_brings_it() {
     );
 }
 
-/// MIK-8668: the five standard JSON-RPC 2.0 codes keep their spec values
+/// The five standard JSON-RPC 2.0 codes keep their spec values
 /// (written as literals here on purpose; every site migrated to these
 /// names relies on them).
 #[test]
