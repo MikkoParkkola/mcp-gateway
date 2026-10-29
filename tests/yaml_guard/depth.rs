@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The nesting-depth rows of the YAML guard: each shape refused at depth 129
 //! and accepted at 128, and a deep flow refused for its depth, not its syntax.
-//! Moved from `mik_8639_yaml_guard.rs` for the file-size ceiling.
+//! Moved from the parent test file for the file-size ceiling.
 
 use super::*;
 

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The syntax-error rows of the YAML guard: a refusal names the position and
-//! carries no value from the input. Moved from `mik_8639_yaml_guard.rs` for the
+//! carries no value from the input. Moved from the parent test file for the
 //! file-size ceiling.
 
 use super::*;

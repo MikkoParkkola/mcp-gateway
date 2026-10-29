@@ -11,9 +11,9 @@
 //! itself. Rows marked ACCEPTED pass on the skeleton by design and pin the
 //! no-false-refusal boundary the implementation must keep.
 
-#[path = "mik_8639_yaml_guard/depth.rs"]
+#[path = "yaml_guard/depth.rs"]
 mod depth;
-#[path = "mik_8639_yaml_guard/syntax.rs"]
+#[path = "yaml_guard/syntax.rs"]
 mod syntax;
 #[path = "common/yaml.rs"]
 mod yaml;
