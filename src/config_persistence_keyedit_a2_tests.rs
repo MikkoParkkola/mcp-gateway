@@ -365,3 +365,37 @@ fn removing_the_last_root_key_leaves_an_empty_file() {
 fn a_comment_past_a_blank_line_under_a_removed_entry_gives_up() {
     assert_gives_up("a: 1\n\n  # note\nb: 2\n", &[remove("a")], GiveUp::Comment);
 }
+
+#[test]
+fn a_set_then_a_removal_of_the_unterminated_last_line_is_proven() {
+    assert_eq!(
+        edited("a: 1\nb: 2", &[set_int("a", 5), remove("b")]),
+        "a: 5"
+    );
+}
+
+#[test]
+fn a_parser_refused_field_gives_up_with_its_own_code() {
+    assert_gives_up(
+        "auth: {enabled: false}\n",
+        &[set_int("auth.enabled", 1)],
+        GiveUp::Flow,
+    );
+    assert_gives_up("a: &x 1\n", &[set_int("a", 2)], GiveUp::Anchor);
+}
+
+#[test]
+fn removing_a_field_past_a_lists_end_is_a_no_op() {
+    assert_eq!(
+        edited(ALERTS, &[(alert(5, "name"), Change::Remove)]),
+        ALERTS
+    );
+}
+
+#[test]
+fn a_comment_only_file_takes_an_insert() {
+    assert_eq!(
+        edited("# template\n", &[set_int("a.b", 1)]),
+        "# template\na:\n  b: 1\n"
+    );
+}
