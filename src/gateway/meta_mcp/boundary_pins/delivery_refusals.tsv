@@ -192,3 +192,8 @@ src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, 
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/refusals.rs	refusals	startup_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
+src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
+src/gateway/ui/tool_call.rs	parse	refusal	4	no-record	admin UI tool route: a body too large, unreadable or invalid, before any dispatch; admin_action record only
+src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: no answer in time; the inner dispatch records its own delivery if it ran, admin_action says may_have_run
+src/gateway/ui_call.rs	refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
