@@ -14,6 +14,7 @@ use super::reload_context::replace::{
 };
 use super::replace_test_support::{NEXT, START, WAIT, read, setup};
 use super::*;
+use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::secret_store::{
     FilesStore, NewSecretOwned, SecretStore, StoreError, StoreKind, Vault, unused_entries,
 };
@@ -37,12 +38,25 @@ fn step(dir: &Path, store: Arc<dyn SecretStore + Send + Sync>) -> SecretStep {
     }
 }
 
-/// `NEXT`, with backend `b`'s env naming the first reference. Single-quoted:
-/// a Windows reference holds backslashes, which a double-quoted YAML scalar
-/// reads as escapes.
-fn with_ref(refs: &[String]) -> Vec<u8> {
-    let quoted = refs[0].replace('\'', "''");
-    format!("{NEXT}    env:\n      K: '{quoted}'\n").into_bytes()
+/// The slot of the step's one secret: backend `b`'s env `K`.
+fn k_slot() -> SlotId {
+    SlotId(
+        ["backends", "b", "env", "K"]
+            .map(|k| Segment::Key(k.to_owned()))
+            .to_vec(),
+    )
+}
+
+/// `prefix`, then `NEXT` with backend `b`'s env `K` holding the secret's
+/// slot; the writer fills it with the entry's reference.
+fn slotted(prefix: &str) -> Template {
+    let placeholder = Template::placeholder_for(&k_slot());
+    let text = format!("{prefix}{NEXT}    env:\n      K: {placeholder}\n");
+    Template::from_placeholders(text.into_bytes(), &[k_slot()]).expect("one slot")
+}
+
+fn with_slot() -> Template {
+    slotted("")
 }
 
 /// A replacement of `START` that writes `compute`'s bytes and saves one
@@ -50,7 +64,7 @@ fn with_ref(refs: &[String]) -> Vec<u8> {
 fn secret_save(
     dir: &Path,
     expected: Expected,
-    compute: impl FnOnce(&[u8], &[String]) -> Result<Vec<u8>, String> + Send + 'static,
+    compute: impl FnOnce(&[u8]) -> Result<Template, String> + Send + 'static,
 ) -> Replace {
     Replace {
         expected,
@@ -76,14 +90,16 @@ async fn a_save_that_stands_keeps_its_entries_and_writes_only_references() {
 
     replace_detached(
         Arc::clone(&ctx),
-        secret_save(dir.path(), Expected::Any, |_, refs| Ok(with_ref(refs))),
+        secret_save(dir.path(), Expected::Any, |_| Ok(with_slot())),
         WAIT,
     )
     .await
     .expect("the save stands");
 
     let written = read(&path);
-    assert!(written.contains("K: '"), "{written}");
+    // The writer fills the slot as a double-quoted scalar (escapes
+    // included, so a Windows reference's backslashes survive).
+    assert!(written.contains("K: \""), "{written}");
     assert!(
         !written.contains(std::str::from_utf8(VALUE).unwrap()),
         "the value never reaches gateway.yaml"
@@ -104,7 +120,7 @@ async fn a_stale_view_creates_no_entry() {
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), stale, |_, refs| Ok(with_ref(refs))),
+        secret_save(dir.path(), stale, |_| Ok(with_slot())),
         WAIT,
     )
     .await
@@ -144,7 +160,7 @@ async fn a_store_refusal_writes_nothing() {
     let (dir, path, ctx) = setup();
     let save = Replace {
         expected: Expected::Any,
-        compute: Box::new(|_, refs| Ok(with_ref(refs))),
+        compute: Box::new(|_| Ok(with_slot())),
         replaced: Replaced::Discard,
         secrets: Some(step(dir.path(), Arc::new(Refusing))),
     };
@@ -217,7 +233,7 @@ async fn a_refused_compute_creates_no_entry() {
     };
     let save = Replace {
         expected: Expected::Any,
-        compute: Box::new(|_, _| Err("no".to_owned())),
+        compute: Box::new(|_| Err("no".to_owned())),
         replaced: Replaced::Discard,
         secrets: Some(step(dir.path(), Arc::new(store))),
     };
@@ -239,15 +255,11 @@ async fn a_refused_compute_creates_no_entry() {
 async fn a_refused_reload_restores_the_original_and_discards() {
     let (dir, path, ctx) = setup();
     // A public URL over open tools: the posture check refuses the reload.
-    let exposed = |refs: &[String]| {
-        let mut bytes = b"server:\n  public_url: \"https://gw.public.test\"\n".to_vec();
-        bytes.extend(with_ref(refs));
-        bytes
-    };
+    let exposed = || slotted("server:\n  public_url: \"https://gw.public.test\"\n");
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, move |_, refs| Ok(exposed(refs))),
+        secret_save(dir.path(), Expected::Any, move |_| Ok(exposed())),
         WAIT,
     )
     .await
@@ -304,7 +316,7 @@ async fn a_panic_after_the_rename_keeps_the_entries() {
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, |_, refs| Ok(with_ref(refs))),
+        secret_save(dir.path(), Expected::Any, |_| Ok(with_slot())),
         WAIT,
     )
     .await
@@ -360,16 +372,12 @@ fn entries_settle_by_the_final_result() {
 async fn a_rollback_that_fails_keeps_the_entries() {
     use crate::config_persistence::journal::fault;
     let (dir, path, ctx) = setup();
-    let exposed = |refs: &[String]| {
-        let mut bytes = b"server:\n  public_url: \"https://gw.public.test\"\n".to_vec();
-        bytes.extend(with_ref(refs));
-        bytes
-    };
+    let exposed = || slotted("server:\n  public_url: \"https://gw.public.test\"\n");
     let armed = fault::set(&path, fault::Fault::FailJournalRemove);
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, move |_, refs| Ok(exposed(refs))),
+        secret_save(dir.path(), Expected::Any, move |_| Ok(exposed())),
         WAIT,
     )
     .await

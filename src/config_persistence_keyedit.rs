@@ -179,8 +179,10 @@ impl Template {
         let mut end = 0;
         let mut seen = std::collections::BTreeSet::new();
         for (id, range) in &slots {
+            let held = text.get(range.clone());
             let holds_own = range.start >= end
-                && text.get(range.clone()) == Some(quoted_placeholder(id).as_str());
+                && (held == Some(quoted_placeholder(id).as_str())
+                    || held == Some(placeholder(id).as_str()));
             if !holds_own || !seen.insert(id) {
                 return Err(ComputeRefusal::SlotMismatch);
             }
@@ -192,6 +194,52 @@ impl Template {
     /// The bytes as they stand, slots still holding their placeholders.
     pub(crate) fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Bytes with no secret slot: what a writer with no secret entries
+    /// returns.
+    pub(crate) fn plain(bytes: Vec<u8>) -> Self {
+        Self {
+            bytes,
+            slots: Vec::new(),
+        }
+    }
+
+    /// The fields this template's slots belong to.
+    pub(crate) fn slot_ids(&self) -> impl Iterator<Item = &SlotId> {
+        self.slots.iter().map(|(id, _)| id)
+    }
+
+    /// A template from bytes another writer produced (the backend splice)
+    /// that hold each of `ids`' placeholders exactly once, quoted or bare;
+    /// `SlotMismatch` otherwise.
+    pub(crate) fn from_placeholders(
+        bytes: Vec<u8>,
+        ids: &[SlotId],
+    ) -> Result<Self, ComputeRefusal> {
+        let text = std::str::from_utf8(&bytes).map_err(|_| ComputeRefusal::SlotMismatch)?;
+        let once = |needle: &str| {
+            let mut found = text.match_indices(needle);
+            match (found.next(), found.next()) {
+                (Some((at, _)), None) => Some(at..at + needle.len()),
+                _ => None,
+            }
+        };
+        let mut slots = Vec::with_capacity(ids.len());
+        for id in ids {
+            let range = once(&quoted_placeholder(id))
+                .or_else(|| once(&placeholder(id)))
+                .ok_or(ComputeRefusal::SlotMismatch)?;
+            slots.push((id.clone(), range));
+        }
+        slots.sort_by_key(|(_, range)| range.start);
+        Self::checked(bytes, slots)
+    }
+
+    /// The text a slot holds until it is filled, for a writer that builds
+    /// its bytes another way.
+    pub(crate) fn placeholder_for(id: &SlotId) -> String {
+        placeholder(id)
     }
 
     /// The bytes with each slot replaced by the reference made for its own

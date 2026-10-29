@@ -64,7 +64,7 @@ async fn a_stale_revision_is_refused_with_the_current_one() {
 async fn a_refused_compute_writes_and_stages_nothing() {
     let (dir, path, ctx) = setup();
     let refuse = Replace {
-        compute: Box::new(|_, _| Err("the splice cannot be proven".to_string())),
+        compute: Box::new(|_| Err("the splice cannot be proven".to_string())),
         ..to(Expected::Any, START, Replaced::KeepBeside)
     };
 
@@ -82,7 +82,11 @@ async fn a_refused_compute_writes_and_stages_nothing() {
 async fn non_utf8_config_bytes_are_refused() {
     let (_dir, path, ctx) = setup();
     let bad = Replace {
-        compute: Box::new(|_, _| Ok(vec![0xff, 0xfe, b'\n'])),
+        compute: Box::new(|_| {
+            Ok(crate::config_persistence::keyedit::Template::plain(vec![
+                0xff, 0xfe, b'\n',
+            ]))
+        }),
         ..to(Expected::Any, START, Replaced::Discard)
     };
 

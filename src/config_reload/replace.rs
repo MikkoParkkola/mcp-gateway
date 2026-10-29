@@ -30,6 +30,7 @@ use crate::secret_store::{
 };
 
 use super::ReloadContext;
+use crate::config_persistence::keyedit::{SlotId, Template};
 
 /// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
 /// history view was made from. Not `config_revision`, which also covers the
@@ -94,9 +95,9 @@ pub(crate) enum Replaced {
         reason = "first callers: the web UI settings save and the configuration-history restore"
     )
 )]
-/// The second argument is the reference texts of the [`SecretStep`]'s new
-/// entries, in its order; empty without one.
-pub(crate) type Compute = Box<dyn FnOnce(&[u8], &[String]) -> Result<Vec<u8>, String> + Send>;
+/// It runs before any store entry exists: a secret field is a slot in the
+/// template, which the writer fills with its entry's reference afterwards.
+pub(crate) type Compute = Box<dyn FnOnce(&[u8]) -> Result<Template, String> + Send>;
 
 /// Secrets a replacement saves with the file: created in the store under the
 /// config hold, after the revision check and before `compute`, which writes
@@ -241,6 +242,40 @@ async fn spawn_locked(
 #[path = "replace_audit.rs"]
 mod audit;
 pub(crate) use audit::{Audit, Intent, IntentId, IntentKind, IntentSink, replace_audited};
+
+/// The template's slots name exactly the step's fields (none without a
+/// step): a slot with no secret, or a secret with no slot, is refused before
+/// any entry exists.
+fn same_fields(template: &Template, step: Option<&SecretStep>) -> Result<(), ReplaceError> {
+    let slots: std::collections::BTreeSet<String> =
+        template.slot_ids().map(SlotId::display).collect();
+    let fields: std::collections::BTreeSet<String> = step
+        .map(|s| s.values.iter().map(|v| v.field.clone()).collect())
+        .unwrap_or_default();
+    if slots == fields {
+        Ok(())
+    } else {
+        Err(ReplaceError::Refused(
+            "the new config's secret slots and the saved secrets name different fields".to_string(),
+        ))
+    }
+}
+
+/// Each slot's reference: the entry made for the field the slot displays as.
+fn by_slot(
+    template: &Template,
+    fields: &[String],
+    refs: &[String],
+) -> std::collections::BTreeMap<SlotId, String> {
+    template
+        .slot_ids()
+        .filter_map(|id| {
+            let shown = id.display();
+            let at = fields.iter().position(|f| *f == shown)?;
+            Some((id.clone(), refs.get(at)?.clone()))
+        })
+        .collect()
+}
 
 /// What happens to a replacement's new store entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -494,26 +529,38 @@ impl ReloadContext {
             pending: None,
             renamed: false,
         };
-        let refs = match replace.secrets {
-            // An empty step saves nothing: no entry for the bytes to name.
-            Some(step) if !step.values.is_empty() => {
+        // The new bytes are computed, and their slots checked against the
+        // secrets, before any entry exists: a refusal creates nothing.
+        let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
+        let step = replace.secrets.filter(|step| !step.values.is_empty());
+        same_fields(&template, step.as_ref())?;
+        let result = match step {
+            None => Ok(template.bytes().to_vec()),
+            Some(step) => {
+                let fields: Vec<String> = step.values.iter().map(|v| v.field.clone()).collect();
                 let pending = create_entries(step, deadline).await?;
-                let refs = pending.refs().to_vec();
+                let refs = by_slot(&template, &fields, pending.refs());
                 entries.pending = Some(pending);
-                refs
+                template.fill(&refs).map_err(|_| {
+                    ReplaceError::Refused(
+                        "the saved secrets could not be placed in the new config".to_string(),
+                    )
+                })
             }
-            _ => Vec::new(),
         };
-        let result = self
-            .write_computed(
-                &locked,
-                &target,
-                &current,
-                (replace.compute, replace.replaced),
-                &refs,
-                &mut entries,
-            )
-            .await;
+        let result = match result {
+            Ok(new) => {
+                self.write_computed(
+                    &locked,
+                    &target,
+                    &current,
+                    (new, replace.replaced),
+                    &mut entries,
+                )
+                .await
+            }
+            Err(refused) => Err(refused),
+        };
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
@@ -531,11 +578,9 @@ impl ReloadContext {
         locked: &Locked,
         target: &std::path::Path,
         current: &[u8],
-        (compute, replaced): (Compute, Replaced),
-        refs: &[String],
+        (new, replaced): (Vec<u8>, Replaced),
         entries: &mut Entries,
     ) -> Result<ReplaceOutcome, ReplaceError> {
-        let new = compute(current, refs).map_err(ReplaceError::Refused)?;
         if std::str::from_utf8(&new).is_err() {
             return Err(ReplaceError::Refused(
                 "the new gateway.yaml is not UTF-8 text".to_string(),
@@ -549,8 +594,8 @@ impl ReloadContext {
             .map_err(ReplaceError::Unsupported)?;
         if new == current {
             if entries.pending.is_some() {
-                // The compute dropped the references: nothing would name the
-                // entries just created.
+                // Unreachable after the slot check (a filled slot changes the
+                // bytes); refused rather than leave entries nothing names.
                 return Err(ReplaceError::Refused(
                     "the new config does not name the saved secrets".to_string(),
                 ));

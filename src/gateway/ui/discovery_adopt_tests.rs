@@ -134,8 +134,18 @@ fn run(
     for (key, value) in env {
         backend.env.insert((*key).to_owned(), (*value).to_owned());
     }
-    compute("tool".to_owned(), backend, slots)(text.as_bytes(), references)
+    let template = compute("tool".to_owned(), backend, slots.clone())(text.as_bytes())?;
+    // The writer fills each slot once its entry exists; too few references
+    // leave a slot unfilled, which the fill refuses.
+    let refs: std::collections::BTreeMap<_, _> = slots
+        .iter()
+        .zip(references)
+        .map(|((header, key), reference)| (adopt_slot("tool", *header, key), reference.clone()))
+        .collect();
+    template
+        .fill(&refs)
         .map(|bytes| String::from_utf8(bytes).expect("utf-8"))
+        .map_err(|_| REFERENCES.to_owned())
 }
 
 /// The compute splices the backend in, disabled, each literal key holding
