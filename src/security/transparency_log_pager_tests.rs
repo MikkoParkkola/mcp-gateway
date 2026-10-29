@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Resolving a cursor and opening its segment, each shape and race.
 
+use std::fmt::Write as _;
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +13,7 @@ fn segment(seq: u64, records: usize) -> String {
     let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": seq});
     let mut text = format!("{opened}\n");
     for i in 0..records {
-        text.push_str(&format!("{{\"n\":{i}}}\n"));
+        writeln!(text, "{{\"n\":{i}}}").unwrap();
     }
     text
 }
@@ -284,7 +285,12 @@ fn production_files(dir: &Path, out: &mut Vec<PathBuf>) {
             if name != "tests" {
                 production_files(&path, out);
             }
-        } else if name.ends_with(".rs") && !name.ends_with("_tests.rs") && name != "tests.rs" {
+        } else if path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("rs"))
+            && !name.ends_with("_tests.rs")
+            && name != "tests.rs"
+        {
             out.push(path);
         }
     }
