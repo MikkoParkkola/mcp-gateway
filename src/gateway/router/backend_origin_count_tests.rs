@@ -329,7 +329,8 @@ fn a_backends_minus_32001_on_the_direct_route_is_audited_as_an_error() {
         .collect();
     assert!(
         !records.is_empty(),
-        "premise: an invocation record was written"
+        "premise: an invocation record was written; the log holds:\n{}",
+        std::fs::read_to_string(&audit).unwrap_or_default()
     );
     for record in &records {
         assert_eq!(record["outcome"], "error", "{record}");
