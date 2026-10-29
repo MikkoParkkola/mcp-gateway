@@ -48,9 +48,10 @@ pub struct VerifyResult {
     /// Findings that do not fail the verdict (archive mode, a trailing seal).
     pub warnings: Vec<String>,
     /// An entry this pass parsed carried a signature (any `sig` key). Set
-    /// before an entry is checked, so a failed chain still reports it: a
-    /// caller verifying without the key refuses on it, whatever another,
-    /// earlier read of the log found.
+    /// before an entry is checked, so a returned result whose chain failed
+    /// still reports it (a read error returns no result at all): a caller
+    /// verifying without the key refuses on it, whatever another, earlier
+    /// read of the log found.
     pub signed_entry_seen: bool,
 }
 
