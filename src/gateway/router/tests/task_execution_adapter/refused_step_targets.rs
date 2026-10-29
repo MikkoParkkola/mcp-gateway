@@ -1,27 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A call the gateway refuses before its backend is not a call the task
-//! made: a refused plan step adds no target, and a refused single call
-//! settles as the gateway's own answer, which no reader takes for backend
-//! output. The backend's own count is the premise that nothing was sent.
+//! A call the gateway refuses before its backend is no call a backend ran:
+//! a refused plan step stays a target (attempted, so stored reads keep
+//! re-checking access) but is never a relay replay call, and a refused single
+//! call settles as the gateway's own answer, which no reader takes for
+//! backend output. The backend's own count is the premise that nothing was
+//! sent.
 use super::super::*;
-use super::stored_result_policy::{install_playbook, playbook_call, withhold};
+use super::stored_result_policy::withhold;
 use super::support::*;
-
-/// A playbook task's settled row as served, and its recorded targets.
-async fn settled_targets(
-    state: &Arc<AppState>,
-    key: &str,
-) -> (Value, Vec<crate::gateway::task_service::Target>) {
-    let created = post(state, "key-a", playbook_call(2, key)).await;
-    let id = task_id(&created);
-    let settled = settled_row(state, &id).await;
-    let done = serde_json::to_value(settled.task.wire()).unwrap_or(Value::Null);
-    (
-        done,
-        state.task_executor.service.store.targets_for_test(&id),
-    )
-}
 
 /// The task's row once settled, read from the store: a stored read through
 /// `tasks/get` judges the caller's current view, so a row whose tool is
@@ -47,41 +34,6 @@ async fn settled_row(
     })
     .await
     .unwrap_or_else(|_| panic!("the task never settled"))
-}
-
-/// A step tool withheld between the task's intake and its run: the intake
-/// admitted the playbook, and the worker's step is answered by the gateway.
-#[cfg(feature = "firewall")]
-#[tokio::test]
-async fn a_withheld_plan_step_records_no_target() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    install_playbook(&state, TOOL);
-    let withheld = Arc::clone(&state);
-    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
-        withhold(&withheld, TOOL);
-    });
-    let (done, targets) = settled_targets(&state, "refused-withheld").await;
-    std::assert_eq!(mock.calls(), 0, "premise: nothing sent: {done}");
-    assert!(
-        targets.is_empty(),
-        "a refused step is not a target: {targets:?} ({done})"
-    );
-}
-
-/// Control: the same playbook with nothing withheld records its one step.
-#[tokio::test]
-async fn a_sent_plan_step_records_its_target() {
-    let mock = MockBackend::answering(Answer::ok());
-    let (state, _store) = state_with(&mock).await;
-    install_playbook(&state, TOOL);
-    let (done, targets) = settled_targets(&state, "refused-control").await;
-    std::assert_eq!(mock.calls(), 1, "{done}");
-    std::assert_eq!(
-        crate::gateway::task_service::Target::pairs(&targets),
-        vec![(BACKEND, TOOL)],
-        "{done}"
-    );
 }
 
 /// A single call whose tool is withheld between intake and run settles on
@@ -128,4 +80,64 @@ async fn a_sent_single_call_keeps_the_backends_result() {
     std::assert_eq!(mock.calls(), 1);
     std::assert_eq!(row.error_author, None);
     assert!(row.backend_result().is_some(), "the backend's answer");
+}
+
+/// A plan with one step sent (alpha) and one withheld between intake and run
+/// (beta): the refused step stays a target, a call attempted, so a stored
+/// read keeps re-checking access to it; but the relay replay entry, the
+/// record a stored read takes "this backend ran it" from, names only alpha.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
+    use super::relay_plan_replay::{
+        ALPHA, BETA, OTHER_PROSE, PROSE, playbook, playbook_args, rig, task_call,
+    };
+    let rig = rig(PROSE, OTHER_PROSE, Some(&playbook())).await;
+    let withheld = Arc::clone(&rig.state);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        super::stored_result_policy::withhold_on(&withheld, BETA, TOOL);
+    });
+    let created = post(
+        &rig.state,
+        "key-a",
+        task_call(
+            1,
+            "refused-partial",
+            "gateway_run_playbook",
+            &playbook_args(),
+        ),
+    )
+    .await;
+    let id = task_id(&created);
+    let row = settled_row(&rig.state, &id).await;
+    let joined = rig
+        .state
+        .task_executor
+        .drain(std::time::Duration::from_secs(10))
+        .await;
+    assert!(
+        joined.is_clean(),
+        "the settling worker must finish: {joined:?}"
+    );
+    std::assert_eq!(rig.calls(), (1, 0), "premise: alpha ran, beta was refused");
+    let targets = rig.state.task_executor.service.store.targets_for_test(&id);
+    std::assert_eq!(
+        crate::gateway::task_service::Target::pairs(&targets),
+        vec![(ALPHA, TOOL), (BETA, TOOL)],
+        "the refused step stays a target"
+    );
+    let key = crate::security::firewall::StoredKey::Task {
+        id: id.clone(),
+        revision: row.revision,
+    };
+    let (_, calls) = rig
+        .relay
+        .replay_digests(&key)
+        .expect("positive control: alpha's step stores a replay entry");
+    let servers: Vec<&str> = calls.iter().map(|(_, server, _)| server.as_str()).collect();
+    std::assert_eq!(
+        servers,
+        vec![ALPHA],
+        "only the step a backend ran is a replay call"
+    );
 }
