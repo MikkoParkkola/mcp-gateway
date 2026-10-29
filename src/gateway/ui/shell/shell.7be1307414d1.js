@@ -1039,6 +1039,11 @@ const runTab = (spec, route, into) => {
   const show = screenBanner(into, route.page, guard);
   // The live stream marks this page stale on a drop, through the same banner.
   livePage = { into, show };
+  // Any banner call of the screen makes the slot its own: the stream no longer clears it.
+  const screenShow = (...args) => {
+    if (stream.banner?.into === into) stream.banner = null;
+    return show(...args);
+  };
   // A page drawn while the stream is down gets the stale state once its tab has drawn.
   const markStale = (drawn) => {
     if (guardHolds(guard)) markPageStale({ into, show });
@@ -1046,7 +1051,7 @@ const runTab = (spec, route, into) => {
   };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
-    show,
+    show: screenShow,
     // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
     // later: Retry reuses the render, so a failed attempt is told apart by its container.
     header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
@@ -1400,8 +1405,11 @@ export async function refreshCounts() {
 
 /** Reconnect waits: one second at first, doubling to thirty at most. */
 const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
-/** A frame still unfinished past this many characters ends the stream as a drop. */
+/** A frame, finished or not, over this many UTF-8 bytes ends the stream as a drop. */
 const STREAM_FRAME_MAX = 64 * 1024;
+/** Whether text is over the frame cap in UTF-8 bytes; it encodes only when the length cannot tell. */
+const overFrameMax = (text) => text.length > STREAM_FRAME_MAX
+  || (text.length * 3 > STREAM_FRAME_MAX && new TextEncoder().encode(text).length > STREAM_FRAME_MAX);
 
 /**
  * The one live stream of this document, GET /ui/api/stream, read through
@@ -1443,12 +1451,12 @@ function closeStream() {
   drawStream();
 }
 
-/** Mark a page stale for the stream, unless a stale banner already shows there. */
+/** Mark a page stale for the stream, only while no banner holds the slot; the top bar carries a drop either way. */
 function markPageStale(page) {
   const down = streamStale();
   if (!down || !page?.into.isConnected) return;
   const current = () => page.into.querySelector(':scope > .state[data-banner]');
-  if (current()?.dataset.state === 'stale') return; // the screen or the stream marked it already
+  if (current()) return; // a banner of the screen, or one the stream set already
   page.show('stale', down);
   const node = current();
   if (node?.dataset.state === 'stale') stream.banner = { node, show: page.show, into: page.into };
@@ -1525,10 +1533,13 @@ async function readStream(body, gen) {
     buffer += value;
     const blocks = buffer.split(/\r?\n\r?\n/);
     buffer = blocks.pop();
-    for (const block of blocks) streamFrame(parseFrame(block));
-    if (buffer.length > STREAM_FRAME_MAX) {
-      stream.abort?.abort(); // ends the connection; the caller treats it as a drop
-      return;
+    // Each finished frame is measured before it is parsed, and so is the unfinished rest.
+    for (const [i, block] of [...blocks, buffer].entries()) {
+      if (overFrameMax(block)) {
+        stream.abort?.abort(); // ends the connection; the caller treats it as a drop
+        return;
+      }
+      if (i < blocks.length) streamFrame(parseFrame(block));
     }
   }
 }
