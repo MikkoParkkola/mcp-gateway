@@ -330,17 +330,21 @@ fn before_epoch() -> std::time::SystemTime {
 fn a_handoff_code_on_a_clock_before_the_epoch_is_refused_and_kept() {
     let b = DashboardBootstrap::new();
     let t0 = Now::read();
-    let code = b.mint_handoff(t0, None);
+    let code = b.mint_handoff(t0, super::Bound::default());
+    let keys = &crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
     let stepped = Now {
         mono: t0.mono + SEC,
         wall: before_epoch(),
     };
     assert!(
-        b.take_handoff(&code, stepped).is_none(),
+        b.take_handoff(&code, stepped, keys).is_none(),
         "a clock before 1970 redeemed a sign-in code"
     );
     assert!(
-        b.take_handoff(&code, at(t0, SEC)).is_some(),
+        b.take_handoff(&code, at(t0, SEC), keys).is_some(),
         "an unreadable clock spent a live sign-in code"
     );
 }
@@ -400,11 +404,17 @@ fn a_capped_session_ends_at_its_cap() {
     let now = Now::read();
     let limits = SessionLimits::default();
     let value = store.rearm_until(Some(now.wall + Duration::from_secs(600)));
-    let super::Redeem::Issued(redemption) = store.consume_capped(&value) else {
+    let super::Redeem::Issued(redemption) = store.consume_capped(
+        &value,
+        &crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        ),
+    ) else {
         panic!("the value redeems");
     };
-    let not_after = redemption.not_after;
-    let handle = store.issue_session_until(now, &limits, not_after);
+    let not_after = redemption.bound.not_after;
+    let handle = store.issue_session_until(now, &limits, redemption.bound);
     let at = |secs| Now {
         mono: now.mono + Duration::from_secs(secs),
         wall: now.wall + Duration::from_secs(secs),

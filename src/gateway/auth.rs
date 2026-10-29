@@ -36,7 +36,7 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -542,10 +542,15 @@ pub async fn auth_middleware(
             Touch::Yes
         };
         let limits = session_limits(&state);
-        match state
-            .dashboard_bootstrap
-            .check_session(&handle, Now::read(), &limits, touch)
-        {
+        // Judged by the request's pinned key table: a session whose minting
+        // key a reload removed, demoted or expired ends here (K13).
+        match state.dashboard_bootstrap.check_session_with(
+            &handle,
+            Now::read(),
+            &limits,
+            touch,
+            auth_config,
+        ) {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
                 return next.run(request).await;

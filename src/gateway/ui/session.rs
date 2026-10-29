@@ -60,13 +60,14 @@ async fn handoff_form() -> Response {
 /// The body is read by the extractor, under the router's configured limit.
 async fn handoff_code(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
     crate::gateway::auth::redeem_handoff(
         &state.dashboard_bootstrap,
-        &state.live_config,
+        (&state.live_config, generation.auth()),
         origin,
         &body,
         crate::gateway::auth::Navigation::of(&headers),
@@ -169,7 +170,15 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    let value = state.dashboard_bootstrap.rearm_until(not_after);
+    // Bound to the minting key, by its quota identity, so the link and the
+    // session it opens end with that key on a reload (K13). The bearer binds
+    // nothing: it is restart-only.
+    let key = client
+        .api_key_identity()
+        .and(client.quota_principal.clone());
+    let value = state
+        .dashboard_bootstrap
+        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
     let scheme = if running.mtls.enabled {
         "https"
     } else {

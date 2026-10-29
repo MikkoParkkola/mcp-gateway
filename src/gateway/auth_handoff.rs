@@ -54,16 +54,20 @@ pub(super) enum Handoff {
 /// The loopback redemption's hand-off (#2130): spend the link and answer
 /// with a one-time code for the public origin.
 #[cfg(feature = "webui")]
-pub(super) fn hand_off(state: &AuthState, candidate: &str) -> Handoff {
+pub(super) fn hand_off(
+    state: &AuthState,
+    keys: &super::ResolvedAuthConfig,
+    candidate: &str,
+) -> Handoff {
     let Some(origin) = public_origin(state) else {
         return Handoff::Failed;
     };
-    let super::Redeem::Issued(Redemption { not_after, now }) =
-        state.dashboard_bootstrap.consume_capped(candidate)
+    let super::Redeem::Issued(Redemption { bound, now }) =
+        state.dashboard_bootstrap.consume_capped(candidate, keys)
     else {
         return Handoff::Failed;
     };
-    let code = state.dashboard_bootstrap.mint_handoff(now, not_after);
+    let code = state.dashboard_bootstrap.mint_handoff(now, bound);
     Handoff::Shown(code_page(&origin, &code))
 }
 
@@ -109,7 +113,10 @@ pub(crate) fn handoff_form() -> Response {
 #[cfg(feature = "webui")]
 pub(crate) fn redeem_handoff(
     bootstrap: &DashboardBootstrap,
-    live: &crate::config_reload::LiveConfig,
+    (live, keys): (
+        &crate::config_reload::LiveConfig,
+        &super::ResolvedAuthConfig,
+    ),
     origin: Option<&str>,
     body: &[u8],
     navigation: super::Navigation,
@@ -127,8 +134,8 @@ pub(crate) fn redeem_handoff(
     let code = url::form_urlencoded::parse(body)
         .find(|(key, _)| key == "code")
         .map(|(_, value)| value.trim().to_string());
-    let Some(Redemption { not_after, now }) =
-        code.and_then(|code| bootstrap.take_handoff(&code, Now::read()))
+    let Some(Redemption { bound, now }) =
+        code.and_then(|code| bootstrap.take_handoff(&code, Now::read(), keys))
     else {
         auth_failure(AuthFailureKind::BootstrapRefused);
         warn!("Dashboard handoff refused: wrong, used or expired code");
@@ -144,7 +151,7 @@ pub(crate) fn redeem_handoff(
     // Always `Secure`: a code exists only because this origin is HTTPS, and a
     // reload since it was minted must not downgrade the cookie it sets.
     private(super::bootstrap::signed_in(
-        bootstrap, live, not_after, now, true,
+        bootstrap, live, bound, now, true,
     ))
 }
 

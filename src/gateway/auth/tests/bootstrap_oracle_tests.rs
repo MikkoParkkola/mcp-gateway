@@ -122,7 +122,14 @@ fn r14_an_empty_code_slot_still_runs_the_compare() {
     assert!(
         state
             .dashboard_bootstrap
-            .take_handoff(&GUESS, crate::gateway::auth::Now::read())
+            .take_handoff(
+                &GUESS,
+                crate::gateway::auth::Now::read(),
+                &crate::gateway::auth::ResolvedAuthConfig::from_config(
+                    &crate::config::AuthConfig::default(),
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )
+            )
             .is_none()
     );
     assert!(

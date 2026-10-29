@@ -276,9 +276,10 @@ async fn a_code_expires_after_a_minute() {
 async fn a_code_past_its_credential_cap_is_refused() {
     let (state, _dir) = behind_https_front().await;
     let past = std::time::SystemTime::now() - Duration::from_secs(1);
-    let code = state
-        .dashboard_bootstrap
-        .mint_handoff(crate::gateway::auth::Now::read(), Some(past));
+    let code = state.dashboard_bootstrap.mint_handoff(
+        crate::gateway::auth::Now::read(),
+        crate::gateway::auth::Bound::until(Some(past)),
+    );
 
     let out = send(&state, submit(&code, None)).await;
     assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);

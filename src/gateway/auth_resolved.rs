@@ -227,6 +227,24 @@ impl ResolvedAuthConfig {
 
     /// Whether `token` is a configured API key past its expiry. Hashed again
     /// only on the reject path, to tell an expired key from a wrong one (D4).
+    /// Whether the key whose quota identity is `minter` is in this table, an
+    /// admin key, and unexpired at `at`: what a dashboard link, handoff or
+    /// session minted with it needs at each use, so one minted by a key a
+    /// reload then removed, demoted, expired or re-issued (another digest)
+    /// ends there. A previous digest in its grace authenticates as its
+    /// current key, so the grace ending alone ends nothing.
+    pub(crate) fn admin_key_live(
+        &self,
+        minter: &QuotaPrincipal,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        self.api_keys().iter().any(|k| {
+            k.quota_principal == *minter
+                && k.admin
+                && !crate::config::api_key_expired(k.expires_at, at)
+        })
+    }
+
     pub(super) fn is_expired_key(&self, token: &str) -> bool {
         use subtle::ConstantTimeEq;
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());

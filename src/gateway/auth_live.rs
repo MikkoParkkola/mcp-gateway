@@ -133,11 +133,12 @@ pub(crate) async fn current_caller(
         // A delivery is not operator activity: checked, never extended, or
         // server push alone would keep an unattended session alive (E5).
         let handle = credential.session.as_ref()?;
-        return (state.dashboard_bootstrap.check_session(
+        return (state.dashboard_bootstrap.check_session_with(
             handle,
             Now::read(),
             &session_limits(state),
             Touch::No,
+            auth_config,
         ) == SessionCheck::Valid)
             .then(|| found(dashboard_client(), None));
     };
