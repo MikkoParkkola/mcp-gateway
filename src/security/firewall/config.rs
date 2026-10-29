@@ -148,6 +148,32 @@ pub struct FirewallRule {
     /// of another type falls to a later rule or to its severity default.
     #[serde(default)]
     pub scan: Vec<ScanType>,
+    /// The backends (globs over the registry name) this rule applies to;
+    /// absent means every backend. An empty list is refused at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub servers: Option<Vec<String>>,
+    /// The API keys (exact names) whose calls this rule applies to; absent
+    /// means every caller. An empty list is refused at load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keys: Option<Vec<String>>,
+    /// Calls this rule skips: a call matching every field an entry sets.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub except: Option<Vec<RuleException>>,
+}
+
+/// One exception on a firewall rule. A call matches it when it matches every
+/// field set; an entry with no field set is refused at load.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RuleException {
+    /// A glob over the backend's registry name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// A glob over the tool name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    /// An API key name, matched exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 /// Action the firewall takes when a threat is detected.
