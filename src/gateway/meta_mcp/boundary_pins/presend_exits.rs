@@ -8,13 +8,14 @@
 //! a call a backend ran (a relay replay call, a single call's answer taken for
 //! the backend's), so a new exit fails here until it is classified.
 //!
-//! A row's count is its sites: its refusal exits plus its refusal marks. A
-//! refusal exit is a nonce refund asked (`ask_refund`, `ask_if_transient`),
-//! a pre-dispatch error test (`is_pre_dispatch`), or an idempotency
-//! reservation released by hand (`.release()` on a receiver named for a
-//! reservation). A refusal mark is a `note_pre_send` or `note_round` call
-//! whose argument names `Refused`: so every hand-marked plain-error exit is a
-//! row, and removing its mark fails here.
+//! A row counts its refusal exits and its refusal marks apart, so a removed
+//! mark is never offset by an added exit. A refusal exit is a nonce refund
+//! asked (`ask_refund`, `ask_if_transient`), a pre-dispatch error test
+//! (`is_pre_dispatch`), or an idempotency reservation released by hand
+//! (`.release()` on a receiver named for a reservation). A refusal mark is a
+//! `note_pre_send` or `note_round` call whose argument names `Refused`: so
+//! every hand-marked plain-error exit is a row, and removing its mark fails
+//! here.
 //!
 //! What this cannot see: a new plain-error exit (a bare `Err` before the
 //! backend) that carries none of those markers. A syntax scan cannot tell it
@@ -136,8 +137,8 @@ impl<'ast> Visit<'ast> for Body {
     }
 }
 
-/// (file, function) -> (exits, class).
-type Found = BTreeMap<(String, String), (usize, &'static str)>;
+/// (file, function) -> (exits, marks, class).
+type Found = BTreeMap<(String, String), (usize, usize, &'static str)>;
 
 #[derive(Default)]
 struct Exits {
@@ -148,14 +149,14 @@ impl Exits {
     fn function(&mut self, file: &str, func: &str, block: &syn::Block) {
         let mut body = Body::default();
         body.visit_block(block);
-        let sites = body.exits + body.refusal_marks;
-        if sites > 0 {
+        if body.exits + body.refusal_marks > 0 {
             let entry = self
                 .found
                 .entry((file.to_owned(), func.to_owned()))
-                .or_insert((0, "excluded"));
-            entry.0 += sites;
-            entry.1 = body.class();
+                .or_insert((0, 0, "excluded"));
+            entry.0 += body.exits;
+            entry.1 += body.refusal_marks;
+            entry.2 = body.class();
         }
     }
 }
@@ -183,11 +184,11 @@ impl Sink for Exits {
     }
 }
 
-/// The reviewed list: file, function, sites, class, reason.
+/// The reviewed list: file, function, exits, marks, class, reason.
 const LISTED: &str = include_str!("presend_exits.tsv");
 
-/// (file, function) -> (exits, class) as listed.
-type Listed = BTreeMap<(String, String), (usize, String)>;
+/// (file, function) -> (exits, marks, class) as listed.
+type Listed = BTreeMap<(String, String), (usize, usize, String)>;
 
 /// The listed rows, and the ones that are malformed.
 fn listed() -> (Listed, Vec<String>) {
@@ -198,18 +199,21 @@ fn listed() -> (Listed, Vec<String>) {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let cols: Vec<&str> = line.split('\t').collect();
-        let [file, func, n, class, reason] = cols[..] else {
-            bad.push(format!("not five columns: {line}"));
+        let [file, func, exits, marks, class, reason] = cols[..] else {
+            bad.push(format!("not six columns: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
             bad.push(format!("no class or no reason: {line}"));
         }
-        let Ok(n) = n.parse::<usize>() else {
-            bad.push(format!("sites is not a number: {line}"));
+        let (Ok(exits), Ok(marks)) = (exits.parse::<usize>(), marks.parse::<usize>()) else {
+            bad.push(format!("exits or marks is not a number: {line}"));
             continue;
         };
-        rows.insert((file.to_owned(), func.to_owned()), (n, class.to_owned()));
+        rows.insert(
+            (file.to_owned(), func.to_owned()),
+            (exits, marks, class.to_owned()),
+        );
     }
     (rows, bad)
 }
@@ -223,13 +227,15 @@ fn every_pre_send_refusal_exit_is_marked_or_excluded() {
     walk(crate_root(), &ROOTS, &mut exits).expect("the walk reads every module");
     let (want, bad) = listed();
     let mut wrong = bad;
-    for ((file, func), (n, class)) in &exits.found {
+    for ((file, func), (e, m, class)) in &exits.found {
         match want.get(&(file.clone(), func.clone())) {
-            Some((m, c)) if m == n && c == class => {}
-            Some((m, c)) => {
-                wrong.push(format!("listed {m} {c}, found {n} {class}: {file}\t{func}"));
-            }
-            None => wrong.push(format!("unlisted: {file}\t{func}\t{n}\t{class}\t<reason>")),
+            Some((we, wm, c)) if we == e && wm == m && c == class => {}
+            Some((we, wm, c)) => wrong.push(format!(
+                "listed {we} exits {wm} marks {c}, found {e} exits {m} marks {class}: {file}\t{func}"
+            )),
+            None => wrong.push(format!(
+                "unlisted: {file}\t{func}\t{e}\t{m}\t{class}\t<reason>"
+            )),
         }
     }
     for (file, func) in want.keys().filter(|k| !exits.found.contains_key(*k)) {
