@@ -176,6 +176,11 @@ impl ReloadContext {
     /// task: a caller dropped meanwhile cannot release the lock while the
     /// recovery still writes.
     async fn recover_held(&self, mut locked: Locked) -> Result<Locked, ReplaceError> {
+        // Owed before the task starts: a rollback whose caller is dropped
+        // meanwhile still leaves its reload to the next lock holder. A
+        // recovery that changed nothing costs one redundant reload.
+        self.reload_owed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         #[cfg(test)]
         let pause = Arc::clone(&self.recovery_pause);
         tokio::task::spawn_blocking(move || {
