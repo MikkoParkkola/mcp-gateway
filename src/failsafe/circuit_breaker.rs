@@ -393,18 +393,19 @@ impl CircuitBreaker {
             }
         }
         drop(state);
-        // After the release: status readers take the state lock, and a log
+        // The observer first: a stalled log sink must not delay it.
+        self.observer.call(HealthChange {
+            backend: self.name.clone(),
+            from: old_state,
+            to: new_state,
+        });
+        // After the release too: status readers take the state lock, and a log
         // sink that stops reading must not hold them up.
         match new_state {
             CircuitState::Closed => info!(backend = %self.name, "Circuit breaker closed"),
             CircuitState::Open => debug!(backend = %self.name, "Circuit breaker state → Open"),
             CircuitState::HalfOpen => debug!(backend = %self.name, "Circuit breaker half-open"),
         }
-        self.observer.call(HealthChange {
-            backend: self.name.clone(),
-            from: old_state,
-            to: new_state,
-        });
     }
 }
 
