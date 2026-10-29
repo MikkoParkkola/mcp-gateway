@@ -67,7 +67,7 @@ pub(super) async fn session(
     let mut wake = shared.wake.subscribe();
     // The tools refill a notice starts. Polled as one arm of the loop's select,
     // never awaited inline, so a hanging `tools/list` (bounded by OPEN_LIMIT)
-    // does not stop the session draining its other notices (MIK-7937).
+    // does not stop the session draining its other notices.
     let mut refill: Option<Refill> = None;
     loop {
         let event = tokio::select! {
@@ -176,7 +176,7 @@ async fn grant_moved(
     true
 }
 
-/// What a tick does about the backend's live transport (MIK-7969 H2).
+/// What a tick does about the backend's live transport.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OnTick {
     Keep,
