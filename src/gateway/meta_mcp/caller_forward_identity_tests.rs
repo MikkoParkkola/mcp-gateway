@@ -126,9 +126,9 @@ fn alpha() -> VerifiedIdentity {
 /// refuses to mint at all. The file lives as long as the returned handle.
 fn audit_log() -> (
     Arc<crate::security::TransparencyLogger>,
-    tempfile::NamedTempFile,
+    crate::security::transparency_log::temp::TempLog,
 ) {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -142,10 +142,10 @@ fn audit_log() -> (
 
 /// A multi-user gateway with one `required`, per-user propagating backend.
 fn gateway() -> (
+    crate::security::transparency_log::temp::TempLog,
     MetaMcp,
     Arc<AlphaOnlyWire>,
     Arc<CountingMint>,
-    tempfile::NamedTempFile,
 ) {
     let config = BackendConfig {
         transport: TransportConfig::Http {
@@ -186,12 +186,12 @@ fn gateway() -> (
     let (logger, audit_file) = audit_log();
     meta.enable_transparency_log(logger);
     meta.set_multi_user(true);
-    (meta, wire, mint, audit_file)
+    (audit_file, meta, wire, mint)
 }
 
 #[tokio::test]
 async fn identified_caller_reads_the_resource_it_was_listed_under_its_own_identity() {
-    let (meta, wire, mint, _audit_file) = gateway();
+    let (_audit_file, meta, wire, mint) = gateway();
     let who = alpha();
 
     let listed = meta

@@ -214,7 +214,7 @@ pub(super) async fn answered_with(
 ) -> (
     Arc<MockBackend>,
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     String,
     u64,
 ) {
@@ -429,7 +429,9 @@ fn a_production_line_after_a_test_only_block_is_kept() {
 }
 
 /// The suite's state with response inspection blocking (action mode).
-async fn state_blocking_responses(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_blocking_responses(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, dir) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let mut meta =

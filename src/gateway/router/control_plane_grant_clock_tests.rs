@@ -40,7 +40,7 @@ fn grant(id: &str) -> IdentityGrant {
 }
 
 /// Three grants: expiring (2099), revoked, and with no expiry.
-async fn state_with_grants() -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_with_grants() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),

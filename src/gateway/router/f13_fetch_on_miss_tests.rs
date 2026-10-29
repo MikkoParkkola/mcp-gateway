@@ -4,6 +4,7 @@
 //! instead of forwarding unchecked. Router-level cells on `/mcp` and
 //! `/mcp/{name}`; "refused" means the wire saw no call, "fetched" a list.
 
+use crate::security::transparency_log::temp::TempLog;
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use parking_lot::Mutex;
@@ -181,7 +182,7 @@ pub(super) struct Fx {
     pub(super) router: axum::Router,
     pub(super) rec: Arc<Rec>,
     backend: Arc<Backend>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// Knobs of the single-tenant fixture. `unwired` leaves the slot with no
@@ -236,8 +237,8 @@ struct PerUser {
     router: axum::Router,
     slots: Vec<Arc<Rec>>,
     shared: Arc<Rec>,
-    _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: [TempLog; 2],
 }
 
 async fn per_user(subjects: &[&str]) -> PerUser {
@@ -268,10 +269,7 @@ async fn per_user(subjects: &[&str]) -> PerUser {
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let audit = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-    ];
+    let audit = [TempLog::new(), TempLog::new()];
     let mut meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state_mut.backends));
     meta.set_identity_propagation(Arc::new(PerIdentityMint));
     meta.enable_transparency_log(transparency_logger(&audit[0]));

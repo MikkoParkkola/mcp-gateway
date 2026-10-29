@@ -216,7 +216,13 @@ impl Backend {
     /// block what it withheld, clear `source`'s own block on what it served
     /// (and, for a complete listing, on what it no longer lists), and log
     /// each distinct descriptor once.
-    pub(crate) fn commit_verdicts(&self, source: &str, listing: Listing, verdicts: Verdicts) {
+    pub(crate) fn commit_verdicts(
+        &self,
+        source: &str,
+        listing: Listing,
+        verdicts: Verdicts,
+    ) -> PendingLogs {
+        let mut pending = PendingLogs::new(&self.name);
         // Hashed once here, so every comparison inside the map is by digest.
         let served: HashSet<NameKey> = verdicts.served.iter().map(|n| name_key(n)).collect();
         let withheld: HashSet<NameKey> = verdicts.withheld.keys().map(|n| name_key(n)).collect();
@@ -236,15 +242,11 @@ impl Backend {
         let mut logged = self.descriptor_gate.logged.lock();
         for (name, (digest, issues)) in verdicts.withheld {
             if first_time(&mut logged, (digest.clone(), true)) {
-                warn!(
-                    backend = %self.name,
-                    tool = %name,
-                    rule = "AX-010",
-                    digest = %digest,
-                    issues = %issues.join("; "),
-                    allow = %format!("allow_flagged_tools: {{ {name}: {digest} }}"),
-                    "Tool withheld: its description failed the tool-poisoning check"
-                );
+                pending.lines.push(Line::Withheld {
+                    name: name.clone(),
+                    digest: digest.clone(),
+                    issues,
+                });
             }
             let key = name_key(&name);
             if !blocked.contains_key(&key) && blocked.len() >= BLOCKED_NAMES_CAP {
@@ -255,12 +257,7 @@ impl Backend {
                     .saturated
                     .swap(true, std::sync::atomic::Ordering::SeqCst);
                 if !was {
-                    warn!(
-                        backend = %self.name,
-                        cap = BLOCKED_NAMES_CAP,
-                        "Blocked tool names reached the cap: every tool of this backend \
-                         is now withheld and refused until restart"
-                    );
+                    pending.lines.push(Line::Saturated);
                 }
                 continue;
             }
@@ -276,13 +273,7 @@ impl Backend {
         }
         for (name, digest) in verdicts.allowed {
             if first_time(&mut logged, (digest.clone(), false)) {
-                info!(
-                    backend = %self.name,
-                    tool = %name,
-                    rule = "AX-010",
-                    digest = %digest,
-                    "Tool served by allow_flagged_tools despite a failed tool-poisoning check"
-                );
+                pending.lines.push(Line::Allowed { name, digest });
             }
         }
         drop(logged);
@@ -292,6 +283,7 @@ impl Backend {
         // Coalesced with every store's nudge (`MIK-8208`): a fill per caller
         // must not queue a nudge per fill.
         self.nudge_changed_coalesced();
+        pending
     }
 
     /// Refusal text when `tool` is blocked on this backend.
@@ -463,6 +455,103 @@ impl Backend {
             tools,
         );
         tools.retain(|tool| !self.is_blocked_tool(&tool.name));
+    }
+}
+
+/// One log line decided on while locks were held.
+enum Line {
+    Withheld {
+        name: String,
+        digest: String,
+        issues: Vec<String>,
+    },
+    Saturated,
+    Allowed {
+        name: String,
+        digest: String,
+    },
+}
+
+/// The log lines `commit_verdicts` decided on while it held the gate's locks
+/// (and, on a store, the tools cache's write guard). The caller emits them
+/// once every guard it holds is released, so a log sink that stops reading
+/// cannot hold up a status reader waiting on those locks.
+#[must_use = "emit the lines after releasing every guard"]
+pub(crate) struct PendingLogs {
+    backend: String,
+    lines: Vec<Line>,
+}
+
+impl PendingLogs {
+    fn new(backend: &str) -> Self {
+        Self {
+            backend: backend.to_string(),
+            lines: Vec::new(),
+        }
+    }
+
+    /// Write the lines.
+    pub(crate) fn emit(self) {
+        let backend = self.backend;
+        for line in self.lines {
+            match line {
+                Line::Withheld {
+                    name,
+                    digest,
+                    issues,
+                } => {
+                    // Joined here, after every gate lock is released.
+                    let issues = issues.join("; ");
+                    warn!(
+                        backend = %backend,
+                        tool = %name,
+                        rule = "AX-010",
+                        digest = %digest,
+                        issues = %issues,
+                        allow = %format!("allow_flagged_tools: {{ {name}: {digest} }}"),
+                        "Tool withheld: its description failed the tool-poisoning check"
+                    );
+                }
+                Line::Saturated => warn!(
+                    backend = %backend,
+                    cap = BLOCKED_NAMES_CAP,
+                    "Blocked tool names reached the cap: every tool of this backend \
+                     is now withheld and refused until restart"
+                ),
+                Line::Allowed { name, digest } => info!(
+                    backend = %backend,
+                    tool = %name,
+                    rule = "AX-010",
+                    digest = %digest,
+                    "Tool served by allow_flagged_tools despite a failed tool-poisoning check"
+                ),
+            }
+        }
+    }
+}
+
+/// Where a fill leaves the lines its store decided on, until the fill has
+/// released every guard.
+#[derive(Default)]
+pub(crate) struct PendingSink(std::sync::Mutex<Vec<PendingLogs>>);
+
+impl PendingSink {
+    /// Keep `logs` for [`Self::emit`], beside any batch already kept.
+    pub(crate) fn store(&self, logs: PendingLogs) {
+        let mut kept = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.push(logs);
+    }
+
+    /// Write every batch kept, in the order stored.
+    pub(crate) fn emit(self) {
+        let kept = self
+            .0
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.into_iter().for_each(PendingLogs::emit);
     }
 }
 
