@@ -32,7 +32,6 @@ use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
 use super::guard::Guard;
-use super::uptime_secs;
 use crate::backend::Backend;
 use crate::config_reload::refusals::{Refusal, RefusalCode, RefusalKind, startup_refusal};
 use crate::counters::{CounterStore, Filter, Metric, Query, Window};
@@ -168,7 +167,7 @@ fn kpi_and_servers(
         up.values().filter(|up| **up).count().into(),
     );
     kpi.insert("tools_total".into(), tools.into());
-    kpi.insert("uptime_secs".into(), uptime_secs().into());
+    kpi.insert("uptime_secs".into(), state.process.uptime_secs().into());
     kpi.insert("version".into(), env!("CARGO_PKG_VERSION").into());
     (kpi, server_list(source, &backends, &up, at), denied)
 }

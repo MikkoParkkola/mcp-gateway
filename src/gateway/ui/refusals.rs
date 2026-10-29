@@ -17,9 +17,8 @@ use serde_json::json;
 
 use super::AppState;
 use super::guard::Guard;
-use crate::backend::BackendRuntimeState;
 use crate::config::Config;
-use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusal};
+use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusals};
 
 /// The handler.
 pub(super) async fn refusals(
@@ -29,19 +28,7 @@ pub(super) async fn refusals(
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
-    )]
-    let backends = state.backends.all();
-    let mut list: Vec<_> = backends
-        .iter()
-        .filter_map(|backend| {
-            let runtime = backend.status().runtime?;
-            (runtime.state == BackendRuntimeState::Denied)
-                .then(|| startup_refusal(&backend.name, &runtime.denied_reasons))
-        })
-        .collect();
+    let mut list = startup_refusals(&state.backends);
     if let Some(context) = state.meta_mcp.reload_context() {
         list.extend(context.refusals().list());
     }

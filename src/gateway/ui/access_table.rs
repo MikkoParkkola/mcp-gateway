@@ -222,6 +222,13 @@ pub(super) static ROWS: &[Row] = &[
         true,
     ),
     row(
+        routes::UI_GATEWAY,
+        Get,
+        Admin(Forbidden),
+        &[(Page::Gateway, Tab::Status)],
+        true,
+    ),
+    row(
         routes::UI_DEAD_LETTERS,
         Get,
         Admin(AdminRequired),

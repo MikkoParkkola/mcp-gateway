@@ -23,6 +23,8 @@ mod dashboard;
 mod discovery;
 mod errors;
 mod events;
+mod gateway_status;
+mod gateway_upgrade;
 mod guard;
 mod history;
 pub mod import;
@@ -37,7 +39,6 @@ pub(crate) mod stream;
 
 use crate::gateway::routes;
 use std::sync::Arc;
-use std::time::Instant;
 
 use axum::extract::{Extension, Query, State};
 use axum::http::{StatusCode, header};
@@ -58,13 +59,6 @@ use self::dashboard::dashboard_handler;
 /// Embedded HTML — compiled into the binary, zero filesystem dependency.
 const INDEX_HTML: &str = include_str!("index.html");
 
-/// Process start time for uptime calculation.
-static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-
-fn uptime_secs() -> u64 {
-    START.get_or_init(Instant::now).elapsed().as_secs()
-}
-
 /// Returns `true` when the caller has admin-level access.
 ///
 /// Admin access follows a credential: the bearer, an API key with `admin: true`,
@@ -83,6 +77,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
+        .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
