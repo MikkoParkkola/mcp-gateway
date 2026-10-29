@@ -40,7 +40,15 @@ const LARGE_BUDGET: u64 = 16 * 1024;
 /// 62,260 B, most of it the custody read on the blocking pool.
 const SMALL_BUDGET: u64 = 96 * 1024;
 /// The share may differ by at most this much between 1 and 3 MiB.
-const SIZE_SLACK: u64 = 1024;
+///
+/// 2 KiB (lead ruling 2026-10-27; was 1 KiB): the refused call's delivery
+/// record now adds about 237 small allocations, and about one loaded run in
+/// 30 puts a one-off ~1 KB on the first measured call (1,042 and 1,082 B
+/// observed, the 3 MiB share identical both times), likely a buffer stepping
+/// up its capacity in the record write. A payload copy would cost megabytes,
+/// and `PLAIN_SLOPE_PER_MIB` pins that separately. Restoring 1 KiB waits on
+/// finding and pre-sizing that buffer.
+const SIZE_SLACK: u64 = 2 * 1024;
 /// How much more the plain target's refusal may allocate per extra MiB of
 /// payload. A payload copy in the shared verdict loop is paid by both targets
 /// and so cancels out of the share; this bounds it on the plain target.
@@ -410,7 +418,15 @@ fn test_path(name: &str) -> String {
 /// body. Measured 46,792 B at both 1 and 3 MiB after the fix (it was
 /// 3,216,360 B at 1 MiB, the `_meta` merge's copy of the arguments).
 /// Lead-ruled 2026-10-20: 64 KiB fixed, tightened only on new evidence.
-const OVER_PARSE: u64 = 64 * 1024;
+///
+/// Raised to 96 KiB (lead ruling 2026-10-27): a refused `/mcp` call now
+/// writes its delivery record. Measured 87,369 B at both 1 and 3 MiB, so the
+/// cost stays fixed. The record write alone is 28,631 B across 237 calls,
+/// none of 2 KiB or more (serializing and hashing the answer is 1,531 B of
+/// it): many small allocations, no one buffer to shrink. Trimming that path
+/// back under 64 KiB is tracked for 4.0.1. Margin: about 11 KB (98,304 B cap over 87,369 B measured); a
+/// further raise needs its own breakdown.
+const OVER_PARSE: u64 = 96 * 1024;
 /// How much that excess may grow from 1 to 3 MiB: no payload term (measured
 /// 0 B).
 const OVER_PARSE_GROWTH: u64 = 1024;

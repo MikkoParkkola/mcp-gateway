@@ -85,6 +85,16 @@ pub(super) struct Dispatched {
 }
 
 impl MetaMcp {
+    /// The use counters: the invocation stats and the ranker's usage.
+    fn count_use(&self, server: &str, tool: &str) {
+        if let Some(ref stats) = self.stats {
+            stats.record_invocation(server, tool);
+        }
+        if let Some(ref ranker) = self.ranker {
+            ranker.record_use(server, tool);
+        }
+    }
+
     /// S6, the send admission: the use counters and the invocation log, the
     /// spend admission, the retry's redemption, the relay refusal and the
     /// dispatch chokepoint. Every refusal here is before anything is sent.
@@ -108,12 +118,7 @@ impl MetaMcp {
         } = call;
         #[cfg(feature = "cost-governance")]
         let api_key_name = caller.api_key_name;
-        if let Some(ref stats) = self.stats {
-            stats.record_invocation(server, tool);
-        }
-        if let Some(ref ranker) = self.ranker {
-            ranker.record_use(server, tool);
-        }
+        self.count_use(server, tool);
 
         log_tool_invoked(caller, server, tool, trace_id);
 
@@ -207,6 +212,7 @@ impl MetaMcp {
                     caller,
                     nonce_settle::PreSendExit::GiveBackUnsent(idem_reservation),
                 );
+                crate::gateway::delivery_facts::refused_while_vouched();
                 return Err(error);
             }
         };

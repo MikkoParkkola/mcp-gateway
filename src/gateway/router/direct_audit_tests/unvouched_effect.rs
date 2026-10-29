@@ -121,7 +121,7 @@ async fn a_replay_after_a_slot_refusal_serves_the_refusal() {
 }
 
 /// The playbook `yaml` registered on `fx`, run on `/mcp`: its answer.
-async fn run_playbook(fx: &Fixture, yaml: &str, name: &str) -> (StatusCode, Value) {
+pub(super) async fn run_playbook(fx: &Fixture, yaml: &str, name: &str) -> (StatusCode, Value) {
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(crate::yaml::from_str(yaml).expect("the playbook parses"));
     fx.state.meta_mcp.set_playbook_engine(engine);
