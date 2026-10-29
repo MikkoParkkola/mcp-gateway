@@ -15,6 +15,30 @@ use crate::identity_propagation::{
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::personal_accounts::identity::{AccountKeyDescriptor, Principal, account_key};
 
+/// How a record stamps the lease generation it was observed under. Here,
+/// not beside the lease, whose code may format nothing (LEASE-T6).
+pub(crate) fn lease_stamp(generation: u128) -> String {
+    format!("{generation:032x}")
+}
+
+/// What a leased listener run puts in an occurrence's `fence`: its own
+/// generation, marked so a vault binding can never read as one.
+pub(crate) fn run_fence(generation: u128) -> String {
+    format!("{RUN_FENCE_PREFIX}{}", lease_stamp(generation))
+}
+
+/// Whether `stamp` has the form [`lease_stamp`] writes: 32 lowercase hex
+/// digits. Anything else in a marked fence names no lease.
+fn is_lease_stamp(stamp: &str) -> bool {
+    stamp.len() == 32
+        && stamp
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The marker on a leased run's fence (see [`run_fence`]).
+pub(crate) const RUN_FENCE_PREFIX: &str = "lease:";
+
 /// The operator config besides the identity that defines `obs` (B3). Plain
 /// config, so it is stored as written and compared exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -127,10 +151,11 @@ pub(crate) fn observe_row(
 impl super::EventsHub {
     /// `sub`'s observation now, under `config`: what a record stamps at
     /// fan-out and must still equal when it is sent (A2). `Ok(None)` for a
-    /// shared row. A vault row is also observed under `fence`, the grant's
-    /// fence binding: the producing listener run's at fan-out, a fresh read
-    /// at delivery, so a record observed under a grant that moved never
-    /// matches.
+    /// shared row. `fence` is the producing listener run's at fan-out (a
+    /// vault grant's binding, or a leased run's marked generation) and a
+    /// fresh read at delivery (a vault row's grant; none for a leased row,
+    /// which then reads the lease held now), so a record observed under a
+    /// grant or lease that moved never matches.
     ///
     /// # Errors
     /// A per-user row whose observation cannot be had now: fan-out sends it
@@ -148,15 +173,30 @@ impl super::EventsHub {
             super::upstream::parse_name(&sub.name).ok_or(ObsRefusal::BasisChanged)?;
         let obs = observe_row(config, backend, sub)?.ok_or(ObsRefusal::BasisChanged)?;
         let lease = match basis.strategy {
-            PropagationStrategyKind::Passthrough => self
-                .leases
-                .held_generation(&super::lease::LeaseKey {
-                    backend: backend.to_owned(),
-                    obs,
-                })
-                .map(|g| format!("{g:032x}")),
-            // Prefixed so it never equals a passthrough generation.
-            PropagationStrategyKind::Vault => fence.map(|binding| format!("vault:{binding}")),
+            // At fan-out, the generation the producing run was opened under,
+            // so an occurrence read under a replaced lease can never carry
+            // the new one; at delivery and replay (no fence), the lease held
+            // now, which a record from a replaced lease no longer matches.
+            PropagationStrategyKind::Passthrough => match fence {
+                // A fence not marked as a leased run's names no lease: no
+                // stamp, so it never matches a lease held now.
+                Some(fence) => fence
+                    .strip_prefix(RUN_FENCE_PREFIX)
+                    .filter(|stamp| is_lease_stamp(stamp))
+                    .map(str::to_owned),
+                None => self
+                    .leases
+                    .held_generation(&super::lease::LeaseKey {
+                        backend: backend.to_owned(),
+                        obs,
+                    })
+                    .map(lease_stamp),
+            },
+            // Prefixed so it never equals a passthrough generation; a leased
+            // run's marked fence is never read as a vault binding.
+            PropagationStrategyKind::Vault => fence
+                .filter(|f| !f.starts_with(RUN_FENCE_PREFIX))
+                .map(|binding| format!("vault:{binding}")),
             _ => None,
         };
         Ok(Some(super::outbox::ObservedUnder {

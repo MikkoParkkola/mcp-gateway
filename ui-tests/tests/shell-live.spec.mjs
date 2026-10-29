@@ -250,11 +250,15 @@ test('L10 no shell source makes a live region but the announcer, or inserts a ba
     }
     if (file.endsWith('.js')) {
       for (const m of source.match(/state\(\s*'(error|forbidden|stale)'/g) ?? []) found.push(`${file}: ${m}`);
-      modals += (source.match(/\.showModal\(/g) ?? []).length;
+      for (const m of source.matchAll(/\.showModal\(/g)) {
+        modals += 1;
+        // A modal makes the page inert, the announcer with it, unless it moves in right after.
+        if (!source.slice(m.index, m.index + 300).includes('moveAnnouncer(')) found.push(`${file}: showModal() without moveAnnouncer`);
+      }
     }
   }
-  // The announcer follows the palette into its modal; a second modal would leave it inert.
-  expect(modals, 'showModal() sites').toBe(1);
+  // The palette and the confirmation (UI1.19) are the two modals; never both at once (D7).
+  expect(modals, 'showModal() sites').toBe(2);
   expect(found).toEqual([]);
 });
 

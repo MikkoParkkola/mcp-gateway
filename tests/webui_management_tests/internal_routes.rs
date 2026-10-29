@@ -555,6 +555,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
+    // so the admin's answer is the fixed invalid_body refusal)
+    row(
+        "/ui/api/discovery/adopt",
+        Method::POST,
+        "/ui/api/discovery/adopt",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
+    ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
         "/ui/api/previews",

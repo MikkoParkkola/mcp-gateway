@@ -250,15 +250,22 @@ async fn run_dispatched(
                 .readmit(&call, &caller, (session_id.as_deref(), &generation))
                 .await
         } else {
-            // The intake's own judgement, not an empty one: the inner scope
-            // shadows the worker's, so an empty one would switch off the
-            // playbook and backend-instance guards this task was admitted under.
+            // The intake's own judgement, which the dispatch compares against;
+            // it also stands as the enclosing scope's, so an empty inner one
+            // would keep the same guards (`with_judged`).
             Ok((call.arguments.clone(), intent.owned.judged()))
         };
         let (arguments, judged) = match readmitted {
             Ok(readmitted) => readmitted,
             Err(refused) => return *refused,
         };
+        // The test seam a reload lands in between a re-admission's judgement
+        // and the run (the C2e6 row). A task whose intake judged something
+        // was not re-admitted, so it does not fire.
+        #[cfg(test)]
+        if intent.owned.judged().is_empty() {
+            crate::gateway::meta_mcp::visible::seams::readmitted();
+        }
         crate::gateway::meta_mcp::visible::memo::with_judged(
             judged,
             meta.dispatch_below_gate_native_result(
@@ -295,9 +302,11 @@ async fn run_dispatched(
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
-    let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
-        Arc::clone(intent.owned.dispatch_log()),
-        dispatch,
+    let mut dispatch = Box::pin(dispatched_in_cell(
+        crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+            Arc::clone(intent.owned.dispatch_log()),
+            dispatch,
+        ),
     ));
 
     // Awaited into its own binding so the dispatch future — which borrows both
@@ -727,7 +736,7 @@ use held::{cancel_held_upstream, follow_upstream_job};
 
 #[path = "worker_inspect.rs"]
 mod inspect;
-pub(super) use inspect::inspect_and_record;
+pub(super) use inspect::{dispatched_in_cell, inspect_and_record};
 
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]

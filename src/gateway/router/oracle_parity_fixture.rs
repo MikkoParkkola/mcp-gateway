@@ -550,7 +550,7 @@ pub(super) fn assert_cells(row: &str, cells: &[String]) {
 /// of what a row compares.
 pub(super) fn untraced(mut body: Value) -> Value {
     if let Some(result) = body["result"].as_object_mut() {
-        result.remove("trace_id");
+        result.remove("_trace_id");
     }
     if let Some(signature) = body["result"]["_signature"].as_object_mut() {
         signature.remove("sig");
