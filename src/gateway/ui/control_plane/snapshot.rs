@@ -557,6 +557,9 @@ pub(super) fn feature_entitlements(
 pub(super) struct ControlPlaneAuthorizationSet {
     pub(super) read_inventory: ControlPlaneAuthorization,
     pub(super) read_evidence: ControlPlaneAuthorization,
+    /// Whether the caller reads every principal's grants and audit events,
+    /// or only its own.
+    pub(super) read_all_principals: ControlPlaneAuthorization,
     pub(super) review_evidence: ControlPlaneAuthorization,
     pub(super) mutate_grant: ControlPlaneAuthorization,
     pub(super) mutate_policy: ControlPlaneAuthorization,
@@ -568,6 +571,10 @@ impl ControlPlaneAuthorizationSet {
         Self {
             read_inventory: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadInventory),
             read_evidence: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReadEvidence),
+            read_all_principals: ControlPlaneRbac::authorize(
+                actor,
+                ControlPlaneAction::ReadAllPrincipals,
+            ),
             review_evidence: ControlPlaneRbac::authorize(actor, ControlPlaneAction::ReviewEvidence),
             mutate_grant: ControlPlaneRbac::authorize(actor, ControlPlaneAction::MutateGrant),
             mutate_policy: ControlPlaneRbac::authorize(actor, ControlPlaneAction::MutatePolicy),
