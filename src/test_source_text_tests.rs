@@ -59,6 +59,11 @@ const CASES: &[(&str, &[&str], &[&str])] = &[
         &["probe", "idle"],
     ),
     (
+        "fn now(&self) -> u8 {\n    #[cfg(test)]\n    { probe() }.touch()?;\n    self.live()\n}\n",
+        &["self.live()"],
+        &["probe", "touch"],
+    ),
+    (
         "// A comment naming #[cfg(test)] marks nothing.\nfn product() {}\n",
         &["fn product()"],
         &[],
