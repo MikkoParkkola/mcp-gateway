@@ -86,6 +86,7 @@ src/gateway/meta_mcp/invoke/audit.rs	noted_classes	http_invoke_tiny	on the HTTP 
 src/gateway/meta_mcp/invoke/audit.rs	noted_response	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	outcome	-	on-path, untimed: invocation and settlement records, only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	pre_send	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	pre_send_now	http_invoke_tiny	on the HTTP gateway_invoke path: read before a delivered answer's relay receipt is staged
 src/gateway/meta_mcp/invoke/audit/settlement.rs	record_task_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	request_tenants	-	on-path, untimed: tenant attribution under a firewall tenant guard (arg_keys); the harness configures none
 src/gateway/meta_mcp/invoke/audit.rs	responded	http_invoke_tiny	on the HTTP gateway_invoke path
