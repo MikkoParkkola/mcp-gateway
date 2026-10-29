@@ -188,6 +188,7 @@ impl AuditLogger {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         self.log_request_attributed(&correlation, args, verdict, &BTreeSet::new());
     }
@@ -208,6 +209,7 @@ impl AuditLogger {
             external_tool: tool,
             subject: _,
             trace_id: _,
+            key: _,
         } = *correlation;
         let tenants = (!tenants.is_empty()).then(|| {
             let hashed: BTreeSet<String> = tenants
@@ -291,10 +293,12 @@ impl AuditLogger {
                 external_tool: tool,
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             &[ResponsePolicyTarget {
                 server: server.into(),
                 tool: tool.into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             ResponseArtifactKind::FinalResponse,
             verdict,
@@ -541,6 +545,7 @@ mod tests {
             external_tool: "t",
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         logger.log_dispatch(
             &correlation,

@@ -195,6 +195,8 @@ mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod rule_keys_route_tests;
 /// Secret injection applies on the direct route as through gateway_invoke.
 #[cfg(test)]
 mod secret_injection_direct_tests;

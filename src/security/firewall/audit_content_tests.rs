@@ -55,6 +55,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_tool: "t",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     }
 }
 
@@ -149,6 +150,7 @@ fn c4_a_response_artifact_row_carries_no_content() {
     let targets = [ResponsePolicyTarget {
         server: "srv".to_owned(),
         tool: "t".to_owned(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let row = row(|log| {
         log.log_response_artifact(

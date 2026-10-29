@@ -576,10 +576,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         before,
         "dispatch itself inspects nothing; the delivery pass does"
     );
-    let targets = [crate::security::response_policy::ResponsePolicyTarget {
-        server: "asks".to_owned(),
-        tool: "gateway_list_tools".to_owned(),
-    }];
+    let targets = [asks_target()];
     let delivered = m
         .finalize_response_for_delivery(
             response,
@@ -593,6 +590,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                     external_tool: "gateway_list_tools",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: ChainSource::NotEligible,
@@ -606,6 +604,16 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         1,
         "the delivery pass inspects the retry's result exactly once"
     );
+}
+
+/// The routed policy target of a call to `asks` under the discovery name.
+#[cfg(feature = "firewall")]
+fn asks_target() -> crate::security::response_policy::ResponsePolicyTarget {
+    crate::security::response_policy::ResponsePolicyTarget {
+        server: "asks".to_owned(),
+        tool: "gateway_list_tools".to_owned(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
+    }
 }
 
 /// Every round asks `roots/list` (declared) except the last, which asks for

@@ -64,6 +64,7 @@ async fn finalize(
             targets: &[ResponsePolicyTarget {
                 server: "actual-backend".into(),
                 tool: "echo".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "signing-delivery-session",
@@ -72,6 +73,7 @@ async fn finalize(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,
@@ -516,6 +518,9 @@ fn install_firewall(
                     action,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

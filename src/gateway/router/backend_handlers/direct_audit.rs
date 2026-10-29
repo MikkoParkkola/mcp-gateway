@@ -240,7 +240,7 @@ async fn audited_call_judged(
         ));
     }
     let RpcHttp {
-        status,
+        mut status,
         body: Json(body),
         origin,
     } = answer;
@@ -255,7 +255,6 @@ async fn audited_call_judged(
     // MIK-7669: the delivery record the meta route writes (`judged_answer`),
     // after the judge and with the answer's `tenant_read` fields in it. The
     // direct route keeps no session, so the session fingerprint is empty.
-    let mut status = status;
     let correlation = crate::security::response_policy::ResponseCorrelation {
         session_id: "",
         caller: reads.caller.as_deref().unwrap_or("anonymous"),
@@ -263,6 +262,7 @@ async fn audited_call_judged(
         external_tool: &reads.tool,
         subject: reads.subject.as_ref(),
         trace_id: trace.as_deref(),
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     // No log, nothing to record: the answer is not copied to be hashed.
     let document = state

@@ -401,6 +401,11 @@ async fn meta_mcp_dispatch(
                         external_tool,
                         subject: grant_subject.as_ref(),
                         trace_id: None,
+                        key: crate::security::response_policy::KeyOf::of_client(
+                            client.as_ref().and_then(
+                                crate::gateway::auth::AuthenticatedClient::api_key_identity,
+                            ),
+                        ),
                     };
                     let credential =
                         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
@@ -602,6 +607,11 @@ async fn meta_mcp_dispatch(
             external_tool,
             subject: grant_subject.as_ref(),
             trace_id: invocation_trace.as_deref(),
+            key: crate::security::response_policy::KeyOf::of_client(
+                client
+                    .as_ref()
+                    .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+            ),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,

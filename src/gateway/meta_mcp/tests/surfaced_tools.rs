@@ -541,6 +541,9 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
                     action: FirewallAction::Warn,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
