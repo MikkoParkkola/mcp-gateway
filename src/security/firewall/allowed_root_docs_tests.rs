@@ -108,10 +108,15 @@ const REASONS: [RootReason; 17] = [
 #[test]
 fn d3_firewall_reference_documents_folder_rules() {
     let text = read("docs/FIREWALL.md");
-    let at = text
-        .find("## Folder rules")
-        .expect("a Folder rules section");
-    let section = &text[at..];
+    let types = section(&text, "## Finding types for `scan`");
+    for output_only in ["path_outside_root", "root_refused"] {
+        assert!(
+            types.contains(output_only),
+            "Finding types lacks {output_only}"
+        );
+    }
+    assert!(types.contains("output-only"), "Finding types: output-only");
+    let section = section(&text, "## Folder rules");
     for needed in [
         "allowed_roots",
         "path_args",
@@ -129,4 +134,13 @@ fn d3_firewall_reference_documents_folder_rules() {
             "Folder rules lacks `{code}`"
         );
     }
+}
+
+/// The text of the `##` section `heading` starts, up to the next `##`.
+fn section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let at = text
+        .find(heading)
+        .unwrap_or_else(|| panic!("no {heading:?} section"));
+    let body = &text[at + heading.len()..];
+    &text[at..at + heading.len() + body.find("\n## ").unwrap_or(body.len())]
 }
