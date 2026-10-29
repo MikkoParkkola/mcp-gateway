@@ -7,7 +7,7 @@
 //! never appear in memory and a scan for it would pass on anything.
 
 use super::*;
-use crate::gateway::alloc_meter::{MIN_MARKER, Scanned, isolate, scan_frees};
+use crate::gateway::alloc_meter::{MIN_MARKER, Scanned, isolate, scan_frees, scan_frees_watching};
 
 fn test_path(name: &str) -> String {
     let module = module_path!();
@@ -15,6 +15,16 @@ fn test_path(name: &str) -> String {
         .split_once("::")
         .map_or(module, |(_crate, rest)| rest);
     format!("{module}::{name}")
+}
+
+/// The heap buffer of the minted `Authorization` value: the block the drop
+/// must free.
+fn value_buffer(headers: &[(String, String)]) -> *const u8 {
+    headers
+        .iter()
+        .find(|(name, _)| name == "Authorization")
+        .map(|(_, value)| value.as_ptr())
+        .expect("premise: the call returned a minted credential")
 }
 
 /// The minted `Authorization` value, copied once into a buffer that is never
@@ -33,8 +43,8 @@ fn minted_value(headers: &[(String, String)]) -> &'static [u8] {
 
 fn assert_wiped(call: &str, scanned: Scanned) {
     assert!(
-        scanned.searched >= 1,
-        "{call}: no block was freed, so a zero proves nothing: {scanned:?}"
+        scanned.watched_freed,
+        "{call}: the credential's own buffer was not freed, so a zero proves nothing: {scanned:?}"
     );
     assert_eq!(
         scanned.hits, 0,
@@ -67,7 +77,8 @@ async fn the_headers_call_hands_out_a_value_wiped_on_drop() {
         "positive control: a plain copy freed unwiped was not seen: {control:?}"
     );
 
-    let ((), scanned) = scan_frees(marker, || drop(headers));
+    let watched = value_buffer(&headers);
+    let ((), scanned) = scan_frees_watching(marker, watched, || drop(headers));
     assert_wiped("resolve_propagation_headers", scanned);
 }
 
@@ -87,7 +98,8 @@ async fn the_credential_call_hands_out_a_value_wiped_on_drop() {
         .expect("resolve ok");
     let marker = minted_value(&returned.0);
 
-    let ((), scanned) = scan_frees(marker, || drop(returned));
+    let watched = value_buffer(&returned.0);
+    let ((), scanned) = scan_frees_watching(marker, watched, || drop(returned));
     assert_wiped("resolve_propagation_credential", scanned);
 }
 

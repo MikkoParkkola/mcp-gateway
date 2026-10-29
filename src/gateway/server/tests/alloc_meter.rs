@@ -81,6 +81,11 @@ static SCAN_HITS: AtomicU64 = AtomicU64::new(0);
 /// Blocks searched while armed (large enough to hold the marker), so a row
 /// can tell "no block held it" from "no block was freed".
 static SCAN_SEARCHED: AtomicU64 = AtomicU64::new(0);
+/// One block a row expects to be freed (the returned credential's own
+/// buffer), so "no block held the marker" is tied to that block, not to
+/// whatever else happened to be freed.
+static SCAN_WATCH: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
+static SCAN_WATCH_FREED: AtomicBool = AtomicBool::new(false);
 
 /// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
 /// included) holds the armed marker. Reads only the block and the marker,
@@ -153,13 +158,21 @@ unsafe impl GlobalAlloc for MeteredSystem {
         // block grown in place was not returned.
         let held = holds_marker(ptr, layout.size());
         let moved = unsafe { System.realloc(ptr, layout, new_size) };
-        if held && !moved.is_null() && moved != ptr {
-            SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+        if !moved.is_null() && moved != ptr {
+            if held {
+                SCAN_HITS.fetch_add(1, Ordering::Relaxed);
+            }
+            if ptr == SCAN_WATCH.load(Ordering::Acquire) {
+                SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
+            }
         }
         moved
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        if !ptr.is_null() && ptr == SCAN_WATCH.load(Ordering::Acquire) {
+            SCAN_WATCH_FREED.store(true, Ordering::Relaxed);
+        }
         if holds_marker(ptr, layout.size()) {
             SCAN_HITS.fetch_add(1, Ordering::Relaxed);
         }
@@ -390,6 +403,7 @@ impl Drop for ScanScope {
     fn drop(&mut self) {
         SCAN_MARKER.store(std::ptr::null_mut(), Ordering::SeqCst);
         SCAN_LEN.store(0, Ordering::SeqCst);
+        SCAN_WATCH.store(std::ptr::null_mut(), Ordering::SeqCst);
     }
 }
 
@@ -412,6 +426,7 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
     );
     SCAN_HITS.store(0, Ordering::SeqCst);
     SCAN_SEARCHED.store(0, Ordering::SeqCst);
+    SCAN_WATCH_FREED.store(false, Ordering::SeqCst);
     SCAN_LEN.store(marker.len(), Ordering::SeqCst);
     SCAN_MARKER.store(marker.as_ptr().cast_mut(), Ordering::SeqCst);
     ScanScope
@@ -425,12 +440,15 @@ pub(crate) struct Scanned {
     /// Blocks searched: every block freed or moved that was large enough to
     /// hold the marker.
     pub(crate) searched: u64,
+    /// Whether the watched block (see [`scan_frees_watching`]) was freed.
+    pub(crate) watched_freed: bool,
 }
 
 fn scanned() -> Scanned {
     Scanned {
         hits: SCAN_HITS.load(Ordering::SeqCst),
         searched: SCAN_SEARCHED.load(Ordering::SeqCst),
+        watched_freed: SCAN_WATCH_FREED.load(Ordering::SeqCst),
     }
 }
 
@@ -455,6 +473,22 @@ where
 {
     let scope = arm_scan(marker);
     let value = make().await;
+    drop(scope);
+    (value, scanned())
+}
+
+/// [`scan_frees`], also watching the block at `watched` (for example the
+/// heap buffer of the returned credential's value): [`Scanned::watched_freed`]
+/// says whether that exact block was freed while the scan ran, so a zero-hit
+/// result is tied to the credential's own buffer.
+pub(crate) fn scan_frees_watching<T>(
+    marker: &'static [u8],
+    watched: *const u8,
+    body: impl FnOnce() -> T,
+) -> (T, Scanned) {
+    let scope = arm_scan(marker);
+    SCAN_WATCH.store(watched.cast_mut(), Ordering::SeqCst);
+    let value = body();
     drop(scope);
     (value, scanned())
 }
