@@ -35,6 +35,26 @@ while IFS= read -r line; do
 done
 "#;
 
+/// What a row varies: the root rule's `servers` and `path_args` (YAML list
+/// bodies) and an optional secret rule injecting into `secret_key`.
+pub(super) struct Setup {
+    pub(super) servers: &'static str,
+    pub(super) path_args: &'static str,
+    pub(super) secret_key: Option<&'static str>,
+    pub(super) secret_value: &'static str,
+}
+
+impl Default for Setup {
+    fn default() -> Self {
+        Self {
+            servers: "\"fs\"",
+            path_args: "\"path?\", \"paths[]?\"",
+            secret_key: None,
+            secret_value: "x",
+        }
+    }
+}
+
 pub(super) struct Routes {
     pub(super) dir: tempfile::TempDir,
     pub(super) gateway: Gateway,
@@ -46,8 +66,12 @@ pub(super) struct Routes {
 
 impl Routes {
     /// A gateway with backend `fs` (the peer), `read_file` surfaced on
-    /// `/mcp`, and a block root rule on `read_file` over `<dir>/safe`.
+    /// `/mcp`, and a block root rule on `read_*` over `<dir>/safe`.
     pub(super) async fn new() -> Self {
+        Self::build(Setup::default()).await
+    }
+
+    pub(super) async fn build(setup: Setup) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         for sub in ["safe", "outside"] {
             std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
@@ -56,15 +80,25 @@ impl Routes {
         let script = dir.path().join("peer.sh");
         let peer = PEER.replace("__LOG__", &log.to_string_lossy());
         std::fs::write(&script, peer).expect("write the peer");
-        let safe = dir.path().join("safe");
+        let secrets = setup.secret_key.map_or_else(String::new, |key| {
+            format!(
+                "    secrets:\n      - name: fs_token\n        credential_type: api_key\n        \
+                 value: \"{}\"\n        inject_as: argument\n        inject_key: {key}\n        \
+                 tools: [\"*\"]\n",
+                setup.secret_value
+            )
+        });
         let yaml = format!(
-            "backends:\n  fs:\n    command: \"sh {}\"\nmeta_mcp:\n  surfaced_tools:\n    - \
-             {{server: fs, tool: read_file}}\nsecurity:\n  firewall:\n    enabled: true\n    audit_log: \"{}\"\n    \
-             rules:\n      - {{match: \"read_*\", servers: [\"fs\"], action: block, \
-             allowed_roots: [\"{}\"], path_args: [\"path?\", \"paths[]?\"]}}\n",
-            script.display(),
-            dir.path().join("audit.ndjson").display(),
-            safe.display()
+            "backends:\n  fs:\n    command: \"sh {script}\"\n{secrets}meta_mcp:\n  \
+             surfaced_tools:\n    - {{server: fs, tool: read_file}}\nsecurity:\n  firewall:\n    \
+             enabled: true\n    audit_log: \"{audit}\"\n    rules:\n      - {{match: \"read_*\", \
+             servers: [{servers}], action: block, allowed_roots: [\"{safe}\"], path_args: \
+             [{args}]}}\n",
+            script = script.display(),
+            audit = dir.path().join("audit.ndjson").display(),
+            servers = setup.servers,
+            safe = dir.path().join("safe").display(),
+            args = setup.path_args,
         );
         let path = dir.path().join("gateway.yaml");
         crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
