@@ -45,6 +45,11 @@ async fn c2e4_a_sync_run_with_no_reload_runs() {
 /// Submit `gateway_run_playbook pb` with a NUL input as a keyed task, and wait
 /// for it to leave `working`; returns the last `tasks/get` body.
 async fn task_run_with_nul(fx: &Fx, key: &str) -> Value {
+    task_run_with(fx, key, json!({"x": NUL})).await
+}
+
+/// [`task_run_with_nul`] with the playbook's `arguments` given.
+async fn task_run_with(fx: &Fx, key: &str, arguments: Value) -> Value {
     let modern = json!({
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {
@@ -58,7 +63,7 @@ async fn task_run_with_nul(fx: &Fx, key: &str) -> Value {
     submit_meta[nonce_meta] = json!(format!("{key}-submit"));
     let submit = json!({
         "name": "gateway_run_playbook",
-        "arguments": {"name": "pb", "arguments": {"x": NUL}},
+        "arguments": {"name": "pb", "arguments": arguments},
         "task": {},
         "_meta": submit_meta,
     });
@@ -173,6 +178,83 @@ async fn c2e3_a_task_with_no_judgement_runs_a_reloaded_playbook() {
     assert_eq!(calls(&fx), 2, "c2e3': the reloaded steps did not both run");
 }
 
+/// A task submitted with sanitizing off over `pb` = `[alpha, alpha-pt]` (not
+/// exempt: `alpha` is not passthrough), whose worker runs after a reload
+/// turned sanitizing on: the worker re-admits it. `reload` runs between the
+/// re-admission's judgement and the run. Clean arguments, so the re-admission
+/// itself passes. Returns the settled body; both seams are asserted to fire.
+async fn readmitted_run(key: &str, reload: Option<[&'static str; 2]>) -> (Fx, Value) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let definition = playbook_definition(["alpha", "alpha-pt"]);
+    let fx = Box::pin(sanitizing(
+        false,
+        super::super::direct_guards_fixture::fixture_hardened_signed_built(
+            Answer::Ok,
+            true,
+            move |meta| {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        ),
+    ))
+    .await;
+    let live = std::sync::Arc::clone(&fx.state.live_config);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        live.edit(|c| c.security.sanitize_input = true);
+    });
+    let readmitted = std::sync::Arc::new(AtomicBool::new(false));
+    let fired = std::sync::Arc::clone(&readmitted);
+    let meta = std::sync::Arc::clone(&fx.state.meta_mcp);
+    crate::gateway::meta_mcp::visible::seams::after_readmit(move || {
+        fired.store(true, Ordering::SeqCst);
+        if let Some(servers) = reload {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(playbook_definition(servers));
+            meta.set_playbook_engine(engine);
+        }
+    });
+    let got = task_run_with(&fx, key, json!({"x": "clean"})).await;
+    assert!(
+        fx.state.live_config.get().security.sanitize_input,
+        "the dispatch seam never ran, so this row tested nothing: {got}"
+    );
+    assert!(
+        readmitted.load(Ordering::SeqCst),
+        "the task was never re-admitted, so this row tested nothing: {got}"
+    );
+    (fx, got)
+}
+
+/// C2e6: a re-admitted, non-exempt playbook task whose playbook is reloaded
+/// between the re-admission and the run is refused as the synchronous path
+/// refuses it, and no step runs: the re-admission keeps the digest it judged.
+#[tokio::test]
+async fn c2e6_a_readmitted_playbook_reloaded_before_its_run_is_refused() {
+    let (fx, got) = Box::pin(readmitted_run("c2e6-k", Some(["alpha", "alpha"]))).await;
+    assert!(got.to_string().contains(CHANGED), "c2e6: {got}");
+    assert_eq!(
+        got.pointer("/result/status"),
+        Some(&json!("failed")),
+        "c2e6: {got}"
+    );
+    assert_eq!(calls(&fx), 0, "c2e6: a step ran");
+}
+
+/// C2e7 CONTROL: the same re-admitted task with no reload completes, and both
+/// steps run: keeping the digest refuses only a changed definition.
+#[tokio::test]
+async fn c2e7_a_readmitted_playbook_with_no_reload_runs() {
+    let (fx, got) = Box::pin(readmitted_run("c2e7-k", None)).await;
+    assert_eq!(
+        got.pointer("/result/status"),
+        Some(&json!("completed")),
+        "c2e7: {got}"
+    );
+    assert_eq!(calls(&fx), 2, "c2e7: the steps did not both run");
+}
+
 /// The refusal a send by a reloaded backend instance meets (MIK-8154 F2).
 const BACKEND_CHANGED: &str = "The backend changed after this call was admitted; retry the call";
 
@@ -241,6 +323,10 @@ async fn r2_a_task_whose_backend_is_reloaded_sends_nothing() {
         super::super::direct_guards_fixture::reload_for_test(&fx, "alpha-pt", false),
     );
     let got = Box::pin(task_run_with_nul(&fx, "r2-k")).await;
+    assert!(
+        got.to_string().contains(BACKEND_CHANGED),
+        "r2: not refused as a changed backend: {got}"
+    );
     assert_eq!(
         calls(&fx),
         0,

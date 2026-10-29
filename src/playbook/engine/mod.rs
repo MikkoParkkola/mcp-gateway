@@ -237,6 +237,8 @@ impl PlaybookEngine {
                         ErrorStrategy::Abort if sent => return Err(e.with_may_have_run()),
                         ErrorStrategy::Abort => return Err(e),
                         ErrorStrategy::Continue | ErrorStrategy::Retry => {
+                            // Carried on past: this step no longer ends the plan.
+                            crate::gateway::delivery_facts::step_absorbed();
                             // Both arms null-fill and carry on, so both must say
                             // why: a null with no reason is how a caller ends up
                             // with a partial result that reads like a success.

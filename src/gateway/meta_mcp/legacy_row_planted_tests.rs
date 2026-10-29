@@ -51,7 +51,9 @@ async fn a_pre_binding_row_with_a_planted_member_is_refused_when_served() {
         meta.refuse_stored_delivery(&RequestId::Number(1), &stored, None, Some("s"), &caller)
     })
     .await;
-    let refusal = refusal.expect("a pre-binding row's output is refused");
+    let refusal = refusal
+        .expect("a pre-binding row's output is refused")
+        .into_response();
     let body = serde_json::to_string(&refusal).expect("serializes");
     assert!(refusal.error.is_some(), "{body}");
     assert!(!body.contains("FORGED-"), "{body}");
