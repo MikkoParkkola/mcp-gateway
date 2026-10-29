@@ -78,6 +78,9 @@ static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
 static SCAN_MARKER: AtomicPtr<u8> = AtomicPtr::new(std::ptr::null_mut());
 static SCAN_LEN: AtomicUsize = AtomicUsize::new(0);
 static SCAN_HITS: AtomicU64 = AtomicU64::new(0);
+/// Blocks searched while armed (large enough to hold the marker), so a row
+/// can tell "no block held it" from "no block was freed".
+static SCAN_SEARCHED: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the block at `ptr` (all `size` bytes of its layout, spare capacity
 /// included) holds the armed marker. Reads only the block and the marker,
@@ -88,6 +91,7 @@ fn holds_marker(ptr: *const u8, size: usize) -> bool {
     if marker.is_null() || len == 0 || size < len {
         return false;
     }
+    SCAN_SEARCHED.fetch_add(1, Ordering::Relaxed);
     // Bytes are read one at a time through `read_volatile`: part of a block
     // may never have been written (a vector's spare capacity), and a volatile
     // read keeps the compiler from assuming anything about it.
@@ -407,23 +411,44 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
         "free scans must not nest"
     );
     SCAN_HITS.store(0, Ordering::SeqCst);
+    SCAN_SEARCHED.store(0, Ordering::SeqCst);
     SCAN_LEN.store(marker.len(), Ordering::SeqCst);
     SCAN_MARKER.store(marker.as_ptr().cast_mut(), Ordering::SeqCst);
     ScanScope
 }
 
-/// Run `body` with the free scan armed on `marker`; returns its value and the
-/// number of blocks returned to the allocator still holding the marker while
-/// it ran. `marker` is `'static` so the scan's own needle is never freed.
-pub(crate) fn scan_frees<T>(marker: &'static [u8], body: impl FnOnce() -> T) -> (T, u64) {
+/// What one free scan saw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Scanned {
+    /// Blocks returned to the allocator still holding the marker: unwiped.
+    pub(crate) hits: u64,
+    /// Blocks searched: every block freed or moved that was large enough to
+    /// hold the marker.
+    pub(crate) searched: u64,
+}
+
+fn scanned() -> Scanned {
+    Scanned {
+        hits: SCAN_HITS.load(Ordering::SeqCst),
+        searched: SCAN_SEARCHED.load(Ordering::SeqCst),
+    }
+}
+
+/// Run `body` with the free scan armed on `marker`; returns its value and
+/// what the scan saw while it ran. `marker` is `'static` so the scan's own
+/// needle is never freed.
+pub(crate) fn scan_frees<T>(marker: &'static [u8], body: impl FnOnce() -> T) -> (T, Scanned) {
     let scope = arm_scan(marker);
     let value = body();
     drop(scope);
-    (value, SCAN_HITS.load(Ordering::SeqCst))
+    (value, scanned())
 }
 
 /// [`scan_frees`] for an awaited body, the future constructed inside the scan.
-pub(crate) async fn scan_frees_async<F, Fut>(marker: &'static [u8], make: F) -> (Fut::Output, u64)
+pub(crate) async fn scan_frees_async<F, Fut>(
+    marker: &'static [u8],
+    make: F,
+) -> (Fut::Output, Scanned)
 where
     F: FnOnce() -> Fut,
     Fut: std::future::Future,
@@ -431,5 +456,5 @@ where
     let scope = arm_scan(marker);
     let value = make().await;
     drop(scope);
-    (value, SCAN_HITS.load(Ordering::SeqCst))
+    (value, scanned())
 }

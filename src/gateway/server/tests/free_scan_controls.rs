@@ -36,11 +36,14 @@ fn a_plain_copy_dropped_is_seen() {
     if isolate(&test_path("a_plain_copy_dropped_is_seen")) {
         return;
     }
-    let ((), hits) = scan_frees(MARKER, || {
+    let ((), scanned) = scan_frees(MARKER, || {
         let held = vec![("Authorization".to_string(), marker())];
         drop(black_box(held));
     });
-    assert!(hits >= 1, "an unwiped copy was freed and the scan saw none");
+    assert!(
+        scanned.hits >= 1,
+        "an unwiped copy was freed and the scan saw none: {scanned:?}"
+    );
 }
 
 /// Negative control: the same credential in the zeroizing holder is wiped
@@ -50,11 +53,15 @@ fn a_wiped_copy_dropped_is_not_seen() {
     if isolate(&test_path("a_wiped_copy_dropped_is_not_seen")) {
         return;
     }
-    let ((), hits) = scan_frees(MARKER, || {
+    let ((), scanned) = scan_frees(MARKER, || {
         let held = Zeroizing::new(vec![("Authorization".to_string(), marker())]);
         drop(black_box(held));
     });
-    assert_eq!(hits, 0, "a wiped copy was counted as unwiped");
+    assert!(
+        scanned.searched >= 1,
+        "no block was freed, so a zero proves nothing: {scanned:?}"
+    );
+    assert_eq!(scanned.hits, 0, "a wiped copy was counted as unwiped");
 }
 
 /// A zeroizing holder wipes only the block it owns when dropped: a block it
@@ -64,13 +71,13 @@ fn a_wiped_holder_that_grew_leaves_its_old_block() {
     if isolate(&test_path("a_wiped_holder_that_grew_leaves_its_old_block")) {
         return;
     }
-    let ((), hits) = scan_frees(MARKER, || {
+    let ((), scanned) = scan_frees(MARKER, || {
         let mut held = Zeroizing::new(MARKER.to_vec());
         held.reserve(64 * MARKER.len());
         drop(black_box(held));
     });
     assert!(
-        hits >= 1,
-        "the block a growing holder left behind was not seen"
+        scanned.hits >= 1,
+        "the block a growing holder left behind was not seen: {scanned:?}"
     );
 }
