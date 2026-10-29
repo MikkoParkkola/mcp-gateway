@@ -137,6 +137,9 @@ fn r33l_non_utf8_entry_is_compared_by_bytes() {
     std::fs::write(fx.dir.path().join("safe").join(odd), "").expect("write");
     assert_eq!(read(&fx, "safe/f"), Seen::Allowed);
     assert_eq!(read(&fx, "safe/a b"), Seen::Allowed);
+    // The UTF-8 name a lossy comparison would confuse with `a\xffb`: its
+    // bytes differ, so it is a distinct missing name and allowed.
+    assert_eq!(read(&fx, "safe/a\u{fffd}b"), Seen::Allowed);
 }
 
 /// W12 (macOS): root `<tmp>/Safe`, call `<tmp>/safe/f`. On a
