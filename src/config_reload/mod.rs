@@ -207,10 +207,29 @@ pub struct LiveConfig {
 }
 
 impl LiveConfig {
-    /// Create a new `LiveConfig` seeded with the startup configuration.
+    /// A `LiveConfig` for `config` whose key table is resolved with no env
+    /// overlay and a throwaway record key. For tests and tools that judge no
+    /// production request; production starts through [`Self::with_auth`],
+    /// with the auth it resolved at startup (a source pin holds this).
+    ///
+    /// # Panics
+    ///
+    /// When `config.auth` holds a secret reference the process environment
+    /// cannot resolve.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let seed = Generation::of(config);
+        use rand::RngExt;
+        let key: [u8; 32] = rand::rng().random();
+        let key = key.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let auth = crate::gateway::auth::ResolvedAuthConfig::from_config(&config.auth, &key);
+        Self::with_auth(config, Arc::new(auth))
+    }
+
+    /// The startup `LiveConfig`: `config` with `auth`, its auth as resolved
+    /// at startup, so the startup keys authenticate from the first request.
+    #[must_use]
+    pub fn with_auth(config: Config, auth: Arc<crate::gateway::auth::ResolvedAuthConfig>) -> Self {
+        let seed = Generation::startup(config, auth);
         let running = Arc::clone(seed.config());
         Self {
             inner: RwLock::new(Arc::new(seed)),
@@ -270,11 +289,19 @@ impl LiveConfig {
         Arc::clone(&self.inner.read())
     }
 
-    /// Atomically replace the current config. Kept for callers that publish
-    /// a config no view can refuse; a reload prepares a [`Generation`] first
-    /// and calls [`Self::publish`].
+    /// Prepare `config` against the published generation, with no env
+    /// overlay, and publish it. For tests: a reload prepares a
+    /// [`Generation`] itself and calls [`Self::publish`] (a source pin holds
+    /// this).
+    ///
+    /// # Panics
+    ///
+    /// When the preparation refuses `config`.
     pub fn set(&self, config: Config) {
-        self.publish(Arc::new(Generation::of(config)));
+        let running = Arc::clone(self.generation().auth());
+        let prepared = Generation::prepare(config, &crate::config::EnvOverlay::none(), &running)
+            .expect("the config prepares");
+        self.publish(Arc::new(prepared));
     }
 
     /// Publish a prepared generation in one swap.

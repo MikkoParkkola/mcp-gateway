@@ -7,35 +7,55 @@
 
 use std::sync::Arc;
 
-use crate::config::Config;
+use crate::config::{Config, EnvOverlay};
+use crate::gateway::auth::ResolvedAuthConfig;
 
 /// The configuration a request is judged against, from arrival to response.
 #[derive(Debug)]
 pub struct Generation {
     config: Arc<Config>,
+    /// The resolved API key table, with the running restart-only `auth`
+    /// settings and the shared per-client store.
+    auth: Arc<ResolvedAuthConfig>,
 }
 
 impl Generation {
     /// Build the generation for `config`. Runs before a reload touches
     /// backends, so a refusal here leaves everything as it was.
     ///
+    /// `running` is the published generation's auth: the key table is
+    /// rebuilt from `config` against `overlay`, and every other `auth`
+    /// setting is the running one, since those apply only at a restart.
+    ///
     /// # Errors
     ///
-    /// A view that cannot be built from `config` (none in this slice; the
-    /// key table and budgets join it later).
-    pub fn prepare(config: Config) -> Result<Self, String> {
+    /// A view that cannot be built from `config`: a key the startup build
+    /// would refuse.
+    pub fn prepare(
+        config: Config,
+        overlay: &EnvOverlay,
+        running: &ResolvedAuthConfig,
+    ) -> Result<Self, String> {
         #[cfg(test)]
         if let Some(reason) = refuse_hook::take() {
             return Err(reason);
         }
-        Ok(Self::of(config))
+        let auth = running
+            .with_keys_of(&config.auth, overlay)
+            .map_err(|e| format!("auth.api_keys: {e}"))?;
+        Ok(Self {
+            config: Arc::new(config),
+            auth: Arc::new(auth),
+        })
     }
 
-    /// The generation for a config that needs no checking: the startup seed,
-    /// and [`super::LiveConfig::set`] while no view can refuse.
-    pub(super) fn of(config: Config) -> Self {
+    /// The startup generation: `auth` is the startup build of `config.auth`
+    /// against the startup overlay, so the startup keys authenticate before
+    /// any reload.
+    pub(super) fn startup(config: Config, auth: Arc<ResolvedAuthConfig>) -> Self {
         Self {
             config: Arc::new(config),
+            auth,
         }
     }
 
@@ -43,6 +63,13 @@ impl Generation {
     #[must_use]
     pub fn config(&self) -> &Arc<Config> {
         &self.config
+    }
+
+    /// The API key table and the running `auth` settings this generation
+    /// judges with.
+    #[must_use]
+    pub fn auth(&self) -> &Arc<ResolvedAuthConfig> {
+        &self.auth
     }
 
     /// `security.sanitize_input` as published.
