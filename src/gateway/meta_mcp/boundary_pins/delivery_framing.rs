@@ -68,8 +68,6 @@ const PENDING: [&str; 1] = ["capability-refusals"];
 struct Found {
     builders: std::collections::BTreeMap<String, usize>,
     refusals: std::collections::BTreeMap<String, usize>,
-    /// Each `Error::Forbidden` site (file, function).
-    forbidden: std::collections::BTreeSet<String>,
 }
 
 /// A function that builds or answers a refusal, by its name: `*refusal`,
@@ -167,7 +165,6 @@ impl Sink for Found {
             && is_error_variant(&literal.path, "Forbidden")
         {
             note(&mut self.refusals, "Error::Forbidden{}");
-            self.forbidden.insert(format!("{}\t{func}", at.file));
         }
         if let syn::Expr::Path(path) = expr
             && is_error_variant(&path.path, "ResponseFirewallRefused")
@@ -275,43 +272,4 @@ fn every_refusal_site_is_classified() {
             "pending:{slug} has no rows left; delete it from PENDING"
         );
     }
-}
-
-/// Every `Error::Forbidden` built in `src/`, by file and function. The
-/// delivery outlet records each one delivered as `refused`, whatever its code
-/// (an admin denial carries `INVALID_REQUEST` too), so a new site fails until
-/// it is listed here and looked at.
-const FORBIDDEN: [&str; 18] = [
-    "src/backend/lend.rs\tlend_to_slot",
-    "src/backend/pool.rs\trefuse_shared_start",
-    "src/gateway/meta_mcp/caller_forward.rs\tscope_refusal",
-    "src/gateway/meta_mcp/invoke/chokepoint.rs\trecheck_target",
-    "src/gateway/meta_mcp/invoke/chokepoint.rs\trescan_outbound",
-    "src/gateway/meta_mcp/invoke/chokepoint.rs\troute_request_scan",
-    "src/gateway/meta_mcp/invoke/gate.rs\tcheck_call_level_policy",
-    "src/gateway/meta_mcp/invoke/policy.rs\tauthorize_invocation",
-    "src/gateway/meta_mcp/invoke/relay.rs\trelay_refusal",
-    "src/gateway/meta_mcp/invoke/relay_catalogue.rs\tcatalogue_refusal",
-    "src/gateway/meta_mcp/playbook_invoker.rs\tstep_not_permitted",
-    "src/gateway/meta_mcp/search/chain_exec.rs\tstep_failure",
-    "src/gateway/meta_mcp/task_replay/judging.rs\tauthorize_stored",
-    "src/gateway/meta_mcp/visibility.rs\tadmin_capability_rule",
-    "src/gateway/meta_mcp/visibility.rs\tmay_invoke_before_grants",
-    "src/playbook/engine/mod.rs\tchecked_arguments",
-    "src/playbook/engine/mod.rs\texecute_definition",
-    "src/transport/lender.rs\tsend_refused",
-];
-
-#[test]
-fn every_forbidden_site_is_listed() {
-    let have: Vec<String> = found().forbidden.into_iter().collect();
-    let want: Vec<&str> = FORBIDDEN
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
-    assert_eq!(
-        have, want,
-        "Forbidden sites changed; look at each, then list it in FORBIDDEN"
-    );
 }

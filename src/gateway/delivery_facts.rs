@@ -245,7 +245,7 @@ pub(crate) fn refused<E>(error: E) -> E {
 /// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`, and so does an
 /// authorization refusal ([`crate::Error::Forbidden`]), a decision about the
 /// caller wherever it was built, whatever its code. Every `Forbidden` site is
-/// listed in `boundary_pins/delivery_framing.rs`. Any other error raises
+/// classified in `boundary_pins/delivery_refusals.tsv`. Any other error raises
 /// nothing.
 pub(crate) fn outlet(error: &crate::Error) {
     if matches!(

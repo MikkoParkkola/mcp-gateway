@@ -172,6 +172,10 @@ async fn a_lent_only_call_carrying_no_credential_records_refused() {
         "premise: the lender's refusal: {status} {answer}"
     );
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(
+        answer["error"]["code"], -32001,
+        "the code is unchanged: {answer}"
+    );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let raw = std::fs::read_to_string(dirs.0.path().join("audit.jsonl")).unwrap_or_default();
     let delivered: Vec<Value> = raw
