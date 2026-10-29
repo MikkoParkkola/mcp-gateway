@@ -507,6 +507,25 @@ impl MetaMcp {
     // ========================================================================
 }
 
+impl MetaMcp {
+    /// A name that is both a registry backend and the attached capability
+    /// backend is refused, at resolve, before any credential, replay, key or
+    /// cache: the checks judge the backend, and the capability would answer.
+    /// Unscoped and name-only, so no caller's view can hide either route.
+    pub(super) fn refuse_name_clash(&self, server: &str) -> Result<()> {
+        if let Some(cap) = self.get_capabilities()
+            && cap.name == server
+            && self
+                .scoped(crate::gateway::authz::BackendGrant::Unscoped)
+                .scoped_get(server)
+                .is_some()
+        {
+            return Err(ambiguous_backend(server, None));
+        }
+        Ok(())
+    }
+}
+
 /// The refusal of a name that is both a registry backend and the capability
 /// backend (see [`Error::AmbiguousBackend`]). `rule` names the policy rule
 /// covering the call, when one does.
