@@ -177,20 +177,11 @@ pub(crate) struct RootOutcome {
 mod check;
 pub(crate) use check::{apply_roots, root_check};
 
-impl super::Firewall {
-    /// The refusal text, `injected_path_argument: rule ..., argument ...`,
-    /// when secret injection on this call would rewrite a declared path
-    /// argument of a covering root rule; `None` otherwise.
-    pub(crate) fn injected_path_refusal(
-        &self,
-        target: RuleTarget<'_>,
-        owned: &[String],
-    ) -> Option<String> {
-        if !self.config.enabled || owned.is_empty() {
-            return None;
-        }
-        check::injection_refusal(self, target, owned)
-    }
+/// The declared path argument whose top-level key a secret rule owns, if
+/// any (`a` over a declared `a.b`). One predicate for the runtime refusal
+/// and the load warning, so the two cannot drift.
+pub(crate) fn owned_path_arg<'a>(owned: &[String], args: &'a [PathArg]) -> Option<&'a PathArg> {
+    args.iter().find(|arg| owned.contains(&arg.segments[0]))
 }
 
 #[path = "allowed_root_resolve.rs"]
@@ -559,7 +550,8 @@ pub(crate) fn warn_at_load(config: &crate::config::Config) {
             for secret in &backend.secrets {
                 let owned = secret.inject_key.as_str();
                 let overlaps = secret.inject_as == crate::secret_injection::InjectTarget::Argument
-                    && declared.iter().any(|arg| arg.segments[0] == owned);
+                    && owned_path_arg(std::slice::from_ref(&secret.inject_key), &declared)
+                        .is_some();
                 if overlaps {
                     tracing::warn!(
                         "secret {:?} of backends.{name} owns {owned:?}, a declared argument in \

@@ -239,19 +239,6 @@ impl SecretInjector {
     ///
     /// Returns an error if a credential value cannot be resolved (e.g., missing
     /// keychain entry or undefined environment variable referenced without default).
-    /// The argument keys a rule matching `tool` on `backend` owns: injection
-    /// drops the caller's value for each of them, whatever the credential
-    /// resolves to. Key names only, never a value.
-    #[cfg(feature = "firewall")]
-    pub(crate) fn owned_argument_keys(&self, backend: &str, tool: &str) -> Vec<String> {
-        self.rules
-            .get(backend)
-            .into_iter()
-            .flatten()
-            .filter(|r| r.inject_as == InjectTarget::Argument && tool_matches_rule(tool, &r.tools))
-            .map(|r| r.inject_key.clone())
-            .collect()
-    }
 
     pub fn inject(
         &self,

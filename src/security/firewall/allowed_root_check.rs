@@ -41,8 +41,21 @@ pub(crate) fn root_check(
         }),
         findings: Vec::new(),
     };
-    if let Err(reason) = classify(firewall, server, backend) {
-        return refuse(first.root, None, reason);
+    let owned = match classify(firewall, server, target.tool, backend) {
+        Ok(owned) => owned,
+        Err(reason) => return refuse(first.root, None, reason),
+    };
+    // A secret rule owning a declared path argument would rewrite, or drop,
+    // what the check judges: refused before any value is read (design d1).
+    for rule in &covering {
+        let args = rule.root.args.as_deref().unwrap_or_default();
+        if let Some(arg) = super::owned_path_arg(&owned, args) {
+            return refuse(
+                rule.root,
+                Some(&arg_name(arg)),
+                RootReason::InjectedPathArgument,
+            );
+        }
     }
     // Every value of every covering rule is extracted and prechecked first,
     // then judged together: one resolver slot and one deadline per call.
@@ -92,29 +105,6 @@ pub(crate) fn root_check(
     }
 }
 
-/// The refusal for a call whose secret injection would rewrite what the
-/// folder check judged: a covering root rule declares an argument whose
-/// top-level key a matching secret rule owns (`a` over a declared `a.b`).
-/// Keyed on ownership, not on what is written: injection drops the
-/// caller's value for an owned key even when the credential is empty.
-pub(crate) fn injection_refusal(
-    firewall: &super::super::Firewall,
-    target: RuleTarget<'_>,
-    owned: &[String],
-) -> Option<String> {
-    covering(firewall, target).into_iter().find_map(|rule| {
-        let argument = match &rule.root.args {
-            None => None,
-            Some(args) => Some(args.iter().find(|a| owned.contains(&a.segments[0]))?),
-        };
-        let argument = argument.map_or_else(String::new, |a| format!(", argument {}", arg_name(a)));
-        Some(format!(
-            "injected_path_argument: rule {}{argument}",
-            rule.root.identity
-        ))
-    })
-}
-
 /// The root rules that apply to `target` under any candidate key, each
 /// once, in rule order: the branch's own coverage, restated nowhere.
 fn covering<'a>(firewall: &'a super::super::Firewall, target: RuleTarget<'a>) -> Vec<Covering<'a>> {
@@ -141,8 +131,9 @@ fn covering<'a>(firewall: &'a super::super::Firewall, target: RuleTarget<'a>) ->
 fn classify(
     firewall: &super::super::Firewall,
     server: &str,
+    tool: &str,
     sending: Option<&crate::backend::Backend>,
-) -> Result<(), RootReason> {
+) -> Result<Vec<String>, RootReason> {
     let registries = &firewall.registries;
     let Some(backends) = &registries.backends else {
         return Err(RootReason::UnknownBackend);
@@ -158,18 +149,19 @@ fn classify(
             RootReason::CapabilityNotCheckable
         });
     }
-    let local = match sending {
-        Some(instance) => instance.is_local_process(),
-        None => match backends.get(server) {
-            Some(live) => live.is_local_process(),
-            None => return Err(RootReason::UnknownBackend),
-        },
+    let live;
+    let instance = match sending {
+        Some(instance) => instance,
+        None => {
+            live = backends.get(server).ok_or(RootReason::UnknownBackend)?;
+            &*live
+        }
     };
-    if local {
-        Ok(())
-    } else {
-        Err(RootReason::RemoteBackend)
+    if !instance.is_local_process() {
+        return Err(RootReason::RemoteBackend);
     }
+    // The secret rules this instance's own send will apply (design d1).
+    Ok(instance.owned_argument_keys(tool))
 }
 
 /// The entry as written in `path_args`, for refusals and findings.
