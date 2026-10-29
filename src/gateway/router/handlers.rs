@@ -408,7 +408,7 @@ async fn meta_mcp_dispatch(
                     let credential =
                         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
                             client.as_ref(),
-                            state.auth_config.record_key(),
+                            state.live_config.generation().auth().record_key(),
                         );
                     return super::judged_answer::record_error_exit(
                         &state.meta_mcp,
