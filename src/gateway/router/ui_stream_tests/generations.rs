@@ -103,3 +103,42 @@ async fn an_open_stream_restarts_a_dead_watcher_without_a_new_admission() {
         "within the bound"
     );
 }
+
+#[tokio::test]
+async fn a_watcher_that_died_before_the_first_snapshot_is_replaced_by_the_waiting_stream() {
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
+    let hub = state.dashboard_bootstrap.stream_hub();
+    let mut a = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    let dead = hub.kill_watcher_for_test().expect("a watcher is running");
+    assert!(yield_until(|| dead.is_finished()).await);
+    let began = tokio::time::Instant::now();
+    a.until("hello").await;
+    assert!(
+        began.elapsed() <= Duration::from_secs(3),
+        "within the bound"
+    );
+}
+
+#[tokio::test]
+async fn a_viewer_revoked_while_waiting_for_the_first_snapshot_ends_within_the_bound() {
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
+    let hub = state.dashboard_bootstrap.stream_hub();
+    let h = issue(&state);
+    let mut a = open(&state, request(STREAM, Who::Cookie(&h), None)).await;
+    let dead = hub.kill_watcher_for_test().expect("a watcher is running");
+    assert!(yield_until(|| dead.is_finished()).await);
+    let out = Request::builder()
+        .method("POST")
+        .uri("/dashboard/logout")
+        .header(header::COOKIE, format!("{SESSION_COOKIE}={h}"))
+        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_346))))
+        .body(Body::empty())
+        .unwrap();
+    let _ = create_router(Arc::clone(&state))
+        .oneshot(out)
+        .await
+        .unwrap();
+    assert!(a.ended_within(REVOKED_WITHIN).await);
+}
