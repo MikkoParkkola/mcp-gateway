@@ -261,6 +261,24 @@ fn same_fields(template: &Template, step: Option<&SecretStep>) -> Result<(), Rep
     }
 }
 
+/// The filled file fits the parser's limit whatever references the store
+/// returns: each slot counted at its escaped worst case (a control byte
+/// escapes to four bytes, plus the quotes). Checked before any entry exists.
+fn fits_when_filled(template: &Template) -> Result<(), ReplaceError> {
+    let worst = crate::secret_store::MAX_REFERENCE_LEN
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(2))
+        .and_then(|n| n.checked_mul(template.slot_ids().count()))
+        .and_then(|n| n.checked_add(template.bytes().len()));
+    match worst {
+        Some(size) if size <= crate::yaml::MAX_YAML_BYTES => Ok(()),
+        _ => Err(ReplaceError::Refused(
+            "the new config could grow past the largest file the loader reads once its secrets are filled in"
+                .to_string(),
+        )),
+    }
+}
+
 /// Each slot's reference: the entry made for the field the slot displays as.
 fn by_slot(
     template: &Template,
@@ -534,6 +552,7 @@ impl ReloadContext {
         let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
         let step = replace.secrets.filter(|step| !step.values.is_empty());
         same_fields(&template, step.as_ref())?;
+        fits_when_filled(&template)?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => {
