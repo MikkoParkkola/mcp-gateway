@@ -239,3 +239,100 @@ async fn iso_t2_managed_listeners_each_queue_and_deliver_only_their_own_change()
     );
     delivery.abort();
 }
+
+/// ISO-T2, end to end, with a lease rotation mid-test: u1's change observed
+/// under u1's old grant is never delivered once the grant rotates, u1's
+/// listener reopens under the new grant, and a change after the rotation is
+/// delivered. u2, whose grant never moved, is delivered throughout.
+#[tokio::test]
+async fn iso_t2_a_change_observed_under_the_old_grant_is_not_delivered_after_rotation() {
+    use crate::events::services::{AccessVerdict, forced_verdict};
+    let _admits = forced_verdict::answer(AccessVerdict::Admits);
+    let mut rig = two_managed_users().await;
+    for user in 0..2 {
+        assert!(
+            rig.peer.push_tools_changed(user),
+            "premise: stream {user} is open"
+        );
+        assert!(
+            fan_out_next(&rig.f, &mut rig.intake).await,
+            "notice {user} was read"
+        );
+    }
+    let before = queued(&rig.f);
+    let old_stamp = format!("vault:{}", rig.grants.binding("u1"));
+    let old = before
+        .iter()
+        .find(|r| r.1 == "sub_u1_pt")
+        .expect("u1's record");
+    assert_eq!(
+        old.2.as_deref(),
+        Some(old_stamp.as_str()),
+        "stamped with the old grant"
+    );
+    assert!(
+        before.iter().any(|r| r.1 == "sub_u2_pt"),
+        "u2's change queued for u2"
+    );
+    rig.grants.rotate("u1");
+    // The old run hears one more notice, reads under the rotated grant and ends.
+    assert!(
+        rig.peer.push_tools_changed(0),
+        "premise: the old stream is still open"
+    );
+    assert_eq!(
+        rig.peer.next().await,
+        Some(Stream::Closed(0)),
+        "the old run ended"
+    );
+    assert_eq!(
+        rig.peer.next().await,
+        Some(Stream::Opened(0)),
+        "reopened under the new grant"
+    );
+    assert!(
+        rig.intake.try_recv().is_err(),
+        "nothing was announced under the old grant"
+    );
+    assert!(
+        rig.peer.push_tools_changed(0),
+        "the new run's stream is open"
+    );
+    assert!(
+        fan_out_next(&rig.f, &mut rig.intake).await,
+        "the new notice was read"
+    );
+    let new_stamp = format!("vault:{}", rig.grants.binding("u1"));
+    let after = queued(&rig.f);
+    let new = after
+        .iter()
+        .find(|r| r.1 == "sub_u1_pt" && r.0 != old.0)
+        .expect("new record");
+    assert_eq!(
+        new.2.as_deref(),
+        Some(new_stamp.as_str()),
+        "stamped with the new grant"
+    );
+    let services = Arc::clone(rig.f.hub.runtime.services.get().expect("services"));
+    let worker = Arc::clone(&rig.f.hub);
+    let delivery = tokio::spawn(async move { worker.deliver_forever(&services).await });
+    crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
+        let sent = rig.posts.iter().all(|p| p.load(Ordering::SeqCst) > 0);
+        match (sent, rig.f.hub.store.dead_summaries().len()) {
+            (true, 1) => std::ops::ControlFlow::Break(()),
+            (sent, dead) => std::ops::ControlFlow::Continue(format!("sent {sent}, dead {dead}")),
+        }
+    })
+    .await
+    .expect("u2 and u1's new change are delivered, the old one buried");
+    let dead = rig.f.hub.store.dead_summaries();
+    assert_eq!(
+        (dead[0].event_id.as_str(), dead[0].reason.as_str()),
+        (
+            old.0.as_str(),
+            crate::events::outbox::DeadReason::Observation.as_str()
+        ),
+        "only u1's record from the old grant is buried, as observation_changed"
+    );
+    delivery.abort();
+}
