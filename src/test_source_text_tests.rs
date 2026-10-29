@@ -77,6 +77,16 @@ const CASES: &[(&str, &[&str], &[&str])] = &[
         &["probe"],
     ),
     (
+        "fn f() {\n    #[cfg(test)]\n    {}\n    \"x\".chars().for_each(|_| live());\n}\n",
+        &["for_each(|_| live())"],
+        &[],
+    ),
+    (
+        "fn f() {\n    #[cfg(test)]\n    { probe() }\n    elseé.live();\n}\n",
+        &["elseé.live()"],
+        &["probe"],
+    ),
+    (
         "// A comment naming #[cfg(test)] marks nothing.\nfn product() {}\n",
         &["fn product()"],
         &[],
