@@ -588,7 +588,7 @@ async fn client_only_dropped(len: usize, name: &str) {
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
     wire.armed.store(true, std::sync::atomic::Ordering::SeqCst);
     let carried_before = wire.carried.load(std::sync::atomic::Ordering::SeqCst);
-    let (_, scanned, census) = scan_dispatch(minted.as_bytes(), || async {
+    let ((), scanned, census) = scan_dispatch(minted.as_bytes(), || async {
         let send = client
             .post(wire.url.as_str())
             .header("Authorization", format!("Bearer {minted}"))
