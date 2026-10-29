@@ -173,9 +173,13 @@ pub(super) async fn dashboard_link(
     // Bound to the minting key, by its quota identity, so the link and the
     // session it opens end with that key on a reload (K13). The bearer binds
     // nothing: it is restart-only.
-    let key = client
-        .api_key_identity()
-        .and(client.quota_principal.clone());
+    // An API-key client that carries no quota identity cannot be bound to
+    // its key, so it may not mint: fail closed.
+    let key = match (client.api_key_identity(), client.quota_principal.clone()) {
+        (None, _) => None,
+        (Some(_), Some(key)) => Some(key),
+        (Some(_), None) => return admin_auth_required().into_response(),
+    };
     let value = state
         .dashboard_bootstrap
         .rearm_bound(crate::gateway::auth::Bound { not_after, key });
