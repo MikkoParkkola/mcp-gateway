@@ -245,7 +245,7 @@ impl Backend {
                 pending.lines.push(Line::Withheld {
                     name: name.clone(),
                     digest: digest.clone(),
-                    issues: issues.join("; "),
+                    issues,
                 });
             }
             let key = name_key(&name);
@@ -463,7 +463,7 @@ enum Line {
     Withheld {
         name: String,
         digest: String,
-        issues: String,
+        issues: Vec<String>,
     },
     Saturated,
     Allowed {
@@ -499,15 +499,19 @@ impl PendingLogs {
                     name,
                     digest,
                     issues,
-                } => warn!(
-                    backend = %backend,
-                    tool = %name,
-                    rule = "AX-010",
-                    digest = %digest,
-                    issues = %issues,
-                    allow = %format!("allow_flagged_tools: {{ {name}: {digest} }}"),
-                    "Tool withheld: its description failed the tool-poisoning check"
-                ),
+                } => {
+                    // Joined here, after every gate lock is released.
+                    let issues = issues.join("; ");
+                    warn!(
+                        backend = %backend,
+                        tool = %name,
+                        rule = "AX-010",
+                        digest = %digest,
+                        issues = %issues,
+                        allow = %format!("allow_flagged_tools: {{ {name}: {digest} }}"),
+                        "Tool withheld: its description failed the tool-poisoning check"
+                    );
+                }
                 Line::Saturated => warn!(
                     backend = %backend,
                     cap = BLOCKED_NAMES_CAP,
