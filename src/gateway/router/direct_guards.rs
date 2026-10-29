@@ -334,6 +334,7 @@ pub(super) fn scan_direct_egress(
     let targets = [ResponsePolicyTarget {
         server: call.server.to_owned(),
         tool: call.tool.to_owned(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let correlation = ResponseCorrelation {
         session_id: &session_id,
@@ -342,6 +343,9 @@ pub(super) fn scan_direct_egress(
         external_tool: call.tool,
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::of_client(
+            client.and_then(AuthenticatedClient::api_key_identity),
+        ),
     };
     // The router's own instance judges the direct route (MIK-7669).
     #[cfg(feature = "firewall")]
