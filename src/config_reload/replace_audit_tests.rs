@@ -230,3 +230,74 @@ async fn a_reload_whose_recovery_intent_fails_changes_nothing() {
     assert!(!running_has_b(&ctx), "the crashed bytes were loaded");
     assert_eq!(recorder.kinds(), [IntentKind::Recovery]);
 }
+
+/// Every `.rs` file under `dir`, test files excluded.
+fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("list src") {
+        let path = entry.expect("entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.is_dir() {
+            if name != "tests" {
+                production_sources(&path, out);
+            }
+        } else if name.ends_with(".rs")
+            && !name.ends_with("_tests.rs")
+            && !name.contains("test_support")
+        {
+            out.push(path);
+        }
+    }
+}
+
+/// Source pin for the reload choke point: the file-watch reload, the UI
+/// reload route and the admin reload tool reach the config lock only
+/// through `ReloadContext::reload_outcome`, and nothing in the gateway takes
+/// the reader lock except that path, so a fourth reload path cannot skip
+/// the recovery intent unseen.
+#[test]
+fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    production_sources(&src, &mut files);
+    let mut takers = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file).expect("read source");
+        for (n, line) in text.lines().enumerate() {
+            let calls = line.contains("reader_lock(") || line.contains("reader_lock_deferred(");
+            if calls && !line.trim_start().starts_with("//") && !line.contains("fn reader_lock") {
+                takers.push(format!(
+                    "{}:{}",
+                    file.strip_prefix(&src).unwrap_or(file).display(),
+                    n + 1
+                ));
+            }
+        }
+    }
+    takers.retain(|t| !t.starts_with("config_persistence_lock.rs:"));
+    assert!(
+        takers
+            .iter()
+            .all(|t| t.starts_with("config_reload/replace_audit.rs:")),
+        "the reader lock is taken outside the reload choke point: {takers:?}"
+    );
+    let reload =
+        std::fs::read_to_string(src.join("config_reload/reload_context.rs")).expect("read");
+    assert!(
+        reload.contains(".reader_lock_for_reload("),
+        "reload_outcome no longer takes its lock through reader_lock_for_reload"
+    );
+    for entry in [
+        "config_reload/watcher.rs",
+        "gateway/ui/mod.rs",
+        "gateway/meta_mcp/invoke/admin.rs",
+    ] {
+        let text = std::fs::read_to_string(src.join(entry)).expect("read entry point");
+        assert!(
+            text.contains(".reload_outcome().await"),
+            "{entry} no longer reloads through ReloadContext::reload_outcome"
+        );
+    }
+}
