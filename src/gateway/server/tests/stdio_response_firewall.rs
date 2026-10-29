@@ -220,6 +220,9 @@ async fn stdio_serves_allowed_responses_with_one_inspection() {
         action: FirewallAction::Warn,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }];
     let stdio = Stdio::new(&format!("uses {}", canary()), "fine", warn).await;
     let (body, inspected) = stdio

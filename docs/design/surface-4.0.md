@@ -685,9 +685,15 @@ Every lib item becomes INTERNAL. crates.io lists no reverse dependencies for `mc
 | `security.firewall.prompt_injection_detection` | KEEP | `true` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:26 |
 | `security.firewall.rules` | KEEP | `Vec::new()` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:35 |
 | `security.firewall.rules[].action` | KEEP | — | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:143 |
+| `security.firewall.rules[].except` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:161 |
+| `security.firewall.rules[].except[].key` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:176 |
+| `security.firewall.rules[].except[].server` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:170 |
+| `security.firewall.rules[].except[].tool` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:173 |
+| `security.firewall.rules[].keys` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:158 |
 | `security.firewall.rules[].match` | KEEP | — | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:141 |
 | `security.firewall.rules[].reason` | KEEP | — | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:146 |
 | `security.firewall.rules[].scan` | KEEP | — | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:149 |
+| `security.firewall.rules[].servers` | KEEP | `None` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:154 |
 | `security.firewall.scan_requests` | KEEP | `true` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:22 |
 | `security.firewall.scan_responses` | KEEP | `true` | firewall switches and per-tool rules (OWASP ASI controls) | - | src/security/firewall/config.rs:24 |
 | `security.firewall.tenant_guard` | KEEP | `see impl Default` | opt-in OWASP ASI06/ASI10 guards: on/off and what they cover | - | src/security/firewall/config.rs:88 |

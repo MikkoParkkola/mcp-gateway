@@ -545,6 +545,7 @@ impl MetaMcp {
         let target = super::response_security::ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         };
         self.inspect_task_result(&[target], trace_id, &mut gated)?;
         // Stamped last, as the live path is (MIK-6909): a peer receipt is
