@@ -471,7 +471,7 @@ impl Error {
     /// Conservative by design: an error that in fact did nothing may still
     /// read `true`; one that may have run never reads `false`.
     #[must_use]
-    pub fn outcome_undetermined(&self) -> bool {
+    pub(crate) fn outcome_undetermined(&self) -> bool {
         !self.is_pre_dispatch()
     }
 

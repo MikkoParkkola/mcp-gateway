@@ -224,3 +224,64 @@ async fn a_lost_round_after_a_retried_refusal_ends_the_step() {
     assert_eq!(invoker.calls(), 2, "the lost round was re-sent");
     assert_eq!(result.steps_failed, vec!["charge"]);
 }
+
+/// MIK-9042.PLAY.4: under `abort`, a step that may have run ends the plan with
+/// an error a caller can read without a crate-private method: it is a
+/// `Transport` error (a lost round) whose text ends with the may-have-run
+/// sentence. A refusal and a tool's own `isError` answer keep their type.
+#[tokio::test]
+async fn an_aborted_step_that_may_have_run_says_so_in_its_error() {
+    let cases: Vec<(&str, fn() -> crate::Error)> = vec![
+        ("BackendTimeout", || {
+            crate::Error::BackendTimeout("no answer".into())
+        }),
+        ("Io", || {
+            crate::Error::Io(std::io::Error::other("broken pipe"))
+        }),
+        ("JsonRpcRetryable 500", || retryable_answer(500)),
+        ("JsonRpc", || crate::Error::JsonRpc {
+            code: -32602,
+            message: "invalid params".into(),
+            data: None,
+        }),
+    ];
+    for (what, error) in cases {
+        let invoker = Scripted::new(vec![answer(error)]);
+        let returned = engine(ErrorStrategy::Abort)
+            .execute("pay", json!({}), &invoker)
+            .await
+            .expect_err("abort ends the plan");
+        assert!(
+            matches!(returned, crate::Error::Transport(_)),
+            "{what}: {returned:?}"
+        );
+        assert!(
+            returned.to_string().ends_with(crate::error::MAY_HAVE_RUN),
+            "{what}: {returned}"
+        );
+    }
+    let refusal = Scripted::new(vec![answer(|| crate::Error::Forbidden {
+        code: -32003,
+        status: 403,
+        message: "step not permitted for this caller".into(),
+    })]);
+    let returned = engine(ErrorStrategy::Abort)
+        .execute("pay", json!({}), &refusal)
+        .await
+        .expect_err("abort ends the plan");
+    assert!(
+        matches!(returned, crate::Error::Forbidden { .. }),
+        "a refusal keeps its type: {returned:?}"
+    );
+    let unsent = Scripted::new(vec![answer(|| {
+        crate::Error::TransportConnect("connection refused".into())
+    })]);
+    let returned = engine(ErrorStrategy::Abort)
+        .execute("pay", json!({}), &unsent)
+        .await
+        .expect_err("abort makes one attempt");
+    assert!(
+        matches!(returned, crate::Error::TransportConnect(_)),
+        "a step never sent is not marked as may-have-run: {returned:?}"
+    );
+}
