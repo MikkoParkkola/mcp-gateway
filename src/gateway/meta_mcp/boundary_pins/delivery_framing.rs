@@ -175,7 +175,10 @@ impl Sink for Found {
             return;
         };
         match (owner.as_deref(), name.as_str()) {
-            (Some("JsonRpcResponse"), "error" | "error_with_data") => {
+            (
+                Some("JsonRpcResponse"),
+                "error" | "error_with_data" | "of_error" | "of_error_text",
+            ) => {
                 note(&mut self.builders, &format!("JsonRpcResponse::{name}"));
             }
             (Some("Error"), "json_rpc") => note(&mut self.builders, "Error::json_rpc"),
