@@ -603,3 +603,43 @@ async fn a_fill_that_fails_after_the_entries_removes_them() {
     assert_eq!(read(&path), START);
     assert_eq!(live_entries(dir.path()), Vec::<String>::new());
 }
+
+/// W3: the filled file must fit the parser's limit, counting each slot at
+/// its escaped worst case (a control byte escapes to four); a template that
+/// could outgrow it is refused before any entry is created.
+#[tokio::test]
+async fn the_size_bound_counts_escaped_references_before_any_entry() {
+    let (dir, path, ctx) = setup();
+    let creates = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let store = Counting {
+        inner: FilesStore::new(dir.path()),
+        creates: Arc::clone(&creates),
+    };
+    let worst = 4 * crate::secret_store::MAX_REFERENCE_LEN + 2;
+    let body = format!(
+        "{NEXT}    env:\n      K: {}\n",
+        Template::placeholder_for(&k_slot())
+    );
+    // One byte past what a worst-case reference may still fill into.
+    let pad = crate::yaml::MAX_YAML_BYTES - worst + 1 - body.len() - 3;
+    let text = format!("# {}\n{body}", "x".repeat(pad));
+    let template = Template::from_placeholders(text.into_bytes(), &[k_slot()]).expect("one slot");
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(move |_| Ok(template)),
+        replaced: Replaced::Discard,
+        secrets: Some(step(dir.path(), Arc::new(store))),
+    };
+
+    let failure = replace_detached(ctx, save, WAIT)
+        .await
+        .expect_err("too large");
+
+    assert!(matches!(failure, ReplaceError::Refused(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    assert_eq!(
+        creates.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "an entry was created"
+    );
+}
