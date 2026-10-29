@@ -43,7 +43,10 @@ async fn call(
 }
 
 /// The state plus the temp directory backing its stores; keep both alive.
-async fn admin_state() -> (Arc<crate::gateway::router::AppState>, tempfile::TempDir) {
+async fn admin_state() -> (
+    Arc<crate::gateway::router::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     test_router_app_state_with_auth_and_config(
         &scoped_auth_config(true),
         crate::config::Config::default(),

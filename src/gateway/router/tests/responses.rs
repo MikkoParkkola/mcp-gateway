@@ -395,7 +395,7 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let (state, _store) = test_router_app_state_minting_without_route_audit(backend).await;
+    let (_log, state, _store) = test_router_app_state_minting_without_route_audit(backend).await;
     let router = create_router(state);
 
     let mut request = axum::http::Request::builder()

@@ -288,7 +288,7 @@ async fn gated_round(
 ) -> (
     Arc<MockBackend>,
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     String,
     Value,
 ) {
@@ -402,7 +402,12 @@ async fn t27_a_held_round_with_no_slot_to_seal_settles_abandoned() {
 /// store refuses it a read.
 async fn breaks_before_park(
     key: &str,
-) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+) -> (
+    Arc<MockBackend>,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let (mock, mut gate) =
         MockBackend::holding(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, dir) = state_with(&mock).await;

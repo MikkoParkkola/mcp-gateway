@@ -62,10 +62,12 @@ struct TaskStore {
 
 /// A stdio gateway over the sole operator's managed backend, both slots warm.
 struct Stdio {
-    gateway: DirectAccountGateway,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// `None` serves no `tasks/*`, as the rows that need no task store.
     tasks: Option<TaskStore>,
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 impl Stdio {

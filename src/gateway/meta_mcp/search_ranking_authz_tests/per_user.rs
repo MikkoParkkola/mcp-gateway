@@ -56,6 +56,7 @@ fn cold_per_user_mcp_backend(name: &str) -> Arc<crate::backend::Backend> {
 /// whose fetch would not carry an identity, finds neither (#2326).
 #[tokio::test]
 async fn per_user_backend_tools_are_discoverable() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let backends = Arc::new(BackendRegistry::new());
     assert!(
         backends.register(per_user_mcp_backend(MCP_BACKEND).await),
@@ -87,7 +88,7 @@ async fn per_user_backend_tools_are_discoverable() {
         "a `required` backend's tools reached a caller with no identity"
     );
 
-    super::super::catalogue_per_caller_tests::install_minting(&mut meta);
+    super::super::catalogue_per_caller_tests::install_minting(&mut meta, &log);
     let alpha = super::super::catalogue_per_caller_tests::identity("alpha");
     meta.seed_caller_slot_for_test(MCP_BACKEND, &alpha).await;
     let response = meta
@@ -113,6 +114,7 @@ async fn per_user_backend_tools_are_discoverable() {
 /// shared slot, whose `tools/list` would carry no identity at all.
 #[tokio::test]
 async fn a_bound_callers_search_does_not_fill_the_shared_slot() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let backend = cold_per_user_mcp_backend(MCP_BACKEND);
     let backends = Arc::new(BackendRegistry::new());
     assert!(backends.register(Arc::clone(&backend)));
@@ -131,7 +133,7 @@ async fn a_bound_callers_search_does_not_fill_the_shared_slot() {
             ..Default::default()
         },
     ));
-    super::super::catalogue_per_caller_tests::install_minting(&mut meta);
+    super::super::catalogue_per_caller_tests::install_minting(&mut meta, &log);
     let alpha = super::super::catalogue_per_caller_tests::identity("alpha");
     meta.seed_caller_slot_for_test(MCP_BACKEND, &alpha).await;
 
