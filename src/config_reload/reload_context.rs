@@ -634,7 +634,6 @@ impl ReloadContext {
 
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        // Keys resolve against the candidate overlay; the rest of `auth` runs on.
         let prepared = self.live_config.prepare(new_config, &overlay);
         let generation = Arc::new(prepared.map_err(|reason| {
             format!(
