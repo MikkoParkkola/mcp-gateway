@@ -206,15 +206,16 @@ async fn a_playbook_past_a_withheld_step_records_no_refused() {
     assert_ne!(event["response_effect"], "refused", "{event}");
 }
 
-/// A malformed tool name is refused as `Forbidden` with `INVALID_REQUEST`:
-/// a bad request, not a decision about the caller, so it records no refusal.
+/// A malformed tool name is a bad request, not a decision about the caller:
+/// `/mcp` answers it as a name the backend does not list, and records no
+/// refusal.
 #[tokio::test]
 async fn a_malformed_meta_tool_name_records_no_refusal() {
     let fx = fixture(Setup::default()).await;
     let invoke = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {
         "name": "gateway_invoke", "arguments": {"server": "alpha", "tool": "bad name!", "arguments": {}}}});
     let (_, body) = post_to(&fx, "/mcp", &invoke.to_string(), &Caller::Anonymous).await;
-    assert_eq!(body["error"]["code"], -32600, "premise: malformed: {body}");
+    assert_eq!(body["result"]["isError"], true, "premise: absent: {body}");
     let event = only_attempt(&fx);
     assert_ne!(event["response_effect"], "refused", "{event}");
 }

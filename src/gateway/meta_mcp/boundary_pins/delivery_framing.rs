@@ -301,7 +301,7 @@ enum Outlet {
 
 /// Every `Error::Forbidden` built in `src/`, by file and function. A new site
 /// fails until it is listed here, whatever its code.
-const FORBIDDEN: [(&str, Outlet); 17] = [
+const FORBIDDEN: [(&str, Outlet); 18] = [
     ("src/backend/lend.rs\tlend_to_slot", Outlet::Raises),
     ("src/backend/pool.rs\trefuse_shared_start", Outlet::Raises),
     (
@@ -364,6 +364,7 @@ const FORBIDDEN: [(&str, Outlet); 17] = [
         "src/playbook/engine/mod.rs\texecute_definition",
         Outlet::Raises,
     ),
+    ("src/transport/lender.rs\tsend_refused", Outlet::Raises),
 ];
 
 /// The outlet's code check is safe only with this list: every `Forbidden`
