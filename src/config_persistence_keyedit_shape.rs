@@ -273,9 +273,27 @@ use crate::yaml::{Node, Shape, Step};
 
 use super::{ComputeRefusal, GiveUp, give_up, unprovable};
 
+/// A file with no content: blank lines and comments only.
+pub(super) fn no_content(text: &str) -> bool {
+    text.lines().all(|l| {
+        let l = l.trim();
+        l.is_empty() || l.starts_with('#')
+    })
+}
+
+/// The stable code for a field the parser refused to edit in place.
+pub(super) fn refusal_code(nodes: &[Node], path: &[Segment]) -> GiveUp {
+    match find(nodes, path) {
+        Some(node) if node.decorated => GiveUp::Anchor,
+        Some(node) if node.flow => GiveUp::Flow,
+        Some(node) if !node.plain => GiveUp::NotPlainKey,
+        _ => GiveUp::Other,
+    }
+}
+
 /// The nodes of `text`; none for a file with no content.
 pub(super) fn nodes(text: &str) -> Result<Vec<Node>, ComputeRefusal> {
-    if text.trim().is_empty() {
+    if no_content(text) {
         return Ok(Vec::new());
     }
     crate::yaml::block_nodes(text)

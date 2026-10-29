@@ -329,7 +329,7 @@ fn set_keyed(
     value: &str,
 ) -> Result<(), ComputeRefusal> {
     let text = lines.text();
-    if text.trim().is_empty() {
+    if shape::no_content(&text) {
         return shape::place(lines, &path.0, value);
     }
     let spans = crate::yaml::mapping_values(&text)
@@ -338,7 +338,8 @@ fn set_keyed(
     match (found.next(), found.next()) {
         (Some(span), None) => {
             if let Some(why) = span.refused {
-                return Err(unprovable(why));
+                let code = shape::refusal_code(&shape::nodes(&text)?, &path.0);
+                return Err(give_up(code, why));
             }
             lines
                 .replace(span.bytes.clone(), value)
@@ -356,7 +357,8 @@ fn one_new_element(
     changes: &[(FieldPath, Change)],
 ) -> Result<(), ComputeRefusal> {
     let mut new: BTreeMap<Vec<Segment>, usize> = BTreeMap::new();
-    for (path, _) in changes {
+    // A removal past a list's end is a no-op, never a new element.
+    for (path, _) in changes.iter().filter(|(_, c)| *c != Change::Remove) {
         for (d, segment) in path.0.iter().enumerate() {
             let Segment::Index(at) = segment else {
                 continue;
@@ -413,8 +415,8 @@ fn whole_file_is_plain(original: &str) -> Result<(), ComputeRefusal> {
     }
     match crate::yaml::from_str::<Value>(original) {
         Ok(Value::Mapping(_)) => Ok(()),
-        // An empty file is an empty root mapping.
-        Ok(Value::Null) if original.trim().is_empty() => Ok(()),
+        // An empty file, or one of comments only, is an empty root mapping.
+        Ok(Value::Null) if shape::no_content(original) => Ok(()),
         _ => Err(unprovable("the file is not one mapping the parser accepts")),
     }
 }
@@ -479,7 +481,7 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
     };
     // An edit that removed every key leaves an empty file: an empty root.
     let got = match crate::yaml::from_str::<Value>(edited) {
-        Ok(Value::Null) if edited.trim().is_empty() => Value::Mapping(crate::yaml::Mapping::new()),
+        Ok(Value::Null) if shape::no_content(edited) => Value::Mapping(crate::yaml::Mapping::new()),
         Ok(got) => got,
         Err(_) => return false,
     };
