@@ -180,7 +180,7 @@ async fn a_refused_compute_discards_the_entries() {
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, |_, _| Err("no".to_owned())),
+        secret_save(dir.path(), Expected::Any, |_| Err("no".to_owned())),
         WAIT,
     )
     .await
@@ -279,7 +279,11 @@ async fn bytes_that_name_no_entry_are_refused_and_discard() {
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, |current, _| Ok(current.to_vec())),
+        // A plain template with a secret step: the slot check refuses it
+        // before any entry exists.
+        secret_save(dir.path(), Expected::Any, |current| {
+            Ok(Template::plain(current.to_vec()))
+        }),
         WAIT,
     )
     .await
@@ -391,16 +395,16 @@ async fn a_rollback_that_fails_keeps_the_entries() {
     assert_eq!(live_entries(dir.path()).len(), 1);
 }
 
-/// A compute that panics dies before the rename: the old file stands, so
-/// the guard deletes the entries.
+/// A compute that panics dies before any entry exists (it runs first): the
+/// old file stands and the store holds nothing.
 #[tokio::test]
 async fn a_panic_before_the_rename_discards_the_entries() {
     let (dir, path, ctx) = setup();
 
     let failure = replace_detached(
         ctx,
-        secret_save(dir.path(), Expected::Any, |_, _| {
-            panic!("the compute dies before the rename")
+        secret_save(dir.path(), Expected::Any, |_| {
+            panic!("the compute dies before any entry exists")
         }),
         WAIT,
     )
@@ -418,7 +422,9 @@ async fn a_panic_before_the_rename_discards_the_entries() {
 #[tokio::test]
 async fn an_empty_secret_step_counts_as_none() {
     let (dir, path, ctx) = setup();
-    let mut save = secret_save(dir.path(), Expected::Any, |current, _| Ok(current.to_vec()));
+    let mut save = secret_save(dir.path(), Expected::Any, |current| {
+        Ok(Template::plain(current.to_vec()))
+    });
     if let Some(step) = save.secrets.as_mut() {
         step.values.clear();
     }
