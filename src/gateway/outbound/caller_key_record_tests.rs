@@ -158,6 +158,7 @@ async fn ck_delivery_merge_logs_the_caller_key_keyed() {
         external_tool: "read",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     let logged = crate::gateway::meta_mcp::response_security::record_answer_delivery(
         Some(&log),

@@ -292,15 +292,15 @@ impl crate::transport::Transport for Unsigned {
     }
 }
 
-/// ADR12: a keyed run whose one step's backend ran and then failed (a required
-/// chain receipt is missing) is retried by the engine (`on_error: retry`), and
-/// the retry is served the stored failure instead of running the side effect
-/// again: one backend call. Unkeyed control: two. Green at base (the step is
-/// keyed on the client's key); red when steps carry no key (mutant m3).
+/// ADR12, now that a step is re-sent only after a failure before its send: a run whose one step's backend ran and then failed (a
+/// required chain receipt is missing) is not re-sent under `on_error: retry`,
+/// keyed or not: the failure follows a send, so the side effect may be done.
+/// One backend call either way. Before that rule the engine re-sent it, and only
+/// the key's stored failure kept a keyed run to one call (unkeyed: two).
 #[tokio::test]
-async fn a_retried_step_in_a_keyed_run_is_served_its_stored_failure() {
+async fn a_step_that_ran_and_failed_is_sent_once_keyed_or_not() {
     use crate::config::{BackendConfig, ChainEmit, ChainMode, FailsafeConfig};
-    for (key, want) in [(Some("pk-adr12"), 1), (None, 2)] {
+    for (key, want) in [(Some("pk-adr12"), 1), (None, 1)] {
         let definition = serde_json::from_value(json!({
             "playbook": "1.0", "name": "chained", "description": "a refused answer",
             "on_error": "retry", "max_retries": 2,
