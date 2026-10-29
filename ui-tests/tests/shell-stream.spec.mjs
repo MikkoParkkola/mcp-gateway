@@ -186,3 +186,72 @@ test('ST7 status and reload frames reach the page as window events', async ({ pa
   await stream.send(frame('reload', { generation: 5 }, 'b1.s2.r5'));
   await expect.poll(() => seen(page, 'gateway-reload')).toEqual([{ generation: 5 }]);
 });
+
+test('ST8 leaving the page closes the stream, a restore reopens it once, and cycles never leave two open', async ({ page, request }, testInfo) => {
+  // This setup does not restore from the back/forward cache (the shell document
+  // is no-store), so the row dispatches pagehide and pageshow(persisted) itself.
+  const stream = await heldStream(page, request, testInfo);
+  await openLive(page, stream);
+  const leave = () => page.evaluate(() => dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+  const restore = () => page.evaluate(() => dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+  const open = async () => (await stream.log()).filter((c) => !c.closed).length;
+  await leave();
+  await expect.poll(async () => (await stream.log())[0].closed).toBe(true);
+  await restore();
+  await expect.poll(stream.connects).toBe(2);
+  for (let i = 0; i < 3; i += 1) {
+    await leave();
+    await expect.poll(open).toBe(0);
+    await restore();
+    await expect.poll(open).toBe(1);
+  }
+  await restore(); // a second restore with no leave between still holds one
+  await expect.poll(stream.connects).toBe(6);
+  await expect.poll(open).toBe(1);
+});
+
+const UNAVAILABLE = 'Updates unavailable · reconnecting';
+
+test('ST9a a first connect that fails shows Updates unavailable on the page and in the top bar', async ({ page, request }, testInfo) => {
+  const stream = await heldStream(page, request, testInfo, { next: [{ status: 500 }] });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await shellReady(page);
+  await expect.poll(stream.connects).toBe(1);
+  await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
+  await expect(page.locator(INDICATOR)).toBeVisible();
+  await expect(page.locator(INDICATOR)).toHaveText(UNAVAILABLE);
+});
+
+test('ST9b a later hello clears Updates unavailable and says so', async ({ page, request }, testInfo) => {
+  await recordAnnouncements(page);
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo, { next: [{ status: 500 }] });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await shellReady(page);
+  await expect(page.locator(`${STALE} h2`)).toHaveText(UNAVAILABLE);
+  await page.clock.runFor(1000); // the first backoff
+  await expect.poll(stream.connects).toBe(2);
+  await stream.send(HELLO);
+  await expect(page.locator(STALE)).toHaveCount(0);
+  await expect(page.locator(INDICATOR)).toHaveText('Live');
+  await page.clock.runFor(5000); // the announcer writes each entry after its dwell
+  const said = (await page.evaluate(() => window.__writes)).filter(Boolean).join(' ');
+  expect(said.indexOf('Updates unavailable')).toBeGreaterThanOrEqual(0);
+  expect(said.indexOf('Updates resumed.')).toBeGreaterThan(said.indexOf('Updates unavailable'));
+});
+
+test('ST9c a 404 first connect shows nothing and never reconnects', async ({ page, request }, testInfo) => {
+  await pausedAt1402(page);
+  const stream = await heldStream(page, request, testInfo, { next: [{ status: 404 }] });
+  await withFixturePages(page);
+  await page.goto('/ui/servers/status');
+  await shellReady(page);
+  await expect.poll(stream.connects).toBe(1);
+  await page.clock.runFor(31_000); // past the longest backoff
+  await page.evaluate(() => null);
+  expect(await stream.connects()).toBe(1);
+  await expect(page.locator(STALE)).toHaveCount(0);
+  await expect(page.locator(INDICATOR)).toBeHidden();
+});
