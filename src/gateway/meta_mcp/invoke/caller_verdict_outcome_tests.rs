@@ -211,11 +211,12 @@ async fn a_carried_fill_failure_is_refused_before_the_backend() {
     let caller = caller_as(None, Some(STDIO_CREDENTIAL_PRINCIPAL));
     let args =
         serde_json::json!({"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}});
-    let invoked = in_request(async {
+    // Boxed: the invocation future is large (clippy::large_futures).
+    let invoked = Box::pin(in_request(async {
         carry(&meta, Some(crate::Error::json_rpc(-32603, "fill failed"))).await;
         meta.invoke_tool_sourced(&args, None, &caller, "trace-fill".to_owned())
             .await
-    })
+    }))
     .await;
     // Premise: the carried fill failure is the answer, a result the gateway
     // wrote, not an earlier refusal's error.
