@@ -24,6 +24,9 @@ mod spelling;
 mod tree;
 #[path = "allowed_root_warn_tests.rs"]
 mod warn;
+#[cfg(windows)]
+#[path = "allowed_root_windows_tests.rs"]
+mod windows;
 
 /// One precheck case with its expected outcome on each OS family.
 struct Shape {
