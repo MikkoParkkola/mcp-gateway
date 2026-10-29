@@ -83,7 +83,9 @@ async fn identity_for_request(
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ));
+        ))
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::Extension(state.live_config.generation()));
 
     let mut builder = Request::builder()
         .uri(PROBE_PATH)

@@ -115,9 +115,11 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
             ),
         )
         .layer(axum::middleware::from_fn_with_state(
-            state,
+            state.clone(),
             super::auth_middleware,
-        ));
+        ))
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::Extension(state.live_config.generation()));
     let request = Request::builder()
         .uri("/protected")
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))

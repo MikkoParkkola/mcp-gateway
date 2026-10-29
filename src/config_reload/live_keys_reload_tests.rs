@@ -289,6 +289,8 @@ async fn k10_a_key_equal_to_the_generated_bearer_is_refused() {
 
 /// K10: the edited bearer differs from the running one; the RUNNING bearer
 /// decides the collision.
+/// (A key equal to the edited bearer never reaches this check: the edit is
+/// refused at load, as at startup.)
 #[tokio::test]
 async fn k10_the_running_bearer_decides_a_collision() {
     let gw = Running::start(&auth_yaml(
@@ -304,15 +306,4 @@ async fn k10_the_running_bearer_decides_a_collision() {
         .await
         .expect_err("collides with the running bearer");
     assert_refused(&err, &before, &gw);
-
-    gw.reload(&auth_yaml(
-        "  bearer_token: edited-bearer-secret\n",
-        &[(A, false), ("edited-bearer-secret", false)],
-    ))
-    .await
-    .expect("the edited bearer is not running: no collision");
-    assert!(
-        gw.accepts("edited-bearer-secret"),
-        "the new key was not published"
-    );
 }

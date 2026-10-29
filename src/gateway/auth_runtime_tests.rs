@@ -173,7 +173,12 @@ async fn rejected_credentials_create_no_store_entry() {
             "/protected",
             axum::routing::get(|| async { StatusCode::OK }),
         )
-        .layer(axum::middleware::from_fn_with_state(state, auth_middleware));
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+        .layer(axum::Extension(state.live_config.generation()));
     let mut call = |bearer: &str| {
         let request = Request::builder()
             .uri("/protected")
