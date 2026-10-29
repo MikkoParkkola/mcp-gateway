@@ -160,7 +160,7 @@ export const GLOSSARY = {
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
   },
-  stream: { live: 'Live', stopped: 'Updates stopped', resumed: 'Updates resumed' },
+  stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
 
 const unlistedStates = new Set();
@@ -265,6 +265,11 @@ export function staleTitle(since) {
   return since instanceof Date && !Number.isNaN(since.getTime())
     ? `${GLOSSARY.stream.stopped} at ${stamp(since)} · reconnecting`
     : `${GLOSSARY.stream.stopped} · reconnecting`;
+}
+
+/** The stale title when the stream never opened: no time, since there never was one. */
+export function unavailableTitle() {
+  return `${GLOSSARY.stream.unavailable} · reconnecting`;
 }
 
 const STATE_COPY = {
@@ -1034,6 +1039,12 @@ const runTab = (spec, route, into) => {
   const show = screenBanner(into, route.page, guard);
   // The live stream marks this page stale on a drop, through the same banner.
   livePage = { into, show };
+  // A page drawn while the stream is down gets the stale state once its tab has drawn.
+  const markStale = (drawn) => {
+    const down = streamStale();
+    if (down) show('stale', down);
+    return drawn;
+  };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
     show,
@@ -1043,7 +1054,7 @@ const runTab = (spec, route, into) => {
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
     confirm: confirmAction,
-  }));
+  })).then(markStale);
 };
 
 /**
@@ -1082,7 +1093,7 @@ function screenBanner(into, page, guard) {
       return;
     }
     // The same banner again is no transition: leave it, say nothing.
-    if (kind && old?.dataset.state === kind && !opts.title) return;
+    if (kind && old?.dataset.state === kind && (!opts.title || old.querySelector('h2')?.textContent === opts.title)) return;
     old?.remove();
     // While stale, the tab's numbers are dimmed (CSS, [data-stale]).
     into.toggleAttribute('data-stale', kind === 'stale');
@@ -1091,7 +1102,7 @@ function screenBanner(into, page, guard) {
       if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
       return;
     }
-    const built = kind === 'stale' ? { ...opts, title: staleTitle(opts.since) } : opts;
+    const built = kind === 'stale' ? { ...opts, title: opts.title ?? staleTitle(opts.since) } : opts;
     const node = bannerState(kind, built);
     node.dataset.banner = '';
     into.prepend(node);
@@ -1395,10 +1406,11 @@ const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
  * The one live stream of this document, GET /ui/api/stream, read through
  * fetch: an EventSource cannot send the bearer that api() sends for a key
  * held in memory. `gen` changes on every open and close, so a read or timer
- * left from an earlier one does nothing. `open` is true from a hello until the
- * stream drops; `since` is when it dropped, until the next hello.
+ * left from an earlier one does nothing. `phase` is idle before any answer,
+ * open from a hello, dropped after an open stream ends (with `since`, when),
+ * and unavailable when the first connect failed, until the next hello.
  */
-const stream = { gen: 0, abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, open: false, since: null };
+const stream = { gen: 0, abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null };
 /** The page shown now and its banner, for the stale state on a drop. */
 let livePage = null;
 
@@ -1413,18 +1425,26 @@ function closeStream() {
   stream.gen++;
   stream.abort?.abort();
   clearTimeout(stream.timer);
-  Object.assign(stream, { abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, open: false, since: null });
+  Object.assign(stream, { abort: null, timer: null, lastId: null, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null });
   drawStream();
+}
+
+/** The stale banner options while the stream is down, else null. */
+function streamStale() {
+  if (stream.phase === 'dropped') return { since: stream.since };
+  if (stream.phase === 'unavailable') return { title: unavailableTitle() };
+  return null;
 }
 
 /** The top bar indicator: hidden, open (the live word) or down (the stale title). */
 function drawStream() {
   const node = document.querySelector('.top .stream');
-  const kind = stream.open ? 'open' : stream.since ? 'down' : null;
+  const down = streamStale();
+  const kind = stream.phase === 'open' ? 'open' : down ? 'down' : null;
   node.hidden = !kind;
   if (kind) node.dataset.stream = kind;
   else delete node.dataset.stream;
-  node.textContent = kind === 'open' ? GLOSSARY.stream.live : kind ? staleTitle(stream.since) : '';
+  node.textContent = kind === 'open' ? GLOSSARY.stream.live : down ? (down.title ?? staleTitle(down.since)) : '';
 }
 
 async function connect(gen) {
@@ -1443,18 +1463,19 @@ async function connect(gen) {
       if (epoch === authEpoch) showSignIn();
       return;
     }
-    if (reply.status === 404) return; // a gateway without the stream: nothing to wait for
+    // A first answer of 404 is a gateway without the stream: nothing to wait for.
+    if (reply.status === 404 && stream.phase === 'idle') return;
     if (reply.status === 503) retryAfterMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
     if (reply.ok && reply.body) await readStream(reply.body, gen);
   } catch {
     // No answer, or the read broke off; a close on purpose has moved `gen` on.
   }
   if (gen !== stream.gen) return;
-  if (stream.open) {
-    stream.open = false;
-    stream.since = new Date();
+  // A drop of an open stream has a time; a first connect that failed has none.
+  if (stream.phase === 'open' || stream.phase === 'idle') {
+    Object.assign(stream, stream.phase === 'open' ? { phase: 'dropped', since: new Date() } : { phase: 'unavailable' });
     drawStream();
-    if (livePage?.into.isConnected) livePage.show('stale', { since: stream.since });
+    if (livePage?.into.isConnected) livePage.show('stale', streamStale());
   }
   // Retry-After is a floor: the backoff still grows under it.
   const wait = Math.max(stream.wait, retryAfterMs);
@@ -1494,8 +1515,8 @@ function parseFrame(block) {
 function streamFrame(frame) {
   if (frame.id) stream.lastId = frame.id;
   if (frame.event === 'hello') {
-    const was = stream.since;
-    Object.assign(stream, { open: true, since: null, wait: STREAM_WAIT_MS.first });
+    const was = streamStale();
+    Object.assign(stream, { phase: 'open', since: null, wait: STREAM_WAIT_MS.first });
     drawStream();
     // Only a stale state the stream set is cleared: another banner stays.
     const page = livePage?.into;
