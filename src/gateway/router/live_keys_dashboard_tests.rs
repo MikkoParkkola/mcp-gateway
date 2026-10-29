@@ -45,7 +45,7 @@ fn auth(keys: Vec<ApiKeyConfig>) -> AuthConfig {
     }
 }
 
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, super::tests::FixtureDir) {
     test_router_app_state_with_auth(&auth(vec![
         admin_key(ADMIN, ADMIN),
         admin_key(OTHER, OTHER),
