@@ -218,3 +218,7 @@ mod shutdown_order_tests;
 #[cfg(test)]
 #[path = "counter_restart_tests.rs"]
 mod counter_restart_tests;
+
+#[cfg(all(test, feature = "webui"))]
+#[path = "gateway_status_start_tests.rs"]
+mod gateway_status_start_tests;

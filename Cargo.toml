@@ -205,8 +205,9 @@ subtle = "2.6"
 # read-modify-write (MIK-6685). Already a transitive dep (tempfile, clap →
 # terminal_size); promoted to direct with the `fs` feature — no new crate is
 # compiled, only a manifest entry (verified via `cargo tree`).
-# `process` gives geteuid for the CONFIG.2 config/env-file mode check.
-rustix = { version = "1.1", features = ["fs", "process"] }
+# `process` gives geteuid for the CONFIG.2 config/env-file mode check;
+# `system` gives uname, the host name the UI's environment chip defaults to.
+rustix = { version = "1.1", features = ["fs", "process", "system"] }
 # Wipes credential bytes held in memory on drop with volatile writes: the
 # passthrough token lease and revocation material.
 # Already transitive; pinned to the locked version.

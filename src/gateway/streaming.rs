@@ -34,6 +34,8 @@ use crate::gateway::session_lifecycle::{SessionLifecycle, now_unix};
 
 #[path = "streaming_provisional.rs"]
 mod provisional;
+#[path = "streaming_roster.rs"]
+mod roster;
 #[path = "streaming_session.rs"]
 mod session;
 #[cfg(test)]
@@ -450,7 +452,7 @@ impl NotificationMultiplexer {
         let session = sessions
             .get(session_id?)
             .filter(|session| session.owner == *owner)?;
-        *session.last_active.write() = Instant::now();
+        session.touch();
         self.promote(session);
         Some(Arc::clone(session))
     }
@@ -485,6 +487,8 @@ impl NotificationMultiplexer {
             last_event_id: RwLock::new(None),
             subscribed_backends: RwLock::new(Vec::new()),
             last_active: RwLock::new(Instant::now()),
+            last_seen: RwLock::new(crate::clock::utc_now().ok()),
+            reported_name: session::ReportedName::default(),
             owner,
             credential: RwLock::new(None),
             records: RwLock::new(Vec::new()),

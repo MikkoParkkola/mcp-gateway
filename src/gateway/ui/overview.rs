@@ -20,7 +20,7 @@ use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
-use super::{admin_auth_required, is_admin, uptime_secs};
+use super::{admin_auth_required, is_admin};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::security::transparency_log::pager::{Tail, lines_newest_first, tail_window};
@@ -119,7 +119,7 @@ fn kpi_and_servers(state: &AppState) -> (Value, Value) {
         "servers_total": rows.len(),
         "servers_up": up,
         "tools_total": tools,
-        "uptime_secs": uptime_secs(),
+        "uptime_secs": state.process.uptime_secs(),
         "version": env!("CARGO_PKG_VERSION"),
     });
     let folded = rows.split_off(rows.len().min(SERVER_ROWS));
