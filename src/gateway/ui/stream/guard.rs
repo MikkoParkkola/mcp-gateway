@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 use tokio::sync::watch;
-use tokio::task::{AbortHandle, JoinHandle};
+use tokio::task::JoinHandle;
 
 use crate::config_reload::Generation;
 
@@ -75,8 +75,7 @@ struct Shared {
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
-    /// Test seam: sends currently waiting for room in their channel.
-    #[cfg(test)]
+    /// Sends currently waiting for room in their channel.
     waiting: std::sync::atomic::AtomicUsize,
 }
 
@@ -97,13 +96,11 @@ impl Default for StreamHub {
     }
 }
 
-/// Marks a send as waiting for room; a no-op outside tests.
+/// Marks a send as waiting for room until it drops.
 pub(super) struct Waiting {
-    #[cfg(test)]
     shared: Arc<Shared>,
 }
 
-#[cfg(test)]
 impl Drop for Waiting {
     fn drop(&mut self) {
         self.shared
@@ -130,7 +127,6 @@ impl StreamHub {
                 snapshot: watch::channel(Snapshot::default()).0,
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
-                #[cfg(test)]
                 waiting: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
@@ -156,7 +152,7 @@ impl StreamHub {
     /// End the watcher task as a crash would, leaving the refcount alone.
     /// The handle lets a test wait until the task has finished.
     #[cfg(test)]
-    pub(crate) fn kill_watcher_for_test(&self) -> Option<AbortHandle> {
+    pub(crate) fn kill_watcher_for_test(&self) -> Option<tokio::task::AbortHandle> {
         let watcher = self.shared.lock().watcher.as_ref()?.abort_handle();
         watcher.abort();
         Some(watcher)
@@ -180,12 +176,10 @@ impl StreamHub {
 
     /// Count one send as waiting until the returned token drops.
     pub(super) fn waiting(&self) -> Waiting {
-        #[cfg(test)]
         self.shared
             .waiting
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Waiting {
-            #[cfg(test)]
             shared: Arc::clone(&self.shared),
         }
     }

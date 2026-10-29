@@ -293,8 +293,11 @@ impl<S: LogSource> LogMerge<S> {
         }
         let done = past || !page.more || self.reached_head(&page.next);
         self.unacked += out.len();
-        self.hint = Some(page.next.clone());
-        self.promote_hint();
+        if !past {
+            // Rows past the head were dropped, so this cursor skips them.
+            self.hint = Some(page.next.clone());
+            self.promote_hint();
+        }
         self.scan = (!done).then_some(page.next);
         out
     }

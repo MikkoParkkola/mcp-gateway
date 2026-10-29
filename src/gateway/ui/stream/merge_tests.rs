@@ -355,7 +355,9 @@ async fn the_fourth_lag_recovery_inside_a_minute_closes_the_view() {
         for _ in 0..6 {
             fake.append(false);
         }
-        let out = merge.next().await;
+        let out = tokio::time::timeout(std::time::Duration::from_secs(30), merge.next())
+            .await
+            .expect("a recovery or the close arrives");
         assert_eq!(out.is_empty(), round == 3, "round {round}");
     }
     assert!(merge.is_too_slow());
@@ -430,6 +432,8 @@ async fn lag_recoveries_do_not_rescan_hidden_rows_they_already_passed() {
     assert_eq!(ids(&collect(&mut merge, 1).await), vec![visible]);
     assert!(merge.lag_recoveries() >= 2);
     let reads = *fake.reads.lock().unwrap();
-    let pages = (visible as usize).div_ceil(PAGE);
+    let pages = usize::try_from(visible)
+        .expect("a test row count fits in usize")
+        .div_ceil(PAGE);
     assert!(reads <= pages + 1, "{reads} page reads for {pages} pages");
 }
