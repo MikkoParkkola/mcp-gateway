@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use super::direct_guards_fixture::{Answer, fixture, post_direct, send};
 use super::helpers::{RpcHttp, build_error_response, build_response};
 use crate::gateway::health_metrics::layers::error_layer;
-use crate::gateway::health_metrics::{Origin, RpcError};
+use crate::gateway::health_metrics::{ErrorKind, Origin, RpcError, error_kind};
 use crate::gateway::outbound::{OutboundFrame, Payload, to_http};
 use crate::protocol::JsonRpcResponse;
 
@@ -290,6 +290,38 @@ fn a_tool_result_marked_is_error_counts_no_error() {
     assert_eq!(body["result"]["isError"], true, "{body}");
     assert!(body.get("error").is_none(), "{body}");
     assert_eq!(all(&text), [0, 0, 0, 0]);
+}
+
+/// The key's own policy refusing a call it may otherwise make: `k-rl`'s rate
+/// limit of 1 refuses the second call on the direct route, with a JSON-RPC
+/// code. (`k-deny`'s denied tool cannot serve here: a withheld tool is
+/// answered exactly as an absent one, so no refusal is visible.) It is the
+/// gateway's error, never the backend's, and is counted once.
+#[test]
+fn a_policy_refusal_on_the_direct_route_counts_as_the_gateways_own() {
+    let ((status, body), text) = counted(async {
+        let fx = fixture(Answer::Ok, |_| {}).await;
+        let (first, _) = post_direct(&fx, "alpha", "k-rl", "read", json!({}), None, None).await;
+        assert_eq!(first, StatusCode::OK, "premise: the first call is served");
+        post_direct(&fx, "alpha", "k-rl", "read", json!({}), None, None).await
+    });
+    let code = body["error"]["code"]
+        .as_i64()
+        .unwrap_or_else(|| panic!("a coded refusal: {status} {body}"));
+    let marker = RpcError {
+        code: i32::try_from(code).expect("a code"),
+        origin: Origin::Gateway,
+    };
+    let kind = error_kind(status.as_u16(), Some(marker))
+        .unwrap_or_else(|| panic!("a refusal is an error: {status} {body}"));
+    assert_ne!(kind, ErrorKind::Backend, "{status} {body}");
+    let counts = all(&text);
+    assert_eq!(counts.iter().sum::<u64>(), 1, "{counts:?}: {status} {body}");
+    assert_eq!(
+        errors(&text, kind.label()),
+        1,
+        "{counts:?}: {status} {body}"
+    );
 }
 
 #[test]
