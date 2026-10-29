@@ -449,8 +449,13 @@ impl ReloadContext {
                 None
             }
             Audit::Required { sink, .. } => {
-                self.recover_audited(sink.as_mut(), locked.journal_pending, &target)
-                    .await?
+                let (id, recovered) = self
+                    .audit_recovery(sink.as_mut(), locked.journal_pending, &target)
+                    .await?;
+                if id.is_some() {
+                    self.pay_owed_reload(recovered, &target).await;
+                }
+                id
             }
         };
 

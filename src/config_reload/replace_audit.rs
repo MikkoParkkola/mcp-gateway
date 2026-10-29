@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::{FileRevision, Replace, ReplaceError, ReplaceOutcome};
+use crate::config_persistence::journal::Recovered;
 use crate::config_reload::ReloadContext;
 
 /// What an intent is for.
@@ -76,23 +77,22 @@ impl ReloadContext {
     /// Audit this gateway's recoveries through `sink`, from its posture at
     /// start.
     pub(crate) fn set_recovery_audit(&self, sink: Box<dyn IntentSink>) {
-        // Red-first stub: kept, not yet consulted by the reload path.
         *self.recovery_audit.lock() = Some(sink);
     }
 
     /// With anything pending (a crashed write's journal, or a reload owed
     /// after a failed one), append the recovery's own intent, then recover
-    /// and pay the reload. A refused intent recovers and reloads nothing;
-    /// the next holder tries again.
-    pub(super) async fn recover_audited(
+    /// the journal. The caller pays the owed reload. A refused intent
+    /// recovers nothing; the next holder tries again.
+    pub(super) async fn audit_recovery(
         &self,
         sink: &mut dyn IntentSink,
         journal_pending: bool,
         target: &std::path::Path,
-    ) -> Result<Option<IntentId>, ReplaceError> {
+    ) -> Result<(Option<IntentId>, Recovered), ReplaceError> {
         let owed = self.reload_owed.load(std::sync::atomic::Ordering::SeqCst);
         if !journal_pending && !owed {
-            return Ok(None);
+            return Ok((None, Recovered::Nothing));
         }
         // An absent file is the empty revision here: the intent names what is
         // on disk before recovery, whatever it is.
@@ -114,7 +114,39 @@ impl ReloadContext {
                 .await
                 .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
                 .map_err(ReplaceError::Failed)?;
-        self.pay_owed_reload(recovered, target).await;
-        Ok(Some(id))
+        Ok((Some(id), recovered))
+    }
+
+    /// The reader lock a reload takes: deferred on an audited gateway, so
+    /// its recovery intent comes before any recovery.
+    pub(crate) async fn reader_lock_for_reload(
+        &self,
+        deadline: std::time::Instant,
+    ) -> crate::config_persistence::lock::ReaderLock {
+        let audited = self.recovery_audit.lock().is_some();
+        if audited {
+            crate::config_persistence::lock::reader_lock_deferred(&self.config_path, deadline).await
+        } else {
+            crate::config_persistence::lock::reader_lock(&self.config_path, deadline).await
+        }
+    }
+
+    /// The reload path's recovery on an audited gateway: the recovery
+    /// sink, taken out of its slot for the call (the reload lock is held, so
+    /// no other holder wants it meanwhile). `Err` is the reason to skip this
+    /// reload. Without a sink, `None`: the caller recovered on acquisition.
+    pub(crate) async fn recover_for_reload(
+        &self,
+        journal_pending: bool,
+        target: &std::path::Path,
+    ) -> Option<Result<Recovered, String>> {
+        let mut sink = self.recovery_audit.lock().take()?;
+        let result = self
+            .audit_recovery(sink.as_mut(), journal_pending, target)
+            .await
+            .map(|(_, recovered)| recovered)
+            .map_err(|e| format!("{e:?}"));
+        *self.recovery_audit.lock() = Some(sink);
+        Some(result)
     }
 }

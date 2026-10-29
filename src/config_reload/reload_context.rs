@@ -451,11 +451,25 @@ impl ReloadContext {
         let reader = tokio::select! {
             biased;
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+            reader = self.reader_lock_for_reload(deadline) => reader,
         };
         let (_sidecar, target) = match reader {
             crate::config_persistence::lock::ReaderLock::Held(locked) => {
-                if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
+                // An audited gateway's lock recovered nothing yet: the
+                // recovery intent comes first.
+                let recovered = match self
+                    .recover_for_reload(locked.journal_pending, &locked.target)
+                    .await
+                {
+                    None => locked.recovered,
+                    Some(Ok(recovered)) => recovered,
+                    Some(Err(why)) => {
+                        return Err(format!(
+                            "config reload skipped: {why}; the next change retries"
+                        ));
+                    }
+                };
+                if recovered == crate::config_persistence::journal::Recovered::RolledBack {
                     self.reload_owed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }

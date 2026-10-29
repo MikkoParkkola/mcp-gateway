@@ -668,7 +668,21 @@ pub(crate) enum ReaderLock {
 /// because no writer can exist here, and no journal is pending (a stat finds
 /// none). Every other failure skips this reload: never an unlocked read.
 pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock {
-    match lock_config(config, deadline).await {
+    reader_lock_with(config, deadline, Recovery::OnAcquire).await
+}
+
+/// [`reader_lock`] for an audited gateway: a pending journal is left for
+/// the holder to recover after its recovery intent.
+pub(crate) async fn reader_lock_deferred(config: &Path, deadline: Instant) -> ReaderLock {
+    reader_lock_with(config, deadline, Recovery::Deferred).await
+}
+
+async fn reader_lock_with(config: &Path, deadline: Instant, recovery: Recovery) -> ReaderLock {
+    let locked = match recovery {
+        Recovery::OnAcquire => lock_config(config, deadline).await,
+        Recovery::Deferred => lock_config_deferred(config, deadline).await,
+    };
+    match locked {
         Ok(locked) => ReaderLock::Held(locked),
         Err(NotLocked::Busy) => ReaderLock::Skip(format!(
             "another writer holds the lock beside {} past the wait",
