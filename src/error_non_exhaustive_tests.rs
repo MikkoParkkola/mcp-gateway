@@ -69,7 +69,10 @@ fn the_error_doc_tests_list_every_variant() {
     let failing = doc_test_lines(FAILING);
     let passing = doc_test_lines(PASSING);
     for line in failing.iter().chain(&passing) {
-        assert!(!line.starts_with("//"), "no commented-out arm: {line}");
+        assert!(
+            !line.starts_with("//") && !line.contains("/*"),
+            "no commented-out arm: {line}"
+        );
     }
     let named: BTreeSet<String> = arms(&failing)
         .iter()
@@ -78,15 +81,14 @@ fn the_error_doc_tests_list_every_variant() {
     let variants = enum_variants();
     assert!(variants.len() > 30, "parsed {} variants", variants.len());
     assert_eq!(named, variants, "the compile_fail doc test's arms");
+    let mut without_wildcard = passing.clone();
+    let wildcard = without_wildcard
+        .iter()
+        .position(|line| line == "_ => false,")
+        .expect("the twin's wildcard arm");
+    without_wildcard.remove(wildcard);
     assert_eq!(
-        arms(&passing),
-        arms(&failing),
-        "the twin's arms are the compile_fail arms, line for line"
-    );
-    let extra: Vec<&String> = passing.iter().filter(|l| !failing.contains(l)).collect();
-    assert_eq!(
-        extra,
-        [&"_ => false,".to_owned()],
-        "the twin differs only by the wildcard arm"
+        without_wildcard, failing,
+        "the twin is the compile_fail snippet, line for line, plus only the wildcard arm"
     );
 }
