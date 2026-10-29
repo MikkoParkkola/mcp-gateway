@@ -90,7 +90,8 @@ struct Shared {
     #[cfg(test)]
     probe: super::probe::PublishProbe,
     /// Sends whose channel reservation is outstanding right now. Credential
-    /// checks outside the reservation wait do not count.
+    /// checks outside the reservation wait do not count. Test builds only.
+    #[cfg(test)]
     awaiting_room: std::sync::atomic::AtomicUsize,
 }
 
@@ -112,10 +113,12 @@ impl Default for StreamHub {
 }
 
 /// Counts one outstanding channel reservation until it drops.
+#[cfg(test)]
 pub(super) struct RoomWait {
     shared: Arc<Shared>,
 }
 
+#[cfg(test)]
 impl Drop for RoomWait {
     fn drop(&mut self) {
         self.shared
@@ -145,6 +148,7 @@ impl StreamHub {
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
                 probe: super::probe::PublishProbe::default(),
+                #[cfg(test)]
                 awaiting_room: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
@@ -193,6 +197,7 @@ impl StreamHub {
     }
 
     /// Count one outstanding reservation until the returned token drops.
+    #[cfg(test)]
     pub(super) fn room_wait_started(&self) -> RoomWait {
         self.shared
             .awaiting_room

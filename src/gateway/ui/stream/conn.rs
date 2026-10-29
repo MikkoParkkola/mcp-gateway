@@ -85,7 +85,8 @@ impl Conn {
         let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let permit = {
-            // Counted only while the reservation is outstanding.
+            // Counted (test builds) only while the reservation is outstanding.
+            #[cfg(test)]
             let _waiting = self
                 .state
                 .dashboard_bootstrap
