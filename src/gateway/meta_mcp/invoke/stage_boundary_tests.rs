@@ -704,7 +704,9 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
     // Exactly the inventory (design r11 section 4): a site added or removed
     // updates this count and its row together.
     let total: usize = mapped.iter().map(|(_, calls)| calls).sum();
-    assert_eq!(total, 15, "the invoke path calls the mapping: {mapped:?}");
+    // 17 since the undeclared-key check routes its two hand-released keys
+    // (an absent slot, a refused fill's connect offer) through the mapping.
+    assert_eq!(total, 17, "the invoke path calls the mapping: {mapped:?}");
 }
 
 /// The text of one pairing arm: from `start` to the first `end` after it.

@@ -1,4 +1,4 @@
-# file	function	exits	class	reason
+# file	function	sites	class	reason
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	1	marks	a meta tool name that matches nothing: marks the worker's round
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	1	marks	the destructive-confirmation and unadmitted-nonce refusals: mark the worker's round
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	1	excluded	a task submit refused before its task exists: no row, no invocation, no call recorded

@@ -656,3 +656,126 @@ mod redaction;
 
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;
+
+/// A backend whose every call fails before it is reached: the transport
+/// reports the backend unavailable, a pre-dispatch error.
+struct Unreachable;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Unreachable {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        if method == "tools/list" {
+            let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
+            return Ok(JsonRpcResponse::success(
+                RequestId::Number(1),
+                json!({"tools": [tool]}),
+            ));
+        }
+        Err(crate::Error::BackendUnavailable("alpha".to_owned()))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// `alpha` on `transport`, under a relay firewall over `alpha:*`, with
+/// `injector`.
+fn relay_meta(
+    transport: Arc<dyn crate::transport::Transport>,
+    injector: crate::secret_injection::SecretInjector,
+) -> MetaMcp {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(transport);
+    assert!(registry.register(backend));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
+    meta
+}
+
+/// A secret that cannot be injected (its environment variable is unset)
+/// refuses the call before its backend: the invocation is marked refused,
+/// so a task never records it as a call a backend ran, and nothing is sent.
+#[tokio::test]
+async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
+        "name": "token",
+        "value": "{env.REFUSED_CALL_ROW_UNSET_SECRET}",
+        "inject_key": "token"
+    }))
+    .expect("rule parses");
+    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
+        "alpha".to_string(),
+        vec![rule],
+    )]));
+    let meta = relay_meta(Arc::new(Seen(Arc::clone(&seen))), injector);
+    let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
+    let invoked =
+        Box::pin(meta.invoke_tool_sourced(&call, None, &ctx(&AllowAll), "t".to_owned())).await;
+    assert!(invoked.outcome.is_err(), "premise: the injection fails");
+    assert!(
+        seen.lock().is_empty(),
+        "premise: nothing reached the backend"
+    );
+    assert_eq!(
+        invoked.pre_send,
+        crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+        "an uninjectable secret is a refusal before the backend"
+    );
+}
+
+/// A dispatch error the backend never saw (unavailable), answered as a tool
+/// result, is the gateway's text: no receipt names the backend for it.
+#[tokio::test]
+async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
+    let meta = relay_meta(
+        Arc::new(Unreachable),
+        crate::secret_injection::SecretInjector::new(HashMap::new()),
+    );
+    let _ = super::take_staged_for_test();
+    let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
+    let invoked =
+        Box::pin(meta.invoke_tool_sourced(&call, None, &ctx(&AllowAll), "t".to_owned())).await;
+    assert_eq!(
+        invoked.pre_send,
+        crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+        "premise: the dispatch error is a refusal before the backend"
+    );
+    let staged = super::take_staged_for_test();
+    assert!(
+        staged.is_empty(),
+        "a receipt was staged for the gateway's text: {staged:?}"
+    );
+}

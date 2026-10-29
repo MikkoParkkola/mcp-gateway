@@ -8,11 +8,19 @@
 //! a call a backend ran (a relay replay call, a single call's answer taken for
 //! the backend's), so a new exit fails here until it is classified.
 //!
-//! A refusal exit is a nonce refund asked (`ask_refund`, `ask_if_transient`),
+//! A row's count is its sites: its refusal exits plus its refusal marks. A
+//! refusal exit is a nonce refund asked (`ask_refund`, `ask_if_transient`),
 //! a pre-dispatch error test (`is_pre_dispatch`), or an idempotency
 //! reservation released by hand (`.release()` on a receiver named for a
-//! reservation). Syntax scan, per function body, as the other pins: a call
-//! passed by path is missed.
+//! reservation). A refusal mark is a `note_pre_send` or `note_round` call
+//! whose argument names `Refused`: so every hand-marked plain-error exit is a
+//! row, and removing its mark fails here.
+//!
+//! What this cannot see: a new plain-error exit (a bare `Err` before the
+//! backend) that carries none of those markers. A syntax scan cannot tell it
+//! from an error after the send; such an exit is caught by its own refused-call
+//! row, not here. Per function body, as the other pins: a function is keyed by
+//! name within its file, and a call passed by path is missed.
 //!
 //! The scope stops at `src/gateway/meta_mcp/` because every record a refused
 //! call could be miscounted in is written there: the dispatch log's targets
@@ -38,6 +46,9 @@ const CLASSES: [&str; 3] = ["settles", "marks", "excluded"];
 #[derive(Default)]
 struct Body {
     exits: usize,
+    /// Calls that mark the call refused (`note_pre_send`, `note_round` with a
+    /// `Refused` argument): a hand mark removed changes this count.
+    refusal_marks: usize,
     settles: bool,
     marks: bool,
 }
@@ -64,7 +75,6 @@ impl Body {
         match name {
             "ask_refund" | "ask_if_transient" | "is_pre_dispatch" => self.exits += 1,
             "settle_pre_send" => self.settles = true,
-            "note_pre_send" | "note_round" => self.marks = true,
             _ => {}
         }
     }
@@ -80,12 +90,37 @@ impl Body {
     }
 }
 
+/// Whether `expr` names `Refused` anywhere (a path, a match arm's value).
+fn names_refused(expr: &syn::Expr) -> bool {
+    struct Find(bool);
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.0 |= last_segment(path).is_some_and(|n| n == "Refused");
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let mut find = Find(false);
+    find.visit_expr(expr);
+    find.0
+}
+
+impl Body {
+    /// A refusal mark: the call is refused before its backend, by hand.
+    fn mark(&mut self, name: &str, first: Option<&syn::Expr>) {
+        if (name == "note_pre_send" || name == "note_round") && first.is_some_and(names_refused) {
+            self.refusal_marks += 1;
+            self.marks = true;
+        }
+    }
+}
+
 impl<'ast> Visit<'ast> for Body {
     fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
         if let syn::Expr::Path(p) = call.func.as_ref()
             && let Some(name) = last_segment(&p.path)
         {
             self.call(&name);
+            self.mark(&name, call.args.first());
         }
         syn::visit::visit_expr_call(self, call);
     }
@@ -113,12 +148,13 @@ impl Exits {
     fn function(&mut self, file: &str, func: &str, block: &syn::Block) {
         let mut body = Body::default();
         body.visit_block(block);
-        if body.exits > 0 {
+        let sites = body.exits + body.refusal_marks;
+        if sites > 0 {
             let entry = self
                 .found
                 .entry((file.to_owned(), func.to_owned()))
                 .or_insert((0, "excluded"));
-            entry.0 += body.exits;
+            entry.0 += sites;
             entry.1 = body.class();
         }
     }
@@ -147,7 +183,7 @@ impl Sink for Exits {
     }
 }
 
-/// The reviewed list: file, function, exits, class, reason.
+/// The reviewed list: file, function, sites, class, reason.
 const LISTED: &str = include_str!("presend_exits.tsv");
 
 /// (file, function) -> (exits, class) as listed.
@@ -170,7 +206,7 @@ fn listed() -> (Listed, Vec<String>) {
             bad.push(format!("no class or no reason: {line}"));
         }
         let Ok(n) = n.parse::<usize>() else {
-            bad.push(format!("exits is not a number: {line}"));
+            bad.push(format!("sites is not a number: {line}"));
             continue;
         };
         rows.insert((file.to_owned(), func.to_owned()), (n, class.to_owned()));
@@ -284,5 +320,37 @@ fn every_call_record_writer_is_on_the_meta_path() {
         writers.outside.is_empty(),
         "call-record writers outside {SCOPE}; widen the refusal-exit scan:\n{}",
         writers.outside.join("\n")
+    );
+}
+
+/// A `Clear` note is not a refusal mark; a `Refused` one, in a match arm too,
+/// is.
+#[test]
+fn only_a_refused_note_is_a_refusal_mark() {
+    let marks = |block: syn::Block| {
+        let mut body = Body::default();
+        body.visit_block(&block);
+        body.refusal_marks
+    };
+    assert_eq!(
+        marks(syn::parse_quote!({
+            note_pre_send(PreSend::Clear);
+        })),
+        0
+    );
+    assert_eq!(
+        marks(syn::parse_quote!({
+            note_round(PreSend::Refused);
+        })),
+        1
+    );
+    assert_eq!(
+        marks(syn::parse_quote!({
+            note_pre_send(match exit {
+                Served(_) => PreSend::Clear,
+                _ => PreSend::Refused,
+            });
+        })),
+        1
     );
 }
