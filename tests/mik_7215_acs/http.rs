@@ -78,6 +78,7 @@ async fn state_with_exposure(
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,

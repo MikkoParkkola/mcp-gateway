@@ -340,6 +340,14 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
+    // src/gateway/ui/gateway_status.rs (gateway; admin-only read, like refusals)
+    row(
+        "/ui/api/gateway",
+        Method::GET,
+        "/ui/api/gateway",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
     // src/gateway/ui/mod.rs:520 (config)
     row(
         "/ui/api/config",

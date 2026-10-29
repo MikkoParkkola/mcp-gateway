@@ -34,6 +34,24 @@ pub fn is_format_char(c: char) -> bool {
     )
 }
 
+/// `raw` as safe display text: without controls (Cc), formats (Cf: bidi
+/// overrides, zero-width marks) or line and paragraph separators (Zl, Zp),
+/// trimmed and capped at `cap` characters, with whether the cap cut it; `None`
+/// when nothing is left. A peer picks these strings, so they must not be able
+/// to reorder or hide what is shown. No Unicode normalization: format
+/// characters are already gone, and display text needs no dependency for it.
+pub(crate) fn display_text(raw: &str, cap: usize) -> Option<(String, bool)> {
+    let kept: String = raw
+        .chars()
+        .filter(|&c| !(c.is_control() || is_format_char(c) || matches!(c, '\u{2028}' | '\u{2029}')))
+        .collect();
+    let kept = kept.trim();
+    if kept.is_empty() {
+        return None;
+    }
+    Some((kept.chars().take(cap).collect(), kept.chars().count() > cap))
+}
+
 /// One discovered server's fate in [`adopt_literals`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {

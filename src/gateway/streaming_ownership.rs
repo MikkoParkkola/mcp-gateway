@@ -22,7 +22,7 @@ impl NotificationMultiplexer {
         let Some(session) = sessions.get(session_id).filter(|s| s.owner == *owner) else {
             return false;
         };
-        *session.last_active.write() = tokio::time::Instant::now();
+        session.touch();
         // Presented again by its owner: adopted (MIK-8504).
         self.promote(session);
         true
@@ -65,7 +65,7 @@ impl NotificationMultiplexer {
             .get(session_id?)
             .filter(|session| session.owner == *owner)?;
         session.replace_credential(credential);
-        *session.last_active.write() = tokio::time::Instant::now();
+        session.touch();
         self.promote(session);
         Some(Arc::clone(session))
     }
