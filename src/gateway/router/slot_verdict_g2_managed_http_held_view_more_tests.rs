@@ -336,3 +336,26 @@ async fn r6_tools_resolve_does_not_resolve_an_old_publish_after_its_recheck() {
         "R6b: tools/resolve resolved an old publish after its re-check: {answer}"
     );
 }
+
+/// Pin 8 (green on base): a `required` managed-account backend whose read is
+/// a Bound binding the caller holds is not marked no-view by the re-check,
+/// and a listing shows the caller's own catalogue for it. Mutant: the Bound
+/// arm of the no-view decision answers no view.
+#[tokio::test]
+async fn pin8_a_required_backends_bound_read_is_not_no_view() {
+    let fx = fixture().await;
+    fill_old(&fx, 1).await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    fx.meta.revalidate_caller_slots(operator_proof()).await;
+    assert!(
+        !backend.caller_has_no_view(&operator_id()),
+        "pin8: a Bound read on a required backend marked the caller no-view"
+    );
+    let listed = rpc(&fx, 2, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&listed, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "pin8: the listing did not show the caller's own catalogue: {listed}"
+    );
+}
