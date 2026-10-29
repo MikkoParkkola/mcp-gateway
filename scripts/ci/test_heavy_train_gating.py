@@ -37,6 +37,7 @@ HEAVY = HEAVY_TRAIN
 DOCS_SKIPPED = HEAVY & SKIPPED
 GATE = HEAVY_GATE
 GATE_NAME = "Heavy checks (merge train)"
+STEP = "Every heavy job succeeded on a merge train"
 CLAUSE = (" && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
           " && !(startsWith(github.head_ref, 'train/')"
           " && github.event.pull_request.head.repo.full_name == github.repository))")
@@ -145,12 +146,14 @@ def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROO
     rendered for context `c`, NEEDS built from `results`; its exit code.
     `root` is the tree its scripts are read from (a self-test passes a copy
     holding a mutated check_needs.py)."""
-    step = next(st for st in gate.get("steps", []) if "run" in st)
+    step = next(st for st in gate.get("steps", []) if st.get("name") == STEP)
     env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
     needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
     with tempfile.NamedTemporaryFile() as summary:
         env.update(NEEDS=json.dumps(needs), GITHUB_STEP_SUMMARY=summary.name, PATH=os.environ.get("PATH", ""))
-        return subprocess.run(["bash", "-c", step["run"]], cwd=root, env=env, capture_output=True).returncode
+        # The shell a `run:` step gets on a Linux runner.
+        shell = ["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", step["run"]]
+        return subprocess.run(shell, cwd=root, env=env, capture_output=True).returncode
 
 
 def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
@@ -158,7 +161,9 @@ def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     gate = jobs.get(GATE)
     if gate is None:
         return [f"ci.yml has no {GATE} job"]
-    step = next((st for st in gate.get("steps", []) if "run" in st), {})
+    step = next((st for st in gate.get("steps", []) if st.get("name") == STEP), None)
+    if step is None:
+        return [f"{GATE}: no step named {STEP!r}"]
     if str((step.get("env") or {}).get("NEEDS", "")).replace(" ", "") != "${{toJSON(needs)}}":
         return [f"{GATE} step: NEEDS is not ${{{{ toJSON(needs) }}}}"]
     every = sorted(HEAVY | {"scope"})
@@ -211,7 +216,7 @@ def main() -> int:
         j[GATE]["needs"] = sorted((HEAVY | {"scope"}) - {"linux-keychain"})
     def train_inverted(j: dict) -> None:
         for st in j[GATE]["steps"]:
-            if "run" in st:
+            if st.get("name") == STEP:
                 st["run"] = st["run"].replace('[ "$TRAIN" != true ]', '[ "$TRAIN" = true ]')
     def docs_always(j: dict) -> None:
         for st in j[GATE]["steps"]:
