@@ -1,26 +1,40 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A plan step the gateway refuses before its backend is not a call the task
-//! made: the worker's dispatch log records no target and no replay call for
-//! it. The backend's own count is the premise that nothing was sent.
+//! A call the gateway refuses before its backend is not a call the task
+//! made: a refused plan step adds no target, and a refused single call
+//! settles as the gateway's own answer, which no reader takes for backend
+//! output. The backend's own count is the premise that nothing was sent.
 use super::super::*;
 use super::stored_result_policy::{install_playbook, playbook_call, withhold};
 use super::support::*;
 
-/// The settled row's recorded targets. Read from the store, not through
-/// `tasks/get`: a stored read judges the caller's current view, so a row
-/// whose step tool is withheld is refused there, settled or not.
+/// A playbook task's settled row as served, and its recorded targets.
 async fn settled_targets(
     state: &Arc<AppState>,
     key: &str,
 ) -> (Value, Vec<crate::gateway::task_service::Target>) {
-    use crate::protocol::tasks::TaskStatus;
     let created = post(state, "key-a", playbook_call(2, key)).await;
     let id = task_id(&created);
+    let settled = settled_row(state, &id).await;
+    let done = serde_json::to_value(settled.task.wire()).unwrap_or(Value::Null);
+    (
+        done,
+        state.task_executor.service.store.targets_for_test(&id),
+    )
+}
+
+/// The task's row once settled, read from the store: a stored read through
+/// `tasks/get` judges the caller's current view, so a row whose tool is
+/// withheld is refused there, settled or not.
+async fn settled_row(
+    state: &Arc<AppState>,
+    id: &str,
+) -> crate::gateway::task_service::CommittedTask {
+    use crate::protocol::tasks::TaskStatus;
     let owner = admission_principal();
-    let settled = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            if let Ok(row) = state.tasks.get(&owner, &id)
+            if let Ok(row) = state.tasks.get(&owner, id)
                 && matches!(
                     row.task.status(),
                     TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
@@ -32,12 +46,7 @@ async fn settled_targets(
         }
     })
     .await
-    .unwrap_or_else(|_| panic!("the task never settled"));
-    let done = serde_json::to_value(settled.task.wire()).unwrap_or(Value::Null);
-    (
-        done,
-        state.task_executor.service.store.targets_for_test(&id),
-    )
+    .unwrap_or_else(|_| panic!("the task never settled"))
 }
 
 /// A step tool withheld between the task's intake and its run: the intake
@@ -73,4 +82,42 @@ async fn a_sent_plan_step_records_its_target() {
         vec![(BACKEND, TOOL)],
         "{done}"
     );
+}
+
+/// A single call whose tool is withheld between intake and run settles on
+/// the gateway's own answer: the row records the gateway as its author, so
+/// no reader takes the stored answer for the backend's.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_refused_single_call_settles_as_the_gateways_answer() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let withheld = Arc::clone(&state);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        withhold(&withheld, TOOL);
+    });
+    let created = post(&state, "key-a", task_invoke(1, "refused-single", json!({}))).await;
+    let row = settled_row(&state, &task_id(&created)).await;
+    std::assert_eq!(mock.calls(), 0, "premise: nothing sent");
+    std::assert_eq!(
+        row.error_author,
+        Some(crate::gateway::task_service::ErrorAuthor::Gateway),
+        "the gateway answered this round"
+    );
+    assert!(
+        row.backend_result().is_none() && row.backend_error().is_none(),
+        "the gateway's answer is not backend output"
+    );
+}
+
+/// Control: the same call, nothing withheld, keeps the backend's result.
+#[tokio::test]
+async fn a_sent_single_call_keeps_the_backends_result() {
+    let mock = MockBackend::answering(Answer::ok());
+    let (state, _store) = state_with(&mock).await;
+    let created = post(&state, "key-a", task_invoke(1, "sent-single", json!({}))).await;
+    let row = settled_row(&state, &task_id(&created)).await;
+    std::assert_eq!(mock.calls(), 1);
+    std::assert_eq!(row.error_author, None);
+    assert!(row.backend_result().is_some(), "the backend's answer");
 }
