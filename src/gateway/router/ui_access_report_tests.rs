@@ -50,8 +50,8 @@ fn expected_tabs(
 ) -> BTreeMap<&'static str, BTreeMap<&'static str, bool>> {
     let rows = plain_rows();
     let mut tabs: BTreeMap<(&str, &str), LoadsAndAll> = BTreeMap::new();
-    // A row that backs no tab decides none (the live stream has no cells).
-    for (path, method, backs, load) in rows.iter().filter(|r| !r.2.is_empty()) {
+    // A route the matrix cannot probe has no cells to check against.
+    for (path, method, backs, load) in rows.iter().filter(|r| !super::STREAMED.contains(&r.0)) {
         let pass = passes(matrix, path, method, caller);
         for &(page, tab) in backs {
             let (loads, all) = tabs.entry((page, tab)).or_default();

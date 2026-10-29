@@ -727,6 +727,13 @@ async fn ui_api_access_matrix_is_preserved() {
     );
 }
 
+/// The streamed exemption is the live stream alone: a second route left out
+/// of the matrix and the report needs a deliberate edit here.
+#[test]
+fn the_streamed_exemption_is_the_stream_alone() {
+    assert_eq!(STREAMED, [routes::UI_STREAM]);
+}
+
 /// The matrix covers every UI API path the listener owns: a new route fails
 /// here until it has cells.
 #[test]
