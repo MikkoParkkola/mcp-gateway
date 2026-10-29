@@ -140,22 +140,27 @@ def gate_errors(jobs: dict) -> list[str]:
     return errors
 
 
-def run_gate_step(gate: dict, c: dict, results: dict[str, str]) -> int:
+def run_gate_step(gate: dict, c: dict, results: dict[str, str], root: Path = ROOT) -> int:
     """Run the gate's verdict step as the runner would: each env expression
-    rendered for context `c`, NEEDS built from `results`; its exit code."""
+    rendered for context `c`, NEEDS built from `results`; its exit code.
+    `root` is the tree its scripts are read from (a self-test passes a copy
+    holding a mutated check_needs.py)."""
     step = next(st for st in gate.get("steps", []) if "run" in st)
     env = {k: "true" if evaluate(str(v), c) else "false" for k, v in (step.get("env") or {}).items() if k != "NEEDS"}
     needs = {job: {"result": r, "outputs": {}} for job, r in results.items()}
     with tempfile.NamedTemporaryFile() as summary:
         env.update(NEEDS=json.dumps(needs), GITHUB_STEP_SUMMARY=summary.name, PATH=os.environ.get("PATH", ""))
-        return subprocess.run(["bash", "-c", step["run"]], cwd=ROOT, env=env, capture_output=True).returncode
+        return subprocess.run(["bash", "-c", step["run"]], cwd=root, env=env, capture_output=True).returncode
 
 
-def gate_step_errors(jobs: dict) -> list[str]:
+def gate_step_errors(jobs: dict, root: Path = ROOT) -> list[str]:
     """The gate's own script passes every lane and judges every train."""
     gate = jobs.get(GATE)
     if gate is None:
         return [f"ci.yml has no {GATE} job"]
+    step = next((st for st in gate.get("steps", []) if "run" in st), {})
+    if str((step.get("env") or {}).get("NEEDS", "")).replace(" ", "") != "${{toJSON(needs)}}":
+        return [f"{GATE} step: NEEDS is not ${{{{ toJSON(needs) }}}}"]
     every = sorted(HEAVY | {"scope"})
     def results(**changed: str) -> dict[str, str]:
         out = {job: "success" for job in every}
@@ -178,10 +183,14 @@ def gate_step_errors(jobs: dict) -> list[str]:
         "docs-only train, docs-only skips": (docs_train, dict(results(), **{j: "skipped" for j in DOCS_SKIPPED}), True),
         "docs-only train, Windows skipped": (docs_train, results(windows_check="skipped"), False),
         "train, a heavy job missing from needs": (train, {j: "success" for j in every if j != "kani"}, False),
+        # Only `skipped` is a docs-only allowance: a docs-skipped job that ran
+        # and failed, or was cancelled, still fails the train.
+        "docs-only train, a docs-skipped job failed": (docs_train, results(kani="failure"), False),
+        "docs-only train, a docs-skipped job cancelled": (docs_train, results(gws_dry_run="cancelled"), False),
     }
     errors = []
     for label, (c, res, passes) in cases.items():
-        code = run_gate_step(gate, c, res)
+        code = run_gate_step(gate, c, res, root)
         if (code == 0) != passes:
             errors.append(f"{GATE} step: {label} {'fails' if passes else 'passes'} (exit {code})")
     return errors
@@ -227,6 +236,20 @@ def main() -> int:
             continue
         if expected not in heavy_errors(mutated) + gate_errors(mutated) + gate_step_errors(mutated):
             errors.append(f"self-test: '{label}' was not caught by: {expected}")
+    # The verdict itself mutated: check_needs.py taking any result of an
+    # allowed job as a skip must fail the docs-only failure row.
+    with tempfile.TemporaryDirectory() as tree:
+        ci = Path(tree, "scripts", "ci")
+        ci.mkdir(parents=True)
+        text = (ROOT / "scripts/ci/check_needs.py").read_text()
+        broken = text.replace('not (result == "skipped" and job in skippable)', "not (job in skippable)")
+        expected = f"{GATE} step: docs-only train, a docs-skipped job failed passes (exit 0)"
+        if broken == text:
+            errors.append("self-test: check_needs.py's allowance line was not found to mutate")
+        else:
+            (ci / "check_needs.py").write_text(broken)
+            if expected not in gate_step_errors(jobs, Path(tree)):
+                errors.append(f"self-test: an allowance for any result was not caught by: {expected}")
     for e in errors:
         print(f"heavy-gating: {e}", file=sys.stderr)
     if not errors:
