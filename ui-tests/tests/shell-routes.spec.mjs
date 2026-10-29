@@ -84,6 +84,19 @@ test('R4 a screen module that fails to load shows the error state, and Retry loa
   await expect(error).toHaveCount(0);
 });
 
+test('R4b retrying a screen whose module failed keeps one copy of its loaded stylesheet', async ({ page }) => {
+  await toolsApi(page);
+  let fail = true;
+  await page.route(`**${asset('tools', 'js')}*`, (r) => (fail ? r.fulfill({ status: 500, body: '' }) : r.continue()));
+  await page.goto('/ui/tools/status');
+  const error = page.locator('#content [data-state="error"]');
+  await expect(error).toBeVisible();
+  fail = false;
+  await error.getByRole('button', { name: 'Retry' }).click();
+  await expect(toolRows(page)).toHaveCount(1);
+  await expect(page.locator(`head link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
+});
+
 test('R5 the screen manifest names only files in the asset table, and the head loads no screen', () => {
   const doc = readFileSync(`${SHELL_DIR}index.html`, 'utf8');
   const block = doc.match(/<script type="application\/json" id="screens">([\s\S]*?)<\/script>/);
