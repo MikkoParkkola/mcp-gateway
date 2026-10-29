@@ -8,8 +8,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use crate::counters::CounterStore;
 use crate::counters::persist::{CounterFile, Restored};
+use crate::counters::{CounterStore, VersionChange};
 use crate::gateway::meta_mcp::MetaMcp;
 
 use super::persistence::{ShutdownSave, spawn_periodic_save};
@@ -26,6 +26,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub(super) struct Counters {
     pub(super) store: Arc<CounterStore>,
     file: Arc<CounterFile>,
+    /// The version change this start's restore marked, kept as a value for
+    /// `GET /ui/api/gateway` rather than read back from marker history.
+    pub(super) upgrade: Option<VersionChange>,
 }
 
 /// Restore the counters from `data_dir`, attach them to `meta_mcp`, and start
@@ -38,7 +41,12 @@ pub(super) fn start(
     // An unreadable clock starts coverage at the epoch; nothing is counted
     // until the clock reads again (every recorder skips on `Err`).
     let now = crate::clock::unix_secs().unwrap_or_default();
-    let Restored { store, file, .. } = CounterFile::restore(
+    let Restored {
+        store,
+        file,
+        upgrade,
+        ..
+    } = CounterFile::restore(
         data_dir.join("counters.json"),
         now,
         VERSION,
@@ -54,7 +62,14 @@ pub(super) fn start(
             }
         }
     });
-    (Counters { store, file }, saver)
+    (
+        Counters {
+            store,
+            file,
+            upgrade,
+        },
+        saver,
+    )
 }
 
 impl Counters {

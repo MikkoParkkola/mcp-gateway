@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 use super::pool::{PoolKey, PooledEntry};
 
 use super::Backend;
+use super::era::EraResolution;
 use crate::config::{BackendConfig, TransportConfig};
 use crate::runtime::RuntimePlan;
 use crate::transport::{HttpTransport, Transport};
@@ -125,6 +126,7 @@ impl Backend {
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
+            secret_resolver: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -772,15 +774,4 @@ pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
         }
         other => other,
     }
-}
-
-/// How a start resolves its slot's era (MIK-8012).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EraResolution {
-    /// Discard and probe under the slot cache's lock: nothing else serves
-    /// from the slot while it starts.
-    Shared,
-    /// Probe without the lock and install at the publish: the transport being
-    /// replaced still serves from the slot (a build-first restart).
-    Deferred,
 }

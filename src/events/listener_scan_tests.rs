@@ -680,3 +680,32 @@ fn iso_t5_the_credential_rule_fails_on_a_broken_send() {
         "async fn notify(&self) {\n    tokio::select! { r = t.client.post(url).send() => r }\n}\n";
     assert_eq!(bad_sends("in_macro.rs", in_macro).0.len(), 1);
 }
+
+/// LEASE-T0, the static half: a lease is installed only for an
+/// `events/lease` request. The hub's `lease` is called from the direct
+/// route's `events/lease` answer alone, and the lease store's `install` from
+/// that call alone, so no forwarded call carrying a passthrough header can
+/// leave a token held. The behavioural half is
+/// `lease_t0_a_call_that_is_not_a_lease_leaves_the_store_empty`.
+#[test]
+fn lease_t0_only_an_events_lease_request_installs_a_lease() {
+    let naming = |words: &[&str]| -> Vec<String> {
+        product_files("src")
+            .into_iter()
+            .filter(|f| {
+                let text = read("src", f);
+                words.iter().all(|w| names_in_code(&text, w))
+            })
+            .collect()
+    };
+    assert_eq!(
+        naming(&[".lease("]),
+        ["gateway/router/backend_handlers/direct_caller.rs"],
+        "the hub's lease is called only for an events/lease request"
+    );
+    assert_eq!(
+        naming(&["leases", ".install("]),
+        ["events/lease_rpc.rs"],
+        "the lease store installs only inside the hub's lease"
+    );
+}

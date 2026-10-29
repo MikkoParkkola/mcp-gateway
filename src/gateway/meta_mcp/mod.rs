@@ -283,7 +283,6 @@ pub struct MetaMcp {
     /// capability carrying a `projection` spec changes no response contract
     /// until an operator opts in. `experimental` drives the A/B split.
     pub(super) projection_mode: crate::projection::ProjectionMode,
-    pub(super) secret_injector: crate::secret_injection::SecretInjector,
     /// Cost tracker — per-session and per-API-key spend accounting.
     pub(super) cost_tracker: Arc<CostTracker>,
     /// Engram-inspired O(1) tool registry with prefetching (optional).

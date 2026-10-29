@@ -386,56 +386,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 401, 200],
     ),
-    // src/gateway/ui/capabilities.rs:217 (list_capabilities)
-    row(
-        "/ui/api/capabilities",
-        Method::GET,
-        "/ui/api/capabilities",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:397 (create_capability; `{}` returns the template)
-    row(
-        "/ui/api/capabilities",
-        Method::POST,
-        "/ui/api/capabilities",
-        Payload::Json("{}"),
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:319 (put_capability)
-    // The admin reaches the handler, which refuses a save without If-Match.
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::PUT,
-        "/ui/api/capabilities/test_cap",
-        Payload::Yaml,
-        [401, 403, 403, 428],
-    ),
-    // src/gateway/ui/capabilities.rs (validate_capability_route; writes nothing)
-    row(
-        "/ui/api/capabilities/{name}/validate",
-        Method::POST,
-        "/ui/api/capabilities/test_cap/validate",
-        Payload::Yaml,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:278 (get_capability)
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::GET,
-        "/ui/api/capabilities/test_cap",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:486 (delete_capability)
-    // The admin reaches the handler, which refuses a delete without If-Match.
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::DELETE,
-        "/ui/api/capabilities/test_cap",
-        Payload::None,
-        [401, 403, 403, 428],
-    ),
     // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
     // with no Activity role 403); mod.rs (admit: no transparency log 404)
     row(
@@ -488,22 +438,6 @@ const ROWS: &[Row] = &[
         "/ui/api/backends/{name}/revive",
         Method::POST,
         "/ui/api/backends/docs/revive",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // backends.rs:510 (list_registry)
-    row(
-        "/ui/api/registry",
-        Method::GET,
-        "/ui/api/registry",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // backends.rs:527 (search_registry)
-    row(
-        "/ui/api/registry/search",
-        Method::GET,
-        "/ui/api/registry/search?q=tavily",
         Payload::None,
         [401, 403, 403, 200],
     ),
@@ -626,9 +560,16 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane and pending-decisions groups.
+const GROUPS: [&[Row]; 5] = [
+    control_plane::ROWS,
+    gateway_rows::ROWS,
+    pending::ROWS,
+    capabilities::ROWS,
+    registry::ROWS,
+];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS).chain(pending::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -797,10 +738,16 @@ async fn internal_routes_refuse_every_other_method() {
     );
 }
 
+#[path = "internal_routes_capabilities.rs"]
+mod capabilities;
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
 #[path = "internal_routes_decisions.rs"]
 mod pending;
+#[path = "internal_routes_registry.rs"]
+mod registry;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]

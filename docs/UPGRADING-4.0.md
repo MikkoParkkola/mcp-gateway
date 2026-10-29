@@ -4794,6 +4794,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/events/dead-letters` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id |  |
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
 | `/ui/api/events/leases` | hidden | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token |  |
+| `/ui/api/gateway` | hidden | admin only; the Gateway page's facts: version, uptime, environment, reload counts, TLS state, upgrade, clients by the name they reported, and what was refused at start |  |
 | `/ui/api/markers` | hidden | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts |  |
 | `/ui/api/metrics/series` | hidden | admin only; windowed call counters for the charts (ADR-017) |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
