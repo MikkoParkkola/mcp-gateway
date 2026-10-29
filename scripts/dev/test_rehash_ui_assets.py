@@ -95,6 +95,24 @@ class RehashOrder(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(t.stale(), [])
 
+    def test_the_screen_manifest_names_are_rewritten(self):
+        # The document lists its screens in a JSON block the shell reads; those
+        # names follow their files like any tag's.
+        t = self.tree({
+            "index.html": '<script type="module" src="/ui/assets/shell.js"></script>\n'
+                          '<script type="application/json" id="screens">'
+                          '{"tools": {"js": "/ui/assets/tools.js", "css": "/ui/assets/tools.css"}}</script>\n',
+            "shell.js": "export const register = () => {};\n",
+            "tools.js": "import { register } from '/ui/assets/shell.js';\nregister();\n",
+            "tools.css": "a{}\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(t.stale(), [])
+        doc = (t.shell / "index.html").read_text()
+        for pattern in ("tools.*.js", "tools.*.css"):
+            self.assertIn(f'"/ui/assets/{next(t.shell.glob(pattern)).name}"', doc)
+
     def test_a_cycle_is_refused(self):
         t = self.tree({
             "index.html": "",
