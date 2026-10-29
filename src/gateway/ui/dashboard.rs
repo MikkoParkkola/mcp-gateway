@@ -4,7 +4,7 @@
 use super::{
     AppState, Arc, AuthenticatedClient, BackendHealth, CacheStats, DashboardRenderer,
     DashboardState, Extension, HealthStatus, IntoResponse, SessionSummary, State, StatsSnapshot,
-    StatusCode, avg_latency_from_backends, compute_error_rate, is_admin, uptime_secs,
+    StatusCode, avg_latency_from_backends, compute_error_rate, is_admin,
 };
 
 /// Served in place of the dashboard when the caller holds no admin credential.
@@ -115,7 +115,7 @@ pub async fn dashboard_handler(
         session_summary,
         tool_counts,
         cache_stats,
-        uptime_secs: uptime_secs(),
+        uptime_secs: state.process.uptime_secs(),
         version: env!("CARGO_PKG_VERSION"),
     };
 
