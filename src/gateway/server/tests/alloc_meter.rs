@@ -555,8 +555,6 @@ pub(crate) struct Census {
     /// The most live blocks holding the marker that one census found: copies
     /// alive at once, wiped on drop or not.
     pub(crate) most_live_copies: u64,
-    /// The block table filled up; the counts are then a lower bound.
-    pub(crate) overflow: bool,
 }
 
 /// Count, now, every live block holding the armed marker. A test calls this
@@ -591,13 +589,19 @@ where
     drop(census);
     drop(scope);
     let (taken, most_live_copies, overflow) = super::live_census::result();
+    // A full table missed blocks, so its count would understate the copies
+    // exactly when allocation is heaviest: the reading is refused, never
+    // reported low.
+    assert!(
+        !overflow,
+        "census invalid: the block table overflowed, so its counts would understate copies"
+    );
     (
         value,
         scanned(),
         Census {
             taken,
             most_live_copies,
-            overflow,
         },
     )
 }

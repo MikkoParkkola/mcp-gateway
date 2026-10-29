@@ -104,7 +104,6 @@ async fn the_census_counts_live_copies_wiped_or_not() {
     })
     .await;
     assert_eq!(census.taken, 1, "premise: one census ran: {census:?}");
-    assert!(!census.overflow, "the block table overflowed: {census:?}");
     assert_eq!(
         census.most_live_copies, 3,
         "three live copies, one wiped on drop: {census:?}"
