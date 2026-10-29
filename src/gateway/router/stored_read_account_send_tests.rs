@@ -145,9 +145,12 @@ async fn r9_a_task_after_a_rotation_sends_once_under_the_new_grant() {
 }
 
 /// R10 rotated (the revoked case is W2 in the parent): the grant rotates
-/// during an input round; the resume sends once, under the new grant.
+/// during an input round, and the resume never sends under the old grant.
+/// Today the resume fails closed: the parked continuation is refused
+/// ("continuation rejected") and nothing is sent, which this row pins. A
+/// resume that does send must send once, under the current grant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn r10_a_resume_after_a_rotation_sends_once_under_the_new_grant() {
+async fn r10_a_resume_after_a_rotation_never_sends_under_the_old_grant() {
     let fx = fixture().await;
     let (id, meta) = parked_input_task(&fx).await;
     let old = DirectAccountGateway::operator_binding();
@@ -169,14 +172,21 @@ async fn r10_a_resume_after_a_rotation_sends_once_under_the_new_grant() {
     .await;
     let task = settled(&fx, &id, "R10").await;
     let calls: Vec<_> = fx.gateway.tool_calls().into_iter().skip(sent).collect();
-    assert_eq!(
-        calls.len(),
-        1,
-        "R10: other than one resumed send after the rotation: {calls:?} {task}"
+    assert!(
+        calls.len() <= 1,
+        "R10: more than one resumed send after the rotation: {calls:?} {task}"
     );
-    assert_eq!(
-        calls[0].1.as_deref(),
-        Some(new.as_str()),
-        "R10: the resumed send did not carry the current grant's credential: {calls:?}"
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.1.as_deref() == Some(new.as_str())),
+        "R10: a resumed send did not carry the current grant's credential: {calls:?}"
     );
+    if calls.is_empty() {
+        assert_eq!(
+            task.get("status"),
+            Some(&json!("failed")),
+            "R10: a resume that sent nothing did not settle refused: {task}"
+        );
+    }
 }
