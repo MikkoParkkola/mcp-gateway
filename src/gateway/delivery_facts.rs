@@ -134,6 +134,14 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
         .await
 }
 
+/// Run an internal send whose error the caller never receives (a probe that
+/// drops it) in a cell of its own, discarded: a refusal it meets, such as a
+/// refused redirect hop, is not this call's answer. Every such send site is
+/// listed in `boundary_pins/discarded_sends.rs`.
+pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
+    scope(future).await
+}
+
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
 /// on the composite's cell whether this step ended in a gateway refusal.
 /// Only the latest step's note is kept: a later step replaces it. A step
