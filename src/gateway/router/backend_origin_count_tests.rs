@@ -187,3 +187,151 @@ fn a_backends_account_shaped_error_on_the_direct_route_is_not_the_account_refusa
     );
     assert_eq!(all(&text), BACKEND, "{text}");
 }
+
+/// A playbook `p` of one `alpha/read` step, failing per `on_error`.
+fn one_step(on_error: &str) -> crate::playbook::PlaybookDefinition {
+    serde_json::from_value(json!({
+        "playbook": "1.0", "name": "p", "description": "one step",
+        "on_error": on_error,
+        "steps": [{"name": "s0", "tool": "read", "server": "alpha", "arguments": {}}]
+    }))
+    .expect("the playbook deserialises")
+}
+
+/// A fixture answering `answer` that serves `definition`.
+async fn serving(
+    answer: Answer,
+    definition: crate::playbook::PlaybookDefinition,
+) -> super::direct_guards_fixture::Fx {
+    fixture(answer, move |meta| {
+        let mut engine = crate::playbook::PlaybookEngine::new();
+        engine.register(definition);
+        meta.set_playbook_engine(engine);
+    })
+    .await
+}
+
+/// Run playbook `p` over the meta route.
+async fn run_p(fx: &super::direct_guards_fixture::Fx) -> (StatusCode, Value) {
+    let params = json!({"name": "gateway_run_playbook",
+        "arguments": {"name": "p", "arguments": {}}});
+    send(fx, "/mcp", KEY, "tools/call", params, None).await
+}
+
+/// `gateway_execute` of `alpha:read`, single or as a one-step chain.
+async fn execute(fx: &super::direct_guards_fixture::Fx, chain: bool) -> (StatusCode, Value) {
+    let arguments = if chain {
+        json!({"chain": [{"tool": "alpha:read", "arguments": {}}]})
+    } else {
+        json!({"tool": "alpha:read", "arguments": {}})
+    };
+    let params = json!({"name": "gateway_execute", "arguments": arguments});
+    send(fx, "/mcp", KEY, "tools/call", params, None).await
+}
+
+/// N7: a plan that aborts on a backend's in-band error (folded in its step)
+/// counts once as `backend`, not as the gateway's `internal`.
+#[test]
+fn a_plan_ending_on_a_backends_error_counts_as_backend() {
+    let ((_, answer), text) = counted(async {
+        let fx = serving(Answer::RpcError(-32001), one_step("abort")).await;
+        run_p(&fx).await
+    });
+    assert!(
+        answer.get("error").is_some(),
+        "premise: the plan ended in error: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// N8: a plan that aborts on a backend tool's own `isError` result is the
+/// tool's failure: it counts once as `backend`.
+#[test]
+fn a_plan_ending_on_a_tools_own_is_error_counts_as_backend() {
+    let ((_, answer), text) = counted(async {
+        let fx = serving(Answer::IsError, one_step("abort")).await;
+        run_p(&fx).await
+    });
+    assert!(
+        answer.get("error").is_some(),
+        "premise: the plan ended in error: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// N6: a plan that carries on past a backend's error reports it in
+/// `step_errors`; the delivered answer carries that failure, so it counts
+/// once as `backend`.
+#[test]
+fn a_plan_carrying_on_past_a_backends_error_counts_it_once() {
+    let ((_, answer), text) = counted(async {
+        let fx = serving(Answer::RpcError(-32001), one_step("continue")).await;
+        run_p(&fx).await
+    });
+    let report = answer["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        report.contains("step_errors"),
+        "premise: the failure is reported: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// N15: a single-tool `gateway_execute` delivers its step's folded backend
+/// error as its own answer: it counts once as `backend`.
+#[test]
+fn a_single_tool_execute_of_a_backends_error_counts_as_backend() {
+    let ((_, answer), text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32001), |_| {}).await;
+        execute(&fx, false).await
+    });
+    folded_text(&answer);
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// N14: a chain ending on a backend's error counts once as `backend`, not as
+/// the gateway's `internal`.
+#[test]
+fn a_chain_ending_on_a_backends_error_counts_as_backend() {
+    let ((_, answer), text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32001), |_| {}).await;
+        execute(&fx, true).await
+    });
+    assert!(
+        answer.get("error").is_some() || answer["result"]["isError"] == true,
+        "premise: the chain failed: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// A1 (MIK-9091.BEO.8): the audit record of a backend's -32001 refusal on
+/// the direct route says `error`, not `denied`: the gateway denied nothing.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_backends_minus_32001_on_the_direct_route_is_audited_as_an_error() {
+    let scratch = tempfile::tempdir().expect("tempdir");
+    let audit = scratch.path().join("audit.jsonl");
+    let ((_, answer), _) = counted(async {
+        let fx = super::direct_guards_fixture::fixture_firewalled_audited(
+            Answer::FailsWith(peer_400),
+            audit.clone(),
+        )
+        .await;
+        post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await
+    });
+    assert_eq!(answer["error"]["code"], -32001, "premise: {answer}");
+    let records: Vec<Value> = std::fs::read_to_string(&audit)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+        .filter(|r| r.get("request_hash").is_some() && r.get("outcome").is_some())
+        .collect();
+    assert!(
+        !records.is_empty(),
+        "premise: an invocation record was written"
+    );
+    for record in &records {
+        assert_eq!(record["outcome"], "error", "{record}");
+    }
+}
