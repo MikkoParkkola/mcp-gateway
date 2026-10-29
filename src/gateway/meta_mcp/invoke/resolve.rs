@@ -63,6 +63,19 @@ impl MetaMcp {
             verified_identity,
             surface,
         } = input;
+        // A name that is both a registry backend and the attached capability
+        // backend is refused before any credential, replay, key or cache:
+        // the checks judge the backend, and the capability would answer.
+        // Unscoped and name-only, so no caller's view can hide either route.
+        if let Some(cap) = self.get_capabilities()
+            && cap.name == server
+            && self
+                .scoped(crate::gateway::authz::BackendGrant::Unscoped)
+                .scoped_get(server)
+                .is_some()
+        {
+            return Err(super::dispatch::ambiguous_backend(server, None));
+        }
         let (backend, resolved) = match self
             .dispatch_resolution(
                 &self.scoped(caller.scope().authorizer.backend_grant()),

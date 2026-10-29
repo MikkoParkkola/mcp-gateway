@@ -250,7 +250,12 @@ impl MetaMcp {
         // The grant was decided at the authorization chokepoint, above the
         // caches. The definition is resolved again here only for the response
         // transform below, in one lookup so a reload cannot split it (#2236).
-        if let Some(cap) = self.get_capabilities()
+        // Only a call judged on no registry backend takes the capability
+        // route: one judged on a backend is never sent to a same-named
+        // capability (resolve refuses that clash; this holds if a backend is
+        // registered between resolve and here).
+        if captured.is_none()
+            && let Some(cap) = self.get_capabilities()
             && server == cap.name
             && let Some(cap_def) = cap.get(tool)
         {
@@ -500,4 +505,32 @@ impl MetaMcp {
     // ========================================================================
     // Operator control meta-tools
     // ========================================================================
+}
+
+/// A name that is both a registry backend and the capability backend: the
+/// checks judge the registry backend while dispatch would reach the
+/// capability, so the call takes neither route. `rule` names the policy rule
+/// covering the call, when one does.
+pub(super) fn ambiguous_backend(server: &str, rule: Option<&str>) -> Error {
+    tracing::warn!(
+        server,
+        "refused: the name is both a configured backend and the capability backend"
+    );
+    let mut data = json!({
+        "reason": "ambiguous_backend",
+        "server": server,
+        "routes": ["backend", "capability"],
+    });
+    if let Some(rule) = rule {
+        data["rule"] = json!(rule);
+    }
+    Error::JsonRpc {
+        code: -32001,
+        message: format!(
+            "Backend name '{server}' is both a configured backend and the capability backend; \
+             the call was refused because the checks judged one and dispatch would reach the \
+             other. Restart the gateway, then rename one of them if the clash remains."
+        ),
+        data: Some(data),
+    }
 }

@@ -632,6 +632,25 @@ impl ReloadContext {
             ));
         }
 
+        // The capabilities section applies only at restart, so the attached
+        // capability backend keeps its name through a reload that renames it.
+        // A backend registered under that name would be judged as itself and
+        // answered by the capability; load refuses the pair, and so does this.
+        if let Some(cap) = &self.capabilities
+            && let Some((name, _)) = patch
+                .backends_added
+                .iter()
+                .chain(&patch.backends_modified)
+                .find(|(name, _)| *name == cap.name)
+        {
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
+                 backend, and a capabilities.name change applies only at restart. Restart \
+                 first, or rename the backend. No backend was started or stopped, and no \
+                 configuration was published."
+            ));
+        }
+
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
         let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
