@@ -344,6 +344,20 @@ const STORE_WRITES: &[&str] = &[
 /// a widened view moves a cell. Export status reads no store.
 const STORE_READS: &[&str] = &[routes::UI_CONTROL_PLANE];
 
+/// Cells that record a known disclosure, pinned as today's answer: with a
+/// store, a control-plane snapshot shows every user's audit events to a
+/// caller that is neither an admin nor mapped to auditor or reviewer (an
+/// unprivileged key or identity falls back to auditor). The follow-up that
+/// scopes the snapshot moves exactly these cells, deliberately.
+const KNOWN_WRONG: &[&str] = &[
+    "StandardKey",
+    "OidcDeveloper",
+    "OidcDeveloperNoSubject",
+    "OidcDeveloperNoIssuer",
+    "OidcUnmapped",
+    "AdminKeyUnmapped",
+];
+
 /// The audit events [`seed_store`] writes, one per actor.
 const SEEDED_EVENTS: [(&str, &str); 2] =
     [("matrix-event-dev", DEV), ("matrix-event-other", OTHER_DEV)];
@@ -832,6 +846,16 @@ fn the_expectation_holds_known_answers() {
             post(path, "valid", "StandardKey").starts_with("403"),
             "{path}"
         );
+    }
+    // The known disclosure is still answered as today: each such caller
+    // reads the seeded store's snapshot.
+    for &caller in KNOWN_WRONG {
+        for shape in ["plain+store", "bad-query+store"] {
+            assert!(
+                get(routes::UI_CONTROL_PLANE, shape, caller).starts_with("200:"),
+                "{shape} {caller}"
+            );
+        }
     }
     // With the seeded store, the roles still see different snapshots.
     let seeded = |caller: &str| get(routes::UI_CONTROL_PLANE, "plain+store", caller);
