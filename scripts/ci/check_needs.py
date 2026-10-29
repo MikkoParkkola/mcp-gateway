@@ -9,8 +9,11 @@ and runs under `always()`. Only an exact `success` from every needed job
 passes. A skipped or cancelled shard is red, never green: a skipped job is
 not evidence that anything ran.
 
-  NEEDS='${{ toJSON(needs) }}' check_needs.py job-a job-b ...
+  NEEDS='${{ toJSON(needs) }}' check_needs.py [--allow-skipped job-a,...] job-a job-b ...
   check_needs.py --self-test
+
+--allow-skipped names jobs whose `skipped` result also passes (a docs-only
+merge train skips some heavy jobs by design); failed and cancelled stay red.
 
 The listed job ids must all be present in NEEDS, so dropping one from
 `needs:` without dropping it here fails too.
@@ -22,11 +25,11 @@ import os
 import sys
 
 
-def verdict(needs: dict, expected: list[str]) -> list[str]:
+def verdict(needs: dict, expected: list[str], skippable: frozenset[str] = frozenset()) -> list[str]:
     problems = [f"{job}: not in needs" for job in expected if job not in needs]
     for job, data in sorted(needs.items()):
         result = (data or {}).get("result")
-        if result != "success":
+        if result != "success" and not (result == "skipped" and job in skippable):
             problems.append(f"{job}: result {result!r}, not 'success'")
     return problems
 
@@ -44,6 +47,14 @@ def self_test() -> int:
     ]
     for needs, expected, passes in cases:
         assert (not verdict(needs, expected)) is passes, (needs, expected)
+    skip_b = frozenset({"b"})
+    for needs, passes in [
+        ({"a": {"result": "success"}, "b": {"result": "skipped"}}, True),
+        ({"a": {"result": "skipped"}, "b": {"result": "success"}}, False),
+        ({"a": {"result": "success"}, "b": {"result": "failure"}}, False),
+        ({"a": {"result": "success"}, "b": {"result": "cancelled"}}, False),
+    ]:
+        assert (not verdict(needs, ["a", "b"], skip_b)) is passes, (needs, "--allow-skipped b")
     print("check_needs self-test: ok")
     return 0
 
@@ -51,6 +62,10 @@ def self_test() -> int:
 def main(argv: list[str]) -> int:
     if argv[1:] == ["--self-test"]:
         return self_test()
+    skippable: frozenset[str] = frozenset()
+    if len(argv) > 2 and argv[1] == "--allow-skipped":
+        skippable = frozenset(j for j in argv[2].split(",") if j)
+        argv = argv[:1] + argv[3:]
     if len(argv) < 2:
         print(__doc__, file=sys.stderr)
         return 2
@@ -58,11 +73,12 @@ def main(argv: list[str]) -> int:
     if not raw:
         print("::error::NEEDS is unset: the step must pass NEEDS: ${{ toJSON(needs) }}")
         return 1
-    problems = verdict(json.loads(raw), argv[1:])
+    problems = verdict(json.loads(raw), argv[1:], skippable)
     for p in problems:
         print(f"::error::{p}")
     if not problems:
-        print("every needed job succeeded:", ", ".join(argv[1:]))
+        allowed = f" (skipping allowed: {', '.join(sorted(skippable))})" if skippable else ""
+        print(f"every needed job succeeded{allowed}:", ", ".join(argv[1:]))
     return 1 if problems else 0
 
 

@@ -70,6 +70,15 @@ TRAIN_ONLY = {"feature-combos-train"}
 # as before, except the release-line push (POST_MERGE_SKIPPED). Checked by its
 # own cases below, so it is in neither SKIPPED nor KEPT.
 MACOS_TRAIN = {"macos-shards", "macos-check"}
+# On a pull request into the release line, run only for a merge train and
+# judged there by HEAVY_GATE; scripts/ci/test_heavy_train_gating.py checks
+# their routing on every event, so the generic pull-request cases below leave
+# them out (their docs-only membership above still applies on a train).
+HEAVY_TRAIN = {
+    "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
+    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
+}
+HEAVY_GATE = "heavy-gate"
 BINARY_STEPS = ("Build the shipped binary", "Verify pins with cap validate (real files accepted, tampered copy refused)")
 
 # Skipped on a push to the release line (MIK-8163, merge skew); every other job
@@ -253,7 +262,7 @@ def runs(job: dict, c: dict) -> bool:
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
-    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY - MACOS_TRAIN
+    unclassified = set(jobs) - SKIPPED - KEPT - NOT_ON_PRS - TRAIN_ONLY - MACOS_TRAIN - {HEAVY_GATE}
     if unclassified:
         errors.append(f"jobs not classified for docs-only gating: {sorted(unclassified)}")
     for wf in PUSH_ONLY_WORKFLOWS:
@@ -288,8 +297,9 @@ def main() -> int:
     if {"test", "test-shards"} & set(shard_needs):
         errors.append("windows-shards needs the Linux suite: it must start in parallel with it")
     for name, c in cases.items():
-        ran = {k for k, j in jobs.items() if k not in NOT_ON_PRS | TRAIN_ONLY | MACOS_TRAIN and runs(j, c)}
-        want = (SKIPPED | KEPT) - (SKIPPED if name == "docs-only PR" else set())
+        left_out = NOT_ON_PRS | TRAIN_ONLY | MACOS_TRAIN | HEAVY_TRAIN | {HEAVY_GATE}
+        ran = {k for k, j in jobs.items() if k not in left_out and runs(j, c)}
+        want = (SKIPPED | KEPT) - HEAVY_TRAIN - (SKIPPED if name == "docs-only PR" else set())
         if ran != want:
             errors.append(f"{name}: unexpected runs {sorted(ran - want)}, unexpected skips {sorted(want - ran)}")
         steps = {st.get("name"): st for st in jobs["capability-pins"]["steps"]}
