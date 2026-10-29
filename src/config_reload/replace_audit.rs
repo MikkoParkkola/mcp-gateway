@@ -127,9 +127,13 @@ impl ReloadContext {
         audit: &mut Audit,
         locked: Locked,
     ) -> Result<(Locked, Option<IntentId>), ReplaceError> {
-        let Audit::Required { sink, .. } = audit else {
-            self.pay_owed_reload(locked.recovered, &locked.target).await;
-            return Ok((locked, None));
+        // Exhaustive on purpose: a new audit mode must choose here.
+        let sink = match audit {
+            Audit::Required { sink, .. } => sink,
+            Audit::Off => {
+                self.pay_owed_reload(locked.recovered, &locked.target).await;
+                return Ok((locked, None));
+            }
         };
         let Some(id) = self.recovery_intent(sink.as_mut(), &locked)? else {
             return Ok((locked, None));
