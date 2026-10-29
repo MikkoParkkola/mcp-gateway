@@ -447,7 +447,7 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
 /// Creates the step's entries, records them in `entries` (so a refusal
 /// below still removes them) and fills the template with their references.
 async fn fill_secrets(
-    template: &Template,
+    template: Template,
     step: SecretStep,
     deadline: Instant,
     entries: &mut Entries,
@@ -458,7 +458,7 @@ async fn fill_secrets(
         .refs()
         .iter()
         .any(|r| r.len() > crate::secret_store::MAX_REFERENCE_LEN);
-    let refs = by_slot(template, &fields, pending.refs());
+    let refs = by_slot(&template, &fields, pending.refs());
     entries.pending = Some(pending);
     // The size bound counted every reference at this length: one longer
     // would let the filled file outgrow what the loader reads. Refused
@@ -593,7 +593,7 @@ impl ReloadContext {
         fits_when_filled(&template)?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
-            Some(step) => fill_secrets(&template, step, deadline, &mut entries).await,
+            Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
         };
         let result = match result {
             Ok(new) => {
