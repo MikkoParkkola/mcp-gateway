@@ -306,7 +306,7 @@ async fn an_annotated_answer_records_annotated() {
 }
 
 /// A direct call to a tool the routing profile excludes is answered as an
-/// absent name; the gateway refused it, so its delivery record says
+/// absent name (an `isError` result); the gateway refused it, so its delivery record says
 /// `refused`. The profile is judged in `withheld_verdict` and raised by
 /// `guard_tool_call`, its caller.
 #[tokio::test]
@@ -336,9 +336,11 @@ async fn a_direct_profile_withheld_call_records_refused() {
     let body = fixture::send(&fx, "/mcp/alpha", "k-std", "tools/call", params, None)
         .await
         .1;
-    assert_eq!(
-        body.pointer("/error/code").and_then(Value::as_i64),
-        Some(-32601),
+    assert!(
+        body.pointer("/result/isError") == Some(&Value::Bool(true))
+            && body
+                .to_string()
+                .contains("does not list a tool named `read`"),
         "premise: answered as an absent name: {body}"
     );
     let row = only_delivery(HttpRoute::Direct, &delivery_rows(&log).await);
