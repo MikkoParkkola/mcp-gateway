@@ -56,7 +56,8 @@ impl IntentSink for Recorder {
         let mut seen = self.seen.lock().expect("lock");
         seen.push(Seen {
             intent: intent.clone(),
-            file: read(&self.path),
+            // Empty when the config is missing (a row removes it).
+            file: std::fs::read_to_string(&self.path).unwrap_or_default(),
             journal_pending: journal::journal_path(&self.path).exists(),
         });
         if self.fail {
