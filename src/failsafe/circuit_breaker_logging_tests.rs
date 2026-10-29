@@ -42,6 +42,7 @@ impl MakeWriter<'_> for Parked {
 
 #[test]
 fn a_transition_writes_its_log_line_after_releasing_the_state_lock() {
+    crate::test_log_capture::keep_interest_open();
     let (entered_tx, entered_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel::<()>();
     let writer = Parked {

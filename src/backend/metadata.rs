@@ -271,6 +271,27 @@ impl Backend {
         self.get_cached_tools_snapshot_for(None)
     }
 
+    /// F13: a stale-hit refresh that failed within [`LIST_FILL_COOLDOWN`] is
+    /// refused before the guard is armed, so a refusal here never stamps.
+    fn refuse_during_refresh_cooldown(
+        &self,
+        entry: &super::pool::PooledEntry,
+        family: &ListFamily,
+    ) -> Result<()> {
+        let recent = || {
+            let failed = entry.tools_refresh_failed_at.lock();
+            failed.is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+        };
+        if family.stale_hit && recent() {
+            return Err(Error::BackendUnavailable(format!(
+                "{}: a stale tools refresh failed within the last {}s",
+                self.name,
+                LIST_FILL_COOLDOWN.as_secs()
+            )));
+        }
+        Ok(())
+    }
+
     /// Fill or serve one metadata list ON THE CALLER'S POOL SLOT
     /// (MIK-7334.CATALOGUE.1).
     ///
@@ -349,16 +370,7 @@ impl Backend {
                 fill_scope(mark, async {
                     // F13: breaker, cooldown, token, in that order, before the
                     // guard is armed, so a refusal here never stamps.
-                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
-                    if family.stale_hit
-                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
-                    {
-                        return Err(Error::BackendUnavailable(format!(
-                            "{}: a stale tools refresh failed within the last {}s",
-                            self.name,
-                            LIST_FILL_COOLDOWN.as_secs()
-                        )));
-                    }
+                    self.refuse_during_refresh_cooldown(&entry, &family)?;
                     // A fill that would have to start a refused shared slot is
                     // refused before its admission, so it charges and counts
                     // nothing; one over a transport already in place starts
@@ -394,7 +406,7 @@ impl Backend {
                     .await;
                     let end = FillEnd::of(&drained);
                     if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
-                        *refresh_failed() = Some(tokio::time::Instant::now());
+                        *entry.tools_refresh_failed_at.lock() = Some(tokio::time::Instant::now());
                     }
                     if let Some(guard) = guard.as_mut() {
                         guard.end(end);
