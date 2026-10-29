@@ -143,6 +143,9 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
+            // A public API that has returned a plain `Vec` since before the
+            // send recheck: the secret is moved out, never copied, and from
+            // here its owner is the caller. Changing the type is an API change.
             .map(|(mut lent, cache_binding, _)| (std::mem::take(&mut *lent.headers), cache_binding))
     }
 
