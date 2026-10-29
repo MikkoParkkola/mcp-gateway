@@ -345,10 +345,11 @@ const STORE_WRITES: &[&str] = &[
 const STORE_READS: &[&str] = &[routes::UI_CONTROL_PLANE];
 
 /// Cells that record a known disclosure, pinned as today's answer: with a
-/// store, a control-plane snapshot shows every user's audit events to a
-/// caller that is neither an admin nor mapped to auditor or reviewer (an
-/// unprivileged key or identity falls back to auditor). The follow-up that
-/// scopes the snapshot moves exactly these cells, deliberately.
+/// store, a control-plane snapshot shows every user's audit events to an
+/// unprivileged caller. A key or identity with no role mapping falls back to
+/// auditor, and a mapped Developer keeps its role, which also reads all of
+/// it. The follow-up that scopes the snapshot moves exactly these cells,
+/// deliberately.
 const KNOWN_WRONG: &[&str] = &[
     "StandardKey",
     "OidcDeveloper",
