@@ -20,7 +20,7 @@ pub(super) fn withhold(state: &Arc<AppState>, tool: &str) {
     assert!(backend.blocked_tool_refusal(None, tool).is_some());
 }
 
-fn install_playbook(state: &Arc<AppState>, step_tool: &str) {
+pub(super) fn install_playbook(state: &Arc<AppState>, step_tool: &str) {
     let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
         "playbook": "1.0", "name": "pb", "description": "one step",
         "steps": [{ "name": "s", "tool": step_tool, "server": BACKEND, "arguments": {} }]
@@ -31,7 +31,7 @@ fn install_playbook(state: &Arc<AppState>, step_tool: &str) {
     state.meta_mcp.set_playbook_engine(engine);
 }
 
-fn playbook_call(id: i64, key: &str) -> Value {
+pub(super) fn playbook_call(id: i64, key: &str) -> Value {
     keyed(
         modern(
             id,

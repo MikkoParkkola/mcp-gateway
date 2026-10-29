@@ -140,6 +140,8 @@ mod provide_input_guards;
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+/// A plan step refused before its backend is not a recorded target.
+mod refused_step_targets;
 mod replay_policy;
 /// No backend-planted gateway member in a task result or a replay.
 mod reserved_members_task;
