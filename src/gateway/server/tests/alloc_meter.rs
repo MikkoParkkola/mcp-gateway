@@ -141,9 +141,6 @@ unsafe fn read_byte(at: *const u8) -> u8 {
     word.to_le_bytes()[0]
 }
 
-/// Whether the free scan can read bytes on this target.
-const SCAN_SUPPORTED: bool = cfg!(any(target_arch = "x86_64", target_arch = "aarch64"));
-
 /// Register one allocator callback's scan work, if a scan is armed. Teardown
 /// waits for every registered callback, so a hit or a watched free it records
 /// is counted before the results are read. The armed state is checked again
@@ -525,9 +522,9 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
         std::env::var_os(CHILD_ENV).is_some(),
         "a free scan runs only in an isolated child: it sees every thread's frees"
     );
-    if !SCAN_SUPPORTED {
-        panic!("the free scan reads bytes through inline asm on x86_64 and aarch64 only");
-    }
+    // Compiled only where `read_byte` has no instruction to read with.
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    panic!("the free scan reads bytes through inline asm on x86_64 and aarch64 only");
     assert!(
         marker.len() >= MIN_MARKER,
         "a free-scan marker must be at least {MIN_MARKER} bytes"
