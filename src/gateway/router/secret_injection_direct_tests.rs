@@ -138,7 +138,7 @@ async fn the_direct_route_applies_a_header_rule() {
 /// a file another handle has locked (`fs_lock::ExclusiveFileLock` is
 /// `LockFileEx` there). The skip is keyed on the sidecars' names: every
 /// `fs_lock` lock file is `*.lock`, and the task store's lease is
-/// `store.lease` (task_service/store.rs, custody state, never a record); no
+/// `store.lease` (`task_service/store.rs`, custody state, never a record); no
 /// store's data file has either name.
 #[cfg(feature = "firewall")]
 fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
