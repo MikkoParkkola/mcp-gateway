@@ -558,13 +558,27 @@ impl ReloadContext {
             Some(step) => {
                 let fields: Vec<String> = step.values.iter().map(|v| v.field.clone()).collect();
                 let pending = create_entries(step, deadline).await?;
+                let too_long = pending
+                    .refs()
+                    .iter()
+                    .any(|r| r.len() > crate::secret_store::MAX_REFERENCE_LEN);
                 let refs = by_slot(&template, &fields, pending.refs());
                 entries.pending = Some(pending);
-                template.fill(&refs).map_err(|_| {
-                    ReplaceError::Refused(
-                        "the saved secrets could not be placed in the new config".to_string(),
-                    )
-                })
+                // The size bound counted every reference at this length: one
+                // longer would let the filled file outgrow what the loader
+                // reads. Refused before the file is written; the entries go.
+                if too_long {
+                    Err(ReplaceError::Refused(
+                        "the secret store returned a reference longer than the writer allows"
+                            .to_string(),
+                    ))
+                } else {
+                    template.fill(&refs).map_err(|_| {
+                        ReplaceError::Refused(
+                            "the saved secrets could not be placed in the new config".to_string(),
+                        )
+                    })
+                }
             }
         };
         let result = match result {
