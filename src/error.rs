@@ -28,6 +28,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///         | Error::ConfigWatcher(..)
 ///         | Error::CapabilityHashMismatch { .. }
 ///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
 ///         | Error::BackendUnavailable(..)
 ///         | Error::CircuitOpen { .. }
 ///         | Error::RateLimited(..)
@@ -73,6 +74,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///         | Error::ConfigWatcher(..)
 ///         | Error::CapabilityHashMismatch { .. }
 ///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
 ///         | Error::BackendUnavailable(..)
 ///         | Error::CircuitOpen { .. }
 ///         | Error::RateLimited(..)
