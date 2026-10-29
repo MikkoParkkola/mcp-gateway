@@ -15,6 +15,19 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use serde_json::Value;
 
+/// Whether one invocation was refused before its backend: decided at the
+/// invoke path's pre-send exits (`nonce_settle::settle_pre_send`) and cleared
+/// by a send or a served answer, so it describes the last thing the
+/// invocation did. A refused invocation is no call the task made.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PreSend {
+    /// Sent, served, or not proven refused: recorded as a call, as before.
+    #[default]
+    Clear,
+    /// Refused before anything reached its backend.
+    Refused,
+}
+
 /// `(server, tool)` pairs in dispatch order, without duplicates.
 #[derive(Default)]
 pub(crate) struct DispatchLog {

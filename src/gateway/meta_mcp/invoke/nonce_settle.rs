@@ -6,6 +6,7 @@
 //! and gives the nonce back only if a step asked and none dispatched.
 
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::dispatch_log::PreSend;
 use crate::gateway::meta_mcp::refund_witness::{Effect, RefundWitness};
 use crate::gateway::task_service::execution::BeginOutcome;
 
@@ -83,6 +84,9 @@ pub(crate) fn note_served(caller: &MetaMcpCallerContext<'_>, step: (&str, &str))
 /// backend is reached: from here on neither the key nor the nonce is given
 /// back, as a replay would repeat what the backend did.
 pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
+    // A send after an earlier refusal in the same call (a fill retry, a
+    // backstop that falls through) is a call: the refusal no longer stands.
+    super::audit::note_pre_send(PreSend::Clear);
     if let Some(execution) = caller.execution {
         execution.mark_dispatched();
     }
@@ -116,6 +120,12 @@ pub(super) enum PreSendExit<'r> {
 /// Settle one pre-send exit: the one place the invoke path decides what a
 /// refusal or an early answer before the send gives back.
 pub(super) fn settle_pre_send(caller: &MetaMcpCallerContext<'_>, exit: PreSendExit<'_>) {
+    // Every exit but `Served` is a refusal before the backend: no call the
+    // task made. A served answer is the backend's earlier output: a call.
+    super::audit::note_pre_send(match exit {
+        PreSendExit::Served(_) => PreSend::Clear,
+        _ => PreSend::Refused,
+    });
     match exit {
         PreSendExit::AskRefund => ask_refund(caller),
         PreSendExit::GiveBackUnsent(reservation) => {

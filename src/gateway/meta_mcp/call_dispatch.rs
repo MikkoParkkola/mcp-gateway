@@ -449,7 +449,8 @@ impl MetaMcp {
                 let invocation = Arc::<str>::from(trace_id.as_str());
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller, trace_id)
-                    .await;
+                    .await
+                    .outcome;
                 match live_or_stored(sourced) {
                     ControlFlow::Continue((result, chain)) => {
                         (source, upstream) = chain;

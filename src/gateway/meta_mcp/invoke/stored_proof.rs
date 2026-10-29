@@ -29,6 +29,15 @@ pub(crate) enum SourcedOutcome {
     Stored(crate::protocol::JsonRpcResponse),
 }
 
+/// `invoke_tool_sourced`'s answer and whether the invocation was refused
+/// before its backend. Must be used: a caller that drops `pre_send` records a
+/// refused invocation as a call.
+#[must_use]
+pub(crate) struct Invoked {
+    pub(crate) outcome: crate::Result<SourcedOutcome>,
+    pub(crate) pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
+}
+
 /// Whether `resolved` minted something that proves the caller's account: a
 /// dispatch binding, from a propagation mint or an account credential. It is
 /// the discriminator the response and retry caches namespace on, so "proven"

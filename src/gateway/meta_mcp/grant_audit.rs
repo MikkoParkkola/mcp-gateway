@@ -675,15 +675,19 @@ impl super::MetaMcp {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
-        let future: Pin<
-            Box<dyn Future<Output = Result<super::invoke::SourcedOutcome>> + Send + '_>,
-        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller, trace_id));
-        let outcome = slot_result(logger, future).await;
+        let future: Pin<Box<dyn Future<Output = super::invoke::Invoked> + Send + '_>> =
+            Box::pin(self.invoke_tool_sourced(args, session_id, caller, trace_id));
+        // As `slot_result`, keeping the invocation's own pre-send verdict
+        // through a failed slot write, which replaces only the answer.
+        let (invoked, written, _) = with_grant_slot(logger, future).await;
+        let refused = invoked.pre_send == super::dispatch_log::PreSend::Refused;
+        let outcome = written.and(invoked.outcome);
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an
-        // audit failure after the call, does not un-dispatch it. Only an
-        // authorization refusal proves nothing was sent.
-        if !matches!(outcome, Err(Error::Forbidden { .. })) {
+        // audit failure after the call, does not un-dispatch it. An
+        // authorization refusal, or any exit refused before its backend,
+        // proves nothing was sent.
+        if !refused && !matches!(outcome, Err(Error::Forbidden { .. })) {
             super::dispatch_log::note_completed(args);
             // `MIK-8408` H2: the same call, with the plan step label it
             // ran under, for the replay entry's `calls`.
