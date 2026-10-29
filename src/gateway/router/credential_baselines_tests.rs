@@ -113,7 +113,6 @@ async fn peer(
                 let method = message["method"].as_str().unwrap_or_default().to_owned();
                 if switch.load(std::sync::atomic::Ordering::SeqCst) {
                     match behaviour {
-                        Peer::Answers => {}
                         Peer::FailsOnce => {
                             switch.store(false, std::sync::atomic::Ordering::SeqCst);
                             return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -121,7 +120,7 @@ async fn peer(
                         Peer::Hangs if method == "tools/call" => {
                             std::future::pending::<()>().await;
                         }
-                        Peer::Hangs => {}
+                        Peer::Answers | Peer::Hangs => {}
                     }
                 }
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
