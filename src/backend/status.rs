@@ -85,8 +85,9 @@ impl Backend {
     }
 
     /// Whether this backend is a local process the gateway's filesystem view
-    /// applies to (MIK-8939): only stdio. Exhaustive with no wildcard arm, so a
-    /// transport added later does not compile until someone classes it.
+    /// applies to, as the firewall's folder check needs: only stdio.
+    /// Exhaustive with no wildcard arm, so a transport added later does not
+    /// compile until someone classes it.
     #[must_use]
     pub(crate) fn is_local_process(&self) -> bool {
         match &self.config.transport {
