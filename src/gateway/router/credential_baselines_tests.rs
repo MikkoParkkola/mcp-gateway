@@ -80,7 +80,8 @@ fn report(path: &str, len: usize, scanned: Scanned, census: Census, sends: usize
 enum Peer {
     /// Answers every call.
     Answers,
-    /// Answers the first measured call with HTTP 503, then answers.
+    /// Answers the first measured request, of any method, with HTTP 503,
+    /// then answers.
     FailsOnce,
     /// Never answers a call: the gateway's call is dropped mid-send.
     Hangs,
@@ -110,14 +111,17 @@ async fn peer(
                 take_census();
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let method = message["method"].as_str().unwrap_or_default().to_owned();
-                if method == "tools/call" && switch.load(std::sync::atomic::Ordering::SeqCst) {
+                if switch.load(std::sync::atomic::Ordering::SeqCst) {
                     match behaviour {
                         Peer::Answers => {}
                         Peer::FailsOnce => {
                             switch.store(false, std::sync::atomic::Ordering::SeqCst);
                             return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
                         }
-                        Peer::Hangs => std::future::pending::<()>().await,
+                        Peer::Hangs if method == "tools/call" => {
+                            std::future::pending::<()>().await;
+                        }
+                        Peer::Hangs => {}
                     }
                 }
                 let id = message.get("id").cloned().unwrap_or(Value::Null);
@@ -410,11 +414,13 @@ fn discovery_row() -> Row {
     }
 }
 
+/// A `tools/call` is never resent (it may not be idempotent), so a 503 on
+/// one is answered as a transport error; the retry path is a `tools/list`.
 fn retry_row() -> Row {
     Row {
-        label: "direct tools/call, retried after a 503",
+        label: "direct tools/list, retried after a 503",
         peer: Peer::FailsOnce,
-        ..call_row()
+        ..list_row()
     }
 }
 
