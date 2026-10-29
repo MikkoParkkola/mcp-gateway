@@ -16,11 +16,13 @@ impl UpstreamListeners {
             s.snapshot.lock().verdict_for(uri, granted)
         })
     }
+
     /// Whether a listener task holds a good snapshot for `backend`.
     pub(crate) fn has_snapshot(&self, key: &ListenerKey) -> bool {
         self.answering(key)
             .is_some_and(|s| s.snapshot.lock().is_known())
     }
+
     /// Whether listener `key` may run now: a passthrough subscriber's
     /// listener only while they hold a lease (E2, E7). Until then it stays
     /// parked, counted with no task, and sends nothing.
@@ -42,6 +44,7 @@ impl UpstreamListeners {
                 })
             })
     }
+
     /// Whether a per-user listener `key` would be one past the backend's
     /// budget: a new one when [`MAX_PER_USER_LISTENERS`] already run.
     pub(crate) fn over_budget(&self, key: &ListenerKey) -> bool {
@@ -56,6 +59,7 @@ impl UpstreamListeners {
                 .count()
                 >= MAX_PER_USER_LISTENERS
     }
+
     /// Whether listener `key` still counts any interest.
     pub(crate) fn holds(&self, key: &ListenerKey) -> bool {
         self.backends
@@ -63,6 +67,7 @@ impl UpstreamListeners {
             .get(key)
             .is_some_and(|shared| !shared.need.lock().is_empty())
     }
+
     /// Whether a registered backend called `name` exists.
     pub(crate) fn knows(&self, name: &str) -> bool {
         #[allow(
@@ -71,6 +76,7 @@ impl UpstreamListeners {
         )]
         self.registry.get(name).is_some()
     }
+
     /// May `uri` be watched on `backend`? A listener's good snapshot
     /// answers; with none (subscribe time) the catalogue is read, filling
     /// it, and a backend that cannot be read admits (design §7, offline

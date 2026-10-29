@@ -76,6 +76,7 @@ impl UpstreamListeners {
         }
         Ok(())
     }
+
     /// Count a key for a backend that cannot be listened to now (absent or
     /// refused), starting nothing: the entry is an ended one, which the
     /// revive sweep starts once the backend can be (`D6.EVENTS_MISC.6`). On a
@@ -96,6 +97,7 @@ impl UpstreamListeners {
         }
         Ok(())
     }
+
     /// Count one key fewer; the last one stops the task.
     pub(crate) fn remove(&self, key: &ListenerKey, interest: &Interest) {
         let mut map = self.backends.lock();
