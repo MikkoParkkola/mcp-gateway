@@ -325,3 +325,20 @@ fn a_store_that_cannot_be_chosen_has_a_fixed_answer() {
         assert!(!json.to_string().contains(CANARY), "{json}");
     }
 }
+
+/// A literal whose key a serializer must quote (here `: `) is adopted with
+/// its reference under that key, as before slots.
+#[test]
+fn a_key_the_serializer_quotes_is_adopted() {
+    let reference = "file:/secrets/tool-key".to_owned();
+    let out = run(
+        "backends: {}\n",
+        &[(false, "X: Y".to_owned())],
+        std::slice::from_ref(&reference),
+        stdio_backend(),
+        &[],
+    )
+    .expect("spliced");
+    let config = crate::config::Config::from_file_text(&out).expect("loads");
+    assert_eq!(config.backends["tool"].env["X: Y"], reference);
+}
