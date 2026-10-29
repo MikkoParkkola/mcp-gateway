@@ -15,7 +15,7 @@ use chrono::TimeZone;
 use parking_lot::Mutex;
 use tracing::{error, info, warn};
 
-use super::{CounterStore, MarkerKind, snapshot};
+use super::{CounterStore, MarkerKind, VersionChange, snapshot};
 
 /// The steps of a save, for the test that pins neither holds the store lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +48,9 @@ pub(crate) struct Restored {
         )
     )]
     pub warnings: usize,
+    /// The version change the restore marked, when another version saved the
+    /// file.
+    pub upgrade: Option<VersionChange>,
 }
 
 /// Move `path` aside to `<name>.unreadable-<now>`, adding `-1`, `-2`, …
@@ -105,6 +108,7 @@ impl CounterFile {
                     store: CounterStore::new(now),
                     file: Self::new(path, false),
                     warnings: 0,
+                    upgrade: None,
                 };
             }
             Err(e) => {
@@ -112,8 +116,8 @@ impl CounterFile {
                 Vec::new()
             }
         };
-        match CounterStore::from_bytes(&bytes, now, binary_version, zone) {
-            Ok((store, cut)) => {
+        match CounterStore::from_bytes_noting_change(&bytes, now, binary_version, zone) {
+            Ok((store, cut, upgrade)) => {
                 if cut {
                     warn!("counters.json held more than the caps allow; cut back to them");
                 }
@@ -123,6 +127,7 @@ impl CounterFile {
                     store,
                     file: Self::new(path, false),
                     warnings: usize::from(cut),
+                    upgrade,
                 }
             }
             Err(reason) => {
@@ -140,6 +145,7 @@ impl CounterFile {
                     store: CounterStore::new(now),
                     file: Self::new(path, disabled),
                     warnings: 1,
+                    upgrade: None,
                 }
             }
         }
