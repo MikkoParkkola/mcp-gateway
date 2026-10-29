@@ -27,6 +27,7 @@ fn big_gateway(state: &AppState) -> Arc<crate::backend::Backend> {
 }
 
 async fn serve(state: &Arc<AppState>) -> SocketAddr {
+    // port-check: the listener serves on in the spawned task
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("address");
     let app = create_router(Arc::clone(state)).into_make_service_with_connect_info::<SocketAddr>();
