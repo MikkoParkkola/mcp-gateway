@@ -143,15 +143,18 @@ pub(super) fn local_runtime_snapshot(
 }
 
 /// The grant subject a UI caller owns grants under, with dispatch's
-/// precedence: the verified identity's, else an API key's fallback subject.
+/// precedence: the verified identity's (issuer, subject), else an API key's
+/// fallback subject. Built as `admin_audit` builds it: the label is never part
+/// of a subject's equality, so it is left out, as in
+/// `router::identity::grant_subject_from_verified_identity`.
 pub(super) fn caller_grant_subject(
     client: Option<&AuthenticatedClient>,
     identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
 ) -> Option<GrantSubject> {
     identity
-        .and_then(crate::gateway::grant_subject_from_verified_identity)
+        .and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None))
         .or_else(|| {
-            crate::gateway::MetaMcp::grant_subject_from_api_key(
+            super::super::super::meta_mcp::MetaMcp::grant_subject_from_api_key(
                 client.and_then(AuthenticatedClient::api_key_identity),
             )
         })
