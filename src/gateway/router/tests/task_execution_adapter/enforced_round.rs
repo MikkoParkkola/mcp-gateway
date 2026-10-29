@@ -46,7 +46,7 @@ fn injected_question() -> Value {
 async fn gated_state(
     mock: &Arc<MockBackend>,
     decision: ContextIntegrityDecisionKind,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, dir) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let meta =

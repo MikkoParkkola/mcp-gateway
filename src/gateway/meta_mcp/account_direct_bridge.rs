@@ -55,6 +55,9 @@ pub(crate) struct DirectAccountGateway {
     pub(super) dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
     custody: Custody,
+    /// The Meta-MCP's audit log. It outlives `take_meta`'s hand-off: hold this
+    /// gateway until the router state it fed is dropped.
+    _log: crate::security::transparency_log::temp::TempLog,
 }
 
 impl DirectAccountGateway {
@@ -177,7 +180,7 @@ impl DirectAccountGateway {
         } else {
             accounts
         };
-        let (meta, dispatches) = gateway_in_with(
+        let (log, meta, dispatches) = gateway_in_with(
             binds,
             &Descriptors::same(&descriptors),
             &custody.installed(),
@@ -190,6 +193,7 @@ impl DirectAccountGateway {
             meta: Some(meta),
             dispatches,
             custody,
+            _log: log,
         }
     }
 

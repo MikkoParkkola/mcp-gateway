@@ -90,7 +90,14 @@ fn operator_slot() -> String {
 
 /// A managed-account gateway whose sole operator (and alice and bob) hold a
 /// grant, every per-user slot seeded onto the capturing transport.
-fn connected(auth: AuthConfig) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
+fn connected(
+    auth: AuthConfig,
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+    super::Custody,
+) {
     let custody = custody_with(&[
         (operator_key(), grant(OPERATOR_TOKEN, u64::MAX)),
         (
@@ -101,7 +108,7 @@ fn connected(auth: AuthConfig) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
     ]);
     let mut seeded = slots(&[("alice", WORK), ("bob", WORK)]);
     seeded.push(operator_slot());
-    let (meta, dispatches) = gateway_in(
+    let (log, meta, dispatches) = gateway_in(
         &[(BACKEND, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -109,7 +116,7 @@ fn connected(auth: AuthConfig) -> (MetaMcp, Arc<Dispatches>, super::Custody) {
         ServeMode::Http,
         auth,
     );
-    (meta, dispatches, custody)
+    (log, meta, dispatches, custody)
 }
 
 /// The requests for `method` that reached the backend, as (slot, token).
@@ -224,7 +231,7 @@ async fn read_everything(
 /// forward, on its own slot with its own grant — as `gateway_invoke` serves it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_user_operator_reads_the_account_backend_on_its_own_slot() {
-    let (meta, dispatches, _custody) = connected(single_user());
+    let (_log, meta, dispatches, _custody) = connected(single_user());
     Box::pin(read_everything(&meta, &dispatches, "operator", None)).await;
     let slot = operator_slot();
     for method in [
@@ -242,7 +249,7 @@ async fn single_user_operator_reads_the_account_backend_on_its_own_slot() {
 /// `resources/list` on its own (the read above also lists, as its owner lookup).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_user_operator_lists_the_account_backends_resources() {
-    let (meta, dispatches, _custody) = connected(single_user());
+    let (_log, meta, dispatches, _custody) = connected(single_user());
     let scope = client("operator");
     let _ = meta
         .handle_resources_list(RequestId::Number(1), None, Some(&scope), None)
@@ -259,7 +266,7 @@ async fn single_user_operator_lists_the_account_backends_resources() {
 /// path's empty principal is never the operator, by listing or by name.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn anonymous_caller_on_a_single_user_gateway_reaches_nothing() {
-    let (meta, dispatches, _custody) = connected(single_user());
+    let (_log, meta, dispatches, _custody) = connected(single_user());
     Box::pin(read_everything(&meta, &dispatches, "", None)).await;
     assert_operator_untouched(&dispatches);
     assert_catalogue_untouched(&dispatches);
@@ -268,7 +275,7 @@ async fn anonymous_caller_on_a_single_user_gateway_reaches_nothing() {
 /// Two keys are two people: neither is served the operator's grant.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn multi_key_caller_reaches_nothing() {
-    let (meta, dispatches, _custody) = connected(multi_key());
+    let (_log, meta, dispatches, _custody) = connected(multi_key());
     Box::pin(read_everything(&meta, &dispatches, "key-b", None)).await;
     assert_operator_untouched(&dispatches);
     assert_catalogue_untouched(&dispatches);
@@ -279,7 +286,7 @@ async fn multi_key_caller_reaches_nothing() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verified_callers_keep_their_own_accounts() {
     for (subject, token) in [("alice", ALICE_WORK_TOKEN), ("bob", BOB_WORK_TOKEN)] {
-        let (meta, dispatches, _custody) = connected(single_user());
+        let (_log, meta, dispatches, _custody) = connected(single_user());
         let who = identity(subject);
         Box::pin(read_everything(&meta, &dispatches, "operator", Some(&who))).await;
         let slot = expected_identity_key_for(&account_key(subject, WORK), SEEDED_REVISION);
@@ -295,7 +302,7 @@ async fn verified_callers_keep_their_own_accounts() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stdio_operator_lists_the_account_backends_tools() {
     let custody = custody_with(&[(operator_key(), grant(OPERATOR_TOKEN, u64::MAX))]);
-    let (meta, dispatches) = gateway_in(
+    let (_log, meta, dispatches) = gateway_in(
         &[(BACKEND, Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &custody.installed(),
@@ -314,7 +321,7 @@ async fn stdio_operator_lists_the_account_backends_tools() {
 /// not hidden behind `gateway_list_tools` fetching the same catalogue.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_user_operator_searches_the_account_backends_tools() {
-    let (meta, dispatches, _custody) = connected(single_user());
+    let (_log, meta, dispatches, _custody) = connected(single_user());
     let found = meta
         .search_tools(
             &json!({"query": "read"}),
