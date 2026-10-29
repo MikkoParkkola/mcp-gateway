@@ -14,6 +14,7 @@
 mod admission_allocations;
 pub(crate) mod alloc_meter;
 mod descriptor_copies;
+pub(crate) mod fixed_token_mint;
 mod free_scan_controls;
 mod fresh_slot_verdict;
 mod input_key_allocations;

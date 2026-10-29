@@ -473,9 +473,10 @@ impl Drop for ScanScope {
     }
 }
 
-/// The shortest marker a free scan accepts: longer than any inline storage, so
-/// a copy can only live in a heap block the scan sees.
-pub(crate) const MIN_MARKER: usize = 64;
+/// The shortest marker a free scan accepts. Rust strings keep no bytes
+/// inline, so a short bearer's copies still live in heap blocks the scan
+/// sees; the floor only keeps a marker from matching by chance.
+pub(crate) const MIN_MARKER: usize = 32;
 
 fn arm_scan(marker: &'static [u8]) -> ScanScope {
     assert!(
