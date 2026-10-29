@@ -111,13 +111,40 @@ pub(crate) fn is_signed_entry(entry: &Value) -> bool {
 
 /// Whether any segment of the log holds a signed entry, so `audit verify`
 /// refuses a silent hash-only pass over a signed log (MIK-6700 review).
+/// A rotation mid-scan can move a segment out from under both its listed
+/// names, so "none signed" stands only over a listing that held still; a
+/// changed listing, or a listed file gone, reads once more, as the session
+/// reader does.
 ///
 /// # Errors
 ///
-/// A segment cannot be read.
+/// A segment cannot be read, or the log rotated under both reads.
 pub fn log_contains_signed_entry(path: &Path) -> io::Result<bool> {
-    for (_, file) in log_files(path)? {
-        let content = bounded_read_to_string(&file, MAX_AUDIT_READ_BYTES)?;
+    let mut attempt = 0;
+    loop {
+        let files = log_files(path)?;
+        #[cfg(test)]
+        fire(&LISTED);
+        let read = holds_signed_entry(&files);
+        let stable = seqs(&files) == seqs(&log_files(path)?);
+        match read {
+            // A signed entry read is signed, whatever moved since.
+            Ok(true) => return Ok(true),
+            Ok(false) if stable => return Ok(false),
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        if attempt == 1 {
+            return Err(changed_under_reader("signed-entry scan"));
+        }
+        attempt += 1;
+    }
+}
+
+/// Whether any of `files` holds a signed entry.
+fn holds_signed_entry(files: &[(Option<u64>, PathBuf)]) -> io::Result<bool> {
+    for (_, file) in files {
+        let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
         let signed = content.lines().any(|raw| {
             serde_json::from_str::<Value>(raw.trim()).is_ok_and(|e| is_signed_entry(&e))
         });

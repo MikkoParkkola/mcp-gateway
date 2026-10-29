@@ -9,135 +9,159 @@ use std::io;
 use std::path::Path;
 
 use super::rotation::MAX_RECORD_BYTES;
-use super::segments::{active_segment_seq, list_segments, sealed_path, segment_seq_in};
+use super::segments::{list_segments, listing, sealed_path, segment_seq_in};
 
-/// Where a page starts reading: bytes below `end` in `segment` are unread.
-/// The segment's file is opened with [`open_segment`].
+/// Where a page starts reading. Its segment's file is opened with
+/// [`open_segment`], and the page's end is read from that file once, with
+/// [`end_in`]: never from a length read by name before the open, which a
+/// rotation in between would take from another file.
 pub(crate) struct Position {
-    pub(crate) end: u64,
-    /// The segment, the active file included; `None` never occurs
-    /// for a resolved position but stays in the cursor shape callers keep.
-    pub(crate) segment: Option<u64>,
-    /// The cursor no longer named a position, so reading restarts at the
-    /// newest record.
+    /// The cursor's bound, unclamped; `None` reads to the end of the file.
+    pub(crate) bound: Option<u64>,
+    /// The segment, the active file included.
+    pub(crate) segment: u64,
+    /// The cursor no longer named a position: reading restarts at the newest
+    /// record. Records between the old position and the newest may have
+    /// expired, so the pages before and after are not one unbroken history.
     pub(crate) reset: bool,
+    /// The log had a file when this was resolved.
+    seen: bool,
 }
 
-/// Resolve a cursor `(offset, segment)` on `log`. No cursor starts at the end
-/// of the active file; a segment cursor names its file by number (a rename
-/// never changes a segment's bytes); an offset-only cursor from before
-/// rotation is honoured only while nothing is sealed.
-pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Result<Position> {
-    let sealed = list_segments(log)?;
-    // The active file's own open record names its number: retention or the
-    // disk-full path can leave no sealed sibling to count from.
-    let active_seq = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
-    let len_of = |p: &Path| match std::fs::metadata(p) {
-        Ok(m) => Ok(m.len()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(0),
-        Err(e) => Err(e),
-    };
-    let newest = |reset| -> io::Result<Position> {
-        Ok(Position {
-            end: len_of(log)?,
-            segment: Some(active_seq),
-            reset,
-        })
-    };
-    match cursor {
-        None => newest(false),
-        Some((offset, None)) if sealed.is_empty() => Ok(Position {
-            end: offset.min(len_of(log)?),
-            segment: Some(0),
-            reset: false,
-        }),
-        Some((_, None)) => {
-            tracing::warn!(
-                "pre-rotation audit cursor after a rotation: restarting at the newest record"
-            );
-            newest(true)
-        }
-        Some((offset, Some(seq))) => {
-            let file = if seq == active_seq {
-                log.to_path_buf()
-            } else {
-                sealed_path(log, seq)
-            };
-            let end = offset.min(len_of(&file)?);
-            Ok(Position {
-                end,
-                segment: Some(seq),
-                reset: false,
-            })
-        }
+impl Position {
+    /// Whether finding no file for this position means bytes were lost: the
+    /// log had files when resolved and the page still names bytes in its
+    /// segment. A log never written, or a page at offset 0, has none to lose.
+    pub(crate) fn lost_if_unopened(&self) -> bool {
+        self.seen && self.bound != Some(0)
     }
 }
 
-/// The `(end offset, segment)` of the segment older than `segment`, if any
-/// survives retention.
-pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Option<(u64, u64)>> {
-    let Some(seq) = segment else { return Ok(None) };
-    let older = list_segments(log)?.into_iter().rev().find(|s| s.seq < seq);
-    Ok(match older {
-        Some(s) => Some((std::fs::metadata(&s.path)?.len(), s.seq)),
-        None => None,
+/// The end of a page in `file`, opened for its position: the bound, or the
+/// file's end, never past the file. Read once per page, right after the open.
+pub(crate) fn end_in(bound: Option<u64>, file: &std::fs::File) -> io::Result<u64> {
+    let len = file.metadata()?.len();
+    Ok(bound.map_or(len, |b| b.min(len)))
+}
+
+/// Resolve a cursor `(offset, segment)` on `log`, reading no file's length.
+/// No cursor reads the newest segment from its end; a segment cursor names
+/// its file by number (a rename never changes a segment's bytes) and holds
+/// while that segment is kept; an offset-only cursor from before rotation
+/// holds while the log is still in segment 0. Any other cursor restarts at
+/// the newest record, with `reset`.
+pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Result<Position> {
+    let files = listing(log)?;
+    #[cfg(test)]
+    seam::fire();
+    let seen = files.seen();
+    let at = |bound, segment, reset| Position {
+        bound,
+        segment,
+        reset,
+        seen,
+    };
+    // The newest page reads the active file from its end. With no active file
+    // (all sealed, or never written) it names the number the next file takes,
+    // at offset 0: nothing there to lose, and the page steps to the sealed ones.
+    let newest_bound = files.active.map_or(Some(0), |_| None);
+    let newest = |why: &str| {
+        tracing::warn!("audit cursor {why}: restarting at the newest record");
+        at(newest_bound, files.newest(), true)
+    };
+    Ok(match cursor {
+        None => at(newest_bound, files.newest(), false),
+        // Bytes named in a log with no file left: they cannot be read, and an
+        // empty page would pass them as the end of the log.
+        Some((offset, _)) if !seen && offset > 0 => newest("into a log with no files"),
+        Some((offset, None)) if files.newest() == 0 => at(Some(offset), 0, false),
+        Some((_, None)) => newest("from before rotation, after a rotation"),
+        Some((offset, Some(seq))) if files.kept(seq) => at(Some(offset), seq, false),
+        Some((_, Some(_))) => newest("into a segment no longer kept"),
     })
 }
 
-/// Read `len` bytes starting at `start`. A log file that was never created
-/// reads as empty, matching a view with no events yet.
-#[cfg(feature = "webui")]
-fn read_window(path: &Path, start: u64, len: u64) -> io::Result<Vec<u8>> {
-    if len == 0 {
-        return Ok(Vec::new());
+/// The `(length, segment)` of the segment just older than `segment`. `None`
+/// at the start of the log, including when retention removes the oldest
+/// segment meanwhile. A kept older segment below `segment - 1` means one in
+/// between is gone (retention only removes the oldest): an error, never a
+/// page that steps over it.
+pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Option<(u64, u64)>> {
+    let Some(seq) = segment else { return Ok(None) };
+    let listed = list_segments(log)?;
+    let Some(older) = listed.iter().rev().find(|s| s.seq < seq).cloned() else {
+        return Ok(None);
+    };
+    // Decided from this listing, not a later one: retention racing a later
+    // listing could make a hole look like the start of the log.
+    let older_kept = listed.iter().any(|s| s.seq < older.seq);
+    if older.seq + 1 != seq {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "log segment {} is missing between kept segments {} and {seq}",
+                seq - 1,
+                older.seq
+            ),
+        ));
     }
-    match std::fs::File::open(path) {
-        Ok(file) => read_window_in(&file, start, len),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
+    #[cfg(test)]
+    seam::fire_older_listed();
+    match std::fs::metadata(&older.path) {
+        Ok(meta) => Ok(Some((meta.len(), older.seq))),
+        // Gone since listed. Retention removes the oldest first: with nothing
+        // older kept, the log ends here; otherwise it is a hole.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if older_kept {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("log segment {} vanished below kept segments", older.seq),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
         Err(e) => Err(e),
     }
 }
 
-/// Open segment `seq` of `log` for reading. The active file is opened by name
-/// and then checked: if rotation sealed it meanwhile, the sealed file holds
-/// its bytes, so that is the one read; in the gap where rotation has renamed
-/// the active file but not yet created the next, its bytes are under the
-/// sealed name too. `None` when neither exists. `before_open` runs just
-/// before the open: a test's seam to rotate in that window.
+/// Open segment `seq` of `log` for reading, positioned at its first byte; the
+/// one place a reader opens a segment. A file opened by the active name is
+/// kept only if its open record names `seq`; otherwise rotation sealed `seq`
+/// meanwhile (or is between renaming it and creating the next file), and its
+/// bytes are under the sealed name. `None` when `seq` is under neither name:
+/// retention removed it, and the active file is a later segment.
+/// `before_open` runs just before the open: a test's seam for that window.
 pub(crate) fn open_segment(
     log: &Path,
     seq: u64,
     before_open: impl FnOnce(),
 ) -> io::Result<Option<std::fs::File>> {
+    use std::io::{Seek, SeekFrom};
+
+    let open = |path: &Path| match std::fs::File::open(path) {
+        Ok(file) => Ok(Some(file)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    };
     let sealed_now =
         || -> io::Result<bool> { Ok(list_segments(log)?.iter().any(|s| s.seq == seq)) };
-    let path = if sealed_now()? {
-        sealed_path(log, seq)
-    } else {
-        log.to_path_buf()
-    };
+    let by_sealed_name = sealed_now()?;
     before_open();
-    let file = match std::fs::File::open(&path) {
-        Ok(f) => f,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            return if path == log && sealed_now()? {
-                std::fs::File::open(sealed_path(log, seq)).map(Some)
-            } else {
-                Ok(None)
-            };
+    let file = if by_sealed_name {
+        open(&sealed_path(log, seq))?
+    } else {
+        match open(log)? {
+            Some(file) if active_seq_of(&file, log)? == seq => Some(file),
+            _ if sealed_now()? => open(&sealed_path(log, seq))?,
+            _ => None,
         }
-        Err(e) => return Err(e),
     };
-    if path == log && sealed_now()? {
-        return std::fs::File::open(sealed_path(log, seq)).map(Some);
+    // The identity check read the first line through this handle.
+    if let Some(mut file) = file.as_ref() {
+        file.seek(SeekFrom::Start(0))?;
     }
-    // Opened by the active name: it must hold `seq`. Retention can delete a
-    // sealed segment after a cursor into it was resolved, and the active file
-    // then holds a later segment, whose bytes are not the ones asked for.
-    if path == log && active_seq_of(&file, log)? != seq {
-        return Ok(None);
-    }
-    Ok(Some(file))
+    Ok(file)
 }
 
 /// The segment the open active file holds, read from that descriptor by the
@@ -184,15 +208,16 @@ impl Tail {
     }
 }
 
-/// Read the tail window below `end` in the file at `file`, without line
-/// assembly: the Overview's recent-actions view, which reads by path. A
-/// window that starts mid-line drops that partial head; the line it belongs to
-/// is read by the page that covers the bytes below. Returns the window and the
-/// bytes it spans.
+/// Read the tail window below `end` in an open file, without line assembly:
+/// the Overview's recent-actions view. A window that starts mid-line drops
+/// that partial head; the line it belongs to is read by the page that covers
+/// the bytes below. Returns the window and the bytes it spans.
 #[cfg(feature = "webui")]
-pub(crate) fn tail_window(file: &Path, end: u64, max: u64) -> io::Result<(Tail, u64)> {
+pub(crate) fn tail_window_in(file: &std::fs::File, end: u64, max: u64) -> io::Result<(Tail, u64)> {
     let window_len = end.min(max);
-    let window = read_window(file, end - window_len, window_len)?;
+    let window = read_window_in(file, end - window_len, window_len)?;
+    #[cfg(test)]
+    seam::fire_after_window();
     Ok(split_tail(window, end))
 }
 
@@ -290,45 +315,78 @@ pub(crate) fn lines_newest_first(body: &[u8], body_start: u64) -> Vec<(u64, &[u8
     lines
 }
 
+/// A test's seam inside [`position`], once the active segment's number is
+/// read: rotation there is the window between naming a segment and reading
+/// anything of it.
 #[cfg(test)]
-mod tests {
-    use super::{open_segment, position, sealed_path};
+pub(crate) mod seam {
+    use std::cell::RefCell;
 
-    /// Every sealed segment expired (retention or the disk-full path): the
-    /// active file is numbered by its open record, not by counting siblings.
-    #[test]
-    fn the_active_segment_is_numbered_by_its_open_record() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("audit.jsonl");
-        let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": 7});
-        std::fs::write(&log, format!("{opened}\n")).unwrap();
-        assert_eq!(position(&log, None).unwrap().segment, Some(7));
-        // A cursor into that segment resolves to the active file.
-        let at = position(&log, Some((3, Some(7)))).unwrap();
-        assert!(!at.reset);
+    thread_local! {
+        static AFTER_ACTIVE_SEQ: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
     }
 
-    /// Retention deletes a sealed segment after `position` resolved a cursor
-    /// into it. Opening that segment then finds it under neither name, and
-    /// must not hand back the active file, which is a different segment.
-    #[test]
-    fn a_segment_removed_after_resolving_is_not_replaced_by_the_active_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("audit.jsonl");
-        let sealed = sealed_path(&log, 3);
-        let opened =
-            |seq: u64| serde_json::json!({"event": "audit_segment_opened", "segment_seq": seq});
-        std::fs::write(&sealed, format!("{}\n{{\"a\":1}}\n", opened(3))).unwrap();
-        std::fs::write(&log, format!("{}\n", opened(4))).unwrap();
-        let at = position(&log, Some((10, Some(3)))).unwrap();
-        assert_eq!(at.segment, Some(3));
-        assert!(!at.reset);
-        // Retention, between resolving the cursor and opening its file.
-        std::fs::remove_file(&sealed).unwrap();
-        let file = open_segment(&log, 3, || {}).unwrap();
-        assert!(
-            file.is_none(),
-            "segment 3 is gone; the active file is segment 4"
-        );
+    #[cfg(feature = "webui")]
+    thread_local! {
+        static AFTER_WINDOW: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, after this thread's next [`super::tail_window_in`]
+    /// read: rotation between two windows of one Overview read.
+    #[cfg(feature = "webui")]
+    pub(crate) fn after_window(hook: impl FnOnce() + 'static) {
+        AFTER_WINDOW.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    #[cfg(feature = "webui")]
+    pub(super) fn fire_after_window() {
+        if let Some(hook) = AFTER_WINDOW.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time this thread's [`super::position`] has
+    /// read the active segment's number.
+    pub(crate) fn after_active_seq(hook: impl FnOnce() + 'static) {
+        AFTER_ACTIVE_SEQ.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = AFTER_ACTIVE_SEQ.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    thread_local! {
+        static AFTER_SEALED_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_OLDER_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, inside the next listing, between listing the sealed
+    /// segments and reading the live file.
+    pub(crate) fn after_sealed_listed(hook: impl FnOnce() + 'static) {
+        AFTER_SEALED_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(crate) fn fire_sealed_listed() {
+        if let Some(hook) = AFTER_SEALED_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, inside the next [`super::older_segment`], between
+    /// finding the older segment and reading its length.
+    pub(crate) fn after_older_listed(hook: impl FnOnce() + 'static) {
+        AFTER_OLDER_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire_older_listed() {
+        if let Some(hook) = AFTER_OLDER_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "transparency_log_pager_tests.rs"]
+mod tests;
