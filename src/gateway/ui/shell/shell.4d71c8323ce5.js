@@ -47,17 +47,25 @@ function screens() {
 /** One load per screen; a failed one is forgotten so Retry tries again. */
 const loads = new Map();
 
+/** One load per stylesheet; the next attempt of its screen reuses a loaded one. */
+const sheets = new Map();
+
 /** Add a stylesheet and settle when it has loaded; a failed one is taken out again. */
 function sheet(href) {
-  return new Promise((ok, fail) => {
-    const link = el('link', { rel: 'stylesheet', href });
-    link.addEventListener('load', ok);
-    link.addEventListener('error', () => {
-      link.remove();
-      fail(new Error(`stylesheet ${href} did not load`));
+  if (!sheets.has(href)) {
+    const load = new Promise((ok, fail) => {
+      const link = el('link', { rel: 'stylesheet', href });
+      link.addEventListener('load', ok);
+      link.addEventListener('error', () => {
+        link.remove();
+        fail(new Error(`stylesheet ${href} did not load`));
+      });
+      document.head.append(link);
     });
-    document.head.append(link);
-  });
+    load.catch(() => sheets.delete(href));
+    sheets.set(href, load);
+  }
+  return sheets.get(href);
 }
 
 /**
