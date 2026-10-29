@@ -177,3 +177,22 @@ async fn a_stream_stuck_in_a_send_revives_a_dead_watcher() {
         "the send's upkeep started a new watcher"
     );
 }
+
+/// A little past the stream's one-hour lifetime.
+const PAST_LIFETIME: Duration = Duration::from_secs(3601);
+
+#[tokio::test]
+async fn a_stream_still_waiting_for_its_first_snapshot_ends_at_its_lifetime() {
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
+    let hub = state.dashboard_bootstrap.stream_hub();
+    // The watcher parks before it publishes, so no fresh snapshot ever lands.
+    hub.probe().arm_park_forever();
+    let _waiting = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    assert_eq!(hub.open_streams(), 1);
+    tokio::time::sleep(PAST_LIFETIME).await;
+    assert!(
+        yield_until(|| hub.open_streams() == 0).await,
+        "the lifetime ended it and its slot returned"
+    );
+}
