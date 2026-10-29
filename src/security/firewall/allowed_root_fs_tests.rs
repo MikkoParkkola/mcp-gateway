@@ -242,13 +242,15 @@ fn r8_sibling_with_shared_prefix_is_outside() {
     );
 }
 
+/// How one refused-shape case spells its value in a fixture.
+type Spell = Box<dyn Fn(&Fx) -> String>;
+
 /// R9-R13b, R15 (both, warn): each refused shape names its code; the control
 /// is the same argument made absolute and normalised.
 #[test]
 fn r9_r15_refused_shapes_name_their_code() {
     let na = code(RootReason::NotAbsolute);
     let nn = code(RootReason::NotNormalised);
-    type Spell = Box<dyn Fn(&Fx) -> String>;
     let cases: Vec<(&str, Spell, &String)> = vec![
         ("R9", Box::new(|_| "safe/f".into()), &na),
         ("R10", Box::new(|_| "~/x".into()), &na),
