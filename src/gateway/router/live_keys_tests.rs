@@ -155,3 +155,62 @@ async fn k2_a_key_removed_or_expired_by_reload_is_refused_on_the_next_call() {
         );
     }
 }
+
+/// The no-pin refusal (`UNPINNED`, a 500) is unreachable from a request: the
+/// router pins a generation on every route it owns and on its fallback before
+/// anything reads keys. Every owned path, an unowned one, three methods,
+/// with a key and without.
+#[tokio::test]
+async fn no_request_through_the_router_reaches_the_no_pin_refusal() {
+    let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
+    let mut paths: Vec<String> = crate::gateway::routes::OWNED
+        .iter()
+        .map(|path| {
+            path.split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "x"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+        })
+        .collect();
+    paths.push("/no-such-route".to_owned());
+    for path in &paths {
+        for method in ["GET", "POST", "DELETE"] {
+            for secret in [Some(KEPT), None] {
+                let mut request = axum::http::Request::builder()
+                    .method(method)
+                    .uri(path.as_str())
+                    .header("content-type", "application/json");
+                if let Some(secret) = secret {
+                    request = request.header("authorization", format!("Bearer {secret}"));
+                }
+                let response = create_router(Arc::clone(&state))
+                    .oneshot(
+                        request
+                            .body(axum::body::Body::from("{}"))
+                            .expect("a request"),
+                    )
+                    .await
+                    .expect("a response");
+                // The refusal is a 500; anything else (a stream included,
+                // whose body never ends) is not it.
+                if response.status() != StatusCode::INTERNAL_SERVER_ERROR {
+                    continue;
+                }
+                let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                    .await
+                    .expect("a body");
+                assert!(
+                    !String::from_utf8_lossy(&body).contains(super::UNPINNED),
+                    "{method} {path} (key: {}) reached the no-pin refusal",
+                    secret.is_some()
+                );
+            }
+        }
+    }
+}
