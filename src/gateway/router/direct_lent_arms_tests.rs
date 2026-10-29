@@ -138,7 +138,7 @@ async fn gateway(
     (super::create_router(state), (log_dir, store))
 }
 
-/// The given body POSTed to the direct route as a verified caller.
+/// The given body, sent by POST to the direct route as a verified caller.
 async fn post_direct(router: &axum::Router, body: &Value) -> (StatusCode, Value) {
     let mut request = axum::http::Request::builder()
         .method("POST")
