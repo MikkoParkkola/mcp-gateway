@@ -82,3 +82,33 @@ async fn a_malformed_enforced_result_records_response_gate() {
     .await;
     assert_eq!(kind, Some(DecisionKind::ResponseGate));
 }
+
+/// A withheld input-required round meets both response-gate notes (the
+/// withhold and the round refusal); the call still records one decision,
+/// the response gate, and a second note leaves the record as one left it.
+#[tokio::test]
+async fn a_withheld_round_records_one_response_gate_decision() {
+    use crate::security::decision_record::Noted;
+    let meta = meta_with(ContextIntegrityPolicy::enforcing_baseline());
+    let (kind, _) = with_dispatch_scope(async {
+        let gated = meta.apply_response_gates_effect(
+            "alpha",
+            "read",
+            None,
+            "t",
+            injected(json!({"resultType": "input_required"})),
+        );
+        assert!(
+            matches!(gated, Err(crate::Error::ResponseFirewallRefused)),
+            "premise: the withheld round is refused: {gated:?}"
+        );
+        take_refusal_kind()
+    })
+    .await;
+    assert_eq!(kind, Some(DecisionKind::ResponseGate));
+    let mut once = Noted::default();
+    once.refused(DecisionKind::ResponseGate, None);
+    let mut twice = once.clone();
+    twice.refused(DecisionKind::ResponseGate, None);
+    assert_eq!(twice, once, "a repeated note adds no second entry");
+}
