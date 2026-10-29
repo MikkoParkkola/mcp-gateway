@@ -3,7 +3,10 @@
 //! `production_text`: each `#[cfg(test)]` item shape is blanked by its own
 //! extent, and nothing after it is lost.
 
-use crate::test_source_text::production_text;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use crate::test_source_text::{production_text, sanitize};
 
 /// `(source, kept, blanked)`: after blanking, every `kept` text remains and
 /// no `blanked` text does.
@@ -131,4 +134,248 @@ fn a_test_only_field_keeps_the_impl_after_it() {
     let out = production_text(&source);
     assert!(out.contains("impl LiveConfig {"));
     assert!(!out.contains("publishes: std::sync::atomic::AtomicU64"));
+}
+
+/// The tree-wide net for the rule "a scan sees more, never less": in every
+/// source file under `src/` and `tests/` that the helper changes, each
+/// identifier outside a `#[cfg(test)]` item, as a full Rust parse reads it,
+/// still appears at least as often in the helper's output. A parse decides
+/// what is test code here, independently of the helper's bracket walk, so a
+/// shape the walk ends too late (production text blanked) fails by name.
+/// Leftover test text only raises the output's counts and passes.
+#[test]
+fn no_production_identifier_is_blanked_anywhere_in_the_tree() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files(&root.join("src"), &mut files);
+    rust_files(&root.join("tests"), &mut files);
+    let mut checked = 0;
+    let mut lost = Vec::new();
+    for path in files {
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let out = production_text(&text);
+        if out == text {
+            continue;
+        }
+        let file = syn::parse_file(&text)
+            .unwrap_or_else(|e| panic!("{} does not parse: {e}", path.display()));
+        let mut parsed = ProductionIdents::default();
+        syn::visit::Visit::visit_file(&mut parsed, &file);
+        let code = sanitize(&out);
+        let kept = words(&code);
+        for (ident, want) in parsed.counts {
+            let have = kept.get(ident.as_str()).copied().unwrap_or(0);
+            if have < want {
+                let name = path.strip_prefix(root).unwrap_or(&path).display();
+                lost.push(format!("{name}: `{ident}` {want} in production, {have} kept"));
+            }
+        }
+        checked += 1;
+    }
+    assert!(checked > 100, "only {checked} files have test items");
+    assert!(lost.is_empty(), "production text blanked:\n{}", lost.join("\n"));
+}
+
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|ext| ext == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Identifier counts in code: runs of word characters that do not start
+/// with a digit (a number's suffix is not an identifier).
+fn words(code: &str) -> BTreeMap<&str, usize> {
+    let mut counts = BTreeMap::new();
+    for run in code.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
+        if run.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_') {
+            *counts.entry(run).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+/// Counts identifiers outside `#[cfg(test)]` items, as `syn` reads them.
+#[derive(Default)]
+struct ProductionIdents {
+    counts: BTreeMap<String, usize>,
+}
+
+impl ProductionIdents {
+    fn count(&mut self, ident: &syn::Ident) {
+        let name = ident.to_string();
+        let name = name.strip_prefix("r#").unwrap_or(&name).to_string();
+        *self.counts.entry(name).or_insert(0) += 1;
+    }
+
+    fn count_tokens(&mut self, mut cursor: syn::buffer::Cursor) {
+        while !cursor.eof() {
+            if let Some((ident, next)) = cursor.ident() {
+                self.count(&ident);
+                cursor = next;
+            } else if let Some((lifetime, next)) = cursor.lifetime() {
+                self.count(&lifetime.ident);
+                cursor = next;
+            } else if let Some((inner, _, _, next)) = cursor.any_group() {
+                self.count_tokens(inner);
+                cursor = next;
+            } else if let Some((_, next)) = cursor.token_tree() {
+                cursor = next;
+            } else {
+                break;
+            }
+        }
+    }
+}
+
+/// An outer `#[cfg(test)]`, exactly the mark the helper looks for.
+fn test_only(attrs: &[syn::Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        matches!(a.style, syn::AttrStyle::Outer)
+            && a.path().is_ident("cfg")
+            && matches!(&a.meta, syn::Meta::List(l) if l.tokens.to_string() == "test")
+    })
+}
+
+fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
+    use syn::Item;
+    match item {
+        Item::Const(i) => &i.attrs,
+        Item::Enum(i) => &i.attrs,
+        Item::ExternCrate(i) => &i.attrs,
+        Item::Fn(i) => &i.attrs,
+        Item::ForeignMod(i) => &i.attrs,
+        Item::Impl(i) => &i.attrs,
+        Item::Macro(i) => &i.attrs,
+        Item::Mod(i) => &i.attrs,
+        Item::Static(i) => &i.attrs,
+        Item::Struct(i) => &i.attrs,
+        Item::Trait(i) => &i.attrs,
+        Item::TraitAlias(i) => &i.attrs,
+        Item::Type(i) => &i.attrs,
+        Item::Union(i) => &i.attrs,
+        Item::Use(i) => &i.attrs,
+        _ => &[],
+    }
+}
+
+fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
+    use syn::Expr;
+    match expr {
+        Expr::Assign(e) => &e.attrs,
+        Expr::Block(e) => &e.attrs,
+        Expr::Call(e) => &e.attrs,
+        Expr::ForLoop(e) => &e.attrs,
+        Expr::If(e) => &e.attrs,
+        Expr::Loop(e) => &e.attrs,
+        Expr::Macro(e) => &e.attrs,
+        Expr::Match(e) => &e.attrs,
+        Expr::MethodCall(e) => &e.attrs,
+        Expr::Return(e) => &e.attrs,
+        Expr::Unsafe(e) => &e.attrs,
+        Expr::While(e) => &e.attrs,
+        _ => &[],
+    }
+}
+
+impl<'ast> syn::visit::Visit<'ast> for ProductionIdents {
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        self.count(ident);
+    }
+
+    /// A doc comment is an attribute to the parser and a comment in the text.
+    fn visit_attribute(&mut self, attr: &'ast syn::Attribute) {
+        if !attr.path().is_ident("doc") {
+            syn::visit::visit_attribute(self, attr);
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        syn::visit::visit_path(self, &mac.path);
+        let tokens = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+        self.count_tokens(tokens.begin());
+    }
+
+    fn visit_item(&mut self, node: &'ast syn::Item) {
+        if !test_only(item_attrs(node)) {
+            syn::visit::visit_item(self, node);
+        }
+    }
+
+    fn visit_impl_item(&mut self, node: &'ast syn::ImplItem) {
+        let attrs = match node {
+            syn::ImplItem::Const(i) => &i.attrs[..],
+            syn::ImplItem::Fn(i) => &i.attrs,
+            syn::ImplItem::Type(i) => &i.attrs,
+            syn::ImplItem::Macro(i) => &i.attrs,
+            _ => &[],
+        };
+        if !test_only(attrs) {
+            syn::visit::visit_impl_item(self, node);
+        }
+    }
+
+    fn visit_trait_item(&mut self, node: &'ast syn::TraitItem) {
+        let attrs = match node {
+            syn::TraitItem::Const(i) => &i.attrs[..],
+            syn::TraitItem::Fn(i) => &i.attrs,
+            syn::TraitItem::Type(i) => &i.attrs,
+            syn::TraitItem::Macro(i) => &i.attrs,
+            _ => &[],
+        };
+        if !test_only(attrs) {
+            syn::visit::visit_trait_item(self, node);
+        }
+    }
+
+    fn visit_field(&mut self, node: &'ast syn::Field) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_field(self, node);
+        }
+    }
+
+    fn visit_variant(&mut self, node: &'ast syn::Variant) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_variant(self, node);
+        }
+    }
+
+    fn visit_arm(&mut self, node: &'ast syn::Arm) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_arm(self, node);
+        }
+    }
+
+    fn visit_field_value(&mut self, node: &'ast syn::FieldValue) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_field_value(self, node);
+        }
+    }
+
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_local(self, node);
+        }
+    }
+
+    fn visit_stmt_macro(&mut self, node: &'ast syn::StmtMacro) {
+        if !test_only(&node.attrs) {
+            syn::visit::visit_stmt_macro(self, node);
+        }
+    }
+
+    fn visit_expr(&mut self, node: &'ast syn::Expr) {
+        if !test_only(expr_attrs(node)) {
+            syn::visit::visit_expr(self, node);
+        }
+    }
 }
