@@ -104,33 +104,51 @@ impl Drop for Released {
     }
 }
 
+/// What a peer reports, and the switch that arms `FailsOnce` and `Hangs`
+/// (off for the warm-up).
+struct Wire {
+    url: String,
+    /// Requests that reached the peer.
+    sends: Arc<std::sync::atomic::AtomicUsize>,
+    /// Requests that carried `Bearer <token>` as their `Authorization`.
+    carried: Arc<std::sync::atomic::AtomicUsize>,
+    armed: Arc<std::sync::atomic::AtomicBool>,
+    hang: Arc<Hang>,
+}
+
 /// A streamable HTTP MCP peer on loopback that takes a census on every
-/// request it serves, then answers as `behaviour` says. Returns its URL, a
-/// send counter, the switch that arms `FailsOnce` and `Hangs` (off for the
-/// warm-up), and what a hung call reports.
-async fn peer(
-    behaviour: Peer,
-) -> (
-    String,
-    Arc<std::sync::atomic::AtomicUsize>,
-    Arc<std::sync::atomic::AtomicBool>,
-    Arc<Hang>,
-) {
+/// request it serves, notes whether the request carried `token`, then
+/// answers as `behaviour` says.
+async fn peer(behaviour: Peer, token: &'static str) -> Wire {
     use axum::response::IntoResponse as _;
-    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let hang = Arc::new(Hang::default());
-    let counted = Arc::clone(&sends);
-    let switch = Arc::clone(&armed);
-    let holder = Arc::clone(&hang);
+    let wire = Wire {
+        url: String::new(),
+        sends: Arc::default(),
+        carried: Arc::default(),
+        armed: Arc::default(),
+        hang: Arc::default(),
+    };
+    let counted = Arc::clone(&wire.sends);
+    let carried = Arc::clone(&wire.carried);
+    let switch = Arc::clone(&wire.armed);
+    let holder = Arc::clone(&wire.hang);
     let app = axum::Router::new().fallback(
-        move |_headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
+        move |headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
             let counted = Arc::clone(&counted);
+            let carried = Arc::clone(&carried);
             let switch = Arc::clone(&switch);
             let holder = Arc::clone(&holder);
             async move {
                 take_census();
                 counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                // Compared in place: a copy here would be one more block
+                // holding the token.
+                let authorization = headers
+                    .get(axum::http::header::AUTHORIZATION)
+                    .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "));
+                if authorization == Some(token.as_bytes()) {
+                    carried.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
                 let method = message["method"].as_str().unwrap_or_default().to_owned();
                 if switch.load(std::sync::atomic::Ordering::SeqCst) {
                     match behaviour {
@@ -168,7 +186,7 @@ async fn peer(
         .expect("bind");
     let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
     tokio::spawn(async move { axum::serve(listener, app).await });
-    (url, sends, armed, hang)
+    Wire { url, ..wire }
 }
 
 /// A router whose one backend, at `url`, has a required per-user binding
@@ -310,6 +328,9 @@ struct Row {
     because: Option<&'static str>,
     /// How the peer treats the measured call.
     peer: Peer,
+    /// Requests the measured call sends (premise), each carrying the token,
+    /// and the censuses those requests take.
+    sends: usize,
     ceiling: Ceiling,
 }
 
@@ -329,14 +350,16 @@ async fn measure(row: Row, len: usize, name: &str) {
     }
     let minted = (row.minted)(len);
     let marker = token(len).as_bytes();
-    let (url, sends, armed, hang) = peer(row.peer).await;
-    let (router, _dirs) = gateway(url, minted).await;
+    let wire = peer(row.peer, token(len)).await;
+    let (sends, carried, armed, hang) = (&wire.sends, &wire.carried, &wire.armed, &wire.hang);
+    let (router, _dirs) = gateway(wire.url.clone(), minted).await;
     // Warm: the slot starts and lists once outside the measurement. A row
     // whose mint is refused warms into the same refusal; the warm-up's
     // outcome is not a premise.
     let warm = direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}}));
     let _ = post(&router, &format!("/mcp/{BACKEND}"), &warm).await;
     let before = sends.load(std::sync::atomic::Ordering::SeqCst);
+    let carried_before = carried.load(std::sync::atomic::Ordering::SeqCst);
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
     let ((status, answer), scanned, census) = scan_dispatch(marker, || async {
         if row.peer == Peer::Hangs {
@@ -374,8 +397,35 @@ async fn measure(row: Row, len: usize, name: &str) {
         );
     }
     let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - before;
+    let authenticated = carried.load(std::sync::atomic::Ordering::SeqCst) - carried_before;
     report(row.label, len, scanned, census, requests);
+    sent_as_premised(row.label, row.sends, (requests, authenticated), census);
     hold(row.label, len, row.ceiling, scanned, census);
+}
+
+/// The premise of every count: the call sent exactly `expected` requests,
+/// each carried the token, and each took one census. A cached or
+/// short-circuited dispatch, or one that dropped its credential, fails here
+/// rather than passing its ceiling with fewer copies.
+fn sent_as_premised(
+    label: &str,
+    expected: usize,
+    (requests, authenticated): (usize, usize),
+    census: Census,
+) {
+    assert_eq!(
+        requests, expected,
+        "premise: {label} sent {requests} requests"
+    );
+    assert_eq!(
+        authenticated, requests,
+        "premise: {label}: {authenticated} of {requests} requests carried the token"
+    );
+    assert_eq!(
+        census.taken, expected as u64,
+        "premise: {label} took {} censuses",
+        census.taken
+    );
 }
 
 /// A modern request: the protocol header a call sends requires the same
@@ -397,6 +447,7 @@ fn call_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        sends: 1,
         ceiling: ceiling(5, 5),
     }
 }
@@ -410,6 +461,7 @@ fn list_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        sends: 1,
         ceiling: ceiling(6, 7),
     }
 }
@@ -423,6 +475,7 @@ fn refused_row() -> Row {
         served: false,
         because: Some("not-listed"),
         peer: Peer::Answers,
+        sends: 0,
         ceiling: ceiling(1, 0),
     }
 }
@@ -436,6 +489,7 @@ fn failed_mint_row() -> Row {
         served: false,
         because: Some("invalid"),
         peer: Peer::Answers,
+        sends: 0,
         ceiling: ceiling(1, 0),
     }
 }
@@ -453,6 +507,7 @@ fn meta_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        sends: 1,
         ceiling: ceiling(5, 6),
     }
 }
@@ -469,6 +524,7 @@ fn discovery_row() -> Row {
         served: true,
         because: None,
         peer: Peer::Answers,
+        sends: 0,
         ceiling: ceiling(1, 0),
     }
 }
@@ -479,6 +535,7 @@ fn retry_row() -> Row {
     Row {
         label: "direct tools/list, retried after a 503",
         peer: Peer::FailsOnce,
+        sends: 2,
         ceiling: ceiling(10, 7),
         ..list_row()
     }
@@ -528,13 +585,14 @@ async fn client_only(len: usize, name: &str) {
         return;
     }
     let minted = token(len);
-    let (url, sends, _armed, _hang) = peer(Peer::Answers).await;
+    let wire = peer(Peer::Answers, minted).await;
+    let (url, sends) = (&wire.url, &wire.sends);
     let client = reqwest::Client::new();
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
         "params": {"name": TOOL, "arguments": {"q": "x"}}});
     let send = || async {
         client
-            .post(&url)
+            .post(url.as_str())
             .header("Authorization", format!("Bearer {minted}"))
             .json(&body)
             .send()
@@ -545,9 +603,12 @@ async fn client_only(len: usize, name: &str) {
             .expect("read")
     };
     let _ = send().await;
+    let carried_before = wire.carried.load(std::sync::atomic::Ordering::SeqCst);
     let (_, scanned, census) = scan_dispatch(minted.as_bytes(), send).await;
     let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - 1;
+    let authenticated = wire.carried.load(std::sync::atomic::Ordering::SeqCst) - carried_before;
     report("client only", len, scanned, census, requests);
+    sent_as_premised("client only", 1, (requests, authenticated), census);
     hold("client only", len, ceiling(1, 1), scanned, census);
 }
 
