@@ -416,25 +416,33 @@ fn an_except_key_does_not_exempt_a_key_not_known_from_a_block() {
 }
 
 /// A shape the load refuses, reaching the firewall anyway (an embedder that
-/// builds it without `Config::load`), may only make the rule stricter: an
-/// empty `servers` list leaves a `warn` rule covering every backend.
+/// builds it without `Config::load`), fails closed: the rule blocks its
+/// finding types on every call, whatever its action.
 #[test]
-fn an_empty_servers_list_on_a_warn_rule_covers_every_backend() {
+fn an_empty_servers_list_on_a_warn_rule_blocks_every_call() {
     let fw = firewall(&json!([{"match": "*", "servers": [], "action": "warn"}]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Warn);
+    assert_eq!(request(&fw, "a"), FirewallAction::Block);
 }
 
-/// An empty `keys` list leaves an `allow` rule covering no call: the
-/// injection keeps its default (a guard; this held before the backstop).
 #[test]
-fn an_empty_keys_list_on_an_allow_rule_covers_no_call() {
+fn an_empty_keys_list_on_an_allow_rule_blocks_every_call() {
     let fw = firewall(&json!([{"match": "*", "keys": [], "action": "allow"}]));
     assert_eq!(request(&fw, "a"), FirewallAction::Block);
 }
 
-/// An exception that sets no field exempts no call.
 #[test]
-fn an_exception_setting_no_field_exempts_no_call() {
-    let fw = firewall(&json!([{"match": "*", "action": "warn", "except": [{}]}]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Warn);
+fn an_exception_setting_no_field_makes_its_rule_block() {
+    let fw = firewall(&json!([{"match": "*", "action": "allow", "except": [{}]}]));
+    assert_eq!(request(&fw, "a"), FirewallAction::Block);
+}
+
+/// Covering no call would not fail closed: a later `allow` rule would decide.
+/// The refused rule still takes the finding first.
+#[test]
+fn a_refused_shape_preempts_a_later_allow() {
+    let fw = firewall(&json!([
+        {"match": "*", "keys": [], "action": "allow"},
+        {"match": "*", "action": "allow"},
+    ]));
+    assert_eq!(request(&fw, "a"), FirewallAction::Block);
 }

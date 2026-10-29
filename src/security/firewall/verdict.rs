@@ -101,26 +101,39 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // rule, which is acceptable only because the load refusal comes first.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
     let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
-    // The same holds for the scopes, which the load also refuses when empty:
-    // a shape that got here anyway may only make the rule stricter. An empty
-    // list leaves an `allow` rule covering no call and a `warn` or `block`
-    // rule covering every call; an exception setting no field exempts none.
-    let unscoped = |list: &Vec<String>| list.is_empty() && rule.action != FirewallAction::Allow;
+    // The scopes are refused at load too: an empty `servers` or `keys` list,
+    // or an exception setting no field. A shape that got here anyway fails
+    // closed: the rule blocks its finding types on every call it matches by
+    // tool. Covering no call would not do: a later `allow` rule would then
+    // decide, and neither would keeping a `warn` or `allow` rule's action.
+    let refused_shape = rule.servers.as_ref().is_some_and(Vec::is_empty)
+        || rule.keys.as_ref().is_some_and(Vec::is_empty)
+        || rule
+            .except
+            .iter()
+            .flatten()
+            .any(|entry| entry.server.is_none() && entry.tool.is_none() && entry.key.is_none());
+    if refused_shape {
+        return CompiledRule {
+            pattern,
+            action: FirewallAction::Block,
+            scans: rule.scan.clone(),
+            servers: None,
+            keys: None,
+            except: Vec::new(),
+            reason: rule.reason.clone(),
+        };
+    }
     CompiledRule {
         pattern,
         action: rule.action,
         scans: rule.scan.clone(),
-        servers: rule
-            .servers
-            .as_ref()
-            .filter(|l| !unscoped(l))
-            .map(|l| globs(l)),
-        keys: rule.keys.clone().filter(|l| !unscoped(l)),
+        servers: rule.servers.as_ref().map(|l| globs(l)),
+        keys: rule.keys.clone(),
         except: rule
             .except
             .iter()
             .flatten()
-            .filter(|entry| entry.server.is_some() || entry.tool.is_some() || entry.key.is_some())
             .map(|entry| CompiledException {
                 server: ExceptGlob::of(entry.server.as_deref()),
                 tool: ExceptGlob::of(entry.tool.as_deref()),
