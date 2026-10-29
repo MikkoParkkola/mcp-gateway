@@ -451,3 +451,21 @@ async fn rows_past_the_captured_head_then_a_lag_recovery_are_neither_lost_nor_re
     assert_eq!(ids(&out), (1..=6).collect::<Vec<_>>());
     assert!(merge.lag_recoveries() >= 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_replaced_log_rescans_from_the_delivered_row_not_the_old_recovery_position() {
+    let fake = Fake::new(2, 4);
+    let mut merge = LogMerge::connect(Arc::clone(&fake), (), None).await;
+    for _ in 0..300 {
+        fake.append(true);
+    }
+    // A lag recovery pages past the hidden rows and moves the recovery
+    // position to row 302; the delivered row stays at 2.
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(30), merge.next()).await;
+    // The log is replaced; rows 3 to 302 of the new log were never sent.
+    fake.replace(400, HASH);
+    fake.append(false);
+    let out = collect(&mut merge, 399).await;
+    assert_eq!(ids(&out), (3..=401).collect::<Vec<_>>());
+    assert!(!out.contains(&Out::Reset));
+}
