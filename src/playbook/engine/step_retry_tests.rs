@@ -298,6 +298,14 @@ async fn an_aborted_step_keeps_its_error_and_says_it_may_have_run() {
     })
     .await;
     assert_eq!(refused.to_string(), "step not permitted for this caller");
+    let gated =
+        aborted(|| crate::Error::gateway_refused(-32000, "Server 'mail' is currently disabled"))
+            .await;
+    assert!(
+        matches!(&gated, crate::Error::GatewayRefused { code: -32000, message }
+            if message == "Server 'mail' is currently disabled"),
+        "a gateway decision's refusal keeps its variant, code and text: {gated:?}"
+    );
     let offer_text = "Connect your work account to continue.";
     let offer = aborted(|| {
         crate::personal_accounts::refusal::offer_error(

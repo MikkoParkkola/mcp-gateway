@@ -122,6 +122,13 @@ fn only_a_refusal_keeps_its_step_text_unmarked() {
         step_failure_text(&refused, refused.to_string()),
         "step not permitted for this caller"
     );
+    let gated = Error::gateway_refused(-32000, "Server 'mail' is currently disabled");
+    assert!(gated.outcome_undetermined());
+    assert_eq!(
+        step_failure_text(&gated, gated.to_string()),
+        gated.to_string(),
+        "a gateway decision's refusal stays unmarked"
+    );
     let offer = crate::personal_accounts::refusal::offer_error(
         -32042,
         "Connect your work account to continue.".into(),

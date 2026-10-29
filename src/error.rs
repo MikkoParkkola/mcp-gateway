@@ -19,18 +19,22 @@ pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have rea
 /// Whether a step that failed with `error` is reported as one that may have
 /// run: the error is not raised before the send ([`Error::is_pre_dispatch`]),
 /// is not a gateway refusal (`Forbidden`, whose caller-facing reason stays
-/// neutral, A3), and is not a sealed account offer or a marked account
+/// neutral, A3, or `GatewayRefused`, raised only at admission checks before
+/// the call), and is not a sealed account offer or a marked account
 /// refusal (their text is the gateway's own: it goes out as written, and a
 /// marked refusal's text is read back). The one rule both loops and an aborted
 /// playbook use.
 ///
 /// A step not reported this way has not been shown never to have run: a
-/// `Forbidden` reads `false` from `is_pre_dispatch` (the conservative answer,
-/// until its construction sites are proven pre-send), and the absence of the
+/// gateway refusal reads `false` from `is_pre_dispatch` (the conservative
+/// answer, until its construction sites are proven pre-send), and the absence of the
 /// note is inconclusive, never "not run".
 pub(crate) fn reports_may_have_run(error: &Error) -> bool {
     error.outcome_undetermined()
-        && !matches!(error, Error::Forbidden { .. })
+        && !matches!(
+            error,
+            Error::Forbidden { .. } | Error::GatewayRefused { .. }
+        )
         && crate::personal_accounts::refusal::offer_data(error).is_none()
         && crate::personal_accounts::refusal::marked(error).is_none()
 }
@@ -573,6 +577,7 @@ impl Error {
             // `reports_may_have_run`). Listed, not `_`, so a new variant is a
             // compile-time decision here.
             other @ (Self::Forbidden { .. }
+            | Self::GatewayRefused { .. }
             | Self::ResponseFirewallRefused
             | Self::AuditUnavailable
             | Self::CapabilityHashMismatch { .. }
