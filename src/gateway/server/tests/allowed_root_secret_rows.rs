@@ -12,7 +12,7 @@ use super::allowed_root_routes::{Routes, Setup};
 
 const SENTINEL: &str = "SENTINEL-8939-secret";
 
-fn invoke(arguments: Value) -> Value {
+fn invoke(arguments: &Value) -> Value {
     json!({"name": "gateway_invoke", "arguments": {
         "server": "fs", "tool": "read_file", "arguments": arguments}})
 }
@@ -52,7 +52,7 @@ async fn r41_secret_owning_the_path_argument_refuses() {
         .await;
         let inside = routes.path("safe/f");
         let answer = routes
-            .post("/mcp", "tools/call", invoke(json!({"path": inside})))
+            .post("/mcp", "tools/call", invoke(&json!({"path": inside})))
             .await;
         refused_as_injected(&routes, row, &answer);
     }
@@ -71,7 +71,7 @@ async fn r41b_secret_owning_an_ancestor_refuses() {
     .await;
     let inside = routes.path("safe/f");
     let answer = routes
-        .post("/mcp", "tools/call", invoke(json!({"a": {"b": inside}})))
+        .post("/mcp", "tools/call", invoke(&json!({"a": {"b": inside}})))
         .await;
     refused_as_injected(&routes, "R41b", &answer);
 }
@@ -87,7 +87,7 @@ async fn r41c_secret_owning_another_key_passes() {
     .await;
     let inside = routes.path("safe/f");
     let answer = routes
-        .post("/mcp", "tools/call", invoke(json!({"path": inside})))
+        .post("/mcp", "tools/call", invoke(&json!({"path": inside})))
         .await;
     assert!(answer.get("error").is_none(), "R41c: allowed: {answer}");
     let sent = serde_json::to_string(&inside).expect("a path serialises");

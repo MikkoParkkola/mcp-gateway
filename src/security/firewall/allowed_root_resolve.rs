@@ -35,11 +35,11 @@ impl<'a> Walk<'a> {
 
     /// One read, refused `timeout` once the call's deadline has passed: no
     /// read starts after it.
-    fn read(&self, op: ResolveOp) -> Result<std::io::Result<Resolved>, RootReason> {
+    fn read(&self, op: &ResolveOp) -> Result<std::io::Result<Resolved>, RootReason> {
         if self.clock.now() >= self.deadline {
             return Err(RootReason::Timeout);
         }
-        Ok(self.io.resolve(&op, self.deadline))
+        Ok(self.io.resolve(op, self.deadline))
     }
 
     fn canonicalize(
@@ -49,7 +49,7 @@ impl<'a> Walk<'a> {
         if let Some(known) = self.canonical.get(path) {
             return Ok(known.clone());
         }
-        let got = match self.read(ResolveOp::Canonicalize(path.to_path_buf()))? {
+        let got = match self.read(&ResolveOp::Canonicalize(path.to_path_buf()))? {
             Ok(Resolved::Path(p)) => Ok(p),
             Ok(_) => Err(std::io::ErrorKind::InvalidData),
             Err(e) => Err(e.kind()),
@@ -72,7 +72,7 @@ impl<'a> Walk<'a> {
         if let Some(known) = self.listings.get(dir) {
             return known.clone();
         }
-        let got = match self.read(ResolveOp::ReadDir(dir.to_path_buf()))? {
+        let got = match self.read(&ResolveOp::ReadDir(dir.to_path_buf()))? {
             Ok(Resolved::Entries(entries)) if entries.len() > DIRECTORY_ENTRY_CAP => {
                 Err(RootReason::DirectoryTooLarge)
             }
@@ -129,7 +129,7 @@ impl<'a> Walk<'a> {
         while let Some(component) = components.next() {
             let name = component.as_os_str();
             let next = current.join(name);
-            match self.read(ResolveOp::Metadata(next.clone()))? {
+            match self.read(&ResolveOp::Metadata(next.clone()))? {
                 Ok(Resolved::Kind(kind)) => {
                     self.spelling(&current, name, true)?;
                     current = if kind == EntryKind::Symlink {
@@ -238,6 +238,7 @@ impl Pool {
     }
 
     /// The process's pool, created on first use.
+    #[cfg(not(test))]
     pub(super) fn shared() -> std::sync::Arc<Self> {
         static SHARED: OnceLock<std::sync::Arc<Pool>> = OnceLock::new();
         std::sync::Arc::clone(SHARED.get_or_init(|| Self::new(super::RESOLVER_THREADS)))

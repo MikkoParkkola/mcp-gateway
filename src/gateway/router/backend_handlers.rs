@@ -121,7 +121,7 @@ fn unnamed_call(id: &RequestId) -> BackendRejection {
 ///    name alike;
 /// 4. the gate: a withheld name is answered as a name the catalogue lacks,
 ///    with no credential and no fill on a per-user backend.
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err, clippy::too_many_lines)]
 async fn guard_tool_call(
     state: &AppState,
     backend_name: &str,

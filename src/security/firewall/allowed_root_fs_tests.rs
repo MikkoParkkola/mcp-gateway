@@ -248,7 +248,8 @@ fn r8_sibling_with_shared_prefix_is_outside() {
 fn r9_r15_refused_shapes_name_their_code() {
     let na = code(RootReason::NotAbsolute);
     let nn = code(RootReason::NotNormalised);
-    let cases: Vec<(&str, Box<dyn Fn(&Fx) -> String>, &String)> = vec![
+    type Spell = Box<dyn Fn(&Fx) -> String>;
+    let cases: Vec<(&str, Spell, &String)> = vec![
         ("R9", Box::new(|_| "safe/f".into()), &na),
         ("R10", Box::new(|_| "~/x".into()), &na),
         ("R11", Box::new(|_| "$HOME/x".into()), &na),

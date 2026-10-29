@@ -44,7 +44,7 @@ fn load(yaml: &str) -> Result<crate::config::Config, String> {
     crate::config::Config::load(Some(&path)).map_err(|e| e.to_string())
 }
 
-fn on<'a>(tool: &'a str) -> RuleTarget<'a> {
+fn on(tool: &str) -> RuleTarget<'_> {
     RuleTarget {
         server: ServerOf::Backend("filesystem"),
         tool,
@@ -98,7 +98,7 @@ fn r23e_name_clash_at_load_is_refused() {
     assert!(err.contains("backends.fs"), "{err}");
 }
 
-/// R34c: under NotKnown with two named candidate keys, an outside path gives
+/// R34c: under `NotKnown` with two named candidate keys, an outside path gives
 /// exactly one root finding for the rule and argument.
 #[test]
 fn r34c_one_finding_per_rule_and_argument() {

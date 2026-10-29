@@ -88,8 +88,6 @@ pub(crate) trait Clock: Send + Sync {
 pub(crate) struct Seams {
     pub(crate) resolver: Option<Arc<dyn Resolve>>,
     pub(crate) clock: Option<Arc<dyn Clock>>,
-    /// Resolver threads this firewall owns instead of the process pool.
-    pub(crate) pool: Option<usize>,
     /// That pool, created on the firewall's first check.
     pub(crate) own_pool: std::sync::OnceLock<Arc<resolve::Pool>>,
 }
@@ -105,12 +103,6 @@ impl super::Firewall {
     /// Compute the remaining budget from `clock` instead of the system's.
     pub(crate) fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.seams.clock = Some(clock);
-        self
-    }
-
-    /// Give this firewall its own pool of `threads` resolvers.
-    pub(crate) fn with_resolver_pool(mut self, threads: usize) -> Self {
-        self.seams.pool = Some(threads);
         self
     }
 }
@@ -177,7 +169,7 @@ pub(crate) struct RootRefusal {
 pub(crate) struct RootOutcome {
     /// A forced block; no rule action softens it.
     pub(crate) forced: Option<RootRefusal>,
-    /// PathOutsideRoot findings, each already decided by its producing rule.
+    /// `PathOutsideRoot` findings, each already decided by its producing rule.
     pub(crate) findings: Vec<(Finding, FirewallAction)>,
 }
 
@@ -277,7 +269,7 @@ fn seams_of(firewall: &super::Firewall) -> Io {
     let seams = &firewall.seams;
     let pool = seams
         .own_pool
-        .get_or_init(|| resolve::Pool::new(seams.pool.unwrap_or(RESOLVER_THREADS)));
+        .get_or_init(|| resolve::Pool::new(RESOLVER_THREADS));
     (
         seams
             .resolver
@@ -291,32 +283,35 @@ fn seams_of(firewall: &super::Firewall) -> Io {
     )
 }
 
-/// Argument names the suggester treats as paths (design section 7).
-const PATH_NAMES: [&str; 16] = [
-    "path",
-    "paths",
-    "file",
-    "files",
-    "filename",
-    "file_path",
-    "filepath",
-    "dir",
-    "directory",
-    "folder",
-    "source",
-    "destination",
-    "src",
-    "dst",
-    "target",
-    "root",
-];
-
 /// `path_args` entries suggested from a tool's input schema, sorted by name:
 /// a string property, or an array of strings (`name[]`), whose name is a
 /// path name or ends in `_path`, `_file` or `_dir`, marked `?` when the
 /// schema does not require it. It enforces nothing; the screen asks the
 /// operator to confirm.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the policies screen is its first caller")
+)]
 pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
+    // Argument names the suggester treats as paths (design section 7).
+    const PATH_NAMES: [&str; 16] = [
+        "path",
+        "paths",
+        "file",
+        "files",
+        "filename",
+        "file_path",
+        "filepath",
+        "dir",
+        "directory",
+        "folder",
+        "source",
+        "destination",
+        "src",
+        "dst",
+        "target",
+        "root",
+    ];
     let Some(properties) = input_schema["properties"].as_object() else {
         return Vec::new();
     };

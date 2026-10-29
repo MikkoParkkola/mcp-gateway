@@ -57,7 +57,8 @@ impl Default for Setup {
 
 pub(super) struct Routes {
     pub(super) dir: tempfile::TempDir,
-    pub(super) gateway: Gateway,
+    /// Kept alive for the rows: it owns the registry both firewalls read.
+    _gateway: Gateway,
     pub(super) meta: Arc<MetaMcp>,
     pub(super) state: Arc<AppState>,
     log: PathBuf,
@@ -124,7 +125,7 @@ impl Routes {
         wired.firewall = Some(firewall);
         Self {
             dir,
-            gateway,
+            _gateway: gateway,
             meta,
             state,
             log,

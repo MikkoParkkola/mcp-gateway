@@ -79,7 +79,7 @@ impl Resolve for Gated {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.deadlines.lock().expect("deadlines").push(deadline);
         if let Some(tx) = self.entered.lock().expect("entered").as_ref() {
-            let _ = tx.send(Event::Entered(op.clone()));
+            let _ = tx.send(Event::Entered);
         }
         let mut open = self.open.lock().expect("gate");
         while !*open {
@@ -94,7 +94,7 @@ impl Resolve for Gated {
 /// returning (its forced reason, if any).
 #[derive(Debug)]
 pub(super) enum Event {
-    Entered(ResolveOp),
+    Entered,
     Done(Option<RootReason>),
 }
 

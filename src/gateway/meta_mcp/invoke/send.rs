@@ -130,7 +130,6 @@ impl MetaMcp {
             target,
             arguments,
             dispatch_binding,
-            backend,
             ..
         } = call;
         #[cfg(feature = "cost-governance")]
@@ -212,7 +211,7 @@ impl MetaMcp {
         let outbound = chokepoint::Outbound {
             arguments,
             answers,
-            backend: backend.as_deref(),
+            backend: call.backend.as_deref(),
         };
         let source = chokepoint::Source::of_call(answers);
         let permit = match self.chokepoint(

@@ -42,6 +42,7 @@ impl MetaMcp {
     }
 
     /// The live capability slot, shared with the firewall's folder check.
+    #[cfg(feature = "firewall")]
     pub(in crate::gateway) fn capability_slot(
         &self,
     ) -> Arc<parking_lot::RwLock<Option<Arc<CapabilityBackend>>>> {

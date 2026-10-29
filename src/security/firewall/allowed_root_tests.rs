@@ -283,7 +283,7 @@ fn assert_refused(rule: &str, path: &str, reason: &str) {
 
 const ROOT: &str = "match: \"read_text_file\", action: block";
 
-/// L1: allowed_roots without path_args, and the reverse.
+/// L1: `allowed_roots` without `path_args`, and the reverse.
 #[test]
 fn l1_roots_and_path_args_come_together() {
     assert_refused(
@@ -328,7 +328,7 @@ fn l3_relative_and_tilde_user_roots_are_refused() {
     );
 }
 
-/// L4: entries outside the path_args grammar are refused, naming the entry.
+/// L4: entries outside the `path_args` grammar are refused, naming the entry.
 #[test]
 fn l4_bad_path_arg_entries_are_refused() {
     for bad in ["a..b", "[]", "name??", "name?[]"] {
@@ -350,8 +350,8 @@ fn l5_load_errors_never_print_the_value() {
     assert!(!err.contains("SENTINEL-8939"), "value leaked: {err}");
 }
 
-/// L6: path_outside_root and root_refused are output-only, and no rule's
-/// scan may list either (root_refused: lead D8, agreed by consol4).
+/// L6: `path_outside_root` and `root_refused` are output-only, and no
+/// rule's `scan` may list either (`root_refused`: lead D8, agreed by consol4).
 #[test]
 fn l6_path_outside_root_is_not_listable_in_scan() {
     for output_only in ["path_outside_root", "root_refused"] {
@@ -401,7 +401,7 @@ fn l4b_optional_array_compiles() {
     );
 }
 
-fn schema(props: serde_json::Value, required: &[&str]) -> serde_json::Value {
+fn schema(props: &serde_json::Value, required: &[&str]) -> serde_json::Value {
     json!({"type": "object", "properties": props, "required": required})
 }
 
@@ -410,29 +410,29 @@ fn schema(props: serde_json::Value, required: &[&str]) -> serde_json::Value {
 fn reference_schemas() -> Vec<(&'static str, serde_json::Value)> {
     let s = json!({"type": "string"});
     let arr = json!({"type": "array", "items": {"type": "string"}});
-    let path_only = || schema(json!({"path": s}), &["path"]);
+    let path_only = || schema(&json!({"path": s}), &["path"]);
     vec![
         ("read_file", path_only()),
         (
             "read_text_file",
             schema(
-                json!({"path": s, "head": {"type": "number"}, "tail": {"type": "number"}}),
+                &json!({"path": s, "head": {"type": "number"}, "tail": {"type": "number"}}),
                 &["path"],
             ),
         ),
         ("read_media_file", path_only()),
         (
             "read_multiple_files",
-            schema(json!({"paths": arr}), &["paths"]),
+            schema(&json!({"paths": arr}), &["paths"]),
         ),
         (
             "write_file",
-            schema(json!({"path": s, "content": s}), &["path", "content"]),
+            schema(&json!({"path": s, "content": s}), &["path", "content"]),
         ),
         (
             "edit_file",
             schema(
-                json!({"path": s, "edits": {"type": "array"}, "dryRun": {"type": "boolean"}}),
+                &json!({"path": s, "edits": {"type": "array"}, "dryRun": {"type": "boolean"}}),
                 &["path", "edits"],
             ),
         ),
@@ -440,28 +440,28 @@ fn reference_schemas() -> Vec<(&'static str, serde_json::Value)> {
         ("list_directory", path_only()),
         (
             "list_directory_with_sizes",
-            schema(json!({"path": s, "sortBy": s}), &["path"]),
+            schema(&json!({"path": s, "sortBy": s}), &["path"]),
         ),
         (
             "directory_tree",
-            schema(json!({"path": s, "excludePatterns": arr}), &["path"]),
+            schema(&json!({"path": s, "excludePatterns": arr}), &["path"]),
         ),
         (
             "move_file",
             schema(
-                json!({"source": s, "destination": s}),
+                &json!({"source": s, "destination": s}),
                 &["source", "destination"],
             ),
         ),
         (
             "search_files",
             schema(
-                json!({"path": s, "pattern": s, "excludePatterns": arr}),
+                &json!({"path": s, "pattern": s, "excludePatterns": arr}),
                 &["path", "pattern"],
             ),
         ),
         ("get_file_info", path_only()),
-        ("list_allowed_directories", schema(json!({}), &[])),
+        ("list_allowed_directories", schema(&json!({}), &[])),
     ]
 }
 
@@ -485,7 +485,7 @@ fn s1_reference_schemas_suggest_exactly_the_path_arguments() {
 #[test]
 fn s2_no_path_like_property_suggests_nothing() {
     let s = schema(
-        json!({"query": {"type": "string"}, "limit": {"type": "number"}}),
+        &json!({"query": {"type": "string"}, "limit": {"type": "number"}}),
         &["query"],
     );
     assert!(suggest_path_args(&s).is_empty());
@@ -495,7 +495,7 @@ fn s2_no_path_like_property_suggests_nothing() {
 #[test]
 fn s2b_non_required_array_is_suggested_optional() {
     let s = schema(
-        json!({"files": {"type": "array", "items": {"type": "string"}}}),
+        &json!({"files": {"type": "array", "items": {"type": "string"}}}),
         &[],
     );
     assert_eq!(suggest_path_args(&s), ["files[]?"]);

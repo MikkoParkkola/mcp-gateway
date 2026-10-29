@@ -51,7 +51,7 @@ fn report(fx: &Fx, tx: &Sender<Event>) {
 
 fn entered(rx: &Receiver<Event>) {
     match rx.recv_timeout(HANG) {
-        Ok(Event::Entered(_)) => {}
+        Ok(Event::Entered) => {}
         other => panic!("the check must reach the resolver first: {other:?}"),
     }
 }
@@ -59,7 +59,7 @@ fn entered(rx: &Receiver<Event>) {
 fn done(rx: &Receiver<Event>) -> Option<RootReason> {
     loop {
         match rx.recv_timeout(HANG) {
-            Ok(Event::Entered(_)) => {}
+            Ok(Event::Entered) => {}
             Ok(Event::Done(outcome)) => return outcome,
             Err(e) => panic!("the check never returned: {e}"),
         }

@@ -11,7 +11,7 @@ use super::tree::{Fx, Seen, root_rule, seen};
 use crate::security::firewall::{FirewallRule, RuleException, ScanType};
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 
-fn keyed<'a>(key: KeyOf<'a>) -> RuleTarget<'a> {
+fn keyed(key: KeyOf<'_>) -> RuleTarget<'_> {
     RuleTarget {
         server: ServerOf::Backend("fs"),
         tool: "read_file",
@@ -74,7 +74,7 @@ fn r25_r26_other_rules_do_not_soften_a_root_rule() {
     let fx = Fx::with_rules(|safe| {
         let warn = root_rule(
             "read_file",
-            &[safe.clone()],
+            std::slice::from_ref(&safe),
             &["path"],
             FirewallAction::Warn,
         );
@@ -128,8 +128,8 @@ fn except_key(server: Option<&str>, key: &str) -> RuleException {
     }
 }
 
-/// R34: a `keys`-scoped root rule applies under NotKnown when its key is a
-/// candidate; R34b [keep]: under NoKey it does not apply.
+/// R34: a `keys`-scoped root rule applies under `NotKnown` when its key is a
+/// candidate; R34b [keep]: under `NoKey` it does not apply.
 #[test]
 fn r34_keys_scope_follows_the_candidates() {
     let fx = scoped(Some(&["k1"]), None);
@@ -143,7 +143,7 @@ fn r34_keys_scope_follows_the_candidates() {
     );
 }
 
-/// R35: an `except` naming one possible key does not exempt under NotKnown;
+/// R35: an `except` naming one possible key does not exempt under `NotKnown`;
 /// R36 [keep]: it exempts that exact key; R36b: a server-and-key `except`
 /// exempts only when both match.
 #[test]

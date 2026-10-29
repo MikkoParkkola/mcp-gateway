@@ -89,6 +89,7 @@ impl Backend {
     /// Exhaustive with no wildcard arm, so a transport added later does not
     /// compile until someone classes it.
     #[must_use]
+    #[cfg(feature = "firewall")]
     pub(crate) fn is_local_process(&self) -> bool {
         match &self.config.transport {
             TransportConfig::Stdio { .. } => true,
