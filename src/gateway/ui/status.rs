@@ -144,3 +144,7 @@ struct ServerStatus {
     /// credentials in cleartext.
     cleartext_credentials_accepted: bool,
 }
+
+#[cfg(test)]
+#[path = "status_tests.rs"]
+mod tests;

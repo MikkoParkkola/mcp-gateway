@@ -43,7 +43,7 @@ fn standard_key() -> ApiKeyConfig {
 /// The built gateway with the clock still running. A test that bounds time
 /// calls `tokio::time::pause()` itself right after, so its virtual clock is
 /// visible where the bound is asserted.
-async fn fixture_unpaused() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture_unpaused() -> (Arc<AppState>, impl Sized) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
@@ -55,7 +55,7 @@ async fn fixture_unpaused() -> (Arc<AppState>, tempfile::TempDir) {
 }
 
 /// The built gateway with time stopped; real I/O is done by then.
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, impl Sized) {
     let made = fixture_unpaused().await;
     tokio::time::pause();
     made

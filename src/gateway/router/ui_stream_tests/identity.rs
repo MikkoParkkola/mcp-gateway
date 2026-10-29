@@ -45,11 +45,7 @@ fn set_mapping(state: &AppState, yaml: &str) {
 /// its holder an admin. Time is paused only after the store is built.
 async fn gateway(
     token: crate::key_server::TemporaryToken,
-) -> (
-    Arc<AppState>,
-    Arc<crate::key_server::KeyServer>,
-    tempfile::TempDir,
-) {
+) -> (Arc<AppState>, Arc<crate::key_server::KeyServer>, impl Sized) {
     let key_server = Arc::new(crate::key_server::KeyServer::new(
         crate::config::KeyServerConfig::default(),
     ));
