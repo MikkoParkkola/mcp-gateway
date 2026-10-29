@@ -22,13 +22,7 @@ pub(crate) fn register() {
     process::register();
 }
 
-/// Who wrote a JSON-RPC error frame: the gateway, or a backend whose answer
-/// the gateway forwarded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Origin {
-    Gateway,
-    Backend,
-}
+pub(crate) use crate::protocol::Origin;
 
 /// The JSON-RPC error an answer carries, set where the frame becomes the
 /// response, so the error count never reads a body.
@@ -39,18 +33,12 @@ pub(crate) struct RpcError {
 }
 
 impl RpcError {
-    /// The error `frame` carries, written by a backend exactly when its
-    /// off-wire flag says a transport returned it.
+    /// The error `frame` carries, with the origin its off-wire marker names.
     pub(crate) fn of_frame(frame: &crate::protocol::JsonRpcResponse) -> Option<Self> {
         let error = frame.error.as_ref()?;
-        let origin = if frame.wire_meta.from_backend {
-            Origin::Backend
-        } else {
-            Origin::Gateway
-        };
         Some(Self {
             code: error.code,
-            origin,
+            origin: frame.wire_meta.origin,
         })
     }
 
@@ -77,7 +65,7 @@ pub(crate) enum ErrorKind {
 /// its client, or `None` when it was not an error.
 pub(crate) fn error_kind(status: u16, marker: Option<RpcError>) -> Option<ErrorKind> {
     let code = marker.map(|m| m.code);
-    if marker.is_some_and(|m| m.origin == Origin::Backend) || code == Some(-32000) {
+    if marker.is_some_and(|m| m.origin != Origin::Gateway) {
         return Some(ErrorKind::Backend);
     }
     match (status, code) {

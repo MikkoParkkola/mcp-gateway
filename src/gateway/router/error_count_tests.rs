@@ -94,7 +94,7 @@ fn a_200_with_a_rpc_error_from_build_error_response_counts_by_its_code() {
 fn a_backend_frame_counts_as_the_backends_whatever_its_code() {
     let (_, text) = counted(hit(app(|| {
         let mut frame = JsonRpcResponse::error(None, -32603, "backend broke");
-        frame.wire_meta.from_backend = true;
+        frame.wire_meta.origin = Origin::Backend;
         to_http(
             OutboundFrame::unjudged(Payload::Response(frame)),
             StatusCode::OK,

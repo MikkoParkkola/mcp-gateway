@@ -117,7 +117,7 @@ pub(crate) struct OutboundFrame {
     /// dropped before then carries none of them away, so they release.
     holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds,
     /// Who wrote an error in an [`Payload::Answer`] value, whose frame no
-    /// longer carries the flag a [`Payload::Response`] does.
+    /// longer carries the origin a [`Payload::Response`] does.
     origin: Origin,
 }
 

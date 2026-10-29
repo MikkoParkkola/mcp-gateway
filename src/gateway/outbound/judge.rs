@@ -374,7 +374,7 @@ mod emitted_document_tests {
             wire_meta: WireMeta {
                 delivery_refusal: true,
                 egress_scanned: true,
-                from_backend: false,
+                origin: crate::protocol::Origin::Gateway,
             },
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,

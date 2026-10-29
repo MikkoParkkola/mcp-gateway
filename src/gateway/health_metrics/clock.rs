@@ -13,7 +13,7 @@ use parking_lot::Mutex;
 use tokio::time::Instant;
 
 use crate::Result;
-use crate::protocol::JsonRpcResponse;
+use crate::protocol::{JsonRpcResponse, Origin};
 
 tokio::task_local! {
     /// The clock of the request this task is working for. Task-locals do not
@@ -120,7 +120,7 @@ where
 {
     let mut answer = backend_wait(fut).await;
     if let Ok(response) = &mut answer {
-        response.wire_meta.from_backend = true;
+        response.wire_meta.origin = Origin::Backend;
     }
     answer
 }

@@ -53,10 +53,25 @@ pub(crate) struct WireMeta {
     /// `MIK-7407.RESPONSE.3`), so no later exit scans it again. Never on the
     /// wire, so no caller can set it.
     pub(crate) egress_scanned: bool,
-    /// Server-owned: a backend's transport returned this frame, so an error
-    /// in it is the backend's even when it reuses a gateway code. Set only
-    /// by `backend_request`; never on the wire, so no caller can set it.
-    pub(crate) from_backend: bool,
+    /// Server-owned: who wrote an error in this frame. `Backend` only from
+    /// `backend_request`, `BackendFailure` only from `Error::origin` through
+    /// `of_error`; never on the wire, so no caller can set it.
+    pub(crate) origin: Origin,
+}
+
+/// Who an error frame blames, for the error count: the gateway's own fault or
+/// refusal, a backend failure the gateway reports, or a backend's own answer
+/// the gateway forwarded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// The gateway's own error or policy refusal.
+    #[default]
+    Gateway,
+    /// A backend-side failure the gateway built (timeout, unavailable, circuit
+    /// open, transport); the gateway itself is healthy.
+    BackendFailure,
+    /// A frame a backend's transport returned.
+    Backend,
 }
 
 /// JSON-RPC response
@@ -198,6 +213,24 @@ impl JsonRpcResponse {
 }
 
 impl JsonRpcResponse {
+    /// The one constructor of an error frame from a [`crate::Error`]: code from
+    /// `to_rpc_code`, text from `Display`, origin from `Error::origin`.
+    pub(crate) fn of_error(id: Option<RequestId>, error: &crate::Error) -> Self {
+        Self::of_error_text(id, error, error.to_string())
+    }
+
+    /// [`Self::of_error`] with the wire text a site already chose (a redacted
+    /// or inner message), so the frame keeps the bytes it always had.
+    pub(crate) fn of_error_text(
+        id: Option<RequestId>,
+        error: &crate::Error,
+        text: impl Into<String>,
+    ) -> Self {
+        let mut response = Self::error(id, error.to_rpc_code(), text);
+        response.wire_meta.origin = error.origin();
+        response
+    }
+
     /// Only gateway-owned finalization failures acquire this private marker.
     pub(crate) fn delivery_refusal_error(id: Option<RequestId>, code: i32, message: &str) -> Self {
         let mut response = Self::error(id, code, message);

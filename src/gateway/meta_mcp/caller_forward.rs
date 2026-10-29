@@ -137,7 +137,7 @@ impl MetaMcp {
                 Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
                 None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
             },
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            Err(e) => JsonRpcResponse::of_error(Some(id), &e),
         }
     }
 }

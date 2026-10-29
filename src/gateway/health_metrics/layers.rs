@@ -131,7 +131,9 @@ pub(crate) fn register() {
     telemetry_metrics::describe_counter!(
         ERRORS,
         "Errors a client received from the gateway, by kind (auth, request, internal, backend). \
-         This is the client-received view. mcp_backend_requests_total is the backend-side view: \
+         Backend means a backend's own error answer or a backend failure the gateway reports \
+         (timeout, unavailable, circuit open, transport); the gateway's own refusals, rate \
+         limits included, are not. This is the client-received view. mcp_backend_requests_total is the backend-side view: \
          it does not count circuit-open refusals before dispatch and counts forwarded JSON-RPC \
          errors as status=ok. mcp_jsonrpc_requests_total{status=error} counts JSON-RPC errors \
          on /mcp only. A tool result with isError: true is not an error here."
