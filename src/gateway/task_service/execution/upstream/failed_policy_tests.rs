@@ -106,9 +106,9 @@ async fn seed_capturable_task(
     Arc<TaskService>,
     Arc<TaskExecutor>,
     String,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
-    let directory = tempfile::tempdir().expect("a fixture store root");
+    let directory = Arc::new(tempfile::tempdir().expect("a fixture store root"));
     let store_dir = directory.path().join("tasks");
     let admission = ExecutionAdmission::new(Arc::new(|| 1_000));
     let service = Arc::new(
@@ -116,6 +116,9 @@ async fn seed_capturable_task(
             .await
             .expect("the fixture store opens"),
     );
+    // The store holds a share of its directory, so a worker still writing
+    // when the test ends cannot land mid-removal and leave the folder behind.
+    service.store.keep_test_dir(Arc::clone(&directory));
     let executor = TaskExecutor::new(
         Arc::clone(&service),
         Arc::new(SubscriptionRegistry::new(
@@ -186,7 +189,7 @@ async fn seed_capturable_task(
 
 /// Recover one seeded working row and return its committed wire projection,
 /// plus the store directory so the bytes on disk can be read back.
-async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
+async fn recover(reply: Reply) -> (Value, crate::gateway::router::tests::FixtureDir) {
     // The gateway a reader would face: the product's own gates, in the mode an
     // operator enables to act on a finding rather than annotate it.
     let mut meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
@@ -195,14 +198,20 @@ async fn recover(reply: Reply) -> (Value, tempfile::TempDir) {
 }
 
 /// [`recover`] against a caller-built gateway.
-async fn recover_with(reply: Reply, meta: MetaMcp) -> (Value, tempfile::TempDir) {
+async fn recover_with(
+    reply: Reply,
+    meta: MetaMcp,
+) -> (Value, crate::gateway::router::tests::FixtureDir) {
     let (committed, directory) = recover_committed(reply, meta).await;
     let wire = serde_json::to_value(committed.task.wire()).expect("the wire projection serializes");
     (wire, directory)
 }
 
 /// [`recover_with`], returning the whole committed row.
-async fn recover_committed(reply: Reply, meta: MetaMcp) -> (CommittedTask, tempfile::TempDir) {
+async fn recover_committed(
+    reply: Reply,
+    meta: MetaMcp,
+) -> (CommittedTask, crate::gateway::router::tests::FixtureDir) {
     let (service, executor, id, directory) = seed_capturable_task(reply).await;
     let meta = Arc::new(meta);
     let owner_digest = service

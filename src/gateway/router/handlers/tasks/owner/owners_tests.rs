@@ -25,7 +25,7 @@ async fn state(
     enabled: bool,
 ) -> (
     std::sync::Arc<crate::gateway::router::AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let auth = crate::config::AuthConfig {
         enabled,

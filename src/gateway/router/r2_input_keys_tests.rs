@@ -73,7 +73,7 @@ impl crate::transport::Transport for Wire {
 struct Fixture {
     router: axum::Router,
     calls: Calls,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// One `edits` backend; `warm` lists its tools through the caller's slot.

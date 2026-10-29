@@ -88,6 +88,8 @@ impl Backend {
             caller_slots: DashMap::new(),
             caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
+            #[cfg(all(test, feature = "webui"))]
+            server_state_evaluations: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
             #[cfg(test)]

@@ -1235,7 +1235,7 @@ Enabling `auth.enabled` is the case that matters: it takes effect on restart, so
 a reload reports `NOT YET APPLIED, restart required for: auth`. Fields are
 treated as restart-required unless proven otherwise, so an occasional needless
 restart is possible; being told a security change took effect when it did not
-is not.
+is not. To take a key away, see [Revoking an API key](#revoking-an-api-key).
 
 Applied without a restart: backends, `server.public_url`, and
 `control_plane.role_mapping`.
@@ -1243,6 +1243,18 @@ Applied without a restart: backends, `server.public_url`, and
 One reload is refused outright rather than applied: one that would leave the
 tools reachable without a credential — see the tunnel section below, which is
 where this is met in practice.
+
+### Revoking an API key
+
+Remove the key from `auth.api_keys` in the config file, then **restart the
+gateway**. A reload alone does not revoke it: `auth` is restart-required, so the
+reload reports `restart_required` for `auth` and the running gateway keeps
+accepting the key until the restart. After the restart the key is refused on
+every route, and any open live stream that used it ends.
+
+To check, send a request with the removed key after the restart and expect a
+`401`. See [What a config reload applies](#what-a-config-reload-applies) for the
+fields a reload does apply.
 
 ### Capabilities that register an address with a third party
 

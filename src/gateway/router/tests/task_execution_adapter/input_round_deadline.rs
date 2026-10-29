@@ -46,7 +46,14 @@ fn status_message(body: &Value) -> &str {
         .unwrap_or_default()
 }
 
-async fn parked_round(key: &str) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+async fn parked_round(
+    key: &str,
+) -> (
+    Arc<MockBackend>,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let mock = MockBackend::answering(Answer::Sequence(vec![ask("confirm", STATE_1), done()]));
     let (state, dir) = state_with(&mock).await;
     let id = parked(&state, key).await;
@@ -181,7 +188,7 @@ async fn swept(
 ) -> (
     Arc<MockBackend>,
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     String,
     u64,
     Value,
@@ -478,7 +485,12 @@ async fn a_resume_on_a_clock_before_1970_waits_then_completes() {
 /// One worker, its round waiting on a clock before 1970.
 async fn one_worker_waiting(
     key: &str,
-) -> (Arc<MockBackend>, Arc<AppState>, tempfile::TempDir, String) {
+) -> (
+    Arc<MockBackend>,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     let (mock, mut gate) = MockBackend::holding(Answer::Sequence(vec![
         ask("confirm", STATE_1),
         done(),
