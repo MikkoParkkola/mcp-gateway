@@ -41,18 +41,18 @@ pub(super) fn real(op: &ResolveOp) -> std::io::Result<Resolved> {
 pub(super) struct Gated {
     open: Mutex<bool>,
     wake: Condvar,
-    entered: Mutex<Option<mpsc::Sender<ResolveOp>>>,
+    entered: Mutex<Option<mpsc::Sender<Event>>>,
     pub(super) calls: AtomicUsize,
     pub(super) deadlines: Mutex<Vec<Instant>>,
 }
 
 impl Gated {
     /// A gated resolver and the receiver of its "entered" events.
-    pub(super) fn new() -> (Arc<Self>, mpsc::Receiver<ResolveOp>) {
+    pub(super) fn new() -> (Arc<Self>, mpsc::Sender<Event>, mpsc::Receiver<Event>) {
         let (tx, rx) = mpsc::channel();
         let gated = Arc::new(Self::default());
-        *gated.entered.lock().expect("entered") = Some(tx);
-        (gated, rx)
+        *gated.entered.lock().expect("entered") = Some(tx.clone());
+        (gated, tx, rx)
     }
 
     pub(super) fn open(&self) {
@@ -79,7 +79,7 @@ impl Resolve for Gated {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.deadlines.lock().expect("deadlines").push(deadline);
         if let Some(tx) = self.entered.lock().expect("entered").as_ref() {
-            let _ = tx.send(op.clone());
+            let _ = tx.send(Event::Entered(op.clone()));
         }
         let mut open = self.open.lock().expect("gate");
         while !*open {
@@ -88,6 +88,14 @@ impl Resolve for Gated {
         drop(open);
         real(op)
     }
+}
+
+/// What a seam row hears: a read entering the gated resolver, or a check
+/// returning (its forced reason, if any).
+#[derive(Debug)]
+pub(super) enum Event {
+    Entered(ResolveOp),
+    Done(Option<RootReason>),
 }
 
 /// Which directory read fails, for R33g and R33h.
@@ -167,14 +175,14 @@ use super::tree::{Fx, target};
 use serde_json::{Value, json};
 
 /// `fx` with `seams` applied to its firewall.
-fn seamed(fx: Fx, seams: impl FnOnce(Firewall) -> Firewall) -> Fx {
+pub(super) fn seamed(fx: Fx, seams: impl FnOnce(Firewall) -> Firewall) -> Fx {
     Fx {
         fw: seams(fx.fw),
         ..fx
     }
 }
 
-fn forced(fx: &Fx, args: &Value) -> Option<RootReason> {
+pub(super) fn forced(fx: &Fx, args: &Value) -> Option<RootReason> {
     let sender = fx.sender();
     root_check(&fx.fw, target("read_file"), args, sender.as_deref())
         .forced

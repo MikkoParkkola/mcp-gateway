@@ -12,6 +12,8 @@ mod entry;
 mod locality;
 #[path = "allowed_root_rules_tests.rs"]
 mod rules;
+#[path = "allowed_root_runtime_tests.rs"]
+mod runtime;
 #[path = "allowed_root_seam_tests.rs"]
 mod seam;
 #[path = "allowed_root_spelling_tests.rs"]
