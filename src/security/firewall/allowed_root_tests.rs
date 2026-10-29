@@ -6,6 +6,9 @@
 use super::*;
 use serde_json::json;
 
+#[path = "allowed_root_fs_tests.rs"]
+mod tree;
+
 /// One precheck case with its expected outcome on each OS family.
 struct Shape {
     row: &'static str,
