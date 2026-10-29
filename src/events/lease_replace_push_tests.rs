@@ -43,3 +43,5 @@ async fn iso_t6_a_credentials_changed_signal_closes_the_listener_without_the_swe
     );
     watcher.abort();
 }
+#[path = "lease_replace_managed_tests.rs"]
+mod managed;
