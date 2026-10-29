@@ -181,6 +181,8 @@ impl Config {
         // authenticated". Compiling here means an unresolved or contradictory
         // reference is a load refusal rather than a dispatch-time discovery.
         account_bindings::validate(self)?;
+        // Each backend's `secrets:` rules, on the config it runs with.
+        super::secret_rules::validate(self)?;
         match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),

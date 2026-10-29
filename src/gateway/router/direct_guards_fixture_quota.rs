@@ -104,11 +104,53 @@ pub(crate) async fn fixture_propagating_budgeted(
     fx
 }
 
+thread_local! {
+    /// The `secrets:` rules every fixture backend carries; empty for none.
+    static SECRETS: std::cell::RefCell<Vec<crate::secret_injection::CredentialRule>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`super::fixture`] whose two backends each carry `rules`, answering over
+/// `transport` when one is given, and writing its firewall audit rows to
+/// `audit` when one is given.
+pub(crate) async fn fixture_with_secrets(
+    rules: Vec<crate::secret_injection::CredentialRule>,
+    transport: Option<Arc<dyn crate::transport::Transport>>,
+    audit: Option<std::path::PathBuf>,
+) -> Fx {
+    SECRETS.with(|s| *s.borrow_mut() = rules);
+    let fixture = Box::pin(async move {
+        #[cfg(feature = "firewall")]
+        if let Some(audit) = audit {
+            return super::fixture_firewalled_audited(Answer::Ok, audit).await;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = audit;
+        super::fixture_built(Answer::Ok, |meta| meta).await
+    });
+    let fx = match transport {
+        Some(transport) => super::with_transport(transport, fixture).await,
+        None => fixture.await,
+    };
+    SECRETS.with(|s| s.borrow_mut().clear());
+    fx
+}
+
+#[cfg(feature = "firewall")]
+impl Fx {
+    /// The directory the fixture's gateway writes its stores under.
+    pub(crate) fn store_path(&self) -> &std::path::Path {
+        let Self { _store: store, .. } = self;
+        store.path()
+    }
+}
+
 /// One fixture backend's config: pass-through or not, and, for a propagating
 /// fixture, a required propagation to `aud-<name>` over an HTTP base URL.
 pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendConfig {
     BackendConfig {
         passthrough,
+        secrets: SECRETS.with(|s| s.borrow().clone()),
         // A propagating backend validates an HTTP base URL before it
         // reaches the scripted transport.
         transport: if super::PROPAGATING.with(std::cell::Cell::get) {

@@ -269,6 +269,7 @@ async fn state_with_firewalls_and_auth(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
