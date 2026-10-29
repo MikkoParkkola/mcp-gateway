@@ -15,14 +15,19 @@ use crate::{Error, Result};
 impl MetaMcp {
     /// Resolve the per-user propagation headers for a backend by name, for the
     /// direct backend route (`/mcp/{name}`) which does not go through
-    /// `dispatch_to_backend` (MIK-6704). Returns the empty vec when the backend
+    /// `dispatch_to_backend` (MIK-6704). Returns no headers when the backend
     /// is not propagation-configured (unchanged static path); fail-closed `Err`
     /// for a `required` backend with no identity/strategy.
+    ///
+    /// The returned headers are a caller's credential: the value is wiped when
+    /// it is dropped and its `Debug` never prints a value. Read them by
+    /// borrowing (`for (name, value) in headers.iter()`); a plain list made
+    /// with `.to_vec()` is the caller's copy, and the caller's to wipe.
     pub async fn resolve_propagation_headers(
         &self,
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-    ) -> Result<Vec<(String, String)>> {
+    ) -> Result<crate::identity_propagation::PropagatedHeaders> {
         #[allow(
             clippy::disallowed_methods,
             reason = "Discovery: the headers API forwards to the credential API (design §2.6)"
@@ -124,7 +129,9 @@ impl MetaMcp {
     /// Like [`Self::resolve_propagation_headers`] but also returns the caller's
     /// stable identity binding (MIK-6784), so the direct backend route can
     /// partition upstream `MCP-Session-Id` state per identity. The binding is
-    /// `None` for a non-propagation backend (unchanged static path).
+    /// `None` for a non-propagation backend (unchanged static path). The
+    /// headers are wiped when dropped and never printed, as for
+    /// [`Self::resolve_propagation_headers`].
     ///
     /// # Errors
     ///
@@ -134,7 +141,10 @@ impl MetaMcp {
         &self,
         server: &str,
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
-    ) -> Result<(Vec<(String, String)>, Option<String>)> {
+    ) -> Result<(
+        crate::identity_propagation::PropagatedHeaders,
+        Option<String>,
+    )> {
         // Identity-only by construction; production reads pass a proof (#2231).
         let caller = CallerProof::new(verified_identity, CallerProvenance::Anonymous);
         let backend = self.backends.get_for(
@@ -143,10 +153,16 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
-            // A public API that has returned a plain `Vec` since before the
-            // send recheck: the secret is moved out, never copied, and from
-            // here its owner is the caller. Changing the type is an API change.
-            .map(|(mut lent, cache_binding, _)| (std::mem::take(&mut *lent.headers), cache_binding))
+            // The headers move into the returned type whole, still in their
+            // zeroizing holder: never copied, wiped when the caller drops them.
+            .map(|(mut lent, cache_binding, _)| {
+                (
+                    crate::identity_propagation::PropagatedHeaders::new(std::mem::take(
+                        &mut lent.headers,
+                    )),
+                    cache_binding,
+                )
+            })
     }
 
     /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,

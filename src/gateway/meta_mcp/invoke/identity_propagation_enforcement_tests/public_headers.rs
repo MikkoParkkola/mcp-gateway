@@ -105,15 +105,19 @@ async fn the_credential_call_hands_out_a_value_wiped_on_drop() {
 
 /// The returned value never prints its contents: plain and pretty `Debug`
 /// name the header and carry none of the credential, and so does the whole
-/// tuple the credential call returns.
+/// tuple the credential call returns. The bindings' types pin both calls'
+/// return types: a change back to a plain vector fails to build.
 #[tokio::test]
 async fn a_returned_credential_never_prints_its_value() {
     let (m, _captured) = meta_with_capturing_backend();
-    let headers = m
+    let headers: crate::identity_propagation::PropagatedHeaders = m
         .resolve_propagation_headers("mem", Some(&identity()))
         .await
         .expect("resolve ok");
-    let returned = m
+    let returned: (
+        crate::identity_propagation::PropagatedHeaders,
+        Option<String>,
+    ) = m
         .resolve_propagation_credential("mem", Some(&identity()))
         .await
         .expect("resolve ok");

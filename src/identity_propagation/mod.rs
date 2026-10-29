@@ -43,6 +43,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 mod account_strategies;
 mod caller_proof;
+mod propagated_headers;
 pub(crate) mod send_check;
 mod token_exchange;
 
@@ -50,6 +51,7 @@ pub(crate) use account_strategies::{
     AccountCredential, AccountStrategyRegistry, InstalledAccount, Minter, PreparedAccountCredential,
 };
 pub(crate) use caller_proof::{CallerProof, CallerProvenance};
+pub use propagated_headers::PropagatedHeaders;
 pub use token_exchange::TokenExchangeStrategy;
 
 #[cfg(test)]
