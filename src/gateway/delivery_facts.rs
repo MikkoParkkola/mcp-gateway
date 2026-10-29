@@ -139,7 +139,9 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
 /// refused redirect hop, is not this call's answer. Every such send site is
 /// listed in `boundary_pins/discarded_sends.rs`.
 pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
-    scope(future).await
+    // Boxed: the cell would otherwise sit inline in every dispatch future
+    // that awaits a probe.
+    Box::pin(scope(future)).await
 }
 
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
