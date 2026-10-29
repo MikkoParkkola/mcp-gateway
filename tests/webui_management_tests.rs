@@ -186,14 +186,7 @@ async fn make_app_state(
         control_plane_store: None,
         control_plane_base: None,
         live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-            {
-                // Flags off, as this fixture set them on `AppState` before they
-                // moved into the published config (ADR-023).
-                let mut config = mcp_gateway::config::Config::default();
-                config.security.sanitize_input = false;
-                config.security.ssrf_protection = false;
-                config
-            },
+            mcp_gateway::gateway::test_helpers::flags_off(mcp_gateway::config::Config::default()),
             Arc::clone(authorizer.live_config.generation().auth()),
         )),
         export_status: None,
@@ -284,14 +277,9 @@ async fn make_app_state_with_reload(
             control_plane_store: None,
             control_plane_base: None,
             live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-                {
-                    // Flags off, as this fixture set them on `AppState` before they
-                    // moved into the published config (ADR-023).
-                    let mut config = mcp_gateway::config::Config::default();
-                    config.security.sanitize_input = false;
-                    config.security.ssrf_protection = false;
-                    config
-                },
+                mcp_gateway::gateway::test_helpers::flags_off(
+                    mcp_gateway::config::Config::default(),
+                ),
                 Arc::clone(authorizer.live_config.generation().auth()),
             )),
             export_status: None,

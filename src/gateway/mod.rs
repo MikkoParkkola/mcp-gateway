@@ -183,6 +183,16 @@ pub mod test_helpers {
         meta.set_change_feed(super::ChangeFeed::Http);
     }
 
+    /// `config` with the two security flags off, as fixtures set them on
+    /// `AppState` before the flags moved into the published config
+    /// (ADR-023). For `tests/` only, not a stable API.
+    #[must_use]
+    pub fn flags_off(mut config: crate::config::Config) -> crate::config::Config {
+        config.security.sanitize_input = false;
+        config.security.ssrf_protection = false;
+        config
+    }
+
     /// A live config for a fixture whose auth (`auth`) differs from
     /// `config.auth`: the key table and record key it judges with are
     /// `auth`'s, as a gateway's are the ones it resolved at startup.

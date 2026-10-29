@@ -207,14 +207,7 @@ mod http {
             control_plane_store: None,
             control_plane_base: None,
             live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
-                {
-                    // Flags off, as this fixture set them on `AppState` before they
-                    // moved into the published config (ADR-023).
-                    let mut config = config.clone();
-                    config.security.sanitize_input = false;
-                    config.security.ssrf_protection = false;
-                    config
-                },
+                mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
                 Arc::new(ResolvedAuthConfig::from_config(
                     &config.auth,
                     crate::record_key::RECORD_KEY,
