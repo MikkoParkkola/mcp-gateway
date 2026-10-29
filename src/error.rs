@@ -11,7 +11,11 @@ use thiserror::Error;
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// MCP Gateway errors
+///
+/// Non-exhaustive: a release may add a variant, so a `match` outside this
+/// crate needs a wildcard arm.
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Configuration error
     #[error("Configuration error: {0}")]
