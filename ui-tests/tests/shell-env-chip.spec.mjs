@@ -122,7 +122,7 @@ test('E6b a clipped name keeps the full name in its native title', async ({ page
   await expect(chip(page)).toHaveAttribute('aria-label', `Environment: ${name}`);
 });
 
-for (const width of [390, 641]) {
+for (const width of [390, 641, 820, 1440]) {
   test(`E7 at ${width} px a long fallback name, its tooltip trigger and the search never overlap`, async ({ page }) => {
     const name = 'staging-eu-west-1-'.padEnd(64, 'x');
     await page.setViewportSize({ width, height: 844 });
