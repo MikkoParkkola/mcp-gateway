@@ -513,6 +513,9 @@ impl Error {
             | Self::TransportConnect(_)
             | Self::TransportPermanent(_) => Origin::BackendFailure,
             Self::Http(e) if http_is_backend_refusal(e) => Origin::BackendFailure,
+            // Built in production only by the HTTP transport, from a peer's
+            // JSON-RPC body on a 429/503: the backend's own answer.
+            Self::JsonRpcRetryable { .. } => Origin::Backend,
             Self::Config(_)
             | Self::Forbidden { .. }
             | Self::ResponseFirewallRefused
@@ -534,7 +537,6 @@ impl Error {
             | Self::Tls(_)
             | Self::JsonRpc { .. }
             | Self::CliCredentialRefused { .. }
-            | Self::JsonRpcRetryable { .. }
             | Self::Io(_)
             | Self::Json(_)
             | Self::Http(_)
