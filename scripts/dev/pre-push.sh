@@ -110,7 +110,10 @@ if [[ -f Cargo.toml ]]; then
   # compile cfg(not(debug_assertions)) code the dev passes never see, and some
   # lints fire only there (#4060: assigning_clones).
   step "registry ban, release profile (both feature sets)"
-  run_cargo "registry ban release all-features" clippy --release --lib --bins --all-features --quiet -- -D warnings
+  # Every feature but the test-only ones, as CI's step computes it. Under
+  # set -e a failing script stops the push at this step.
+  feats=$(python3 scripts/ci/release_features.py)
+  run_cargo "registry ban release features" clippy --release --lib --bins --features "$feats" --quiet -- -D warnings
   run_cargo "registry ban release no-default-features" clippy --release --lib --bins --no-default-features --quiet -- -D warnings
   unset CLIPPY_CONF_DIR
   step "registry lint self-test"
