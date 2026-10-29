@@ -10,7 +10,7 @@ use super::*;
 /// R4a: a modern task-augmented `tools/call read` by its surfaced name on
 /// `/mcp`, declaring form elicitation, where `read` is listed
 /// `destructiveHint: true`, so X14 has a destructive call to decide. `k-std`
-/// carries no verified identity, so X14 binds it by its key (MIK-8137).
+/// carries no verified identity, so X14 binds it by its key.
 ///
 /// The whole round on one gateway: `k-std`'s call; its challenge, answered
 /// `accept` and presented by another key (`k-budget`); then by `k-std`. With
@@ -63,7 +63,7 @@ pub(crate) struct TaskConfirmRound {
     pub same_key: serde_json::Value,
 }
 
-/// Whether the fixture surfaces `read` (P3, MIK-8326).
+/// Whether the fixture surfaces `read` (P3).
 #[derive(Clone, Copy)]
 pub(crate) enum Surfacing {
     /// `read` is surfaced on `/mcp`.
@@ -98,7 +98,7 @@ async fn task_submit_fixture(
 
 /// One R4a call sent with the API key `key`, on a fixture that surfaces
 /// `read` per `surfacing_mode`. Returns the HTTP status with the answer.
-/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
+/// `k-deny` is the fixture's key denied `read` (P3).
 pub(crate) async fn task_submit_read_as(
     key: &str,
     surfacing_mode: Surfacing,
@@ -122,7 +122,7 @@ pub(crate) async fn task_submit_read_as(
     (status, sent)
 }
 
-/// R4a `Authorize` (MIK-8315): a modern task-augmented `gateway_invoke` of a
+/// R4a `Authorize`: a modern task-augmented `gateway_invoke` of a
 /// personal capability the caller holds no grant for, on `/mcp`. Panics
 /// unless the submit answers the sync call's status, code and message,
 /// writes the sync call's audit records, creates no task and reaches nothing.
@@ -131,7 +131,7 @@ pub(crate) async fn task_submit_ungranted() {
         .await;
 }
 
-/// R4a `Authorize` before `TaskConfirm` (MIK-8331): a task call by a surfaced
+/// R4a `Authorize` before `TaskConfirm`: a task call by a surfaced
 /// name from a caller without the grant, and from a non-admin for an admin
 /// capability, answers as the sync call with no X14 challenge, and X14 does
 /// not classify the surfaced capability for an admitted scope. Panics

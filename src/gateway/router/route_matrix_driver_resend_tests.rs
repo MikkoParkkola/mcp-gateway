@@ -21,7 +21,7 @@ pub(crate) struct RelayResend {
     pub(crate) resent_calls: usize,
 }
 
-/// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
+/// R1, NONCE.3: on the signed, relayed fixture whose backend answers
 /// `text`, `k-std` reads it from `alpha` (the receipt, and the warm schema),
 /// then `k-budget` relays it to `server` under nonce `b1` and is refused,
 /// then re-sends a clean call under `b1`, then sends once more under it.
@@ -73,7 +73,7 @@ pub(crate) async fn direct_spend_then_resend() -> (Value, Value, Value, usize) {
     (refused, again, replay, fx.calls.load(Ordering::SeqCst))
 }
 
-/// R2, MIK-8150 NONCE.4: on the hardened, signed fixture surfacing
+/// R2, NONCE.4: on the hardened, signed fixture surfacing
 /// `alpha/read`, a keyed surfaced-name call runs under `s1`; the key reused for
 /// other arguments is refused by execution admission (409) under `s2`; the
 /// honest call is re-sent under `s2` with its own key; then a third call under
