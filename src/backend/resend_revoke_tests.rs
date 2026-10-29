@@ -728,7 +728,9 @@ async fn s15_a_refresh_cut_off_by_its_deadline_narrows_from_what_it_read() {
         Page::Held(Vec::new()),
     ])
     .await;
-    let _ = backend.tools_for_check(None, &[], true).await;
+    let _ = backend
+        .tools_for_check(None, crate::transport::LentCredential::default(), true)
+        .await;
     assert!(
         !permitted(&backend).contains("t"),
         "a refresh cut off by its deadline kept a write it read resend-permitted"

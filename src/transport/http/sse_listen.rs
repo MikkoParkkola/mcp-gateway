@@ -70,7 +70,7 @@ impl SseListenSession {
         let mut headers = if self.credential.source.is_some() {
             t.build_lent_headers(mode, identity).await?
         } else {
-            t.build_mcp_headers(mode, identity).await?
+            t.build_mcp_headers(mode, identity, &[]).await?
         };
         headers.remove("mcp-session-id");
         Ok(headers)

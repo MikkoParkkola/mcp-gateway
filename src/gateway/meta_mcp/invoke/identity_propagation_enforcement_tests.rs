@@ -600,3 +600,48 @@ async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
 
 #[cfg(test)]
 mod resolution;
+
+/// The real mint attaches the per-send check, and the credential it lends
+/// carries it: a required per-user slot refuses a loan without one, so a mint
+/// that stopped attaching it would leave every per-user send refused. The
+/// check passes for a freshly minted credential.
+#[tokio::test]
+async fn the_mint_attaches_the_send_check_to_what_it_lends() {
+    use tempfile::NamedTempFile;
+
+    use crate::security::TransparencyLogger;
+    use crate::security::transparency_log::TransparencyLogConfig;
+
+    // A required binding mints only with a durable audit record.
+    let file = NamedTempFile::new().expect("tempfile");
+    let cfg = Arc::new(TransparencyLogConfig {
+        enabled: true,
+        path: file.path().to_string_lossy().to_string(),
+        key_id: "test".to_string(),
+        ..TransparencyLogConfig::default()
+    });
+    let mut m = meta_with_strategy();
+    m.enable_transparency_log(Arc::new(
+        TransparencyLogger::open(cfg).expect("logger opens"),
+    ));
+    let cred = m
+        .resolve_caller_credential("memory", &idp_cfg(true), Some(&identity()))
+        .await
+        .expect("mint ok");
+    assert!(!cred.headers.is_empty(), "premise: a credential was minted");
+    let lent = cred.lent();
+    let check = lent.check.expect("the mint attaches a send check");
+    assert_eq!(check().await, Ok(()), "a fresh credential passes its check");
+}
+
+/// The resolved credential holds its headers in the zeroizing type, as the
+/// loans built from it do: a change back to a plain `Vec` fails to build.
+#[test]
+fn a_caller_credentials_headers_are_wiped_on_drop() {
+    type Held = zeroize::Zeroizing<Vec<(String, String)>>;
+    fn stored(credential: &super::caller_credential::CallerCredential) -> &Held {
+        &credential.headers
+    }
+    let pinned: fn(&super::caller_credential::CallerCredential) -> &Held = stored;
+    let _ = pinned;
+}

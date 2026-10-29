@@ -43,6 +43,7 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
         self.mints.fetch_add(1, Ordering::SeqCst);
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),

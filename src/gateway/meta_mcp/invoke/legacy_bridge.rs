@@ -81,6 +81,7 @@ impl MetaMcp {
             // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
+            let lent = caller_credential.lent();
             let account_refusal = parking_lot::Mutex::new(None);
             let relay_refused = parking_lot::Mutex::new(None);
             let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
@@ -100,7 +101,7 @@ impl MetaMcp {
                     caller_identity,
                     caller_proof,
                     credential_owner,
-                    headers: &caller_credential.headers,
+                    headers: &lent,
                     cache_binding: dispatch_binding,
                     account_credential: bridge_account_credential.take(),
                     api_key_name,

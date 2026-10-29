@@ -56,9 +56,14 @@ fn a_fresh_slot_check_allocates_nothing() {
 async fn fresh_slot_check() {
     let backend = listed_backend();
     // Warm: anything built once per backend is billed to no measured call.
-    let warm = backend.tools_for_check(None, &[], true).await;
+    let warm = backend
+        .tools_for_check(None, crate::transport::LentCredential::default(), true)
+        .await;
     assert!(warm.is_ok(), "the fresh slot answers");
-    let (checked, measured) = measure_async(|| backend.tools_for_check(None, &[], true)).await;
+    let (checked, measured) = measure_async(|| {
+        backend.tools_for_check(None, crate::transport::LentCredential::default(), true)
+    })
+    .await;
     let (tools, completeness) = checked.expect("the fresh slot answers");
     assert_eq!(tools.len(), 1);
     // `Completeness` is private to `backend`; its Debug form names the variant.

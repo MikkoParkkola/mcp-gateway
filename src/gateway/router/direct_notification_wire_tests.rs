@@ -45,6 +45,7 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
     > {
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),

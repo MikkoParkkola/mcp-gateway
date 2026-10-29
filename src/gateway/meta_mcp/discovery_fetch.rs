@@ -44,9 +44,9 @@ impl MetaMcp {
         &self,
         backend: &Backend,
         caller: CallerProof<'_>,
-    ) -> (Vec<(String, String)>, Option<String>) {
+    ) -> (crate::transport::LentCredential, Option<String>) {
         if self.principal_for(backend, caller).is_none() {
-            return (Vec::new(), None);
+            return (crate::transport::LentCredential::default(), None);
         }
         self.resolve_propagation_credential_held_for(&backend.name, Some(backend), caller)
             .await
@@ -66,7 +66,7 @@ impl MetaMcp {
         &self,
         backend: &Backend,
         caller: &super::MetaMcpCallerContext<'_>,
-    ) -> Option<(Vec<(String, String)>, Option<String>)> {
+    ) -> Option<(crate::transport::LentCredential, Option<String>)> {
         self.catalogue_credential_for(backend, Self::proof_of(caller))
             .await
     }
@@ -211,7 +211,7 @@ impl MetaMcp {
         &self,
         backend: &Backend,
         caller: CallerProof<'_>,
-    ) -> Option<(Vec<(String, String)>, Option<String>)> {
+    ) -> Option<(crate::transport::LentCredential, Option<String>)> {
         let (headers, binding) = self.caller_credential_for_identity(backend, caller).await;
         if self.meta_route_isolation_refused_for_caller(backend, binding.as_deref()) {
             return None;
@@ -259,7 +259,7 @@ impl MetaMcp {
         backend: &Arc<Backend>,
         allow_empty_cache_fetch: bool,
         binding: Option<&str>,
-        headers: &[(String, String)],
+        headers: crate::transport::LentCredential,
     ) -> Option<Arc<Vec<Tool>>> {
         let tools = backend.get_cached_tools_snapshot_for(binding);
         // An empty shared slot is filled behind this read, never by it: one
@@ -288,7 +288,7 @@ impl MetaMcp {
         // A per-user slot fills on its owner's own credentialed read, never on a
         // background task's, so an empty one is always worth filling here.
         if allow_empty_cache_fetch || binding.is_some() {
-            return match backend.get_tools_for_binding(binding, headers).await {
+            return match backend.get_tools_for_binding_lent(binding, headers).await {
                 Ok(tools) if !tools.is_empty() => Some(tools),
                 Ok(_) => None,
                 Err(e) => {

@@ -382,6 +382,7 @@ impl VaultStrategy {
         })?;
 
         let credential = PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 authorization_value(&credentials),
@@ -543,6 +544,7 @@ impl VaultStrategy {
 /// Only [`VaultStrategy::prepare_held_classified`] builds one, so no other strategy can
 /// hand a dispatch site a forced refresh. The lease is a non-secret binding:
 /// holding it is not holding a token.
+#[derive(Clone)]
 pub(crate) struct ManagedLease {
     strategy: Arc<VaultStrategy>,
     lease: CredentialLease,
@@ -731,6 +733,9 @@ fn authorization_value(credentials: &ReleasedCredentials) -> String {
     let scheme = if scheme.is_empty() { "Bearer" } else { scheme };
     format!("{scheme} {}", credentials.access_token)
 }
+
+#[path = "vault_send.rs"]
+mod send;
 
 #[cfg(test)]
 #[path = "vault_tests.rs"]

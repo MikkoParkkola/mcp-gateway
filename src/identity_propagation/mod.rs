@@ -43,6 +43,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 mod account_strategies;
 mod caller_proof;
+pub(crate) mod send_check;
 mod token_exchange;
 
 pub(crate) use account_strategies::{
@@ -92,6 +93,10 @@ pub struct PropagatedCredential {
     /// Unix-seconds expiry of the credential (IDP.6). Callers may pre-emptively
     /// refuse to use an expired credential.
     pub expires_at: i64,
+    /// Whether `expires_at` is a default the strategy chose (an exchange that
+    /// omitted `expires_in`) and not one the issuer published. A send past a
+    /// default expiry is refused for its own loan only.
+    pub expiry_synthetic: bool,
     /// Stable per-user key (the caller identity) — the isolation anchor.
     pub subject_key: String,
     /// Audience the credential is scoped to.
@@ -111,6 +116,7 @@ impl std::fmt::Debug for PropagatedCredential {
         f.debug_struct("PropagatedCredential")
             .field("headers", &format_args!("{header_names:?} = <redacted>"))
             .field("expires_at", &self.expires_at)
+            .field("expiry_synthetic", &self.expiry_synthetic)
             .field("subject_key", &self.subject_key)
             .field("audience", &self.audience)
             .field("scopes", &self.scopes)
@@ -530,6 +536,7 @@ impl IdentityPropagation for SignedAssertionStrategy {
         let (token, exp) = self.mint(identity, &backend.audience)?;
 
         Ok(PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), format!("Bearer {token}"))],
             expires_at: exp,
             cache_binding: cache_binding(&subject_key, &backend.audience),

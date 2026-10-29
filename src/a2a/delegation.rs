@@ -246,6 +246,13 @@ impl Canceller {
     /// failure is logged without the agent's text or ids: an agent can echo a
     /// caller's credential into either.
     pub(crate) fn spawn(&self, task_id: String, headers: Vec<(String, String)>) {
+        // A cancel runs after its dispatch ended, so a per-user slot has no
+        // loan left to send it as.
+        if self.client.is_lent_only() {
+            tracing::warn!("a deferred A2A cancel on a per-user slot was refused");
+            crate::transport::count_refusal("a2a_deferred_cancel");
+            return;
+        }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
             tracing::warn!("no runtime to cancel an abandoned A2A task on");
             return;

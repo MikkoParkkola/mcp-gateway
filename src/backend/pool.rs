@@ -445,7 +445,9 @@ impl Backend {
                     // relies on to never miss a slot opened while it runs.
                     self.observe_slot(key, &entry);
                     created = true;
-                    vacant.insert(Arc::new(entry))
+                    let published = Arc::new(entry);
+                    self.arm_refusal_eviction(key, &published);
+                    vacant.insert(published)
                 }
             };
             let entry = Arc::clone(slot.value());

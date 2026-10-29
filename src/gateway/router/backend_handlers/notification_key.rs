@@ -35,7 +35,7 @@ pub(super) async fn resolve(
             backend.transport_carries_identity_headers(),
         ) {
             Ok((headers, digest)) => (
-                headers,
+                crate::identity_propagation::send_check::dispatch_scoped(headers),
                 super::charged_binding(state, backend, caller, proven, digest),
             ),
             Err(reason) => {
@@ -72,7 +72,7 @@ pub(super) async fn resolve(
             }
         }
     };
-    if !headers.is_empty() {
+    if !headers.headers.is_empty() {
         // Sent without its caller's credential, the notification would carry
         // the backend's static one: refuse it instead (#2292).
         if !backend.transport_carries_identity_headers() {
@@ -116,7 +116,7 @@ const CANNOT_CARRY: &str = crate::identity_propagation::TRANSPORT_CANNOT_CARRY_H
 /// What a forwarded notification carries: the caller's credential headers
 /// and the session bucket. No `Debug`: the headers are credentials.
 pub(super) struct Resolved {
-    pub(super) headers: Vec<(String, String)>,
+    pub(super) headers: crate::transport::LentCredential,
     pub(super) binding: Option<String>,
 }
 

@@ -28,7 +28,7 @@ async fn a_fill_deadline_leaves_its_request_time_login_open() {
 
     let error = within(
         "the fill's own deadline",
-        Box::pin(backend.tools_for_check(None, &[], false)),
+        Box::pin(backend.tools_for_check(None, crate::transport::LentCredential::default(), false)),
     )
     .await
     .expect_err("no tools while the request-time login is pending");
@@ -68,7 +68,11 @@ async fn callers_retrying_after_their_deadlines_share_one_login() {
     let fills: Vec<_> = (0..5)
         .map(|_| {
             let backend = Arc::clone(&backend);
-            tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+            tokio::spawn(async move {
+                backend
+                    .tools_for_check(None, crate::transport::LentCredential::default(), false)
+                    .await
+            })
         })
         .collect();
     for fill in fills {
@@ -109,7 +113,7 @@ async fn an_unapproved_detached_login_ends_at_its_own_window() {
 
     let fill = within(
         "the fill's own deadline",
-        Box::pin(backend.tools_for_check(None, &[], false)),
+        Box::pin(backend.tools_for_check(None, crate::transport::LentCredential::default(), false)),
     )
     .await;
     assert!(fill.is_err(), "premise: the fill's deadline fired");
@@ -236,7 +240,11 @@ async fn a_fill_served_by_its_approved_login_then_stalled_is_a_backend_timeout()
 
     let fill = {
         let backend = Arc::clone(&backend);
-        tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+        tokio::spawn(async move {
+            backend
+                .tools_for_check(None, crate::transport::LentCredential::default(), false)
+                .await
+        })
     };
     let url = browser.opened(2, "the fill's request-time login").await;
     assert!(
@@ -263,7 +271,7 @@ async fn fill_abandons_a_login(
 ) -> String {
     let fill = within(
         "the fill's own deadline",
-        Box::pin(backend.tools_for_check(None, &[], false)),
+        Box::pin(backend.tools_for_check(None, crate::transport::LentCredential::default(), false)),
     )
     .await;
     assert!(fill.is_err(), "premise: the fill's deadline fired");
@@ -356,7 +364,7 @@ async fn a_deadline_during_a_stalled_refresh_is_not_a_pending_login() {
 
     let error = within(
         "the fill's own deadline",
-        Box::pin(backend.tools_for_check(None, &[], false)),
+        Box::pin(backend.tools_for_check(None, crate::transport::LentCredential::default(), false)),
     )
     .await
     .expect_err("the refresh never answers");
