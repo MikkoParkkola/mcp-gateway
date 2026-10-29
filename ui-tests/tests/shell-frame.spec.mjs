@@ -461,10 +461,11 @@ test.describe('budgets', () => {
       const early = performance.getEntriesByType('resource').filter((r) => r.startTime < fcp);
       return { fcp, names: early.map((r) => new URL(r.name).pathname), requests: 1 + early.length, bytes: size(nav) + early.reduce((sum, r) => sum + size(r), 0) };
     });
-    // Measured: 9 requests, 215,405 bytes. They are the page, the shell's and the tools
-    // screen's script and stylesheet, the fixture pages module (test-only) and the three
+    // Measured with the tools screen in the head: 9 requests, 215,405 bytes. Screens now
+    // load with their route, so the path is 7 requests, 206,490 bytes: the page, the
+    // shell's script and stylesheet, the fixture pages module (test-only) and the three
     // fonts; the fonts are asked for after the stylesheet parses, so a fast host that
-    // paints first counts fewer. Budget: the measured total plus 10%.
+    // paints first counts fewer. Budget: the first measured total plus 10%.
     expect(path.requests, `requests before first paint: ${path.names.join(', ')}`).toBeLessThanOrEqual(9);
     expect(path.bytes, 'bytes before first paint').toBeLessThanOrEqual(237_000);
     // Smoke check only. The strict 1000 ms first-paint budget is enforced by the dedicated
