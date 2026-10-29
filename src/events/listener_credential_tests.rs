@@ -44,7 +44,7 @@ impl ListenerMint for Scripted {
             return Err(crate::Error::Config("the grant was revoked".to_owned()));
         }
         Ok(ListenerGrant {
-            headers: vec![("authorization".to_owned(), "Bearer at.u1".to_owned())],
+            headers: vec![("authorization".to_owned(), "Bearer at.u1".to_owned())].into(),
             fence: Some(self.grant.lock().clone()),
         })
     }
@@ -224,7 +224,7 @@ impl ListenerMint for MintsHeaders {
         _identity: &VerifiedIdentity,
     ) -> crate::Result<ListenerGrant> {
         Ok(ListenerGrant {
-            headers: self.0.clone(),
+            headers: self.0.clone().into(),
             fence: None,
         })
     }

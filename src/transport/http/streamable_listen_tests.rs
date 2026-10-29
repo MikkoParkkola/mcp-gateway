@@ -95,7 +95,7 @@ impl CredentialSource for Counting {
         send: CredentialedSend<'a>,
     ) -> BoxFuture<'a, crate::Result<reqwest::Response>> {
         let n = self.0.fetch_add(1, Ordering::SeqCst);
-        Box::pin(async move { send(vec![("x-cred".to_owned(), format!("v{n}"))]).await })
+        Box::pin(async move { send(vec![("x-cred".to_owned(), format!("v{n}"))].into()).await })
     }
 
     fn identity_key(&self) -> Option<&str> {

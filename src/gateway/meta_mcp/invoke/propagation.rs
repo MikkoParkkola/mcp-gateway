@@ -79,7 +79,7 @@ impl MetaMcp {
                 Error::Config(format!("events listener for backend '{server}': {error}"))
             })?;
         Ok(crate::events::ListenerGrant {
-            headers: std::mem::take(&mut *minted.headers),
+            headers: std::mem::take(&mut minted.headers),
             fence,
         })
     }

@@ -52,7 +52,8 @@ pub(crate) trait ListenerMint: Send + Sync {
 /// the grant they were released under (`None` when no vault grant backs
 /// them, so nothing rotates under them).
 pub(crate) struct ListenerGrant {
-    pub headers: Vec<(String, String)>,
+    /// The minted credential, wiped on drop.
+    pub headers: zeroize::Zeroizing<Vec<(String, String)>>,
     pub fence: Option<String>,
 }
 
