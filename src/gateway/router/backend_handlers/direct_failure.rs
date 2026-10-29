@@ -107,9 +107,9 @@ impl DirectFailure<'_> {
                 .await;
         }
         // An authorization refusal raised at the send (a lent-only slot the
-        // call brought no credential for) is the gateway's decision: recorded
-        // refused, and answered with its own status, as on the meta route.
-        crate::gateway::delivery_facts::outlet(&error);
+        // call brought no credential for) is the gateway's decision: answered
+        // with its own status, as on the meta route, so the direct recorder
+        // classes it denied and records it refused.
         let status = match &error {
             crate::Error::Forbidden { status, .. } => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
