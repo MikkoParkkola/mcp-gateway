@@ -22,10 +22,13 @@ use super::{
     task_runtime, tools_changed, window_saver,
 };
 use crate::capability::CapabilityWatcher;
+use crate::config_reload::refusals::startup_refusals;
 use crate::config_reload::{ConfigWatcher, LiveConfig, ReloadContext};
 use crate::gateway::auth::ResolvedAuthConfig;
 use crate::gateway::proxy::ProxyManager;
-use crate::gateway::router::{AppState, account_handles_of, create_router_with_accounts};
+use crate::gateway::router::{
+    AppState, ProcessFacts, ProcessStart, account_handles_of, create_router_with_accounts,
+};
 use crate::gateway::streaming::NotificationMultiplexer;
 use crate::gateway::webhooks::WebhookRegistry;
 use crate::playbook::PlaybookEngine;
@@ -46,6 +49,9 @@ impl Gateway {
     /// Panics if RSA key pair generation fails on all retry attempts.
     #[allow(clippy::too_many_lines)]
     pub async fn run(mut self) -> Result<()> {
+        // Taken first, so the uptime the web UI reports counts from the start
+        // of this call, not from the first request it serves.
+        let started = ProcessStart::now();
         start_checks::http(&self.config)?;
         let addr = SocketAddr::new(
             self.config
@@ -463,6 +469,7 @@ impl Gateway {
             export_status,
             transparency_log,
             dashboard_bootstrap,
+            process: Arc::new(ProcessFacts::new(started, counters.upgrade.clone())),
         });
 
         // REST capability watch polls through the router's controls, so it
@@ -489,6 +496,7 @@ impl Gateway {
         // Captured before the router takes ownership: the startup banner prints
         // the dashboard link and runs after the bind.
         let dashboard_bootstrap = Arc::clone(&state.dashboard_bootstrap);
+        let process = Arc::clone(&state.process);
 
         let accounts = account_handles_of(self.custody.as_ref());
         let app = create_router_with_accounts(state, webhook_routes, accounts);
@@ -517,6 +525,10 @@ impl Gateway {
             &self.backends,
             Some(dashboard_bootstrap.as_ref()),
         );
+        // What the startup backend pass denied, snapshotted once here, where
+        // the banner above has summarised the start. A denial after this
+        // stays on `/ui/api/refusals` alone.
+        process.record_refused_at_start(startup_refusals(&self.backends));
 
         // Warm-start backends: connect + prefetch tools into cache. If the
         // warm_start list is empty, warm ALL backends (makes list/search fast).

@@ -248,9 +248,6 @@ impl MetaMcp {
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
-        let injection = self.secret_injector.inject(server, tool, arguments)?;
-        let arguments = injection.arguments;
-
         // The grant was decided at the authorization chokepoint, above the
         // caches. The definition is resolved again here only for the response
         // transform below, in one lookup so a reload cannot split it (#2236).

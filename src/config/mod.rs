@@ -17,6 +17,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod env_provider;
+pub(crate) mod secret_rules;
 use env_provider::{EnvFileConfig, Expansion, OverlayEnv, Tolerance};
 mod features;
 pub(crate) mod load_error;
@@ -723,6 +724,10 @@ mod cwe532_debug_redaction;
 #[cfg(test)]
 #[path = "cleartext_credential_guard_tests.rs"]
 mod cleartext_credential_guard;
+
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_secrets_tests.rs"]
+mod a2a_secrets;
 
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]

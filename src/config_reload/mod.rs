@@ -671,6 +671,7 @@ pub(crate) mod override_audit;
 )]
 pub(crate) mod refusals;
 mod reload_context;
+pub(crate) mod reload_tally;
 mod reload_warm_hook;
 pub(crate) mod revision;
 use revision::{AppliedInputs, RawInputs};
