@@ -16,6 +16,17 @@ pub(crate) struct ResponsePolicyTarget {
     pub(crate) origin: TargetOrigin,
 }
 
+impl ResponsePolicyTarget {
+    /// The backend the call was routed to.
+    pub(crate) fn routed(server: &str, tool: &str) -> Self {
+        Self {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+            origin: TargetOrigin::Routed,
+        }
+    }
+}
+
 /// Where a [`ResponsePolicyTarget`] came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum TargetOrigin {
@@ -50,6 +61,14 @@ impl<'a> KeyOf<'a> {
     pub(crate) fn of_client(api_key: Option<&'a str>) -> Self {
         api_key.map_or(Self::NoKey, Self::Key)
     }
+
+    /// From an authenticated caller: its proven API key name, or no key.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) fn of_caller(client: Option<&'a crate::gateway::auth::AuthenticatedClient>) -> Self {
+        Self::of_client(
+            client.and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+        )
+    }
 }
 
 /// The backend a firewall rule's `servers` scope is judged against.
@@ -81,6 +100,22 @@ pub(crate) struct RuleTarget<'a> {
     pub(crate) server: ServerOf<'a>,
     pub(crate) tool: &'a str,
     pub(crate) key: KeyOf<'a>,
+}
+
+#[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+impl<'a> RuleTarget<'a> {
+    /// A call routed to `server`'s `tool` by `client` (its API key, or none).
+    pub(crate) fn routed(
+        server: &'a str,
+        tool: &'a str,
+        client: Option<&'a crate::gateway::auth::AuthenticatedClient>,
+    ) -> Self {
+        Self {
+            server: ServerOf::Backend(server),
+            tool,
+            key: KeyOf::of_caller(client),
+        }
+    }
 }
 
 /// Internal response admission requires at least one server-bound policy target.

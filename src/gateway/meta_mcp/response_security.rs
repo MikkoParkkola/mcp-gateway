@@ -137,11 +137,7 @@ pub(crate) fn meta_response_targets(
     }
     let mut targets: Vec<_> = targets
         .iter()
-        .map(|target| ResponsePolicyTarget {
-            server: target.server.clone(),
-            tool: target.tool.clone(),
-            origin: crate::security::response_policy::TargetOrigin::Routed,
-        })
+        .map(|target| ResponsePolicyTarget::routed(&target.server, &target.tool))
         .collect();
     targets.sort();
     targets.dedup();

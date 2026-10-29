@@ -32,9 +32,9 @@ use crate::gateway::router::helpers::{
 };
 use crate::gateway::router::meta_refusal_audit::Refused;
 use crate::protocol::{JsonRpcResponse, RequestId};
-#[cfg(feature = "firewall")]
-use crate::security::firewall::FirewallAction;
 use crate::security::response_policy::ResponsePolicyTarget;
+#[cfg(feature = "firewall")]
+use crate::security::{firewall::FirewallAction, response_policy::RuleTarget};
 
 /// The `tools/call` arm. Writes the response targets and the owned execution
 /// the dispatcher's tail reads, and the signing context it prepares.
@@ -322,18 +322,9 @@ pub(super) async fn tools_call(
             {
                 lifecycle.renew(control_identity.clone());
             }
-            let rule_target = crate::security::response_policy::RuleTarget {
-                server: crate::security::response_policy::ServerOf::Backend(target.server),
-                tool: target.tool,
-                key: crate::security::response_policy::KeyOf::of_client(
-                    client
-                        .as_ref()
-                        .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
-                ),
-            };
             let verdict = fw.check_request_keyed(
                 session_id,
-                rule_target,
+                RuleTarget::routed(target.server, target.tool, client.as_ref()),
                 target.arguments,
                 caller_name,
                 &control_identity,
