@@ -22,6 +22,8 @@ use crate::gateway::meta_mcp::visible::{
     Visibility, Withholding, absent::absent_name, memo::note_denial_code, memo::record_visibility,
     memo::recorded_visibility,
 };
+use crate::identity_propagation::CallerProof;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
 
 /// What a shared catalogue says about a name the caller's policy allows.
@@ -547,20 +549,12 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(
-                server,
-                tool,
-                -32003,
-                Some(crate::security::decision_record::DecisionKind::BackendScope),
-            );
+            note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
         } else {
             // Not out of scope: the name matches nothing.
-            super::audit::note_refused_by(
-                crate::security::decision_record::DecisionKind::NotFound,
-                None,
-            );
+            super::audit::note_refused_by(DecisionKind::NotFound, None);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
@@ -606,7 +600,7 @@ impl MetaMcp {
     async fn per_user_withheld_answer(
         &self,
         (server, tool): (&str, &str),
-        backend: &crate::backend::Backend,
+        backend: &Backend,
         refused: bool,
         caller: &MetaMcpCallerContext<'_>,
         session_id: Option<&str>,
@@ -630,10 +624,7 @@ impl MetaMcp {
         // tell names apart, so a withheld name it names gets the connect
         // offer a missing one gets; -32601 at once is for a caller with a
         // view. Resolution mints nothing without a grant.
-        let proof = crate::identity_propagation::CallerProof::new(
-            caller.verified_identity,
-            caller.provenance(),
-        );
+        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
         if self.has_no_view_for(backend, proof).await
             && let Err(offer) = self
                 .resolve_dispatch(
