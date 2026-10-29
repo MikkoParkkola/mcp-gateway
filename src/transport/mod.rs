@@ -18,6 +18,8 @@ mod write_claim;
 pub(crate) use self::command_split::join_command;
 pub use self::command_split::{split_command, split_command_unix, split_command_windows};
 pub use self::http::HttpTransport;
+#[cfg(test)]
+pub(crate) use self::http::peer_refusal_for_test;
 pub(crate) use self::http::SlotCredential;
 #[cfg(feature = "a2a")]
 pub(crate) use self::http::guarded_client;

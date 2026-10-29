@@ -158,6 +158,8 @@ mod egress_matrix_tests;
 mod era_refusal_http_tests;
 #[cfg(all(test, feature = "metrics"))]
 mod error_count_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
 #[cfg(test)]

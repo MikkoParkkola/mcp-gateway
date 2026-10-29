@@ -195,6 +195,17 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
 /// probe reads the code and the retry classifiers read the carriage
 /// (MIK-7217, OUTBOUND.2).
+/// [`peer_refusal`] for rows outside this module that need the error a peer's
+/// non-2xx JSON-RPC body really becomes, not a hand-built look-alike.
+#[cfg(test)]
+pub(crate) fn peer_refusal_for_test(
+    body: &str,
+    id: &RequestId,
+    status: reqwest::StatusCode,
+) -> Option<Error> {
+    peer_refusal(body, id, status)
+}
+
 fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
     let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
     if response.id.as_ref() != Some(id) {
