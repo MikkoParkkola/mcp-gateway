@@ -217,10 +217,21 @@ async fn a_carried_fill_failure_is_refused_before_the_backend() {
             .await
     })
     .await;
+    // Premise: the carried fill failure is the answer, a result the gateway
+    // wrote, not an earlier refusal's error.
+    let answer = match &invoked.outcome {
+        Ok(super::super::SourcedOutcome::Live((value, _, _))) => value.clone(),
+        Ok(super::super::SourcedOutcome::Stored(_)) => panic!("premise: a stored answer"),
+        Err(error) => panic!("premise: refused earlier, not by the carried fill: {error}"),
+    };
+    assert_eq!(
+        answer.get("isError"),
+        Some(&serde_json::json!(true)),
+        "{answer}"
+    );
     assert_eq!(
         invoked.pre_send,
         PreSend::Refused,
-        "the gateway answered the failed fill: {:?}",
-        invoked.outcome.as_ref().err()
+        "the gateway answered the failed fill"
     );
 }
