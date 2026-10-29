@@ -73,7 +73,10 @@ test('E4 a key that is not admin sees no chip and no error', async ({ page }) =>
 test('E4b an admin whose gateway answers 403 or 404 sees no chip and no error', async ({ page }) => {
   for (const status of [403, 404]) {
     await page.route('**/ui/api/gateway', (r) => r.fulfill({ status, body: '' }));
+    // Started before navigation, so the refusal is known to have reached the shell.
+    const refused = page.waitForResponse((r) => new URL(r.url()).pathname === '/ui/api/gateway');
     await page.goto('/ui/overview/status');
+    expect((await refused).status()).toBe(status);
     await shellReady(page);
     await expect(page.locator('.top .who')).toHaveText('Signed in · admin');
     await expect(chip(page)).toHaveCount(0);
@@ -117,4 +120,59 @@ test('E6b a clipped name keeps the full name in its native title', async ({ page
   await shellReady(page);
   await expect(chip(page)).toHaveAttribute('title', name);
   await expect(chip(page)).toHaveAttribute('aria-label', `Environment: ${name}`);
+});
+
+for (const width of [390, 641]) {
+  test(`E7 at ${width} px a long fallback name, its tooltip trigger and the search never overlap`, async ({ page }) => {
+    const name = 'staging-eu-west-1-'.padEnd(64, 'x');
+    await page.setViewportSize({ width, height: 844 });
+    await gateway(page, { name, source: 'hostname' });
+    await page.goto('/ui/overview/status');
+    await shellReady(page);
+    await expect(page.locator('.top .has-tip button')).toBeVisible();
+    const boxes = await page.evaluate(() => ['.top .env', '.top .has-tip button', '.top .search']
+      .map((s) => document.querySelector(s).getBoundingClientRect())
+      .map((r) => ({ left: r.left, right: r.right, top: r.top, bottom: r.bottom })));
+    const overlap = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    const [env, trigger, search] = boxes;
+    expect({ envTrigger: overlap(env, trigger), envSearch: overlap(env, search), triggerSearch: overlap(trigger, search) })
+      .toEqual({ envTrigger: false, envSearch: false, triggerSearch: false });
+    expect(await fits(page)).toBe(true);
+  });
+}
+
+test('E8 a late environment answer for an admin who signed out never draws a chip for the next key', async ({ page }) => {
+  const ADMIN = 'mcpg_fixture_admin_0123456789';
+  const USER = 'mcpg_fixture_user_0123456789';
+  await page.route('**/ui/api/status', (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    const signedIn = auth === `Bearer ${ADMIN}` || auth === `Bearer ${USER}`;
+    return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: auth === `Bearer ${ADMIN}` } } });
+  });
+  await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 200, json: {} }));
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  let held;
+  const asked = new Promise((resolve) => { held = resolve; });
+  await page.route('**/ui/api/gateway', async (route) => {
+    held();
+    await gate;
+    await route.fulfill({ json: { environment: { name: 'late-admin-answer', source: 'config' } } });
+  });
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin-key').fill(ADMIN);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.top .who')).toHaveText('Signed in · admin');
+  await asked;
+  await page.locator('.top .signout').click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await page.locator('#signin-key').fill(USER);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.top .who')).toHaveText('Signed in');
+  const late = page.waitForResponse((r) => new URL(r.url()).pathname === '/ui/api/gateway');
+  release();
+  expect((await late).status()).toBe(200);
+  // One more turn of the page, so the shell has handled the answer it just got.
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))));
+  await expect(chip(page)).toHaveCount(0);
 });
