@@ -204,20 +204,35 @@ mod tests {
             let text = std::fs::read_to_string(&path)
                 .expect("read")
                 .replace("\r\n", "\n");
-            // Production code only: a file's own test module comes last.
-            let code = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
-            for call in ["write_config(", "write_config_text("] {
-                let calls = code
-                    .match_indices(call)
-                    .filter(|(at, _)| {
-                        !code[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric())
-                    })
-                    .filter(|(at, _)| !code[..*at].ends_with("fn "))
-                    .count();
-                found.extend(std::iter::repeat_n(format!("{name}:{call}"), calls));
+            for call in direct_write_calls(&text) {
+                found.push(format!("{name}:{call}"));
             }
         }
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// Each unlocked config write in a file's production code: every
+    /// `#[cfg(test)]` item is left out by its own extent, wherever it sits.
+    fn direct_write_calls(text: &str) -> Vec<&'static str> {
+        let code = crate::test_source_text::production_text(text);
+        let mut found = Vec::new();
+        for call in ["write_config(", "write_config_text("] {
+            let calls = code
+                .match_indices(call)
+                .filter(|(at, _)| !code[..*at].ends_with(|c: char| c == '_' || c.is_alphanumeric()))
+                .filter(|(at, _)| !code[..*at].ends_with("fn "))
+                .count();
+            found.extend(std::iter::repeat_n(call, calls));
+        }
+        found
+    }
+
+    /// An unlocked write after an early test module is production code and
+    /// is found.
+    #[test]
+    fn a_write_after_an_early_test_module_is_found() {
+        let source = "#[cfg(test)]\nmod early {\n    fn t() {}\n}\n\npub fn save(c: &Config) {\n    write_config(c);\n}\n";
+        assert_eq!(direct_write_calls(source), ["write_config("]);
     }
 
     /// MIK-8042: `upgrade`'s text rewrite overlapping a gateway's locked

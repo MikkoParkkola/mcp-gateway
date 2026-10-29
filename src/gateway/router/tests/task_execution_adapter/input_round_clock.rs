@@ -382,18 +382,7 @@ fn production_redemption_now_is_the_store_clock_and_no_other() {
         .expect("the sampler");
     let body = &source[start..];
     let body = &body[..body.find("\n    }\n").expect("its end")];
-    // Production code only: not the signature, not the test-only script block.
-    let mut in_script = false;
-    let production: Vec<&str> = body
-        .lines()
-        .skip(1)
-        .filter(|line| {
-            in_script |= line.contains("#[cfg(test)]");
-            let keep = !in_script;
-            in_script &= *line != "        }";
-            keep
-        })
-        .collect();
+    let production = production_lines(body);
     let raw = ["SystemTime", "Utc", "Instant"].map(|name| format!("{name}::now"));
     for line in &production {
         for other in raw
@@ -412,6 +401,29 @@ fn production_redemption_now_is_the_store_clock_and_no_other() {
             .iter()
             .map(|line| line.trim())
             .collect::<Vec<_>>(),
+        ["self.now()"]
+    );
+}
+
+/// A function body's production lines: not its signature, not any
+/// `#[cfg(test)]` item or block, each left out by its own extent.
+fn production_lines(body: &str) -> Vec<String> {
+    let rest = body.split_once('\n').map_or("", |(_, rest)| rest);
+    crate::test_source_text::production_text(rest)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// A test-only block that closes at another indent still ends where its
+/// brace does: the production line after it is kept.
+#[test]
+fn a_production_line_after_a_test_only_block_is_kept() {
+    let body = "    pub(crate) fn redemption_now(&self) -> u64 {\n        #[cfg(test)]\n        {\n            if let Some(t) = script() {\n                return t;\n            }\n          }\n        self.now()";
+    let production = production_lines(body);
+    std::assert_eq!(
+        production.iter().map(|l| l.trim()).collect::<Vec<_>>(),
         ["self.now()"]
     );
 }
