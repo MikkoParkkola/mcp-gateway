@@ -533,26 +533,25 @@ impl PendingLogs {
 /// Where a fill leaves the lines its store decided on, until the fill has
 /// released every guard.
 #[derive(Default)]
-pub(crate) struct PendingSink(std::sync::Mutex<Option<PendingLogs>>);
+pub(crate) struct PendingSink(std::sync::Mutex<Vec<PendingLogs>>);
 
 impl PendingSink {
-    /// Keep `logs` for [`Self::emit`].
+    /// Keep `logs` for [`Self::emit`], beside any batch already kept.
     pub(crate) fn store(&self, logs: PendingLogs) {
-        *self
+        let mut kept = self
             .0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(logs);
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.push(logs);
     }
 
-    /// Write what was kept.
+    /// Write every batch kept, in the order stored.
     pub(crate) fn emit(self) {
         let kept = self
             .0
             .into_inner()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(logs) = kept {
-            logs.emit();
-        }
+        kept.into_iter().for_each(PendingLogs::emit);
     }
 }
 
