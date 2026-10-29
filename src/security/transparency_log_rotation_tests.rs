@@ -631,5 +631,5 @@ fn a_reopened_segment_keeps_its_dated_or_undated_open_record() {
     assert_nothing_dated_zero(&path);
 }
 
-#[path = "transparency_log_signature_tests.rs"]
+#[path = "transparency_log_rotation_signature_tests.rs"]
 mod signature_tests;
