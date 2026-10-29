@@ -218,6 +218,9 @@ struct Row {
     minted: fn(usize) -> &'static str,
     /// Whether the measured request is served (premise), or refused.
     served: bool,
+    /// For a refused row, text its refusal must carry, so a refusal for some
+    /// other reason (a malformed request) cannot stand in for it.
+    because: Option<&'static str>,
 }
 
 fn plain(len: usize) -> &'static str {
@@ -254,6 +257,13 @@ async fn measure(row: Row, len: usize, name: &str) {
         "premise: {} served={served}: {status} {answer}",
         row.label
     );
+    if let Some(because) = row.because {
+        assert!(
+            answer.to_string().contains(because),
+            "premise: {} was refused for another reason: {answer}",
+            row.label
+        );
+    }
     let requests = sends.load(std::sync::atomic::Ordering::SeqCst) - before;
     report(row.label, len, scanned, census, requests);
 }
@@ -275,6 +285,7 @@ fn call_row() -> Row {
         body: direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}})),
         minted: plain,
         served: true,
+        because: None,
     }
 }
 
@@ -285,6 +296,7 @@ fn list_row() -> Row {
         body: direct("tools/list", json!({})),
         minted: plain,
         served: true,
+        because: None,
     }
 }
 
@@ -295,6 +307,7 @@ fn refused_row() -> Row {
         body: direct("tools/call", json!({"name": "not-listed", "arguments": {}})),
         minted: plain,
         served: false,
+        because: Some("not-listed"),
     }
 }
 
@@ -305,6 +318,7 @@ fn failed_mint_row() -> Row {
         body: direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}})),
         minted: invalid,
         served: false,
+        because: Some("invalid"),
     }
 }
 
@@ -319,6 +333,7 @@ fn meta_row() -> Row {
         ),
         minted: plain,
         served: true,
+        because: None,
     }
 }
 
