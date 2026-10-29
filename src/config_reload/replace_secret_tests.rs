@@ -643,3 +643,54 @@ async fn the_size_bound_counts_escaped_references_before_any_entry() {
         "an entry was created"
     );
 }
+
+/// A files store that returns a reference longer than any store may.
+struct LongReference(FilesStore);
+
+impl SecretStore for LongReference {
+    fn kind(&self) -> StoreKind {
+        self.0.kind()
+    }
+    fn limit(&self) -> usize {
+        self.0.limit()
+    }
+    fn probe(&self) -> Result<(), StoreError> {
+        self.0.probe()
+    }
+    fn exists(&self, name: &str) -> Result<bool, StoreError> {
+        self.0.exists(name)
+    }
+    fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        let reference = self.0.create(name, value)?;
+        let pad = crate::secret_store::MAX_REFERENCE_LEN + 1 - reference.len();
+        Ok(format!("{reference}{}", "x".repeat(pad)))
+    }
+    fn delete(&self, name: &str) -> Result<(), StoreError> {
+        self.0.delete(name)
+    }
+}
+
+/// The reference-length bound the size check counts on is enforced: a store
+/// that returns a longer reference is refused before the file is written,
+/// and the entry it made is removed.
+#[tokio::test]
+async fn a_reference_longer_than_the_bound_is_refused_and_removed() {
+    let (dir, path, ctx) = setup();
+    let save = Replace {
+        expected: Expected::Any,
+        compute: Box::new(|_| Ok(with_slot())),
+        replaced: Replaced::Discard,
+        secrets: Some(step(
+            dir.path(),
+            Arc::new(LongReference(FilesStore::new(dir.path()))),
+        )),
+    };
+
+    let failure = replace_detached(ctx, save, WAIT)
+        .await
+        .expect_err("too long");
+
+    assert!(matches!(failure, ReplaceError::Refused(_)), "{failure:?}");
+    assert_eq!(read(&path), START);
+    assert_eq!(live_entries(dir.path()), Vec::<String>::new());
+}
