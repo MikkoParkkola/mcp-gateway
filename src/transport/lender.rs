@@ -688,7 +688,13 @@ mod tests {
                     continue;
                 }
                 let text = std::fs::read_to_string(&path).expect("a source file");
-                let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                // One space between tokens, none before a `<`, so spacing
+                // cannot hide a header.
+                let flat = text
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .replace(" <", "<");
                 // Built at run time, so this row's own text never matches.
                 let target = format!("{}{}", "Lent", "Credential");
                 let conversions = [concat!("From", "<"), concat!("Into", "<")];
@@ -698,10 +704,13 @@ mod tests {
                     };
                     // The impl header up to the type, path prefix included.
                     let header = &flat[start..at];
-                    if header.contains(['{', '}']) || !header.contains(" for ") {
+                    if header.contains(['{', '}']) {
                         continue;
                     }
-                    if conversions.iter().any(|c| header.contains(c)) {
+                    // `From<..> for` the type, or `Into<` the type for another.
+                    let from = header.contains(" for ") && header.contains(conversions[0]);
+                    let into = header.contains(conversions[1]);
+                    if from || into {
                         hits.push(format!("{}: {header}", path.display()));
                     }
                 }
