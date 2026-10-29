@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! One connection's life: the session loop of a backend's listener task and
-//! the select arms it polls, moved from upstream_session.rs.
+//! the select arms it polls, moved from `upstream_session.rs`.
 
 use std::sync::{Arc, Weak};
 use std::time::Instant;
@@ -12,8 +12,8 @@ use super::opening::open_first;
 use super::refill::{Refill, finish_refill, refilled, start_due_refill};
 use super::run::{self, begin_run};
 use super::{
-    FENCE_EVERY, OPEN_LIMIT, Opening, Outcome, Pending, State, TICK, ToolsDebt, end_ineligible,
-    failed, registered_anew, requested,
+    FENCE_EVERY, Opening, Outcome, Pending, State, TICK, ToolsDebt, end_ineligible, failed,
+    registered_anew,
 };
 use crate::backend::{Backend, BackendRegistry};
 use crate::events::EventsHub;

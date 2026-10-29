@@ -17,8 +17,10 @@ use super::upstream_listener::Shared;
 use super::upstream_need::Coalescer;
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::PeerEra;
+#[cfg(test)]
+use crate::transport::upstream_tap::UpstreamNote;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
+    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
