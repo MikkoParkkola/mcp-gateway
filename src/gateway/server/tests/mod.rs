@@ -17,6 +17,8 @@ pub(crate) mod alloc_meter;
 mod allowed_root_route_rows;
 #[cfg(all(unix, feature = "firewall"))]
 mod allowed_root_routes;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_secret_rows;
 mod descriptor_copies;
 mod fresh_slot_verdict;
 mod input_key_allocations;
