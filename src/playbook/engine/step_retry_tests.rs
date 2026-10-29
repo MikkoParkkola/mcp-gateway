@@ -247,6 +247,17 @@ async fn an_aborted_step_keeps_its_error_and_says_it_may_have_run() {
             crate::Error::BackendTimeout("no answer".into())
         }),
         ("JsonRpcRetryable 500", || retryable_answer(500)),
+        ("ConfigValidation", || {
+            crate::Error::ConfigValidation("bad value".into())
+        }),
+        ("ConfigWatcher", || {
+            crate::Error::ConfigWatcher("lost".into())
+        }),
+        ("CliCredentialRefused", || {
+            crate::Error::CliCredentialRefused {
+                message: "the command refused the credential".into(),
+            }
+        }),
         ("JsonRpc", || crate::Error::JsonRpc {
             code: -32602,
             message: "invalid params".into(),

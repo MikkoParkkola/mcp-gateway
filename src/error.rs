@@ -509,6 +509,11 @@ impl Error {
         let note = |text: String| format!("{text}; {MAY_HAVE_RUN}");
         match self {
             Self::Config(m) => Self::Config(note(m)),
+            Self::ConfigValidation(m) => Self::ConfigValidation(note(m)),
+            Self::ConfigWatcher(m) => Self::ConfigWatcher(note(m)),
+            Self::CliCredentialRefused { message } => Self::CliCredentialRefused {
+                message: note(message),
+            },
             Self::BackendTimeout(m) => Self::BackendTimeout(note(m)),
             Self::Transport(m) => Self::Transport(note(m)),
             Self::TransportPermanent(m) => Self::TransportPermanent(note(m)),
@@ -536,7 +541,29 @@ impl Error {
                 status,
                 data,
             },
-            other => other,
+            // No text of ours to append to (or never reported, by
+            // `reports_may_have_run`). Listed, not `_`, so a new variant is a
+            // compile-time decision here.
+            other @ (Self::Forbidden { .. }
+            | Self::ResponseFirewallRefused
+            | Self::AuditUnavailable
+            | Self::CapabilityHashMismatch { .. }
+            | Self::BackendNotFound(_)
+            | Self::BackendUnavailable(_)
+            | Self::CircuitOpen { .. }
+            | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
+            | Self::ToolNotFound(_)
+            | Self::TransportConnect(_)
+            | Self::ProtocolVersionRejected { .. }
+            | Self::AuthorizationIncomplete { .. }
+            | Self::AuthorizationCancelled { .. }
+            | Self::AuthorizationRequired { .. }
+            | Self::AuthorizationPending { .. }
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Http(_)
+            | Self::Shutdown) => other,
         }
     }
 
