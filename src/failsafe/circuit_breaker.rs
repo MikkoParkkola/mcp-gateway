@@ -517,3 +517,7 @@ mod clock_tests;
 #[cfg(test)]
 #[path = "circuit_breaker_clock_compile_red_tests.rs"]
 mod clock_compile_red_tests;
+
+#[cfg(test)]
+#[path = "circuit_breaker_logging_tests.rs"]
+mod logging_tests;
