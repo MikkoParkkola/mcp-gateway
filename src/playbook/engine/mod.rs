@@ -187,28 +187,8 @@ impl PlaybookEngine {
             } else {
                 1
             };
-            // Checked and interpolated once, outside the retry loop: a retry
-            // re-sends the same arguments and must not refill the probe budget.
-            // `sent`: the error, if any, came from dispatching the step, not
-            // from refusing its arguments before any send.
-            let (outcome, sent) = match checked_arguments(&ctx, step, invoker) {
-                Ok(arguments) => (
-                    dispatch(
-                        step,
-                        label,
-                        arguments,
-                        max_attempts,
-                        invoker,
-                        &mut attempted,
-                    )
-                    .await,
-                    true,
-                ),
-                Err(refusal) => {
-                    warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
-                    (Err(refusal), false)
-                }
-            };
+            let (outcome, sent) =
+                run_step(&ctx, step, label, max_attempts, invoker, &mut attempted).await;
 
             match outcome {
                 Ok(result) => {
@@ -265,6 +245,30 @@ impl PlaybookEngine {
             duration_ms,
             provenance,
         })
+    }
+}
+
+/// One step's outcome, and whether it came from dispatching the step
+/// (`true`) rather than from refusing its arguments before any send. The
+/// arguments are checked and interpolated once, outside the retry loop: a
+/// retry re-sends the same arguments and must not refill the probe budget.
+async fn run_step(
+    ctx: &PlaybookContext,
+    step: &PlaybookStep,
+    label: u32,
+    max_attempts: u32,
+    invoker: &dyn ToolInvoker,
+    attempted: &mut bool,
+) -> (crate::Result<Value>, bool) {
+    match checked_arguments(ctx, step, invoker) {
+        Ok(arguments) => (
+            dispatch(step, label, arguments, max_attempts, invoker, attempted).await,
+            true,
+        ),
+        Err(refusal) => {
+            warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
+            (Err(refusal), false)
+        }
     }
 }
 
