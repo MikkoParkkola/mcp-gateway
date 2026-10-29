@@ -5,17 +5,17 @@
 
 use std::future::Future;
 
-use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::middleware::from_fn;
 use axum::response::IntoResponse;
 use axum::routing::post;
+use axum::{Json, Router};
 use serde_json::json;
 use tower::ServiceExt;
 
 use super::direct_guards_fixture::{Answer, fixture, post_direct, send};
-use super::helpers::{build_error_response, build_response};
+use super::helpers::{RpcHttp, build_error_response, build_response};
 use crate::gateway::health_metrics::layers::error_layer;
 use crate::gateway::health_metrics::{Origin, RpcError, error_kind};
 use crate::gateway::outbound::{OutboundFrame, Payload, to_http};
@@ -222,6 +222,45 @@ fn a_backends_verbatim_internal_error_on_the_direct_route_counts_as_backend() {
         let fx = fixture(Answer::RpcError(-32603), |_| {}).await;
         post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await
     });
+    assert_eq!(all(&text), [0, 0, 0, 1]);
+}
+
+/// An answer returned straight as `RpcHttp`, never rebuilt by the direct
+/// route's judge, is marked by its own `IntoResponse`: once, by its origin.
+#[test]
+fn an_answer_sent_straight_from_rpc_http_counts_once_by_its_origin() {
+    let body =
+        || Json(json!({"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "x"}}));
+    let (_, text) = counted(hit(app(move || {
+        RpcHttp {
+            status: StatusCode::OK,
+            body: body(),
+            origin: Origin::Backend,
+        }
+        .into_response()
+    })));
+    assert_eq!(all(&text), [0, 0, 0, 1]);
+    let (_, text) = counted(hit(app(move || {
+        RpcHttp {
+            status: StatusCode::OK,
+            body: body(),
+            origin: Origin::Gateway,
+        }
+        .into_response()
+    })));
+    assert_eq!(all(&text), [0, 0, 1, 0]);
+}
+
+/// A backend's error on the direct route is built as `RpcHttp`, taken apart
+/// and rebuilt by the judge, and written by `to_http`: two places that can
+/// mark it, one count.
+#[test]
+fn an_answer_through_both_rpc_http_and_the_judge_counts_once() {
+    let (_, text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32602), |_| {}).await;
+        post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await
+    });
+    assert_eq!(all(&text).iter().sum::<u64>(), 1, "{text}");
     assert_eq!(all(&text), [0, 0, 0, 1]);
 }
 
