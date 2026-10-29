@@ -136,3 +136,160 @@ impl Clock for Manual {
         *self.0.lock().expect("clock")
     }
 }
+
+/// Records every read and the deadline it was given, and moves `clock` by
+/// `step` as each read runs, so a row decides the deadline without waiting.
+pub(super) struct Stepping {
+    clock: Arc<Manual>,
+    step: Duration,
+    pub(super) ops: Mutex<Vec<(ResolveOp, Instant)>>,
+}
+
+impl Stepping {
+    pub(super) fn new(clock: &Arc<Manual>, step: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            clock: Arc::clone(clock),
+            step,
+            ops: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+impl Resolve for Stepping {
+    fn resolve(&self, op: &ResolveOp, deadline: Instant) -> std::io::Result<Resolved> {
+        self.ops.lock().expect("ops").push((op.clone(), deadline));
+        self.clock.advance(self.step);
+        real(op)
+    }
+}
+
+use super::tree::{Fx, target};
+use serde_json::{Value, json};
+
+/// `fx` with `seams` applied to its firewall.
+fn seamed(fx: Fx, seams: impl FnOnce(Firewall) -> Firewall) -> Fx {
+    Fx {
+        fw: seams(fx.fw),
+        ..fx
+    }
+}
+
+fn forced(fx: &Fx, args: &Value) -> Option<RootReason> {
+    let sender = fx.sender();
+    root_check(&fx.fw, target("read_file"), args, sender.as_deref())
+        .forced
+        .map(|refusal| refusal.reason)
+}
+
+/// R16: a read that outlives the budget refuses the call `timeout`, and no
+/// read starts after it; control: a zero step completes.
+#[test]
+fn r16_a_read_past_the_deadline_times_out() {
+    let clock = Manual::new();
+    let slow = Stepping::new(&clock, Duration::from_secs(3));
+    let (c, s) = (Arc::clone(&clock), Arc::clone(&slow));
+    let fx = seamed(Fx::new(&["path"], FirewallAction::Block), |fw| {
+        fw.with_clock(c).with_resolver(s)
+    });
+    assert_eq!(
+        forced(&fx, &json!({"path": fx.path("safe/f")})),
+        Some(RootReason::Timeout)
+    );
+    assert_eq!(
+        slow.ops.lock().expect("ops").len(),
+        1,
+        "nothing starts past the deadline"
+    );
+
+    let quick = Stepping::new(&clock, Duration::ZERO);
+    let (c, q) = (Arc::clone(&clock), Arc::clone(&quick));
+    let fx = seamed(Fx::new(&["path"], FirewallAction::Block), |fw| {
+        fw.with_clock(c).with_resolver(q)
+    });
+    assert_eq!(forced(&fx, &json!({"path": fx.path("safe/f")})), None);
+}
+
+/// R16b: two values share one 2 s budget: at 1.5 s a read, the call times
+/// out once the original instant passes, and every read got that instant.
+#[test]
+fn r16b_values_share_one_deadline() {
+    let clock = Manual::new();
+    let step = Stepping::new(&clock, Duration::from_millis(1500));
+    let (c, s) = (Arc::clone(&clock), Arc::clone(&step));
+    let fx = Fx::with_rules(|safe| {
+        let args = ["a", "b"];
+        vec![super::tree::root_rule(
+            "read_file",
+            &[safe],
+            &args,
+            FirewallAction::Block,
+        )]
+    });
+    let fx = seamed(fx, |fw| fw.with_clock(c).with_resolver(s));
+    let args = json!({"a": fx.path("safe/f"), "b": fx.path("safe/f")});
+    assert_eq!(forced(&fx, &args), Some(RootReason::Timeout));
+    let ops = step.ops.lock().expect("ops");
+    assert!(ops.len() >= 2, "both values started: {ops:?}");
+    assert!(
+        ops.iter().all(|(_, d)| *d == ops[0].1),
+        "one deadline: {ops:?}"
+    );
+}
+
+/// R33g, R33h: a refused `read_dir` and a failing entry are `unresolvable`,
+/// never an empty directory; control: the real filesystem allows it.
+#[test]
+fn r33g_r33h_directory_read_errors_refuse() {
+    for (row, fail) in [("R33g", Fail::ReadDir), ("R33h", Fail::Entry)] {
+        let fx = seamed(Fx::new(&["path"], FirewallAction::Block), |fw| {
+            fw.with_resolver(Arc::new(Failing(fail)))
+        });
+        let args = json!({"path": fx.path("safe/new.txt")});
+        assert_eq!(forced(&fx, &args), Some(RootReason::Unresolvable), "{row}");
+    }
+    let fx = Fx::new(&["path"], FirewallAction::Block);
+    assert_eq!(forced(&fx, &json!({"path": fx.path("safe/new.txt")})), None);
+}
+
+/// R44: ten array values under one root and one parent: the root is
+/// canonicalised once and the directory listed once.
+#[test]
+fn r44_reads_are_cached_within_a_call() {
+    let reads = Stepping::new(&Manual::new(), Duration::ZERO);
+    let r = Arc::clone(&reads);
+    let fx = Fx::with_rules(|safe| {
+        let args = ["paths[]"];
+        vec![super::tree::root_rule(
+            "read_file",
+            &[safe],
+            &args,
+            FirewallAction::Block,
+        )]
+    });
+    let fx = seamed(fx, |fw| fw.with_resolver(r));
+    let paths: Vec<String> = (0..10).map(|i| fx.path(&format!("safe/n{i}"))).collect();
+    assert_eq!(forced(&fx, &json!({"paths": paths})), None);
+    let root = fx.dir.path().join("safe");
+    let ops = reads.ops.lock().expect("ops");
+    let canonicalised = |p: &std::path::Path| {
+        ops.iter()
+            .filter(|(op, _)| *op == ResolveOp::Canonicalize(p.to_path_buf()))
+            .count()
+    };
+    assert_eq!(canonicalised(&root), 1, "the root, once: {ops:?}");
+    let mut listed: Vec<_> = ops
+        .iter()
+        .filter_map(|(op, _)| match op {
+            ResolveOp::ReadDir(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        listed.iter().any(|p| p.ends_with("safe")),
+        "safe/ listed: {ops:?}"
+    );
+    let total = listed.len();
+    listed.sort();
+    listed.dedup();
+    assert_eq!(listed.len(), total, "no directory listed twice: {ops:?}");
+}
