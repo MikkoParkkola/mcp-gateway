@@ -163,6 +163,8 @@ mod test_ports;
 #[cfg(test)]
 pub(crate) mod test_source_text;
 #[cfg(test)]
+mod test_source_text_tests;
+#[cfg(test)]
 mod test_wait;
 #[cfg(feature = "tool-profiles")]
 #[doc(hidden)]
