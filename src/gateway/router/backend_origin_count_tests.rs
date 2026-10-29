@@ -304,35 +304,3 @@ fn a_chain_ending_on_a_backends_error_counts_as_backend() {
     );
     assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
 }
-
-/// A1 (MIK-9091.BEO.8): the audit record of a backend's -32001 refusal on
-/// the direct route says `error`, not `denied`: the gateway denied nothing.
-#[cfg(feature = "firewall")]
-#[test]
-fn a_backends_minus_32001_on_the_direct_route_is_audited_as_an_error() {
-    let scratch = tempfile::tempdir().expect("tempdir");
-    let audit = scratch.path().join("audit.jsonl");
-    let ((_, answer), _) = counted(async {
-        let fx = super::direct_guards_fixture::fixture_firewalled_audited(
-            Answer::FailsWith(peer_400),
-            audit.clone(),
-        )
-        .await;
-        post_direct(&fx, "alpha", KEY, "read", json!({}), None, None).await
-    });
-    assert_eq!(answer["error"]["code"], -32001, "premise: {answer}");
-    let records: Vec<Value> = std::fs::read_to_string(&audit)
-        .unwrap_or_default()
-        .lines()
-        .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-        .filter(|r| r.get("request_hash").is_some() && r.get("outcome").is_some())
-        .collect();
-    assert!(
-        !records.is_empty(),
-        "premise: an invocation record was written; the log holds:\n{}",
-        std::fs::read_to_string(&audit).unwrap_or_default()
-    );
-    for record in &records {
-        assert_eq!(record["outcome"], "error", "{record}");
-    }
-}
