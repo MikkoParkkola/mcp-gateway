@@ -137,9 +137,68 @@ async fn a_call_judged_on_a_backend_is_not_sent_to_a_same_named_capability() {
         Some("ambiguous_backend"),
         "a name that is both routes must be refused, not dispatched: {outcome:?}"
     );
+    let Err(crate::Error::JsonRpc { code, data: Some(data), .. }) = &outcome else {
+        unreachable!("checked above");
+    };
+    assert_eq!(*code, -32001);
+    assert_eq!(
+        data,
+        &json!({"reason": "ambiguous_backend", "server": "edits", "routes": ["backend", "capability"]}),
+        "no rule is named when none covers the call"
+    );
     assert_eq!(
         served.load(Ordering::SeqCst),
         0,
         "the refused call must not reach the registry backend either"
     );
+}
+
+fn caller() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
+    crate::gateway::meta_mcp::MetaMcpCallerContext {
+        api_key_name: Some("clash-caller"),
+        ..crate::gateway::meta_mcp::test_callers::anonymous_caller()
+    }
+}
+
+/// RUNCLASH.3 control: with no registry backend of that name, the capability
+/// still serves the call (its unreachable provider fails it, not the clash).
+#[tokio::test]
+async fn a_capability_with_no_same_named_backend_still_runs() {
+    let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    meta.set_capabilities(capability_backend("edits", &dir).await);
+    let outcome = meta
+        .invoke_tool(
+            &json!({"server": "edits", "tool": "read", "arguments": {}}),
+            None,
+            &caller(),
+        )
+        .await;
+    assert_eq!(reason(&outcome), None, "{outcome:?}");
+    let text = format!("{outcome:?}");
+    assert!(
+        text.contains("error sending request"),
+        "the capability's own request ran: {text}"
+    );
+}
+
+/// RUNCLASH.3 control: with the capability backend under another name, the
+/// registry backend serves its own call.
+#[tokio::test]
+async fn a_backend_with_no_same_named_capability_still_runs() {
+    let served = Arc::new(AtomicUsize::new(0));
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(registry_backend("edits", &served)));
+    let meta = MetaMcp::new(registry);
+    let dir = tempfile::TempDir::new().expect("temp dir");
+    meta.set_capabilities(capability_backend("caps", &dir).await);
+    let outcome = meta
+        .invoke_tool(
+            &json!({"server": "edits", "tool": "read", "arguments": {}}),
+            None,
+            &caller(),
+        )
+        .await;
+    assert_eq!(reason(&outcome), None, "{outcome:?}");
+    assert_eq!(served.load(Ordering::SeqCst), 1, "{outcome:?}");
 }
