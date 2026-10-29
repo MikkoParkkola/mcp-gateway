@@ -11,6 +11,7 @@
 //! names the caller); the absent twin's capability backend defines nothing.
 //! The caller is `k-std` in both.
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 
 use axum::http::StatusCode;
@@ -215,7 +216,7 @@ async fn c_a_withheld_capability_writes_the_undefined_ones_invocation_records() 
     for reason in [Reason::Admin, Reason::Grant] {
         let mut counts = Vec::new();
         for withheld in [true, false] {
-            let audit = tempfile::NamedTempFile::new().expect("tempfile");
+            let audit = TempLog::new();
             let log = super::r2_identity_keys_tests::transparency_logger(&audit);
             let caps = capabilities(reason, withheld);
             let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
@@ -249,7 +250,7 @@ async fn c_a_withheld_capability_writes_the_undefined_ones_invocation_records() 
 /// now. Measured on the unmapped code, 2026-10-15.
 #[tokio::test]
 async fn a_profile_refused_capability_keeps_its_audit_trail() {
-    let audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let audit = TempLog::new();
     let log = super::r2_identity_keys_tests::transparency_logger(&audit);
     let caps = capabilities(Reason::Profile, true);
     let fx = fixture_firewalled_built(Answer::Ok, move |meta| {
@@ -281,7 +282,7 @@ async fn a_profile_refused_capability_keeps_its_audit_trail() {
 
 /// The invocation records in `audit`. A log that cannot be read fails the
 /// row; it never reads as none.
-fn invocation_records(audit: &tempfile::NamedTempFile) -> usize {
+fn invocation_records(audit: &TempLog) -> usize {
     std::fs::read_to_string(audit.path())
         .expect("the audit log is readable")
         .lines()
@@ -293,11 +294,7 @@ fn invocation_records(audit: &tempfile::NamedTempFile) -> usize {
 /// #3872 review (FIX 3), the positive control: in the same fixture, a
 /// visible backend tool that is dispatched writes at least one invocation
 /// record, so the counts above are measured on a log that records.
-async fn assert_the_log_records_a_dispatch(
-    fx: &Fx,
-    audit: &tempfile::NamedTempFile,
-    before: usize,
-) {
+async fn assert_the_log_records_a_dispatch(fx: &Fx, audit: &TempLog, before: usize) {
     let visible = json!({"name": "gateway_invoke",
         "arguments": {"server": "alpha", "tool": "read", "arguments": {}}});
     send(fx, "/mcp", "k-std", "tools/call", visible, None).await;
@@ -398,7 +395,7 @@ async fn a_killed_capability_server_answers_unentitled_twins_alike() {
 async fn f4_an_audit_outage_answers_a_withheld_capability_as_the_undefined_one() {
     let mut answers = Vec::new();
     for withheld in [true, false] {
-        let audit = tempfile::NamedTempFile::new().expect("tempfile");
+        let audit = TempLog::new();
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(
                 crate::security::TransparencyLogConfig {

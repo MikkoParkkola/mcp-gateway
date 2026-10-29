@@ -277,6 +277,7 @@ pub(super) async fn gateway(multi_user: bool) -> MetaMcp {
 /// only a caller whose fetch carries that caller's identity.
 #[tokio::test]
 async fn single_user_gateway_serves_each_caller_what_its_fetch_may_carry() {
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut meta = gateway(false).await;
     let names =
         super::catalogue_per_caller_tests::listed_for(&meta, &super::anonymous_caller()).await;
@@ -292,7 +293,7 @@ async fn single_user_gateway_serves_each_caller_what_its_fetch_may_carry() {
         "a `required` backend was served to a caller with no identity: {names:?}"
     );
 
-    super::catalogue_per_caller_tests::install_minting(&mut meta);
+    super::catalogue_per_caller_tests::install_minting(&mut meta, &log);
     let alpha = super::catalogue_per_caller_tests::identity("alpha");
     meta.seed_caller_slot_for_test(PER_USER_BACKEND, &alpha)
         .await;

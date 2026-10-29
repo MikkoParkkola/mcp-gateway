@@ -26,7 +26,10 @@ fn text(text: &str) -> Value {
 
 /// The `block` relay detector over every `mock` tool, one shared fingerprint
 /// enough to refuse, and `playbook` registered.
-async fn seam_state(mock: &Arc<MockBackend>, playbook: &str) -> (Arc<AppState>, tempfile::TempDir) {
+async fn seam_state(
+    mock: &Arc<MockBackend>,
+    playbook: &str,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     seam_state_with(mock, playbook, &[], blocking(&[BACKEND])).await
 }
 
@@ -48,7 +51,7 @@ async fn seam_state_with(
     playbook: &str,
     more: &[&str],
     collusion: CollusionConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let relay = Arc::new(
         Firewall::from_config(
             FirewallConfig {

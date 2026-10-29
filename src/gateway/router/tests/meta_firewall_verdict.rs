@@ -122,7 +122,11 @@ impl Transport for LeakyBackendTransport {
 /// route's own per-target obligation actually applies.
 async fn firewall_app_state(
     action: FirewallAction,
-) -> (Arc<AppState>, Arc<Firewall>, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    Arc<Firewall>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     app_state_with_rules(vec![FirewallRule {
         tool_match: TOOL.to_string(),
         action,
@@ -139,7 +143,11 @@ async fn firewall_app_state(
 /// can give different targets different verdicts on ONE artifact.
 async fn app_state_with_rules(
     rules: Vec<FirewallRule>,
-) -> (Arc<AppState>, Arc<Firewall>, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    Arc<Firewall>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let firewall = response_firewall(rules);
     let (state, store_dir) =
         state_with_firewalls(Arc::clone(&firewall), Arc::clone(&firewall)).await;
@@ -187,7 +195,7 @@ async fn split_firewall_app_state(
     Arc<AppState>,
     Arc<Firewall>,
     Arc<Firewall>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let meta = response_firewall(rules.clone());
     let keys = meta.continuations_for_test().expect("keyed");
@@ -201,7 +209,7 @@ async fn split_firewall_app_state(
 async fn state_with_firewalls(
     handler_firewall: Arc<Firewall>,
     meta_firewall: Arc<Firewall>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     state_with_firewalls_and_auth(handler_firewall, meta_firewall, &AuthConfig::default()).await
 }
 
@@ -211,7 +219,7 @@ async fn state_with_firewalls_and_auth(
     handler_firewall: Arc<Firewall>,
     meta_firewall: Arc<Firewall>,
     auth: &AuthConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),

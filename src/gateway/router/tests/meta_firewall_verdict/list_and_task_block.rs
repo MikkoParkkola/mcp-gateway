@@ -76,7 +76,7 @@ type Wired = (
     Arc<crate::gateway::router::AppState>,
     Arc<Firewall>,
     Arc<Firewall>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 );
 
 /// The split production wiring with the leaky-list backend as `demo`.

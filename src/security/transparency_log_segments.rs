@@ -209,6 +209,80 @@ pub(crate) fn segment_seq_in(file: &File, after: u64) -> io::Result<u64> {
         .unwrap_or(after))
 }
 
+/// One snapshot of a log's files for a reader resolving where to read.
+pub(crate) struct Listing {
+    /// The sealed segments, oldest first.
+    pub(crate) sealed: Vec<Segment>,
+    /// The active file's segment, `None` when there is no active file.
+    pub(crate) active: Option<u64>,
+    /// The number after the newest sealed segment: the active file's number
+    /// when it has no open record, and the newest when it is absent.
+    next: u64,
+}
+
+impl Listing {
+    /// The newest segment: the active file's, or with none, the number the
+    /// next file takes, whose page is empty and steps to the sealed ones.
+    pub(crate) fn newest(&self) -> u64 {
+        self.active.unwrap_or(self.next)
+    }
+
+    /// Whether the log had any file when listed. A log never written has
+    /// none; one whose files went later must not read as never written.
+    pub(crate) fn seen(&self) -> bool {
+        self.active.is_some() || !self.sealed.is_empty()
+    }
+
+    /// Whether `seq` lies in the kept range, from the oldest sealed segment
+    /// (or the newest, with none sealed) up to the newest.
+    pub(crate) fn kept(&self, seq: u64) -> bool {
+        let oldest = self.sealed.first().map_or(self.newest(), |s| s.seq);
+        (oldest..=self.newest()).contains(&seq)
+    }
+}
+
+/// List `path`'s files: the sealed segments first, then the active file.
+/// That order means a rotation between the two reads shows the new active
+/// file under a number above every listed segment, never a sealed segment
+/// as the newest; a sealed list that changed meanwhile is listed again.
+///
+/// # Errors
+///
+/// The directory or the active file cannot be read, the newest sealed
+/// segment holds the last number ([`next_seq`]), or the log rotated during
+/// three listings in a row (`Interrupted`).
+pub(crate) fn listing(path: &Path) -> io::Result<Listing> {
+    // A rotation between the two reads (the live file renamed to its sealed
+    // name, the next not yet created) would leave the just-sealed segment in
+    // neither: listing the sealed segments again shows whether one moved.
+    for _ in 0..3 {
+        let sealed = list_segments(path)?;
+        let next = next_seq(&sealed)?;
+        #[cfg(test)]
+        super::pager::seam::fire_sealed_listed();
+        let active = match File::open(path) {
+            Ok(file) => Some(segment_seq_in(&file, next)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        let moved = list_segments(path)?
+            .iter()
+            .map(|s| s.seq)
+            .ne(sealed.iter().map(|s| s.seq));
+        if !moved {
+            return Ok(Listing {
+                sealed,
+                active,
+                next,
+            });
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Interrupted,
+        "log rotated during listing three times in a row; retry",
+    ))
+}
+
 /// The segment number an open record line names.
 fn opened_seq(line: &str) -> Option<u64> {
     serde_json::from_str::<serde_json::Value>(line)

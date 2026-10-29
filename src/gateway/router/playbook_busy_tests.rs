@@ -21,7 +21,7 @@ use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
 struct Harness {
     router: axum::Router,
     account: CapabilityAccount,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// A gateway serving the capability account, with playbook `pb` of `steps`

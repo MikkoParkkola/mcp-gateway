@@ -12,12 +12,37 @@ use serde_json::{Value, json};
 
 use super::answers::{call_answer, listing, question, recording_answer};
 #[cfg(feature = "firewall")]
-use super::{AUDIT_LOG, FIREWALL_RULE, FIREWALL_RULE_KEYS, META_FIREWALL};
+use super::{AUDIT_LOG, FIREWALL_RULE, META_FIREWALL};
 use super::{Answer, TRANSPORT};
 #[cfg(feature = "firewall")]
 use super::{Fx, fixture_inner};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
+
+#[cfg(feature = "firewall")]
+thread_local! {
+    static FIREWALL_RULE_KEYS: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The rule for each backend tool, scoped to the cell's API keys.
+/// `send_message` is the A2A backend's one tool (MIK-8139).
+#[cfg(feature = "firewall")]
+pub(super) fn firewall_rules(
+    action: crate::security::firewall::FirewallAction,
+) -> Vec<crate::security::firewall::FirewallRule> {
+    ["read", "send_message"]
+        .map(|tool| crate::security::firewall::FirewallRule {
+            tool_match: tool.to_string(),
+            action,
+            reason: None,
+            scan: Vec::new(),
+            servers: None,
+            keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
+            except: None,
+        })
+        .to_vec()
+}
 
 /// [`super::fixture_firewalled_with`] with `transport` answering for both backends
 /// in place of the scripted one (the egress matrix's planted backend).

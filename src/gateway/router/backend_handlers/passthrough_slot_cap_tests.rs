@@ -56,7 +56,9 @@ fn passthrough_backend() -> Arc<Backend> {
     ))
 }
 
-async fn router_with(backend: &Arc<Backend>) -> (axum::Router, tempfile::TempDir) {
+async fn router_with(
+    backend: &Arc<Backend>,
+) -> (axum::Router, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
