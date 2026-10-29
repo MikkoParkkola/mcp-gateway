@@ -133,6 +133,8 @@ fn rule(tool: &str, action: FirewallAction) -> FirewallRule {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 

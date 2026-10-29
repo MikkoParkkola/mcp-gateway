@@ -187,6 +187,7 @@ async fn guard_tool_call(
             arguments,
             caller_name,
             &control_identity,
+            Some(backend),
         );
         if verdict.action == FirewallAction::Warn {
             warn!(

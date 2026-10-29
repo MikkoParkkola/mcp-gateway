@@ -288,6 +288,7 @@ impl MetaMcp {
             arguments,
             caller,
             control_identity,
+            None,
         );
         if verdict.action == crate::security::firewall::FirewallAction::Warn {
             tracing::warn!(
@@ -392,9 +393,19 @@ impl MetaMcp {
                 crate::security::response_policy::KeyOf::Key,
             ),
         };
-        let mut verdict = firewall.rescan(target, outbound.arguments);
+        let mut verdict = firewall.rescan(
+            target,
+            outbound.arguments,
+            crate::security::firewall::ScanSubject::Arguments,
+            None,
+        );
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(target, answers);
+            let answered = firewall.rescan(
+                target,
+                answers,
+                crate::security::firewall::ScanSubject::Answers,
+                None,
+            );
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }

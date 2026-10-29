@@ -84,6 +84,19 @@ impl Backend {
         self.config.passthrough
     }
 
+    /// Whether this backend is a local process the gateway's filesystem view
+    /// applies to (MIK-8939): only stdio. Exhaustive with no wildcard arm, so a
+    /// transport added later does not compile until someone classes it.
+    #[must_use]
+    pub(crate) fn is_local_process(&self) -> bool {
+        match &self.config.transport {
+            TransportConfig::Stdio { .. } => true,
+            TransportConfig::Http { .. } | TransportConfig::WebSocket { .. } => false,
+            #[cfg(feature = "a2a")]
+            TransportConfig::A2a { .. } => false,
+        }
+    }
+
     /// Return the HTTP URL if this backend uses an HTTP-based transport.
     ///
     /// Returns `None` for stdio backends.
