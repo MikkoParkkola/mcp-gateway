@@ -101,3 +101,22 @@ async fn r41c_secret_owning_another_key_passes() {
         "R41c: the injected value was audited"
     );
 }
+
+/// R41d: the direct route `/mcp/fs`, which the dispatch-site guard never
+/// covered, refuses a call whose secret owns `path`, with an empty and a
+/// real credential; the check now travels with the sending instance.
+#[tokio::test]
+async fn r41d_direct_route_refuses_a_secret_owned_path() {
+    for (row, value) in [("R41d empty", ""), ("R41d sentinel", SENTINEL)] {
+        let routes = Routes::build(Setup {
+            secret_key: Some("path"),
+            secret_value: value,
+            ..Setup::default()
+        })
+        .await;
+        let inside = routes.path("safe/f");
+        let call = json!({"name": "read_file", "arguments": {"path": inside}});
+        let answer = routes.post("/mcp/fs", "tools/call", call).await;
+        refused_as_injected(&routes, row, &answer);
+    }
+}

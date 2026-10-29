@@ -216,3 +216,48 @@ fn r42_the_captured_instance_is_classified() {
     let got = call(&fx.fw, "fs", &inside, Some(&http_sender));
     assert_eq!(got, refused(RootReason::RemoteBackend));
 }
+
+/// A Stdio `fs` whose own secret rule injects into argument `key`.
+fn fs_with_secret(key: &str) -> Arc<Backend> {
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "fs_token", "value": "x", "inject_as": "argument", "inject_key": key}),
+    )
+    .expect("a credential rule");
+    Arc::new(Backend::new(
+        "fs",
+        crate::config::BackendConfig {
+            transport: stdio(),
+            secrets: vec![rule],
+            ..crate::config::BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ))
+}
+
+/// R42d: the injection check reads the sending instance's secret rules, not
+/// the registry's. A captured instance whose secret owns `path` is refused
+/// after the registry swaps in one without it; a captured instance without
+/// it passes after the registry swaps in one that owns `path`.
+#[test]
+fn r42d_injection_reads_the_sending_instances_rules() {
+    let fx = fixture();
+    let inside = fx.path("safe/f");
+    let owning = fs_with_secret("path");
+    assert!(fx.registry.register(Arc::clone(&owning)));
+    assert!(fx.registry.register(fs_with_secret("token")));
+    let got = call(&fx.fw, "fs", &inside, Some(&owning));
+    assert_eq!(
+        got,
+        refused(RootReason::InjectedPathArgument),
+        "captured owns path"
+    );
+
+    let clean = fs_with_secret("token");
+    assert!(fx.registry.register(fs_with_secret("path")));
+    assert_eq!(
+        call(&fx.fw, "fs", &inside, Some(&clean)),
+        Seen::Allowed,
+        "captured does not"
+    );
+}
