@@ -490,10 +490,16 @@ fn fingerprint(state: &AppState) -> String {
     let config = serde_json::to_string(&*state.live_config.get()).expect("config serialises");
     let mut backends: Vec<String> = state.backends.statuses().into_keys().collect();
     backends.sort_unstable();
+    // Whole rows, so an in-place update shows, and the audit log's length,
+    // so an audit-only append shows.
     let store = state.control_plane_store.as_ref().map(|store| {
         (
-            store.list_grants().map(|g| g.len()).ok(),
-            store.list_policies().map(|p| p.len()).ok(),
+            store.list_grants().ok(),
+            store.list_policies().ok(),
+            store
+                .read_audit(&crate::control_plane::AuditFilter::new(200))
+                .map(|page| page.events.len())
+                .ok(),
         )
     });
     format!("{}|{backends:?}|{store:?}", hash12(config.as_bytes()))
@@ -510,10 +516,21 @@ const VOLATILE: &[&str] = &[
     "checked_at",
 ];
 
+/// Keys whose values come from the machine running the test, not from the
+/// fixture: the control-plane shadow radar scans the host's MCP client
+/// configs. No caller scoping touches them, so they are left out of the hash.
+const HOST_DEPENDENT: &[&str] = &[
+    "shadow_radar",
+    "shadow_assets",
+    "shadow_high_or_critical_assets",
+];
+
 fn strip(value: &mut Value) {
     match value {
         Value::Object(map) => {
-            map.retain(|k, _| !VOLATILE.contains(&k.as_str()));
+            map.retain(|k, _| {
+                !VOLATILE.contains(&k.as_str()) && !HOST_DEPENDENT.contains(&k.as_str())
+            });
             map.values_mut().for_each(strip);
         }
         Value::Array(items) => items.iter_mut().for_each(strip),
