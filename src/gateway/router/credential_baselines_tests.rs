@@ -6,6 +6,12 @@
 //! holds its path to a [`Ceiling`]: today's counts, so any added copy or
 //! unwiped free fails the row. Work that removes a copy lowers the ceiling.
 //!
+//! A ceiling is never raised to absorb a rise. A dependency or toolchain
+//! change that moves a count is re-baselined only with a fresh attribution
+//! trace naming every added block as the HTTP client's or the test peer's,
+//! and the client-only rows must move by the same amount. A block the trace
+//! attributes to the gateway is a regression, whatever caused it.
+//!
 //! The peer is a real loopback HTTP server in this process; its handler takes
 //! the live census while the gateway is mid-send. The HTTP client's own
 //! buffers hold the credential too, so a client-only row sends the same header
@@ -15,12 +21,11 @@ use std::io::Write as _;
 use std::sync::Arc;
 
 use axum::body::to_bytes;
-use axum::http::HeaderMap;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
-use crate::gateway::alloc_meter::{Census, Scanned, isolate_reporting, scan_dispatch, take_census};
+use crate::gateway::alloc_meter::{Census, Scanned, isolate_reporting, scan_dispatch};
 use crate::gateway::server::signing_allocation_tests::fixed_token_mint::{
     FixedTokenMint, LONG, SHORT, token,
 };
@@ -28,6 +33,10 @@ use crate::identity_propagation::{
     IdentityPropagationConfig, PropagationStrategyKind, SessionMode,
 };
 use crate::key_server::oidc::VerifiedIdentity;
+
+mod peer;
+
+use peer::{Peer, peer};
 
 const BACKEND: &str = "baseline";
 const TOOL: &str = "lookup";
@@ -73,120 +82,6 @@ fn report(path: &str, len: usize, scanned: Scanned, census: Census, sends: usize
             .and_then(|mut file| file.write_all(line.as_bytes()))
             .expect("the baseline file is writable");
     }
-}
-
-/// How the peer treats `tools/call`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Peer {
-    /// Answers every call.
-    Answers,
-    /// Answers the first measured request, of any method, with HTTP 503,
-    /// then answers.
-    FailsOnce,
-    /// Never answers a call: the gateway's call is dropped mid-send.
-    Hangs,
-}
-
-/// What a `Hangs` peer reports: the hung call arrived, and its handler
-/// ended because the gateway dropped the call.
-#[derive(Default)]
-struct Hang {
-    arrived: tokio::sync::Notify,
-    released: tokio::sync::Notify,
-}
-
-/// Wakes `released` when the hung handler is dropped.
-struct Released(Arc<Hang>);
-
-impl Drop for Released {
-    fn drop(&mut self) {
-        self.0.released.notify_one();
-    }
-}
-
-/// What a peer reports, and the switch that arms `FailsOnce` and `Hangs`
-/// (off for the warm-up).
-struct Wire {
-    url: String,
-    /// Requests that reached the peer.
-    sends: Arc<std::sync::atomic::AtomicUsize>,
-    /// Requests that carried `Bearer <token>` as their `Authorization`.
-    carried: Arc<std::sync::atomic::AtomicUsize>,
-    armed: Arc<std::sync::atomic::AtomicBool>,
-    hang: Arc<Hang>,
-}
-
-/// A streamable HTTP MCP peer on loopback that takes a census on every
-/// request it serves, notes whether the request carried `token`, then
-/// answers as `behaviour` says.
-async fn peer(behaviour: Peer, token: &'static str) -> Wire {
-    use axum::response::IntoResponse as _;
-    let wire = Wire {
-        url: String::new(),
-        sends: Arc::default(),
-        carried: Arc::default(),
-        armed: Arc::default(),
-        hang: Arc::default(),
-    };
-    let counted = Arc::clone(&wire.sends);
-    let carried = Arc::clone(&wire.carried);
-    let switch = Arc::clone(&wire.armed);
-    let holder = Arc::clone(&wire.hang);
-    let app = axum::Router::new().fallback(
-        move |headers: HeaderMap, axum::Json(message): axum::Json<Value>| {
-            let counted = Arc::clone(&counted);
-            let carried = Arc::clone(&carried);
-            let switch = Arc::clone(&switch);
-            let holder = Arc::clone(&holder);
-            async move {
-                take_census();
-                counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                // Compared in place: a copy here would be one more block
-                // holding the token.
-                let authorization = headers
-                    .get(axum::http::header::AUTHORIZATION)
-                    .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "));
-                if authorization == Some(token.as_bytes()) {
-                    carried.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                }
-                let method = message["method"].as_str().unwrap_or_default().to_owned();
-                if switch.load(std::sync::atomic::Ordering::SeqCst) {
-                    match behaviour {
-                        Peer::FailsOnce => {
-                            switch.store(false, std::sync::atomic::Ordering::SeqCst);
-                            return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
-                        }
-                        Peer::Hangs if method == "tools/call" => {
-                            let _released = Released(Arc::clone(&holder));
-                            holder.arrived.notify_one();
-                            std::future::pending::<()>().await;
-                        }
-                        Peer::Answers | Peer::Hangs => {}
-                    }
-                }
-                let id = message.get("id").cloned().unwrap_or(Value::Null);
-                let result = match method.as_str() {
-                    "server/discover" => json!({
-                        "supportedVersions": [crate::protocol::meta::MODERN_VERSIONS[0]],
-                        "capabilities": {"tools": {}}
-                    }),
-                    "tools/list" => json!({"tools": [{
-                        "name": TOOL,
-                        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}
-                    }]}),
-                    "tools/call" => json!({"content": [{"type": "text", "text": "ok"}]}),
-                    _ => json!({}),
-                };
-                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
-            }
-        },
-    );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let url = format!("http://{}/mcp", listener.local_addr().expect("addr"));
-    tokio::spawn(async move { axum::serve(listener, app).await });
-    Wire { url, ..wire }
 }
 
 /// A router whose one backend, at `url`, has a required per-user binding
@@ -314,6 +209,18 @@ fn hold(label: &str, len: usize, ceiling: Ceiling, scanned: Scanned, census: Cen
     );
 }
 
+/// Which part of a call's life the scan covers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Phase {
+    /// A call on a slot a first call has already started and listed.
+    Warm,
+    /// The first call: it starts the slot, inside the scan.
+    Cold,
+    /// A warm call, then the router and its backends dropped inside the
+    /// scan, until every connection to the peer has closed.
+    Teardown,
+}
+
 /// What a baseline row does: its label, the request, and where it goes.
 struct Row {
     label: &'static str,
@@ -331,6 +238,7 @@ struct Row {
     /// Requests the measured call sends (premise), each carrying the token,
     /// and the censuses those requests take.
     sends: usize,
+    phase: Phase,
     ceiling: Ceiling,
 }
 
@@ -352,12 +260,23 @@ async fn measure(row: Row, len: usize, name: &str) {
     let marker = token(len).as_bytes();
     let wire = peer(row.peer, token(len)).await;
     let (sends, carried, armed, hang) = (&wire.sends, &wire.carried, &wire.armed, &wire.hang);
-    let (router, _dirs) = gateway(wire.url.clone(), minted).await;
+    // Held so a teardown row can drop the whole stack inside the scan.
+    let held = std::sync::Mutex::new(Some(gateway(wire.url.clone(), minted).await));
+    let router = || {
+        held.lock()
+            .expect("held")
+            .as_ref()
+            .expect("not torn down")
+            .0
+            .clone()
+    };
     // Warm: the slot starts and lists once outside the measurement. A row
     // whose mint is refused warms into the same refusal; the warm-up's
     // outcome is not a premise.
-    let warm = direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}}));
-    let _ = post(&router, &format!("/mcp/{BACKEND}"), &warm).await;
+    if row.phase != Phase::Cold {
+        let warm = direct("tools/call", json!({"name": TOOL, "arguments": {"q": "x"}}));
+        let _ = post(&router(), &format!("/mcp/{BACKEND}"), &warm).await;
+    }
     let before = sends.load(std::sync::atomic::Ordering::SeqCst);
     let carried_before = carried.load(std::sync::atomic::Ordering::SeqCst);
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -365,8 +284,9 @@ async fn measure(row: Row, len: usize, name: &str) {
         if row.peer == Peer::Hangs {
             // Dropped once the peer holds it, then measured until the peer's
             // handler ends: the client has closed the connection by then.
+            let sending = router();
             tokio::select! {
-                answered = post(&router, &row.uri, &row.body) => {
+                answered = post(&sending, &row.uri, &row.body) => {
                     panic!("premise: the hung call was dropped, not answered: {answered:?}")
                 }
                 () = hang.arrived.notified() => {}
@@ -377,7 +297,15 @@ async fn measure(row: Row, len: usize, name: &str) {
                 .expect("the peer's handler ends once the call is dropped");
             (axum::http::StatusCode::REQUEST_TIMEOUT, Value::Null)
         } else {
-            post(&router, &row.uri, &row.body).await
+            let answered = post(&router(), &row.uri, &row.body).await;
+            if row.phase == Phase::Teardown {
+                drop(held.lock().expect("held").take());
+                // A guard against a hang, never expected to elapse.
+                tokio::time::timeout(std::time::Duration::from_secs(30), wire.all_closed())
+                    .await
+                    .expect("every connection to the peer closes once the router is dropped");
+            }
+            answered
         }
     })
     .await;
@@ -448,6 +376,7 @@ fn call_row() -> Row {
         because: None,
         peer: Peer::Answers,
         sends: 1,
+        phase: Phase::Warm,
         ceiling: ceiling(5, 5),
     }
 }
@@ -462,6 +391,7 @@ fn list_row() -> Row {
         because: None,
         peer: Peer::Answers,
         sends: 1,
+        phase: Phase::Warm,
         ceiling: ceiling(6, 7),
     }
 }
@@ -476,6 +406,7 @@ fn refused_row() -> Row {
         because: Some("not-listed"),
         peer: Peer::Answers,
         sends: 0,
+        phase: Phase::Warm,
         ceiling: ceiling(1, 0),
     }
 }
@@ -490,6 +421,7 @@ fn failed_mint_row() -> Row {
         because: Some("invalid"),
         peer: Peer::Answers,
         sends: 0,
+        phase: Phase::Warm,
         ceiling: ceiling(1, 0),
     }
 }
@@ -508,6 +440,7 @@ fn meta_row() -> Row {
         because: None,
         peer: Peer::Answers,
         sends: 1,
+        phase: Phase::Warm,
         ceiling: ceiling(5, 6),
     }
 }
@@ -525,6 +458,7 @@ fn discovery_row() -> Row {
         because: None,
         peer: Peer::Answers,
         sends: 0,
+        phase: Phase::Warm,
         ceiling: ceiling(1, 0),
     }
 }
@@ -536,8 +470,31 @@ fn retry_row() -> Row {
         label: "direct tools/list, retried after a 503",
         peer: Peer::FailsOnce,
         sends: 2,
+        phase: Phase::Warm,
         ceiling: ceiling(10, 7),
         ..list_row()
+    }
+}
+
+/// The first call on a cold slot: its start's sends are inside the scan.
+fn cold_row() -> Row {
+    Row {
+        label: "direct tools/call, cold slot",
+        phase: Phase::Cold,
+        // The start's discovery, the key check's list fill, the call.
+        sends: 3,
+        ceiling: ceiling(10, 7),
+        ..call_row()
+    }
+}
+
+/// A warm call, then everything that held the credential dropped.
+fn teardown_row() -> Row {
+    Row {
+        label: "direct tools/call, then teardown",
+        phase: Phase::Teardown,
+        ceiling: ceiling(7, 5),
+        ..call_row()
     }
 }
 
@@ -546,6 +503,7 @@ fn cancelled_row() -> Row {
         label: "direct tools/call, dropped mid-send",
         served: false,
         peer: Peer::Hangs,
+        phase: Phase::Warm,
         ceiling: ceiling(7, 5),
         ..call_row()
     }
@@ -576,6 +534,10 @@ baseline!(baseline_retry_long, retry_row(), LONG);
 baseline!(baseline_retry_short, retry_row(), SHORT);
 baseline!(baseline_cancelled_long, cancelled_row(), LONG);
 baseline!(baseline_cancelled_short, cancelled_row(), SHORT);
+baseline!(baseline_cold_long, cold_row(), LONG);
+baseline!(baseline_cold_short, cold_row(), SHORT);
+baseline!(baseline_teardown_long, teardown_row(), LONG);
+baseline!(baseline_teardown_short, teardown_row(), SHORT);
 
 /// The HTTP client alone: the same `Authorization` header sent by a bare
 /// client to the same peer. Its frees and live copies are the client's share,
@@ -610,6 +572,73 @@ async fn client_only(len: usize, name: &str) {
     report("client only", len, scanned, census, requests);
     sent_as_premised("client only", 1, (requests, authenticated), census);
     hold("client only", len, ceiling(1, 1), scanned, census);
+}
+
+/// The HTTP client alone, its call dropped once the peer holds it: what a
+/// dropped send frees and keeps of the client's own, for the gateway's
+/// dropped-send row to be read against.
+async fn client_only_dropped(len: usize, name: &str) {
+    if in_child(name) {
+        return;
+    }
+    let minted = token(len);
+    let wire = peer(Peer::Hangs, minted).await;
+    let client = reqwest::Client::new();
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": TOOL, "arguments": {"q": "x"}}});
+    wire.armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let carried_before = wire.carried.load(std::sync::atomic::Ordering::SeqCst);
+    let (_, scanned, census) = scan_dispatch(minted.as_bytes(), || async {
+        let send = client
+            .post(wire.url.as_str())
+            .header("Authorization", format!("Bearer {minted}"))
+            .json(&body)
+            .send();
+        tokio::select! {
+            answered = send => panic!("premise: the hung call was answered: {answered:?}"),
+            () = wire.hang.arrived.notified() => {}
+        }
+        // A guard against a hang, never expected to elapse.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            wire.hang.released.notified(),
+        )
+        .await
+        .expect("the peer's handler ends once the call is dropped");
+    })
+    .await;
+    let requests = wire.sends.load(std::sync::atomic::Ordering::SeqCst);
+    let authenticated = wire.carried.load(std::sync::atomic::Ordering::SeqCst) - carried_before;
+    report(
+        "client only, dropped mid-send",
+        len,
+        scanned,
+        census,
+        requests,
+    );
+    sent_as_premised(
+        "client only, dropped mid-send",
+        1,
+        (requests, authenticated),
+        census,
+    );
+    hold(
+        "client only, dropped mid-send",
+        len,
+        ceiling(3, 3),
+        scanned,
+        census,
+    );
+}
+
+#[tokio::test]
+async fn baseline_client_only_dropped_long() {
+    client_only_dropped(LONG, "baseline_client_only_dropped_long").await;
+}
+
+#[tokio::test]
+async fn baseline_client_only_dropped_short() {
+    client_only_dropped(SHORT, "baseline_client_only_dropped_short").await;
 }
 
 #[tokio::test]
