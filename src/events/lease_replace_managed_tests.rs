@@ -155,6 +155,24 @@ fn queued(f: &Fixture) -> Vec<(String, String, Option<String>)> {
         .collect()
 }
 
+/// The event ids of `sub`'s records in `f`'s outbox stamped `stamp`.
+fn stamped(f: &Fixture, sub: &str, stamp: &str) -> Vec<String> {
+    queued(f)
+        .into_iter()
+        .filter(|r| r.1 == sub && r.2.as_deref() == Some(stamp))
+        .map(|r| r.0)
+        .collect()
+}
+
+/// Run `f`'s delivery worker, startup reconciliation done: the worker sends
+/// nothing before it.
+fn start_delivery(f: &Fixture) -> tokio::task::JoinHandle<()> {
+    f.hub.runtime.reconciled.store(true, Ordering::Release);
+    let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
+    let worker = Arc::clone(&f.hub);
+    tokio::spawn(async move { worker.deliver_forever(&services).await })
+}
+
 /// Two users, `u1` and `u2`, each with a minted listener open on `pt`.
 struct Rig {
     peer: TwoTokenPeer,
@@ -221,9 +239,7 @@ async fn iso_t2_managed_listeners_each_queue_and_deliver_only_their_own_change()
         [("sub_u1_pt", Some(stamp.as_str()))],
         "u1's change queued for u1 alone, under u1's grant"
     );
-    let services = Arc::clone(rig.f.hub.runtime.services.get().expect("services"));
-    let worker = Arc::clone(&rig.f.hub);
-    let delivery = tokio::spawn(async move { worker.deliver_forever(&services).await });
+    let delivery = start_delivery(&rig.f);
     crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
         match rig.posts[0].load(Ordering::SeqCst) {
             0 => std::ops::ControlFlow::Continue("u1 not yet sent to".to_owned()),
@@ -275,7 +291,8 @@ async fn iso_t2_a_change_observed_under_the_old_grant_is_not_delivered_after_rot
         "u2's change queued for u2"
     );
     rig.grants.rotate("u1");
-    // The old run hears one more notice, reads under the rotated grant and ends.
+    // The old run hears one more notice, reads under the rotated grant and
+    // ends; anything it announced first keeps the old grant's stamp.
     assert!(
         rig.peer.push_tools_changed(0),
         "premise: the old stream is still open"
@@ -291,48 +308,57 @@ async fn iso_t2_a_change_observed_under_the_old_grant_is_not_delivered_after_rot
         "reopened under the new grant"
     );
     assert!(
-        rig.intake.try_recv().is_err(),
-        "nothing was announced under the old grant"
-    );
-    assert!(
         rig.peer.push_tools_changed(0),
         "the new run's stream is open"
     );
-    assert!(
-        fan_out_next(&rig.f, &mut rig.intake).await,
-        "the new notice was read"
-    );
     let new_stamp = format!("vault:{}", rig.grants.binding("u1"));
-    let after = queued(&rig.f);
-    let new = after
-        .iter()
-        .find(|r| r.1 == "sub_u1_pt" && r.0 != old.0)
-        .expect("new record");
+    // The old run's late announcement, if any, may reach fan-out first.
+    while stamped(&rig.f, "sub_u1_pt", &new_stamp).is_empty() {
+        assert!(
+            fan_out_next(&rig.f, &mut rig.intake).await,
+            "the new notice was read"
+        );
+    }
     assert_eq!(
-        new.2.as_deref(),
-        Some(new_stamp.as_str()),
-        "stamped with the new grant"
+        stamped(&rig.f, "sub_u1_pt", &new_stamp).len(),
+        1,
+        "one change stamped with the new grant"
     );
-    let services = Arc::clone(rig.f.hub.runtime.services.get().expect("services"));
-    let worker = Arc::clone(&rig.f.hub);
-    let delivery = tokio::spawn(async move { worker.deliver_forever(&services).await });
+    let mut old_grant = stamped(&rig.f, "sub_u1_pt", &old_stamp);
+    assert!(
+        old_grant.contains(&old.0),
+        "the first change keeps the old stamp"
+    );
+    assert!(
+        queued(&rig.f)
+            .iter()
+            .filter(|r| r.1 == "sub_u1_pt")
+            .all(|r| [Some(old_stamp.as_str()), Some(new_stamp.as_str())]
+                .contains(&r.2.as_deref())),
+        "every u1 change carries the grant it was observed under"
+    );
+    let delivery = start_delivery(&rig.f);
     crate::test_wait::wait_until(crate::test_wait::HANG_BOUND, || async {
         let sent = rig.posts.iter().all(|p| p.load(Ordering::SeqCst) > 0);
         match (sent, rig.f.hub.store.dead_summaries().len()) {
-            (true, 1) => std::ops::ControlFlow::Break(()),
+            (true, dead) if dead == old_grant.len() => std::ops::ControlFlow::Break(()),
             (sent, dead) => std::ops::ControlFlow::Continue(format!("sent {sent}, dead {dead}")),
         }
     })
     .await
-    .expect("u2 and u1's new change are delivered, the old one buried");
+    .expect("u2 and u1's new change are delivered, the old ones buried");
     let dead = rig.f.hub.store.dead_summaries();
+    assert!(
+        dead.iter()
+            .all(|d| d.reason == crate::events::outbox::DeadReason::Observation.as_str()),
+        "buried as observation_changed"
+    );
+    let mut buried: Vec<String> = dead.into_iter().map(|d| d.event_id).collect();
+    buried.sort();
+    old_grant.sort();
     assert_eq!(
-        (dead[0].event_id.as_str(), dead[0].reason.as_str()),
-        (
-            old.0.as_str(),
-            crate::events::outbox::DeadReason::Observation.as_str()
-        ),
-        "only u1's record from the old grant is buried, as observation_changed"
+        buried, old_grant,
+        "only u1's changes from the old grant are buried"
     );
     delivery.abort();
 }
