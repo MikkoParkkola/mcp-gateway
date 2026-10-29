@@ -90,6 +90,28 @@ fn r22_remote_transports_are_refused() {
     }
 }
 
+/// R22a (A2A): an A2A backend is `remote_backend` too, under block and warn;
+/// control: the same name as Stdio is judged and allowed inside.
+#[cfg(feature = "a2a")]
+#[test]
+fn r22a_a2a_backend_is_refused_as_remote() {
+    let a2a = TransportConfig::A2a {
+        a2a_url: "http://127.0.0.1:9".to_string(),
+        a2a_agent_card_path: None,
+    };
+    for action in [FirewallAction::Block, FirewallAction::Warn] {
+        let fx = Fx::new(&["path"], action);
+        let inside = fx.path("safe/f");
+        assert_eq!(
+            call(&fx.fw, "fs", &inside, fx.sender().as_deref()),
+            Seen::Allowed
+        );
+        assert!(fx.registry.register(backend("fs", a2a.clone())));
+        let got = call(&fx.fw, "fs", &inside, fx.sender().as_deref());
+        assert_eq!(got, refused(RootReason::RemoteBackend), "A2A {action:?}");
+    }
+}
+
 /// R23: a server the registry does not hold is `unknown_backend`; R23b: so is
 /// every call on a firewall built without the registries.
 #[test]
