@@ -72,7 +72,7 @@ fn assert_served(row: &str, (status, answer): &(axum::http::StatusCode, Value)) 
 /// What the last delivery record in the fixture's log (`dirs.0`) states as
 /// its effect: a refused replay states `refused`, never `delivered`, and no
 /// findings (`Absent` when it names none).
-fn last_effect(dirs: &(tempfile::TempDir, tempfile::TempDir)) -> Value {
+fn last_effect(dirs: &(tempfile::TempDir, crate::gateway::router::tests::FixtureDir)) -> Value {
     std::fs::read_to_string(dirs.0.path().join("audit.jsonl"))
         .unwrap_or_default()
         .lines()
@@ -412,7 +412,7 @@ const PASSTHROUGH: (&str, &str) = (
 async fn passthrough_after_forwarded() -> (
     axum::Router,
     Arc<std::sync::atomic::AtomicUsize>,
-    (tempfile::TempDir, tempfile::TempDir),
+    (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
     crate::key_server::oidc::VerifiedIdentity,
 ) {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("keygen"));

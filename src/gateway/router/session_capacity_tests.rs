@@ -15,7 +15,7 @@ use super::tests::test_router_app_state_with_streaming;
 use super::{AppState, create_router};
 use crate::config::StreamingConfig;
 
-async fn gateway() -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     test_router_app_state_with_streaming(StreamingConfig {
         enabled: true,
         ..StreamingConfig::default()

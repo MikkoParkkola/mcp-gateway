@@ -211,7 +211,7 @@ fn the_transparency_log_stores_a_session_fingerprint() {
     use crate::security::transparency_log::{
         TransparencyLogConfig, TransparencyLogger, show_session_entries,
     };
-    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let tmp = crate::security::transparency_log::temp::TempLog::new();
     let logger = TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
         path: tmp.path().to_string_lossy().to_string(),
