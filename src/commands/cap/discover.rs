@@ -157,7 +157,7 @@ async fn cap_discover_shadow(
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
         match crate::write_discovered_to_config(&adoptable_servers, Some(&apply_path), mode) {
             // The counts are what the writer wrote and skipped: it applies
-            // the shared adopt rule and skips `capabilities.name` (MIK-8358).
+            // the shared adopt rule and skips `capabilities.name`.
             Ok((path, adopted, refused)) => {
                 eprintln!(
                     "Adopted {adopted} local shadow server(s) into {}; skipped {refused}",
