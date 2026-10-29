@@ -31,7 +31,9 @@ pub use session::show_session_entries;
 /// Result of a chain-integrity verification pass.
 #[derive(Debug, Default)]
 pub struct VerifyResult {
-    /// `true` when every entry in the log passed all checks.
+    /// `true` when every entry in the log passed all checks. Without a
+    /// secret those checks are hash-only: a caller verifying without the key
+    /// must also refuse on [`Self::signed_entry_seen`].
     pub ok: bool,
     /// Number of entries checked.
     pub entries_checked: usize,
@@ -45,6 +47,12 @@ pub struct VerifyResult {
     pub segments_expired: usize,
     /// Findings that do not fail the verdict (archive mode, a trailing seal).
     pub warnings: Vec<String>,
+    /// An entry this pass parsed carried a signature (any `sig` key). Set
+    /// before an entry is checked, so a returned result whose chain failed
+    /// still reports it (a read error returns no result at all): a caller
+    /// verifying without the key refuses on it, whatever another, earlier
+    /// read of the log found.
+    pub signed_entry_seen: bool,
 }
 
 /// Whether tail completeness is checked against `<path>.hwm`.
@@ -61,6 +69,7 @@ pub enum VerifyMode {
 ///
 /// Does **not** authenticate the per-entry HMAC `sig`; use
 /// [`verify_log_signed`] when a shared secret is configured (MIK-6700).
+/// [`VerifyResult::signed_entry_seen`] says whether it skipped any.
 ///
 /// # Errors
 ///
@@ -340,6 +349,19 @@ impl<'a> Stream<'a> {
         Ok(self.result)
     }
 
+    /// Parse one line, and note a signature on it before any check can
+    /// reject the entry, so a failed chain still reports it.
+    fn read_entry(&mut self, raw: &str, file: &Path, ln: usize) -> io::Result<Value> {
+        let entry: Value = serde_json::from_str(raw.trim()).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{}: line {}: invalid JSON: {e}", file.display(), ln + 1),
+            )
+        })?;
+        self.result.signed_entry_seen |= is_signed_entry(&entry);
+        Ok(entry)
+    }
+
     fn stream(&mut self, files: &[(Option<u64>, PathBuf)]) -> io::Result<Verdict> {
         let newest_sealed = files.iter().filter_map(|(s, _)| *s).next_back();
         // The previous file: its segment, path, and the seal it ended with.
@@ -359,12 +381,7 @@ impl<'a> Stream<'a> {
             let content = bounded_read_to_string(file, MAX_AUDIT_READ_BYTES)?;
             let mut sealed_here: Option<u64> = None;
             for (ln, raw) in content.lines().filter(|l| !l.trim().is_empty()).enumerate() {
-                let entry: Value = serde_json::from_str(raw.trim()).map_err(|e| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("{}: line {}: invalid JSON: {e}", file.display(), ln + 1),
-                    )
-                })?;
+                let entry = self.read_entry(raw, file, ln)?;
                 let counter =
                     field_u64(&entry, "counter").ok_or_else(|| missing(ln + 1, "counter"))?;
                 if let Some(next) = sealed_here {

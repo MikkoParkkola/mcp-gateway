@@ -302,6 +302,13 @@ test.describe('placement', () => {
     });
   }
 
+  /** Where the dialog sits: centred in the visible part, or docked 16px from the top edge or below the opener (the one case where centring yields). Vertical only: both modes are centred across, checked apart. */
+  const placement = (box, opener, { width, height }) => {
+    if (Math.abs(box.y + box.height / 2 - height / 2) <= 1) return 'centred';
+    const docked = Math.abs(box.y - 16) <= 1 || Math.abs(box.y - (opener.y + opener.height + 16)) <= 1;
+    return docked ? 'docked' : 'neither';
+  };
+
   test('D5b text at 200%, a tall opener, and a resize while open still leave the opener uncovered', async ({ page }) => {
     await page.setViewportSize({ width: 820, height: 600 });
     await page.addInitScript(() => {
@@ -315,6 +322,12 @@ test.describe('placement', () => {
       await expect.poll(async () => intersects(await dialog(page).boundingBox(), await page.locator('#remove-probe').boundingBox())).toBe(false);
       const buttons = await dialog(page).locator('.acts').boundingBox();
       expect(buttons.y >= 0 && buttons.y + buttons.height <= size.height, 'the buttons stay in view').toBe(true);
+      const box = await dialog(page).boundingBox();
+      const opener = await page.locator('#remove-probe').boundingBox();
+      expect(Math.abs(box.x + box.width / 2 - size.width / 2), 'centred across in both modes').toBeLessThanOrEqual(1);
+      expect(box.x >= 0 && box.x + box.width <= size.width, 'inside the viewport across').toBe(true);
+      expect(buttons.x >= 0 && buttons.x + buttons.width <= size.width, 'the button row inside the viewport across').toBe(true);
+      expect(['centred', 'docked'], `placed ${JSON.stringify(box)} for the opener ${JSON.stringify(opener)}`).toContain(placement(box, opener, size));
     }
   });
 
@@ -331,6 +344,9 @@ test.describe('placement', () => {
     expect(box.y).toBeGreaterThanOrEqual(120);
     expect(box.y + box.height).toBeLessThanOrEqual(540);
     expect(intersects(box, await page.locator('#remove-probe').boundingBox())).toBe(false);
+    const buttons = await dialog(page).locator('.acts').boundingBox();
+    expect(buttons.y, 'the buttons start inside the visible part').toBeGreaterThanOrEqual(120);
+    expect(buttons.y + buttons.height, 'and end inside it').toBeLessThanOrEqual(540);
     // Centred in the visible part, not the layout viewport.
     expect(Math.abs(box.y + box.height / 2 - (120 + 210))).toBeLessThanOrEqual(1);
   });

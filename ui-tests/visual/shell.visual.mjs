@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { test, expect } from '../tests/base.mjs';
-import { withFixturePages } from '../tests/shell.mjs';
+import { withFixturePages, tooltipModuleUrl } from '../tests/shell.mjs';
 
 const FRAMES = process.env.FRAMES_DIR;
 
@@ -50,7 +50,20 @@ const CASES = [
   ['48q-tools-status-search-results.png', 1440, 900, 'dark', [
     ['toolbar', 256, 200, 760, 52, 0.15, 'the server choice is a native select, not a drawn button; no ⌘K hint in a page search (the palette owns ⌘K)'],
     ['list', 256, 258, 1160, 448, 0.06, "the shell's table.t draws uppercase headings inside the card's padding; an Open link to the tool's page and the tool's class beside \"Input schema\" in the open row; the count line replaces the frame's scroll footer"]], 'tools'],
+  // Frame 36 draws its tooltips as a sheet. The tooltip module's own tip()
+  // draws the "Calls today" one with the frame's copy, its box placed on the frame's.
+  ['36-tooltip-sheet.png', 1440, 1000, 'dark', [
+    ['tooltip', 388, 142, 300, 200]], 'tooltip'],
 ];
+
+const FRAME_COPY = {
+  _pending: {},
+  'fixture.status.calls': { title: 'Calls today', rows: [
+    ['What', 'Tool calls github answered or refused.'],
+    ['Window', "Since 00:00 in the gateway's time zone, per call."],
+    ['Source', "The gateway's call log."],
+    ['Compared', '↘ 48% against yesterday by the same time.']] },
+};
 
 /** The tools frame 48q draws, then filler to its totals. */
 function frameTools() {
@@ -85,6 +98,7 @@ test.describe('frames', () => {
       if (act === 'signin') {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
       }
+      if (act === 'tooltip') await page.route('**/ui/assets/tips.*.json', (r) => r.fulfill({ json: FRAME_COPY }));
       if (act === 'tools') {
         await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
         await page.route('**/ui/api/tools**', (r) => r.fulfill({ json: { tools: frameTools() } }));
@@ -97,6 +111,19 @@ test.describe('frames', () => {
       }
       await page.waitForSelector(act === 'signin' ? '#signin:not([hidden])' : '#content [data-rendered]');
       if (act === 'tools') await page.evaluate(() => document.activeElement?.blur());
+      if (act === 'tooltip') {
+        await page.evaluate(async (url) => {
+          const tips = await import(url);
+          await tips.tipsSettled();
+          const t = tips.tip('fixture.status.calls');
+          // The box opens 6 px under its 14 px trigger; the frame's box sits at y = 142.5.
+          Object.assign(t.style, { position: 'fixed', left: '388px', top: '122.5px' });
+          document.body.append(t);
+        }, tooltipModuleUrl());
+        await page.locator('.has-tip button').focus();
+        await expect(page.locator('.tip.open')).toHaveCount(1);
+        await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+      }
       if (act?.startsWith('palette:')) {
         await page.keyboard.press('Control+KeyK');
         await page.keyboard.type(act.slice('palette:'.length));
