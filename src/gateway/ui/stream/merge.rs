@@ -326,6 +326,9 @@ impl<S: LogSource> LogMerge<S> {
         let known = &mut self.generations[appended.log as usize];
         if std::mem::replace(known, appended.generation) != appended.generation {
             // The log was replaced or truncated: the source says where we are.
+            // Positions in the old log mean nothing in the new one.
+            self.recovery = None;
+            self.hint = None;
             self.begin_scan().await;
             return None;
         }
