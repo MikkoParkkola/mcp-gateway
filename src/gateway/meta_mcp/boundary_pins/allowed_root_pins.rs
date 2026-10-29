@@ -8,8 +8,9 @@
 //!   `apply_roots`; `check_request` only delegates to `check_request_keyed`.
 //! - P1: every production `Firewall::from_config` sits in
 //!   `response_firewall`, which also calls `with_registries`.
-//! - P2: a `check_request_keyed` or `rescan` call passing `None` for the
-//!   sending backend is one of the listed live-lookup fallbacks.
+//! - P2: every production `check_request_keyed` and `rescan` call site is
+//!   listed as passing the sending backend or as a live-lookup fallback
+//!   passing `None`; an unlisted site fails whatever it passes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,32 +19,62 @@ use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The live-lookup fallbacks (design section 3): file, function, method and
-/// the reason no sending instance exists there.
-const FALLBACKS: [(&str, &str, &str, &str); 4] = [
+/// What a call site passes for the sending backend.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pass {
+    /// The instance that sends: the folder check classifies it.
+    Instance,
+    /// `None`: a live-lookup fallback, for the stated reason (design
+    /// section 3).
+    Fallback(&'static str),
+}
+
+/// Every production `check_request_keyed` and `rescan` call: file, function,
+/// method and what it passes. A call site not listed here fails P2, whatever
+/// it passes, so the instance-passing guarantee cannot erode silently.
+const SITES: [(&str, &str, &str, Pass); 6] = [
     (
         "src/gateway/router/handlers/dispatch_tools_call.rs",
         "tools_call",
         "check_request_keyed",
-        "the /mcp route scan: its targets carry no instance, and the chokepoint re-judges",
+        Pass::Fallback(
+            "the /mcp route scan: its targets carry no instance, and the chokepoint re-judges",
+        ),
     ),
     (
         "src/gateway/meta_mcp/invoke/chokepoint.rs",
         "route_request_scan",
         "check_request_keyed",
-        "the route scan the stdio route stage uses; the chokepoint re-runs the checks",
+        Pass::Fallback(
+            "the route scan the stdio route stage uses; the chokepoint re-runs the checks",
+        ),
     ),
     (
         "src/gateway/router/watch_poll.rs",
         "poll_capability",
         "check_request_keyed",
-        "capability watch polling: a capability route, refused under a root rule",
+        Pass::Fallback("capability watch polling: a capability route, refused under a root rule"),
     ),
     (
         "src/security/firewall/mod.rs",
         "check_request",
         "check_request_keyed",
-        "a public delegator whose embedder callers have no backend instance",
+        Pass::Fallback(
+            "a public delegator whose embedder callers have no backend instance, so the \
+             live-lookup fallback is the only option there",
+        ),
+    ),
+    (
+        "src/gateway/router/backend_handlers.rs",
+        "guard_tool_call",
+        "check_request_keyed",
+        Pass::Instance,
+    ),
+    (
+        "src/gateway/meta_mcp/invoke/chokepoint.rs",
+        "rescan_outbound",
+        "rescan",
+        Pass::Instance,
     ),
 ];
 
@@ -53,16 +84,18 @@ struct Calls {
     by_fn: BTreeMap<(String, String), BTreeSet<String>>,
     /// (file, function) of each production `Firewall::from_config`.
     builds: Vec<(String, String)>,
-    /// (file, function, method) of each call passing `None` last.
-    none_sites: Vec<(String, String, String)>,
+    /// (file, function, method, passes `None` last) of each check call.
+    sites: Vec<(String, String, String, bool)>,
 }
 
 fn key(at: &Place) -> (String, String) {
     (at.file.clone(), at.func.clone().unwrap_or_default())
 }
 
+/// `None` or `Option::None` as the last argument.
 fn is_none(expr: Option<&syn::Expr>) -> bool {
-    matches!(expr, Some(syn::Expr::Path(p)) if p.path.is_ident("None"))
+    matches!(expr, Some(syn::Expr::Path(p))
+        if p.path.segments.last().is_some_and(|s| s.ident == "None"))
 }
 
 impl Sink for Calls {
@@ -74,11 +107,10 @@ impl Sink for Calls {
                     .entry(key(at))
                     .or_default()
                     .insert(method.clone());
-                if matches!(method.as_str(), "check_request_keyed" | "rescan")
-                    && is_none(call.args.last())
-                {
+                if matches!(method.as_str(), "check_request_keyed" | "rescan") {
                     let (file, func) = key(at);
-                    self.none_sites.push((file, func, method));
+                    self.sites
+                        .push((file, func, method, is_none(call.args.last())));
                 }
             }
             syn::Expr::Call(call) => {
@@ -160,23 +192,40 @@ fn p1_production_firewalls_are_built_with_registries() {
     );
 }
 
-/// P2: a call passing no sending backend is a listed fallback; any other
-/// fails until it is added here, and to design section 3, with its reason.
+/// P2: every check call site is listed; a fallback passes `None` and an
+/// instance site does not; no listed row is stale. A new site fails until it
+/// is added here, and to design section 3, with what it passes and why.
 #[test]
-fn p2_no_backend_calls_are_listed_fallbacks() {
+fn p2_every_check_call_site_is_listed() {
     let calls = scan();
-    let mut stray = Vec::new();
-    for (file, func, method) in &calls.none_sites {
-        let listed = FALLBACKS
+    let mut wrong = Vec::new();
+    for (file, func, method, none) in &calls.sites {
+        let listed = SITES
             .iter()
-            .any(|(f, fun, m, _why)| f == file && fun == func && m == method);
-        if !listed {
-            stray.push(format!("{file}::{func} {method}(.., None)"));
+            .find(|(f, fun, m, _)| f == file && fun == func && m == method);
+        match listed {
+            None => wrong.push(format!("unlisted: {file}::{func} {method}")),
+            Some((.., Pass::Fallback(_))) if !none => {
+                wrong.push(format!(
+                    "listed as a fallback, passes an instance: {file}::{func}"
+                ));
+            }
+            Some((.., Pass::Instance)) if *none => {
+                wrong.push(format!(
+                    "passes None, not the sending instance: {file}::{func} {method}"
+                ));
+            }
+            Some(_) => {}
         }
     }
-    assert!(
-        stray.is_empty(),
-        "unlisted calls without the sending backend:\n{}",
-        stray.join("\n")
-    );
+    for (file, func, method, _) in SITES {
+        let found = calls
+            .sites
+            .iter()
+            .any(|(f, fun, m, _)| f == file && fun == func && m == method);
+        if !found {
+            wrong.push(format!("stale row: {file}::{func} {method}"));
+        }
+    }
+    assert!(wrong.is_empty(), "check call sites:\n{}", wrong.join("\n"));
 }
