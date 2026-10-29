@@ -1117,13 +1117,20 @@ export function render() {
   };
 
   const loading = watchLoading(content, body, label, current);
+  // Busy from the first render's start until it settles (data, error or empty), as a Retry is.
+  content.setAttribute('aria-busy', 'true');
   runTab(spec, route, body)
     .then(() => {
       // The data is already in the body, under the loading state: let it go after its minimum.
-      loading.release();
+      // Busy ends when the loading state does, never while it still covers the arrived content.
+      loading.release(() => { if (current()) content.removeAttribute('aria-busy'); });
       if (current()) saveSnapshot(key, body);
     })
-    .catch((err) => loading.after(() => { if (current()) settle(err); }));
+    .catch((err) => loading.after(() => {
+      if (!current()) return;
+      settle(err);
+      content.removeAttribute('aria-busy');
+    }));
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
@@ -1137,7 +1144,7 @@ const LOADING_MIN_MS = 400;
  * - after(swap) waits out the rest of LOADING_MIN_MS if the state is up, takes
  *   it away, then runs `swap` (an error, a 403, a Retry's result), so a state
  *   shown at 300 ms is never replaced 10 ms later;
- * - release() is for data already drawn under it: it goes after its minimum.
+ * - release(done) is for data already drawn under it: it goes after its minimum, then `done` runs.
  * Either withdraws a loading message not yet said.
  */
 function watchLoading(content, body, label, current) {
@@ -1169,12 +1176,15 @@ function watchLoading(content, body, label, current) {
       if (wait > 0) setTimeout(finish, wait);
       else finish();
     },
-    release() {
+    release(done) {
       stop();
       const wait = left();
-      if (!node) return;
-      if (wait > 0) setTimeout(() => node.remove(), wait);
-      else node.remove();
+      const finish = () => {
+        node?.remove();
+        done?.();
+      };
+      if (wait > 0) setTimeout(finish, wait);
+      else finish();
     },
   };
 }
@@ -1317,6 +1327,8 @@ function markKey(refused) {
 async function signOut() {
   bearer = null;
   const epoch = ++authEpoch;
+  // The identity changed with no re-render: a load still running can no longer clear this itself.
+  document.getElementById('content').removeAttribute('aria-busy');
   showWho(null);
   // Its own status line, apart from the key check's error: a key typed while
   // the logout is pending must not hide this, nor this overwrite its answer.
