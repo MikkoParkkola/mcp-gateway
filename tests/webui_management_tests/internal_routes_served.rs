@@ -227,7 +227,7 @@ async fn writable() -> (
         make_app_state_with_reload(initial, None, config_path.clone()).await;
     {
         let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
-        seat.live_config = std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+        seat.live_config = std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
             (*seat.live_config.get()).clone(),
             Arc::new(ResolvedAuthConfig::from_config(
                 &auth_on(),

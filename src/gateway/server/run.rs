@@ -180,8 +180,11 @@ impl Gateway {
         // resolved above, so the startup keys authenticate from the first
         // request, and every reload rebuilds the key list over it.
         let live_config = Arc::new(
-            LiveConfig::with_auth(self.config.clone(), Arc::clone(&auth_config))
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            LiveConfig::from_prepared(crate::config_reload::Generation::prepare_startup(
+                self.config.clone(),
+                Arc::clone(&auth_config),
+            ))
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
         );
 
         // SIEM evidence-export background task (MIK-6703). None when disabled.

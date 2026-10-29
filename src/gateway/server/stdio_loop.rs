@@ -108,12 +108,14 @@ impl Gateway {
         // Its auth is the default one: stdio authenticates by API key nothing,
         // and the gateway's own `auth` is never resolved here (MIK-7638).
         let live_config = Arc::new(
-            crate::config_reload::LiveConfig::with_auth(
-                self.config.clone(),
-                Arc::new(stdio_tasks::default_auth(
-                    self.env.startup(),
-                    Arc::clone(&record_key),
-                )),
+            crate::config_reload::LiveConfig::from_prepared(
+                crate::config_reload::Generation::prepare_startup(
+                    self.config.clone(),
+                    Arc::new(stdio_tasks::default_auth(
+                        self.env.startup(),
+                        Arc::clone(&record_key),
+                    )),
+                ),
             )
             .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
         );

@@ -166,7 +166,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         agent_identity_config: f.agent_identity,
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
             config.clone(),
             Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
         )),

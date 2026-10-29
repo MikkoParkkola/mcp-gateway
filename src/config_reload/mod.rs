@@ -209,7 +209,7 @@ pub struct LiveConfig {
 impl LiveConfig {
     /// A `LiveConfig` for `config` whose key table is resolved with no env
     /// overlay and a throwaway record key. For tests and tools that judge no
-    /// production request; production starts through [`Self::with_auth`],
+    /// production request; production starts through [`Self::from_prepared`]
     /// with the auth it resolved at startup (a source pin holds this).
     ///
     /// # Panics
@@ -222,14 +222,13 @@ impl LiveConfig {
         let key: [u8; 32] = rand::rng().random();
         let key = key.iter().map(|b| format!("{b:02x}")).collect::<String>();
         let auth = crate::gateway::auth::ResolvedAuthConfig::from_config(&config.auth, &key);
-        Self::with_auth(config, Arc::new(auth))
+        Self::from_prepared(Generation::prepare_startup(config, Arc::new(auth)))
     }
 
-    /// The startup `LiveConfig`: `config` with `auth`, its auth as resolved
-    /// at startup, so the startup keys authenticate from the first request.
+    /// The startup `LiveConfig`, seeded with a prepared generation, so the
+    /// startup keys authenticate from the first request.
     #[must_use]
-    pub fn with_auth(config: Config, auth: Arc<crate::gateway::auth::ResolvedAuthConfig>) -> Self {
-        let seed = Generation::startup(config, auth);
+    pub(crate) fn from_prepared(seed: Generation) -> Self {
         let running = Arc::clone(seed.config());
         Self {
             inner: RwLock::new(Arc::new(seed)),
@@ -239,6 +238,17 @@ impl LiveConfig {
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// [`Self::from_prepared`] for `config` with `auth`, for unit-test
+    /// fixtures whose auth differs from `config.auth`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_auth(
+        config: Config,
+        auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
+    ) -> Self {
+        Self::from_prepared(Generation::prepare_startup(config, auth))
     }
 
     /// Share the gateway policy epoch so a published reload can bump it.

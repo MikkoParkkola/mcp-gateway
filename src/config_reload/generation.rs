@@ -54,9 +54,10 @@ impl Generation {
     }
 
     /// The startup generation: `auth` is the startup build of `config.auth`
-    /// against the startup overlay, so the startup keys authenticate before
-    /// any reload.
-    pub(super) fn startup(config: Config, auth: Arc<ResolvedAuthConfig>) -> Self {
+    /// against the startup overlay, which ran the same key resolution and
+    /// collision checks `prepare` runs, so the startup keys authenticate
+    /// before any reload.
+    pub(crate) fn prepare_startup(config: Config, auth: Arc<ResolvedAuthConfig>) -> Self {
         Self {
             config: Arc::new(config),
             auth,

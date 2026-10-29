@@ -185,7 +185,7 @@ async fn make_app_state(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+        live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
             {
                 // Flags off, as this fixture set them on `AppState` before they
                 // moved into the published config (ADR-023).
@@ -212,7 +212,7 @@ async fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> (Arc<AppSt
     let (mut state, store_dir) = make_app_state(None, None).await;
     {
         let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
-        seat.live_config = std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+        seat.live_config = std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
             (*seat.live_config.get()).clone(),
             Arc::new(ResolvedAuthConfig::from_config(
                 auth_config,
@@ -283,7 +283,7 @@ async fn make_app_state_with_reload(
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+            live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
                 {
                     // Flags off, as this fixture set them on `AppState` before they
                     // moved into the published config (ADR-023).

@@ -449,7 +449,7 @@ async fn the_other_scopes_cannot_widen_the_selection() {
         };
         {
             state.live_config =
-                std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+                std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
                     (*state.live_config.get()).clone(),
                     Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
                         &auth,

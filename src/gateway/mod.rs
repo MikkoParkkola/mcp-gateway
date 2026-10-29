@@ -183,6 +183,19 @@ pub mod test_helpers {
         meta.set_change_feed(super::ChangeFeed::Http);
     }
 
+    /// A live config for a fixture whose auth (`auth`) differs from
+    /// `config.auth`: the key table and record key it judges with are
+    /// `auth`'s, as a gateway's are the ones it resolved at startup.
+    #[must_use]
+    pub fn live_config(
+        config: crate::config::Config,
+        auth: std::sync::Arc<super::ResolvedAuthConfig>,
+    ) -> crate::config_reload::LiveConfig {
+        crate::config_reload::LiveConfig::from_prepared(
+            crate::config_reload::Generation::prepare_startup(config, auth),
+        )
+    }
+
     /// The authorizer a fixture's `SubscriptionRegistry` re-validates against:
     /// `config` with no key server, as a fixture's `AppState` carries it.
     #[must_use]
@@ -191,7 +204,7 @@ pub mod test_helpers {
             key_server: None,
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,
-            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            live_config: std::sync::Arc::new(live_config(
                 crate::config::Config::default(),
                 std::sync::Arc::new(super::ResolvedAuthConfig::from_config(config, record_key)),
             )),

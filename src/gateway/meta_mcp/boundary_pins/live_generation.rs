@@ -4,7 +4,9 @@
 //! `Generation::prepare`, which resolves the key table and runs the reload
 //! refusals. A production call to `LiveConfig::new`, `LiveConfig::set` or
 //! `Generation::of` would publish a generation that skipped them, so none may
-//! exist outside the listed exemptions.
+//! exist outside the listed exemptions. And production seeds a `LiveConfig`
+//! through `LiveConfig::from_prepared` at exactly the startup sites below, so
+//! production cannot construct one without a prepared generation.
 //!
 //! Syntax scan, per expression: a path call ending in `LiveConfig::new` or
 //! `Generation::of`, and a `.set(..)` method call on a receiver whose last
@@ -18,6 +20,15 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 
 /// Production sites that may build a generation without `prepare`, and why.
 const ALLOW: &[(&str, &str, &str)] = &[];
+
+/// The production calls to `LiveConfig::from_prepared` by name: (file,
+/// function). `LiveConfig::new` reaches it as `Self::from_prepared`, and its
+/// own production callers are refused above.
+const SEEDS: &[(&str, &str)] = &[
+    ("src/gateway/mod.rs", "live_config"),
+    ("src/gateway/server/run.rs", "run"),
+    ("src/gateway/server/stdio_loop.rs", "run_stdio_on"),
+];
 
 /// The last identifier of a receiver expression (`state.live_config` ->
 /// `live_config`).
@@ -44,6 +55,7 @@ fn ends_with(path: &syn::Path, ty: &str, func: &str) -> bool {
 #[derive(Default)]
 struct Calls {
     rows: Vec<String>,
+    seeds: Vec<(String, String)>,
 }
 
 impl Sink for Calls {
@@ -56,6 +68,10 @@ impl Sink for Calls {
                 }
                 syn::Expr::Path(path) if ends_with(&path.path, "Generation", "of") => {
                     Some("Generation::of")
+                }
+                syn::Expr::Path(path) if ends_with(&path.path, "LiveConfig", "from_prepared") => {
+                    self.seeds.push((at.file.clone(), func.to_owned()));
+                    None
                 }
                 _ => None,
             },
@@ -88,5 +104,14 @@ fn k21_every_published_generation_is_prepared() {
         calls.rows.is_empty(),
         "a production generation skips `Generation::prepare`:\n{}",
         calls.rows.join("\n")
+    );
+    calls.seeds.sort();
+    let want: Vec<(String, String)> = SEEDS
+        .iter()
+        .map(|(file, func)| ((*file).to_owned(), (*func).to_owned()))
+        .collect();
+    assert_eq!(
+        calls.seeds, want,
+        "production seeds a LiveConfig somewhere other than the startup sites"
     );
 }

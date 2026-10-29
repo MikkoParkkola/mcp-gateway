@@ -75,7 +75,7 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::with_auth(
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
             {
                 // Flags off, as this fixture set them on `AppState` before they
                 // moved into the published config (ADR-023).
