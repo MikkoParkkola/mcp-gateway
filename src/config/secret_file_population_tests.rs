@@ -111,6 +111,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (
+        "src/config_persistence_scratch.rs",
+        "the scratch-and-rename writer: creates its scratch file owner-only (0600 / owner-only DACL)",
+    ),
+    (
         "src/config_persistence_atomic.rs",
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),

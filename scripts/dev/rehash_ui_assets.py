@@ -24,7 +24,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SHELL = ROOT / "src/gateway/ui/shell"
 SHELL_RS = ROOT / "src/gateway/ui/shell.rs"
-HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|woff2|svg|png)$")
+HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|json|woff2|svg|png)$")
 TABLE = re.compile(r"pub\(super\) const ASSETS: &\[\(&str, &\[u8\]\)\] = &\[.*?\];", re.S)
 
 
