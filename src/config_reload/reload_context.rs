@@ -457,19 +457,15 @@ impl ReloadContext {
             crate::config_persistence::lock::ReaderLock::Held(locked) => {
                 // An audited gateway's lock recovered nothing yet: the
                 // recovery intent comes first.
-                let recovered = match self
-                    .recover_for_reload(locked.journal_pending, &locked.target)
-                    .await
-                {
-                    None => locked.recovered,
-                    Some(Ok(recovered)) => recovered,
-                    Some(Err(why)) => {
+                let locked = match self.recover_for_reload(locked).await {
+                    Ok(locked) => locked,
+                    Err(why) => {
                         return Err(format!(
                             "config reload skipped: {why}; the next change retries"
                         ));
                     }
                 };
-                if recovered == crate::config_persistence::journal::Recovered::RolledBack {
+                if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
                     self.reload_owed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                 }

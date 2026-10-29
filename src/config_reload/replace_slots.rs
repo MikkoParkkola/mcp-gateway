@@ -11,16 +11,18 @@ use crate::config_persistence::keyedit::{SlotId, Template};
 
 /// The template's slots name exactly the step's fields (none without a
 /// step): a slot with no secret, or a secret with no slot, is refused before
-/// any entry exists.
+/// any entry exists. Compared as sorted lists: two secrets for one field
+/// would leave an entry no field names.
 pub(super) fn same_fields(
     template: &Template,
     step: Option<&SecretStep>,
 ) -> Result<(), ReplaceError> {
-    let slots: std::collections::BTreeSet<String> =
-        template.slot_ids().map(SlotId::display).collect();
-    let fields: std::collections::BTreeSet<String> = step
+    let mut slots: Vec<String> = template.slot_ids().map(SlotId::display).collect();
+    let mut fields: Vec<String> = step
         .map(|s| s.values.iter().map(|v| v.field.clone()).collect())
         .unwrap_or_default();
+    slots.sort();
+    fields.sort();
     if slots == fields {
         Ok(())
     } else {

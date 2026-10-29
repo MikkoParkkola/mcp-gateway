@@ -450,21 +450,7 @@ impl ReloadContext {
             }
         })?;
         let target = locked.target.clone();
-        let recovery_intent_id = match &mut audit {
-            Audit::Off => {
-                self.pay_owed_reload(locked.recovered, &target).await;
-                None
-            }
-            Audit::Required { sink, .. } => {
-                let (id, recovered) = self
-                    .audit_recovery(sink.as_mut(), locked.journal_pending, &target)
-                    .await?;
-                if id.is_some() {
-                    self.pay_owed_reload(recovered, &target).await;
-                }
-                id
-            }
-        };
+        let (locked, recovery_intent_id) = self.recover_before_write(&mut audit, locked).await?;
 
         if target != self.trusted_config {
             return Err(ReplaceError::Unsupported(format!(

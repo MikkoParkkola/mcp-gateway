@@ -498,8 +498,20 @@ fn plain_key(segment: &str) -> bool {
 
 /// The text a secret slot holds until the writer fills it: unique per path,
 /// so a slot can only ever be read back under its own field.
+/// Only plain-scalar bytes, so a serializer writes it bare or
+/// double-quoted, never single-quoted around the reference; any other byte
+/// of the field is written as `~xx`.
 fn placeholder(id: &SlotId) -> String {
-    format!("__mcpgw_slot_{}__", id.display())
+    let mut out = String::from("__mcpgw_slot_");
+    for byte in id.display().bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-') {
+            out.push(char::from(byte));
+        } else {
+            out.push_str(&format!("~{byte:02x}"));
+        }
+    }
+    out.push_str("__");
+    out
 }
 
 /// The placeholder as the scalar text written into the file.
