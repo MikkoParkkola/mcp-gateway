@@ -306,11 +306,7 @@ async fn tasks_get_judged(
                             caller.session_id,
                             policy_caller,
                         )
-                        .inspect(|_| {
-                            crate::gateway::delivery_facts::raise(
-                                crate::gateway::delivery_facts::ResponseEffect::Refused,
-                            );
-                        })
+                        .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                 })
             },
             |current, frame| state.meta_mcp.scan_task_read(current, frame),

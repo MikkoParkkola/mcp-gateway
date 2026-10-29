@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::{BackendConfig, FailsafeConfig};
-use crate::gateway::egress_fixture::{BACKEND_METHODS, NAME, Part, Planted, URI, secret};
+use crate::gateway::egress_fixture::{
+    BACKEND_METHODS, Delivery, NAME, Part, Planted, URI, secret, unclassified_additions,
+};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::firewall::{Firewall, FirewallAction, FirewallConfig, FirewallRule};
 
@@ -26,6 +28,10 @@ enum Setup {
     Warn,
     /// No firewall; response inspection in action mode is the only screen.
     InspectionOnly,
+    /// No firewall; response inspection in observe mode, which annotates.
+    ObserveOnly,
+    /// No firewall and response inspection turned off: no screen at all.
+    InspectionOff,
     /// The firewall present with response scanning off.
     ScanOff,
     /// The firewall present and disabled.
@@ -57,6 +63,13 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
     let mut meta = MetaMcp::new(registry);
     if matches!(setup, Setup::InspectionOnly) {
         meta.enable_response_inspection_action_mode();
+        return (Arc::new(meta), None);
+    }
+    if matches!(setup, Setup::ObserveOnly) {
+        return (Arc::new(meta), None);
+    }
+    if matches!(setup, Setup::InspectionOff) {
+        meta.disable_response_inspection();
         return (Arc::new(meta), None);
     }
     let firewall = Arc::new(
@@ -389,15 +402,101 @@ async fn a_clean_stdio_delivery_records_delivered() {
     assert_eq!(row["response_findings"], json!([]), "{row}");
 }
 
-/// A firewall with response scanning off reads nothing: the answer is
-/// delivered and its findings are null, never an empty (scanned clean) list.
+/// On stdio, response inspection's finding is recorded
+/// beside a firewall scan that found nothing.
 #[tokio::test]
-async fn a_scan_off_delivery_records_null_findings() {
+async fn a_stdio_inspection_finding_is_recorded() {
+    let text = format!("base64: {}", "A".repeat(120));
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, text.clone()).await;
+    assert!(!refused(&body), "premise: delivered: {body}");
+    let findings = row["response_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        findings
+            .iter()
+            .any(|f| f["kind"] == "inspect:encoding" && f["where"] == "result"),
+        "inspection's finding is missing: {row}"
+    );
+    assert!(!row.to_string().contains(&text), "no content: {row}");
+}
+
+/// On stdio, the same answer goes out with the gateway's
+/// `_security_findings` added: the record says `annotated`.
+#[tokio::test]
+async fn a_stdio_annotated_answer_records_annotated() {
+    let text = format!("base64: {}", "A".repeat(120));
+    let (body, row) = recorded_delivery(Setup::Default, Part::ResultText, text.clone()).await;
+    assert!(
+        body.contains("_security_findings") && body.contains(&text),
+        "premise: annotated, text unchanged: {body}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
+/// On stdio, a backend error comes back as a tool error carrying the
+/// gateway's `recovery` hint and nothing else added: the hint is noted, so
+/// the record says `annotated`.
+#[tokio::test]
+async fn a_stdio_recovery_hint_records_annotated() {
+    let (body, row) = recorded_delivery(
+        Setup::FirewallOff,
+        Part::ErrorMessage,
+        "upstream unavailable".into(),
+    )
+    .await;
+    assert!(
+        body.contains("recovery")
+            && !body.contains("_context_integrity")
+            && !body.contains("_security_findings"),
+        "premise: the hint is the only addition: {body}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
+/// On stdio, a context-integrity verdict attached to an unchanged answer,
+/// the only member the gateway adds, records `annotated`.
+#[tokio::test]
+async fn a_stdio_verdict_records_annotated() {
+    let text = "Contact: keeper@orchardcoop.fi".to_owned();
+    let (body, row) = recorded_delivery(Setup::FirewallOff, Part::ResultText, text.clone()).await;
+    assert!(
+        body.contains(&text)
+            && body.contains("_context_integrity")
+            && !body.contains("_security_findings"),
+        "premise: unchanged, the verdict the only addition: {body}"
+    );
+    assert_eq!(row["response_effect"], "annotated", "{row}");
+}
+
+/// A firewall with response scanning off reads nothing, so it states no
+/// finding of its own: a credential is listed by response inspection only,
+/// which always reads the answer, never as a firewall finding.
+#[tokio::test]
+async fn a_scan_off_firewall_states_no_finding() {
     for setup in [Setup::ScanOff, Setup::FirewallOff] {
-        let (body, row) = recorded_delivery(setup, Part::ResultText, "plain".into()).await;
+        let leak = secret();
+        let (body, row) = recorded_delivery(setup, Part::ResultText, leak.clone()).await;
         assert!(!refused(&body), "premise: delivered: {body}");
-        assert_eq!(row["response_effect"], "delivered", "{row}");
-        assert_eq!(row["response_findings"], Value::Null, "{row}");
+        let findings = row["response_findings"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            findings.iter().any(|f| f["kind"] == "inspect:secret"),
+            "{setup:?}: inspection's finding: {row}"
+        );
+        assert!(
+            !findings.iter().any(|f| f["kind"]
+                .as_str()
+                .is_some_and(|k| k.starts_with("firewall:"))),
+            "{setup:?}: a firewall that read nothing states nothing: {row}"
+        );
+        assert!(
+            !row.to_string().contains(&leak),
+            "{setup:?}: no content: {row}"
+        );
     }
 }
 
@@ -474,4 +573,92 @@ async fn a_killed_stdio_call_records_refused() {
         panic!("one delivery record: {rows:?}");
     };
     assert_eq!(row["response_effect"], "refused", "{row}");
+}
+
+/// The stdio twin of the HTTP row: every member the gateway adds to a
+/// backend's answer is a row of the member table. A listing is merged from
+/// the gateway's own entries and every backend's, so the backend's entry is
+/// found in it and diffed.
+#[tokio::test]
+async fn every_member_the_gateway_adds_on_stdio_is_in_the_member_table() {
+    let mut failures = Vec::new();
+    for setup in [Setup::ObserveOnly, Setup::InspectionOnly] {
+        for method in BACKEND_METHODS {
+            for part in [Part::ResultText, Part::ErrorData] {
+                for text in ["harmless".to_owned(), secret()] {
+                    let seen = cell(setup, method, part, text.clone()).await;
+                    let delivery = match method {
+                        "tools/call" => Delivery::Wrapped,
+                        m if m.ends_with("/list") => Delivery::Merged,
+                        _ => Delivery::Passthrough,
+                    };
+                    for path in unclassified_additions((method, part, &text), delivery, &seen.body)
+                    {
+                        failures.push(format!(
+                            "{setup:?} stdio {method} {part:?}: `{path}` added outside the member table"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    report(&failures);
+}
+
+/// `security.response_inspection.enabled: false` over stdio: for a tool
+/// result, a backend error and another method's answer, a text carrying a
+/// pattern inspection finds is delivered and not inspected at all (no
+/// refusal, no `_security_findings`, no "Response inspection finding" log, no
+/// inspection run), while the same text under action-mode inspection in the
+/// same process is still inspected and screened.
+#[test]
+fn inspection_off_inspects_nothing_on_stdio() {
+    use crate::test_classification_count::{MARKER, runs};
+    let cells = [
+        ("tools/call", Part::ResultText),
+        ("tools/call", Part::ErrorMessage),
+        ("prompts/get", Part::ResultText),
+    ];
+    let mut failures = Vec::new();
+    for (n, (method, part)) in cells.into_iter().enumerate() {
+        let marker = format!("{MARKER}inspection-off-stdio-{n}");
+        let text = format!("{} {marker}", secret());
+        for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+            let at = format!("{method} {part:?} {setup:?}");
+            let before = runs("d2_inspection", &marker);
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                runtime.block_on(cell(setup, method, part, text.clone()))
+            });
+            let inspected = runs("d2_inspection", &marker) - before;
+            if seen.calls == 0 {
+                failures.push(format!("{at}: never reached the backend"));
+            }
+            if matches!(setup, Setup::InspectionOff) {
+                if inspected != 0 {
+                    failures.push(format!("{at}: inspected {inspected} times"));
+                }
+                if refused(&seen.body) || !seen.body.contains(&marker) {
+                    failures.push(format!("{at}: not delivered: {}", seen.body));
+                }
+                if seen.body.contains("_security_findings") {
+                    failures.push(format!("{at}: annotated: {}", seen.body));
+                }
+                if warnings.contains("Response inspection finding") {
+                    failures.push(format!("{at}: logged a finding: {warnings}"));
+                }
+            } else {
+                if inspected == 0 {
+                    failures.push(format!("{at}: premise: never inspected"));
+                }
+                if seen.body.contains(&secret()) {
+                    failures.push(format!("{at}: premise: not screened: {}", seen.body));
+                }
+            }
+        }
+    }
+    report(&failures);
 }

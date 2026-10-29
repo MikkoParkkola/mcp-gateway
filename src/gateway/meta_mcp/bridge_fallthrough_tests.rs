@@ -482,7 +482,7 @@ fn assert_answers_native(response: &crate::protocol::JsonRpcResponse) {
     let object = result
         .as_object_mut()
         .unwrap_or_else(|| panic!("a retry to its origin backend answers native: {response:?}"));
-    let trace_id = object.remove("trace_id");
+    let trace_id = object.remove("_trace_id");
     assert!(
         matches!(&trace_id, Some(Value::String(id)) if id.starts_with("gw-")),
         "a retry to its origin backend answers native: {response:?}"
@@ -698,7 +698,6 @@ async fn an_undeclared_last_round_records_refused_only_while_vouched() {
             let mut fields = serde_json::Map::new();
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
-                false,
                 false,
                 &mut fields,
             );

@@ -12,7 +12,7 @@ async fn recorded(steps: fn()) -> Map<String, serde_json::Value> {
     scope(async move {
         steps();
         let mut fields = Map::new();
-        record_fields(snapshot().as_ref(), false, false, &mut fields);
+        record_fields(snapshot().as_ref(), false, &mut fields);
         fields
     })
     .await

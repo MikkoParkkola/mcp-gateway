@@ -243,6 +243,10 @@ mod attestation_plan;
 #[cfg(test)]
 #[path = "chain_strip_tests.rs"]
 mod chain_strip;
+/// A chain verifies over the members ingress withheld.
+#[cfg(test)]
+#[path = "chain_withheld_tests.rs"]
+mod chain_withheld;
 /// MIK-8202 P2: the meta route's clock reads on a clock before 1970.
 #[cfg(test)]
 #[path = "clock_p2_tests.rs"]

@@ -264,6 +264,9 @@ pub(crate) fn validate_capability_url_for_context(
     url: &str,
     context: &CapabilityExecutionContext,
 ) -> Result<()> {
+    // A loopback name is refused whatever the context allows: the isolated
+    // runtime's allowance covers loopback IP literals only.
+    crate::security::ssrf::refuse_loopback_name(url)?;
     match validate_url_not_ssrf(url) {
         Ok(()) => Ok(()),
         Err(_err) if context.allow_loopback_egress && url_targets_loopback_ip(url) => Ok(()),

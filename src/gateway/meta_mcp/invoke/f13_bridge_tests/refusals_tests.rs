@@ -86,7 +86,6 @@ async fn an_undeclared_key_bridged_round_records_refused_only_while_vouched() {
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
                 false,
-                false,
                 &mut fields,
             );
             fields
@@ -209,7 +208,6 @@ async fn a_firewall_refused_bridged_round_records_refused_only_while_vouched() {
             let mut fields = serde_json::Map::new();
             crate::gateway::delivery_facts::record_fields(
                 crate::gateway::delivery_facts::snapshot().as_ref(),
-                false,
                 false,
                 &mut fields,
             );

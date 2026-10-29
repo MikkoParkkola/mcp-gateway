@@ -638,6 +638,9 @@ mod link;
 #[path = "e5_dashboard_session_tests/handoff.rs"]
 mod handoff;
 
+#[path = "e5_dashboard_session_tests/refused_redirect.rs"]
+mod refused_redirect;
+
 #[path = "e5_dashboard_session_tests/clock.rs"]
 mod clock;
 

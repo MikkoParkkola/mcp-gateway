@@ -466,6 +466,7 @@ impl Backend {
         );
         let safe = prepared.resend_permitted;
         let read_only = prepared.read_only_declared;
+        let hint_declared = prepared.hint_declared;
         let mut verdicts = prepared.verdicts;
         verdicts.add_unparseable(unparseable);
         let withheld = verdicts.withheld_names();
@@ -495,6 +496,8 @@ impl Backend {
         };
         entry.tools_cache.replace(parsed, || {
             self.commit_verdicts(&source, listing, verdicts);
+            // Display only, so replaced outright: it labels this list.
+            *entry.hint_declared.write() = hint_declared;
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

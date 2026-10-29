@@ -16,12 +16,14 @@ pub mod backends;
 pub mod capabilities;
 pub mod control_plane;
 mod dashboard;
+mod discovery;
 mod errors;
 mod events;
 mod history;
 pub mod import;
 mod overview;
 mod preview;
+mod preview_identity;
 mod refusals;
 pub(crate) mod session;
 mod shell;
@@ -84,6 +86,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(backends::backends_router())
         .merge(events::events_router())
         .merge(import::import_router())
+        .merge(discovery::discovery_router())
         .merge(history::history_router());
 
     #[cfg(feature = "cost-governance")]
@@ -430,6 +433,8 @@ async fn status(
                 .next_retry_at
                 .and_then(crate::config_reload::refusals::rfc3339),
             cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
+            calls_24h: None,
+            calls_prev_24h: None,
             name: bs.name,
             running: bs.running,
             transport: bs.transport,
@@ -447,6 +452,16 @@ async fn status(
         });
     }
 
+    let labels: Vec<crate::counters::Filter<'_>> = servers
+        .iter()
+        .map(|s| crate::counters::Filter::Server(&s.name))
+        .collect();
+    let (windows, counts_since) = call_windows(&state, &labels);
+    for (server, (day, prev)) in servers.iter_mut().zip(windows) {
+        server.calls_24h = day;
+        server.calls_prev_24h = prev;
+    }
+
     Json(json!({
         "server_count": total,
         "tool_count": tool_count,
@@ -458,6 +473,7 @@ async fn status(
             "half_open": cb_half_open,
         },
         "servers": servers,
+        "counts_since": counts_since,
         "auth": auth,
     }))
 }
@@ -493,7 +509,7 @@ async fn tools(
 
         // get_tools() returns from cache if populated (no network I/O).
         // If cache is empty, it will connect + fetch — acceptable for the tools tab.
-        if let Ok(tools) = backend.get_tools_shared().await {
+        if let Ok((tools, declared)) = backend.shared_tools_with_declared_hints().await {
             for tool in tools.iter() {
                 // Search filter
                 if !query_lower.is_empty() {
@@ -509,17 +525,47 @@ async fn tools(
                     }
                 }
 
+                let (class, class_source) =
+                    preview::tool_class(tool, declared.contains(&tool.name));
                 entries.push(json!({
                     "name": tool.name,
                     "server": name,
                     "description": tool.description,
                     "schema": tool.input_schema,
+                    "class": class,
+                    "class_source": class_source,
+                    // The admin view lists every cached tool, so one left out
+                    // of `allowed_tools` can be ticked again.
+                    "selected": !backend.is_unselected(&tool.name),
                 }));
             }
         }
     }
 
-    Json(json!({ "tools": entries, "total": entries.len() })).into_response()
+    // The names, copied out so the entries can take their counts in place.
+    let names: Vec<(String, String)> = entries
+        .iter()
+        .map(|e| {
+            let text = |key: &str| e[key].as_str().unwrap_or_default().to_owned();
+            (text("server"), text("name"))
+        })
+        .collect();
+    let labels: Vec<crate::counters::Filter<'_>> = names
+        .iter()
+        .map(|(server, tool)| crate::counters::Filter::Tool(server, tool))
+        .collect();
+    let (windows, counts_since) = call_windows(&state, &labels);
+    for (entry, (day, prev)) in entries.iter_mut().zip(windows) {
+        entry["calls_24h"] = json!(day);
+        entry["calls_prev_24h"] = json!(prev);
+    }
+
+    Json(json!({
+        "tools": entries,
+        "total": entries.len(),
+        "counts_since": counts_since,
+    }))
+    .into_response()
 }
 
 /// `GET /ui/api/config` — sanitized configuration (secrets masked). One
@@ -549,6 +595,8 @@ async fn config(
                 "name": s.name,
                 "transport": s.transport,
                 "running": s.running,
+                // As written, so a pattern that matches no current tool shows.
+                "allowed_tools": b.allowed_tools(),
             })
         })
         .collect();
@@ -711,13 +759,38 @@ struct ToolsQuery {
     server: Option<String>,
 }
 
+/// Each label's calls in the last 24 hours (the 48 half-hour buckets ending
+/// with the current, partial one) and in the same local wall-clock hours of
+/// the day before (on a DST date that span is one hour shorter or longer),
+/// read in one store read, plus when counting began. A count is `None` when
+/// it could be low (calls folded into an overflow, or no longer held); every
+/// count and the start are `None` when the counter store is not running or
+/// the clock cannot be read: the caller still answers, with nulls.
+fn call_windows(
+    state: &AppState,
+    labels: &[crate::counters::Filter<'_>],
+) -> (Vec<crate::counters::CallWindows>, Option<u64>) {
+    let unknown = || vec![(None, None); labels.len()];
+    let (Some(store), Ok(now)) = (state.meta_mcp.counters(), crate::clock::unix_secs()) else {
+        return (unknown(), None);
+    };
+    let sums = store.window_sums(labels, now, &crate::local_day::host_zone());
+    (sums.counts, Some(sums.since))
+}
+
 #[derive(Debug, Serialize)]
 struct ServerStatus {
     name: String,
     running: bool,
     transport: String,
     tools_cached: usize,
+    /// Requests since this process started; resets on restart.
     request_count: u64,
+    /// Calls in the last 24 hours, persisted across restarts; `null` when
+    /// the count could be low (see [`call_windows`]).
+    calls_24h: Option<u64>,
+    /// Calls in the same hours of the day before; `null` likewise.
+    calls_prev_24h: Option<u64>,
     circuit_state: String,
     circuit_trips: u64,
     current_failures: u32,

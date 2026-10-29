@@ -200,6 +200,20 @@ pub(crate) fn scan_uncached(text: &str) -> Vec<usize> {
     PATTERN_SET.matches(text).into_iter().collect()
 }
 
+/// What response inspection (D2) does with a backend's answer, as the
+/// operator configured it (`security.response_inspection`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum ResponseInspectionMode {
+    /// `enabled: false`: the answer is not inspected at all, whatever
+    /// `action_mode` says.
+    Off,
+    /// Findings are logged and annotated; nothing is blocked.
+    #[default]
+    Observe,
+    /// A HIGH/CRITICAL finding refuses the answer.
+    Action,
+}
+
 /// Inspect response text for security patterns.
 ///
 /// `action_mode`: `true` = block on HIGH/CRITICAL; `false` = observe only.

@@ -195,7 +195,7 @@ async fn r1_a_sync_call_whose_backend_is_reloaded_is_refused() {
         .pointer("/result/content/0/text")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let recovery = serde_json::from_str::<Value>(text).unwrap_or_default()["recovery"].clone();
+    let recovery = serde_json::from_str::<Value>(text).unwrap_or_default()["_recovery"].clone();
     assert_eq!(recovery["error_code"], "BACKEND_ERROR", "r1: {body}");
     assert_eq!(recovery["retry"], true, "r1: {body}");
     assert!(

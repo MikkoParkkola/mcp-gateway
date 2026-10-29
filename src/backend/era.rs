@@ -308,7 +308,10 @@ impl Backend {
     /// went; a peer that answers a 2026-only method `method not found` is not
     /// modern however its probe went. Either way the stale verdict is dropped
     /// and one fresh probe is run, detached: the request that noticed must not
-    /// pay for it.
+    /// pay for it. A lent-only slot is the exception: it sends only while a
+    /// dispatch lends its credential, so its probe runs before the dispatch
+    /// that noticed returns, and that dispatch waits at most the probe's
+    /// timeout.
     pub(super) async fn reprobe_if_contradicted(
         &self,
         method: &str,
@@ -335,11 +338,9 @@ impl Backend {
         // The slot this transport serves, found first: an answer that arrived over a transport
         // no slot holds any more is evidence about a peer that has been replaced, and must
         // neither drop the current verdict nor start a probe of it.
-        let Some(entry) = self
-            .pool
-            .iter()
-            .find_map(|slot| holds(slot.value(), transport).then(|| Arc::clone(slot.value())))
-        else {
+        let Some((key, entry)) = self.pool.iter().find_map(|slot| {
+            holds(slot.value(), transport).then(|| (slot.key().clone(), Arc::clone(slot.value())))
+        }) else {
             return;
         };
         #[cfg(test)]
@@ -367,13 +368,24 @@ impl Backend {
         let era = Arc::clone(&entry.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
-        tokio::spawn(async move {
+        let reprobe = async move {
             era.reprobe_with(
                 || probe(&transport, timeout),
                 |store| with_serving(&entry, &transport, store),
             )
             .await;
-        });
+        };
+        // A lent-only slot sends only while a dispatch lends its credential,
+        // and the answer that contradicted the era came to the dispatch now
+        // running: its probe runs here, before that dispatch returns and its
+        // loan ends. Detached, it would have no subscriber to send as.
+        let lent_only = matches!(key, super::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly;
+        if lent_only {
+            reprobe.await;
+        } else {
+            tokio::spawn(reprobe);
+        }
     }
 
     /// Probe deadline: never longer than the backend's own request timeout.
@@ -403,12 +415,15 @@ fn probe_cap() -> Duration {
 /// peer's era once, and finish startup with that verdict. The same sequence
 /// `Backend::start_entry` runs, so a modern stateless server that refuses
 /// `initialize` previews like a legacy one.
+///
+/// Returns the `serverInfo` the peer reported, as sent: a modern peer's from
+/// its discover answer's `_meta`, a legacy peer's from its `initialize`.
 #[cfg(feature = "webui")]
 pub(crate) async fn start_detached_http(
     transport: &Arc<crate::transport::HttpTransport>,
     name: &str,
     timeout: Duration,
-) -> Result<()> {
+) -> Result<Option<serde_json::Value>> {
     let cache = Arc::new(crate::protocol::era::EraCache::for_backend(name));
     transport.attach_era(Arc::clone(&cache));
     transport.connect().await?;
@@ -422,8 +437,19 @@ pub(crate) async fn start_detached_http(
     };
     // Installed in the attached cache, as a slot's start does: every request
     // after the probe is shaped for that verdict.
+    let reported = match &outcome {
+        ProbeOutcome::Result(result) => result
+            .get("_meta")
+            .and_then(|meta| meta.get(crate::protocol::meta::KEY_SERVER_INFO))
+            .cloned(),
+        ProbeOutcome::Error(_) | ProbeOutcome::NoAnswer => None,
+    };
     let era = cache.resolve_with(|| async { outcome }).await;
-    transport.finish_startup(era).await
+    transport.finish_startup(era).await?;
+    Ok(match era {
+        PeerEra::Modern => reported,
+        PeerEra::Legacy => transport.reported_server_info(),
+    })
 }
 
 /// What a refusal of a method the 2026-07-28 revision removed carries, so the

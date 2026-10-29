@@ -334,6 +334,8 @@ impl Backend {
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
+        // A lent-only slot's fill, its start included, sends as this caller.
+        let _loan = self.lend_to_slot(&key, &entry, fetch_headers)?;
         // MIK-8399: what a tools fill read, for the permit's abandon hook.
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tools = family.truncated_flag.is_some();
@@ -356,6 +358,13 @@ impl Backend {
                             self.name,
                             LIST_FILL_COOLDOWN.as_secs()
                         )));
+                    }
+                    // A fill that would have to start a refused shared slot is
+                    // refused before its admission, so it charges and counts
+                    // nothing; one over a transport already in place starts
+                    // nothing and is not a start.
+                    if entry.transport.read().is_none() {
+                        self.refuse_shared_start(&key)?;
                     }
                     let counted = (self.name.as_str(), &self.list_fills);
                     admit_fill(&entry, counted, bound, family.cooldown)?;
@@ -532,6 +541,12 @@ impl Backend {
         .await
     }
 
+    /// The longest one fill for a check may take: the backend's call timeout
+    /// and the list wait's grace.
+    pub(crate) fn tools_fill_bound(&self) -> std::time::Duration {
+        self.config.timeout + super::fill_check::LIST_FILL_WAIT_GRACE
+    }
+
     /// The caller's tool list for R2's check, and whether it is the slot's
     /// whole catalogue (design §2 step 2).
     ///
@@ -553,7 +568,7 @@ impl Backend {
         let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
-            tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+            tokio::time::timeout(self.tools_fill_bound(), fill)
                 .await
                 .unwrap_or_else(|_| {
                     Err(Provenance::expired(

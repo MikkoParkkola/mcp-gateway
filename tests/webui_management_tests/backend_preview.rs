@@ -15,8 +15,14 @@ use mcp_gateway::protocol::meta::MODERN_VERSIONS;
 
 use super::*;
 
+#[path = "backend_preview_allowed_tools.rs"]
+mod allowed_tools;
+#[path = "backend_preview_identity.rs"]
+mod identity;
 #[path = "backend_preview_lifecycle.rs"]
 mod lifecycle;
+#[path = "backend_preview_tools_class.rs"]
+mod tools_class;
 
 const PREVIEW: &str = "/ui/api/previews";
 
@@ -166,6 +172,12 @@ async fn an_unconfirmed_preview_starts_nothing_and_returns_a_token() {
         "{body}"
     );
     assert_eq!(body["preview"]["transport"], "http", "{body}");
+    assert!(
+        body["preview"]
+            .as_object()
+            .is_some_and(|p| p.get("package") == Some(&Value::Null)),
+        "not known before the server answers: {body}"
+    );
     assert!(
         log.lock().unwrap().is_empty(),
         "nothing may start before confirm"

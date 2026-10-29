@@ -38,6 +38,8 @@ pub mod capability;
 pub mod chains;
 #[doc(hidden)]
 pub mod cli;
+#[doc(hidden)]
+pub mod cli_support;
 mod clock;
 #[doc(hidden)]
 pub mod config;
@@ -86,6 +88,7 @@ pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
 pub(crate) mod local_day;
+mod log_escape;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
@@ -151,6 +154,8 @@ pub mod stats;
 // Every caller judges a daily budget, which only a cost-governance build has.
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
+#[cfg(test)]
+pub(crate) mod test_fixture_host;
 #[cfg(test)]
 mod test_pause;
 #[cfg(test)]
@@ -255,7 +260,9 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
         }
         _ => {
             subscriber
-                .with(fmt::layer().with_writer(std::io::stderr))
+                .with(log_escape::escaping(
+                    fmt::layer().with_writer(std::io::stderr),
+                ))
                 .init();
         }
     }

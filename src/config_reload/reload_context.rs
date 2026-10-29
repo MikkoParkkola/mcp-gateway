@@ -197,7 +197,7 @@ pub struct ReloadContext {
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "webui")),
         expect(
             dead_code,
             reason = "read only by the byte writer, whose first caller lands next"

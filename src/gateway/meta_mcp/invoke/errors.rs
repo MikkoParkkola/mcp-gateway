@@ -6,8 +6,7 @@ use serde_json::{Value, json};
 
 use super::audit;
 use crate::gateway::recovery::{
-    ErrorCategory, MetaSurface, RecoveryContext, Revive, SurfaceRequest, attach_recovery,
-    recovery_for_surface,
+    ErrorCategory, MetaSurface, RecoveryContext, Revive, SurfaceRequest, recovery_for_surface,
 };
 use crate::gateway::router::CallerStanding;
 use crate::{Error, Result};
@@ -44,15 +43,19 @@ pub(super) fn dispatch_error_result(
         rejection.error_code.clone_into(&mut hint.error_code);
         hint.retry = rejection.retry;
     }
-    let answer = attach_recovery(
-        json!({
-            "isError": true,
-            "content": [{"type": "text", "text": e.to_string()}],
-        }),
-        hint,
-    );
+    let mut answer = json!({
+        "isError": true,
+        "content": [{"type": "text", "text": e.to_string()}],
+    });
     // MIK-7939: the hint is the gateway's text, never a receipt's.
-    super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &answer);
+    if let Ok(hint) = serde_json::to_value(hint) {
+        super::gateway_writes::insert_noted(
+            super::gateway_writes::Layer::Value,
+            &["_recovery"],
+            &mut answer,
+            hint,
+        );
+    }
     answer
 }
 

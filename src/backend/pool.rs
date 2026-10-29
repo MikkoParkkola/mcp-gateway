@@ -101,6 +101,10 @@ pub(crate) struct PooledEntry {
     /// and only this slot's start and re-probes write it. `Arc` because the
     /// detached re-probe outlives the request that triggered it.
     pub(crate) era: Arc<crate::protocol::era::EraCache>,
+    /// The credentials this slot's dispatches in flight lend its transport
+    ///. A per-user slot's transport reads it on every send; a
+    /// required backend's sends nothing else.
+    pub(crate) lender: Arc<crate::transport::Lender>,
     /// The four metadata caches, and the set derived from the first of them.
     ///
     /// CO-LOCATED WITH THE SLOT, NOT THE BACKEND (MIK-7334.CATALOGUE.1). A
@@ -132,6 +136,10 @@ pub(crate) struct PooledEntry {
     /// no effect to lose. Per slot for the same reason as that set, and absent
     /// means deny: an unfilled slot caches nothing.
     pub(crate) read_only_declared: RwLock<std::collections::HashSet<String>>,
+    /// Tools whose `readOnlyHint` this slot's upstream declared, either way,
+    /// as of its last `tools/list`: the UI's declared-or-inferred label.
+    /// Grants nothing, so revocation never narrows it; the next fill rewrites it.
+    pub(crate) hint_declared: RwLock<std::collections::HashSet<String>>,
     /// Set when the last drain (MIK 7570 PAGING.1) stopped before the
     /// catalogue was exhausted (page cap, repeated cursor, or the fill
     /// budget); cleared by the next complete fill. Tools and resources only.
@@ -249,9 +257,11 @@ impl PooledEntry {
             retired: AtomicBool::new(false),
             failsafe: Failsafe::new(name, failsafe_config),
             era: Arc::new(crate::protocol::era::EraCache::for_slot(name, "shared")),
+            lender: Arc::default(),
             tools_cache: CachedMetadata::new(),
             resend_permitted: RwLock::default(),
             read_only_declared: RwLock::default(),
+            hint_declared: RwLock::default(),
             tools_truncated: AtomicBool::new(false),
             resources_truncated: AtomicBool::new(false),
             tools_fill_failed_at: parking_lot::Mutex::new(None),
@@ -294,6 +304,53 @@ impl Backend {
             .identity_propagation
             .as_ref()
             .map(|c| c.session_mode)
+    }
+
+    /// Whether this backend's Shared slot must never start: a required
+    /// identity binding with per-user sessions. ADR-007 IDP.7 forbids reaching
+    /// such a backend through a shared session, so no gateway-internal path
+    /// (warm-start, the health probe, a restart, an unbound fill) opens one
+    /// as the gateway.
+    pub(crate) fn shared_slot_refused(&self) -> bool {
+        self.config.identity_propagation.as_ref().is_some_and(|c| {
+            c.required && c.session_mode == crate::identity_propagation::SessionMode::PerUser
+        })
+    }
+
+    /// A per-user-sessions-only backend's Shared slot never starts or fills,
+    /// whoever asks: refused before anything is built, charged or counted,
+    /// with the isolation refusal's code (a denial, so never retried).
+    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> crate::Result<()> {
+        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
+            tracing::debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
+            return Err(crate::Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: format!(
+                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
+                    self.name
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// What this backend's per-user slots may send with (ADR-007
+    /// IDP.7): a required identity binding, whatever its session mode, sends
+    /// only the credential its dispatch lends, never a static header or a
+    /// gateway token; a may-share binding (an optional one) keeps its
+    /// configured headers.
+    pub(crate) fn per_user_slot_credential(&self) -> crate::transport::SlotCredential {
+        if self
+            .config
+            .identity_propagation
+            .as_ref()
+            .is_some_and(|c| c.required)
+        {
+            crate::transport::SlotCredential::LentOnly
+        } else {
+            crate::transport::SlotCredential::Configured
+        }
     }
 
     /// Whether this backend keeps one catalogue per caller: with identity

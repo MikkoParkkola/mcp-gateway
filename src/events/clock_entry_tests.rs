@@ -28,8 +28,10 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("fanout.rs", "revoke", 1),
     ("fanout.rs", "withdraw_rows", 1),
     ("governance.rs", "audit_lifecycle", 1),
-    // A lease judges its token's expiry at install, and a held
-    // lease's expiry before each send.
+    // A lease judges its token's expiry at install, a held lease's expiry
+    // before each send, and whether a held generation is past its deadline
+    // wherever it is read (delivery, fan-out, a listener's start and check).
+    ("lease.rs", "held_generation", 1),
     ("lease.rs", "install", 1),
     ("lease.rs", "with_credential", 1),
     // A lease request judges its row live once.
@@ -39,8 +41,8 @@ const DECISION_POINTS: &[(&str, &str, usize)] = &[
     ("operational_source.rs", "authorize", 1),
     ("reconcile.rs", "stop_expired_keys", 1),
     ("reconcile.rs", "sweep_lifecycle", 1),
-    ("rpc.rs", "subscribe", 1),
     ("rpc.rs", "unsubscribe", 1),
+    ("rpc/subscribe.rs", "subscribe", 1),
     ("rpc_held.rs", "refresh_held", 1),
     ("runtime.rs", "emit_dated", 1),
     ("runtime.rs", "new", 1),

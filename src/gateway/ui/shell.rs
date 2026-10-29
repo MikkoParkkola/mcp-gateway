@@ -37,12 +37,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.54b46a7583fd.css",
-        include_bytes!("shell/shell.54b46a7583fd.css"),
+        "shell.30f973ab3f5e.js",
+        include_bytes!("shell/shell.30f973ab3f5e.js"),
     ),
     (
-        "shell.9c17f5be2034.js",
-        include_bytes!("shell/shell.9c17f5be2034.js"),
+        "shell.5f16263b163b.css",
+        include_bytes!("shell/shell.5f16263b163b.css"),
+    ),
+    (
+        "tools.6d5b18720c69.css",
+        include_bytes!("shell/tools.6d5b18720c69.css"),
+    ),
+    (
+        "tools.c5e3db097eb0.js",
+        include_bytes!("shell/tools.c5e3db097eb0.js"),
     ),
 ];
 

@@ -274,7 +274,7 @@ async fn a_write_answer_is_never_stored() {
 // --- The capability route (r3/r5: the capability's own `read_only`) ---------
 
 /// A capability `name` on the capability backend `capabilities`, reached at a
-/// counting `localhost` endpoint. No `cache:` block, so the executor's own
+/// counting fixture-host endpoint. No `cache:` block, so the executor's own
 /// cache is off and any hit is the outer response cache's (r4, muse H2).
 async fn counting_capability(meta: &MetaMcp, name: &str, metadata: &str) -> Arc<AtomicUsize> {
     let hits = Arc::new(AtomicUsize::new(0));
@@ -296,16 +296,14 @@ async fn counting_capability(meta: &MetaMcp, name: &str, metadata: &str) -> Arc<
         );
         axum::serve(listener, app).await.expect("serve");
     });
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: {name}\ndescription: the capability under test\nmetadata:\n{metadata}\
          providers:\n  primary:\n    service: rest\n    config:\n      \
-         base_url: http://localhost:{port}\n      path: /probe\n      method: GET\n"
+         base_url: {base_url}\n      path: /probe\n      method: GET\n"
     ))
     .expect("fixture capability");
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .expect("client");
+    let client = crate::test_fixture_host::fixture_client(Duration::from_secs(5));
     let executor =
         Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
     let capabilities = Arc::new(crate::capability::CapabilityBackend::new(

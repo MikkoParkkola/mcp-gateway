@@ -33,9 +33,12 @@ impl DirectRouteGuards {
         // the G7 signing refusal are gateway refusals with no seal: raised
         // here, where the direct route delivers them. The kill switch and the
         // capability disable are sealed and raise where they are framed.
-        meta.admit_target(call).map_err(|e| match e {
-            Error::Protocol(_) => crate::gateway::delivery_facts::refused(e),
-            other => other,
+        meta.admit_target(call).inspect_err(|e| {
+            if matches!(e, Error::Protocol(_)) {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
         })?;
         if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
             return Err(crate::gateway::delivery_facts::refused(Error::json_rpc(
@@ -155,7 +158,15 @@ impl DirectRouteGuards {
             meta.chain_receive_for(
                 &meta.scoped(crate::gateway::authz::BackendGrant::of(client)),
                 call.server,
-                result,
+                (
+                    result,
+                    // Taken: the withheld members are for this check only.
+                    response
+                        .ingress_withheld
+                        .take()
+                        .as_deref()
+                        .map(crate::protocol::reserved_members::Withheld::members),
+                ),
                 challenge,
                 &slot,
             )

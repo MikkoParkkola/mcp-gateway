@@ -2,8 +2,8 @@ name: Pull request body hygiene
 
 # A pull request body is public the moment it is posted. Its own workflow, so
 # editing the body re-runs this check alone rather than the whole CI. The body
-# reaches the script through the environment, never interpolated into `run:`,
-# so its text stays data.
+# and title reach the script through the environment, never interpolated into
+# `run:`, so their text stays data.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
@@ -23,7 +23,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Check the body
+      - name: Check the title and body
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: scripts/dev/check-pr-body-hygiene.sh

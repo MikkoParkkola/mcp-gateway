@@ -48,6 +48,7 @@ src/events/worker.rs	unsent_later	retry_after_refusal	1	no-record	event delivery
 src/fs_lock_windows.rs	lock_dir	directory_refusal	1	no-record	a state-directory file lock, not a call delivery
 src/fs_lock_windows.rs	lock_directory_finding	directory_refusal	1	no-record	a state-directory file lock, not a call delivery
 src/fs_lock_windows.rs	sidecar	held_refusal	2	no-record	a state-directory file lock, not a call delivery
+src/gateway/auth_bootstrap.rs	try_dashboard_bootstrap	clock_refusal	2	no-record	a dashboard sign-in link exchange, not a call delivery
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_digests	1	no-record	config load: two credentials sharing a secret
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_principals	1	no-record	config load: two credentials sharing a principal
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
@@ -59,7 +60,7 @@ src/gateway/meta_mcp/admission_plan.rs	authorize_execution_plan	refuse_unatteste
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	refuse_chained_task	1	recorded	raised at this delivering return
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	refuse_on_playbook_run	1	not-a-decision	client-protocol rejection: retry fields on a playbook run
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	refuse_unadmitted	1	not-a-decision	an internal invariant: signing's prediction and the gates disagree
-src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	refuse_stored_repeat	1	recorded	raised where it returns the refusal
+src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	refuse_stored_repeat	1	recorded	StoredAnswer::deliver raises only a policy refusal
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	Error::Forbidden{}	1	feeds	the prompts/get scope refusal handle_prompts_get raises
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/chain_receipt.rs	chain_receive	refusal	1	recorded	chain-receipt refusal of the backend answer; raised at its delivering callers (meta and direct)
@@ -143,9 +144,11 @@ src/gateway/meta_mcp/task_replay.rs	keep_permanent_refusal	record_account_refusa
 src/gateway/meta_mcp/task_replay.rs	prepare_stored_read_kind	keep_permanent_refusal	1	not-delivered	memo
 src/gateway/meta_mcp/task_replay.rs	refuse_stored_delivery	refuse_stored	1	feeds	the stored-row refusal its callers raise
 src/gateway/meta_mcp/task_replay.rs	refuse_stored_repeat	refuse_stored	1	feeds	the stored-row refusal begin_task raises
-src/gateway/meta_mcp/task_replay/judging.rs	authorize_stored	Error::Forbidden{}	1	composite-or-replay	a stored task read re-judged at tasks/get; refuse_stored delivers it, raised there
+src/gateway/meta_mcp/task_replay/judging.rs	authorize_stored	Error::Forbidden{}	1	composite-or-replay	a stored task read re-judged at tasks/get; refuse_stored marks it a policy refusal
 src/gateway/meta_mcp/task_replay/judging.rs	judge_stored_accounts	take_account_refusal	1	composite-or-replay	stored task read
-src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	unknown_server_refusal	1	recorded	tasks/get refuse_stored raises where it returns Some
+src/gateway/meta_mcp/task_replay/judging.rs	refuse_stored	unknown_server_refusal	1	not-a-decision	a removed backend answers as the live call does; not a policy refusal
+src/gateway/meta_mcp/upstream.rs	recover_task_error_with	Error::ResponseFirewallRefused	1	not-delivered	settlement note for a recovered failure; the stored answer is read through tasks/get
+src/gateway/meta_mcp/upstream.rs	recover_task_error_with	note_refusal	1	not-delivered	settlement note for a recovered failure; the stored answer is read through tasks/get
 src/gateway/meta_mcp/upstream.rs	recover_task_result	note_refusal	1	not-delivered	audit note
 src/gateway/meta_mcp/visibility.rs	admin_capability_rule	Error::Forbidden{}	1	feeds	delivered by the route stage or the send chokepoint, both raised
 src/gateway/meta_mcp/visibility.rs	may_invoke_before_grants	Error::Forbidden{}	1	feeds	the authorization refusal the route stage delivers and raises
@@ -180,6 +183,8 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	forward_plain	refusal	1	r
 src/gateway/router/backend_handlers/direct_dispatch.rs	forward_sanitized	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_dispatch.rs	guard_and_sanitize	catalogue_refusal	1	recorded	catalogue relay 403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	refusal	1	recorded	direct outlet: records a sealed refusal
+src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_plain	refusal	1	recorded	direct outlet: records a sealed refusal
+src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_sanitized	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_failure.rs	answer	direct_refusal	1	recorded	a 403 the direct recorder classes Denied (an account backend refusing the caller)
 src/gateway/router/backend_handlers/direct_idempotency.rs	deliver_replay	refusal	2	recorded	refused() at each replay exit
 src/gateway/router/backend_handlers/direct_permit.rs	refused_send	refusal	1	recorded	direct outlet: records a sealed refusal
@@ -206,7 +211,7 @@ src/gateway/router/handlers/sse.rs	mcp_sse_handler	stream_request_refusal	1	no-r
 src/gateway/router/handlers/sse.rs	open_stream_session	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/handlers/sse.rs	open_stream_session	session_capacity_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/handlers/tasks.rs	frame	refuse_stored_delivery	1	not-delivered	a predicate (is_some)
-src/gateway/router/handlers/tasks.rs	tasks_get_judged	refuse_stored_delivery	1	recorded	tasks/get: raised where it returns the refusal
+src/gateway/router/handlers/tasks.rs	tasks_get_judged	refuse_stored_delivery	1	recorded	tasks/get: StoredAnswer::deliver raises only a policy refusal
 src/gateway/router/hardened_elicitation.rs	direct_refusal	refusal (as value)	1	recorded	the hardened legacy refusal, a 403 the direct recorder classes Denied
 src/gateway/router/hardened_elicitation.rs	direct_refusal	request_check_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/hardened_elicitation.rs	refuse	refusal	1	no-record	session admission
@@ -222,12 +227,18 @@ src/gateway/server/start_checks.rs	http	refuse_keyless_http_anomaly	1	no-record	
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	removed_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/server/stdio_dispatch.rs	prepare_signing	refuse_malformed_nonce_early	1	not-a-decision	client-protocol rejection: a malformed signing nonce
-src/gateway/server/stdio_tasks.rs	dispatch_get	refuse_stored_delivery	1	recorded	stdio tasks/get: raised where it returns the refusal
+src/gateway/server/stdio_tasks.rs	dispatch_get	refuse_stored_delivery	1	recorded	stdio tasks/get: StoredAnswer::deliver raises only a policy refusal
 src/gateway/server/support.rs	start_refusal	replica_state_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
 src/gateway/server/support.rs	start_refusal	serve_refusal	1	not-delivered	start-up, and restart advice text inside a reload answer, never the refusal delivered
+src/gateway/task_service/execution/worker_inspect.rs	dispatch_refusal_code	Error::ResponseFirewallRefused	1	not-delivered	the settlement record's code for a withheld dispatch refusal, not a delivery; the caller's answer is recorded at tasks/get
+src/gateway/task_service/execution/worker_inspect.rs	dispatched_in_cell	dispatch_refusal	1	not-delivered	reads the dispatch cell's refusal flag for the worker's settlement record, not a delivery; the caller's answer is recorded at tasks/get
+src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	Error::ResponseFirewallRefused	1	not-delivered	the worker's task settlement record (the inspection's refusal code), not a delivery; the caller's answer is recorded at tasks/get
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
+src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
+src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI discovery adopt: refuses adopting a find whose name is taken, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery

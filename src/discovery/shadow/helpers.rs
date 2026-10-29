@@ -122,8 +122,8 @@ pub(super) fn classify_remediation(
         };
     }
 
-    // Adoption would drop a header only the client can resolve.
-    let lossless = server.unresolved_header_names.is_empty();
+    // Adoption would lose or leak something: the rule adopt itself applies.
+    let lossless = crate::discovery::adopt::refusals(server).is_empty();
     if lossless
         && (matches!(
             ownership,
@@ -203,6 +203,13 @@ pub(super) fn risk_reasons(
     }
     if has_stale_binary_reference(server) {
         reasons.push("stale_binary".to_string());
+    }
+    // Why adoption is not offered, once per reason.
+    for (refusal, _) in crate::discovery::adopt::refusals(server) {
+        let code = refusal.code().to_string();
+        if !reasons.contains(&code) {
+            reasons.push(code);
+        }
     }
     reasons
 }
@@ -349,7 +356,7 @@ pub(super) fn is_loopback_url(raw: &str) -> bool {
     crate::gateway::is_loopback_host(host)
 }
 
-pub(super) fn executable_name(command: &str) -> Option<String> {
+pub(in crate::discovery) fn executable_name(command: &str) -> Option<String> {
     // Discovery stores argv joined with platform quoting, which starts a
     // quoted program with a quote; split that the same way. Anything else
     // (an unquoted program, raw `ps` text) keeps the whitespace split, so a

@@ -77,6 +77,16 @@ pub(crate) async fn fixture_hardened_signed_built_on(
     fx
 }
 
+/// `transport` behind no firewall, with response inspection in its default
+/// observe mode: findings are written onto the answer, nothing is withheld.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_observing_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |meta| meta).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 // Its only consumer is the egress matrix, which is `firewall`-gated.
@@ -85,6 +95,20 @@ pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
     let fx = fixture_inner(Answer::Ok, false, |mut meta| {
         meta.enable_response_inspection_action_mode();
+        meta
+    })
+    .await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// `transport` behind no firewall, with response inspection turned off
+/// (`enabled: false`): nothing screens what it answers.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_inspection_off_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |mut meta| {
+        meta.disable_response_inspection();
         meta
     })
     .await;

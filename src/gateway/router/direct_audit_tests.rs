@@ -42,6 +42,7 @@ mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
 #[cfg(feature = "firewall")]
 mod response_judge;
+mod rewritten_effect;
 mod route_records;
 mod sealed_refusal;
 #[cfg(feature = "firewall")]

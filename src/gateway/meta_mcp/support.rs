@@ -518,7 +518,7 @@ fn note_written(path: &'static [&'static str], result: &Value) {
     note(Layer::Value, path, result);
 }
 
-/// Attach `predicted_next` to an invoke result when predictions are available.
+/// Attach `_predicted_next` to an invoke result when predictions are available.
 ///
 /// If `predictions` is empty the original `result` is returned unchanged,
 /// preserving the zero-cost fast path for sessions without enough history.
@@ -526,23 +526,25 @@ pub(super) fn augment_with_predictions(mut result: Value, predictions: Vec<Value
     if predictions.is_empty() {
         return result;
     }
-    if let Value::Object(ref mut map) = result {
-        map.insert("predicted_next".to_string(), Value::Array(predictions));
-    }
-    note_written(&["predicted_next"], &result);
+    super::invoke::gateway_writes::insert_noted(
+        super::invoke::gateway_writes::Layer::Value,
+        &["_predicted_next"],
+        &mut result,
+        Value::Array(predictions),
+    );
     result
 }
 
-/// Attach `trace_id` to an invoke result so callers can correlate gateway logs
+/// Attach `_trace_id` to an invoke result so callers can correlate gateway logs
 /// with backend logs.
 ///
-/// The `trace_id` is always inserted; this function never returns the original
+/// The `_trace_id` is always inserted; this function never returns the original
 /// `result` unmodified (the contract guarantees the field is present).
 pub(super) fn augment_with_trace(mut result: Value, trace_id: &str) -> Value {
     if let Value::Object(ref mut map) = result {
-        map.insert("trace_id".to_string(), json!(trace_id));
+        map.insert("_trace_id".to_string(), json!(trace_id));
     }
-    note_written(&["trace_id"], &result);
+    note_written(&["_trace_id"], &result);
     result
 }
 
@@ -601,7 +603,7 @@ pub(super) fn augment_with_provenance(
         receipt = receipt.with_row_count(row_count);
     }
     // Join key: the active call's trace_id (also returned to the client as
-    // `result.trace_id`), so the receipt is self-joinable to the agent's claim.
+    // `result._trace_id`), so the receipt is self-joinable to the agent's claim.
     // Absent on paths with no trace scope (e.g. direct backend route).
     if let Some(trace_id) = crate::gateway::trace::current() {
         receipt = receipt.with_call_id(trace_id);
