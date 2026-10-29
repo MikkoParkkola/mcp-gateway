@@ -164,6 +164,7 @@ impl<'a> Walk<'a> {
 /// UTF-8.
 fn key(name: &std::ffi::OsStr) -> Option<String> {
     static SPACES: OnceLock<regex::Regex> = OnceLock::new();
+    // invariant: a constant pattern of one Unicode class, which always compiles.
     let spaces = SPACES.get_or_init(|| regex::Regex::new(r"\p{Zs}").expect("a valid class"));
     let nfc = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(name.to_str()?);
     Some(spaces.replace_all(&nfc, " ").into_owned())
@@ -220,20 +221,32 @@ impl Pool {
     pub(crate) fn new(threads: usize) -> std::sync::Arc<Self> {
         let (tx, rx) = std::sync::mpsc::channel::<Job>();
         let rx = std::sync::Arc::new(std::sync::Mutex::new(rx));
-        for i in 0..threads {
-            let rx = std::sync::Arc::clone(&rx);
-            std::thread::Builder::new()
-                .name(format!("folder-check-{i}"))
-                .spawn(move || {
-                    while let Ok(job) = rx.lock().map_or(Err(()), |r| r.recv().map_err(|_| ())) {
-                        job();
-                    }
-                })
-                .expect("a resolver thread starts");
+        // Only threads that start count as slots. With none, every covered
+        // call is refused `resolver_busy`: the check fails closed, never panics.
+        let started = (0..threads)
+            .filter(|i| {
+                let rx = std::sync::Arc::clone(&rx);
+                std::thread::Builder::new()
+                    .name(format!("folder-check-{i}"))
+                    .spawn(move || {
+                        while let Ok(job) = rx.lock().map_or(Err(()), |r| r.recv().map_err(|_| ()))
+                        {
+                            job();
+                        }
+                    })
+                    .is_ok()
+            })
+            .count();
+        if started < threads {
+            tracing::warn!(
+                started,
+                threads,
+                "Firewall: folder-check resolver threads did not all start; calls beyond them are refused"
+            );
         }
         std::sync::Arc::new(Self {
             jobs: std::sync::Mutex::new(tx),
-            free: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(threads)),
+            free: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(started)),
         })
     }
 
