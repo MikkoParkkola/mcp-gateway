@@ -347,10 +347,9 @@ impl Backend {
         // would leave the sibling route forwarding the caller's token.
         let params = substitute_progress_token(params);
 
-        // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both
-        // here because every route's tools/call passes through. Resolved
-        // before the call is admitted, so a value that does not resolve holds
-        // no permit. The caller's own credential is taken first, before the
+        // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both here because every
+        // route's tools/call passes through. Resolved before the call is admitted, so a value that
+        // does not resolve holds no permit. The caller's own credential is taken first, before the
         // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
         let (params, extra_headers) =
