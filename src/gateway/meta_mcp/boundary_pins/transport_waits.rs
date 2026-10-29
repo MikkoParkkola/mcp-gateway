@@ -1,133 +1,103 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Every production await on a backend transport sits inside
-//! `backend_wait(..)`, so `mcp_gateway_added_latency_seconds` subtracts it.
-//! A transport request outside the helper would count backend time as time
-//! the gateway added.
+//! Every production `impl Transport for ..` runs each sending method's body
+//! inside `backend_wait(..)`, so `mcp_gateway_added_latency_seconds`
+//! subtracts the time a call waits on a backend's transport. The impl is the
+//! one place every backend request and notification passes, whoever calls it
+//! and under whatever name the transport is held; a new transport fails here
+//! until its sending methods are wrapped.
 //!
-//! Syntax scan: a call of a transport request method whose receiver is named
-//! `transport` (a binding or a field). The `Backend` methods of the same
-//! names funnel into the wrapped send in `request_attempted` and are not
-//! transports. ponytail: a transport bound under another name is missed;
-//! the site list below fails if one of the known sites moves or vanishes.
+//! The trait's own default bodies only delegate to another sending method or
+//! refuse without I/O, so they need no wrap. Syntax scan with `syn`.
 
 use std::collections::BTreeSet;
-
-use syn::visit::Visit;
 
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
-/// The transport methods that send a request and await its answer.
-const METHODS: [&str; 3] = [
+/// The trait methods that send to a backend and wait for it.
+const SENDING: [&str; 5] = [
     "request",
     "request_with_headers",
     "request_with_task_capability",
+    "notify",
+    "notify_with_headers",
 ];
 
 /// The helper that measures a backend wait.
 const WRAPPER: &str = "backend_wait";
 
-/// (file, function) of every transport request the scan should find.
-const SITES: [(&str, &str); 5] = [
-    ("src/backend/era.rs", "probe"),
-    ("src/backend/era.rs", "start_detached_http"),
-    ("src/backend/list_drain.rs", "drain_list_pages"),
-    ("src/backend/ops.rs", "request_attempted"),
-    ("src/backend/probe.rs", "health_probe"),
+/// The production transports. A new one is a reviewed addition here, and
+/// keeps the scan from passing because it found nothing.
+const TRANSPORTS: [&str; 4] = [
+    "A2aTransport",
+    "HttpTransport",
+    "StdioTransport",
+    "WebSocketTransport",
 ];
 
-fn names_transport(receiver: &syn::Expr) -> bool {
-    match receiver {
-        syn::Expr::Path(p) => p.path.is_ident("transport"),
-        syn::Expr::Field(f) => matches!(&f.member, syn::Member::Named(n) if n == "transport"),
-        syn::Expr::Paren(p) => names_transport(&p.expr),
-        syn::Expr::Reference(r) => names_transport(&r.expr),
-        _ => false,
-    }
-}
-
-/// One function body: its transport requests, and which were unwrapped.
-#[derive(Default)]
-struct Body {
-    depth: usize,
-    found: usize,
-    unwrapped: usize,
-}
-
-impl<'ast> Visit<'ast> for Body {
-    fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-        let wraps = matches!(call.func.as_ref(), syn::Expr::Path(p)
-            if p.path.segments.last().is_some_and(|s| s.ident == WRAPPER));
-        self.depth += usize::from(wraps);
-        syn::visit::visit_expr_call(self, call);
-        self.depth -= usize::from(wraps);
-    }
-
-    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
-        if METHODS.contains(&call.method.to_string().as_str()) && names_transport(&call.receiver) {
-            self.found += 1;
-            self.unwrapped += usize::from(self.depth == 0);
-        }
-        syn::visit::visit_expr_method_call(self, call);
-    }
+/// The body is exactly `backend_wait(..).await`.
+fn wrapped(block: &syn::Block) -> bool {
+    let [syn::Stmt::Expr(syn::Expr::Await(awaited), None)] = block.stmts.as_slice() else {
+        return false;
+    };
+    matches!(awaited.base.as_ref(), syn::Expr::Call(call)
+        if matches!(call.func.as_ref(), syn::Expr::Path(p)
+            if p.path.segments.last().is_some_and(|s| s.ident == WRAPPER)))
 }
 
 #[derive(Default)]
-struct Waits {
-    sites: BTreeSet<(String, String)>,
+struct Impls {
+    found: BTreeSet<String>,
     unwrapped: Vec<String>,
 }
 
-impl Waits {
-    fn function(&mut self, file: &str, func: &str, attrs: &[syn::Attribute], block: &syn::Block) {
-        if test_only(attrs) {
+impl Sink for Impls {
+    fn item(&mut self, at: &Place, item: &syn::Item) {
+        let syn::Item::Impl(block) = item else {
+            return;
+        };
+        let Some((_, trait_path, _)) = &block.trait_ else {
+            return;
+        };
+        if test_only(&block.attrs)
+            || !trait_path
+                .segments
+                .last()
+                .is_some_and(|s| s.ident == "Transport")
+        {
             return;
         }
-        let mut body = Body::default();
-        body.visit_block(block);
-        if body.found > 0 {
-            self.sites.insert((file.to_owned(), func.to_owned()));
-        }
-        if body.unwrapped > 0 {
-            self.unwrapped
-                .push(format!("{file} {func}: {} unwrapped", body.unwrapped));
-        }
-    }
-}
-
-impl Sink for Waits {
-    fn item(&mut self, at: &Place, item: &syn::Item) {
-        match item {
-            syn::Item::Fn(f) => {
-                self.function(&at.file, &f.sig.ident.to_string(), &f.attrs, &f.block)
+        let syn::Type::Path(self_ty) = block.self_ty.as_ref() else {
+            return;
+        };
+        let Some(name) = self_ty.path.segments.last().map(|s| s.ident.to_string()) else {
+            return;
+        };
+        for member in &block.items {
+            if let syn::ImplItem::Fn(method) = member
+                && SENDING.contains(&method.sig.ident.to_string().as_str())
+                && !wrapped(&method.block)
+            {
+                self.unwrapped
+                    .push(format!("{} {name}::{}", at.file, method.sig.ident));
             }
-            syn::Item::Impl(block) => {
-                for member in &block.items {
-                    if let syn::ImplItem::Fn(m) = member {
-                        self.function(&at.file, &m.sig.ident.to_string(), &m.attrs, &m.block);
-                    }
-                }
-            }
-            _ => {}
         }
+        self.found.insert(name);
     }
 }
 
 #[test]
-fn every_backend_transport_wait_is_measured() {
-    let mut waits = Waits::default();
-    walk(crate_root(), &ROOTS, &mut waits).expect("the walk reads every module");
-    let expected: BTreeSet<(String, String)> = SITES
-        .iter()
-        .map(|(file, func)| ((*file).to_owned(), (*func).to_owned()))
-        .collect();
-    assert_eq!(waits.sites, expected, "the transport request sites changed");
+fn every_transport_send_is_measured_as_backend_wait() {
+    let mut impls = Impls::default();
+    walk(crate_root(), &ROOTS, &mut impls).expect("the walk reads every module");
+    let expected: BTreeSet<String> = TRANSPORTS.iter().map(|t| (*t).to_owned()).collect();
+    assert_eq!(impls.found, expected, "the production transports changed");
     assert!(
-        waits.unwrapped.is_empty(),
-        "transport waits outside {WRAPPER}:\n{}",
-        waits.unwrapped.join("\n")
+        impls.unwrapped.is_empty(),
+        "sending methods not run inside {WRAPPER}:\n{}",
+        impls.unwrapped.join("\n")
     );
 }
