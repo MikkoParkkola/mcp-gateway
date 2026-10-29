@@ -100,7 +100,7 @@ async fn a_redirect_hop_to_a_loopback_literal_is_the_ssrf_refusal() {
     );
 }
 
-/// MIK-9086 SITES.8: the refused hop comes after the request was sent, and a
+/// The refused hop comes after the request was sent, and a
 /// call's delivery records it `refused`, as a blocked answer after the send.
 #[tokio::test]
 async fn a_refused_redirect_hop_records_refused_on_the_delivery() {
