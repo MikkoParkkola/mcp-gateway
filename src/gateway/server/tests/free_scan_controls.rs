@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 use super::alloc_meter::{MIN_MARKER, isolate, scan_frees};
 
 /// A marker no other test writes, longer than any inline storage.
-static MARKER: &[u8] =
+const MARKER: &[u8] =
     b"free-scan-marker:7f3a9c2e-4b1d-4e8a-9c6f-2d5b8e1a7c30:credential-shaped-bytes";
 
 const _: () = assert!(MARKER.len() >= MIN_MARKER);
