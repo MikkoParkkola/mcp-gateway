@@ -15,9 +15,12 @@
 set -euo pipefail
 
 target=x86_64-pc-windows-gnu
-if [ -z "${CROSS_CARGO:-}" ] && ! rustup target list --installed 2>/dev/null | grep -qx "$target"; then
+if [ -z "${CROSS_CARGO:-}" ] && ! rustup target list --installed 2>/dev/null | grep -x "$target" >/dev/null; then
   echo "windows-cross-clippy: the $target target is not installed." >&2
   echo "  rustup target add $target   (and a mingw-w64 toolchain for C dependencies)" >&2
   exit 2
+fi
+if [ -z "${CROSS_CARGO:-}" ] && ! command -v x86_64-w64-mingw32-gcc >/dev/null; then
+  echo "windows-cross-clippy: no x86_64-w64-mingw32-gcc; crates with C code will fail to build (install mingw-w64)." >&2
 fi
 exec "${CROSS_CARGO:-cargo}" clippy --target "$target" --all-targets --all-features "$@" -- -D warnings
