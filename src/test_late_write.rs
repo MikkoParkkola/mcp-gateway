@@ -12,6 +12,10 @@
 //! `eprintln!`, because libtest captures the print macros per test and a late
 //! writer's test has already finished. The write itself is unchanged, and the
 //! check races it: this names the leaker, it does not prevent the leak.
+//!
+//! A log opened at a file directly in the temp root is named when its lease is
+//! taken ([`Creator::beside_temp_root`]): its `.lock` and `.hwm` sit beside
+//! that file, so whatever removes the file leaves both behind.
 
 use std::io::Write as _;
 use std::path::Path;
@@ -42,9 +46,36 @@ impl Creator {
             "late {kind} write after its directory was removed; created by {}\n",
             self.0
         );
-        // Best effort: attribution must never fail the write it describes.
-        let _ = std::io::stderr().lock().write_all(line.as_bytes());
+        report(&line);
     }
+
+    /// Report a log opened at a file directly in the temp root: its `.lock`
+    /// and `.hwm` sidecars sit beside the file, so removing the file (a
+    /// `NamedTempFile`, or a `TempDir` reused as a file path) leaves both.
+    /// Checked when the lease is taken, so it names the test on every run,
+    /// not only when a late write races the removal.
+    pub(crate) fn beside_temp_root(&self, kind: &str, path: &Path) {
+        if !in_temp_root(path) {
+            return;
+        }
+        report(&format!(
+            "{kind} at {} sits in the temp root, so its sidecars outlive it; created by {}\n",
+            path.display(),
+            self.0
+        ));
+    }
+}
+
+/// Best effort: attribution must never fail the write it describes.
+fn report(line: &str) {
+    let _ = std::io::stderr().lock().write_all(line.as_bytes());
+}
+
+/// Whether `path`'s directory is the process temp root itself.
+fn in_temp_root(path: &Path) -> bool {
+    let canonical = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    path.parent()
+        .is_some_and(|parent| canonical(parent) == canonical(&std::env::temp_dir()))
 }
 
 /// The name a writer is attributed to.
@@ -87,5 +118,13 @@ mod tests {
         let gone = dir.path().join("gone");
         Creator::default().witness("probe", &gone);
         assert!(!gone.exists(), "the check creates nothing");
+    }
+
+    #[test]
+    fn only_a_file_directly_in_the_temp_root_is_flagged() {
+        let root = std::env::temp_dir();
+        assert!(in_temp_root(&root.join(".tmpAbC123")));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!in_temp_root(&dir.path().join("audit.jsonl")));
     }
 }
