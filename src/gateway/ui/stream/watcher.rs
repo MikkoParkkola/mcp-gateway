@@ -18,29 +18,28 @@ use crate::gateway::router::AppState;
 /// Every change lands within 250 ms, well inside the 1 s the stream promises.
 pub(super) const TICK: Duration = Duration::from_millis(250);
 
-/// Spawn the watcher; it first waits for `retiring` (the aborted one before
-/// it) to finish, so two watchers never publish at once.
-pub(super) fn spawn(state: &Arc<AppState>, retiring: Option<JoinHandle<()>>) -> JoinHandle<()> {
-    tokio::spawn(run(Arc::clone(state), retiring))
+/// Spawn the watcher. It takes the hub's publish lock before anything else,
+/// so it waits for any watcher still publishing.
+pub(super) fn spawn(state: &Arc<AppState>) -> JoinHandle<()> {
+    tokio::spawn(run(Arc::clone(state)))
 }
 
 /// Run until aborted (the last stream's guard aborts it).
-async fn run(state: Arc<AppState>, retiring: Option<JoinHandle<()>>) {
+async fn run(state: Arc<AppState>) {
     #[cfg(test)]
     state
         .dashboard_bootstrap
         .stream_hub()
         .probe()
         .watcher_started();
-    if let Some(old) = retiring {
-        // Aborted already, so this returns at its next await point.
-        let _ = old.await;
-    }
     let hub = state.dashboard_bootstrap.stream_hub();
+    let _publishing = hub.publish_lock().lock_owned().await;
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tick.tick().await;
+        #[cfg(test)]
+        hub.probe().park_point().await;
         let reloaded = hub.reloaded(&state.live_config.generation());
         hub.observe(
             status_body(&state, StatusView::Full),

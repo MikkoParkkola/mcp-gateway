@@ -13,6 +13,7 @@ use std::sync::{Mutex, PoisonError};
 pub(crate) struct PublishProbe {
     gate: Mutex<Option<Receiver<()>>>,
     entered: AtomicBool,
+    park_forever: AtomicBool,
     observe_calls: AtomicUsize,
     publishes: AtomicUsize,
     watchers_started: AtomicUsize,
@@ -23,6 +24,12 @@ impl PublishProbe {
     /// matching sender. The wait blocks its thread, as a stuck publish would.
     pub(crate) fn arm(&self, release: Receiver<()>) {
         *self.gate.lock().unwrap_or_else(PoisonError::into_inner) = Some(release);
+    }
+
+    /// Park the next watcher forever at an await point before it publishes,
+    /// where an abort can still cancel it.
+    pub(crate) fn arm_park_forever(&self) {
+        self.park_forever.store(true, SeqCst);
     }
 
     /// Whether a publish is parked on the gate now or was.
@@ -47,6 +54,13 @@ impl PublishProbe {
 
     pub(super) fn watcher_started(&self) {
         self.watchers_started.fetch_add(1, SeqCst);
+    }
+
+    pub(super) async fn park_point(&self) {
+        if self.park_forever.swap(false, SeqCst) {
+            self.entered.store(true, SeqCst);
+            std::future::pending::<()>().await;
+        }
     }
 
     pub(super) fn before_publish(&self) {

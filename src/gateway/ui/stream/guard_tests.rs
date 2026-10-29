@@ -11,7 +11,7 @@ use tokio::task::JoinHandle;
 
 use super::guard::{Guard, MAX_PER_CREDENTIAL, MAX_UI_STREAMS, Refusal, StreamHub};
 
-fn idle_task(_: Option<JoinHandle<()>>) -> JoinHandle<()> {
+fn idle_task() -> JoinHandle<()> {
     tokio::spawn(std::future::pending::<()>())
 }
 
@@ -49,9 +49,9 @@ async fn the_watcher_starts_on_the_first_stream_and_stops_on_the_last() {
     let starts = Arc::new(AtomicUsize::new(0));
     let start = |starts: &Arc<AtomicUsize>| {
         let starts = Arc::clone(starts);
-        move |old| {
+        move || {
             starts.fetch_add(1, Ordering::SeqCst);
-            idle_task(old)
+            idle_task()
         }
     };
     assert!(!hub.watcher_running());

@@ -60,9 +60,6 @@ struct Inner {
     streams: usize,
     per_credential: HashMap<String, usize>,
     watcher: Option<JoinHandle<()>>,
-    /// The watcher the last guard aborted; its successor waits for it to
-    /// finish before it publishes anything.
-    retiring: Option<JoinHandle<()>>,
     /// The last generation the watcher saw, kept across watcher restarts so
     /// a reload applied while no stream was open still counts.
     last_generation: Option<Arc<Generation>>,
@@ -72,6 +69,12 @@ struct Shared {
     boot: u64,
     inner: Mutex<Inner>,
     snapshot: watch::Sender<Snapshot>,
+    /// Held by a watcher for its whole publishing life, so two never publish
+    /// at once. A successor starts only after the previous watcher was
+    /// aborted (the last guard's drop) or finished; an aborted watcher's
+    /// guard drops with it, so the lock never outlives a cancellable watcher.
+    /// Waiting for it is cancel-safe, unlike a chain of join handles.
+    publish_lock: Arc<tokio::sync::Mutex<()>>,
     /// Test seam: credential validation never answers while set.
     #[cfg(test)]
     hang_validation: std::sync::atomic::AtomicBool,
@@ -129,6 +132,7 @@ impl StreamHub {
                 boot: rand::rng().random(),
                 inner: Mutex::new(Inner::default()),
                 snapshot: watch::channel(Snapshot::default()).0,
+                publish_lock: Arc::new(tokio::sync::Mutex::new(())),
                 #[cfg(test)]
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
@@ -202,7 +206,7 @@ impl StreamHub {
     pub(super) fn admit(
         &self,
         credential: &str,
-        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
+        start: impl FnOnce() -> JoinHandle<()>,
     ) -> Result<Guard, Refusal> {
         let mut inner = self.shared.lock();
         if inner.streams >= MAX_UI_STREAMS {
@@ -224,29 +228,27 @@ impl StreamHub {
         })
     }
 
+    /// The lock a watcher holds while it publishes.
+    pub(super) fn publish_lock(&self) -> Arc<tokio::sync::Mutex<()>> {
+        Arc::clone(&self.shared.publish_lock)
+    }
+
     /// Start the watcher if none is running, or if the last one ended on its
     /// own while streams were open (logged at warn).
-    pub(super) fn ensure_watcher(
-        &self,
-        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
-    ) {
+    pub(super) fn ensure_watcher(&self, start: impl FnOnce() -> JoinHandle<()>) {
         self.start_if_needed(&mut self.shared.lock(), start);
     }
 
-    fn start_if_needed(
-        &self,
-        inner: &mut Inner,
-        start: impl FnOnce(Option<JoinHandle<()>>) -> JoinHandle<()>,
-    ) {
+    fn start_if_needed(&self, inner: &mut Inner, start: impl FnOnce() -> JoinHandle<()>) {
         if inner.watcher.as_ref().is_some_and(JoinHandle::is_finished) {
             tracing::warn!("ui stream: the watcher ended unexpectedly; starting a new one");
-            inner.retiring = inner.watcher.take();
+            inner.watcher = None;
         }
         if inner.watcher.is_none() {
             self.shared
                 .snapshot
                 .send_if_modified(|s| std::mem::replace(&mut s.fresh, false));
-            inner.watcher = Some(start(inner.retiring.take()));
+            inner.watcher = Some(start());
         }
     }
 
@@ -324,8 +326,8 @@ impl Drop for Guard {
         if inner.streams == 0
             && let Some(watcher) = inner.watcher.take()
         {
+            // Always abort before a successor can start (see `publish_lock`).
             watcher.abort();
-            inner.retiring = Some(watcher);
         }
     }
 }

@@ -113,7 +113,7 @@ async fn stream(
     let who = held
         .as_ref()
         .map_or_else(|| "anonymous".to_owned(), HeldCredential::deciding_digest);
-    let guard = match hub.admit(&who, |old| watcher::spawn(&state, old)) {
+    let guard = match hub.admit(&who, || watcher::spawn(&state)) {
         Ok(guard) => guard,
         Err(refusal) => return too_many(refusal),
     };

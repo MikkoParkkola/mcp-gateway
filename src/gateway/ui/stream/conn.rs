@@ -105,7 +105,7 @@ impl Conn {
     async fn upkeep(&self) -> Result<(), End> {
         self.require_entitled().await?;
         let hub = self.state.dashboard_bootstrap.stream_hub();
-        hub.ensure_watcher(|old| watcher::spawn(&self.state, old));
+        hub.ensure_watcher(|| watcher::spawn(&self.state));
         Ok(())
     }
 

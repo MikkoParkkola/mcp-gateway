@@ -53,3 +53,19 @@ async fn a_successor_waits_for_the_publisher_even_after_a_waiting_replacement_is
     assert!(until(|| probe.publishes() >= 2).await, "A then C published");
     assert_eq!(probe.watchers_started(), 3);
 }
+
+#[tokio::test]
+async fn a_publisher_parked_forever_is_aborted_so_its_successor_still_publishes() {
+    let (state, _dir) = fixture_unpaused().await;
+    let hub = state.dashboard_bootstrap.stream_hub();
+    let probe = hub.probe();
+    probe.arm_park_forever();
+    // A takes the lock and parks at an await point, never to publish.
+    let first = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    assert!(until(|| probe.entered()).await, "A parked holding the lock");
+    // The last stream goes: A is aborted, which frees the lock.
+    drop(first);
+    assert!(until(|| hub.open_streams() == 0).await);
+    let _second = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
+    assert!(until(|| probe.publishes() >= 1).await, "C published");
+}
