@@ -530,6 +530,32 @@ impl PendingLogs {
     }
 }
 
+/// Where a fill leaves the lines its store decided on, until the fill has
+/// released every guard.
+#[derive(Default)]
+pub(crate) struct PendingSink(std::sync::Mutex<Option<PendingLogs>>);
+
+impl PendingSink {
+    /// Keep `logs` for [`Self::emit`].
+    pub(crate) fn store(&self, logs: PendingLogs) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(logs);
+    }
+
+    /// Write what was kept.
+    pub(crate) fn emit(self) {
+        let kept = self
+            .0
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(logs) = kept {
+            logs.emit();
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "allowed_tools_tests.rs"]
 mod allowed_tools_tests;

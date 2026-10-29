@@ -363,7 +363,7 @@ impl Backend {
         // Boxed: the fill's state is large, and every caller of this (and of
         // its callers) would otherwise carry it inline (clippy large_futures).
         // Log lines decided on under the cache's write guard, written after it.
-        let pending_logs = std::sync::Mutex::new(None);
+        let pending_logs = crate::backend::descriptor_gate::PendingSink::default();
         let stored = Box::pin(select(&entry).get_or_fetch_shared_then(
             self.cache_ttl,
             |mark| {
@@ -434,9 +434,7 @@ impl Backend {
                 // #1441).
                 if let Some(prepared) = prepared {
                     let logs = self.store_prepared(&entry, identity_key, truncated, prepared);
-                    *pending_logs
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(logs);
+                    pending_logs.store(logs);
                 }
                 // The only place a guard reaches `Stored`: a voided store
                 // drops it unrun, still `Drained`, and so stamps (F13).
@@ -458,12 +456,7 @@ impl Backend {
             on_abandon,
         ))
         .await;
-        let logs = pending_logs
-            .into_inner()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(logs) = logs {
-            logs.emit();
-        }
+        pending_logs.emit();
         stored
     }
 
