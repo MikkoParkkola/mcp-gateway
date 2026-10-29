@@ -131,13 +131,13 @@ async fn a_frame_waiting_for_room_is_not_sent_after_the_credential_is_revoked() 
     // virtual ms stay inside the 1 s before any re-check tick.
     let hub = state.dashboard_bootstrap.stream_hub();
     for _ in 0..100 {
-        if hub.waiting_sends() == 1 {
+        if hub.sends_in_progress() == 1 {
             break;
         }
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
     assert_eq!(
-        hub.waiting_sends(),
+        hub.sends_in_progress(),
         1,
         "the write is pending, not delivered"
     );

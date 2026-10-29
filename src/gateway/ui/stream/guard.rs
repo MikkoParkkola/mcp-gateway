@@ -78,8 +78,9 @@ struct Shared {
     /// Test seam: the watcher handover probe.
     #[cfg(test)]
     probe: super::probe::PublishProbe,
-    /// Sends currently waiting for room in their channel.
-    waiting: std::sync::atomic::AtomicUsize,
+    /// Sends in progress: begun after the first credential check and not yet
+    /// written or given up, whether waiting for room or re-checking.
+    in_progress: std::sync::atomic::AtomicUsize,
 }
 
 /// Caps, the watcher's lifetime and its published state.
@@ -99,15 +100,15 @@ impl Default for StreamHub {
     }
 }
 
-/// Marks a send as waiting for room until it drops.
-pub(super) struct Waiting {
+/// Counts one send as in progress until it drops.
+pub(super) struct SendInProgress {
     shared: Arc<Shared>,
 }
 
-impl Drop for Waiting {
+impl Drop for SendInProgress {
     fn drop(&mut self) {
         self.shared
-            .waiting
+            .in_progress
             .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
@@ -132,7 +133,7 @@ impl StreamHub {
                 hang_validation: std::sync::atomic::AtomicBool::new(false),
                 #[cfg(test)]
                 probe: super::probe::PublishProbe::default(),
-                waiting: std::sync::atomic::AtomicUsize::new(0),
+                in_progress: std::sync::atomic::AtomicUsize::new(0),
             }),
         }
     }
@@ -171,20 +172,20 @@ impl StreamHub {
         self.shared.hang_validation.store(on, SeqCst);
     }
 
-    /// Sends waiting for channel room right now.
+    /// Sends in progress right now.
     #[cfg(test)]
-    pub(crate) fn waiting_sends(&self) -> usize {
+    pub(crate) fn sends_in_progress(&self) -> usize {
         self.shared
-            .waiting
+            .in_progress
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Count one send as waiting until the returned token drops.
-    pub(super) fn waiting(&self) -> Waiting {
+    /// Count one send as in progress until the returned token drops.
+    pub(super) fn send_started(&self) -> SendInProgress {
         self.shared
-            .waiting
+            .in_progress
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Waiting {
+        SendInProgress {
             shared: Arc::clone(&self.shared),
         }
     }

@@ -84,7 +84,7 @@ impl Conn {
         // A fixed cadence: a slow lookup delays one tick, never the schedule.
         let mut recheck = interval_at(Instant::now() + RECHECK, RECHECK);
         recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        let _waiting = self.state.dashboard_bootstrap.stream_hub().waiting();
+        let _in_progress = self.state.dashboard_bootstrap.stream_hub().send_started();
         let permit = loop {
             tokio::select! {
                 done = &mut room => match done {
@@ -155,6 +155,7 @@ async fn drive(
     let start = Instant::now();
     let mut keep = interval_at(start + KEEP_ALIVE, KEEP_ALIVE);
     let mut recheck = interval_at(start + RECHECK, RECHECK);
+    recheck.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let deadline = start + MAX_LIFETIME;
     loop {
         tokio::select! {
