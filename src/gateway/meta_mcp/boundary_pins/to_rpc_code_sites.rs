@@ -58,7 +58,7 @@ impl Sink for Sites {
     fn item(&mut self, at: &Place, item: &syn::Item) {
         match item {
             syn::Item::Fn(f) => {
-                self.function(&at.file, &f.sig.ident.to_string(), &f.attrs, &f.block)
+                self.function(&at.file, &f.sig.ident.to_string(), &f.attrs, &f.block);
             }
             syn::Item::Impl(block) if !test_only(&block.attrs) => {
                 for member in &block.items {
