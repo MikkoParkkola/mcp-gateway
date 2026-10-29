@@ -113,6 +113,7 @@ fn the_write_path_never_parks_the_thread_it_runs_on() {
     let needle = concat!("thread::", "sleep");
     let source = concat!(
         include_str!("config_persistence.rs"),
+        include_str!("config_persistence_scratch.rs"),
         include_str!("config_persistence_atomic.rs")
     );
     let sleeps: Vec<&str> = source
