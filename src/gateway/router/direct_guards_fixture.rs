@@ -382,6 +382,7 @@ pub(crate) use egress::{
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
+pub(crate) use quota::fixture_with_secrets;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
