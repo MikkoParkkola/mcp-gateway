@@ -125,7 +125,7 @@ async fn o6_outside_a_request_no_outcome_is_judged_or_kept() {
 #[tokio::test]
 async fn o5_an_external_account_is_unjudged_with_no_custody_read() {
     let custody = custody_with(&[]);
-    let (_meta, registry) =
+    let (_log, _meta, registry) =
         installed_gateway(&[("partner", external("partner"))], &custody.installed());
     let view = registry
         .view_binding_classified("partner", operator())

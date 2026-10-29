@@ -73,7 +73,9 @@ const BOUND: Duration = Duration::from_secs(5);
 /// has been shared with nobody (no request has downgraded it into an owned task
 /// context) and its `MetaMcp` was moved in whole, so a failure here means the
 /// fixture changed shape and the row must be re-read rather than patched.
-async fn signed_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn signed_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) = state_with(mock).await;
     {
         let app = Arc::get_mut(&mut state)

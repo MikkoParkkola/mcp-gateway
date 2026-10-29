@@ -722,3 +722,26 @@ fn t55_a_late_label_keeps_its_admission_across_a_restart() {
     assert_eq!(after.since, before.since, "the admission survived");
     assert_eq!(after.points, before.points);
 }
+
+/// A full marker ring: the newest-first read returns only the rows asked
+/// for, counts every marker in the window, and takes the lock once.
+#[test]
+fn newest_markers_returns_the_cap_and_counts_the_window() {
+    let store = CounterStore::new(0);
+    for i in 0..MAX_MARKERS as u64 {
+        store.mark(
+            MarkerKind::ConfigReload,
+            Some(&format!("m{i:04}")),
+            1_000 + i,
+        );
+    }
+    let before = store.reads_for_test();
+
+    let (rows, total) = store.newest_markers(1_500, 51);
+
+    assert_eq!(store.reads_for_test() - before, 1);
+    assert_eq!(rows.len(), 51);
+    assert_eq!(rows[0].subject.as_deref(), Some("m0999"));
+    assert_eq!(rows[50].subject.as_deref(), Some("m0949"));
+    assert_eq!(total, 500);
+}

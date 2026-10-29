@@ -108,7 +108,7 @@ accounts:
 /// A gateway state whose registry holds `BOUND` and `OTHER`.
 async fn state() -> (
     Arc<crate::gateway::router::AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     [Arc<Backend>; 2],
 ) {
     let (state, dir) = crate::gateway::router::tests::test_router_app_state().await;

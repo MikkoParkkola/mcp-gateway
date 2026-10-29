@@ -21,13 +21,15 @@ const MARKER: &str = "stored-output-8392";
 
 struct Fx {
     router: axum::Router,
-    gateway: DirectAccountGateway,
     /// The served task executor: its store's committed rows (MIK-8406).
     tasks: Arc<crate::gateway::task_service::TaskExecutor>,
     /// The served Meta-MCP: its plan executor entries (MIK-8406).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     audit: Option<tempfile::TempDir>,
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 fn sole_operator() -> AuthConfig {
@@ -645,7 +647,7 @@ async fn two_account_fixture_revokes_one_account_only() {
         gateway,
         tasks,
         meta: served,
-        _store: tempfile::tempdir().unwrap(),
+        _store: Arc::new(tempfile::tempdir().unwrap()),
         audit: None,
     };
     let call = |backend: &str| {

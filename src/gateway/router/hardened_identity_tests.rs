@@ -52,7 +52,10 @@ fn config(posture: SecurityPosture) -> Config {
 }
 
 /// Auth on (a shared and a personal key) or off, under `posture`.
-async fn gateway(posture: SecurityPosture, auth_on: bool) -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway(
+    posture: SecurityPosture,
+    auth_on: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: auth_on,
         bearer_token: auth_on.then(|| BEARER.to_string()),
