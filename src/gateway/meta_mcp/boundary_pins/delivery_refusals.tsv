@@ -100,7 +100,7 @@ src/gateway/meta_mcp/invoke/egress.rs	inspect_discovery_value	Error::ResponseFir
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	seal_key_refusal	1	recorded	withheld answer; withheld raised in this fn for an out-of-scope name
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	capability_rule_refusal	1	not-delivered	predicate comparing the rule's text
 src/gateway/meta_mcp/invoke/gate.rs	backstop	is_authorization_refusal	1	not-delivered	predicate: which dispatch-time refusal the playbook step records
-src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Forbidden{}	1	not-a-decision	a malformed tool name
+src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Forbidden{}	1	recorded	a malformed tool name, refused as the policy would; a delivered Forbidden is recorded by the outlet
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	audit_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	capability_rule_refusal	1	not-delivered	predicate
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	seal_key_refusal	1	recorded	withheld answer; withheld_for raises in this fn

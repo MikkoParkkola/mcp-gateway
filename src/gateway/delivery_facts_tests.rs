@@ -96,25 +96,21 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
     .await;
 }
 
-/// A delivered authorization refusal records refused wherever it was built;
-/// a malformed name's `Forbidden` (`INVALID_REQUEST`) is no decision.
+/// A delivered authorization refusal records refused wherever it was built,
+/// whatever its code: an admin denial carries `INVALID_REQUEST` too.
 #[tokio::test]
-async fn a_delivered_forbidden_is_refused_unless_it_is_a_malformed_name() {
-    let forbidden = |code| crate::Error::Forbidden {
-        code,
-        status: 403,
-        message: "no".into(),
-    };
-    scope(async {
-        super::outlet(&forbidden(-32001));
-        assert_eq!(recorded(false)["response_effect"], "refused");
-    })
-    .await;
-    scope(async {
-        super::outlet(&forbidden(crate::error::rpc_codes::INVALID_REQUEST));
-        assert_eq!(recorded(false)["response_effect"], "delivered");
-    })
-    .await;
+async fn a_delivered_forbidden_is_refused_whatever_its_code() {
+    for code in [-32001, crate::error::rpc_codes::INVALID_REQUEST] {
+        scope(async {
+            super::outlet(&crate::Error::Forbidden {
+                code,
+                status: 403,
+                message: "no".into(),
+            });
+            assert_eq!(recorded(false)["response_effect"], "refused", "{code}");
+        })
+        .await;
+    }
 }
 
 /// Every production site that reads an answer back out of a store, as
