@@ -69,7 +69,45 @@ pub(crate) async fn replace_audited(
     audit: Audit,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
-    // Red-first stub: the audit is not yet consulted.
-    drop(audit);
-    super::replace_detached(ctx, replace, wait).await
+    super::spawn_locked(ctx, replace, audit, wait).await
+}
+
+impl ReloadContext {
+    /// With anything pending (a crashed write's journal, or a reload owed
+    /// after a failed one), append the recovery's own intent, then recover
+    /// and pay the reload. A refused intent recovers and reloads nothing;
+    /// the next holder tries again.
+    pub(super) async fn recover_audited(
+        &self,
+        sink: &mut dyn IntentSink,
+        journal_pending: bool,
+        target: &std::path::Path,
+    ) -> Result<Option<IntentId>, ReplaceError> {
+        let owed = self.reload_owed.load(std::sync::atomic::Ordering::SeqCst);
+        if !journal_pending && !owed {
+            return Ok(None);
+        }
+        // An absent file is the empty revision here: the intent names what is
+        // on disk before recovery, whatever it is.
+        let on_disk = std::fs::read(target).unwrap_or_default();
+        let intent = Intent {
+            kind: IntentKind::Recovery,
+            base: FileRevision::of(&on_disk),
+            outside_change: true,
+            recovery_intent_id: None,
+        };
+        let id = sink.append(&intent).map_err(|e| {
+            ReplaceError::Refused(format!(
+                "the audit log refused the recovery's record; nothing was recovered or reloaded: {e}"
+            ))
+        })?;
+        let path = target.to_path_buf();
+        let recovered =
+            tokio::task::spawn_blocking(move || crate::config_persistence::journal::recover(&path))
+                .await
+                .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
+                .map_err(ReplaceError::Failed)?;
+        self.pay_owed_reload(recovered, target).await;
+        Ok(Some(id))
+    }
 }
