@@ -1,9 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Docs rows for per-tool allowed folders (D1, D2): the upgrading fragment
-//! names the setting, the reason, the grammar, the section 1 example and
-//! every limit; the changelog fragment exists. Batch 6.
+//! Docs rows for per-tool allowed folders (D1, D2, D3): the upgrading
+//! fragment names the setting, the reason, the grammar, the section 1
+//! example and every limit; the changelog fragment exists; the firewall
+//! reference documents folder rules. Batch 6.
 
+use super::super::RootReason;
 use super::config::EXAMPLE;
 
 const UPGRADING: &str = "upgrading.d/8939.md";
@@ -77,4 +79,54 @@ fn d2_fragments_exist_with_their_front_matter() {
     );
     assert!(text.contains("\naction: "), "{UPGRADING}: action");
     assert!(text.contains("**Startup:**"), "{UPGRADING}: startup line");
+}
+
+/// Every refusal reason, as the audit row and the wire spell it.
+const REASONS: [RootReason; 17] = [
+    RootReason::NotAbsolute,
+    RootReason::NotNormalised,
+    RootReason::DevicePath,
+    RootReason::MissingArgument,
+    RootReason::WrongType,
+    RootReason::RemoteBackend,
+    RootReason::UnknownBackend,
+    RootReason::AmbiguousBackend,
+    RootReason::CapabilityNotCheckable,
+    RootReason::InjectedPathArgument,
+    RootReason::DanglingLink,
+    RootReason::Unresolvable,
+    RootReason::RootUnresolvable,
+    RootReason::EquivalentSpelling,
+    RootReason::DirectoryTooLarge,
+    RootReason::Timeout,
+    RootReason::ResolverBusy,
+];
+
+/// D3: the firewall reference (`docs/FIREWALL.md`, created by the policy
+/// schema work) has a "Folder rules" section naming both keys, the
+/// root-rule constraints, both output-only types and every reason code.
+#[test]
+fn d3_firewall_reference_documents_folder_rules() {
+    let text = read("docs/FIREWALL.md");
+    let at = text
+        .find("## Folder rules")
+        .expect("a Folder rules section");
+    let section = &text[at..];
+    for needed in [
+        "allowed_roots",
+        "path_args",
+        "path_outside_root",
+        "root_refused",
+        "`action: allow`",
+        "`scan`",
+    ] {
+        assert!(section.contains(needed), "Folder rules lacks {needed:?}");
+    }
+    for reason in REASONS {
+        let code = super::tree::code(reason);
+        assert!(
+            section.contains(&format!("`{code}`")),
+            "Folder rules lacks `{code}`"
+        );
+    }
 }
