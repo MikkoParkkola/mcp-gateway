@@ -467,6 +467,18 @@ impl CounterStore {
             .collect()
     }
 
+    /// The newest `limit` markers at or after `from`, newest first, and how
+    /// many markers are at or after `from` in all. One lock, and only the
+    /// rows returned are cloned.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn newest_markers(&self, from: u64, limit: usize) -> (Vec<Marker>, usize) {
+        let inner = self.read_lock();
+        let mut in_window = inner.markers.iter().rev().filter(|m| m.at >= from);
+        let newest: Vec<Marker> = in_window.by_ref().take(limit).cloned().collect();
+        let total = newest.len() + in_window.count();
+        (newest, total)
+    }
+
     /// When coverage began.
     #[cfg(test)]
     pub(crate) fn since(&self) -> u64 {

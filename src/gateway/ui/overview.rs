@@ -24,6 +24,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{Extension, State};
@@ -94,8 +95,10 @@ pub(super) async fn overview(
     if let Ok(now) = crate::clock::utc_now() {
         body.insert("generated_at".into(), now.to_rfc3339().into());
     }
-    let source = Source::open(&state);
-    let (mut kpi, servers, denied) = kpi_and_servers(&state, &source);
+    // One instant for the counter reads and the server states alike.
+    let at = crate::clock::system_time_or_before_epoch();
+    let source = Source::open(&state, at);
+    let (mut kpi, servers, denied) = kpi_and_servers(&state, &source, at);
     source.add_totals(&mut kpi);
     body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
@@ -143,7 +146,11 @@ fn backends_by_name(state: &AppState) -> Vec<Arc<Backend>> {
 /// over the backends. A server is up when it is running. Rows are best first
 /// by calls (by name when calls are not counted); the rest fold into `more`
 /// with their up and down counts.
-fn kpi_and_servers(state: &AppState, source: &Source) -> (Map<String, Value>, Value, Vec<Refusal>) {
+fn kpi_and_servers(
+    state: &AppState,
+    source: &Source,
+    at: SystemTime,
+) -> (Map<String, Value>, Value, Vec<Refusal>) {
     let backends = backends_by_name(state);
     // Not `status()`: it also sorts latency samples this view never shows.
     let up: HashMap<&str, bool> = backends
@@ -164,12 +171,17 @@ fn kpi_and_servers(state: &AppState, source: &Source) -> (Map<String, Value>, Va
     kpi.insert("tools_total".into(), tools.into());
     kpi.insert("uptime_secs".into(), uptime_secs().into());
     kpi.insert("version".into(), env!("CARGO_PKG_VERSION").into());
-    (kpi, server_list(source, &backends, &up), denied)
+    (kpi, server_list(source, &backends, &up, at), denied)
 }
 
 /// The server rows and what folded. Servers are ranked first; only the rows
 /// shown have their state worked out, because that reads health metrics.
-fn server_list(source: &Source, backends: &[Arc<Backend>], up: &HashMap<&str, bool>) -> Value {
+fn server_list(
+    source: &Source,
+    backends: &[Arc<Backend>],
+    up: &HashMap<&str, bool>,
+    at: SystemTime,
+) -> Value {
     let counts = source.server_calls(backends);
     let names = backends.iter().map(|b| b.name.clone());
     let mut ranked: Vec<(String, Option<u64>)> = match &counts {
@@ -180,11 +192,10 @@ fn server_list(source: &Source, backends: &[Arc<Backend>], up: &HashMap<&str, bo
     let folded_up = folded.iter().filter(|(name, _)| up[name.as_str()]).count();
     let by_name: HashMap<&str, &Arc<Backend>> =
         backends.iter().map(|b| (b.name.as_str(), b)).collect();
-    let now = crate::clock::system_time_or_before_epoch();
     let rows: Vec<Value> = ranked
         .into_iter()
         .map(|(name, calls)| {
-            let mut row = server_row(by_name[name.as_str()], up[name.as_str()], now);
+            let mut row = server_row(by_name[name.as_str()], up[name.as_str()], at);
             if counts.is_some() {
                 row["calls_24h"] = calls.into();
             }
@@ -203,8 +214,8 @@ fn server_list(source: &Source, backends: &[Arc<Backend>], up: &HashMap<&str, bo
 
 /// One server row: its name, whether it is up, its tools, and the operator's
 /// state with the reason.
-fn server_row(backend: &Backend, up: bool, now: std::time::SystemTime) -> Value {
-    let view = backend.server_state(now);
+fn server_row(backend: &Backend, up: bool, at: SystemTime) -> Value {
+    let view = backend.server_state(at);
     json!({
         "name": clip(&backend.name),
         "up": up,
@@ -244,11 +255,14 @@ enum Source {
 }
 
 impl Source {
-    fn open(state: &AppState) -> Self {
+    fn open(state: &AppState, at: SystemTime) -> Self {
         let Some(store) = state.meta_mcp.counters() else {
             return Self::Off;
         };
-        crate::clock::unix_secs().map_or(Self::Unreadable, |now| Self::On(Arc::clone(store), now))
+        at.duration_since(UNIX_EPOCH)
+            .map_or(Self::Unreadable, |since| {
+                Self::On(Arc::clone(store), since.as_secs())
+            })
     }
 
     /// The counter fields that could not be read.
@@ -367,14 +381,12 @@ impl Source {
 
 /// The newest [`MARKER_ROWS`] markers of the last 24 hours, newest first.
 fn marker_rows(store: &CounterStore, now: u64) -> Value {
-    let mut markers = store.markers(now.saturating_sub(DAY_SECS));
-    markers.reverse();
-    let folded = markers.split_off(markers.len().min(MARKER_ROWS));
+    let (markers, total) = store.newest_markers(now.saturating_sub(DAY_SECS), MARKER_ROWS);
     let rows: Vec<Value> = markers
         .iter()
         .map(|m| json!({ "t": m.at, "kind": m.kind, "subject": m.subject.as_deref().map(clip) }))
         .collect();
-    json!({ "rows": rows, "more": { "count": folded.len() } })
+    json!({ "rows": rows, "more": { "count": total - markers.len() } })
 }
 
 /// What needs the operator, highest priority first, capped with `more`: the
