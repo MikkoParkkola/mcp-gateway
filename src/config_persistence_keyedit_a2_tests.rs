@@ -287,10 +287,13 @@ fn an_empty_document_edits_as_an_empty_root() {
 // A18: a hand table in place of a property test (no property-testing
 // library): key order, nesting depth, and a comment beside each edit.
 
+/// One table row: the original file, the changes, the edited file.
+type Case = (&'static str, Vec<(FieldPath, Change)>, &'static str);
+
 #[test]
 fn edits_keep_untouched_bytes_across_order_depth_and_comments() {
     let new_v = || (path("s.new"), Change::Set(Scalar::Str("v".into())));
-    let cases: Vec<(&str, Vec<(FieldPath, Change)>, &str)> = vec![
+    let cases: Vec<Case> = vec![
         // Unsorted keys: an insert goes last, nothing is reordered.
         (
             "z: 1\na: 2\nm: 3\n",

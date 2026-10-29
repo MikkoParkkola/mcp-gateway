@@ -48,7 +48,11 @@ impl SlotId {
                     }
                     out.push_str(key);
                 }
-                Segment::Index(at) => out.push_str(&format!("[{at}]")),
+                Segment::Index(at) => {
+                    out.push('[');
+                    out.push_str(&at.to_string());
+                    out.push(']');
+                }
             }
         }
         out

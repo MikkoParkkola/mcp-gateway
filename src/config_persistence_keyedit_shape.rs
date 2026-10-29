@@ -233,10 +233,10 @@ impl Lines {
     /// a final newline needs); a replaced line keeps everything around its
     /// value.
     pub(super) fn bytes_hold(&self, original: &str) -> bool {
-        let orig: Vec<&str> = original.split_inclusive('\n').collect();
         fn split(s: &str) -> (&str, &str) {
             s.split_at(s.trim_end_matches(['\n', '\r']).len())
         }
+        let orig: Vec<&str> = original.split_inclusive('\n').collect();
         let mut last: Option<usize> = None;
         let count = self.lines.len();
         self.lines.iter().enumerate().all(|(n, (text, origin))| {
@@ -437,41 +437,34 @@ pub(super) fn place(
             if let Some(refusal) = attach_refusal(&nodes, node, &rest[0]) {
                 return Err(refusal);
             }
-            match node.shape {
-                Shape::Scalar { .. } => {
-                    let key = node
-                        .key
-                        .clone()
-                        .ok_or_else(|| unprovable("an empty list item"))?;
-                    (column(&text, key.start) + 2, Some(lines.line_of(key.start)))
-                }
-                _ => {
-                    let first = children(&nodes, node)
-                        .next()
-                        .ok_or_else(|| unprovable("an empty collection"))?;
-                    let col = match node.shape {
-                        Shape::Sequence => {
-                            let Segment::Index(at) = rest[0] else {
-                                return Err(unprovable("a key under a list"));
-                            };
-                            if at != children(&nodes, node).count() {
-                                return Err(give_up(
-                                    GiveUp::SequenceShape,
-                                    "a new list position past the end",
-                                ));
-                            }
-                            column(&text, first.bytes.start)
-                        }
-                        _ => column(&text, first.start),
+            if let Shape::Scalar { .. } = node.shape {
+                let key = node
+                    .key
+                    .clone()
+                    .ok_or_else(|| unprovable("an empty list item"))?;
+                (column(&text, key.start) + 2, Some(lines.line_of(key.start)))
+            } else {
+                let first = children(&nodes, node)
+                    .next()
+                    .ok_or_else(|| unprovable("an empty collection"))?;
+                let col = if node.shape == Shape::Sequence {
+                    let Segment::Index(at) = rest[0] else {
+                        return Err(unprovable("a key under a list"));
                     };
-                    let col = if node.shape == Shape::Sequence {
-                        col.checked_sub(2)
-                            .ok_or_else(|| unprovable("a list item's dash"))?
-                    } else {
-                        col
-                    };
-                    (col, Some(lines.line_of(node.end.saturating_sub(1))))
-                }
+                    if at != children(&nodes, node).count() {
+                        return Err(give_up(
+                            GiveUp::SequenceShape,
+                            "a new list position past the end",
+                        ));
+                    }
+                    // The dash sits two columns before the element's content.
+                    column(&text, first.bytes.start)
+                        .checked_sub(2)
+                        .ok_or_else(|| unprovable("a list item's dash"))?
+                } else {
+                    column(&text, first.start)
+                };
+                (col, Some(lines.line_of(node.end.saturating_sub(1))))
             }
         }
     };
