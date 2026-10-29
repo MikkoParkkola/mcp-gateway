@@ -137,7 +137,8 @@ unsafe fn read_byte(at: *const u8) -> u8 {
         let _ = at;
         word = 0;
     }
-    word as u8
+    // The load zero-extends one byte, so the low byte is the whole value.
+    word.to_le_bytes()[0]
 }
 
 /// Whether the free scan can read bytes on this target.
@@ -517,10 +518,9 @@ fn arm_scan(marker: &'static [u8]) -> ScanScope {
         std::env::var_os(CHILD_ENV).is_some(),
         "a free scan runs only in an isolated child: it sees every thread's frees"
     );
-    assert!(
-        SCAN_SUPPORTED,
-        "the free scan reads bytes through inline asm on x86_64 and aarch64 only"
-    );
+    if !SCAN_SUPPORTED {
+        panic!("the free scan reads bytes through inline asm on x86_64 and aarch64 only");
+    }
     assert!(
         marker.len() >= MIN_MARKER,
         "a free-scan marker must be at least {MIN_MARKER} bytes"
