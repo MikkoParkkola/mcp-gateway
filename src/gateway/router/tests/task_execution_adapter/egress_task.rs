@@ -221,6 +221,9 @@ async fn ruled_state(
                     action,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
