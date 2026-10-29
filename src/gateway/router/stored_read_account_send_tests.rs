@@ -71,6 +71,26 @@ async fn listing_shows_tool(fx: &Fx, row: &str) {
     );
 }
 
+/// One live `gateway_invoke` under the grant as it stands, so a later task
+/// could reuse its resolution if anything kept one.
+async fn warm_send(fx: &Fx, row: &str) {
+    let sent = fx.gateway.tool_calls().len();
+    let live = send(
+        fx,
+        "tools/call",
+        "gateway_invoke",
+        json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
+            "_meta": modern_meta()}),
+    )
+    .await;
+    assert_eq!(
+        fx.gateway.tool_calls().len(),
+        sent + 1,
+        "premise {row}: the warm call sent once: {live}"
+    );
+}
+
 /// The binding the vault reads for the operator now.
 async fn current_binding(fx: &Fx) -> String {
     fx.state
@@ -90,6 +110,7 @@ async fn r9_a_task_after_a_revoke_sends_nothing() {
     for shape in SHAPES {
         let fx = fixture().await;
         listing_shows_tool(&fx, "R9").await;
+        warm_send(&fx, "R9").await;
         fx.gateway.revoke_operator_grant_for_test().await;
         let sent = fx.gateway.tool_calls().len();
         let (name, params) = task_params(shape, &format!("r9-revoked-{shape}"));
@@ -125,6 +146,7 @@ async fn r9_a_task_after_a_rotation_sends_once_under_the_new_grant() {
     for shape in SHAPES {
         let fx = fixture().await;
         listing_shows_tool(&fx, "R9").await;
+        warm_send(&fx, "R9").await;
         let old = DirectAccountGateway::operator_binding();
         fx.gateway.rotate_operator_grant().await;
         let new = current_binding(&fx).await;
