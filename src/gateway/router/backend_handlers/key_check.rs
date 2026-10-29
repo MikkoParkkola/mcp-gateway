@@ -26,6 +26,24 @@ pub(super) fn absent_response(id: &RequestId, tool: &str) -> BackendRejection {
     build_http_response(&Egressed::gateway_own(response), StatusCode::OK)
 }
 
+/// [`key_refusal`] for a name the caller may not see: answered as a name the
+/// catalogue lacks, under no caller's credential, so nothing is filled.
+pub(super) async fn withheld_refusal(
+    backend: &crate::backend::Backend,
+    failed: &DirectFailure<'_>,
+    params: &Value,
+    id: &RequestId,
+) -> Option<BackendRejection> {
+    let none = crate::transport::LentCredential::default();
+    key_refusal(
+        backend,
+        ((None, &none), failed),
+        params,
+        (id, Lens::Withheld),
+    )
+    .await
+}
+
 /// The rejection for a `tools/call` R2 refuses, or `None` to proceed.
 ///
 /// A refusal is a tool result, not a 403, so a model can correct the call;
