@@ -20,4 +20,5 @@ mod scan_tests;
 mod shipped_reads;
 mod single_predicate;
 mod single_reader;
+mod to_rpc_code_sites;
 mod transport_waits;
