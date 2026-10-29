@@ -117,3 +117,27 @@ async fn stdio_route_stage_confines_the_path() {
     let answer = send(inside.clone()).await;
     assert_inside(&routes, "stdio", &answer, &inside);
 }
+
+/// Registers playbook `steps`: one `read_file` step on `fs` with `path`.
+fn register_playbook(routes: &Routes, path: &str) {
+    let definition = json!({"playbook": "1.0", "name": "steps", "description": "steps",
+        "steps": [{"name": "s0", "tool": "read_file", "server": "fs",
+            "arguments": {"path": path}}]});
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    engine.register(serde_json::from_value(definition).expect("the playbook deserialises"));
+    routes.meta.set_playbook_engine(engine);
+}
+
+/// I4, I4b: a `gateway_run_playbook` step carrying the path.
+#[tokio::test]
+async fn i4_playbook_step_confines_the_path() {
+    let routes = Routes::new().await;
+    let run = json!({"name": "gateway_run_playbook", "arguments": {"name": "steps"}});
+    let (inside, outside) = (routes.path("safe/f"), routes.path("outside/f"));
+    register_playbook(&routes, &outside);
+    let answer = routes.post("/mcp", "tools/call", run.clone()).await;
+    assert_outside(&routes, "I4", &answer, &outside);
+    register_playbook(&routes, &inside);
+    let answer = routes.post("/mcp", "tools/call", run).await;
+    assert_inside(&routes, "I4b", &answer, &inside);
+}
