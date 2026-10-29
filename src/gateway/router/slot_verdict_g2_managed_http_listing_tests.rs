@@ -32,7 +32,7 @@ async fn tools_list_never_warms_a_backend_the_grant_excludes_http() {
 
 /// The surfaced entries in a `tools/list` answer whose trust card names
 /// `server`.
-fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
+pub(super) fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
     answer
         .pointer("/result/tools")
         .and_then(Value::as_array)
@@ -43,7 +43,7 @@ fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
 }
 
 /// Whether an entry carries the shared slot's schema B (a `folder` property).
-fn is_shared_schema(entry: &Value) -> bool {
+pub(super) fn is_shared_schema(entry: &Value) -> bool {
     entry.pointer("/inputSchema/properties/folder").is_some()
 }
 
@@ -123,7 +123,7 @@ async fn two_surfaced(gateway: DirectAccountGateway, auth: &AuthConfig) -> Fx {
 }
 
 /// The fill bound of `server`.
-fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
+pub(super) fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
     fx.gateway
         .backends()
         .get(server)

@@ -445,6 +445,7 @@ pub(crate) mod seams {
         static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_REVALIDATE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static INSPECTED_SERVERS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -467,6 +468,20 @@ pub(crate) mod seams {
     /// Called where `served_tools_list` has taken its surfaced snapshot.
     pub(crate) fn list_snapshot_taken() {
         if let Some(hook) = AFTER_LIST_SNAPSHOT.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time `revalidate_caller_slots` on this
+    /// thread returns: between a listing's account re-check and its read of
+    /// the held slots.
+    pub(crate) fn after_revalidate(hook: impl FnOnce() + 'static) {
+        AFTER_REVALIDATE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where `revalidate_caller_slots` returns.
+    pub(crate) fn revalidated() {
+        if let Some(hook) = AFTER_REVALIDATE.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
     }

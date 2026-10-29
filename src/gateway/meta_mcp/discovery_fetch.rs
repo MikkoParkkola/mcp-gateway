@@ -192,6 +192,8 @@ impl MetaMcp {
                 backend.forget_caller_principal(&id);
             }
         }
+        #[cfg(test)]
+        super::visible::seams::revalidated();
     }
 
     /// Whether `backend` must be omitted from a per-caller catalogue

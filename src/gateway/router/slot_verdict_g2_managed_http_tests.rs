@@ -610,3 +610,6 @@ mod noview_cooldown;
 
 #[path = "slot_verdict_g2_managed_http_listing_tests.rs"]
 mod listing;
+
+#[path = "slot_verdict_g2_managed_http_held_view_tests.rs"]
+mod held_view;
