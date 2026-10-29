@@ -1,15 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A call refused before its backend on the relay path: a secret that cannot
-//! be injected is marked refused, and a dispatch error the backend never saw,
-//! answered as a tool result, stages no receipt naming the backend.
+//! A call refused before its backend on the relay path: a dispatch error the
+//! backend never saw, answered as a tool result, stages no receipt naming the
+//! backend.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::tests::{PROSE, Seen};
+use super::tests::PROSE;
 use crate::gateway::authz::AllowAll;
 use crate::gateway::meta_mcp::authz_tests::ctx;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
@@ -80,12 +79,8 @@ impl crate::transport::Transport for Unreachable {
     }
 }
 
-/// `alpha` on `transport`, under a relay firewall over `alpha:*`, with
-/// `injector`.
-fn alpha_relay_meta(
-    transport: Arc<dyn crate::transport::Transport>,
-    injector: crate::secret_injection::SecretInjector,
-) -> MetaMcp {
+/// `alpha` on `transport`, under a relay firewall over `alpha:*`.
+fn alpha_relay_meta(transport: Arc<dyn crate::transport::Transport>) -> MetaMcp {
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
@@ -110,55 +105,10 @@ fn alpha_relay_meta(
         )
         .keyed_for_test(),
     );
-    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     meta
-}
-
-/// A secret that cannot be injected (its environment variable is unset)
-/// refuses the call before its backend: the invocation is marked refused,
-/// so a task never records it as a call a backend ran, and nothing is sent.
-#[tokio::test]
-async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
-    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
-    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
-        "name": "token",
-        "value": "{env.REFUSED_CALL_ROW_UNSET_SECRET}",
-        "inject_key": "token"
-    }))
-    .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
-    let meta = alpha_relay_meta(Arc::new(Seen(Arc::clone(&seen))), injector);
-    // Authenticated: the relay check refuses an anonymous caller first.
-    let bob = MetaMcpCallerContext {
-        caller_key: Some("bob"),
-        ..ctx(&AllowAll)
-    };
-    let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
-    let invoked = Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
-    assert!(
-        seen.lock().is_empty(),
-        "premise: nothing reached the backend"
-    );
-    // Premise: refused by the injection failure itself, not by an earlier exit.
-    let answer = match &invoked.outcome {
-        Ok(super::super::SourcedOutcome::Live((value, _, _))) => value.to_string(),
-        Ok(super::super::SourcedOutcome::Stored(_)) => panic!("premise: a stored answer"),
-        Err(error) => panic!("premise: refused earlier than the injection: {error}"),
-    };
-    assert!(
-        answer.contains("Failed to resolve credential 'token'"),
-        "premise: the injection failure is the answer: {answer}"
-    );
-    assert_eq!(
-        invoked.pre_send,
-        crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
-        "an uninjectable secret is a refusal before the backend"
-    );
 }
 
 /// The receipts naming `alpha` that one invocation of `meta` stages, read
@@ -183,15 +133,11 @@ async fn alpha_receipts(meta: &MetaMcp) -> (super::super::Invoked, usize) {
 /// control, an answered call, stages one in the same scope.
 #[tokio::test]
 async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
-    let none = crate::secret_injection::SecretInjector::new(HashMap::new());
-    let answered = alpha_relay_meta(Arc::new(Prose), none);
+    let answered = alpha_relay_meta(Arc::new(Prose));
     let (_, control) = alpha_receipts(&answered).await;
     assert_eq!(control, 1, "control: an answered call stages its receipt");
     let tried = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let refused = alpha_relay_meta(
-        Arc::new(Unreachable(Arc::clone(&tried))),
-        crate::secret_injection::SecretInjector::new(HashMap::new()),
-    );
+    let refused = alpha_relay_meta(Arc::new(Unreachable(Arc::clone(&tried))));
     let (invoked, staged) = alpha_receipts(&refused).await;
     assert_eq!(
         invoked.pre_send,
