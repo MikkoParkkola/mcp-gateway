@@ -21,13 +21,18 @@ async fn settled_targets(
     )
 }
 
-/// A withheld step tool: the playbook step is answered by the gateway.
+/// A step tool withheld between the task's intake and its run: the intake
+/// admitted the playbook, and the worker's step is answered by the gateway.
+#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_withheld_plan_step_records_no_target() {
     let mock = MockBackend::answering(Answer::ok());
     let (state, _store) = state_with(&mock).await;
     install_playbook(&state, TOOL);
-    withhold(&state, TOOL);
+    let withheld = Arc::clone(&state);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        withhold(&withheld, TOOL);
+    });
     let (done, targets) = settled_targets(&state, "refused-withheld").await;
     std::assert_eq!(mock.calls(), 0, "premise: nothing sent: {done}");
     assert!(
