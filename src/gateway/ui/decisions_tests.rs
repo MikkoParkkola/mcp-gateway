@@ -62,7 +62,9 @@ fn write(log: &TransparencyLogger, fields: Map<String, Value>) {
 }
 
 /// A gateway state whose `MetaMcp` writes `log`, and the store dir it keeps.
-async fn state_with(log: &Arc<TransparencyLogger>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_with(
+    log: &Arc<TransparencyLogger>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let log = Arc::clone(log);
     crate::gateway::router::tests::audience_state(
         &AuthConfig::default(),
