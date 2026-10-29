@@ -9,7 +9,7 @@ use super::*;
 const REFUSAL: &str = "Response blocked by security firewall";
 
 fn assert_unmarked(response: &JsonRpcResponse) {
-    assert!(!response.delivery_refusal);
+    assert!(!response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(!response.excludes_client_accounting());
     let wire = serde_json::to_value(response).unwrap();
@@ -80,7 +80,7 @@ fn firewall_response_delivery_refusal_constructor_is_private_provenance() {
             code,
             message,
         );
-        assert!(response.delivery_refusal);
+        assert!(response.wire_meta.delivery_refusal);
         assert!(!response.confirmation_refusal);
         assert!(response.excludes_client_accounting());
         let wire = serde_json::to_value(&response).unwrap();
@@ -93,7 +93,7 @@ fn firewall_response_delivery_refusal_constructor_is_private_provenance() {
     }
     let confirmation = confirmation_refusal_response(&RequestId::Number(8), "Declined".into());
     assert!(confirmation.confirmation_refusal);
-    assert!(!confirmation.delivery_refusal);
+    assert!(!confirmation.wire_meta.delivery_refusal);
     assert!(confirmation.excludes_client_accounting());
 }
 
@@ -112,7 +112,7 @@ fn firewall_response_typed_refusal_has_exact_rpc_code() {
 fn firewall_response_typed_projector_sets_marker_and_preserves_safe_envelope() {
     let response =
         error_response_preserving_status(RequestId::Number(91), &Error::ResponseFirewallRefused);
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(

@@ -612,7 +612,7 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
-    if response.delivery_refusal {
+    if response.wire_meta.delivery_refusal {
         reservation.fail(&stored_failure(
             crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
         ));

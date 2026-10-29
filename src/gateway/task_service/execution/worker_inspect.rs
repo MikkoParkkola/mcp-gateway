@@ -194,7 +194,7 @@ fn inspect_settled_pinned(
     id: &str,
     mut response: crate::protocol::JsonRpcResponse,
 ) -> (crate::protocol::JsonRpcResponse, Option<Decided>) {
-    if response.error.is_some() || response.egress_scanned {
+    if response.error.is_some() || response.wire_meta.egress_scanned {
         return (response, None);
     }
     let Some(result) = response.result.as_mut() else {

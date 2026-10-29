@@ -207,7 +207,7 @@ pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> RpcHttp
     RpcHttp {
         status,
         body: Json(frame.to_value_lossy()),
-        origin: if frame.from_backend {
+        origin: if frame.wire_meta.from_backend {
             Origin::Backend
         } else {
             Origin::Gateway

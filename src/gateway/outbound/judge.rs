@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{Admission, Assessment, OutboundFrame, Payload};
-use crate::protocol::{JsonRpcError, JsonRpcResponse};
+use crate::protocol::{JsonRpcError, JsonRpcResponse, WireMeta};
 use crate::security::firewall::Firewall;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuard};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict, RejectionEvidence};
@@ -64,9 +64,7 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
                     data: placeholder(&e.data),
                 }),
                 confirmation_refusal: false,
-                delivery_refusal: false,
-                egress_scanned: false,
-                from_backend: false,
+                wire_meta: WireMeta::default(),
                 chain_source: crate::protocol::ChainSource::NotEligible,
                 chain_upstream: None,
                 invocation_trace: None,
@@ -373,9 +371,11 @@ mod emitted_document_tests {
                 data,
             }),
             confirmation_refusal: true,
-            delivery_refusal: true,
-            egress_scanned: true,
-            from_backend: false,
+            wire_meta: WireMeta {
+                delivery_refusal: true,
+                egress_scanned: true,
+                from_backend: false,
+            },
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
             invocation_trace: None,

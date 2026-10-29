@@ -43,7 +43,7 @@ impl RpcError {
     /// off-wire flag says a transport returned it.
     pub(crate) fn of_frame(frame: &crate::protocol::JsonRpcResponse) -> Option<Self> {
         let error = frame.error.as_ref()?;
-        let origin = if frame.from_backend {
+        let origin = if frame.wire_meta.from_backend {
             Origin::Backend
         } else {
             Origin::Gateway

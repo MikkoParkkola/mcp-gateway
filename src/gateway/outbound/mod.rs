@@ -160,7 +160,9 @@ impl OutboundFrame {
     /// follow; a result beside an error is still delivered.
     pub(crate) fn delivers_result(&self) -> bool {
         match &self.payload {
-            Payload::Response(response) => response.result.is_some() && !response.delivery_refusal,
+            Payload::Response(response) => {
+                response.result.is_some() && !response.wire_meta.delivery_refusal
+            }
             Payload::Answer(value) => value.get("result").is_some(),
             _ => false,
         }
