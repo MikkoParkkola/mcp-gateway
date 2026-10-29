@@ -13,6 +13,8 @@
 
 mod admission_allocations;
 pub(crate) mod alloc_meter;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_routes;
 mod descriptor_copies;
 mod fresh_slot_verdict;
 mod input_key_allocations;
