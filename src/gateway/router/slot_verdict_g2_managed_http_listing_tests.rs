@@ -28,6 +28,18 @@ async fn tools_list_never_warms_a_backend_the_grant_excludes_http() {
         reached.is_empty(),
         "tools/list reached a backend the caller's grant excludes: {reached:?}"
     );
+    // A backend the grant excludes is skipped, not refused: no shared start
+    // is attempted for it, so the listing records no refusal.
+    let raw = std::fs::read_to_string(fx.dirs.0.path().join("audit.jsonl")).unwrap_or_default();
+    let delivered: Vec<Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect();
+    let [listing] = delivered.as_slice() else {
+        panic!("premise: one delivery record for the listing: {delivered:?}");
+    };
+    assert_ne!(listing["response_effect"], "refused", "{listing}");
 }
 
 /// The surfaced entries in a `tools/list` answer whose trust card names
