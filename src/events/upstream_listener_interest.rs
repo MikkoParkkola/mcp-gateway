@@ -78,8 +78,8 @@ impl UpstreamListeners {
     }
     /// Count a key for a backend that cannot be listened to now (absent or
     /// refused), starting nothing: the entry is an ended one, which the
-    /// revive sweep starts once the backend can be (MIK-7944
-    /// `D6.EVENTS_MISC.6`). On a backend whose task runs it counts there.
+    /// revive sweep starts once the backend can be (`D6.EVENTS_MISC.6`). On a
+    /// backend whose task runs it counts there.
     ///
     /// # Errors
     /// The URI budget is spent, as [`Self::add`] refuses; `tools_changed` has
@@ -113,7 +113,7 @@ impl UpstreamListeners {
             (changed, !need.watches_any())
         };
         // With no URI watched the snapshot is no longer read, so it stops
-        // answering for a new URI (design r3 L4, MIK-7897 LIFE.3b).
+        // answering for a new URI (design r3 L4, LIFE.3b).
         if no_uris {
             shared.snapshot.lock().clear();
         }

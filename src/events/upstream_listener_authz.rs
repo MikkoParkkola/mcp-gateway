@@ -77,7 +77,7 @@ impl UpstreamListeners {
     /// rule). `-32012` only on confirmed absence from a complete read.
     /// `granted` is the subscription's incarnation when one exists (a
     /// delivery), `None` at subscribe: a snapshot does not revoke a grant
-    /// made after its read began (MIK-8194).
+    /// made after its read began.
     pub(crate) async fn authorize_uri(
         &self,
         key: &ListenerKey,
@@ -105,7 +105,7 @@ impl UpstreamListeners {
             return Ok(());
         };
         // A delivery attempt that already waited on a lookup that failed does
-        // not wait again: it gets the verdict that failure gave (MIK-7921).
+        // not wait again: it gets the verdict that failure gave.
         if FAILED_LOOKUP
             .try_with(std::cell::Cell::get)
             .unwrap_or(false)
@@ -119,7 +119,7 @@ impl UpstreamListeners {
         .await;
         match read {
             Ok(Ok(snapshot)) if snapshot.complete && !snapshot.uris.contains(uri) => {
-                // A cached list may predate the grant (MIK-8194): an absence
+                // A cached list may predate the grant: an absence
                 // is confirmed by a read begun now, after it, before revoking.
                 if granted.is_none() {
                     return Err(RpcError::forbidden());
