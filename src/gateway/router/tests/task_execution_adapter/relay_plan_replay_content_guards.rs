@@ -386,6 +386,9 @@ fn g11_router(rig: &Rig, redact: bool) -> Arc<Firewall> {
                     action: FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

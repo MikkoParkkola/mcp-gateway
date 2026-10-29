@@ -213,6 +213,7 @@ impl Gateway {
                     external_tool: &external_tool,
                     subject: None,
                     trace_id: invocation_trace.as_deref(),
+                    key: crate::security::response_policy::KeyOf::NoKey,
                 },
                 signing: signing_context.as_ref(),
                 chain_source,

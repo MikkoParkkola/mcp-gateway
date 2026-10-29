@@ -210,7 +210,7 @@ async fn audited_call_judged(
     let guard = super::super::helpers::read_guard(&state);
     // One memo spans the guard and the record, so a withheld call's one
     // record names its refusal (MIK-8361).
-    let (((status, Json(body)), hidden), trace) =
+    let (((mut status, Json(body)), hidden), trace) =
         crate::gateway::meta_mcp::visible::memo::with_visibility_memo(async {
             let inner = Box::pin(crate::gateway::outbound::read_scoped(
                 guard.clone(),
@@ -245,7 +245,6 @@ async fn audited_call_judged(
     // MIK-7669: the delivery record the meta route writes (`judged_answer`),
     // after the judge and with the answer's `tenant_read` fields in it. The
     // direct route keeps no session, so the session fingerprint is empty.
-    let mut status = status;
     let correlation = crate::security::response_policy::ResponseCorrelation {
         session_id: "",
         caller: reads.caller.as_deref().unwrap_or("anonymous"),
@@ -253,6 +252,7 @@ async fn audited_call_judged(
         external_tool: &reads.tool,
         subject: reads.subject.as_ref(),
         trace_id: trace.as_deref(),
+        key: crate::security::response_policy::KeyOf::NotKnown,
     };
     // No log, nothing to record: the answer is not copied to be hashed.
     let document = state

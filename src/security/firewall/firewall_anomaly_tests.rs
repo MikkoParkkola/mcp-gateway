@@ -42,10 +42,8 @@ fn an_unscoreable_call_cannot_be_downgraded_by_a_rule() {
         anomaly_threshold: 0.7,
         anomaly_block_threshold: Some(0.9),
         rules: vec![FirewallRule {
-            tool_match: "*".to_string(),
-            action: FirewallAction::Allow,
             reason: Some("allow everything".to_string()),
-            scan: Vec::new(),
+            ..rule("*", FirewallAction::Allow)
         }],
         ..FirewallConfig::default()
     };
