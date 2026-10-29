@@ -292,6 +292,8 @@ enum Outlet {
     /// An authorization decision about the caller: records `refused`, unless
     /// the code it forwards is `INVALID_REQUEST` (`authorize_invocation`
     /// passes on the authorizer's code), which the outlet reads at run time.
+    /// So an authorizer answers `INVALID_REQUEST` only for a malformed name,
+    /// never for a denial.
     Raises,
     /// A malformed name (`INVALID_REQUEST`): not a decision, records nothing.
     Exempt,
