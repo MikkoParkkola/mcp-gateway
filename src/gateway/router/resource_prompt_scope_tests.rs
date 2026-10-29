@@ -121,7 +121,7 @@ struct Fixture {
     router: axum::Router,
     beta: Arc<CatalogueWire>,
     gamma: Arc<CatalogueWire>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// A single-user gateway: `alpha-key` may reach `alpha` only, `open-key`

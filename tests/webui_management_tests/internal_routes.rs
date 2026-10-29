@@ -211,6 +211,11 @@ async fn send(gw: &Gateway, req: Request<Body>) -> (StatusCode, String, Vec<u8>)
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    // A live stream has no end: its status and headers are the answer here;
+    // its frames are read by the router tests beside the route.
+    if content_type.starts_with("text/event-stream") {
+        return (status, content_type, Vec::new());
+    }
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap()
@@ -316,6 +321,15 @@ const ROWS: &[Row] = &[
         "/ui/api/status",
         Method::GET,
         "/ui/api/status",
+        Payload::None,
+        [401, 200, 200, 200],
+    ),
+    // src/gateway/ui/stream/mod.rs (stream): any signed-in caller gets its
+    // own kinds; `send` reads an event stream's headers only.
+    row(
+        "/ui/api/stream",
+        Method::GET,
+        "/ui/api/stream",
         Payload::None,
         [401, 200, 200, 200],
     ),

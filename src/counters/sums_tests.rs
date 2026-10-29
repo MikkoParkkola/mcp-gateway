@@ -201,3 +201,24 @@ fn t2b_previous_buckets_past_the_ring_are_unknown() {
     let sums = store.window_sums(&[tool("t")], now, &Amsterdam);
     assert_eq!(sums.counts, vec![(Some(1), None)]);
 }
+
+/// T7b: labels the store does not hold all get the same answer, worked out
+/// once: the walks do not grow with the number of misses.
+#[test]
+fn t7b_unheld_labels_share_one_walk() {
+    let now = T0 + 7 * HOUR;
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("held"), now - HOUR);
+    let names: Vec<String> = (0..600).map(|i| format!("ghost-{i:03}")).collect();
+    let labels: Vec<Filter<'_>> = names.iter().map(|n| Filter::Server(n)).collect();
+    let before = store.window_walks_for_test();
+
+    let sums = store.window_sums(&labels, now, &UTC);
+
+    assert!(sums.counts.iter().all(|c| *c == (Some(0), Some(0))));
+    assert!(
+        store.window_walks_for_test() - before <= 1,
+        "{} walks for 600 unheld labels",
+        store.window_walks_for_test() - before
+    );
+}

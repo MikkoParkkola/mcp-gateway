@@ -82,6 +82,11 @@ use meta_state_fixtures::{
     test_router_app_state_minting_without_route_audit, test_router_app_state_with_meta,
 };
 
+/// A router fixture's temporary directory, shared with the task store it
+/// holds: the directory is removed only after both the test and the store's
+/// last write let go, so a worker's late write cannot leave it behind.
+pub(crate) type FixtureDir = Arc<tempfile::TempDir>;
+
 /// The durable task runtime every fixture in this file is built on.
 ///
 /// A fresh `TempDir` per fixture, handed back to the caller and bound for the
@@ -105,9 +110,9 @@ async fn test_task_runtime(
 ) -> (
     Arc<crate::gateway::task_service::TaskService>,
     Arc<crate::gateway::task_service::TaskExecutor>,
-    tempfile::TempDir,
+    FixtureDir,
 ) {
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (service, executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         crate::config::TasksConfig::default().max_workers,
@@ -117,6 +122,10 @@ async fn test_task_runtime(
     )
     .await
     .expect("the fixture task store opens");
+    // The store holds a share of its directory, so the directory is removed
+    // only after both the test and the store's last write let go: a worker's
+    // late write landing while the test removed it left the folder behind.
+    service.store.keep_test_dir(Arc::clone(&store_dir));
     (service, executor, store_dir)
 }
 
@@ -142,7 +151,7 @@ fn test_subscriptions(
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
 }
 
-type Fixture = (Arc<AppState>, tempfile::TempDir);
+type Fixture = (Arc<AppState>, FixtureDir);
 
 pub(super) async fn test_router_app_state_with_streaming(
     streaming_config: StreamingConfig,
@@ -159,7 +168,7 @@ pub(super) async fn test_router_app_state_with_streaming(
 async fn test_router_app_state_with(
     streaming_config: StreamingConfig,
     config: crate::config::Config,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -217,11 +226,11 @@ async fn test_router_app_state_with(
     (state, store_dir)
 }
 
-pub(super) async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn test_router_app_state() -> (Arc<AppState>, FixtureDir) {
     test_router_app_state_with_streaming(StreamingConfig::default()).await
 }
 
-async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, tempfile::TempDir) {
+async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -282,7 +291,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
 
 pub(super) async fn test_router_app_state_with_backend(
     backend: Arc<Backend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let (state, store_dir) = test_router_app_state().await;
     let _ = state.backends.register(backend);
     (state, store_dir)
@@ -329,7 +338,7 @@ pub(crate) async fn audience_state(
         Option<Arc<AgentRegistry>>,
     ),
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let agent_auth = match agents {
         Some(registry) => AgentAuthState::new(true, registry),
         None => AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
@@ -370,7 +379,7 @@ pub(crate) fn view_judge_for(
 pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
     config: crate::config::Config,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
@@ -391,7 +400,8 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         Arc::clone(&auth_config),
     ));
     let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
-    let store_dir = tempfile::tempdir().expect("a private configured task-store directory");
+    let store_dir =
+        Arc::new(tempfile::tempdir().expect("a private configured task-store directory"));
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -408,6 +418,10 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     )
     .await
     .expect("the configured fixture task store opens");
+    // The store holds a share of its directory, so the directory is removed
+    // only after both the test and the store's last write let go: a worker's
+    // late write landing while the test removed it left the folder behind.
+    task_service.store.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
         session_lifecycle: None,
@@ -633,7 +647,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
 /// Without it every modern request stops at `unsupported protocol version`,
 /// and a test asserting an absence — no session header, no profile switch —
 /// passes on the refusal rather than on the behaviour it names.
-async fn modern_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn modern_router_app_state() -> (Arc<AppState>, FixtureDir) {
     let mut config = crate::config::Config::default();
     config.server.modern_protocol = true;
     test_router_app_state_with(StreamingConfig::default(), config).await
@@ -648,7 +662,7 @@ mod openwebui_adapter;
 /// a client bypasses by changing the path.
 pub(crate) async fn direct_route_state_with_identity(
     config: crate::config::AgentIdentityConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),

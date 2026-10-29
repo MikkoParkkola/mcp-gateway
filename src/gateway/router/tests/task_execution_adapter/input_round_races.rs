@@ -312,7 +312,7 @@ async fn a_loser_parked_behind_a_resume_answers_when_the_resume_commits() {
 pub(super) async fn state_with_config(
     mock: &Arc<MockBackend>,
     config: crate::config::Config,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) =
         test_router_app_state_with_auth_and_config(&two_principal_auth(), config).await;
     register(&state, BACKEND, mock);

@@ -53,7 +53,9 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on with a static bearer, one admin and one standard key, and
 /// `public` as the public paths.
-async fn fixture_with(public: &[&str]) -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture_with(
+    public: &[&str],
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
@@ -64,7 +66,7 @@ async fn fixture_with(public: &[&str]) -> (Arc<AppState>, tempfile::TempDir) {
     test_router_app_state_with_auth_and_key_server(&auth, None).await
 }
 
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     fixture_with(&["/health"]).await
 }
 

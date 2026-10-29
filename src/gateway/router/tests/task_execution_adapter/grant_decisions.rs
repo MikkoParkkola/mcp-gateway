@@ -22,7 +22,7 @@ pub(super) struct Armed {
     pub(super) endpoint: Endpoint,
     pub(super) dir: tempfile::TempDir,
     pub(super) log: Arc<crate::security::TransparencyLogger>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// Keys scoped to the capability backend and the suite's mock.

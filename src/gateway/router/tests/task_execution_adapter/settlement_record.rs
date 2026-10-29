@@ -243,7 +243,7 @@ struct Fixture {
     recovery: Arc<Recovery>,
     log: Arc<TransparencyLogger>,
     log_dir: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// The suite's real state with an attributing firewall, a transparency log,
