@@ -41,6 +41,7 @@ impl FirewallConfig {
         if self.enabled {
             for (i, rule) in self.rules.iter().enumerate() {
                 validate_rule_scope(i, rule)?;
+                super::allowed_root::validate_rule(i, rule)?;
             }
         }
         // Relay detection is independent of anomaly detection: checked first.

@@ -316,6 +316,77 @@ pub(crate) fn compile_path_arg(entry: &str) -> Result<PathArg, String> {
     }
 }
 
+/// `root` after `~` expansion: a bare `~` or a leading `~/` uses the
+/// gateway's home directory. `None` for `~user/...`, for any `~` root when
+/// the home directory is unknown, and for a root that is not absolute.
+pub(crate) fn expand_root(root: &str) -> Option<std::path::PathBuf> {
+    let expanded = match root.strip_prefix('~') {
+        Some("") => crate::home_dir::home_dir()?,
+        Some(rest) if rest.starts_with(['/', '\\']) => {
+            crate::home_dir::home_dir()?.join(&rest[1..])
+        }
+        Some(_) => return None,
+        None => std::path::PathBuf::from(root),
+    };
+    expanded.is_absolute().then_some(expanded)
+}
+
+/// The finding types no rule's `scan` may list: only the folder check
+/// produces them.
+const OUTPUT_ONLY: [super::ScanType; 2] = [
+    super::ScanType::PathOutsideRoot,
+    super::ScanType::RootRefused,
+];
+
+/// Load checks for rule `i`'s folder keys (L1-L8). Messages name the key
+/// path, never a value.
+pub(crate) fn validate_rule(i: usize, rule: &super::FirewallRule) -> Result<(), String> {
+    let path = format!("security.firewall.rules[{i}]");
+    if let Some(j) = rule.scan.iter().position(|t| OUTPUT_ONLY.contains(t)) {
+        return Err(format!(
+            "{path}.scan[{j}] is output-only: only a folder rule's own check produces it"
+        ));
+    }
+    let (roots, args) = match (&rule.allowed_roots, &rule.path_args) {
+        (None, None) => return Ok(()),
+        (Some(_), None) => {
+            return Err(format!("{path}.path_args is required with allowed_roots"));
+        }
+        (None, Some(_)) => {
+            return Err(format!("{path}.allowed_roots is required with path_args"));
+        }
+        (Some(roots), Some(args)) => (roots, args),
+    };
+    for (key, empty) in [
+        ("allowed_roots", roots.is_empty()),
+        ("path_args", args.is_empty()),
+    ] {
+        if empty {
+            return Err(format!("{path}.{key} must not be empty"));
+        }
+    }
+    if let Some(j) = roots.iter().position(|root| expand_root(root).is_none()) {
+        return Err(format!(
+            "{path}.allowed_roots[{j}] must be absolute (a bare ~ or ~/ uses the home \
+             directory; ~user is not expanded)"
+        ));
+    }
+    if let Some(j) = args.iter().position(|arg| compile_path_arg(arg).is_err()) {
+        return Err(format!("{path}.path_args[{j}] is not a path argument"));
+    }
+    if !rule.scan.is_empty() {
+        return Err(format!(
+            "{path}.scan must be empty: a root rule decides only its own findings"
+        ));
+    }
+    if rule.action == FirewallAction::Allow {
+        return Err(format!(
+            "{path}.action must be warn or block on a root rule"
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "allowed_root_tests.rs"]
 mod tests;
