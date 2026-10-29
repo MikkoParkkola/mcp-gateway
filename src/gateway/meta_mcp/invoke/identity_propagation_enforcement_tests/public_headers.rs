@@ -103,8 +103,9 @@ async fn the_credential_call_hands_out_a_value_wiped_on_drop() {
     assert_wiped("resolve_propagation_credential", scanned);
 }
 
-/// The returned value never prints its contents: `{:?}` names the header and
-/// carries none of the credential.
+/// The returned value never prints its contents: plain and pretty `Debug`
+/// name the header and carry none of the credential, and so does the whole
+/// tuple the credential call returns.
 #[tokio::test]
 async fn a_returned_credential_never_prints_its_value() {
     let (m, _captured) = meta_with_capturing_backend();
@@ -112,20 +113,35 @@ async fn a_returned_credential_never_prints_its_value() {
         .resolve_propagation_headers("mem", Some(&identity()))
         .await
         .expect("resolve ok");
-    let (_, value) = headers
-        .iter()
-        .find(|(name, _)| name == "Authorization")
-        .expect("premise: a minted credential");
-    let printed = format!("{headers:?}");
-    assert!(
-        printed.contains("Authorization"),
-        "the header name is shown: {}",
-        printed.len()
-    );
-    let token = value.trim_start_matches("Bearer ");
-    assert!(
-        !printed.contains(token),
-        "Debug printed the credential ({} bytes of output)",
-        printed.len()
-    );
+    let returned = m
+        .resolve_propagation_credential("mem", Some(&identity()))
+        .await
+        .expect("resolve ok");
+    let token = |headers: &[(String, String)]| {
+        headers
+            .iter()
+            .find(|(name, _)| name == "Authorization")
+            .map(|(_, value)| value.trim_start_matches("Bearer ").to_owned())
+            .expect("premise: a minted credential")
+    };
+    let cases = [
+        ("headers {:?}", format!("{headers:?}"), token(&headers)),
+        ("headers {:#?}", format!("{headers:#?}"), token(&headers)),
+        (
+            "credential tuple {:?}",
+            format!("{returned:?}"),
+            token(&returned.0),
+        ),
+    ];
+    for (case, printed, secret) in cases {
+        assert!(
+            printed.contains("Authorization"),
+            "{case}: the header name is shown"
+        );
+        assert!(
+            !printed.contains(&secret),
+            "{case}: Debug printed the credential ({} bytes of output)",
+            printed.len()
+        );
+    }
 }
