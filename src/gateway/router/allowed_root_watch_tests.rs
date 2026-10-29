@@ -86,7 +86,16 @@ async fn watch() -> Watch {
     let seen = Arc::new(Recorder(Mutex::new(Vec::new())));
     let backend = Arc::new(Backend::new(
         "fs",
-        BackendConfig::default(),
+        // A local process, so the folder check judges its paths; the default
+        // config is an HTTP backend, which a root rule refuses as remote.
+        BackendConfig {
+            transport: crate::config::TransportConfig::Stdio {
+                command: "true".to_string(),
+                cwd: None,
+                protocol_version: None,
+            },
+            ..BackendConfig::default()
+        },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(5),
     ));
