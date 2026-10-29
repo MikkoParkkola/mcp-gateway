@@ -94,8 +94,9 @@ fn remove(node: &mut Value, path: &[Segment]) -> bool {
 pub(super) enum Origin {
     /// Original line `0`, unchanged.
     Kept(usize),
-    /// Original line `line` with only its value replaced: its first `before`
-    /// bytes and its last `after` bytes (ending included) are the original's.
+    /// Original line `line` with only its value replaced: the first `before`
+    /// and last `after` bytes of its text (its ending aside) are the
+    /// original's.
     Replaced {
         line: usize,
         before: usize,
@@ -161,10 +162,11 @@ impl Lines {
             return None;
         };
         let (from, to) = (range.start - start, range.end - start);
-        if to > line.trim_end_matches(['\n', '\r']).len() {
+        let content = line.trim_end_matches(['\n', '\r']).len();
+        if to > content {
             return None;
         }
-        let after = line.len() - to;
+        let after = content - to;
         let text = format!("{}{value}{}", &line[..from], &line[to..]);
         self.lines[n] = (
             text,
@@ -232,7 +234,7 @@ impl Lines {
     /// value.
     pub(super) fn bytes_hold(&self, original: &str) -> bool {
         let orig: Vec<&str> = original.split_inclusive('\n').collect();
-        let bare = |s: &str| s.trim_end_matches(['\n', '\r']).len();
+        let split = |s: &str| s.split_at(s.trim_end_matches(['\n', '\r']).len());
         let mut last: Option<usize> = None;
         let count = self.lines.len();
         self.lines.iter().enumerate().all(|(n, (text, origin))| {
@@ -244,24 +246,25 @@ impl Lines {
                 return false;
             }
             last = Some(index);
-            let was = orig[index];
-            match origin {
-                Origin::Kept(_) => {
-                    text == was
-                        || (index + 1 == orig.len()
-                            && !was.ends_with('\n')
-                            && text[..bare(text)] == *was)
-                        || (n + 1 == count
-                            && !original.ends_with('\n')
-                            && *text == was[..bare(was)])
+            let ((text, ending), (was, was_ending)) = (split(text), split(orig[index]));
+            // Endings are compared apart from content: only a file without
+            // a final newline may see its last line gain one (something was
+            // inserted after it) or its new last line lose one.
+            let ending_holds = ending == was_ending
+                || (index + 1 == orig.len() && was_ending.is_empty())
+                || (n + 1 == count && !original.ends_with('\n') && ending.is_empty());
+            ending_holds
+                && match origin {
+                    Origin::Kept(_) => text == was,
+                    Origin::Replaced { before, after, .. } => {
+                        was.len() >= before + after
+                            && was.get(..*before).is_some_and(|p| text.starts_with(p))
+                            && was
+                                .get(was.len() - after..)
+                                .is_some_and(|s| text.ends_with(s))
+                    }
+                    Origin::Inserted => true,
                 }
-                Origin::Replaced { before, after, .. } => {
-                    was.len() >= before + after
-                        && text.starts_with(&was[..*before])
-                        && text.ends_with(&was[was.len() - after..])
-                }
-                Origin::Inserted => true,
-            }
         })
     }
 }
@@ -508,14 +511,20 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
     }
     let mut last = lines.line_of(node.end.saturating_sub(1).max(key.start));
     // Comment and blank lines indented under the entry belong to it.
-    while last + 1 < lines.len() {
-        let next = lines.content(last + 1);
-        let indent = next.len() - next.trim_start().len();
-        let trimmed = next.trim_start();
-        if !trimmed.starts_with('#') || indent <= key_col {
+    // Blank lines between them do not end that.
+    let mut next = last + 1;
+    while next < lines.len() {
+        let line = lines.content(next);
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            next += 1;
+            continue;
+        }
+        if !trimmed.starts_with('#') || line.len() - trimmed.len() <= key_col {
             break;
         }
-        last += 1;
+        last = next;
+        next += 1;
     }
     if (first..=last).any(|n| lines.content(n).contains('#')) {
         return Err(give_up(GiveUp::Comment, "a deleted line carries a comment"));

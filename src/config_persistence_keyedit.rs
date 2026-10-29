@@ -477,7 +477,13 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
     let Some(want) = shape::expected(&doc, changes) else {
         return false;
     };
-    crate::yaml::from_str::<Value>(edited).is_ok_and(|got| got == want)
+    // An edit that removed every key leaves an empty file: an empty root.
+    let got = match crate::yaml::from_str::<Value>(edited) {
+        Ok(Value::Null) if edited.trim().is_empty() => Value::Mapping(crate::yaml::Mapping::new()),
+        Ok(got) => got,
+        Err(_) => return false,
+    };
+    got == want
 }
 
 #[path = "config_persistence_keyedit_shape.rs"]
