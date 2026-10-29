@@ -161,9 +161,9 @@ pub(super) struct CountingBackend {
     pub(super) kept: Arc<std::sync::Mutex<String>>,
 }
 
-#[async_trait::async_trait]
-impl Transport for CountingBackend {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+impl CountingBackend {
+    /// The answer this backend gives to `method`.
+    fn reply(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
             return Ok(JsonRpcResponse::success(
@@ -234,6 +234,15 @@ impl Transport for CountingBackend {
             });
         }
         call_answer(self.answer, id)
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for CountingBackend {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        // As every production transport does: the answer is a backend's.
+        crate::gateway::health_metrics::clock::backend_request(async { self.reply(method, params) })
+            .await
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())

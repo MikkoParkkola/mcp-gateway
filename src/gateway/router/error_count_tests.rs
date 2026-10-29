@@ -283,12 +283,13 @@ fn a_gateway_refusal_on_the_direct_route_counts_by_its_code() {
         let fx = fixture(Answer::Ok, |_| {}).await;
         post_direct(&fx, "alpha", "k-deny", "read", json!({}), None, None).await
     });
-    let code = body["error"]["code"].as_i64().expect("a refusal code");
-    let marker = RpcError {
+    // A 403 or 429 refusal on this route carries the body `{}` and no code,
+    // so it counts by its status; one with a code counts by the code.
+    let marker = body["error"]["code"].as_i64().map(|code| RpcError {
         code: i32::try_from(code).expect("a code"),
         origin: Origin::Gateway,
-    };
-    let want = error_kind(status.as_u16(), Some(marker)).expect("a refusal is an error");
+    });
+    let want = error_kind(status.as_u16(), marker).expect("a refusal is an error");
     let counts = all(&text);
     assert_eq!(counts.iter().sum::<u64>(), 1, "{counts:?}");
     assert_eq!(

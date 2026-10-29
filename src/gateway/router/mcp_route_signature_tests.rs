@@ -49,8 +49,20 @@ fn registered_in(table: &str) -> Result<Vec<String>, String> {
         }
         rest = tail;
     }
+    // `timed_post(` is a POST that also times the call; the underscore rule
+    // keeps its inner `post(` from counting a second time.
     let methods = [
-        "post(", "get(", "delete(", "put(", "patch(", "any(", "on(", "head(", "options(", "trace(",
+        "timed_post(",
+        "post(",
+        "get(",
+        "delete(",
+        "put(",
+        "patch(",
+        "any(",
+        "on(",
+        "head(",
+        "options(",
+        "trace(",
         "connect(",
     ];
     let mut names = Vec::new();
