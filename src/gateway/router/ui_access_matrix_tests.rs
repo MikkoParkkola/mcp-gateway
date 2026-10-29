@@ -400,6 +400,8 @@ fn shapes(method: &str, path: &str) -> Vec<&'static str> {
         "POST" if valid_body(path).is_some() => vec!["json", "valid", "bad-type", "bad-json"],
         "POST" | "PUT" | "PATCH" => vec!["json", "bad-type", "bad-json"],
         "GET" if path == routes::UI_ACTIVITY_RECEIPT => vec!["plain", "bad-query", "other-receipt"],
+        // CSV is the unsigned export, so it answers without a signing key.
+        "GET" if path == routes::UI_ACTIVITY_EXPORT => vec!["plain", "bad-query", "csv"],
         "GET" => vec!["plain", "bad-query"],
         _ => vec!["plain"],
     }
@@ -419,6 +421,8 @@ fn request(
     let mut uri = path.replace("{name}", object).replace("{id}", object);
     if shape == "bad-query" {
         uri.push_str("?limit=1&limit=2");
+    } else if shape == "csv" {
+        uri.push_str("?format=csv&server=srv");
     } else if path == routes::UI_ACTIVITY {
         // Only the seeded calls: the audit layer's own records for earlier
         // cells would otherwise page them out, newest first.
@@ -566,6 +570,18 @@ fn cell(path: &str, status: StatusCode, body: &[u8]) -> String {
             .filter(|tool| tool.starts_with("tool_"))
             .collect();
         seen.sort_unstable();
+        return format!("{code}:{}", seen.join(","));
+    }
+    if status.is_success() && path == routes::UI_ACTIVITY_EXPORT {
+        // The export's scope is which seeded calls it carries; like the list,
+        // only those are pinned.
+        let text = String::from_utf8_lossy(body);
+        let mut seen: Vec<&str> = text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .filter(|token| token.starts_with("tool_"))
+            .collect();
+        seen.sort_unstable();
+        seen.dedup();
         return format!("{code}:{}", seen.join(","));
     }
     if status.is_success() && SCOPED.contains(&path) && !body.is_empty() {
@@ -788,6 +804,18 @@ fn the_expectation_holds_known_answers() {
     }
     assert_eq!(
         get(routes::UI_ACTIVITY, "plain", "OidcDeveloper"),
+        "200:tool_0"
+    );
+    // The CSV export carries the same scope as the list.
+    for caller in ["AdminKey", "OidcAdmin", "OidcAuditor"] {
+        assert_eq!(
+            get(routes::UI_ACTIVITY_EXPORT, "csv", caller),
+            all,
+            "{caller}"
+        );
+    }
+    assert_eq!(
+        get(routes::UI_ACTIVITY_EXPORT, "csv", "OidcDeveloper"),
         "200:tool_0"
     );
     // A body that parses reaches the guards of the writes that parse first:
