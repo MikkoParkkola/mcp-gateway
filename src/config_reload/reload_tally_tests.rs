@@ -14,13 +14,7 @@ use crate::config_reload::reload_tally::{ReloadResult, ReloadTally};
 use crate::config_reload::{LiveConfig, ReloadContext};
 
 fn write_config(path: &Path, text: &str) {
-    std::fs::write(path, text).expect("config written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .expect("owner-only mode");
-    }
+    crate::gateway::test_helpers::write_owner_only(path, text).expect("config written owner-only");
 }
 
 fn valid_yaml() -> String {

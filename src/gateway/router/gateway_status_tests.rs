@@ -90,16 +90,11 @@ async fn read(state: &Arc<AppState>) -> Value {
 /// A reload context on a real file, attached to the state's meta-MCP.
 fn attach_reload_context(state: &AppState, dir: &tempfile::TempDir) -> Arc<ReloadContext> {
     let path = dir.path().join("gateway.yaml");
-    std::fs::write(
+    crate::gateway::test_helpers::write_owner_only(
         &path,
         crate::yaml::to_string(&Config::default()).expect("yaml"),
     )
-    .expect("config written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");
-    }
+    .expect("config written owner-only");
     let context = Arc::new(
         ReloadContext::new(
             path,
