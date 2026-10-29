@@ -288,3 +288,15 @@ async fn a_refused_twin_loan_refuses_the_send() {
     lender.refuse(first.id(), crate::transport::Refusal::ThisLoan);
     assert!(request_headers(&t, &subscriber()).await.is_err());
 }
+
+/// A transport never marked as a per-user slot has no lender, so a lent
+/// send on it is refused, never sent without a credential.
+#[tokio::test]
+async fn a_lent_send_on_a_transport_with_no_lender_is_refused() {
+    let t = make_transport_with_headers("http://localhost", HashMap::new());
+    let refused = t.lent_for(&subscriber()).await;
+    assert!(
+        refused.is_err(),
+        "a send with no lender was given headers: {refused:?}"
+    );
+}

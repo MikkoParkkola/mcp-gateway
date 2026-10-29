@@ -36,6 +36,15 @@ fn only_a_jwt_with_an_alg_header_yields_an_exp() {
         None,
         "no alg: not read as a JWT"
     );
+    // A fourth segment makes it no JWT, even after a header and claims that
+    // would otherwise yield an `exp`.
+    assert_eq!(
+        unverified_jwt_exp(&format!(
+            "{}.extra",
+            jwt(r#"{"alg":"RS256"}"#, &format!(r#"{{"exp":{exp}}}"#))
+        )),
+        None
+    );
     assert_eq!(unverified_jwt_exp("opaque.dotted.token"), None);
     assert_eq!(unverified_jwt_exp("opaque-token"), None);
 }
