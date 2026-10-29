@@ -9,31 +9,39 @@ use super::super::*;
 use super::input_round::{STATE_1, answer, ask, done, parked, update};
 use super::support::*;
 
+/// The fixture's key list.
+type Keys = Vec<crate::config::ApiKeyConfig>;
+
 /// Reload `edit` of the fixture's two-principal key table.
-fn reload_keys(state: &Arc<AppState>, edit: impl FnOnce(&mut Vec<crate::config::ApiKeyConfig>)) {
+fn reload_keys(state: &Arc<AppState>, edit: impl FnOnce(Keys) -> Keys) {
     let mut config = (*state.live_config.get()).clone();
     let mut auth = two_principal_auth();
-    edit(&mut auth.api_keys);
+    auth.api_keys = edit(auth.api_keys);
     config.auth = auth;
     state.live_config.set(config);
 }
 
-fn remove_key_a(keys: &mut Vec<crate::config::ApiKeyConfig>) {
-    keys.retain(|k| k.name != "principal-a");
+fn without(keys: Keys, name: &str) -> Keys {
+    keys.into_iter().filter(|k| k.name != name).collect()
 }
 
-#[expect(
-    clippy::ptr_arg,
-    reason = "shares the edit table's signature with the removals, which need the Vec"
-)]
-fn narrow_key_a(keys: &mut Vec<crate::config::ApiKeyConfig>) {
-    for key in keys.iter_mut().filter(|k| k.name == "principal-a") {
-        key.backends = vec![FORBIDDEN_BACKEND.to_owned()];
-    }
+fn remove_key_a(keys: Keys) -> Keys {
+    without(keys, "principal-a")
 }
 
-fn remove_key_b(keys: &mut Vec<crate::config::ApiKeyConfig>) {
-    keys.retain(|k| k.name != "principal-b");
+fn remove_key_b(keys: Keys) -> Keys {
+    without(keys, "principal-b")
+}
+
+fn narrow_key_a(keys: Keys) -> Keys {
+    keys.into_iter()
+        .map(|mut key| {
+            if key.name == "principal-a" {
+                key.backends = vec![FORBIDDEN_BACKEND.to_owned()];
+            }
+            key
+        })
+        .collect()
 }
 
 /// The committed record of `task`, once terminal, read as its owner (the
@@ -63,7 +71,7 @@ async fn settled(state: &Arc<AppState>, task: &str) -> String {
 #[tokio::test]
 async fn k15_a_queued_task_of_a_removed_or_narrowed_key_is_refused_at_dispatch() {
     for (label, edit) in [
-        ("removed", remove_key_a as fn(&mut Vec<_>)),
+        ("removed", remove_key_a as fn(Keys) -> Keys),
         ("narrowed", narrow_key_a),
     ] {
         let mock = MockBackend::answering(Answer::ok());
