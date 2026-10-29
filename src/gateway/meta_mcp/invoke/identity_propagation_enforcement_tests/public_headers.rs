@@ -122,31 +122,38 @@ async fn a_returned_credential_never_prints_its_value() {
         .resolve_propagation_credential("mem", Some(&identity()))
         .await
         .expect("resolve ok");
-    let token = |headers: &[(String, String)]| {
+    // Exactly the names, each value redacted: a partial leak fails too.
+    let redacted = |headers: &[(String, String)]| {
         headers
             .iter()
-            .find(|(name, _)| name == "Authorization")
-            .map(|(_, value)| value.trim_start_matches("Bearer ").to_owned())
-            .expect("premise: a minted credential")
+            .map(|(name, _)| (name.clone(), "<redacted>"))
+            .collect::<Vec<_>>()
     };
+    assert!(
+        headers.iter().any(|(name, _)| name == "Authorization"),
+        "premise: a minted credential"
+    );
     let cases = [
-        ("headers {:?}", format!("{headers:?}"), token(&headers)),
-        ("headers {:#?}", format!("{headers:#?}"), token(&headers)),
+        (
+            "headers {:?}",
+            format!("{headers:?}"),
+            format!("{:?}", redacted(&headers)),
+        ),
+        (
+            "headers {:#?}",
+            format!("{headers:#?}"),
+            format!("{:#?}", redacted(&headers)),
+        ),
         (
             "credential tuple {:?}",
             format!("{returned:?}"),
-            token(&returned.0),
+            format!("{:?}", (redacted(&returned.0), &returned.1)),
         ),
     ];
-    for (case, printed, secret) in cases {
-        assert!(
-            printed.contains("Authorization"),
-            "{case}: the header name is shown"
-        );
-        assert!(
-            !printed.contains(&secret),
-            "{case}: Debug printed the credential ({} bytes of output)",
-            printed.len()
+    for (case, printed, expected) in cases {
+        assert_eq!(
+            printed, expected,
+            "{case}: Debug is not exactly the redacted form"
         );
     }
 }
