@@ -19,7 +19,10 @@ use super::{Visibility, Withholding};
 #[derive(Default)]
 struct VisibilityMemo {
     visibility: Keyed<TargetKey, Visibility>,
-    carried_credential: Keyed<TargetKey, Carried>,
+    /// Boxed: a [`Carried`] is hundreds of bytes, and the map's smallest
+    /// table of them inline crosses the per-call allocation budget
+    /// (`http_nonce_alloc` ALLOC.2).
+    carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
     denial_code: Keyed<TargetKey, i32>,
     judged: parking_lot::Mutex<Judged>,
@@ -464,7 +467,7 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     in_memo(|memo| {
         memo.carried_credential
-            .set(target_key(server, tool), carried);
+            .set(target_key(server, tool), Box::new(carried));
     });
 }
 
@@ -478,7 +481,9 @@ pub(crate) fn with_carried<R>(
 ) -> Option<R> {
     in_memo(|memo| {
         memo.carried_credential
-            .with(&target(server, tool) as &(dyn Pair + '_), read)
+            .with(&target(server, tool) as &(dyn Pair + '_), |carried| {
+                read(carried)
+            })
     })
     .flatten()
 }
@@ -489,6 +494,7 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     in_memo(|memo| {
         memo.carried_credential
             .take(&target(server, tool) as &(dyn Pair + '_))
+            .map(|carried| *carried)
     })
     .flatten()
 }

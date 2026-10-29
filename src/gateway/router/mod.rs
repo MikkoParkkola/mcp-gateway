@@ -82,8 +82,6 @@ mod callback_admin_denial_tests;
 #[cfg(test)]
 mod chokepoint_direct_tests;
 #[cfg(test)]
-mod direct_lent_arms_tests;
-#[cfg(test)]
 mod chokepoint_tests;
 /// MIK-8202 P2: task creation on a clock before 1970.
 #[cfg(test)]
@@ -117,6 +115,8 @@ mod direct_guards_fixture;
 mod direct_guards_fixture_a2a;
 #[cfg(test)]
 mod direct_guards_tests;
+#[cfg(test)]
+mod direct_lent_arms_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]

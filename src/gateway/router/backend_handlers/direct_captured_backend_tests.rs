@@ -415,15 +415,13 @@ async fn an_unminted_a2a_key_holder_is_not_served_a_7b_replay() {
 /// the secret to a plain `Vec` fails to build.
 #[test]
 fn a_direct_route_credential_is_wiped_on_drop() {
-    fn stored(
-        propagation: &super::direct_preflight::Propagation,
-    ) -> &zeroize::Zeroizing<Vec<(String, String)>> {
+    type Held = zeroize::Zeroizing<Vec<(String, String)>>;
+    type Propagation = super::direct_preflight::Propagation;
+    fn stored(propagation: &Propagation) -> &Held {
         &propagation.headers
     }
-    let pinned: for<'a> fn(
-        &'a super::direct_preflight::Propagation,
-    ) -> &'a zeroize::Zeroizing<Vec<(String, String)>> = stored;
-    let empty: zeroize::Zeroizing<Vec<(String, String)>> = zeroize::Zeroizing::default();
+    let pinned: for<'a> fn(&'a Propagation) -> &'a Held = stored;
+    let empty: Held = Held::default();
     assert!(
         empty.is_empty(),
         "premise: the holder type is the zeroizing one"

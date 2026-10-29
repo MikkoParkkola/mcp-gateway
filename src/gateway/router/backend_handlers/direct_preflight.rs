@@ -250,7 +250,7 @@ impl Propagation {
     /// The resolved headers with the check that guards their every send.
     pub(super) fn lent(&self) -> crate::transport::LentCredential {
         crate::transport::LentCredential {
-            headers: self.headers.clone().into(),
+            headers: self.headers.clone(),
             check: self.check.clone(),
         }
     }
