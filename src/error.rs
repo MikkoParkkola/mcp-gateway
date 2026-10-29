@@ -12,8 +12,97 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// MCP Gateway errors
 ///
-/// Non-exhaustive: a `match` outside this crate needs a wildcard arm, so a new
-/// variant is not a breaking change.
+/// Non-exhaustive: a release may add a variant, so a `match` outside this
+/// crate needs a wildcard arm. Listing every variant is not enough:
+///
+/// ```compile_fail,E0004
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///     }
+/// }
+/// ```
+///
+/// The same arms with a wildcard compile:
+///
+/// ```
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///         _ => false,
+///     }
+/// }
+/// ```
 #[derive(Error, Debug)]
 #[non_exhaustive]
 pub enum Error {
@@ -646,3 +735,7 @@ mod rpc_code_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "error_non_exhaustive_tests.rs"]
+mod non_exhaustive_tests;
