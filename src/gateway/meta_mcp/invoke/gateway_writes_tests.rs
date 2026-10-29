@@ -530,3 +530,64 @@ async fn noting_a_counted_member_raises_annotated() {
         assert_eq!(effect, expected, "{path:?}");
     }
 }
+
+/// The response-contract gate's annotations make the delivery `annotated`
+/// on both branches that write them (no contract declared; a declared
+/// contract violated), and an answer the declared contract admits stays
+/// `delivered`: each noted contract member is counted where it is written.
+#[tokio::test]
+async fn a_contract_annotation_records_annotated() {
+    use std::sync::Arc;
+    let declared = crate::config::ToolContractConfig {
+        max_bytes: Some(1),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    let roomy = crate::config::ToolContractConfig {
+        max_bytes: Some(1 << 20),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    for (tool, expected) in [
+        ("undeclared", "annotated"),
+        ("declared", "annotated"),
+        ("roomy", "delivered"),
+    ] {
+        let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        meta.set_response_contract(crate::config::ResponseContractConfig {
+            enabled: true,
+            action_mode: false,
+            fail_closed: true,
+            tools: [
+                ("declared".to_owned(), declared.clone()),
+                ("roomy".to_owned(), roomy.clone()),
+            ]
+            .into(),
+            ..Default::default()
+        });
+        let (effect, annotated) = crate::gateway::delivery_facts::scope(async {
+            let mut result = json!({"content": [{"type": "text", "text": "longer than one byte"}]});
+            meta.apply_response_contract_gate("alpha", tool, "t-1", &mut result)
+                .expect("observe mode annotates");
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            (
+                fields["response_effect"].clone(),
+                result.get("_contract_violation").is_some(),
+            )
+        })
+        .await;
+        assert_eq!(
+            annotated,
+            expected == "annotated",
+            "premise {tool}: the gate's annotation"
+        );
+        assert_eq!(effect, expected, "{tool}");
+    }
+}
