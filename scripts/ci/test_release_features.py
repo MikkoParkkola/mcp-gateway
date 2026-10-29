@@ -30,6 +30,12 @@ def main() -> int:
     assert refuses({"features": {"default": [], "sandbox-fixtures": []}}), "a test-only-only table was accepted"
     assert refuses({}), "a manifest without [features] was accepted"
     assert refuses({"features": {"a": []}}), "a manifest without the test-only feature was accepted"
+    # Transitive: a release feature, or default, that switches a test-only one on.
+    assert refuses({"features": {"a": ["b"], "b": ["sandbox-fixtures"], "sandbox-fixtures": []}}), "a two-step enable was accepted"
+    assert refuses({"features": {"default": ["sandbox-fixtures"], "a": [], "sandbox-fixtures": []}}), "default enabling it was accepted"
+    # A dependency feature of the same name is not this crate's feature.
+    dep = {"features": {"a": ["dep:sandbox-fixtures", "x/sandbox-fixtures"], "sandbox-fixtures": []}}
+    assert release_features(dep) == ["a"], release_features(dep)
 
     # The real manifest: every non-default, non-test-only feature is listed.
     real = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))

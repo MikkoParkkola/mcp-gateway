@@ -505,6 +505,20 @@ jobs:
           cargo clippy --release --lib --bins --no-default-features -- -D warnings
       - name: The registry lint still bites (MIK-8387)
         run: scripts/dev/check_registry_lint.sh --self-test
+      # The command preview's test seams must never compile into a build
+      # without debug assertions. This build must fail, and on the guard's
+      # own message, so deleting or breaking the guard turns the job red.
+      - name: A release build refuses the test-only feature
+        run: |
+          if cargo check --release --lib --features sandbox-fixtures 2> "$RUNNER_TEMP/fixtures.log"; then
+            echo "::error::a release build compiled the test-only sandbox-fixtures feature"
+            exit 1
+          fi
+          if ! grep -qF "cannot be built without debug_assertions" "$RUNNER_TEMP/fixtures.log"; then
+            cat "$RUNNER_TEMP/fixtures.log"
+            echo "::error::the release build failed, but not on the sandbox-fixtures guard"
+            exit 1
+          fi
       # Here because this job is a required Linux check: the futures' depth
       # margin below rustc's recursion limit, which Windows and Kani exceed
       # first (MIK-7678).

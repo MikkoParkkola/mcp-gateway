@@ -24,6 +24,20 @@ ROOT = Path(__file__).resolve().parents[2]
 TEST_ONLY = frozenset({"sandbox-fixtures"})
 
 
+def enabled(features: dict, name: str) -> set[str]:
+    """Every feature of this crate that `name` switches on, itself included,
+    following the [features] table (`dep:x` and `x/y` name dependencies, not
+    this crate's features, and are skipped)."""
+    seen, todo = set(), [name]
+    while todo:
+        f = todo.pop()
+        if f in seen or f not in features:
+            continue
+        seen.add(f)
+        todo.extend(e for e in features[f] if ":" not in e and "/" not in e)
+    return seen
+
+
 def release_features(manifest: dict) -> list[str]:
     features = manifest.get("features") or {}
     # A renamed test-only feature must not slip into release unnoticed.
@@ -33,9 +47,12 @@ def release_features(manifest: dict) -> list[str]:
     picked = sorted(f for f in features if f != "default" and f not in TEST_ONLY)
     if not picked:
         raise SystemExit("release-features: no features found in Cargo.toml")
-    leaked = TEST_ONLY.intersection(picked)
-    if leaked:
-        raise SystemExit(f"release-features: test-only features in the list: {sorted(leaked)}")
+    # A release feature (or `default`) that switches a test-only one on would
+    # carry it into release builds through the list.
+    for f in [*picked, "default"]:
+        reached = TEST_ONLY.intersection(enabled(features, f))
+        if reached:
+            raise SystemExit(f"release-features: {f} enables test-only {sorted(reached)}")
     return picked
 
 
