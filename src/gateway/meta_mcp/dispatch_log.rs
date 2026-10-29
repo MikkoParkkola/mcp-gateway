@@ -37,6 +37,9 @@ pub(crate) struct DispatchLog {
     bindings: Mutex<Vec<crate::gateway::meta_mcp::admission::StepBinding>>,
     /// The worker-only clock channel (MIK-8202 AC12, AC13).
     worker: super::invoke::worker_clock::WorkerChannel,
+    /// Whether the current round's last invocation was refused before its
+    /// backend; reset when a round starts, so it never outlives one.
+    round: Mutex<PreSend>,
 }
 
 impl DispatchLog {
@@ -49,6 +52,16 @@ impl DispatchLog {
     /// Every binding noted so far, as [`Self::snapshot`] keeps its calls.
     pub(crate) fn bindings(&self) -> Vec<crate::gateway::meta_mcp::admission::StepBinding> {
         self.bindings.lock().clone()
+    }
+
+    /// Whether the current round was refused before its backend.
+    pub(crate) fn round(&self) -> PreSend {
+        *self.round.lock()
+    }
+
+    /// Start a round: nothing refused yet.
+    pub(crate) fn reset_round(&self) {
+        *self.round.lock() = PreSend::Clear;
     }
 
     /// The clock channel the invoke funnel and this log's worker share.
@@ -90,6 +103,12 @@ pub(crate) fn note_binding((server, tool): (&str, &str), binding: Option<&str>) 
             binding,
         );
     });
+}
+
+/// Note what an invocation of this worker's round decided: each invocation
+/// assigns it, so the round reads its last one. A no-op outside a worker.
+pub(crate) fn note_round(pre_send: PreSend) {
+    let _ = DISPATCH_LOG.try_with(|log| *log.round.lock() = pre_send);
 }
 
 /// Note the step `args` (a `{server, tool, ..}` envelope) completed. A no-op

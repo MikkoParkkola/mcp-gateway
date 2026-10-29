@@ -25,9 +25,18 @@ impl Settling<'_> {
     /// What a settle records with its outcome: the plan's targets and the
     /// binding every call so far ran under (MIK-8407), from the dispatch log.
     pub(super) fn provenance(&self) -> crate::gateway::task_service::record::Provenance {
+        let composite = crate::gateway::meta_mcp::is_composite_meta_tool(&self.call.tool);
         crate::gateway::task_service::record::Provenance {
             targets: self.plan_targets(),
             bindings: self.owned.dispatch_log().bindings(),
+            // A plan's result is its own assembly of steps: never wholly the
+            // gateway's for one refused step (the partial plan keeps today's
+            // receipts).
+            pre_send: if composite {
+                crate::gateway::meta_mcp::dispatch_log::PreSend::Clear
+            } else {
+                self.owned.dispatch_log().round()
+            },
         }
     }
 
@@ -37,8 +46,9 @@ impl Settling<'_> {
     pub(super) async fn park_targets(&self) -> Option<crate::idempotency::admission::TaskOwner> {
         // Every parked row records its bindings (MIK-8407), a single call's
         // too: its pending input requests are backend output.
-        let crate::gateway::task_service::record::Provenance { targets, bindings } =
-            self.provenance();
+        let crate::gateway::task_service::record::Provenance {
+            targets, bindings, ..
+        } = self.provenance();
         // A plan's calls must be durable before it parks; a single call's one
         // target was recorded at creation.
         let plan = targets.is_some();

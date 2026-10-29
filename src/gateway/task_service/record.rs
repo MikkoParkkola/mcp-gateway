@@ -38,8 +38,9 @@ pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 pub(super) const TARGET_VERSION: u32 = 5;
 
 /// The record version that introduced [`Record::error_author`]. Written only on
-/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1); every other
-/// row keeps its version and its bytes. An older loader refuses such a row,
+/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1) and on a row
+/// whose round the gateway refused before its backend; every other row keeps
+/// its version and its bytes. An older loader refuses such a row,
 /// which UPGRADING-4.0 item 105 states.
 pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
 
@@ -294,10 +295,13 @@ pub(super) struct Record {
     /// output, so delivering it needs no target check.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) output_free: bool,
-    /// Who wrote a Failed row's stored error, decided where it is known
-    /// (MIK-7887.RECEIPT.1). Private: never on the wire or in a `tasks/get`
-    /// body. Absent on older rows and on every non-Failed row; absent is read
-    /// as "not established", which receipts nothing.
+    /// Who wrote the stored outcome, decided where it is known
+    /// (MIK-7887.RECEIPT.1): `Peer` on a Failed row whose error the gateway
+    /// established as the backend's; `Gateway` on a Completed or Failed row
+    /// whose round the gateway refused before its backend, so its answer is
+    /// the gateway's own. Private: never on the wire or in a `tasks/get`
+    /// body. Absent on older rows and otherwise; absent on a Failed row is
+    /// read as "not established", which receipts nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) error_author: Option<ErrorAuthor>,
     /// The attempt claim for the one upstream `tasks/cancel` a cancelled row's
@@ -342,13 +346,16 @@ pub(super) struct Record {
 pub(crate) struct Provenance {
     pub(crate) targets: Option<Vec<Target>>,
     pub(crate) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    /// Whether the settling round of a single call was refused before its
+    /// backend: its answer is then the gateway's own (`ErrorAuthor::Gateway`).
+    pub(crate) pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
 }
 
 impl From<Option<Vec<Target>>> for Provenance {
     fn from(targets: Option<Vec<Target>>) -> Self {
         Self {
             targets,
-            bindings: Vec::new(),
+            ..Self::default()
         }
     }
 }
@@ -497,7 +504,7 @@ pub(crate) struct CommittedTask {
     pub(crate) targets_recorded: bool,
     /// The row holds only the gateway's own bounded failure, no backend output.
     pub(crate) output_free: bool,
-    /// Who wrote a Failed row's stored error; see `Record::error_author`.
+    /// Who wrote the stored outcome; see `Record::error_author`.
     pub(crate) error_author: Option<ErrorAuthor>,
     /// The owner's digest as the record persisted it, read in the same piece
     /// as the rest of the snapshot (the events source carries it).
@@ -598,12 +605,14 @@ impl CommittedTask {
 
     /// The stored result when it is backend output. A row holding only the
     /// gateway's own sentence (a bounded failure, an interrupted or abandoned
-    /// round) has none: nothing the backend said was delivered with it.
+    /// round, a round refused before its backend) has none: nothing the
+    /// backend said was delivered with it.
     pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
         let result = self.task.result()?;
-        let gateway_authored = result
-            .get("_meta")
-            .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
+        let gateway_authored = self.error_author == Some(ErrorAuthor::Gateway)
+            || result
+                .get("_meta")
+                .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
         (!self.output_free && !gateway_authored).then_some(result)
     }
 }

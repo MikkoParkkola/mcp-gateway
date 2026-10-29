@@ -396,10 +396,18 @@ fn settled(
     } else {
         WriteRecord::default()
     };
-    // Only the peer's authorship is recorded: absent reads as "not
-    // established", which is what every gateway error is.
+    // Assigned on every settlement, so it describes the round that settled.
+    // A round refused before its backend is the gateway's own answer,
+    // Completed or Failed; otherwise only the peer's authorship of an error
+    // is recorded, and absent reads as "not established", which is what
+    // every other gateway error is.
     record.error_author = None;
-    if fails && author == ErrorAuthor::Peer && keep_provenance(&task, &mut record) {
+    if targets.pre_send == crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
+        && (fails || completes)
+    {
+        record.error_author = Some(ErrorAuthor::Gateway);
+        record.version = record.version.max(ERROR_AUTHOR_VERSION);
+    } else if fails && author == ErrorAuthor::Peer && keep_provenance(&task, &mut record) {
         record.error_author = Some(ErrorAuthor::Peer);
         record.version = record.version.max(ERROR_AUTHOR_VERSION);
     }

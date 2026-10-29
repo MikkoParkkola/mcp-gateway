@@ -447,10 +447,13 @@ impl MetaMcp {
             Some(MetaArm::Invoke) => {
                 let trace_id = crate::gateway::trace::generate();
                 let invocation = Arc::<str>::from(trace_id.as_str());
-                let sourced = self
+                let invoked = self
                     .invoke_tool_sourced(&arguments, session_id, caller, trace_id)
-                    .await
-                    .outcome;
+                    .await;
+                // This path skips the step funnel: the task worker's round
+                // still learns whether it was refused before its backend.
+                super::dispatch_log::note_round(invoked.pre_send);
+                let sourced = invoked.outcome;
                 match live_or_stored(sourced) {
                     ControlFlow::Continue((result, chain)) => {
                         (source, upstream) = chain;

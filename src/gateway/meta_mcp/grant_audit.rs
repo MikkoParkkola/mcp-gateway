@@ -680,6 +680,7 @@ impl super::MetaMcp {
         // As `slot_result`, keeping the invocation's own pre-send verdict
         // through a failed slot write, which replaces only the answer.
         let (invoked, written, _) = with_grant_slot(logger, future).await;
+        super::dispatch_log::note_round(invoked.pre_send);
         let refused = invoked.pre_send == super::dispatch_log::PreSend::Refused;
         let outcome = written.and(invoked.outcome);
         // #2450: every step that got past the authorization chokepoint is a
