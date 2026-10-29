@@ -36,7 +36,7 @@ fn remove_key_b(keys: &mut Vec<crate::config::ApiKeyConfig>) {
 
 /// The committed record of `task`, once terminal, read as its owner (the
 /// owner's key may be gone, so not through the route).
-async fn settled(state: &Arc<AppState>, task: &str) -> Value {
+async fn settled(state: &Arc<AppState>, task: &str) -> String {
     let owner = admission_principal();
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -46,7 +46,7 @@ async fn settled(state: &Arc<AppState>, task: &str) -> Value {
                     committed.task.status(),
                     TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
                 ) {
-                    return serde_json::to_value(&committed.task).unwrap_or(Value::Null);
+                    return format!("{:?}", committed.task);
                 }
             }
             tokio::task::yield_now().await;

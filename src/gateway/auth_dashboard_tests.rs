@@ -413,7 +413,6 @@ fn a_capped_session_ends_at_its_cap() {
     ) else {
         panic!("the value redeems");
     };
-    let not_after = redemption.bound.not_after;
     let handle = store.issue_session_until(now, &limits, redemption.bound);
     let at = |secs| Now {
         mono: now.mono + Duration::from_secs(secs),
