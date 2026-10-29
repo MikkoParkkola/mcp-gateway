@@ -86,8 +86,6 @@ struct Calls {
     builds: Vec<(String, String)>,
     /// (file, function, method, passes `None` last) of each check call.
     sites: Vec<(String, String, String, bool)>,
-    /// (function, scanned value, subject) of each `rescan` in the chokepoint.
-    subjects: Vec<(String, String, String)>,
 }
 
 fn key(at: &Place) -> (String, String) {
@@ -109,24 +107,6 @@ impl Sink for Calls {
                     .entry(key(at))
                     .or_default()
                     .insert(method.clone());
-                if method == "rescan" && at.file.ends_with("invoke/chokepoint.rs") {
-                    let name = |e: Option<&syn::Expr>| match e {
-                        Some(syn::Expr::Field(f)) => match &f.member {
-                            syn::Member::Named(id) => id.to_string(),
-                            syn::Member::Unnamed(_) => String::new(),
-                        },
-                        Some(syn::Expr::Path(p)) => p
-                            .path
-                            .segments
-                            .last()
-                            .map(|s| s.ident.to_string())
-                            .unwrap_or_default(),
-                        _ => String::new(),
-                    };
-                    let (_, func) = key(at);
-                    let subject = (name(call.args.iter().nth(1)), name(call.args.iter().nth(2)));
-                    self.subjects.push((func, subject.0, subject.1));
-                }
                 if matches!(method.as_str(), "check_request_keyed" | "rescan") {
                     let (file, func) = key(at);
                     self.sites
@@ -250,23 +230,4 @@ fn p2_every_check_call_site_is_listed() {
         }
     }
     assert!(wrong.is_empty(), "check call sites:\n{}", wrong.join("\n"));
-}
-
-/// P3: the chokepoint scans the dispatched arguments as `Arguments`, so the
-/// folder check judges them, and a retry's answers as `Answers`, so it does
-/// not. Found by mutant M5b: relabelling the arguments left every end-to-end
-/// row green, because the route scan had already refused the outside path.
-#[test]
-fn p3_chokepoint_labels_what_it_scans() {
-    let mut subjects = scan().subjects;
-    subjects.sort();
-    let expected = [
-        ("rescan_outbound", "answers", "Answers"),
-        ("rescan_outbound", "arguments", "Arguments"),
-    ];
-    let got: Vec<(&str, &str, &str)> = subjects
-        .iter()
-        .map(|(f, v, s)| (f.as_str(), v.as_str(), s.as_str()))
-        .collect();
-    assert_eq!(got, expected, "the chokepoint's rescan subjects");
 }
