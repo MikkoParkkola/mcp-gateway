@@ -309,6 +309,27 @@ async fn s6_state_is_read_for_the_rows_shown_only() {
     assert_eq!(evaluations, 24);
 }
 
+/// Asserts that every field the counter store feeds is absent from `body`.
+fn assert_no_counter_fields(body: &Value) {
+    for absent in [
+        "calls_24h",
+        "calls_prev_24h",
+        "blocks_24h",
+        "blocks_prev_24h",
+        "errors_24h",
+        "errors_prev_24h",
+        "counting_since",
+    ] {
+        assert!(body["kpi"].get(absent).is_none(), "kpi.{absent}: {body}");
+    }
+    for row in body["servers"]["rows"].as_array().expect("server rows") {
+        assert!(row.get("calls_24h").is_none(), "servers.rows: {body}");
+    }
+    assert!(body.get("edges").is_none(), "edges: {body}");
+    assert!(body.get("markers").is_none(), "markers: {body}");
+    assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
+}
+
 /// S8: no counter store, so the counter fields are absent and nothing is
 /// degraded. Green at the base: regression coverage.
 #[tokio::test]
@@ -317,14 +338,7 @@ async fn s8_no_store_leaves_the_counter_fields_out() {
 
     let body = overview(&state).await;
 
-    for absent in ["calls_24h", "blocks_24h", "errors_24h"] {
-        assert!(body["kpi"].get(absent).is_none(), "{absent}: {body}");
-    }
-    assert!(
-        body.get("edges").is_none() && body.get("markers").is_none(),
-        "{body}"
-    );
-    assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
+    assert_no_counter_fields(&body);
     assert!(body.get("degraded").is_none(), "{body}");
     assert_eq!(body["checklist"]["has_key"], true, "{body}");
 }
@@ -341,8 +355,7 @@ async fn s8b_an_unreadable_clock_degrades_the_counter_fields() {
     let (_, raw) = get(&state, Some(ADMIN_KEY)).await;
 
     let body: Value = serde_json::from_str(&raw).expect("a JSON body");
-    assert!(body["kpi"].get("calls_24h").is_none(), "{body}");
-    assert!(body["degraded"].is_array(), "degraded absent: {body}");
+    assert_no_counter_fields(&body);
     let mut degraded: Vec<&str> = body["degraded"]
         .as_array()
         .expect("a degraded list")
@@ -480,17 +493,11 @@ async fn s10_a_read_takes_the_store_lock_seven_times() {
     }
 }
 
-/// S11 (F1): a server the runtime policy denies is a `refused` needs-you row
-/// with the same cause `/ui/api/refusals` serves, even when its name sorts
-/// last and it is folded out of the 24 server rows.
-#[tokio::test]
-async fn s11_a_startup_denied_server_is_a_refused_row() {
+/// A plan the runtime policy denies: it asks to mount the host root.
+fn forbidden_mount_plan() -> crate::runtime::RuntimePlan {
     use crate::runtime::{
-        RuntimeAvailability, RuntimeDenyReason, RuntimeIntent, RuntimeMount, RuntimeMountMode,
-        RuntimePlanner,
+        RuntimeAvailability, RuntimeIntent, RuntimeMount, RuntimeMountMode, RuntimePlanner,
     };
-    let (state, _dir) = fixture(0, false).await;
-    let _backends = register(&state, 30);
     let mut intent = RuntimeIntent::named("denied");
     intent.image = Some("ghcr.io/example/filesystem:1".to_owned());
     intent.requested_mounts = vec![RuntimeMount {
@@ -500,6 +507,57 @@ async fn s11_a_startup_denied_server_is_a_refused_row() {
     }];
     let plan = RuntimePlanner::new(RuntimeAvailability::with_docker()).plan(&intent);
     assert!(plan.is_denied(), "the fixture plan is denied");
+    plan
+}
+
+/// Every reason the runtime policy can give for a denial.
+#[cfg(feature = "cost-governance")]
+const ALL_DENIALS: [crate::runtime::RuntimeDenyReason; 4] = {
+    use crate::runtime::RuntimeDenyReason as R;
+    [
+        R::RuntimeUnavailable,
+        R::MissingContainerImage,
+        R::InvalidResourcePolicy,
+        R::ForbiddenMount,
+    ]
+};
+
+/// `count` servers denied for every reason, with escape-heavy names. Each has
+/// calls at `at`, so they rank first and show their state.
+#[cfg(feature = "cost-governance")]
+fn register_denied(state: &Arc<AppState>, store: &CounterStore, count: usize, at: u64) {
+    for i in 0..count {
+        let name = format!("d{i:02}{}", "\u{1}".repeat(300));
+        let mut plan = forbidden_mount_plan();
+        plan.denied = ALL_DENIALS
+            .iter()
+            .map(|&reason| crate::runtime::RuntimeDenial {
+                reason,
+                detail: String::new(),
+            })
+            .collect();
+        plan.audit.denied_reasons = ALL_DENIALS.to_vec();
+        let backend = Backend::new_with_runtime_plan(
+            &name,
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+            Some(plan),
+        );
+        assert!(state.backends.register(Arc::new(backend)), "register {i}");
+        record(store, "key:a", &name, at, Tally::default());
+    }
+}
+
+/// S11 (F1): a server the runtime policy denies is a `refused` needs-you row
+/// with the same cause `/ui/api/refusals` serves, even when its name sorts
+/// last and it is folded out of the 24 server rows.
+#[tokio::test]
+async fn s11_a_startup_denied_server_is_a_refused_row() {
+    use crate::runtime::RuntimeDenyReason;
+    let (state, _dir) = fixture(0, false).await;
+    let _backends = register(&state, 30);
+    let plan = forbidden_mount_plan();
     let denied = Arc::new(Backend::new_with_runtime_plan(
         "tail-denied",
         BackendConfig::default(),
@@ -584,9 +642,10 @@ async fn s7b_needs_you_orders_invalid_config_refused_then_limits() {
 }
 
 /// S9 (D11, API16.2): O3e's worst case plus a full store: 48 edges with
-/// 128-byte escape-heavy labels and 50 markers. The body stays under the
-/// ceiling computed from the caps per field class, and over three quarters
-/// of it.
+/// 128-byte escape-heavy labels, 50 markers, and 24 servers denied for every
+/// reason, whose state reason is the longest fixed text and whose startup
+/// refusals name an escape-heavy backend. The body stays under the ceiling
+/// computed from the caps per field class, and over three quarters of it.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
 async fn s9_the_full_body_stays_under_the_extended_ceiling() {
@@ -594,13 +653,23 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         BUDGET_NOW, FIELD, NEEDS_YOU_ROWS, SERVER_ROWS, WORST_BODY, worst_case,
     };
     // Counter labels and marker subjects are at most 128 bytes (the store
-    // normalizes them); a reason is fixed text of at most 256 bytes.
+    // normalizes them). A state reason and a refusal's fix are fixed text,
+    // escape-free: priced at the longest this fixture produces. A startup
+    // refusal's cause names the backend, so it is dynamic text (`FIELD`), and
+    // `WORST_BODY` already prices a needs-you row at two of those.
     const LABEL: usize = 2 + 6 * 128;
-    const REASON: usize = 2 + 256;
-    let ceiling =
-        WORST_BODY + SERVER_ROWS * (REASON + 64) + 48 * (2 * LABEL + 192) + 50 * (LABEL + 192);
+    let codes = ALL_DENIALS.map(|r| serde_json::to_value(r).expect("a code"));
+    let codes: Vec<&str> = codes.iter().filter_map(Value::as_str).collect();
+    let reason = format!("Refused by the runtime policy: {}.", codes.join(", "));
+    let fix = crate::config_reload::refusals::startup_refusal("x", &ALL_DENIALS).fix;
+    let ceiling = WORST_BODY
+        + SERVER_ROWS * (2 + reason.len() + 64)
+        + NEEDS_YOU_ROWS * (2 + fix.len() + 64)
+        + 48 * (2 * LABEL + 192)
+        + 50 * (LABEL + 192);
     let (state, _dir, _clock) = worst_case().await;
     let store = with_store(&state, 0);
+    register_denied(&state, &store, SERVER_ROWS, BUDGET_NOW - 600);
     let heavy = |i: usize| format!("{i:02}{}", "\u{1}".repeat(126));
     for caller in 0..2 {
         for server in 0..30 {
@@ -639,6 +708,9 @@ async fn s9_the_full_body_stays_under_the_extended_ceiling() {
         body["needs_you"]["rows"].as_array().map(Vec::len),
         Some(NEEDS_YOU_ROWS)
     );
+    assert_eq!(body["servers"]["rows"][0]["reason"], reason.as_str());
+    let refused = body["needs_you"]["rows"][0]["detail"]["cause"].as_str();
+    assert_eq!(refused.map(str::len), Some(256), "{refused:?}");
     const { assert!(FIELD > LABEL, "a dynamic field is the larger class") };
     assert!(
         raw.len() <= ceiling,
