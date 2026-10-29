@@ -365,9 +365,33 @@ impl<'ast> syn::visit::Visit<'ast> for ProductionIdents {
         }
     }
 
+    /// `S { id }` holds `id` as both field and value; the text has it once.
     fn visit_field_value(&mut self, node: &'ast syn::FieldValue) {
-        if !test_only(&node.attrs) {
+        if test_only(&node.attrs) {
+            return;
+        }
+        if node.colon_token.is_none() {
+            self.visit_expr(&node.expr);
+        } else {
             syn::visit::visit_field_value(self, node);
+        }
+    }
+
+    /// The same shorthand in a pattern, `S { id, .. }`.
+    fn visit_field_pat(&mut self, node: &'ast syn::FieldPat) {
+        if node.colon_token.is_none() {
+            self.visit_pat(&node.pat);
+        } else {
+            syn::visit::visit_field_pat(self, node);
+        }
+    }
+
+    /// `&self` carries a `Self` type the parser supplies; the text has none.
+    fn visit_receiver(&mut self, node: &'ast syn::Receiver) {
+        if node.colon_token.is_some() {
+            syn::visit::visit_receiver(self, node);
+        } else if let Some((_, Some(lifetime))) = &node.reference {
+            self.visit_lifetime(lifetime);
         }
     }
 
