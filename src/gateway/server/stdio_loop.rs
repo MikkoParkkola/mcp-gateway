@@ -106,7 +106,8 @@ impl Gateway {
         // One config for everything stdio judges with and for its reload
         // context, so a stdio reload reaches intake, tasks and policy (ADR-023).
         // Its auth is the default one: stdio authenticates by API key nothing,
-        // and the gateway's own `auth` is never resolved here (MIK-7638).
+        // and the gateway's own `auth` is never resolved here, so one that does
+        // not resolve cannot turn stdio's tasks off.
         let live_config = Arc::new(
             crate::config_reload::LiveConfig::from_prepared(
                 crate::config_reload::Generation::prepare_startup(
