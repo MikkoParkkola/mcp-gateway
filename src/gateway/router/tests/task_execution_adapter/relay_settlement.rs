@@ -23,7 +23,7 @@ fn text(text: &str) -> Value {
 async fn relay_state(
     mock: &Arc<MockBackend>,
     window_secs: u64,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store, _) = relay_state_with_firewall(mock, window_secs).await;
     (state, store)
 }
@@ -33,7 +33,11 @@ async fn relay_state(
 async fn relay_state_with_firewall(
     mock: &Arc<MockBackend>,
     window_secs: u64,
-) -> (Arc<AppState>, tempfile::TempDir, Arc<Firewall>) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    Arc<Firewall>,
+) {
     let config = FirewallConfig {
         rules: crate::yaml::from_str("[{match: echo, action: block}]").unwrap(),
         collusion: CollusionConfig {
