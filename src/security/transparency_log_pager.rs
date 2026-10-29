@@ -81,78 +81,6 @@ pub(crate) fn position(log: &Path, cursor: Option<(u64, Option<u64>)>) -> io::Re
     })
 }
 
-/// A test's seam inside [`position`], once the active segment's number is
-/// read: rotation there is the window between naming a segment and reading
-/// anything of it.
-#[cfg(test)]
-pub(crate) mod seam {
-    use std::cell::RefCell;
-
-    thread_local! {
-        static AFTER_ACTIVE_SEQ: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    #[cfg(feature = "webui")]
-    thread_local! {
-        static AFTER_WINDOW: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    /// Run `hook` once, after this thread's next [`super::tail_window_in`]
-    /// read: rotation between two windows of one Overview read.
-    #[cfg(feature = "webui")]
-    pub(crate) fn after_window(hook: impl FnOnce() + 'static) {
-        AFTER_WINDOW.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
-    }
-
-    #[cfg(feature = "webui")]
-    pub(super) fn fire_after_window() {
-        if let Some(hook) = AFTER_WINDOW.with(|h| h.borrow_mut().take()) {
-            hook();
-        }
-    }
-
-    /// Run `hook` once, the next time this thread's [`super::position`] has
-    /// read the active segment's number.
-    pub(crate) fn after_active_seq(hook: impl FnOnce() + 'static) {
-        AFTER_ACTIVE_SEQ.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
-    }
-
-    pub(super) fn fire() {
-        if let Some(hook) = AFTER_ACTIVE_SEQ.with(|h| h.borrow_mut().take()) {
-            hook();
-        }
-    }
-
-    thread_local! {
-        static AFTER_SEALED_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-        static AFTER_OLDER_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    }
-
-    /// Run `hook` once, inside the next listing, between listing the sealed
-    /// segments and reading the live file.
-    pub(crate) fn after_sealed_listed(hook: impl FnOnce() + 'static) {
-        AFTER_SEALED_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
-    }
-
-    pub(crate) fn fire_sealed_listed() {
-        if let Some(hook) = AFTER_SEALED_LISTED.with(|h| h.borrow_mut().take()) {
-            hook();
-        }
-    }
-
-    /// Run `hook` once, inside the next [`super::older_segment`], between
-    /// finding the older segment and reading its length.
-    pub(crate) fn after_older_listed(hook: impl FnOnce() + 'static) {
-        AFTER_OLDER_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
-    }
-
-    pub(super) fn fire_older_listed() {
-        if let Some(hook) = AFTER_OLDER_LISTED.with(|h| h.borrow_mut().take()) {
-            hook();
-        }
-    }
-}
-
 /// The `(length, segment)` of the segment just older than `segment`. `None`
 /// at the start of the log, including when retention removes the oldest
 /// segment meanwhile. A kept older segment below `segment - 1` means one in
@@ -381,6 +309,78 @@ pub(crate) fn lines_newest_first(body: &[u8], body_start: u64) -> Vec<(u64, &[u8
     }
     lines.reverse();
     lines
+}
+
+/// A test's seam inside [`position`], once the active segment's number is
+/// read: rotation there is the window between naming a segment and reading
+/// anything of it.
+#[cfg(test)]
+pub(crate) mod seam {
+    use std::cell::RefCell;
+
+    thread_local! {
+        static AFTER_ACTIVE_SEQ: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    #[cfg(feature = "webui")]
+    thread_local! {
+        static AFTER_WINDOW: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, after this thread's next [`super::tail_window_in`]
+    /// read: rotation between two windows of one Overview read.
+    #[cfg(feature = "webui")]
+    pub(crate) fn after_window(hook: impl FnOnce() + 'static) {
+        AFTER_WINDOW.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    #[cfg(feature = "webui")]
+    pub(super) fn fire_after_window() {
+        if let Some(hook) = AFTER_WINDOW.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time this thread's [`super::position`] has
+    /// read the active segment's number.
+    pub(crate) fn after_active_seq(hook: impl FnOnce() + 'static) {
+        AFTER_ACTIVE_SEQ.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire() {
+        if let Some(hook) = AFTER_ACTIVE_SEQ.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    thread_local! {
+        static AFTER_SEALED_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_OLDER_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, inside the next listing, between listing the sealed
+    /// segments and reading the live file.
+    pub(crate) fn after_sealed_listed(hook: impl FnOnce() + 'static) {
+        AFTER_SEALED_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(crate) fn fire_sealed_listed() {
+        if let Some(hook) = AFTER_SEALED_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, inside the next [`super::older_segment`], between
+    /// finding the older segment and reading its length.
+    pub(crate) fn after_older_listed(hook: impl FnOnce() + 'static) {
+        AFTER_OLDER_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire_older_listed() {
+        if let Some(hook) = AFTER_OLDER_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 #[cfg(test)]

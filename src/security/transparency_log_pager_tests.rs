@@ -240,6 +240,7 @@ const READER_TOKENS: &[&str] = &[
     "super::segments",
     "bounded_read_to_string",
     "log_files(",
+    "open_segment(",
 ];
 
 /// Ways to open or measure a file by name.
@@ -274,7 +275,62 @@ const READERS: &[(&str, &str)] = &[
         "src/security/transparency_log_lease.rs",
         "names segments for the lease, opens none",
     ),
+    (
+        "src/control_plane/store/file_io.rs",
+        "uses the pager's line splitter; its one open is the line allowed below",
+    ),
 ];
+
+/// Exact lines a reader file may keep, each the only by-name open it has.
+const ALLOWED_LINES: &[(&str, &str)] = &[(
+    "src/control_plane/store/file_io.rs",
+    "std::fs::File::open(dir)?.sync_all()?;",
+)];
+
+/// The production part of a source file: the text with each inline test
+/// module's block removed, so the code after one is still scanned. Braces
+/// are counted plainly; a test module with an unbalanced brace in a string
+/// only hides more of itself.
+fn production_text(text: &str) -> String {
+    const MARK: &str = "#[cfg(test)]";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(MARK) {
+        let after = rest[i + MARK.len()..].trim_start();
+        let after = after.strip_prefix("pub(crate) ").unwrap_or(after);
+        let inline = after.strip_prefix("mod ").is_some_and(|m| {
+            m.trim_start_matches(|c: char| c.is_alphanumeric() || c == '_')
+                .trim_start()
+                .starts_with('{')
+        });
+        if !inline {
+            out.push_str(&rest[..=i]);
+            rest = &rest[i + 1..];
+            continue;
+        }
+        out.push_str(&rest[..i]);
+        let block = &rest[i..];
+        let open = block.find('{').expect("an inline module has a block");
+        let mut depth = 0_usize;
+        let mut end = block.len();
+        for (at, c) in block[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + at + 1;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        rest = &block[end..];
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Files allowed to open or measure log files by name, each for one reason.
 const OPENERS: &[(&str, &str)] = &[
@@ -314,10 +370,6 @@ const OPENERS: &[(&str, &str)] = &[
         "src/security/transparency_log_session.rs",
         "whole-log reader: one session, relists after each pass and retries",
     ),
-    (
-        "src/control_plane/store/file_io.rs",
-        "uses the pager's line splitter; its open is a directory fsync",
-    ),
 ];
 
 fn production_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -350,7 +402,9 @@ fn only_the_listed_files_open_log_segments_by_name() {
     production_files(&root.join("src"), &mut files);
     let mut touching = Vec::new();
     for file in &files {
-        let text = std::fs::read_to_string(file).unwrap();
+        let source = std::fs::read_to_string(file).unwrap();
+        let text = production_text(&source);
+        let text = text.as_str();
         if !READER_TOKENS.iter().any(|t| text.contains(t)) {
             continue;
         }
@@ -359,15 +413,21 @@ fn only_the_listed_files_open_log_segments_by_name() {
             .unwrap()
             .to_string_lossy()
             .replace('\\', "/");
-        let opens: Vec<&str> = BY_NAME
-            .iter()
-            .copied()
-            .filter(|t| text.contains(t))
-            .collect();
         if READERS.iter().any(|(f, _)| *f == rel) {
+            let allowed: Vec<&str> = ALLOWED_LINES
+                .iter()
+                .filter(|(f, _)| *f == rel)
+                .map(|(_, line)| *line)
+                .collect();
+            let opens: Vec<&str> = text
+                .lines()
+                .map(str::trim)
+                .filter(|line| !allowed.contains(line))
+                .filter(|line| BY_NAME.iter().any(|t| line.contains(t)))
+                .collect();
             assert!(
                 opens.is_empty(),
-                "{rel} opens by name ({opens:?}); use open_segment"
+                "{rel} opens by name: {opens:?}; use open_segment"
             );
         }
         touching.push(rel);
