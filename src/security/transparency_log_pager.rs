@@ -122,6 +122,35 @@ pub(crate) mod seam {
             hook();
         }
     }
+
+    thread_local! {
+        static AFTER_SEALED_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_OLDER_LISTED: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Run `hook` once, inside the next listing, between listing the sealed
+    /// segments and reading the live file.
+    pub(crate) fn after_sealed_listed(hook: impl FnOnce() + 'static) {
+        AFTER_SEALED_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(crate) fn fire_sealed_listed() {
+        if let Some(hook) = AFTER_SEALED_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, inside the next [`super::older_segment`], between
+    /// finding the older segment and reading its length.
+    pub(crate) fn after_older_listed(hook: impl FnOnce() + 'static) {
+        AFTER_OLDER_LISTED.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    pub(super) fn fire_older_listed() {
+        if let Some(hook) = AFTER_OLDER_LISTED.with(|h| h.borrow_mut().take()) {
+            hook();
+        }
+    }
 }
 
 /// The `(length, segment)` of the segment just older than `segment`. `None`
@@ -144,9 +173,22 @@ pub(crate) fn older_segment(log: &Path, segment: Option<u64>) -> io::Result<Opti
             ),
         ));
     }
+    #[cfg(test)]
+    seam::fire_older_listed();
     match std::fs::metadata(&older.path) {
         Ok(meta) => Ok(Some((meta.len(), older.seq))),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        // Gone since listed. Retention removes the oldest first: with nothing
+        // older kept, the log ends here; otherwise it is a hole.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if list_segments(log)?.iter().any(|s| s.seq < older.seq) {
+                Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("log segment {} vanished below kept segments", older.seq),
+                ))
+            } else {
+                Ok(None)
+            }
+        }
         Err(e) => Err(e),
     }
 }

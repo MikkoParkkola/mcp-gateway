@@ -186,11 +186,54 @@ fn a_missing_segment_between_kept_ones_is_an_error() {
     assert_eq!(older_segment(&log, Some(2)).unwrap(), None);
 }
 
+/// Rotation renames the live file to its sealed name between the listing's
+/// two reads and has not created the next one yet. The listing reads again,
+/// so the just-sealed segment is still found below the newest page.
+#[test]
+fn a_rename_gap_inside_the_listing_still_finds_the_sealed_segment() {
+    let (_dir, log) = log_with(&[3], Some(4));
+    let live = log.clone();
+    super::seam::after_sealed_listed(move || {
+        std::fs::rename(&live, sealed_path(&live, 4)).unwrap();
+    });
+    let at = position(&log, None).unwrap();
+    assert_eq!(
+        (at.segment, at.bound),
+        (5, Some(0)),
+        "no live file: the next number"
+    );
+    let older = older_segment(&log, Some(at.segment)).unwrap();
+    assert_eq!(
+        older.map(|(_, seq)| seq),
+        Some(4),
+        "segment 4 is not skipped"
+    );
+}
+
+/// The older segment goes between being found and being measured. With an
+/// even older one kept, that is a hole, not the end of the log.
+#[test]
+fn an_older_segment_vanishing_mid_step_above_a_kept_one_is_a_hole() {
+    let (_dir, log) = log_with(&[2, 3], Some(4));
+    let doomed = sealed_path(&log, 3);
+    super::seam::after_older_listed(move || std::fs::remove_file(&doomed).unwrap());
+    let err = older_segment(&log, Some(4)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+
+    // The oldest going the same way is the log's natural end.
+    let (_dir, log) = log_with(&[3], Some(4));
+    let doomed = sealed_path(&log, 3);
+    super::seam::after_older_listed(move || std::fs::remove_file(&doomed).unwrap());
+    assert_eq!(older_segment(&log, Some(4)).unwrap(), None);
+}
+
 /// What marks a production file as touching the log's segments: the pager,
 /// the segment listing, or the whole-file read helpers, by any path.
 const READER_TOKENS: &[&str] = &[
     "pager::",
     "segments::",
+    "transparency_log::pager",
+    "transparency_log::segments",
     "sealed_path",
     "list_segments",
     "super::pager",

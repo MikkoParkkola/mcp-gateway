@@ -244,25 +244,43 @@ impl Listing {
 /// List `path`'s files: the sealed segments first, then the active file.
 /// That order means a rotation between the two reads shows the new active
 /// file under a number above every listed segment, never a sealed segment
-/// as the newest.
+/// as the newest; a sealed list that changed meanwhile is listed again.
 ///
 /// # Errors
 ///
-/// The directory or the active file cannot be read, or the newest sealed
-/// segment holds the last number ([`next_seq`]).
+/// The directory or the active file cannot be read, the newest sealed
+/// segment holds the last number ([`next_seq`]), or the log rotated during
+/// three listings in a row (`Interrupted`).
 pub(crate) fn listing(path: &Path) -> io::Result<Listing> {
-    let sealed = list_segments(path)?;
-    let next = next_seq(&sealed)?;
-    let active = match File::open(path) {
-        Ok(file) => Some(segment_seq_in(&file, next)?),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-        Err(e) => return Err(e),
-    };
-    Ok(Listing {
-        sealed,
-        active,
-        next,
-    })
+    // A rotation between the two reads (the live file renamed to its sealed
+    // name, the next not yet created) would leave the just-sealed segment in
+    // neither: listing the sealed segments again shows whether one moved.
+    for _ in 0..3 {
+        let sealed = list_segments(path)?;
+        let next = next_seq(&sealed)?;
+        #[cfg(test)]
+        super::pager::seam::fire_sealed_listed();
+        let active = match File::open(path) {
+            Ok(file) => Some(segment_seq_in(&file, next)?),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        let moved = list_segments(path)?
+            .iter()
+            .map(|s| s.seq)
+            .ne(sealed.iter().map(|s| s.seq));
+        if !moved {
+            return Ok(Listing {
+                sealed,
+                active,
+                next,
+            });
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::Interrupted,
+        "log rotated during listing three times in a row; retry",
+    ))
 }
 
 /// The segment number an open record line names.

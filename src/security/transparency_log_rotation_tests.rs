@@ -512,6 +512,31 @@ fn a_segment_removed_during_the_signed_entry_scan_is_read_again() {
     );
 }
 
+/// The log rotates under both passes of the signed-entry scan: a busy log,
+/// `Interrupted`, never an answer read from a listing that moved.
+#[test]
+fn a_signed_entry_scan_rotated_twice_is_interrupted() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    append(&l, 3);
+    drop(l);
+    let seal = |live: &Path, seq: u64| {
+        std::fs::rename(live, sealed_path(live, seq)).unwrap();
+        let opened = serde_json::json!({"event": "audit_segment_opened", "segment_seq": seq + 1});
+        std::fs::write(live, format!("{opened}\n")).unwrap();
+    };
+    let live = path.clone();
+    verify::LISTED.with(|h| {
+        *h.borrow_mut() = Some(Box::new(move || {
+            seal(&live, 0);
+            verify::LISTED.with(|h| *h.borrow_mut() = Some(Box::new(move || seal(&live, 1))));
+        }));
+    });
+    let err = log_contains_signed_entry(&path).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::Interrupted, "{err}");
+}
+
 #[test]
 fn caller_cannot_append_segment_event() {
     let dir = tempfile::tempdir().unwrap();
