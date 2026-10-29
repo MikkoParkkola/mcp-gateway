@@ -145,7 +145,7 @@ impl MetaMcp {
             step: Step { server, tool },
         } = input;
         let mut arguments = parse_tool_arguments(args).inspect_err(|_| {
-            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused)
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
         })?;
         // `_full` (opt out of response projection, MIK-3533) and `_claim` (the
         // MIK-6914 Option B claim-under-test) are gateway directives, not

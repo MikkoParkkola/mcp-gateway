@@ -39,7 +39,6 @@ async fn settled_row(
 /// A single call whose tool is withheld between intake and run settles on
 /// the gateway's own answer: the row records the gateway as its author, so
 /// no reader takes the stored answer for the backend's.
-#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_refused_single_call_settles_as_the_gateways_answer() {
     let mock = MockBackend::answering(Answer::ok());
@@ -86,7 +85,6 @@ async fn a_sent_single_call_keeps_the_backends_result() {
 /// (beta): the refused step stays a target, a call attempted, so a stored
 /// read keeps re-checking access to it; but the relay replay entry, the
 /// record a stored read takes "this backend ran it" from, names only alpha.
-#[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_refused_plan_step_stays_a_target_but_is_no_replay_call() {
     use super::relay_plan_replay::{
