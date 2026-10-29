@@ -23,6 +23,7 @@ python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
+python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_release_features.py	0	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed

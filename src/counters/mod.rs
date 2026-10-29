@@ -258,6 +258,14 @@ pub(crate) struct Marker {
     pub subject: Option<String>,
 }
 
+/// The binary version a restored `counters.json` was saved by, and the one
+/// now running, when they differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionChange {
+    pub from: String,
+    pub to: String,
+}
+
 /// One capped label map plus the overflow count past its cap.
 #[derive(Debug, Clone)]
 pub(crate) struct Dimension<K: Hash + Eq> {
@@ -505,18 +513,40 @@ impl CounterStore {
     /// # Errors
     ///
     /// The bytes are not a version-1 `counters.json`.
+    #[cfg(test)]
     pub(crate) fn from_bytes<Tz: TimeZone>(
         bytes: &[u8],
         now: u64,
         binary_version: &str,
         zone: &Tz,
     ) -> Result<(Self, bool), snapshot::RestoreError> {
+        Self::from_bytes_noting_change(bytes, now, binary_version, zone)
+            .map(|(store, cut, _)| (store, cut))
+    }
+
+    /// [`Self::from_bytes`], also returning the version change it marked: the
+    /// one value the server keeps for `GET /ui/api/gateway`, taken from the
+    /// restore itself and never read back from marker history.
+    ///
+    /// # Errors
+    ///
+    /// The bytes are not a version-1 `counters.json`.
+    pub(crate) fn from_bytes_noting_change<Tz: TimeZone>(
+        bytes: &[u8],
+        now: u64,
+        binary_version: &str,
+        zone: &Tz,
+    ) -> Result<(Self, bool, Option<VersionChange>), snapshot::RestoreError> {
         let (mut inner, saved_version, cut) = snapshot::from_bytes(bytes, now, zone)?;
-        if saved_version != binary_version {
-            let subject = format!("{saved_version} → {binary_version}");
+        let change = (saved_version != binary_version).then(|| VersionChange {
+            from: saved_version,
+            to: binary_version.to_owned(),
+        });
+        if let Some(change) = &change {
+            let subject = format!("{} → {}", change.from, change.to);
             inner.mark(MarkerKind::Upgrade, Some(&subject), now);
         }
-        Ok((Self::from_inner(inner), cut))
+        Ok((Self::from_inner(inner), cut, change))
     }
 
     /// Labels a dimension holds now.
