@@ -29,6 +29,12 @@ PATHS = [
         "stdio dispatch",
         [
             "src/transport/stdio.rs",
+            # Its start sequence, split out of stdio.rs: the same lines,
+            # graded where they now live.
+            "src/transport/stdio_start.rs",
+            # Its child environment, split out of stdio.rs earlier and
+            # restored here.
+            "src/transport/stdio_env.rs",
             "src/gateway/server/stdio_channel.rs",
             "src/transport/command_split.rs",
         ],

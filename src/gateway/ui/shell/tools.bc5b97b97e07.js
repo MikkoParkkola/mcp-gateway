@@ -92,7 +92,13 @@ async function statusTab(body, ctx) {
     h('div', { class: 'tools-card-head' }, h('h2', { class: 'kicker', id: 'tools-card-title' }, 'All tools'), meta),
     h('div', { class: 'tools-scroll', tabindex: 0, role: 'region', 'aria-label': 'Tool list' }, table),
     none, h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
-  body.append(h('div', { class: 'tools-bar' }, search, pick), card);
+  // Frame 48s: how agents reach this catalogue, beside the search (copy D11).
+  const load = h('p', { class: 't3 tools-load' }, 'Agents load 11 tools and reach the rest through search and invoke ');
+  // The tooltip module loads after the catalogue is drawn and never holds it up: a static
+  // import would put its bytes before every page's first paint, and if it fails to load
+  // the sentence simply stands without its (i).
+  import('/ui/assets/tooltip.deb27f374db3.js').then(({ tip }) => load.append(tip('tools.status.load-11-tools-and-reach')), () => {});
+  body.append(h('div', { class: 'tools-bar' }, search, pick, load), card);
   search.value = filters.query;
   pick.value = servers.includes(filters.server) ? filters.server : '';
 
