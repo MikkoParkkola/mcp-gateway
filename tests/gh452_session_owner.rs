@@ -124,7 +124,7 @@ async fn state(
             {
                 // Flags off, as this fixture set them on `AppState` before they
                 // moved into the published config (ADR-023).
-                let mut config = config;
+                let mut config = config.clone();
                 config.security.sanitize_input = false;
                 config.security.ssrf_protection = false;
                 config
