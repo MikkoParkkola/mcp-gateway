@@ -16,6 +16,8 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use super::EventsHub;
+#[cfg(test)]
+use super::types::RpcError;
 use super::upstream_need::ledger::Ledger;
 use super::upstream_need::{Full, Interest, Need, Snapshot};
 use crate::backend::{Backend, BackendRegistry};
