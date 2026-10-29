@@ -236,3 +236,41 @@ async fn an_optional_backends_unavailable_read_keeps_its_held_slot() {
         "an unavailable read forgot the optional backend's held slot"
     );
 }
+
+/// R6a (spec preview): the old grant's slot was published before the
+/// rotation; `tools/resolve` after it answers from the current grant's view
+/// or cold, never the old slot. RED on base: `tools/resolve` runs no account
+/// re-check, so the held slot stands.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn r6_tools_resolve_after_a_rotation_does_not_resolve_the_old_slot() {
+    let fx = Arc::new(fixture().await);
+    let old = fill_old(&fx, 1).await;
+    rotate(&fx, &old).await;
+    let answer = rpc(&fx, 2, "tools/resolve", json!({"name": TOOL})).await;
+    assert!(
+        answer.pointer("/result/tool").is_none(),
+        "R6a: tools/resolve resolved the old grant's slot after the rotation: {answer}"
+    );
+}
+
+/// R6b (spec preview): after the rotation, a publish of the old binding
+/// lands after `tools/resolve`'s account re-check. RED on base: the re-check
+/// does not run on `tools/resolve`, so the seam never fires.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn r6_tools_resolve_does_not_resolve_an_old_publish_after_its_recheck() {
+    let fx = Arc::new(fixture().await);
+    let old = fill_old(&fx, 1).await;
+    rotate(&fx, &old).await;
+    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
+    let answer = rpc(&fx, 2, "tools/resolve", json!({"name": TOOL})).await;
+    assert!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        "R6b: tools/resolve ran no account re-check (the after_revalidate seam never fired): {answer}"
+    );
+    assert!(
+        answer.pointer("/result/tool").is_none(),
+        "R6b: tools/resolve resolved an old publish after its re-check: {answer}"
+    );
+}
