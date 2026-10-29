@@ -27,7 +27,19 @@ use crate::{Error, Result};
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
 pub(super) fn build(proxy: Option<&url::Url>) -> Client {
-    route(proxy)
+    configured(route(proxy))
+}
+
+/// [`build`] over `builder`, for a test that supplies its own resolver: the
+/// same settings and redirect policy.
+#[cfg(test)]
+pub(super) fn build_over(builder: reqwest::ClientBuilder) -> Client {
+    configured(builder)
+}
+
+/// [`build`]'s settings and redirect policy, over `builder`'s route.
+fn configured(builder: reqwest::ClientBuilder) -> Client {
+    builder
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
