@@ -213,21 +213,55 @@ async fn e5_a_stale_rejection_leaves_the_newer_lease() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// E5, replace racing replace: B replaces the original while its drain is
+/// held open, and C queues behind B on the store lock (tokio's mutex is
+/// fair, so C runs after B). The last replace wins, exactly one lease is
+/// held, and B's generation can no longer send.
 #[tokio::test]
-async fn e5_concurrent_replaces_leave_one_lease() {
+async fn e5_a_replace_racing_a_replace_leaves_the_last_one() {
     let s = Arc::new(store());
-    let a = {
-        let s = s.clone();
-        tokio::spawn(async move { s.install(key("p"), token_until(now() + 3600), FAR, 0).await })
+    s.install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
     };
-    let b = {
+    let in_flight = token.read_owned().await;
+    let replace = |exp: u64| {
         let s = s.clone();
-        tokio::spawn(async move { s.install(key("p"), token_until(now() + 3600), FAR, 0).await })
+        tokio::spawn(async move { s.install(key("p"), token_until(exp), FAR, 0).await })
     };
-    let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
-    let current = s.generation(&key("p")).await.expect("one lease");
-    assert!(current == a || current == b);
-    assert_eq!(s.held.lock().await.len(), 1);
+    let b = replace(now() + 7200);
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "B never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    let c = replace(now() + 9000);
+    tokio::task::yield_now().await;
+    assert!(!b.is_finished() && !c.is_finished(), "premise: both wait");
+    drop(in_flight);
+    let b = b.await.unwrap().unwrap();
+    let c = c.await.unwrap().unwrap();
+    assert_ne!(b, c, "two replaces, two generations");
+    assert_eq!(
+        s.held_generation(&key("p")),
+        Some(c),
+        "the last replace wins"
+    );
+    assert_eq!(s.held.lock().await.len(), 1, "exactly one lease");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assert!(
+        s.with_credential(&key("p"), b, recording(seen, calls.clone()))
+            .await
+            .is_err(),
+        "B's generation is refused"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "and never sends");
 }
 
 /// D1: a wipe cancels a send that is still in flight, waits for it to let
