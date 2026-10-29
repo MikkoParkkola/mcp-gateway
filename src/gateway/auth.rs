@@ -468,7 +468,8 @@ mod clients;
 pub(crate) use clients::presented_bearer_sha256;
 pub use clients::{anonymous_client, session_cookie_value};
 use clients::{
-    dashboard_client, is_poll, presented_credential, public_client, session_ended_response,
+    dashboard_client, is_poll, is_ui_stream, presented_credential, public_client,
+    session_ended_response,
 };
 
 /// Combined auth state: static config + optional key server.
@@ -532,7 +533,7 @@ pub async fn auth_middleware(
     // live once the clock reads (MIK-8202).
     let mut keep_cookie = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
-        let touch = if has_authorization || is_poll(&request) {
+        let touch = if has_authorization || is_poll(&request) || is_ui_stream(&request) {
             Touch::No
         } else {
             Touch::Yes

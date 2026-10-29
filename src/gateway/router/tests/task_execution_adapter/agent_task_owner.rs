@@ -68,7 +68,12 @@ pub(super) fn agent_token_for(
 /// Gateway auth off, agent auth on with two agents; returns their tokens.
 pub(super) async fn agent_gateway(
     mock: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir, String, String) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+    String,
+) {
     agent_gateway_expiring(mock, 3600).await
 }
 
@@ -76,7 +81,12 @@ pub(super) async fn agent_gateway(
 pub(super) async fn agent_gateway_expiring(
     mock: &Arc<MockBackend>,
     a_lifetime: i64,
-) -> (Arc<AppState>, tempfile::TempDir, String, String) {
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+    String,
+) {
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
     let token_a = agent_token_for(&registry, AGENT_A, a_lifetime);
     let token_b = agent_token(&registry, AGENT_B);

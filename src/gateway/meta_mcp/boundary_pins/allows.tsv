@@ -64,12 +64,12 @@ src/gateway/ui/control_plane/snapshot.rs	local_runtime_snapshot	statement	Admin	
 src/gateway/ui/control_plane/snapshot.rs	local_shadow_radar	statement	Admin	allx1
 src/gateway/ui/dashboard.rs	dashboard_handler	statement	Admin	allx1
 src/gateway/ui/mod.rs	config	statement	Admin	allx1
-src/gateway/ui/mod.rs	status	statement	Admin	allx1
+src/gateway/ui/status.rs	status_body	statement	Admin	allx1
 src/gateway/ui/mod.rs	tools	statement	Admin	allx1
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
 src/home_dir.rs	-	item	the one place the platform lookups are called	
-src/gateway/ui/overview.rs	kpi_and_servers	statement	Admin	allx1
+src/gateway/ui/overview.rs	backends_by_name	statement	Admin	allx1
 src/config_reload/override_audit.rs	drain	statement	Lifecycle	lock_reloadx1
 src/config_reload/override_audit.rs	in_effect	statement	Lifecycle	allx1

@@ -24,6 +24,10 @@ const EXPORT_SRC: &str = include_str!("../src/commands/config_export/mod.rs");
 const PATHS_SRC: &str = include_str!("../src/commands/paths.rs");
 const MATRIX: &str = include_str!("../docs/release/v4.0.0-supported-matrix.md");
 
+#[cfg(feature = "config-export")]
+#[path = "../src/test_source_text.rs"]
+mod test_source_text;
+
 /// Rows of the table whose header's first cell is `header`, as cells.
 fn table(doc: &str, header: &str) -> Vec<Vec<String>> {
     let mut lines = doc.lines().skip_while(|l| {
@@ -92,7 +96,8 @@ fn literals(src: &str, open: &str, prefix: &str) -> BTreeSet<String> {
 #[cfg(feature = "config-export")]
 fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
     let specs = fn_body(EXPORT_SRC, "client_specs");
-    let helpers = PATHS_SRC.split("#[cfg(test)]").next().unwrap();
+    let helpers = test_source_text::production_text(PATHS_SRC);
+    let helpers = helpers.as_str();
     let mut out = BTreeMap::new();
     for spec in specs.split("ClientSpec {").skip(1) {
         let spec = &spec[..spec.find('}').unwrap_or(spec.len())];
@@ -138,7 +143,26 @@ fn exporter_clients() -> BTreeMap<String, (String, BTreeSet<String>)> {
 /// helpers, from the `#[cfg]` line above each `return`.
 #[cfg(feature = "config-export")]
 fn platform_paths() -> Vec<(&'static str, String)> {
-    platform_paths_in(PATHS_SRC.split("#[cfg(test)]").next().unwrap())
+    helper_paths(PATHS_SRC)
+}
+
+/// The platform paths of a path-helper source's production code: every
+/// `#[cfg(test)]` item is left out by its own extent, wherever it sits.
+#[cfg(feature = "config-export")]
+fn helper_paths(src: &str) -> Vec<(&'static str, String)> {
+    platform_paths_in(&test_source_text::production_text(src))
+}
+
+/// A helper after an early test-only item is production code and its path
+/// is read.
+#[cfg(feature = "config-export")]
+#[test]
+fn a_helper_after_an_early_test_item_is_read() {
+    let src = "#[cfg(test)]\nconst FIXTURE: u8 = 0;\n\npub fn claude_path() -> PathBuf {\n    #[cfg(target_os = \"macos\")]\n    return home_path(\"Library/x.json\");\n}\n";
+    assert_eq!(
+        helper_paths(src),
+        [("macOS", "~/Library/x.json".to_string())]
+    );
 }
 
 /// As [`platform_paths`], for one helper body. A `config_dir_path("…")` is

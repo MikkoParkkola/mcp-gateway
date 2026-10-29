@@ -44,7 +44,9 @@ fn auth() -> AuthConfig {
     }
 }
 
-async fn state(main: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state(
+    main: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = fixture_state(&auth()).await;
     register(&state, BACKEND, main);
     register(&state, OTHER, &MockBackend::answering(Answer::ok()));

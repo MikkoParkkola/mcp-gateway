@@ -32,7 +32,7 @@ async fn an_identical_second_request_from_alice_is_served_from_the_warm_cache() 
     let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
 
@@ -81,7 +81,7 @@ async fn a_credential_to_the_fixture_host_over_plain_http_is_refused() {
     let (port, captured) = capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(
         &crate::test_fixture_host::fixture_url(port),
@@ -118,7 +118,7 @@ async fn bob_is_never_served_alices_warm_cache_entry() {
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
 
@@ -182,7 +182,7 @@ async fn a_revocation_after_prepare_refuses_the_warm_cache_entry_and_the_wire() 
     let alice = account_key("alice", WORK);
     let custody = custody_with(&[(alice.clone(), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));

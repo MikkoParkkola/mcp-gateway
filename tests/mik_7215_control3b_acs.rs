@@ -68,7 +68,12 @@ const TRACE_ID: &str = "4bf92f3577b34da6a3ce929d0e0e4736";
     clippy::too_many_lines,
     reason = "builds every AppState field by hand, so each new field grows it"
 )]
-async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::TempDir) {
+async fn app_state_with_log() -> (
+    tempfile::TempDir,
+    Arc<AppState>,
+    std::path::PathBuf,
+    tempfile::TempDir,
+) {
     let mut config = Config::default();
     // A modern `tools/call` carrying an idempotency key is admitted only for a
     // principal the gateway verified (`meta_mcp/admission.rs:161`), and an
@@ -103,10 +108,7 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_path_buf();
-    // Kept alive for the whole test; reclaimed at process exit.
-    std::mem::forget(file);
+    let (log_dir, path) = temp_log();
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -182,7 +184,20 @@ async fn app_state_with_log() -> (Arc<AppState>, std::path::PathBuf, tempfile::T
         subscriptions,
         continuation,
     });
-    (state, path, store_dir)
+    (log_dir, state, path, store_dir)
+}
+
+/// An empty log file in its own temp dir. The dir is returned first so the
+/// caller's `let (_log_dir, ..)` drops it last: the log writes `.hwm` and
+/// `.lock` beside itself, and the dir takes them with it.
+fn temp_log() -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("audit-log-")
+        .tempdir()
+        .expect("a private log directory");
+    let path = dir.path().join("audit.jsonl");
+    std::fs::File::create(&path).expect("the log file");
+    (dir, path)
 }
 
 /// A loopback MCP server: enough protocol surface to be dispatched to.
@@ -325,7 +340,7 @@ fn invocation_entries(path: &std::path::Path) -> Vec<Value> {
 /// that trace id and the entry names `otel_trace_id` as its source.
 #[tokio::test]
 async fn ac_control_3b_client_params_meta_trace_id_is_the_correlation_key() {
-    let (state, log_path, _store_dir) = app_state_with_log().await;
+    let (_log_dir, state, log_path, _store_dir) = app_state_with_log().await;
     let url = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 
@@ -369,7 +384,7 @@ async fn ac_control_3b_client_params_meta_trace_id_is_the_correlation_key() {
 /// pass the case above.
 #[tokio::test]
 async fn control_params_meta_without_traceparent_yields_no_otel_key() {
-    let (state, log_path, _store_dir) = app_state_with_log().await;
+    let (_log_dir, state, log_path, _store_dir) = app_state_with_log().await;
     let url = spawn_fixture_backend().await;
     register_fixture_backend(&state, &url);
 

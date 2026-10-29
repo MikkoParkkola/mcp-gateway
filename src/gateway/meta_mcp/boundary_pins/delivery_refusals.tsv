@@ -189,4 +189,5 @@ src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery l
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI discovery adopt: refuses adopting a find whose name is taken, no call delivery
 src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
