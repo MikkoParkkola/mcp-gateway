@@ -417,49 +417,26 @@ fn an_except_key_does_not_exempt_a_key_not_known_from_a_block() {
 
 /// A shape the load refuses, reaching the firewall anyway (an embedder that
 /// builds it without `Config::load`), fails closed: the rule blocks its
-/// finding types on every call, whatever its action.
+/// finding types on every call, whatever its action. Each shape sits ahead
+/// of an `allow`, so a rule that covered no call, or kept its own action,
+/// would let the later `allow` (or itself) decide.
 #[test]
-fn an_empty_servers_list_on_a_warn_rule_blocks_every_call() {
-    let fw = firewall(&json!([{"match": "*", "servers": [], "action": "warn"}]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Block);
-}
-
-#[test]
-fn an_empty_keys_list_on_an_allow_rule_blocks_every_call() {
-    let fw = firewall(&json!([{"match": "*", "keys": [], "action": "allow"}]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Block);
-}
-
-#[test]
-fn an_exception_setting_no_field_makes_its_rule_block() {
-    let fw = firewall(&json!([{"match": "*", "action": "allow", "except": [{}]}]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Block);
-}
-
-/// A scope glob that does not parse is refused the same way: a block rule
-/// keeps blocking, and an allow rule's broken exception does not widen it.
-#[test]
-fn a_scope_glob_that_does_not_parse_makes_its_rule_block() {
-    for rules in [
-        json!([{"match": "*", "servers": ["["], "action": "block"}, {"match": "*", "action": "allow"}]),
-        json!([{"match": "*", "action": "allow", "except": [{"server": "["}]}]),
-        json!([{"match": "*", "action": "allow", "except": [{"tool": "["}]}]),
-    ] {
+fn every_refused_shape_blocks_ahead_of_a_later_allow() {
+    let shapes = [
+        json!({"match": "*", "servers": [], "action": "warn"}),
+        json!({"match": "*", "keys": [], "action": "allow"}),
+        json!({"match": "*", "action": "allow", "except": []}),
+        json!({"match": "*", "action": "allow", "except": [{}]}),
+        json!({"match": "*", "servers": ["["], "action": "block"}),
+        json!({"match": "*", "action": "allow", "except": [{"server": "["}]}),
+        json!({"match": "*", "action": "allow", "except": [{"tool": "["}]}),
+    ];
+    for shape in shapes {
+        let rules = json!([shape, {"match": "*", "action": "allow"}]);
         assert_eq!(
             request(&firewall(&rules), "a"),
             FirewallAction::Block,
-            "{rules}"
+            "{shape}"
         );
     }
-}
-
-/// Covering no call would not fail closed: a later `allow` rule would decide.
-/// The refused rule still takes the finding first.
-#[test]
-fn a_refused_shape_preempts_a_later_allow() {
-    let fw = firewall(&json!([
-        {"match": "*", "keys": [], "action": "allow"},
-        {"match": "*", "action": "allow"},
-    ]));
-    assert_eq!(request(&fw, "a"), FirewallAction::Block);
 }

@@ -100,9 +100,9 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // that skips the load), the rule is a refused shape, below.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
     let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
-    // The scopes are refused at load too: an empty `servers` or `keys` list,
-    // a glob that does not parse (`match` or a scope's), or an exception
-    // setting no field. A shape that got here anyway fails closed: the rule
+    // The scopes are refused at load too: an empty `servers`, `keys` or
+    // `except` list, a glob that does not parse (`match` or a scope's), or an
+    // exception setting no field. A shape that got here anyway fails closed: the rule
     // blocks its finding types on every call. Covering no call would not do:
     // a later `allow` rule would then decide, and neither would keeping a
     // `warn` or `allow` rule's action.
@@ -113,6 +113,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             .as_ref()
             .is_some_and(|l| l.is_empty() || l.iter().any(|g| unparsed(Some(g))))
         || rule.keys.as_ref().is_some_and(Vec::is_empty)
+        || rule.except.as_ref().is_some_and(Vec::is_empty)
         || rule.except.iter().flatten().any(|entry| {
             (entry.server.is_none() && entry.tool.is_none() && entry.key.is_none())
                 || unparsed(entry.server.as_ref())
