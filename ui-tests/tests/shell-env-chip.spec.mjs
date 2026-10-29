@@ -108,3 +108,13 @@ test('E6 a 64-character name is clipped at 390 px and named in full', async ({ p
   await expect(page.getByRole('img', { name: `Environment: ${name}` })).toBeVisible();
   expect(await fits(page)).toBe(true);
 });
+
+test('E6b a clipped name keeps the full name in its native title', async ({ page }) => {
+  const name = 'staging-eu-west-1-'.padEnd(64, 'x');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await gateway(page, { name, source: 'config' });
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await expect(chip(page)).toHaveAttribute('title', name);
+  await expect(chip(page)).toHaveAttribute('aria-label', `Environment: ${name}`);
+});
