@@ -4,7 +4,7 @@
 // The web UI shell: sidebar, page title, tabs in the address, page states
 // and the authenticated API client. Screens register a page; the shell owns
 // the URL. The document lists the screens in a manifest; the shell loads the
-// current route's screen before rendering it and the rest after the first
+// screen of the current route before rendering it and the rest after the first
 // paint. A screen calls register() whenever it runs, before boot or after.
 // All text goes in with textContent.
 
@@ -35,7 +35,7 @@ export function register(id, spec) {
   pages.set(id, spec);
 }
 
-/** The document's screen manifest: page id → {js, css}. The shell never names a screen's file itself. */
+/** The screen manifest of the document: page id → {js, css}. The shell never names a screen file itself. */
 function screens() {
   try {
     return JSON.parse(document.getElementById('screens')?.textContent || '{}');
@@ -68,15 +68,38 @@ function sheet(href) {
   return sheets.get(href);
 }
 
+/** A manifest path the shell will fetch: one file name under /ui/assets/, nothing else. */
+const ASSET_PATH = /^\/ui\/assets\/[A-Za-z0-9._-]+$/;
+
+/** Pages whose stylesheet and module have both loaded. */
+const ready = new Set();
+/** Pages the shell has itself tried to load. */
+const tried = new Set();
+
 /**
- * Load page `id`'s screen, its stylesheet and module, unless the page is
- * registered already or has no screen. The module registers itself.
+ * Whether page id must load its screen before it is drawn: it has a
+ * manifest entry and is not ready. A page registered without the shell
+ * ever loading it, such as a test fixture page, is drawn as it is.
+ */
+function needsLoad(id) {
+  if (!screens()[id] || ready.has(id)) return false;
+  return tried.has(id) || !pages.has(id);
+}
+
+/**
+ * Load the screen of page id, its stylesheet and module; the module registers
+ * itself. The page is ready once both have loaded. A failed load is
+ * forgotten, so the next attempt fetches again only the part that failed:
+ * a loaded stylesheet and an evaluated module are kept.
  */
 function loadScreen(id) {
-  const entry = screens()[id];
-  if (!entry || pages.has(id)) return Promise.resolve();
+  if (!needsLoad(id)) return Promise.resolve();
   if (!loads.has(id)) {
-    const load = Promise.all([sheet(entry.css), import(entry.js)]).then(() => {});
+    tried.add(id);
+    const entry = screens()[id];
+    const load = ASSET_PATH.test(entry?.js) && ASSET_PATH.test(entry?.css)
+      ? Promise.all([sheet(entry.css), import(entry.js)]).then(() => { ready.add(id); })
+      : Promise.reject(new Error(`screen ${id}: the manifest entry is not an asset path`));
     load.catch(() => loads.delete(id));
     loads.set(id, load);
   }
@@ -460,7 +483,7 @@ export function openPalette() {
       list.append(box);
     }
     if (!options.length) list.append(el('p', { class: 'muted palette-empty' }, 'No page, action or setting matches.'));
-    // A redraw keeps the user's place on the entry, not on its position.
+    // A redraw keeps the place of the user on the entry, not on its position.
     const kept = was ? options.findIndex((o) => o.dataset.path === was) : -1;
     active = kept >= 0 ? kept : Math.min(active, Math.max(options.length - 1, 0));
     mark();
@@ -511,7 +534,9 @@ export function openPalette() {
   draw();
   // Screens not loaded yet declare their entries when they register: list them as they arrive.
   const dialog = paletteEl;
-  loadAllScreens().then(() => { if (paletteEl === dialog) draw(true); });
+  for (const id of Object.keys(screens()).filter(needsLoad)) {
+    loadScreen(id).then(() => { if (paletteEl === dialog) draw(true); }, () => {});
+  }
   search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
   // A modal makes the rest of the page inert, the live region with it: it rides along.
@@ -1114,9 +1139,9 @@ function draw(seq, held = null) {
     setContent(content, mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
-  if (!held && !pages.has(route.page) && screens()[route.page]) {
+  if (!held && needsLoad(route.page)) {
     setHeader({ title: label, subtitle: null });
-    // Not marked: shellReady and the screens wait for the screen's own render.
+    // Not marked: shellReady and the screens wait for the render of the screen itself.
     const body = el('div', { class: 'body' });
     setContent(content, body);
     content.setAttribute('aria-busy', 'true');
@@ -1138,12 +1163,18 @@ function draw(seq, held = null) {
   setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
-    held?.loading.release();
+    if (held) {
+      held.loading.release();
+      content.removeAttribute('aria-busy');
+    }
     setContent(content, mark(state('not-built')));
     return;
   }
   if (!tabs.some(([t]) => t === route.tab)) {
-    held?.loading.release();
+    if (held) {
+      held.loading.release();
+      content.removeAttribute('aria-busy');
+    }
     go(pathFor({ ...route, tab: tabs[0][0] }), { replace: true });
     return;
   }
@@ -1622,11 +1653,19 @@ function boot() {
   render();
   // The other screens load once the first paint is out, when the browser is idle,
   // so the palette lists their actions and settings and a later visit is instant.
-  new PerformanceObserver((list, observer) => {
-    if (!list.getEntriesByName('first-contentful-paint').length) return;
-    observer.disconnect();
-    (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
-  }).observe({ type: 'paint', buffered: true });
+  // Without paint timing they load after this first render instead; either way
+  // the rest of boot runs.
+  const preload = () => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  try {
+    if (!PerformanceObserver.supportedEntryTypes?.includes('paint')) throw new Error('no paint timing');
+    new PerformanceObserver((list, observer) => {
+      if (!list.getEntriesByName('first-contentful-paint').length) return;
+      observer.disconnect();
+      preload();
+    }).observe({ type: 'paint', buffered: true });
+  } catch {
+    preload();
+  }
   refreshCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.
