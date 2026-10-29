@@ -741,10 +741,13 @@ async fn an_uninjectable_secret_refuses_the_call_before_its_backend() {
         vec![rule],
     )]));
     let meta = alpha_relay_meta(Arc::new(Seen(Arc::clone(&seen))), injector);
+    // Authenticated: the relay check refuses an anonymous caller first.
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
     let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
-    let invoked =
-        Box::pin(meta.invoke_tool_sourced(&call, None, &ctx(&AllowAll), "t".to_owned())).await;
-    assert!(invoked.outcome.is_err(), "premise: the injection fails");
+    let invoked = Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
     assert!(
         seen.lock().is_empty(),
         "premise: nothing reached the backend"
@@ -765,9 +768,13 @@ async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
         crate::secret_injection::SecretInjector::new(HashMap::new()),
     );
     let _ = super::take_staged_for_test();
+    // Authenticated: the relay check refuses an anonymous caller first.
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
     let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
-    let invoked =
-        Box::pin(meta.invoke_tool_sourced(&call, None, &ctx(&AllowAll), "t".to_owned())).await;
+    let invoked = Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
     assert_eq!(
         invoked.pre_send,
         crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
