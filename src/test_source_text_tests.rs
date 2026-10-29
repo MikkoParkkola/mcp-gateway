@@ -188,6 +188,20 @@ fn no_production_identifier_is_blanked_anywhere_in_the_tree() {
     assert!(lost.is_empty(), "production text blanked:\n{}", lost.join("\n"));
 }
 
+/// The checker's own skip stays narrow: a `///` comment in a macro body
+/// counts no `doc`, while `doc` as a name in macro code still counts.
+#[test]
+fn a_doc_comment_in_a_macro_body_is_not_counted_but_a_doc_name_is() {
+    let file = syn::parse_file(
+        "m! {\n    /// note\n    static A: u8;\n}\nm! { let doc = 1; }\n",
+    )
+    .unwrap();
+    let mut parsed = ProductionIdents::default();
+    syn::visit::Visit::visit_file(&mut parsed, &file);
+    assert_eq!(parsed.counts.get("doc"), Some(&1));
+    assert_eq!(parsed.counts.get("note"), None);
+}
+
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -235,6 +249,8 @@ impl ProductionIdents {
             } else if let Some((lifetime, next)) = cursor.lifetime() {
                 self.count(&lifetime.ident);
                 cursor = next;
+            } else if let Some(next) = doc_attribute_end(cursor) {
+                cursor = next;
             } else if let Some((inner, _, _, next)) = cursor.any_group() {
                 self.count_tokens(inner);
                 cursor = next;
@@ -245,6 +261,18 @@ impl ProductionIdents {
             }
         }
     }
+}
+
+/// Past a `#[doc = ...]` in macro tokens: a `///` comment to the parser, a
+/// comment (blanked) in the text, as `visit_attribute` treats it outside macros.
+fn doc_attribute_end(cursor: syn::buffer::Cursor) -> Option<syn::buffer::Cursor> {
+    let (hash, next) = cursor.punct()?;
+    let (inner, _, _, after) = next.any_group()?;
+    let (ident, rest) = inner.ident()?;
+    let is_doc = hash.as_char() == '#'
+        && ident == "doc"
+        && rest.punct().is_some_and(|(p, _)| p.as_char() == '=');
+    is_doc.then_some(after)
 }
 
 /// An outer `#[cfg(test)]`, exactly the mark the helper looks for.
