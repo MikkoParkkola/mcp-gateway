@@ -288,6 +288,12 @@ async fn a_reload_dropped_mid_recovery_keeps_the_lock_and_the_sink() {
         !journal::journal_path(&path).exists(),
         "the journal was left"
     );
+    // The recovery rolled the file back with nobody left to reload it: the
+    // reload is owed, so the next lock holder reconciles the running config.
+    assert!(
+        ctx.reload_owed.load(std::sync::atomic::Ordering::SeqCst),
+        "the rollback's reload was lost with the dropped caller"
+    );
 }
 
 /// Every `.rs` file under `dir`, test files excluded.
