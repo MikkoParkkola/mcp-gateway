@@ -198,6 +198,9 @@ pub struct ReloadContext {
     /// appends one before it recovers a crashed write or pays an owed
     /// reload.
     pub(super) recovery_audit: parking_lot::Mutex<Option<Box<dyn replace::IntentSink>>>,
+    /// Test-only: parks an audited recovery inside its task, lock held.
+    #[cfg(test)]
+    pub(super) recovery_pause: std::sync::Arc<crate::test_pause::Slot>,
     /// gateway.yaml as this gateway resolved it at start, through any
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
@@ -272,6 +275,8 @@ impl ReloadContext {
             trusted_config,
             reload_owed: std::sync::atomic::AtomicBool::new(false),
             recovery_audit: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            recovery_pause: std::sync::Arc::default(),
             live_config,
             registry,
             failsafe_config,

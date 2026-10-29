@@ -134,7 +134,7 @@ impl ReloadContext {
         let Some(id) = self.recovery_intent(sink.as_mut(), &locked)? else {
             return Ok((locked, None));
         };
-        let locked = recover_held(locked).await?;
+        let locked = self.recover_held(locked).await?;
         self.pay_owed_reload(locked.recovered, &locked.target).await;
         Ok((locked, Some(id)))
     }
@@ -164,22 +164,29 @@ impl ReloadContext {
         };
         match intent {
             Ok(None) => Ok(locked),
-            Ok(Some(_)) => recover_held(locked).await.map_err(|e| format!("{e:?}")),
+            Ok(Some(_)) => self
+                .recover_held(locked)
+                .await
+                .map_err(|e| format!("{e:?}")),
             Err(e) => Err(format!("{e:?}")),
         }
     }
-}
 
-/// Recovers `locked`'s journal with the lock moved into the recovery task:
-/// a caller dropped meanwhile cannot release the lock while the recovery
-/// still writes.
-async fn recover_held(mut locked: Locked) -> Result<Locked, ReplaceError> {
-    tokio::task::spawn_blocking(move || {
-        locked.recovered = crate::config_persistence::journal::recover(&locked.target)?;
-        locked.journal_pending = false;
-        Ok(locked)
-    })
-    .await
-    .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
-    .map_err(ReplaceError::Failed)
+    /// Recovers `locked`'s journal with the lock moved into the recovery
+    /// task: a caller dropped meanwhile cannot release the lock while the
+    /// recovery still writes.
+    async fn recover_held(&self, mut locked: Locked) -> Result<Locked, ReplaceError> {
+        #[cfg(test)]
+        let pause = Arc::clone(&self.recovery_pause);
+        tokio::task::spawn_blocking(move || {
+            #[cfg(test)]
+            pause.pause_blocking();
+            locked.recovered = crate::config_persistence::journal::recover(&locked.target)?;
+            locked.journal_pending = false;
+            Ok(locked)
+        })
+        .await
+        .map_err(|e| ReplaceError::Failed(format!("the recovery task failed: {e}")))?
+        .map_err(ReplaceError::Failed)
+    }
 }

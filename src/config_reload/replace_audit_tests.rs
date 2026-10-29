@@ -231,6 +231,65 @@ async fn a_reload_whose_recovery_intent_fails_changes_nothing() {
     assert_eq!(recorder.kinds(), [IntentKind::Recovery]);
 }
 
+/// A reload dropped while its audited recovery runs: the recovery keeps
+/// the config lock until it finishes, and the recovery sink stays in its
+/// slot. The recovery is parked inside its task, so the drop lands at that
+/// await and nowhere else.
+#[tokio::test]
+async fn a_reload_dropped_mid_recovery_keeps_the_lock_and_the_sink() {
+    use crate::config_persistence::lock::{NotLocked, lock_config};
+    use crate::test_pause::within;
+    let (_dir, path, ctx) = setup();
+    crashed_after_rename(&path, NEXT);
+    ctx.set_recovery_audit(Box::new(Recorder::new(&path, false)));
+    let (reached, release) = ctx.recovery_pause.arm();
+
+    let mut reload = Box::pin(ctx.reload_outcome());
+    tokio::select! {
+        _ = &mut reload => panic!("the reload finished before its recovery parked"),
+        () = within("the recovery parks", reached.notified()) => {}
+    }
+    drop(reload);
+    // Observed while the recovery is parked, then released before any
+    // assert, so a red run cannot leave the recovery task parked.
+    let sink_kept = ctx.recovery_audit.lock().is_some();
+    let probe = lock_config(&path, std::time::Instant::now()).await;
+    let lock_held = matches!(probe, Err(NotLocked::Busy));
+    drop(probe);
+    release.notify_one();
+    let after = within(
+        "the recovery releases the lock",
+        lock_config(
+            &path,
+            std::time::Instant::now() + std::time::Duration::from_secs(30),
+        ),
+    )
+    .await;
+
+    assert!(
+        lock_held,
+        "the config lock was released under a running recovery"
+    );
+    assert!(
+        sink_kept,
+        "the dropped reload took the recovery sink with it"
+    );
+    assert!(
+        after.is_ok(),
+        "the lock was never released: {:?}",
+        after.err()
+    );
+    assert_eq!(
+        read(&path),
+        START,
+        "the recovery did not put the original back"
+    );
+    assert!(
+        !journal::journal_path(&path).exists(),
+        "the journal was left"
+    );
+}
+
 /// Every `.rs` file under `dir`, test files excluded.
 fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("list src") {
