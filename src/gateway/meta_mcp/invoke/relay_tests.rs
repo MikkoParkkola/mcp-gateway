@@ -657,6 +657,36 @@ mod redaction;
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;
 
+/// A backend that answers every call with [`PROSE`]: text long enough to
+/// fingerprint, so its delivery stages a receipt.
+struct Prose;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Prose {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        if method == "tools/list" {
+            let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
+            return Ok(JsonRpcResponse::success(id, json!({"tools": [tool]})));
+        }
+        let answer = json!({"content": [{"type": "text", "text": PROSE}], "isError": false});
+        Ok(JsonRpcResponse::success(id, answer))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
 /// A backend whose every call fails before it is reached: the transport
 /// reports the backend unavailable, a pre-dispatch error.
 struct Unreachable;
@@ -767,15 +797,13 @@ async fn alpha_receipts(meta: &MetaMcp) -> (super::super::Invoked, usize) {
         ..ctx(&AllowAll)
     };
     let call = json!({"server": "alpha", "tool": "send", "arguments": {}});
-    super::RELAY_RECEIPTS
-        .scope(std::cell::RefCell::new(Vec::new()), async {
-            let invoked =
-                Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
-            let staged = super::RELAY_RECEIPTS
-                .with(|r| r.borrow().iter().filter(|r| r.server == "alpha").count());
-            (invoked, staged)
-        })
-        .await
+    super::collecting(async {
+        let invoked = Box::pin(meta.invoke_tool_sourced(&call, None, &bob, "t".to_owned())).await;
+        let staged = super::RELAY_RECEIPTS
+            .with(|r| r.borrow().iter().filter(|r| r.server == "alpha").count());
+        (invoked, staged)
+    })
+    .await
 }
 
 /// A dispatch error the backend never saw (unavailable), answered as a tool
@@ -784,10 +812,7 @@ async fn alpha_receipts(meta: &MetaMcp) -> (super::super::Invoked, usize) {
 #[tokio::test]
 async fn a_pre_dispatch_error_answered_as_a_result_stages_no_receipt() {
     let none = crate::secret_injection::SecretInjector::new(HashMap::new());
-    let answered = alpha_relay_meta(
-        Arc::new(Seen(Arc::new(parking_lot::Mutex::new(Vec::new())))),
-        none,
-    );
+    let answered = alpha_relay_meta(Arc::new(Prose), none);
     let (_, control) = alpha_receipts(&answered).await;
     assert_eq!(control, 1, "control: an answered call stages its receipt");
     let refused = alpha_relay_meta(
