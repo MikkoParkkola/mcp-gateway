@@ -17,6 +17,7 @@ pub(crate) struct PublishProbe {
     observe_calls: AtomicUsize,
     publishes: AtomicUsize,
     watchers_started: AtomicUsize,
+    lock_waits: AtomicUsize,
 }
 
 impl PublishProbe {
@@ -50,6 +51,15 @@ impl PublishProbe {
     /// Watcher tasks started.
     pub(crate) fn watchers_started(&self) -> usize {
         self.watchers_started.load(SeqCst)
+    }
+
+    /// Watchers that found the publish lock held and queued behind it.
+    pub(crate) fn lock_waits(&self) -> usize {
+        self.lock_waits.load(SeqCst)
+    }
+
+    pub(super) fn lock_wait_begun(&self) {
+        self.lock_waits.fetch_add(1, SeqCst);
     }
 
     pub(super) fn watcher_started(&self) {

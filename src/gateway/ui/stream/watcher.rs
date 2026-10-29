@@ -33,6 +33,11 @@ async fn run(state: Arc<AppState>) {
         .probe()
         .watcher_started();
     let hub = state.dashboard_bootstrap.stream_hub();
+    // Test signal: this watcher found the lock held and now queues behind it.
+    #[cfg(test)]
+    if hub.publish_lock().try_lock_owned().is_err() {
+        hub.probe().lock_wait_begun();
+    }
     let _publishing = hub.publish_lock().lock_owned().await;
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

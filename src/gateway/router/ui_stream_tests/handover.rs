@@ -2,21 +2,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The watcher handover: a replacement waits for the retiring watcher to
 //! finish before it publishes. Real worker threads, ordered by counts and the
-//! old task's `JoinHandle`, never by time.
+//! publish lock's wait signal, never by time.
 
 use super::*;
 
-/// Tries for a wait that must succeed, and for one that must not.
+/// Tries for a wait that must succeed.
 const TRIES: u32 = 5_000_000;
-const NEGATIVE_TRIES: u32 = 200_000;
 
-async fn until(done: impl FnMut() -> bool) -> bool {
-    until_within(TRIES, done).await
-}
-
-/// Yield until `done`, giving up after `tries` yields.
-async fn until_within(tries: u32, mut done: impl FnMut() -> bool) -> bool {
-    for _ in 0..tries {
+/// Yield until `done`, giving up after `TRIES` yields.
+async fn until(mut done: impl FnMut() -> bool) -> bool {
+    for _ in 0..TRIES {
         if done() {
             return true;
         }
@@ -45,8 +40,11 @@ async fn a_successor_waits_for_the_publisher_even_after_a_waiting_replacement_is
     // C starts. While A is parked it must not publish.
     let _third = open(&state, request(STREAM, Who::Bearer(BEARER), None)).await;
     assert!(until(|| probe.watchers_started() == 3).await);
-    let early = until_within(NEGATIVE_TRIES, || probe.observe_calls() >= 2).await;
-    assert!(!early, "C began a publish while A was still parked");
+    assert!(
+        until(|| probe.lock_waits() == 2).await,
+        "B and C each queued behind A's lock"
+    );
+    assert_eq!(probe.observe_calls(), 1, "only A has begun a publish");
     assert_eq!(probe.publishes(), 0);
     // A finishes; only then does C publish.
     release.send(()).expect("the gate is open");
