@@ -179,10 +179,12 @@ const REPLAY: &str = "Nonce replay detected";
 /// `tools/call` with a required nonce in `_meta` (MIK-8406 G2), and the
 /// playbook engine armed.
 struct Signed {
-    gateway: DirectAccountGateway,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     policy: Arc<crate::security::ToolPolicy>,
     mtls: Arc<crate::mtls::MtlsPolicy>,
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 fn signed() -> Signed {

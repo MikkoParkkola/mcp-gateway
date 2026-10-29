@@ -33,7 +33,7 @@ struct Fixture {
     log: Arc<TransparencyLogger>,
     ctx: Arc<ReloadContext>,
     path: PathBuf,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 fn admin_auth() -> AuthConfig {

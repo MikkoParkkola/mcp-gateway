@@ -152,7 +152,7 @@ async fn meta_route_revoked_grant_401_carries_the_reconnect_offer() {
         expected_identity_key_for(&key, 1),
         expected_identity_key_for(&key, 2),
     ];
-    let (meta, dispatches) = gateway(
+    let (_log, meta, dispatches) = gateway(
         &[("mail", Bind::Account(WORK))],
         &Descriptors::same(&[WORK]),
         &installed,
