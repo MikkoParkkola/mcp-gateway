@@ -10,6 +10,8 @@ use serde_json::json;
 mod locality;
 #[path = "allowed_root_rules_tests.rs"]
 mod rules;
+#[path = "allowed_root_spelling_tests.rs"]
+mod spelling;
 #[path = "allowed_root_fs_tests.rs"]
 mod tree;
 
