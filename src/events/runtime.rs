@@ -188,15 +188,7 @@ impl EventsHub {
         // C8: a revocation re-checks the per-user listeners at once. Weak, so
         // the watch never keeps a dropped hub alive.
         let (weak, mut changed) = (Arc::downgrade(self), super::CREDENTIALS_CHANGED.subscribe());
-        tokio::spawn(async move {
-            while changed.changed().await.is_ok() {
-                let Some(hub) = weak.upgrade() else {
-                    return;
-                };
-                hub.revoke_unobservable(None).await;
-                hub.revoke_inadmissible(None).await;
-            }
-        });
+        tokio::spawn(watch_credentials(weak, changed));
         // After a restart the upstream state is rebuilt from the store.
         let hub = Arc::clone(self);
         tokio::spawn(async move {
@@ -294,5 +286,21 @@ impl EventsHub {
                 None
             }
         }
+    }
+}
+
+/// The watcher [`EventsHub::start`] spawns for C8: each credential change
+/// re-checks the per-user listeners at once. A free function so a test can
+/// drive it with the real `credentials_changed()` signal.
+pub(super) async fn watch_credentials(
+    weak: std::sync::Weak<EventsHub>,
+    mut changed: tokio::sync::watch::Receiver<u64>,
+) {
+    while changed.changed().await.is_ok() {
+        let Some(hub) = weak.upgrade() else {
+            return;
+        };
+        hub.revoke_unobservable(None).await;
+        hub.revoke_inadmissible(None).await;
     }
 }

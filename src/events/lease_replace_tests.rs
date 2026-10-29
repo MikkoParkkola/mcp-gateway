@@ -796,3 +796,5 @@ async fn a_replace_after_a_failed_open_reopens_under_the_new_token() {
 async fn a_replace_after_a_terminal_exit_cuts_its_backoff() {
     a_replace_after_a_refused_stream_reopens_under_the_new_token(405).await;
 }
+#[path = "lease_replace_push_tests.rs"]
+mod push;
