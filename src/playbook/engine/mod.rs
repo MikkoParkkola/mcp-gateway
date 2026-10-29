@@ -187,25 +187,8 @@ impl PlaybookEngine {
             } else {
                 1
             };
-            // Checked and interpolated once, outside the retry loop: a retry
-            // re-sends the same arguments and must not refill the probe budget.
-            let outcome = match checked_arguments(&ctx, step, invoker) {
-                Ok(arguments) => {
-                    dispatch(
-                        step,
-                        label,
-                        arguments,
-                        max_attempts,
-                        invoker,
-                        &mut attempted,
-                    )
-                    .await
-                }
-                Err(refusal) => {
-                    warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
-                    Err(refusal)
-                }
-            };
+            let (outcome, sent) =
+                run_step(&ctx, step, label, max_attempts, invoker, &mut attempted).await;
 
             match outcome {
                 Ok(result) => {
@@ -231,6 +214,7 @@ impl PlaybookEngine {
                 Err(e) => {
                     steps_failed.push(step.name.clone());
                     match definition.on_error {
+                        ErrorStrategy::Abort if sent => return Err(e.with_may_have_run()),
                         ErrorStrategy::Abort => return Err(e),
                         ErrorStrategy::Continue | ErrorStrategy::Retry => {
                             // Carried on past: this step no longer ends the plan.
@@ -261,6 +245,30 @@ impl PlaybookEngine {
             duration_ms,
             provenance,
         })
+    }
+}
+
+/// One step's outcome, and whether it came from dispatching the step
+/// (`true`) rather than from refusing its arguments before any send. The
+/// arguments are checked and interpolated once, outside the retry loop: a
+/// retry re-sends the same arguments and must not refill the probe budget.
+async fn run_step(
+    ctx: &PlaybookContext,
+    step: &PlaybookStep,
+    label: u32,
+    max_attempts: u32,
+    invoker: &dyn ToolInvoker,
+    attempted: &mut bool,
+) -> (crate::Result<Value>, bool) {
+    match checked_arguments(ctx, step, invoker) {
+        Ok(arguments) => (
+            dispatch(step, label, arguments, max_attempts, invoker, attempted).await,
+            true,
+        ),
+        Err(refusal) => {
+            warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
+            (Err(refusal), false)
+        }
     }
 }
 
@@ -353,7 +361,10 @@ async fn dispatch(
                     crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
                 );
                 warn!(step = %step.name, error = %e, refused, "Step failed");
-                if refused {
+                // Re-sent only when the error was raised before the request
+                // was sent: anything later may have acted, and a second send
+                // would repeat it.
+                if refused || !e.is_pre_dispatch() {
                     return Err(e);
                 }
                 last_error = Some(e);
@@ -403,7 +414,7 @@ fn tool_error(step: &PlaybookStep, result: &Value) -> crate::Error {
 /// A failed step's entry in `step_errors`, caller output, not a log: the
 /// error and, for a tool error, its capped text.
 fn step_reason(error: &crate::Error) -> String {
-    match error {
+    let reason = match error {
         crate::Error::JsonRpc {
             data: Some(data), ..
         } if data[TOOL_TEXT_DATA_KEY].is_string() => {
@@ -413,7 +424,10 @@ fn step_reason(error: &crate::Error) -> String {
             )
         }
         _ => error.to_string(),
-    }
+    };
+    // A null-filled step returns success, so no outer settlement sees this
+    // error: the reason itself says the step may have run.
+    crate::error::step_failure_text(error, reason)
 }
 
 /// The gateway-sealed transient a busy custody raises before any send,
@@ -502,5 +516,7 @@ fn build_output(
 mod busy_tests;
 #[cfg(test)]
 mod envelope_tests;
+#[cfg(test)]
+mod step_retry_tests;
 #[cfg(test)]
 mod tests;
