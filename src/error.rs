@@ -597,6 +597,7 @@ impl Error {
                 | Self::RateLimited(_)
                 | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
+                | Self::AmbiguousBackend { .. }
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
                 | Self::BackendUnavailable(_)
@@ -689,6 +690,7 @@ impl Error {
             | Self::AuditUnavailable
             | Self::CapabilityHashMismatch { .. }
             | Self::BackendNotFound(_)
+            | Self::AmbiguousBackend { .. }
             | Self::BackendUnavailable(_)
             | Self::CircuitOpen { .. }
             | Self::RateLimited(_)
@@ -730,25 +732,6 @@ impl Error {
                 | Self::AuthorizationRequired { .. }
                 | Self::AuthorizationPending { .. }
         )
-    }
-
-    /// The fixed data a clash refusal carries on the wire: the reason a
-    /// client branches on, the name, the two routes it resolves to, and the
-    /// covering rule when one names it. `None` for every other error.
-    #[must_use]
-    pub(crate) fn ambiguous_backend_data(&self) -> Option<serde_json::Value> {
-        let Self::AmbiguousBackend { server, rule } = self else {
-            return None;
-        };
-        let mut data = serde_json::json!({
-            "reason": "ambiguous_backend",
-            "server": server,
-            "routes": ["backend", "capability"],
-        });
-        if let Some(rule) = rule {
-            data["rule"] = serde_json::json!(rule);
-        }
-        Some(data)
     }
 
     /// Convert to JSON-RPC error code
@@ -800,23 +783,11 @@ impl Error {
     }
 }
 
+#[path = "error_ambiguous.rs"]
+mod ambiguous;
 /// Standard JSON-RPC error codes
-pub mod rpc_codes {
-    /// Parse error - Invalid JSON
-    pub const PARSE_ERROR: i32 = -32700;
-    /// Invalid Request - Not a valid Request object
-    pub const INVALID_REQUEST: i32 = -32600;
-    /// Method not found
-    pub const METHOD_NOT_FOUND: i32 = -32601;
-    /// Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
-    /// Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
-    /// Server error range start
-    pub const SERVER_ERROR_START: i32 = -32000;
-    /// Server error range end
-    pub const SERVER_ERROR_END: i32 = -32099;
-}
+#[path = "error_rpc_codes.rs"]
+pub mod rpc_codes;
 
 #[cfg(test)]
 #[path = "error_pre_send_scan_tests.rs"]

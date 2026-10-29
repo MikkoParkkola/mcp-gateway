@@ -301,3 +301,16 @@ fn only_the_gateway_variant_carries_the_clash_fields() {
         "a backend's data is not forwarded: {forged}"
     );
 }
+
+/// The clash is refused at resolve, before anything is sent: pre-dispatch, so
+/// a same-key retry after a rename runs, and a playbook or chain step never
+/// reads it as "may have run".
+#[test]
+fn a_clash_refusal_is_pre_dispatch_and_never_may_have_run() {
+    let error = crate::Error::AmbiguousBackend {
+        server: "docs".to_string(),
+        rule: None,
+    };
+    assert!(error.is_pre_dispatch(), "{error}");
+    assert!(!crate::error::reports_may_have_run(&error), "{error}");
+}
