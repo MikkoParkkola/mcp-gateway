@@ -64,6 +64,16 @@ const CASES: &[(&str, &[&str], &[&str])] = &[
         &["probe", "touch"],
     ),
     (
+        "fn f(x: u8) -> u8 {\n    match x {\n        #[cfg(test)]\n        0 => { probe() }\n        ..=5 => live(),\n        _ => 0,\n    }\n}\n",
+        &["..=5 => live()"],
+        &["probe"],
+    ),
+    (
+        "fn f() -> std::ops::RangeTo<u8> {\n    #[cfg(test)]\n    { probe() }\n    ..5\n}\n",
+        &["..5"],
+        &["probe"],
+    ),
+    (
         "// A comment naming #[cfg(test)] marks nothing.\nfn product() {}\n",
         &["fn product()"],
         &[],
