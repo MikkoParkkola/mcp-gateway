@@ -122,13 +122,20 @@ async fn a_removed_configured_key_is_restart_required_and_stream_and_list_agree(
 
 #[tokio::test]
 async fn a_frame_waiting_for_room_is_not_sent_after_the_credential_is_revoked() {
-    let (state, _dir) = fixture().await;
+    let (state, _dir) = fixture_unpaused().await;
+    tokio::time::pause();
     let h = issue(&state);
     let mut s = open(&state, request(STREAM, Who::Cookie(&h), None)).await;
     // Nobody reads: `hello` fills the one-frame channel and the first `status`
-    // frame waits for room; the clock is still, so no re-check tick can come.
+    // frame waits for room. Parking in 1 ms steps lets the runtime run it; 100
+    // virtual ms stay inside the 1 s before any re-check tick.
     let hub = state.dashboard_bootstrap.stream_hub();
-    assert!(yield_until(|| hub.waiting_sends() == 1).await);
+    for _ in 0..100 {
+        if hub.waiting_sends() == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
     assert_eq!(
         hub.waiting_sends(),
         1,
