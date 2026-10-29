@@ -431,12 +431,14 @@ fn no_overlap(changes: &[(FieldPath, Change)]) -> Result<(), ComputeRefusal> {
     Ok(())
 }
 
-/// A segment this module can address: letters, digits, `_` and `-`, read by
-/// YAML as that same string (not a number, a bool or null).
+/// A segment this module can address: letters, digits, `_` and `-`, not
+/// starting with `-` (which reads as a list item's dash), read by YAML as
+/// that same string (not a number, a bool or null).
 fn plain_key(segment: &str) -> bool {
-    segment
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    !segment.starts_with('-')
+        && segment
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         && crate::yaml::from_str::<Value>(segment).is_ok_and(|v| v.as_str() == Some(segment))
 }
 

@@ -93,7 +93,11 @@ pub(crate) fn block_nodes(text: &str) -> Result<Vec<Node>, Error> {
                     top.key = Some((value.into_owned(), plain, bytes));
                     continue;
                 }
-                let empty = style == ScalarStyle::Plain && value.is_empty() && !decorated;
+                // An implicit null (`key:` alone) has no text of its own, whatever
+                // value the parser reports for it; an explicit `~` or `null` does.
+                let empty = style == ScalarStyle::Plain
+                    && !decorated
+                    && text.get(bytes.clone()).is_none_or(|t| t.trim().is_empty());
                 push(
                     &mut out,
                     &mut open,
