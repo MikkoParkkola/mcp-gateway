@@ -16,21 +16,19 @@ train: a heavy job skipped or red there, or a gate skipped there, stops it.
 from __future__ import annotations
 
 import copy
+import re
 import sys
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_docs_only_gating import POST_MERGE_SKIPPED, ROOT, SKIPPED, as_train, ctx, runs  # noqa: E402
+from test_docs_only_gating import HEAVY_GATE, HEAVY_TRAIN, ROOT, SKIPPED, as_train, ctx, runs  # noqa: E402
 
-HEAVY = {
-    "windows-shards", "windows-clippy", "windows-check", "release-script-tests",
-    "task-sdk-recovery", "gws-dry-run", "linux-keychain", "kani", "upgrade-rehearsal",
-}
+HEAVY = HEAVY_TRAIN
 # Skipped on a docs-only change by the docs-only rule, train or not.
 DOCS_SKIPPED = HEAVY & SKIPPED
-GATE = "heavy-gate"
+GATE = HEAVY_GATE
 GATE_NAME = "Heavy checks (merge train)"
 CLAUSE = (" && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line'"
           " && !(startsWith(github.head_ref, 'train/')"
@@ -76,14 +74,16 @@ def with_needs(job: dict, c: dict, result: str) -> dict:
     return dict(c, needs=dict(c["needs"], **extra))
 
 
-def heavy_errors(jobs: dict) -> list[str]:
+def heavy_errors(jobs: dict, original: dict | None = None) -> list[str]:
+    """`original` is the workflow before a self-test mutation: its condition
+    without the clause is what every non-lane event must still see."""
+    original = original or jobs
     errors = [f"HEAVY names a job ci.yml lacks: {j}" for j in sorted(HEAVY - set(jobs))]
     for job in sorted(HEAVY & set(jobs)):
         cond = str(jobs[job].get("if", ""))
         if CLAUSE not in cond:
             errors.append(f"{job}: its if lacks the train clause")
-            continue
-        today = dict(jobs[job], **{"if": cond.replace(CLAUSE, "")})
+        today = dict(jobs[job], **{"if": str(original[job].get("if", "")).replace(CLAUSE, "")})
         for label, (c, lane) in contexts().items():
             c = with_needs(jobs[job], c, "success")
             got, was = runs(jobs[job], c), runs(today, c)
@@ -112,14 +112,17 @@ def gate_errors(jobs: dict) -> list[str]:
     needs = {needs} if isinstance(needs, str) else set(needs)
     if needs != HEAVY | {"scope"}:
         errors.append(f"{GATE}: needs {sorted(needs)}, not every heavy job plus scope")
-    if gate.get("permissions") != {}:
-        errors.append(f"{GATE}: permissions must be {{}}")
+    if gate.get("permissions") != {"contents": "read"}:
+        errors.append(f"{GATE}: permissions must be contents: read alone")
     run = " ".join(str(s.get("run", "")) for s in gate.get("steps", []))
     for job in sorted(HEAVY):
         if job not in run:
             errors.append(f"{GATE}: its verdict does not name {job}")
     if "check_needs.py" not in run:
         errors.append(f"{GATE}: its verdict does not use check_needs.py")
+    allowed = re.search(r"--allow-skipped (\S+?)\)", run)
+    if not allowed or set(allowed.group(1).split(",")) != DOCS_SKIPPED:
+        errors.append(f"{GATE}: --allow-skipped must name exactly {sorted(DOCS_SKIPPED)}")
     if "${{" in run:
         errors.append(f"{GATE}: a step interpolates an expression into its script; pass it through env")
     # It runs, whatever its needs did, on every pull request into the release
@@ -167,7 +170,7 @@ def main() -> int:
         except KeyError as missing:
             errors.append(f"self-test: '{label}' could not be applied: no {missing}")
             continue
-        if expected not in heavy_errors(mutated) + gate_errors(mutated):
+        if expected not in heavy_errors(mutated, jobs) + gate_errors(mutated):
             errors.append(f"self-test: '{label}' was not caught by: {expected}")
     for e in errors:
         print(f"heavy-gating: {e}", file=sys.stderr)
