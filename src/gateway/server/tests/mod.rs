@@ -52,6 +52,8 @@ mod egress_matrix_stdio;
 mod r2_stdio_keys;
 /// Backend-planted gateway members over stdio.
 mod reserved_member_stdio;
+/// Secret injection delivers a header rule as a header, a query rule never in the arguments.
+mod secret_injection_targets;
 mod stdio_cache_scope;
 mod stdio_list_changed;
 mod stdio_listing_scope;

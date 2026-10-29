@@ -96,6 +96,9 @@ pub(crate) mod rotation_fault {
 pub(crate) mod pager;
 #[path = "transparency_log_segments.rs"]
 pub(crate) mod segments;
+#[cfg(test)]
+#[path = "transparency_log_temp.rs"]
+pub(crate) mod temp;
 // Read only by the web UI's Activity view.
 #[cfg(any(test, feature = "webui"))]
 #[path = "transparency_log_signature.rs"]

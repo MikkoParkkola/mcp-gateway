@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{Change, ComputeRefusal, FieldPath, Scalar, SlotId, Template, edit_in_place};
+use super::{Change, ComputeRefusal, FieldPath, Scalar, Segment, SlotId, Template, edit_in_place};
 
 /// A commented file of the shape the web UI edits.
 const COMMENTED: &str = "\
@@ -22,7 +22,22 @@ auth:
 ";
 
 fn path(dotted: &str) -> FieldPath {
-    FieldPath(dotted.split('.').map(str::to_owned).collect())
+    keys(&dotted.split('.').collect::<Vec<_>>())
+}
+
+/// A path of mapping keys, taken as given (a key may hold a dot).
+fn keys(segments: &[&str]) -> FieldPath {
+    FieldPath(
+        segments
+            .iter()
+            .map(|k| Segment::Key((*k).to_owned()))
+            .collect(),
+    )
+}
+
+/// The slot of the dotted key path `dotted`.
+fn slot(dotted: &str) -> SlotId {
+    path(dotted).slot()
 }
 
 fn set_int(dotted: &str, value: i64) -> (FieldPath, Change) {
@@ -34,7 +49,7 @@ fn set_str(dotted: &str, value: &str) -> (FieldPath, Change) {
 }
 
 fn secret(dotted: &str) -> (FieldPath, Change) {
-    (path(dotted), Change::Secret(SlotId(dotted.to_owned())))
+    (path(dotted), Change::Secret(slot(dotted)))
 }
 
 /// The edited text; the edit must be provable.
@@ -48,7 +63,7 @@ fn edited(original: &str, changes: &[(FieldPath, Change)]) -> String {
 #[track_caller]
 fn assert_refused_by(original: &str, changes: &[(FieldPath, Change)], by: &str) {
     match edit_in_place(original, changes) {
-        Err(ComputeRefusal::Unprovable { reason }) if reason.contains(by) => {}
+        Err(ComputeRefusal::Unprovable { reason, .. }) if reason.contains(by) => {}
         other => panic!("expected Unprovable by `{by}`, got {other:?}"),
     }
 }
@@ -166,9 +181,10 @@ fn a_mapping_value_is_unprovable() {
     assert_unprovable(COMMENTED, &[set_str("auth", "x")]);
 }
 
+/// A missing key is inserted (a2); one under a plain value cannot be.
 #[test]
-fn a_missing_key_is_unprovable() {
-    assert_unprovable(COMMENTED, &[set_int("auth.missing", 1)]);
+fn a_key_under_a_plain_value_is_unprovable() {
+    assert_unprovable(COMMENTED, &[set_int("auth.enabled.missing", 1)]);
 }
 
 #[test]
@@ -185,11 +201,7 @@ fn overlapping_changes_are_unprovable() {
 fn a_runtime_backend_name_is_a_path_segment() {
     let file = "backends:\n  my-srv:\n    description: old\n";
     let change = (
-        FieldPath(vec![
-            "backends".into(),
-            "my-srv".into(),
-            "description".into(),
-        ]),
+        keys(&["backends", "my-srv", "description"]),
         Change::Set(Scalar::Str("new".into())),
     );
     assert_eq!(
@@ -205,7 +217,7 @@ fn a_segment_yaml_reads_as_a_number_or_bool_is_unprovable() {
     for name in ["123", "true", "1e3"] {
         let file = format!("backends:\n  {name}:\n    description: x\n");
         let change = (
-            FieldPath(vec!["backends".into(), name.into(), "description".into()]),
+            keys(&["backends", name, "description"]),
             Change::Set(Scalar::Str("y".into())),
         );
         assert_unprovable(&file, &[change]);
@@ -223,16 +235,13 @@ fn a_flow_mapping_as_the_edited_value_is_unprovable() {
 /// could not tell apart from the path `a` then `b`.
 #[test]
 fn a_literal_dotted_key_is_unprovable() {
-    let change = (FieldPath(vec!["a.b".into()]), Change::Set(Scalar::Int(2)));
+    let change = (keys(&["a.b"]), Change::Set(Scalar::Int(2)));
     assert_unprovable("a.b: 1\n", &[change]);
 }
 
 #[test]
 fn an_empty_segment_is_refused() {
-    let change = (
-        FieldPath(vec!["a".into(), String::new()]),
-        Change::Set(Scalar::Int(2)),
-    );
+    let change = (keys(&["a", ""]), Change::Set(Scalar::Int(2)));
     assert_unprovable("a:\n  b: 1\n", &[change]);
 }
 
@@ -297,16 +306,10 @@ fn crossed_slot_ranges_are_refused() {
     assert_eq!(&text[b.clone()], "\"__mcpgw_slot_b__\"");
     let straight = Template::checked(
         text.into(),
-        vec![
-            (SlotId("a".into()), a.clone()),
-            (SlotId("b".into()), b.clone()),
-        ],
+        vec![(slot("a"), a.clone()), (slot("b"), b.clone())],
     );
     assert!(straight.is_ok());
-    let crossed = Template::checked(
-        text.into(),
-        vec![(SlotId("b".into()), a), (SlotId("a".into()), b)],
-    );
+    let crossed = Template::checked(text.into(), vec![(slot("b"), a), (slot("a"), b)]);
     assert_eq!(crossed, Err(ComputeRefusal::SlotMismatch));
 }
 
@@ -319,14 +322,8 @@ fn fill_writes_each_reference_under_its_own_field() {
     ];
     let template = edit_in_place(TWO_SECRETS, &changes).expect("provable");
     let refs = BTreeMap::from([
-        (
-            SlotId("backends.a.env.TOKEN".into()),
-            "keychain:for-a".to_owned(),
-        ),
-        (
-            SlotId("backends.b.env.TOKEN".into()),
-            "keychain:for-b".to_owned(),
-        ),
+        (slot("backends.a.env.TOKEN"), "keychain:for-a".to_owned()),
+        (slot("backends.b.env.TOKEN"), "keychain:for-b".to_owned()),
     ]);
     let filled = String::from_utf8(template.fill(&refs).expect("filled")).expect("utf-8");
     let doc: crate::yaml::Value = crate::yaml::from_str(&filled).expect("parses");
@@ -344,7 +341,7 @@ fn fill_writes_each_reference_under_its_own_field() {
 fn a_reference_with_quotes_and_a_newline_round_trips() {
     let template = edit_in_place("a:\n  t: old\n", &[secret("a.t")]).expect("provable");
     let reference = "file:C:\\dir \"q\"\tx\ny";
-    let refs = BTreeMap::from([(SlotId("a.t".into()), reference.to_owned())]);
+    let refs = BTreeMap::from([(slot("a.t"), reference.to_owned())]);
     let filled = String::from_utf8(template.fill(&refs).expect("filled")).expect("utf-8");
     let doc: crate::yaml::Value = crate::yaml::from_str(&filled).expect("parses");
     assert_eq!(doc["a"]["t"].as_str(), Some(reference));
@@ -358,15 +355,15 @@ fn fill_refuses_a_missing_or_an_extra_reference() {
         Err(ComputeRefusal::SlotMismatch)
     );
     let extra = BTreeMap::from([
-        (SlotId("a.t".into()), "keychain:x".to_owned()),
-        (SlotId("a.u".into()), "keychain:y".to_owned()),
+        (slot("a.t"), "keychain:x".to_owned()),
+        (slot("a.u"), "keychain:y".to_owned()),
     ]);
     assert_eq!(template.fill(&extra), Err(ComputeRefusal::SlotMismatch));
 }
 
 #[test]
 fn a_slot_named_for_another_field_is_refused() {
-    let change = (path("a.t"), Change::Secret(SlotId("a.u".into())));
+    let change = (path("a.t"), Change::Secret(slot("a.u")));
     assert_eq!(
         edit_in_place("a:\n  t: old\n  u: old\n", &[change]),
         Err(ComputeRefusal::SlotMismatch)
@@ -389,14 +386,11 @@ fn a_comment_only_value_is_refused_by_the_meaning_proof() {
 #[test]
 fn fill_refuses_a_reference_not_under_its_own_field() {
     let text = "a: \"__mcpgw_slot_b__\"\nb: \"__mcpgw_slot_a__\"\n";
-    let template = Template::checked(
-        text.into(),
-        vec![(SlotId("b".into()), 3..21), (SlotId("a".into()), 25..43)],
-    )
-    .expect("each range holds its own id's placeholder");
+    let template = Template::checked(text.into(), vec![(slot("b"), 3..21), (slot("a"), 25..43)])
+        .expect("each range holds its own id's placeholder");
     let refs = BTreeMap::from([
-        (SlotId("a".into()), "keychain:for-a".to_owned()),
-        (SlotId("b".into()), "keychain:for-b".to_owned()),
+        (slot("a"), "keychain:for-a".to_owned()),
+        (slot("b"), "keychain:for-b".to_owned()),
     ]);
     assert_eq!(template.fill(&refs), Err(ComputeRefusal::SlotMismatch));
 }
@@ -554,3 +548,6 @@ fn a_field_after_a_sequence_or_a_collection_key_is_editable() {
 fn an_unused_anchor_on_the_value_is_unprovable() {
     assert_unprovable("a: &x 5\n", &[set_int("a", 6)]);
 }
+
+#[path = "config_persistence_keyedit_a2_tests.rs"]
+mod a2;

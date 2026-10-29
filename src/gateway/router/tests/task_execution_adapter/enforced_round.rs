@@ -46,7 +46,7 @@ fn injected_question() -> Value {
 async fn gated_state(
     mock: &Arc<MockBackend>,
     decision: ContextIntegrityDecisionKind,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, dir) = state_with(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let meta =
@@ -233,7 +233,13 @@ async fn s7b_a_continuing_playbook_records_the_enforced_step_failed() {
         .unwrap_or_else(|| panic!("a playbook result: {read}"));
     std::assert_eq!(outcome["steps_failed"], json!(["first"]), "{read}");
     std::assert_eq!(outcome["steps_completed"], json!(["second"]), "{read}");
-    std::assert_eq!(outcome["step_errors"]["first"], REFUSAL, "{read}");
+    // The backend ran and its answer was refused afterwards, so the reason
+    // says the step may have run.
+    std::assert_eq!(
+        outcome["step_errors"]["first"],
+        format!("{REFUSAL}; {}", crate::error::MAY_HAVE_RUN),
+        "{read}"
+    );
     std::assert!(!read.to_string().contains(STATE_1), "{read}");
 }
 
@@ -261,6 +267,12 @@ async fn s7c_a_retrying_playbook_does_not_retry_an_enforced_question() {
         .and_then(|text| serde_json::from_str(text).ok())
         .unwrap_or_else(|| panic!("a playbook result: {read}"));
     std::assert_eq!(outcome["steps_failed"], json!(["first"]), "{read}");
-    std::assert_eq!(outcome["step_errors"]["first"], REFUSAL, "{read}");
+    // The backend ran and its answer was refused afterwards, so the reason
+    // says the step may have run.
+    std::assert_eq!(
+        outcome["step_errors"]["first"],
+        format!("{REFUSAL}; {}", crate::error::MAY_HAVE_RUN),
+        "{read}"
+    );
     std::assert!(!read.to_string().contains(STATE_1), "{read}");
 }

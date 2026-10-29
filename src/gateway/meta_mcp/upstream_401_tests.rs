@@ -15,6 +15,8 @@
 
 use std::sync::Arc;
 
+use crate::security::transparency_log::temp::TempLog;
+
 use crate::personal_accounts::AccountCustody;
 use crate::personal_accounts::refusal::{AccountState, marked, upstream_rejection};
 
@@ -38,6 +40,7 @@ async fn managed_capability(
     steps: &[ProviderStep],
     multi_user: bool,
 ) -> (
+    TempLog,
     Arc<crate::capability::CapabilityBackend>,
     Custody,
     Arc<Captured>,
@@ -48,7 +51,7 @@ async fn managed_capability(
         steps,
     );
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let (port, captured) = capture_endpoint_answering(statuses).await;
     let backend = backend_with(
         &registry,
@@ -60,7 +63,7 @@ async fn managed_capability(
     )
     .expect("the capability must register");
     backend.set_multi_user(multi_user);
-    (backend, custody, captured)
+    (log, backend, custody, captured)
 }
 
 #[track_caller]
@@ -85,7 +88,7 @@ fn assert_rejected(error: &crate::Error, code: &str, retry: bool, what: &str) {
 /// and the account is fenced, so the next call is refused before the wire.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn upstream_401_with_revoked_grant_returns_reconnect_offer() {
-    let (backend, custody, captured) =
+    let (_log, backend, custody, captured) =
         managed_capability(&[401], &[ProviderStep::InvalidGrant], true).await;
 
     let first = call(&backend, Some("alice"))
@@ -120,7 +123,7 @@ async fn upstream_401_with_revoked_grant_returns_reconnect_offer() {
 /// inside the executor today and dropped before the 401 is seen.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn single_user_upstream_401_still_reaches_the_forced_refresh() {
-    let (backend, custody, _captured) =
+    let (_log, backend, custody, _captured) =
         managed_capability(&[401], &[ProviderStep::InvalidGrant], false).await;
 
     let error = call(&backend, Some("alice"))
@@ -134,7 +137,7 @@ async fn single_user_upstream_401_still_reaches_the_forced_refresh() {
 /// presents the rotated token.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn upstream_401_with_live_grant_refreshes_and_says_retry() {
-    let (backend, custody, captured) =
+    let (_log, backend, custody, captured) =
         managed_capability(&[401], &[ProviderStep::Rotate(FORCED_TOKEN)], true).await;
 
     let first = call(&backend, Some("alice"))
@@ -162,7 +165,7 @@ async fn upstream_401_with_live_grant_refreshes_and_says_retry() {
 /// token revision, and says so instead of asking for endless retries.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn persistent_401_costs_one_forced_refresh() {
-    let (backend, custody, captured) = managed_capability(
+    let (_log, backend, custody, captured) = managed_capability(
         &[401, 401, 401, 401, 401],
         &[ProviderStep::Rotate(FORCED_TOKEN)],
         true,
@@ -191,7 +194,7 @@ async fn persistent_401_costs_one_forced_refresh() {
 /// T5 (positive control): other statuses keep today's error and never refresh.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn non_401_status_is_unchanged() {
-    let (backend, custody, captured) = managed_capability(&[500, 403], &[], true).await;
+    let (_log, backend, custody, captured) = managed_capability(&[500, 403], &[], true).await;
 
     for status in [500, 403] {
         let error = call(&backend, Some("alice"))
@@ -210,7 +213,7 @@ async fn non_401_status_is_unchanged() {
 /// never decides custody.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn body_text_401_in_200_is_not_detected() {
-    let (backend, custody, _captured) = managed_capability(&[200], &[], true).await;
+    let (_log, backend, custody, _captured) = managed_capability(&[200], &[], true).await;
 
     call(&backend, Some("alice"))
         .await

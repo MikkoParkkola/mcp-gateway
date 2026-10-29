@@ -52,7 +52,7 @@ async fn attested_state(
     mock: &Arc<MockBackend>,
 ) -> (
     Arc<AppState>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
     Arc<AttestationValidator>,
     BnautAttestationSigner,
 ) {
@@ -277,7 +277,9 @@ async fn joint_d_rotated_predecessor_refused_after_dispatched_mark_successor_dis
 
 /// The signed fixture with Enforce built the way a deployment builds it: an
 /// env file with `enforce` and the key, read through the overlay.
-async fn state_enforced_from_config(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn state_enforced_from_config(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = signed_state(mock).await;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let meta =

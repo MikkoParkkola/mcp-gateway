@@ -78,6 +78,9 @@ pub(super) fn outbound_params(
 #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
 pub(super) struct Egress<'a> {
     pub(super) arguments: &'a Value,
+    /// The backend the call was judged on and will be sent through; `None`
+    /// for a capability. Its own rules say which keys the send overwrites.
+    pub(super) backend: Option<&'a std::sync::Arc<crate::backend::Backend>>,
     pub(super) inbound_meta: Option<&'a Value>,
     pub(super) prompt_cache_key: Option<&'a str>,
     pub(super) retry: &'a OutboundRetry,
@@ -102,11 +105,12 @@ impl MetaMcp {
             let capability = self
                 .get_capabilities()
                 .is_some_and(|cap| server == cap.name && cap.get(tool).is_some());
-            // Secret injection overwrites its keys after this check: what the
-            // caller put there never leaves, so it is not checked.
+            // The backend's secret rules overwrite their keys on the send:
+            // what the caller put there never leaves, so it is not checked.
             let mut arguments = egress.arguments.clone();
-            self.secret_injector
-                .strip_overwritten(server, tool, &mut arguments);
+            if let Some(backend) = egress.backend {
+                backend.strip_secret_keys(tool, &mut arguments);
+            }
             let params = if capability {
                 arguments
             } else {
@@ -168,6 +172,9 @@ impl MetaMcp {
             caller,
             super::nonce_settle::PreSendExit::ReleaseKey(reservation),
         );
+        // The delivered refusal; a composite step's is absorbed, so raised
+        // only while the cell is vouched.
+        crate::gateway::delivery_facts::refused_while_vouched();
         Err(refused)
     }
 
@@ -200,6 +207,7 @@ impl super::BridgeDispatcher<'_> {
     ) -> Result<(), crate::gateway::input_bridge::BridgeError> {
         let egress = Egress {
             arguments: self.arguments,
+            backend: self.captured.as_ref(),
             inbound_meta: self.inbound_meta,
             prompt_cache_key: self.prompt_cache_key,
             retry,
@@ -213,6 +221,8 @@ impl super::BridgeDispatcher<'_> {
             return Ok(());
         };
         let message = refused.to_string();
+        // The exchange ends with this refusal (read first at the call site).
+        crate::gateway::delivery_facts::refused_while_vouched();
         *self.relay_refused.lock() = Some(refused);
         Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message })
     }

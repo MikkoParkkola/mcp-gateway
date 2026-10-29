@@ -76,7 +76,7 @@ type Wired = (
     Arc<crate::gateway::router::AppState>,
     Arc<Firewall>,
     Arc<Firewall>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 );
 
 /// The split production wiring with the leaky-list backend as `demo`.
@@ -265,6 +265,9 @@ async fn discovery_inspection_reads_the_unescaped_value() {
         action: FirewallAction::Block,
         reason: Some("#2350".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }];
     // Built at run time so no key-shaped literal sits in the source.
     let secret = "A".repeat(20);

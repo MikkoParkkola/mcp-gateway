@@ -4,6 +4,7 @@
 //! parent of the caller-verdict commits: C6c and F4 (controls), P5 (red).
 //! Every test name starts with `g3_`.
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -33,8 +34,8 @@ pub(super) struct Gateway {
     pub(super) mints: Arc<AtomicUsize>,
     #[cfg(feature = "firewall")]
     firewall_audit: std::path::PathBuf,
-    _store: tempfile::TempDir,
-    _files: [tempfile::NamedTempFile; 3],
+    _store: crate::gateway::router::tests::FixtureDir,
+    _files: [TempLog; 3],
 }
 
 impl Gateway {
@@ -93,11 +94,7 @@ pub(super) async fn gateway_armed(
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let files = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-    ];
+    let files = [TempLog::new(), TempLog::new(), TempLog::new()];
     let mints = Arc::new(AtomicUsize::new(0));
     let mut meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state_mut.backends))
         .with_surfaced_tools(surfaced.configs());

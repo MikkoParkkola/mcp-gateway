@@ -88,6 +88,11 @@ impl MetaMcp {
             let carries_identity = backend.fetch_carries_caller_identity(binding);
             self.enforce_oauth_isolation_for(backend, &backend.name, carries_identity)
                 .map_err(|e| {
+                    // The isolation denial is the delivered refusal; the mint
+                    // failure below is not a decision and raises nothing.
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
                     Box::new(JsonRpcResponse::error(
                         Some(id.clone()),
                         e.to_rpc_code(),

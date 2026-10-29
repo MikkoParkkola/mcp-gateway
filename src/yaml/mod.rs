@@ -31,6 +31,7 @@ mod emit;
 mod error;
 mod guard;
 mod mapping;
+mod nodes;
 mod number;
 mod rep;
 mod resolve;
@@ -47,6 +48,7 @@ use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
 pub(crate) use mapping::Mapping;
+pub(crate) use nodes::{Node, Shape, Step, block_nodes};
 pub(crate) use number::Number;
 pub(crate) use spans::{ValueSpan, mapping_values};
 pub(crate) use tagged::{Tag, TaggedValue};

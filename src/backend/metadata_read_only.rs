@@ -51,7 +51,7 @@ impl Backend {
         identity_key: Option<&str>,
         truncated: bool,
         prepared: crate::backend::annotations::PreparedTools,
-    ) {
+    ) -> crate::backend::descriptor_gate::PendingLogs {
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.read_only_declared.write() = prepared.read_only_declared;
         *entry.hint_declared.write() = prepared.hint_declared;
@@ -60,7 +60,7 @@ impl Backend {
         } else {
             crate::backend::Listing::Complete
         };
-        self.commit_verdicts(identity_key.unwrap_or(""), listing, prepared.verdicts);
+        self.commit_verdicts(identity_key.unwrap_or(""), listing, prepared.verdicts)
     }
 
     /// Seed the shared slot's read-only set, for fixtures whose subject is the

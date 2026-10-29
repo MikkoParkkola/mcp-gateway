@@ -109,7 +109,7 @@ impl crate::transport::Transport for SlotWire {
     }
 }
 
-fn logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
+fn logger(file: &crate::security::transparency_log::temp::TempLog) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -123,8 +123,8 @@ struct Gateway {
     router: axum::Router,
     backend: Arc<Backend>,
     seen: Seen,
-    _store: tempfile::TempDir,
-    audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
+    audit: [crate::security::transparency_log::temp::TempLog; 2],
 }
 
 impl Gateway {
@@ -226,8 +226,8 @@ async fn gateway(config: BackendConfig, route_log: bool) -> Gateway {
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let audit = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
+        crate::security::transparency_log::temp::TempLog::new(),
+        crate::security::transparency_log::temp::TempLog::new(),
     ];
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(

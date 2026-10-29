@@ -60,13 +60,15 @@ pub struct Refusal {
     pub repeats: u32,
 }
 
-/// What every reload context of one gateway reports into: one refusal ledger
-/// and one override auditor, shared by the admin API, the meta-tool and the
+/// What every reload context of one gateway reports into: one refusal ledger,
+/// one reload tally and one override auditor, shared by the admin API, the meta-tool and the
 /// config file watcher, so a refusal is seen wherever it happened.
 #[derive(Clone, Default)]
 pub struct ReloadReporting {
     pub(crate) refusals: std::sync::Arc<RefusalLedger>,
     pub(crate) override_audit: Option<std::sync::Arc<super::override_audit::OverrideAuditor>>,
+    /// Attempts and outcomes of every reload, whichever entry point made it.
+    pub(crate) tally: std::sync::Arc<super::reload_tally::ReloadTally>,
 }
 
 impl ReloadReporting {
@@ -78,6 +80,7 @@ impl ReloadReporting {
         Self {
             refusals: std::sync::Arc::default(),
             override_audit: Some(override_audit),
+            tally: std::sync::Arc::default(),
         }
     }
 }
@@ -286,6 +289,26 @@ pub(crate) fn startup_refusal(
     }
 }
 
+/// Every backend `registry` holds that its runtime policy denies, as `startup`
+/// refusals: what `GET /ui/api/refusals` lists, and what the gateway snapshots
+/// once at start.
+#[must_use]
+pub(crate) fn startup_refusals(registry: &crate::backend::BackendRegistry) -> Vec<Refusal> {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
+    )]
+    let backends = registry.all();
+    backends
+        .iter()
+        .filter_map(|backend| {
+            let runtime = backend.status().runtime?;
+            (runtime.state == crate::backend::BackendRuntimeState::Denied)
+                .then(|| startup_refusal(&backend.name, &runtime.denied_reasons))
+        })
+        .collect()
+}
+
 fn is_active(entry: &Entry, reload_applied: u64, write_applied: u64) -> bool {
     match entry.kind {
         RefusalKind::Startup => true,
@@ -371,6 +394,11 @@ impl super::ReloadContext {
     /// The refusals this context's reloads and writes recorded.
     pub(crate) fn refusals(&self) -> &std::sync::Arc<RefusalLedger> {
         &self.reporting.refusals
+    }
+
+    /// The attempts and outcomes this context's reloads recorded.
+    pub(crate) fn reload_tally(&self) -> &std::sync::Arc<super::reload_tally::ReloadTally> {
+        &self.reporting.tally
     }
 
     /// Share `reporting` with every other reload context of this gateway.

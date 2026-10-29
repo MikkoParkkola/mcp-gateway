@@ -271,7 +271,13 @@ async fn until_seen(seen: &Seen, method: &str, what: &str) {
 /// an `/mcp` session on it. The store keeps the task runtime alive.
 async fn mcp_gateway_with_slow_backend(
     call_delay: Duration,
-) -> (SocketAddr, Seen, reqwest::Client, String, tempfile::TempDir) {
+) -> (
+    SocketAddr,
+    Seen,
+    reqwest::Client,
+    String,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (backend_url, seen) = slow_backend(call_delay).await;
     let (state, store) = super::test_router_app_state_with_auth(&auth()).await;
     let backend = Arc::new(Backend::new(

@@ -32,7 +32,9 @@ fn stuffing() -> String {
 
 /// The suite's state with `mock` behind a surfaced `TOOL` and a `block` relay
 /// firewall over it.
-async fn surfaced_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn surfaced_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     surfaced_state_with(mock, None).await
 }
 
@@ -40,7 +42,7 @@ async fn surfaced_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::Te
 async fn surfaced_state_with(
     mock: &Arc<MockBackend>,
     kernel: Option<crate::context_integrity::ContextIntegrityKernel>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let config = FirewallConfig {
         collusion: CollusionConfig {
             action: CollusionAction::Block,
@@ -353,6 +355,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
     let targets = [ResponsePolicyTarget {
         server: BACKEND.to_string(),
         tool: TOOL.to_string(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let context = ResponseDeliveryContext {
         method: "tools/call",
@@ -364,6 +367,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
             external_tool: TOOL,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         },
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),

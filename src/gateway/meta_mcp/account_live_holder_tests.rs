@@ -146,7 +146,7 @@ async fn a_live_refresh_and_a_warm_cached_credential_cannot_survive_revoke_and_r
         .expect("custody starts over the seeded store"),
     );
     let installed: Arc<dyn AccountCustody> = Arc::clone(&handle) as Arc<dyn AccountCustody>;
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));

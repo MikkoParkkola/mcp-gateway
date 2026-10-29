@@ -6,6 +6,7 @@
 mod allow_pins;
 mod ci_wiring;
 mod creation_sites;
+mod delivery_framing;
 mod guard_tests;
 mod invoke_stages;
 mod invoke_stages_allow;
@@ -13,6 +14,7 @@ mod invoke_stages_dest;
 mod invoke_stages_r6;
 mod invoke_stages_rules;
 mod invoke_stages_tests;
+mod keyed_request;
 mod packaged;
 mod scan;
 mod scan_tests;

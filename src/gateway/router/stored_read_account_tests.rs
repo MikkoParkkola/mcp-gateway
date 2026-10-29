@@ -28,7 +28,7 @@ struct Fx {
     /// The transparency log this fixture's `MetaMcp` writes (MIK-8392 B1).
     audit_path: std::path::PathBuf,
     _audit: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 fn sole_operator() -> AuthConfig {

@@ -29,7 +29,7 @@ struct Fx {
     /// The gateway the router serves, for its plan-execution count.
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     gateway: DirectAccountGateway,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 fn sole_operator() -> AuthConfig {

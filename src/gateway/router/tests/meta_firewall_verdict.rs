@@ -122,12 +122,19 @@ impl Transport for LeakyBackendTransport {
 /// route's own per-target obligation actually applies.
 async fn firewall_app_state(
     action: FirewallAction,
-) -> (Arc<AppState>, Arc<Firewall>, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    Arc<Firewall>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     app_state_with_rules(vec![FirewallRule {
         tool_match: TOOL.to_string(),
         action,
         reason: Some("meta response verdict regression".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await
 }
@@ -136,7 +143,11 @@ async fn firewall_app_state(
 /// can give different targets different verdicts on ONE artifact.
 async fn app_state_with_rules(
     rules: Vec<FirewallRule>,
-) -> (Arc<AppState>, Arc<Firewall>, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    Arc<Firewall>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let firewall = response_firewall(rules);
     let (state, store_dir) =
         state_with_firewalls(Arc::clone(&firewall), Arc::clone(&firewall)).await;
@@ -184,7 +195,7 @@ async fn split_firewall_app_state(
     Arc<AppState>,
     Arc<Firewall>,
     Arc<Firewall>,
-    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
 ) {
     let meta = response_firewall(rules.clone());
     let keys = meta.continuations_for_test().expect("keyed");
@@ -198,7 +209,7 @@ async fn split_firewall_app_state(
 async fn state_with_firewalls(
     handler_firewall: Arc<Firewall>,
     meta_firewall: Arc<Firewall>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     state_with_firewalls_and_auth(handler_firewall, meta_firewall, &AuthConfig::default()).await
 }
 
@@ -208,7 +219,7 @@ async fn state_with_firewalls_and_auth(
     handler_firewall: Arc<Firewall>,
     meta_firewall: Arc<Firewall>,
     auth: &AuthConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),
@@ -258,6 +269,7 @@ async fn state_with_firewalls_and_auth(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
@@ -426,12 +438,18 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             action: FirewallAction::Allow,
             reason: Some("permissive first target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: Some("credential-refusing later target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -510,12 +528,18 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             action: FirewallAction::Allow,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -524,10 +548,12 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "alpha_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "zeta_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     let mut artifact = json!({
@@ -545,6 +571,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
                 external_tool: "gateway_execute",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,
@@ -595,6 +622,9 @@ async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -654,6 +684,9 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         action: FirewallAction::Block,
         reason: Some("split-wiring refusal".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -682,6 +715,9 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 

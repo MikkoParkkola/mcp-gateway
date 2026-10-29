@@ -66,7 +66,6 @@ impl MetaMcp {
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
-            secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
             tool_registry: None,
             #[cfg(feature = "cost-governance")]

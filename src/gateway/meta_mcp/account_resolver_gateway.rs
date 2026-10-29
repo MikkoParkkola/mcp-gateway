@@ -134,21 +134,20 @@ fn installer_config(config: &Config, installed: &[&str]) -> Config {
     config
 }
 
-/// A durable audit sink. A managed backend compiles to `required: true`, and the
-/// MIK-6740 guard aborts a required mint with no transparency log, so every
-/// managed fixture needs one. Leaked for the process, as the existing
-/// propagation fixtures do.
-fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
+/// A durable audit sink in `log`'s temp dir. A managed backend compiles to
+/// `required: true`, and the MIK-6740 guard aborts a required mint with no
+/// transparency log, so every managed fixture needs one. The caller keeps `log`
+/// alive until the logger is dropped.
+fn transparency_logger_in(
+    log: &crate::security::transparency_log::temp::TempLog,
+) -> Arc<crate::security::TransparencyLogger> {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
     Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
-            path,
+            path: log.path().to_string_lossy().to_string(),
             key_id: "test".to_string(),
             ..TransparencyLogConfig::default()
         }))
@@ -158,7 +157,8 @@ fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
 
 /// Build the gateway under test: header/identity-capturing HTTP backends built
 /// from the EFFECTIVE compiled configuration, and strategies installed through
-/// the SAME production helper `Gateway::start` uses.
+/// the SAME production helper `Gateway::start` uses. The audit log comes first,
+/// so a caller's `let (_log, meta, dispatches)` drops it last.
 ///
 /// `identity_slots` pre-seeds the per-user transport slots a
 /// `SessionMode::PerUser` backend selects (`Backend::pool_key_for`), so a
@@ -172,7 +172,11 @@ pub(in super::super) fn gateway(
     descriptors: &Descriptors<'_>,
     custody: &Arc<dyn AccountCustody>,
     identity_slots: &[String],
-) -> (MetaMcp, Arc<Dispatches>) {
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+) {
     gateway_in(
         binds,
         descriptors,
@@ -192,7 +196,11 @@ pub(in super::super) fn gateway_in(
     identity_slots: &[String],
     mode: ServeMode,
     auth: crate::config::AuthConfig,
-) -> (MetaMcp, Arc<Dispatches>) {
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+) {
     gateway_in_with(
         binds,
         descriptors,
@@ -212,7 +220,11 @@ pub(in super::super) fn gateway_in_with(
     identity_slots: &[String],
     (mode, auth): (ServeMode, crate::config::AuthConfig),
     configure: impl Fn(&mut BackendConfig),
-) -> (MetaMcp, Arc<Dispatches>) {
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<Dispatches>,
+) {
     let mut config = Config {
         auth,
         ..fixture_config(binds, descriptors.compiled)
@@ -243,8 +255,9 @@ pub(in super::super) fn gateway_in_with(
         assert!(registry.register(backend), "fixture registry must accept");
     }
 
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let mut meta = MetaMcp::new(registry);
-    meta.enable_transparency_log(leaked_transparency_logger());
+    meta.enable_transparency_log(transparency_logger_in(&log));
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
 
     // The EXISTING process-wide install for legacy external control, unchanged:
@@ -267,7 +280,7 @@ pub(in super::super) fn gateway_in_with(
         mode,
     )
     .expect("the shared installer must accept the fixture configuration");
-    (meta, dispatches)
+    (log, meta, dispatches)
 }
 
 /// One fixture backend over the capturing transport: its shared slot and
@@ -486,6 +499,8 @@ pub(in super::super) fn external_cfg() -> IdentityPropagationConfig {
 /// `account` set on the running backend; actual dispatch is then refused.
 #[tokio::test]
 async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody() {
+    // The audit log, first so it drops after the gateway that writes to it.
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let name = "shared-backend";
     let mut config = fixture_config(&[(name, Bind::Account(WORK))], &[WORK]);
     {
@@ -536,7 +551,7 @@ async fn account_shared_descriptor_dispatches_legacy_without_identity_or_custody
     assert!(registry.register(backend), "fixture registry must accept");
 
     let mut meta = MetaMcp::new(registry);
-    meta.enable_transparency_log(leaked_transparency_logger());
+    meta.enable_transparency_log(transparency_logger_in(&log));
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     // THE SAME production installer, with NO custody: shared must not refuse.
     install_account_strategies(&config, None, &gateway_key, &meta, ServeMode::Http)
