@@ -67,7 +67,11 @@ pub(super) fn mint_permit(
         invoke_scope,
         Some(&session),
         (scope.name, tool),
-        &crate::gateway::meta_mcp::invoke::Outbound { arguments, answers },
+        &crate::gateway::meta_mcp::invoke::Outbound {
+            arguments,
+            answers,
+            backend: Some(&*scope.route.backend),
+        },
     )
 }
 
