@@ -645,3 +645,7 @@ impl MetaMcp {
         self.content_refuses(&at, Part::Error, value)
     }
 }
+
+#[cfg(test)]
+#[path = "egress_stored_targets_tests.rs"]
+mod stored_targets_tests;

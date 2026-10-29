@@ -122,3 +122,38 @@ pub(super) fn note_completed(args: &Value) {
     };
     let _ = DISPATCH_LOG.try_with(|log| log.note(server, tool));
 }
+
+#[cfg(test)]
+mod round_tests {
+    use std::sync::Arc;
+
+    use super::{DispatchLog, PreSend, note_round, with_dispatch_log};
+
+    /// A round reads its last invocation, starts clear, and is written only
+    /// inside a worker's scope: a refusal never outlives its round, and a
+    /// later invocation that was sent clears an earlier refusal.
+    #[tokio::test]
+    async fn a_round_reads_its_last_invocation_and_starts_clear() {
+        let log = Arc::new(DispatchLog::default());
+        with_dispatch_log(Arc::clone(&log), async { note_round(PreSend::Refused) }).await;
+        assert_eq!(log.round(), PreSend::Refused, "refused, then read");
+        log.reset_round();
+        assert_eq!(log.round(), PreSend::Clear, "a new round starts clear");
+        with_dispatch_log(Arc::clone(&log), async {
+            note_round(PreSend::Refused);
+            note_round(PreSend::Clear);
+        })
+        .await;
+        assert_eq!(
+            log.round(),
+            PreSend::Clear,
+            "a later sent invocation clears it"
+        );
+        note_round(PreSend::Refused);
+        assert_eq!(
+            log.round(),
+            PreSend::Clear,
+            "outside a worker nothing is noted"
+        );
+    }
+}
