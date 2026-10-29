@@ -179,23 +179,27 @@ fn no_production_identifier_is_blanked_anywhere_in_the_tree() {
             let have = kept.get(ident.as_str()).copied().unwrap_or(0);
             if have < want {
                 let name = path.strip_prefix(root).unwrap_or(&path).display();
-                lost.push(format!("{name}: `{ident}` {want} in production, {have} kept"));
+                lost.push(format!(
+                    "{name}: `{ident}` {want} in production, {have} kept"
+                ));
             }
         }
         checked += 1;
     }
     assert!(checked > 100, "only {checked} files have test items");
-    assert!(lost.is_empty(), "production text blanked:\n{}", lost.join("\n"));
+    assert!(
+        lost.is_empty(),
+        "production text blanked:\n{}",
+        lost.join("\n")
+    );
 }
 
 /// The checker's own skip stays narrow: a `///` comment in a macro body
 /// counts no `doc`, while `doc` as a name in macro code still counts.
 #[test]
 fn a_doc_comment_in_a_macro_body_is_not_counted_but_a_doc_name_is() {
-    let file = syn::parse_file(
-        "m! {\n    /// note\n    static A: u8;\n}\nm! { let doc = 1; }\n",
-    )
-    .unwrap();
+    let file =
+        syn::parse_file("m! {\n    /// note\n    static A: u8;\n}\nm! { let doc = 1; }\n").unwrap();
     let mut parsed = ProductionIdents::default();
     syn::visit::Visit::visit_file(&mut parsed, &file);
     assert_eq!(parsed.counts.get("doc"), Some(&1));
