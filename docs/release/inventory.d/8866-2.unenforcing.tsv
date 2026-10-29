@@ -1,0 +1,8 @@
+src/gateway/outbound/mod.rs	written_by	1	Sets who wrote the error in a rendered answer, for the error count; decides nothing.
+src/gateway/router/helpers.rs	gateway	1	Builds a direct-route answer the gateway wrote; decides nothing.
+src/gateway/router/helpers.rs	from	1	Wraps a status and body as the gateway-written answer; decides nothing.
+src/gateway/router/helpers.rs	into_response	1	Writes a direct-route answer as the response, marking its error for the count; decides nothing.
+src/gateway/router/mod.rs	protected_resource_route	1	Builds the unauthenticated protected-resource metadata route, moved out of the router build unchanged.
+src/gateway/router/mod.rs	outermost	1	Applies the generation pin and the error count as the last layers, moved out of the router build unchanged.
+src/gateway/router/mod.rs	timed_post	1	Wraps a POST handler in the added-latency layer; decides nothing.
+src/gateway/router/process_facts.rs	wall	1	Reads the process start for the start-time gauge; decides nothing.

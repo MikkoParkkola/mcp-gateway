@@ -12,3 +12,4 @@ src/security/dump_guard_tests.rs	lease_t11_child	inherent	The child half of leas
 src/security/dump_guard_tests.rs	lease_t11_linux_guard_is_observable	inherent	Runs lease_t11_child in a fresh process to observe the not-dumpable mark, which only Linux and Android have; on macOS no test observes the guard's zero core limit.
 tests/preview_sandbox_inherited_fd.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
 tests/preview_sandbox_linux.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
+src/gateway/health_metrics/process_tests.rs	the_live_sample_is_positive_on_linux	n/a	Reads /proc/self/statm, which only Linux has; the same parsing runs on every system in the other rows.
