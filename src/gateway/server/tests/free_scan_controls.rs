@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Controls for the allocator's free scan (MIK-9070): it must see a copy of a
+//! Controls for the allocator's free scan: it must see a copy of a
 //! marker freed unwiped, must not see one wiped on drop, and must see the old
 //! block a growing holder leaves behind. Without these, a scan that reads
 //! nothing would pass every row that uses it.

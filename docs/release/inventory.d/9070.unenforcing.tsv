@@ -1,0 +1,2 @@
+src/identity_propagation/propagated_headers.rs	new	1	Takes ownership of headers already in the zeroizing holder; it checks nothing and copies nothing.
+src/identity_propagation/propagated_headers.rs	deref	1	A borrow of the held headers; it decides nothing, and the value stays wiped on drop.

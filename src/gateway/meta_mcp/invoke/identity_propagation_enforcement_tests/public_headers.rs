@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The two public credential calls hand an embedder a value that is wiped
-//! when dropped and never prints its contents (MIK-9070 A). The free scan
+//! when dropped and never prints its contents. The free scan
 //! looks for the exact header value the call returned: a signed assertion
 //! encodes its claims, so a marker placed in the caller's identity would
 //! never appear in memory and a scan for it would pass on anything.

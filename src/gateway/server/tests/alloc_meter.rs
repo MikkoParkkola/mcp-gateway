@@ -22,7 +22,7 @@
 //! 2. **Deallocation is never counted and never touches the cells.** The
 //!    checkpoint asks for allocated bytes, never net bytes, so `dealloc` only
 //!    forwards — which also removes the thread-teardown hazard entirely on
-//!    that path. The one exception is the free scan (MIK-9070): one atomic
+//!    that path. The one exception is the free scan: one atomic
 //!    load, and a search of the block only while a marker is armed.
 //! 3. **Failure is silent, never a panic.** A panic raised inside the
 //!    allocator is not recoverable in any useful way. `try_with` losing a
@@ -70,7 +70,7 @@ static WIDE_LARGEST: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE: AtomicU64 = AtomicU64::new(0);
 static WIDE_LARGE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
-/// The free scan (MIK-9070): while a marker is armed, every block freed, and
+/// The free scan: while a marker is armed, every block freed, and
 /// every block a reallocation moves, is searched for it before it goes back
 /// to the allocator. A hit is a copy of the marker returned still holding it,
 /// that is, never wiped. Process-wide, because a block is freed on whatever

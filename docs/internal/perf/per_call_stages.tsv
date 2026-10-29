@@ -282,6 +282,13 @@ src/gateway/meta_mcp/invoke/guarded.rs	backend	http_invoke_tiny	on the HTTP gate
 src/gateway/meta_mcp/invoke/guarded.rs	from_cache	-	on-path, untimed: cache and idempotent-replay hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/guarded.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/guarded.rs	sealed_by_guard	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	a_returned_credential_never_prints_its_value	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	assert_wiped	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	minted_value	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	test_path	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	the_credential_call_hands_out_a_value_wiped_on_drop	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	the_headers_call_hands_out_a_value_wiped_on_drop	-	test-only (the module is cfg(test))
+src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/public_headers.rs	value_buffer	-	test-only (the module is cfg(test))
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	code_mode_execute_fails_closed_without_identity	-	test-only (the module is cfg(test))
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	code_mode_execute_propagates_identity_to_backend	-	test-only (the module is cfg(test))
 src/gateway/meta_mcp/invoke/identity_propagation_enforcement_tests/resolution.rs	direct_route_fails_closed_without_identity	-	test-only (the module is cfg(test))

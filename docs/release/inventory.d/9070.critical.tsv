@@ -1,0 +1,1 @@
+src/identity_propagation/propagated_headers.rs	fmt	1	standard	borderline	PropagatedHeaders::fmt	Debug that shows header names only; a mistake would print a caller's credential into a log.

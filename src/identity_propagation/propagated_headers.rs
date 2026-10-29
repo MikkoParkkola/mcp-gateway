@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The caller credential the public propagation calls hand out (MIK-9070 A).
+//! The caller credential the public propagation calls hand out.
 
 use std::ops::Deref;
 
