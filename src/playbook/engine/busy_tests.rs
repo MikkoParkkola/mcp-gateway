@@ -370,9 +370,10 @@ async fn a_long_tool_text_is_capped_and_kept_out_of_the_message() {
     let Err(error) = run(ErrorStrategy::Abort, &["first"], &invoker).await else {
         panic!("D3: an isError step was recorded completed");
     };
-    assert_eq!(
-        error.to_string().matches('q').count(),
-        0,
+    // A run of the tool's `q`s, not a single one: the may-have-run sentence
+    // says "request".
+    assert!(
+        !error.to_string().contains("qq"),
         "D3: the tool's text is in the message: {error}"
     );
     let text = tool_text(&error).expect("D3: the tool's text is in the data");
