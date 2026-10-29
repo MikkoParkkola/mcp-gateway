@@ -18,8 +18,8 @@ use mcp_gateway::{
     registry::Registry,
 };
 
-mod discover;
-use discover::cap_discover;
+mod server_scan;
+use server_scan::cap_discover;
 
 /// Run a `cap` subcommand (validate, list, import, test, discover, install, search, ...).
 #[allow(clippy::too_many_lines)]
