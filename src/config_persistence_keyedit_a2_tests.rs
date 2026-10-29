@@ -344,3 +344,24 @@ fn edits_keep_untouched_bytes_across_order_depth_and_comments() {
         assert_eq!(edited(original, &changes), want, "from {original:?}");
     }
 }
+
+// Review rows: an unterminated last line, the last root key, and a comment
+// past a blank line.
+
+#[test]
+fn an_insert_then_a_set_on_an_unterminated_unicode_line_is_proven() {
+    assert_eq!(
+        edited("a: é", &[set_int("b", 1), set_str("a", "x")]),
+        "a: \"x\"\nb: 1"
+    );
+}
+
+#[test]
+fn removing_the_last_root_key_leaves_an_empty_file() {
+    assert_eq!(edited("a: 1\n", &[remove("a")]), "");
+}
+
+#[test]
+fn a_comment_past_a_blank_line_under_a_removed_entry_gives_up() {
+    assert_gives_up("a: 1\n\n  # note\nb: 2\n", &[remove("a")], GiveUp::Comment);
+}
