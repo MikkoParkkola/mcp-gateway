@@ -8,17 +8,26 @@
 //! fixture.
 use super::*;
 
-/// The two task-call shapes the worker dispatches: `gateway_invoke` naming
-/// the backend, and the surfaced name.
+/// The task-call shapes the worker dispatches: `gateway_invoke` naming the
+/// backend, the surfaced name, and `gateway_execute` single and chain.
+const SHAPES: [&str; 4] = ["invoke", "surfaced", "execute", "chain"];
+
+/// One task call of `shape`, keyed `key`: its name and params.
 fn task_params(shape: &str, key: &str) -> (String, Value) {
     let mut meta = modern_meta();
     meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
-    let params = if shape == "invoke" {
-        json!({"name": "gateway_invoke",
-            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"folder": "inbox"}},
-            "task": {}, "_meta": meta})
-    } else {
-        json!({"name": TOOL, "arguments": {"folder": "inbox"}, "task": {}, "_meta": meta})
+    let target = json!({"folder": "inbox"});
+    let params = match shape {
+        "invoke" => json!({"name": "gateway_invoke",
+            "arguments": {"server": BACKEND, "tool": TOOL, "arguments": target},
+            "task": {}, "_meta": meta}),
+        "execute" => json!({"name": "gateway_execute",
+            "arguments": {"tool": format!("{BACKEND}:{TOOL}"), "arguments": target},
+            "task": {}, "_meta": meta}),
+        "chain" => json!({"name": "gateway_execute",
+            "arguments": {"chain": [{"tool": format!("{BACKEND}:{TOOL}"), "arguments": target}]},
+            "task": {}, "_meta": meta}),
+        _ => json!({"name": TOOL, "arguments": target, "task": {}, "_meta": meta}),
     };
     let name = params["name"].as_str().expect("a name").to_owned();
     (name, params)
@@ -78,7 +87,7 @@ async fn current_binding(fx: &Fx) -> String {
 /// the call or its task ends with the account refusal a live call gets.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r9_a_task_after_a_revoke_sends_nothing() {
-    for shape in ["invoke", "surfaced"] {
+    for shape in SHAPES {
         let fx = fixture().await;
         listing_shows_tool(&fx, "R9").await;
         fx.gateway.revoke_operator_grant_for_test().await;
@@ -113,7 +122,7 @@ async fn r9_a_task_after_a_revoke_sends_nothing() {
 /// carrying the current grant's credential.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn r9_a_task_after_a_rotation_sends_once_under_the_new_grant() {
-    for shape in ["invoke", "surfaced"] {
+    for shape in SHAPES {
         let fx = fixture().await;
         listing_shows_tool(&fx, "R9").await;
         let old = DirectAccountGateway::operator_binding();

@@ -221,6 +221,51 @@ async fn pin_an_optional_backends_unavailable_read_is_not_no_view() {
     );
 }
 
+/// Pin (green on base): a `required` backend whose custody read is
+/// unavailable is marked no-view by the re-check, as a revoke is. Mutant:
+/// drop Unavailable-as-no-view from the no-view decision.
+#[tokio::test]
+async fn pin_a_required_backends_unavailable_read_is_no_view() {
+    let fx = fixture().await;
+    fill_old(&fx, 1).await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    custody_unavailable(&fx).await;
+    fx.meta.revalidate_caller_slots(operator_proof()).await;
+    assert!(
+        backend.caller_has_no_view(&operator_id()),
+        "pin: a required backend's unavailable read did not mark the caller no-view"
+    );
+}
+
+/// R7: after a rotation, a `gateway_set_profile` switch reads its caller's
+/// new view for the change notice. That refresh must run the account
+/// re-check first, so a publish of the old binding after it is judged
+/// against the current grant. RED on base: the refresh runs no re-check, so
+/// the after_revalidate seam never fires. The view itself is read only for
+/// a session holding a listener record, which this fixture does not open.
+#[tokio::test]
+async fn r7_a_set_profile_refresh_rechecks_the_account_first() {
+    let fx = Arc::new(fixture().await);
+    let old = fill_old(&fx, 1).await;
+    rotate(&fx, &old).await;
+    let fired = publish_old_after_revalidate(&fx, &old, |_| {});
+    let set = rpc(
+        &fx,
+        2,
+        "tools/call",
+        json!({"name": "gateway_set_profile", "arguments": {"profile": "default"}}),
+    )
+    .await;
+    assert!(
+        set.get("error").is_none() && set.pointer("/result/isError") != Some(&json!(true)),
+        "premise: the profile switch succeeded, so its refresh runs: {set}"
+    );
+    assert!(
+        fired.load(std::sync::atomic::Ordering::SeqCst),
+        "R7: the set_profile refresh ran no account re-check (the after_revalidate seam never fired): {set}"
+    );
+}
+
 /// The design's other half for the same ordering: the held slot is kept for
 /// the next request (a failed read is not a finding). RED on base: the
 /// re-check forgets any slot its read does not confirm.
