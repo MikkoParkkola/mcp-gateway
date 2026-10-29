@@ -258,8 +258,8 @@ async fn a_token_without_exp_is_refused_with_its_reason() {
     );
 }
 
-/// L4 / LEASE-T3: the subscriber's last interest on the backend ends their
-/// lease; an interest that remains keeps it.
+/// L4 / LEASE-T3 / ISO-T6 (stop on the last subscriber): the subscriber's last
+/// interest on the backend ends their lease; an interest that remains keeps it.
 #[tokio::test]
 async fn the_last_interest_on_the_backend_wipes_the_lease() {
     use crate::events::EventSource;
