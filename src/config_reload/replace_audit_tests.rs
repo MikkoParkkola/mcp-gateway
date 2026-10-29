@@ -243,7 +243,7 @@ fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
             if name != "tests" {
                 production_sources(&path, out);
             }
-        } else if name.ends_with(".rs")
+        } else if path.extension().is_some_and(|e| e == "rs")
             && !name.ends_with("_tests.rs")
             && !name.contains("test_support")
         {

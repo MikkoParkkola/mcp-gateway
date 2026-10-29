@@ -126,7 +126,7 @@ fn stdio_backend() -> BackendConfig {
 
 fn run(
     text: &str,
-    slots: Slots,
+    slots: &[(bool, String)],
     references: &[String],
     mut backend: BackendConfig,
     env: &[(&str, &str)],
@@ -134,7 +134,7 @@ fn run(
     for (key, value) in env {
         backend.env.insert((*key).to_owned(), (*value).to_owned());
     }
-    let template = compute("tool".to_owned(), backend, slots.clone())(text.as_bytes())?;
+    let template = compute("tool".to_owned(), backend, slots.to_vec())(text.as_bytes())?;
     // The writer fills each slot once its entry exists; too few references
     // leave a slot unfilled, which the fill refuses.
     let refs: std::collections::BTreeMap<_, _> = slots
@@ -156,7 +156,7 @@ fn the_compute_splices_a_disabled_backend_with_references() {
     let reference = "file:/secrets/tool-key".to_owned();
     let out = run(
         text,
-        vec![(false, "API_KEY".to_owned())],
+        &[(false, "API_KEY".to_owned())],
         std::slice::from_ref(&reference),
         stdio_backend(),
         &[("TOKEN", "${TOKEN}")],
@@ -174,13 +174,13 @@ fn the_compute_splices_a_disabled_backend_with_references() {
 /// spliced and is refused, never re-serialised.
 #[test]
 fn a_populated_flow_mapping_is_refused_and_an_empty_one_spliced() {
-    assert!(run("backends: {}\n", vec![], &[], stdio_backend(), &[]).is_ok());
+    assert!(run("backends: {}\n", &[], &[], stdio_backend(), &[]).is_ok());
     for text in [
         "backends: {other: {command: other}}\n",
         "# note\nbackends: {other: {command: other}}\n",
     ] {
         assert_eq!(
-            run(text, vec![], &[], stdio_backend(), &[]),
+            run(text, &[], &[], stdio_backend(), &[]),
             Err(NOT_IN_PLACE.to_owned()),
             "{text}"
         );
@@ -194,7 +194,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     assert_eq!(
         run(
             "backends:\n  tool:\n    command: x\n",
-            vec![],
+            &[],
             &[],
             stdio_backend(),
             &[]
@@ -204,7 +204,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     assert_eq!(
         run(
             "backends: {}\n",
-            vec![(false, "API_KEY".to_owned())],
+            &[(false, "API_KEY".to_owned())],
             &[],
             stdio_backend(),
             &[]

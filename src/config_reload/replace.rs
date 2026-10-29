@@ -216,7 +216,7 @@ pub(crate) async fn replace_detached(
     audit::replace_audited(ctx, replace, Audit::Off, wait).await
 }
 
-/// The writer's task: [`replace_detached`] and [`replace_audited`] share it.
+/// The writer's task: [`replace_detached`] and [`replace_audited`](audit::replace_audited) share it.
 #[cfg_attr(
     not(any(test, feature = "webui")),
     expect(
@@ -241,7 +241,9 @@ async fn spawn_locked(
 
 #[path = "replace_audit.rs"]
 mod audit;
-pub(crate) use audit::{Audit, Intent, IntentId, IntentKind, IntentSink, replace_audited};
+pub(crate) use audit::{Audit, Intent, IntentSink};
+#[cfg(test)]
+pub(crate) use audit::{IntentId, IntentKind, replace_audited};
 
 /// The template's slots name exactly the step's fields (none without a
 /// step): a slot with no secret, or a secret with no slot, is refused before
@@ -442,6 +444,42 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
         reason = "first callers: the web UI settings save and discovery adopt"
     )
 )]
+/// Creates the step's entries, records them in `entries` (so a refusal
+/// below still removes them) and fills the template with their references.
+async fn fill_secrets(
+    template: &Template,
+    step: SecretStep,
+    deadline: Instant,
+    entries: &mut Entries,
+) -> Result<Vec<u8>, ReplaceError> {
+    let fields: Vec<String> = step.values.iter().map(|v| v.field.clone()).collect();
+    let pending = create_entries(step, deadline).await?;
+    let too_long = pending
+        .refs()
+        .iter()
+        .any(|r| r.len() > crate::secret_store::MAX_REFERENCE_LEN);
+    let refs = by_slot(template, &fields, pending.refs());
+    entries.pending = Some(pending);
+    // The size bound counted every reference at this length: one longer
+    // would let the filled file outgrow what the loader reads. Refused
+    // before the file is written; the entries go.
+    if too_long {
+        return Err(ReplaceError::Refused(
+            "the secret store returned a reference longer than the writer allows".to_string(),
+        ));
+    }
+    template.fill(&refs).map_err(|_| {
+        ReplaceError::Refused("the saved secrets could not be placed in the new config".to_string())
+    })
+}
+
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and discovery adopt"
+    )
+)]
 async fn create_entries(
     step: SecretStep,
     deadline: Instant,
@@ -555,31 +593,7 @@ impl ReloadContext {
         fits_when_filled(&template)?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
-            Some(step) => {
-                let fields: Vec<String> = step.values.iter().map(|v| v.field.clone()).collect();
-                let pending = create_entries(step, deadline).await?;
-                let too_long = pending
-                    .refs()
-                    .iter()
-                    .any(|r| r.len() > crate::secret_store::MAX_REFERENCE_LEN);
-                let refs = by_slot(&template, &fields, pending.refs());
-                entries.pending = Some(pending);
-                // The size bound counted every reference at this length: one
-                // longer would let the filled file outgrow what the loader
-                // reads. Refused before the file is written; the entries go.
-                if too_long {
-                    Err(ReplaceError::Refused(
-                        "the secret store returned a reference longer than the writer allows"
-                            .to_string(),
-                    ))
-                } else {
-                    template.fill(&refs).map_err(|_| {
-                        ReplaceError::Refused(
-                            "the saved secrets could not be placed in the new config".to_string(),
-                        )
-                    })
-                }
-            }
+            Some(step) => fill_secrets(&template, step, deadline, &mut entries).await,
         };
         let result = match result {
             Ok(new) => {
