@@ -8,6 +8,8 @@ use serde_json::json;
 
 #[path = "allowed_root_config_tests.rs"]
 mod config;
+#[path = "allowed_root_docs_tests.rs"]
+mod docs;
 #[path = "allowed_root_entry_tests.rs"]
 mod entry;
 #[path = "allowed_root_locality_tests.rs"]
