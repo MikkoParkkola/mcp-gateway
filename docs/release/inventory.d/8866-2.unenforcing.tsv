@@ -10,3 +10,4 @@ src/error.rs	origin	1	Classes an error as the gateway's or a backend's, for the 
 src/error.rs	http_is_backend_refusal	1	Names an Http status a backend refused with, shared by the code and origin maps; decides nothing.
 src/protocol/messages.rs	of_error	1	Builds an error frame from an Error with its code, text and origin; decides nothing.
 src/protocol/messages.rs	of_error_text	1	Builds an error frame from an Error and a chosen wire text; decides nothing.
+src/gateway/router/backend_handlers/direct_audit.rs	presented_credential	1	Reads which credential a direct request presented, for its delivery record; decides nothing.
