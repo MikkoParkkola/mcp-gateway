@@ -138,7 +138,7 @@ pub(super) struct Fx {
     pub(super) calls: Arc<AtomicUsize>,
     audit_path: std::path::PathBuf,
     _audit: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// A backend `alpha` answered by [`Stub`], its tool list filled, and both
