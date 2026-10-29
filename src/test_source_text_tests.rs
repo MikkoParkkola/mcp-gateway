@@ -281,18 +281,45 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
 fn expr_attrs(expr: &syn::Expr) -> &[syn::Attribute] {
     use syn::Expr;
     match expr {
+        Expr::Array(e) => &e.attrs,
         Expr::Assign(e) => &e.attrs,
+        Expr::Async(e) => &e.attrs,
+        Expr::Await(e) => &e.attrs,
+        Expr::Binary(e) => &e.attrs,
         Expr::Block(e) => &e.attrs,
+        Expr::Break(e) => &e.attrs,
         Expr::Call(e) => &e.attrs,
+        Expr::Cast(e) => &e.attrs,
+        Expr::Closure(e) => &e.attrs,
+        Expr::Const(e) => &e.attrs,
+        Expr::Continue(e) => &e.attrs,
+        Expr::Field(e) => &e.attrs,
         Expr::ForLoop(e) => &e.attrs,
+        Expr::Group(e) => &e.attrs,
         Expr::If(e) => &e.attrs,
+        Expr::Index(e) => &e.attrs,
+        Expr::Infer(e) => &e.attrs,
+        Expr::Let(e) => &e.attrs,
+        Expr::Lit(e) => &e.attrs,
         Expr::Loop(e) => &e.attrs,
         Expr::Macro(e) => &e.attrs,
         Expr::Match(e) => &e.attrs,
         Expr::MethodCall(e) => &e.attrs,
+        Expr::Paren(e) => &e.attrs,
+        Expr::Path(e) => &e.attrs,
+        Expr::Range(e) => &e.attrs,
+        Expr::RawAddr(e) => &e.attrs,
+        Expr::Reference(e) => &e.attrs,
+        Expr::Repeat(e) => &e.attrs,
         Expr::Return(e) => &e.attrs,
+        Expr::Struct(e) => &e.attrs,
+        Expr::Try(e) => &e.attrs,
+        Expr::TryBlock(e) => &e.attrs,
+        Expr::Tuple(e) => &e.attrs,
+        Expr::Unary(e) => &e.attrs,
         Expr::Unsafe(e) => &e.attrs,
         Expr::While(e) => &e.attrs,
+        Expr::Yield(e) => &e.attrs,
         _ => &[],
     }
 }
@@ -309,10 +336,36 @@ impl<'ast> syn::visit::Visit<'ast> for ProductionIdents {
         }
     }
 
+    /// A macro body is tokens, not items: one that holds a test-only mark is
+    /// left uncounted rather than judged by a second copy of the helper's rule.
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         syn::visit::visit_path(self, &mac.path);
-        let tokens = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
-        self.count_tokens(tokens.begin());
+        let body = mac.tokens.to_string().replace(' ', "");
+        if !body.contains("#[cfg(test)]") {
+            let tokens = syn::buffer::TokenBuffer::new2(mac.tokens.clone());
+            self.count_tokens(tokens.begin());
+        }
+    }
+
+    fn visit_fn_arg(&mut self, node: &'ast syn::FnArg) {
+        let attrs = match node {
+            syn::FnArg::Receiver(r) => &r.attrs,
+            syn::FnArg::Typed(t) => &t.attrs,
+        };
+        if !test_only(attrs) {
+            syn::visit::visit_fn_arg(self, node);
+        }
+    }
+
+    fn visit_generic_param(&mut self, node: &'ast syn::GenericParam) {
+        let attrs = match node {
+            syn::GenericParam::Lifetime(p) => &p.attrs,
+            syn::GenericParam::Type(p) => &p.attrs,
+            syn::GenericParam::Const(p) => &p.attrs,
+        };
+        if !test_only(attrs) {
+            syn::visit::visit_generic_param(self, node);
+        }
     }
 
     fn visit_item(&mut self, node: &'ast syn::Item) {
