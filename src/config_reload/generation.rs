@@ -118,11 +118,13 @@ fn refuse_multi_user_flip(
     if !flips {
         return Ok(());
     }
-    let now = if after.implies_multi_user(oidc) {
-        "multi-user"
+    // Named by what changed: multi-user status, else the sole-operator grant.
+    let multi = if after.implies_multi_user(oidc) == running.auth.implies_multi_user(oidc) {
+        !after.grants_single_user_principal(oidc)
     } else {
-        "single-user"
+        after.implies_multi_user(oidc)
     };
+    let now = if multi { "multi-user" } else { "single-user" };
     Err(format!(
         "auth.api_keys: this key list would make the gateway {now}, which applies only at a \
          restart; the running keys stay in force until then."

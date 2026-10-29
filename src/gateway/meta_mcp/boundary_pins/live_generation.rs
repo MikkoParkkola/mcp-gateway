@@ -21,6 +21,16 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 /// Production sites that may build a generation without `prepare`, and why.
 const ALLOW: &[(&str, &str, &str)] = &[];
 
+/// The production calls to `Generation::prepare_startup`, which seeds a
+/// generation without the reload refusals: (file, function).
+const STARTUP_SEEDS: &[(&str, &str)] = &[
+    ("src/config_reload/mod.rs", "new"),
+    ("src/config_reload/mod.rs", "set"),
+    ("src/gateway/mod.rs", "live_config"),
+    ("src/gateway/server/run.rs", "run"),
+    ("src/gateway/server/stdio_loop.rs", "run_stdio_on"),
+];
+
 /// The production calls to `LiveConfig::from_prepared` by name: (file,
 /// function). `LiveConfig::new` reaches it as `Self::from_prepared`, and its
 /// own production callers are refused above.
@@ -56,6 +66,7 @@ fn ends_with(path: &syn::Path, ty: &str, func: &str) -> bool {
 struct Calls {
     rows: Vec<String>,
     seeds: Vec<(String, String)>,
+    startup_seeds: Vec<(String, String)>,
 }
 
 impl Sink for Calls {
@@ -68,6 +79,10 @@ impl Sink for Calls {
                 }
                 syn::Expr::Path(path) if ends_with(&path.path, "Generation", "of") => {
                     Some("Generation::of")
+                }
+                syn::Expr::Path(path) if ends_with(&path.path, "Generation", "prepare_startup") => {
+                    self.startup_seeds.push((at.file.clone(), func.to_owned()));
+                    None
                 }
                 syn::Expr::Path(path) if ends_with(&path.path, "LiveConfig", "from_prepared") => {
                     self.seeds.push((at.file.clone(), func.to_owned()));
@@ -113,5 +128,14 @@ fn k21_every_published_generation_is_prepared() {
     assert_eq!(
         calls.seeds, want,
         "production seeds a LiveConfig somewhere other than the startup sites"
+    );
+    calls.startup_seeds.sort();
+    let want: Vec<(String, String)> = STARTUP_SEEDS
+        .iter()
+        .map(|(file, func)| ((*file).to_owned(), (*func).to_owned()))
+        .collect();
+    assert_eq!(
+        calls.startup_seeds, want,
+        "production builds a startup generation somewhere other than the listed sites"
     );
 }

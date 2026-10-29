@@ -229,8 +229,6 @@ impl ResolvedAuthConfig {
             .map(|(client, _origin)| client)
     }
 
-    /// Whether `token` is a configured API key past its expiry. Hashed again
-    /// only on the reject path, to tell an expired key from a wrong one (D4).
     /// Whether the key whose quota identity is `minter` is in this table, an
     /// admin key, and unexpired at `at`: what a dashboard link, handoff or
     /// session minted with it needs at each use, so one minted by a key a
@@ -249,6 +247,8 @@ impl ResolvedAuthConfig {
         })
     }
 
+    /// Whether `token` is a configured API key past its expiry. Hashed again
+    /// only on the reject path, to tell an expired key from a wrong one (D4).
     pub(super) fn is_expired_key(&self, token: &str) -> bool {
         use subtle::ConstantTimeEq;
         let presented = <sha2::Sha256 as sha2::Digest>::digest(token.as_bytes());
