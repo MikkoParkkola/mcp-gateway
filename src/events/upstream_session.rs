@@ -157,6 +157,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
     let mut wake = shared.wake.subscribe();
     // The lease the last run sent under; a wake that moved it cuts the backoff.
     let mut ran_under: Option<u128> = None;
+    let mut cut = run::LeaseCut::default();
     loop {
         if shared.stop.is_cancelled() {
             return;
@@ -216,7 +217,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         shared.before_backoff.pause().await;
         // A revival cuts the wait; a filter change does not, so churn on the
         // subscriptions cannot reconnect a failing backend early (T35).
-        let mut deadline = tokio::time::Instant::now() + delay;
+        let mut deadline = cut.deadline(&shared, &hub, ran_under, delay, BACKOFF_FIRST);
         #[cfg(test)]
         shared.waits.begin();
         loop {
@@ -233,10 +234,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
                         shared.waits.ended(WaitEnd::Revival);
                         break;
                     }
-                    // Soon, but at most once a `BACKOFF_FIRST` however often.
-                    if run::lease_moved(&shared, &hub, ran_under) {
-                        deadline = deadline.min(tokio::time::Instant::now() + BACKOFF_FIRST);
-                    }
+                    deadline = cut.on_wake(&shared, &hub, ran_under, deadline, BACKOFF_FIRST);
                 }
             }
         }
