@@ -165,7 +165,7 @@ fn stamped(f: &Fixture, sub: &str, stamp: &str) -> Vec<String> {
 }
 
 /// Run `f`'s delivery worker, startup reconciliation done: the worker sends
-/// nothing before it.
+/// nothing before it (`dispatch`, src/events/worker_dispatch.rs:86).
 fn start_delivery(f: &Fixture) -> tokio::task::JoinHandle<()> {
     f.hub.runtime.reconciled.store(true, Ordering::Release);
     let services = Arc::clone(f.hub.runtime.services.get().expect("services"));
