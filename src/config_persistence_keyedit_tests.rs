@@ -181,9 +181,10 @@ fn a_mapping_value_is_unprovable() {
     assert_unprovable(COMMENTED, &[set_str("auth", "x")]);
 }
 
+/// A missing key is inserted (a2); one under a plain value cannot be.
 #[test]
-fn a_missing_key_is_unprovable() {
-    assert_unprovable(COMMENTED, &[set_int("auth.missing", 1)]);
+fn a_key_under_a_plain_value_is_unprovable() {
+    assert_unprovable(COMMENTED, &[set_int("auth.enabled.missing", 1)]);
 }
 
 #[test]

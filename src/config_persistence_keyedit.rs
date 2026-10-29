@@ -19,9 +19,7 @@
 use std::collections::BTreeMap;
 use std::ops::Range;
 
-use crate::yaml::{Value, ValueSpan};
-
-use super::eol::{Line, render};
+use crate::yaml::Value;
 
 /// One step from a node to a child: a mapping key, or a position in a block
 /// sequence.
@@ -225,23 +223,16 @@ impl Template {
     }
 }
 
-/// `original` with each change applied in place, or why it cannot be.
+/// `original` with each change applied in place, or why it cannot be. All
+/// changes apply to one evolving text: values set and keys inserted first,
+/// in order, then removals, then the mappings the removals emptied; the two
+/// proofs then compare the final text with the original.
 pub(crate) fn edit_in_place(
     original: &str,
     changes: &[(FieldPath, Change)],
 ) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
-    let spans = crate::yaml::mapping_values(original)
-        .map_err(|_| unprovable("the parser gives no value positions for this file"))?;
-    let lines: Vec<&str> = original
-        .split('\n')
-        .map(|l| l.trim_end_matches('\r'))
-        .collect();
-    let mut out: Vec<Line> = (0..original.split_inclusive('\n').count())
-        .map(Line::Kept)
-        .collect();
-    let mut edits = Vec::with_capacity(changes.len());
     for (path, change) in changes {
         // A slot is named by its own field's path, never another's.
         if let Change::Secret(id) = change
@@ -249,27 +240,38 @@ pub(crate) fn edit_in_place(
         {
             return Err(ComputeRefusal::SlotMismatch);
         }
-        let field = locate(original, &lines, &spans, path)?;
-        let new_value = match change {
-            Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
-            Change::Set(Scalar::Int(n)) => n.to_string(),
-            Change::Set(Scalar::Bool(b)) => b.to_string(),
-            Change::Secret(id) => quoted_placeholder(id),
-            Change::Set(Scalar::Num(_)) | Change::Remove => {
-                return Err(unprovable("not supported yet"));
-            }
-        };
-        let line = lines[field.line];
-        let text = format!(
-            "{}{new_value}{}",
-            &line[..field.value.start],
-            &line[field.value.end..]
-        );
-        out[field.line] = Line::Replaced(field.line, text);
-        edits.push(field);
+        let plain = path.0.iter().all(|segment| match segment {
+            Segment::Key(key) => plain_key(key),
+            Segment::Index(_) => true,
+        });
+        if !plain {
+            return Err(give_up(
+                GiveUp::NotPlainKey,
+                "a path segment is not a plain key",
+            ));
+        }
     }
-    let edited = render(original, &out);
-    if !bytes_hold(original, &edited, &edits) {
+    let before = shape::nodes(original)?;
+    one_new_element(&before, changes)?;
+    let mut lines = shape::Lines::new(original);
+    for (path, change) in changes {
+        let Some(value) = rendered(change) else {
+            continue;
+        };
+        match path.keys() {
+            Some(keys) => set_keyed(&mut lines, path, &keys, &value)?,
+            None => shape::place(&mut lines, &path.0, &value)?,
+        }
+    }
+    let mut removed: Vec<&[Segment]> = Vec::new();
+    for (path, change) in changes {
+        if *change == Change::Remove && shape::remove_entry(&mut lines, &path.0)? {
+            removed.push(&path.0);
+        }
+    }
+    shape::drop_emptied(&mut lines, &before, &removed)?;
+    let edited = lines.text();
+    if !lines.bytes_hold(original) {
         return Err(unprovable("an untouched line changed"));
     }
     if !meaning_holds(original, changes, &edited) {
@@ -293,6 +295,89 @@ pub(crate) fn edit_in_place(
     Template::checked(edited.into_bytes(), slots)
 }
 
+/// The value text `change` writes; `None` for a removal.
+fn rendered(change: &Change) -> Option<String> {
+    Some(match change {
+        Change::Set(Scalar::Str(s)) => crate::yaml::double_quoted(s),
+        Change::Set(Scalar::Int(n)) => n.to_string(),
+        Change::Set(Scalar::Bool(b)) => b.to_string(),
+        Change::Set(Scalar::Num(n)) => float_text(n.0),
+        Change::Secret(id) => quoted_placeholder(id),
+        Change::Remove => return None,
+    })
+}
+
+/// A float always written with a decimal point, so it reads back as a
+/// float: `2.0`, `1.0e300`.
+fn float_text(value: f64) -> String {
+    let shortest = format!("{value:?}");
+    if shortest.contains('.') {
+        return shortest;
+    }
+    match shortest.split_once('e') {
+        Some((mantissa, exponent)) => format!("{mantissa}.0e{exponent}"),
+        None => format!("{shortest}.0"),
+    }
+}
+
+/// Set a field reached through mapping keys alone: in place, by the
+/// parser's own span, when it exists; inserted otherwise.
+fn set_keyed(
+    lines: &mut shape::Lines,
+    path: &FieldPath,
+    keys: &[String],
+    value: &str,
+) -> Result<(), ComputeRefusal> {
+    let text = lines.text();
+    if text.trim().is_empty() {
+        return shape::place(lines, &path.0, value);
+    }
+    let spans = crate::yaml::mapping_values(&text)
+        .map_err(|_| unprovable("the parser gives no value positions for this file"))?;
+    let mut found = spans.iter().filter(|s| s.path == keys);
+    match (found.next(), found.next()) {
+        (Some(span), None) => {
+            if let Some(why) = span.refused {
+                return Err(unprovable(why));
+            }
+            lines
+                .replace(span.bytes.clone(), value)
+                .ok_or_else(|| unprovable("the value runs past the end of its line"))
+        }
+        (None, _) => shape::place(lines, &path.0, value),
+        _ => Err(unprovable("the field is not one scalar value in the file")),
+    }
+}
+
+/// A save appends at most one new element to a list, at its end: every new
+/// position names the list's length as the file holds it.
+fn one_new_element(
+    before: &[crate::yaml::Node],
+    changes: &[(FieldPath, Change)],
+) -> Result<(), ComputeRefusal> {
+    let mut new: BTreeMap<Vec<Segment>, usize> = BTreeMap::new();
+    for (path, _) in changes {
+        for (d, segment) in path.0.iter().enumerate() {
+            let Segment::Index(at) = segment else {
+                continue;
+            };
+            let list = &path.0[..d];
+            let len = shape::find(before, list).map_or(0, |n| shape::child_count(before, n));
+            if *at < len {
+                continue;
+            }
+            let earlier = new.insert(list.to_vec(), *at);
+            if *at != len || earlier.is_some_and(|e| e != *at) {
+                return Err(give_up(
+                    GiveUp::SequenceShape,
+                    "only one new list element, at the list's end",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn unprovable(reason: &str) -> ComputeRefusal {
     give_up(GiveUp::Other, reason)
 }
@@ -302,13 +387,6 @@ fn give_up(code: GiveUp, reason: &str) -> ComputeRefusal {
         code,
         reason: reason.to_owned(),
     }
-}
-
-/// One located field: its line, and the byte range of its value text on
-/// that line (an inline comment after it stays outside the range).
-struct Located {
-    line: usize,
-    value: Range<usize>,
 }
 
 /// One block-mapping document this module can reason about: no byte order
@@ -322,8 +400,21 @@ fn whole_file_is_plain(original: &str) -> Result<(), ComputeRefusal> {
     if original.lines().any(marker) {
         return Err(unprovable("the file has a document marker or directive"));
     }
+    // A carriage return ends a line only before a line feed here; a bare one
+    // would let a "line" hold two keys.
+    if original
+        .split('\r')
+        .skip(1)
+        .any(|rest| !rest.starts_with('\n'))
+    {
+        return Err(unprovable(
+            "an untouched line changed: a bare carriage return",
+        ));
+    }
     match crate::yaml::from_str::<Value>(original) {
         Ok(Value::Mapping(_)) => Ok(()),
+        // An empty file is an empty root mapping.
+        Ok(Value::Null) if original.trim().is_empty() => Ok(()),
         _ => Err(unprovable("the file is not one mapping the parser accepts")),
     }
 }
@@ -340,29 +431,6 @@ fn no_overlap(changes: &[(FieldPath, Change)]) -> Result<(), ComputeRefusal> {
     Ok(())
 }
 
-/// Proof 2, on the rendered bytes: the same number of lines; every line no
-/// change touched is byte-identical, ending included; and an edited line
-/// keeps everything before and after its value.
-fn bytes_hold(original: &str, edited: &str, edits: &[Located]) -> bool {
-    let before: Vec<&str> = original.split_inclusive('\n').collect();
-    let after: Vec<&str> = edited.split_inclusive('\n').collect();
-    if before.len() != after.len() {
-        return false;
-    }
-    before
-        .iter()
-        .zip(&after)
-        .enumerate()
-        .all(
-            |(at, (old, new))| match edits.iter().find(|e| e.line == at) {
-                None => old == new,
-                Some(e) => {
-                    new.starts_with(&old[..e.value.start]) && new.ends_with(&old[e.value.end..])
-                }
-            },
-        )
-}
-
 /// A segment this module can address: letters, digits, `_` and `-`, read by
 /// YAML as that same string (not a number, a bool or null).
 fn plain_key(segment: &str) -> bool {
@@ -370,49 +438,6 @@ fn plain_key(segment: &str) -> bool {
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
         && crate::yaml::from_str::<Value>(segment).is_ok_and(|v| v.as_str() == Some(segment))
-}
-
-/// The line and in-line byte range of `path`'s value, as the parser placed
-/// it: exactly one scalar value at that path, one the parser's spans allow
-/// replacing in place.
-fn locate(
-    original: &str,
-    lines: &[&str],
-    spans: &[ValueSpan],
-    path: &FieldPath,
-) -> Result<Located, ComputeRefusal> {
-    let Some(keys) = path.keys() else {
-        return Err(unprovable("not supported yet"));
-    };
-    if !keys.iter().all(|s| plain_key(s)) {
-        return Err(give_up(
-            GiveUp::NotPlainKey,
-            "a path segment is not a plain key",
-        ));
-    }
-    let mut found = spans.iter().filter(|s| s.path == keys);
-    let (Some(span), None) = (found.next(), found.next()) else {
-        return Err(unprovable("the field is not one scalar value in the file"));
-    };
-    if let Some(why) = span.refused {
-        return Err(unprovable(why));
-    }
-    // Byte accounting over the raw lines, endings included; the length
-    // check over the same line without its ending.
-    let mut line_start = 0;
-    for (line, raw) in original.split_inclusive('\n').enumerate() {
-        let text = lines[line];
-        let next = line_start + raw.len();
-        if span.bytes.start < next {
-            let value = span.bytes.start - line_start..span.bytes.end - line_start;
-            if value.end > text.len() {
-                return Err(unprovable("the value runs past the end of its line"));
-            }
-            return Ok(Located { line, value });
-        }
-        line_start = next;
-    }
-    Err(unprovable("the value lies outside the file"))
 }
 
 /// The text a secret slot holds until the writer fills it: unique per path,
@@ -441,29 +466,20 @@ fn expected_value(change: &Change) -> Option<Value> {
 
 /// Proof 1: `edited` parses to `original` with exactly `changes` applied,
 /// each secret slot holding its own placeholder. Value equality only: the
-/// parser's spans refuse anchors, aliases and tags before this runs.
+/// parser refuses anchors, aliases and tags on any node an edit touches
+/// before this runs.
 fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) -> bool {
-    let Ok(mut want) = crate::yaml::from_str::<Value>(original) else {
+    let Ok(doc) = crate::yaml::from_str::<Value>(original) else {
         return false;
     };
-    for (path, change) in changes {
-        let Some(keys) = path.keys() else {
-            return false;
-        };
-        let mut node = &mut want;
-        for key in &keys {
-            let Some(next) = node.as_mapping_mut().and_then(|m| m.get_mut(key.as_str())) else {
-                return false;
-            };
-            node = next;
-        }
-        let Some(value) = expected_value(change) else {
-            return false;
-        };
-        *node = value;
-    }
+    let Some(want) = shape::expected(&doc, changes) else {
+        return false;
+    };
     crate::yaml::from_str::<Value>(edited).is_ok_and(|got| got == want)
 }
+
+#[path = "config_persistence_keyedit_shape.rs"]
+mod shape;
 
 #[cfg(test)]
 #[path = "config_persistence_keyedit_tests.rs"]
