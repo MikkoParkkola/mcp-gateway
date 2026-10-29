@@ -208,7 +208,7 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         })
-        .map_err(|refusal| self.profile_refusal_as_undefined((server, tool), session_id, refusal))
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))
     }
 
     /// The refusal of [`Self::admit_target`] that says nothing about whether
@@ -217,7 +217,7 @@ impl MetaMcp {
     /// missing name alike, before any fill.
     pub(crate) fn admit_backend_wide(&self, server: &str) -> Result<()> {
         if self.kill_switch.is_killed(server) {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32000,
                 format!("Server '{server}' is currently disabled by operator kill switch"),
             ));
@@ -239,7 +239,7 @@ impl MetaMcp {
             .kill_switch
             .is_capability_disabled_with_cooldown(server, tool, cooldown)
         {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32000,
                 format!(
                     "Capability '{tool}' on server '{server}' is temporarily disabled due to \
