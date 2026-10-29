@@ -112,7 +112,7 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
 /// print one.
 /// A refused preparation's answer: the reason, and that the reload changed
 /// nothing.
-fn nothing_published(reason: String) -> String {
+fn nothing_published(reason: &str) -> String {
     format!(
         "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
          configuration was published."
@@ -644,7 +644,7 @@ impl ReloadContext {
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
         let prepared = self.live_config.prepare(new_config, &overlay);
-        let generation = Arc::new(prepared.map_err(nothing_published)?);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
