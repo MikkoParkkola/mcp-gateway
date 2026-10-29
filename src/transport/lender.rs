@@ -43,7 +43,9 @@ pub(crate) type SendCheck =
 /// and a lent-only slot refuses a loan without one.
 #[derive(Clone, Default)]
 pub(crate) struct LentCredential {
-    pub(crate) headers: Vec<(String, String)>,
+    /// Wiped on drop, as the lender's own copy is: every copy of a caller's
+    /// credential the gateway holds is zeroized when it goes.
+    pub(crate) headers: Zeroizing<Vec<(String, String)>>,
     pub(crate) check: Option<SendCheck>,
 }
 
@@ -70,7 +72,7 @@ impl std::fmt::Debug for LentCredential {
 impl From<&[(String, String)]> for LentCredential {
     fn from(headers: &[(String, String)]) -> Self {
         Self {
-            headers: headers.to_vec(),
+            headers: headers.to_vec().into(),
             check: None,
         }
     }
@@ -471,7 +473,7 @@ mod tests {
     fn a_send_without_a_credential_never_borrows_the_starting_loan() {
         let lender = Arc::new(Lender::default());
         let loan = lender.lend(LentCredential {
-            headers: headers("one"),
+            headers: headers("one").into(),
             check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
         });
         let _starting = lender.starting(loan.id());
@@ -504,7 +506,7 @@ mod tests {
     fn a_start_call_follows_the_starter_cancelled_mid_start() {
         let lender = Arc::new(Lender::default());
         let checked = |value: &str| LentCredential {
-            headers: headers(value),
+            headers: headers(value).into(),
             check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
         };
         let first = lender.lend(checked("one"));
@@ -537,7 +539,7 @@ mod tests {
         let release = Arc::new(tokio::sync::Notify::new());
         let (in_check, resume) = (Arc::clone(&entered), Arc::clone(&release));
         let first = lender.lend(LentCredential {
-            headers: headers("one"),
+            headers: headers("one").into(),
             check: Some(Arc::new(move || {
                 let (in_check, resume) = (Arc::clone(&in_check), Arc::clone(&resume));
                 Box::pin(async move {
@@ -548,7 +550,7 @@ mod tests {
             })),
         });
         let second = lender.lend(LentCredential {
-            headers: headers("two"),
+            headers: headers("two").into(),
             check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
         });
         let first_waits = lender.starting(first.id());
@@ -573,6 +575,15 @@ mod tests {
         drop(second);
         let after = runtime.block_on(lender.lent_for(&call));
         assert!(after.is_err(), "a start call with no waiter left was sent");
+    }
+
+    /// A lent credential's headers are the zeroizing type the lender stores,
+    /// so no copy of a caller's credential outlives its holder unwiped.
+    #[test]
+    fn a_lent_credentials_headers_are_wiped_on_drop() {
+        let credential = LentCredential::from(&headers("one"));
+        let wiped: &Zeroizing<Vec<(String, String)>> = &credential.headers;
+        assert_eq!(wiped.as_slice(), headers("one").as_slice());
     }
 
     /// A refusal mark only escalates: `ThisLoan` then `Definitive` evicts once,
@@ -649,7 +660,7 @@ mod tests {
         let handle = recorder.handle();
         let lender = Arc::new(Lender::default());
         let _loan = lender.lend(LentCredential {
-            headers: headers("one"),
+            headers: headers("one").into(),
             check: Some(Arc::new(|| Box::pin(async { Err(Refusal::ThisLoan) }))),
         });
         let runtime = tokio::runtime::Builder::new_current_thread()

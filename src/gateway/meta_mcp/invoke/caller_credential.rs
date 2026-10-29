@@ -45,7 +45,7 @@ impl CallerCredential {
     /// slot takes them.
     pub(super) fn lent(&self) -> crate::transport::LentCredential {
         crate::transport::LentCredential {
-            headers: self.headers.clone(),
+            headers: self.headers.clone().into(),
             check: self.check.clone(),
         }
     }

@@ -38,7 +38,7 @@ pub(crate) fn unix_now() -> Option<i64> {
 pub(crate) fn dispatch_scoped(headers: Vec<(String, String)>) -> LentCredential {
     LentCredential {
         check: Some(expiry_check(Expiry::Unpublished, &headers, unix_now)),
-        headers,
+        headers: headers.into(),
     }
 }
 

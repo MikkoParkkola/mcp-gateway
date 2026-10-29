@@ -223,7 +223,7 @@ fn bearer(value: &str) -> Vec<(String, String)> {
 /// A credential whose per-send check always passes.
 fn checked(headers: Vec<(String, String)>) -> LentCredential {
     LentCredential {
-        headers,
+        headers: headers.into(),
         check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
     }
 }

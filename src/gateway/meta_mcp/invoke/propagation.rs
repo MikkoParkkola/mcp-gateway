@@ -143,7 +143,7 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
-            .map(|(lent, cache_binding, _)| (lent.headers, cache_binding))
+            .map(|(mut lent, cache_binding, _)| (std::mem::take(&mut *lent.headers), cache_binding))
     }
 
     /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,

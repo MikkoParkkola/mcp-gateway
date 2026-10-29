@@ -157,7 +157,7 @@ async fn reprobe_carries_the_bearer(credential: Vec<(String, String)>) {
             "server/discover",
             None,
             crate::transport::LentCredential {
-                headers: credential.clone(),
+                headers: credential.clone().into(),
                 check: Some(std::sync::Arc::new(|| Box::pin(async { Ok(()) }))),
             },
             Some(USER),
@@ -211,7 +211,7 @@ async fn a_stalled_reprobe_holds_the_caller_no_longer_than_the_probe_cap() {
             "server/discover",
             None,
             crate::transport::LentCredential {
-                headers: subscriber_credential(USER),
+                headers: subscriber_credential(USER).into(),
                 check: Some(std::sync::Arc::new(|| Box::pin(async { Ok(()) }))),
             },
             Some(USER),

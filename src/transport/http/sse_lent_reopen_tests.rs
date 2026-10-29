@@ -168,7 +168,7 @@ fn subscriber() -> Vec<(String, String)> {
 /// The subscriber's credential with a send check that always passes.
 fn checked() -> LentCredential {
     LentCredential {
-        headers: subscriber(),
+        headers: subscriber().into(),
         check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
     }
 }

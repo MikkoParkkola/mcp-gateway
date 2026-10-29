@@ -128,7 +128,7 @@ async fn agent(script: Script, advertised: Option<String>) -> (String, Arc<Mutex
 /// The credential `headers` with a send check that always passes.
 fn checked(headers: &[(String, String)]) -> crate::transport::LentCredential {
     crate::transport::LentCredential {
-        headers: headers.to_vec(),
+        headers: headers.to_vec().into(),
         check: Some(Arc::new(|| Box::pin(async { Ok(()) }))),
     }
 }
@@ -403,7 +403,7 @@ async fn a_call_whose_check_refuses_sends_nothing_to_the_agent() {
     let (base, log) = recording_agent().await;
     let backend = required_a2a_backend(&base);
     let refusing = crate::transport::LentCredential {
-        headers: subscriber_credential(USER),
+        headers: subscriber_credential(USER).into(),
         check: Some(Arc::new(|| {
             Box::pin(async { Err(crate::transport::Refusal::ThisLoan) })
         })),

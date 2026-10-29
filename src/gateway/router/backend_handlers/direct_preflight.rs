@@ -248,7 +248,7 @@ impl Propagation {
     /// The resolved headers with the check that guards their every send.
     pub(super) fn lent(&self) -> crate::transport::LentCredential {
         crate::transport::LentCredential {
-            headers: self.headers.clone(),
+            headers: self.headers.clone().into(),
             check: self.check.clone(),
         }
     }
@@ -313,9 +313,10 @@ async fn resolve_headers(
                     caller.slot.as_deref(),
                     binding,
                 );
-                let lent = crate::identity_propagation::send_check::dispatch_scoped(headers);
+                let mut lent = crate::identity_propagation::send_check::dispatch_scoped(headers);
                 resolution.check = lent.check;
-                Ok(lent.headers)
+                // Moved out, not copied: the wrapper wipes what is left, nothing.
+                Ok(std::mem::take(&mut *lent.headers))
             }
             Err(e) => Err(e),
         };

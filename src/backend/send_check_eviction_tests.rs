@@ -93,7 +93,7 @@ fn passes_then(passes: usize, refusal: Refusal) -> SendCheck {
 
 fn checked(binding: &str, check: SendCheck) -> LentCredential {
     LentCredential {
-        headers: subscriber_credential(binding),
+        headers: subscriber_credential(binding).into(),
         check: Some(check),
     }
 }
@@ -222,7 +222,7 @@ async fn the_next_dispatch_after_a_this_loan_refusal_is_served() {
         .expect_err("the stale lease is refused");
 
     let fresh = LentCredential {
-        headers: vec![("Authorization".to_owned(), "Bearer refreshed".to_owned())],
+        headers: vec![("Authorization".to_owned(), "Bearer refreshed".to_owned())].into(),
         check: Some(passes_then(1, Refusal::Definitive)),
     };
     ping(&backend, &binding, &fresh)
