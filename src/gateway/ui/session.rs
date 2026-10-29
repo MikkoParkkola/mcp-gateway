@@ -405,11 +405,8 @@ mod mik_8659_dashboard_tests {
         // K13: an API-key client with no quota identity cannot bind the link
         // to its key, so the mint fails closed rather than minting a link no
         // reload can end.
-        let unbindable = crate::gateway::auth::AuthenticatedClient {
-            quota_principal: None,
-            principal: real.principal.clone(),
-            ..real
-        };
+        let mut unbindable = real;
+        unbindable.quota_principal = None;
         let store_dir = tempfile::tempdir().expect("task store dir");
         let state = t1f_app_state(&auth_config, store_dir.path()).await;
         let response = super::dashboard_link(
