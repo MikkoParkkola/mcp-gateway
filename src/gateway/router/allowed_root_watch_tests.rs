@@ -33,7 +33,14 @@ impl Transport for Recorder {
                 .expect("recorder")
                 .push(params.unwrap_or_default());
         }
-        let answer = json!({"content": [{"type": "text", "text": "ok"}]});
+        let answer = match method {
+            // Answer as an MCP backend would, so `gateway_invoke` finds the tool.
+            "initialize" => json!({"protocolVersion": "2025-06-18",
+                "capabilities": {"tools": {}}, "serverInfo": {"name": "fs", "version": "0"}}),
+            "tools/list" => json!({"tools": [{"name": "read_file", "inputSchema": {
+                "type": "object", "properties": {"path": {"type": "string"}}}}]}),
+            _ => json!({"content": [{"type": "text", "text": "ok"}]}),
+        };
         Ok(JsonRpcResponse::success(RequestId::Number(1), answer))
     }
 
@@ -147,7 +154,11 @@ async fn i7_watch_polls_are_confined() {
     let w = watch().await;
     let path = |rel: &str| w.dir.path().join(rel).to_string_lossy().into_owned();
     let refused = poll(&w, &path("outside/f")).await;
-    assert!(refused.is_err(), "I7: outside polled: {refused:?}");
+    assert_eq!(
+        refused,
+        Err("Firewall".to_string()),
+        "I7: the request firewall refuses the outside poll"
+    );
     assert!(
         w.seen.0.lock().expect("recorder").is_empty(),
         "I7: the backend saw it"
