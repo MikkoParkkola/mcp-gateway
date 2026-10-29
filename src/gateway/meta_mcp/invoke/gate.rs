@@ -168,6 +168,26 @@ impl MetaMcp {
         }
     }
 
+    /// [`Self::profile_refusal_as_undefined`] at a site that delivers it: a
+    /// profile refusal answered as an absent name is the gateway's refusal,
+    /// raised for a one-target call (`delivery_facts::withheld`). Never
+    /// called from the decision functions themselves, so a discarded policy
+    /// probe raises nothing.
+    pub(super) fn withheld_as_undefined(
+        &self,
+        named: (&str, &str),
+        session_id: Option<&str>,
+        refusal: Error,
+    ) -> Error {
+        let answered = self.profile_refusal_as_undefined(named, session_id, refusal);
+        // Only the profile refusal maps to `ToolNotFound` here; every other
+        // refusal of `admit_target` passes through unchanged.
+        if matches!(answered, Error::ToolNotFound(_)) {
+            crate::gateway::delivery_facts::withheld();
+        }
+        answered
+    }
+
     /// `refusal`, unless the session's routing profile excludes a defined
     /// capability: then the undefined capability's answer (MIK-8361), as
     /// [`Self::profile_withheld_capability`] gives it. Any other refusal (kill
@@ -533,6 +553,8 @@ impl MetaMcp {
                 -32003,
                 Some(crate::security::decision_record::DecisionKind::BackendScope),
             );
+            // Outside the key's scope: refused, not merely missing.
+            crate::gateway::delivery_facts::withheld();
         } else {
             // Not out of scope: the name matches nothing.
             super::audit::note_refused_by(
@@ -603,6 +625,7 @@ impl MetaMcp {
         };
         self.record_withheld(server, tool, reason, caller, session_id)
             .await;
+        withheld_for(reason);
         // Ruling B (A5): a caller with no view of this backend cannot
         // tell names apart, so a withheld name it names gets the connect
         // offer a missing one gets; -32601 at once is for a caller with a
@@ -624,6 +647,28 @@ impl MetaMcp {
             return Some(Err(offer));
         }
         Some(Err(absent_name(tool)))
+    }
+
+    /// The lens the key check reads a named tool under: withheld when the
+    /// gate judged it so (recorded, and raised for a policy reason); as
+    /// listed for a miss or a fill that failed, which the check below meets
+    /// and answers as F13 does.
+    async fn gate_lens(
+        &self,
+        judged: Option<Withholding>,
+        (server, tool): (&str, &str),
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Lens {
+        let Some(reason) = judged else {
+            return Lens::Catalogue;
+        };
+        if reason != Withholding::Lacked {
+            self.record_withheld(server, tool, reason, caller, session_id)
+                .await;
+        }
+        withheld_for(reason);
+        Lens::Withheld
     }
 
     /// [`Self::gate_answer`] for a name that is not absent.
@@ -654,6 +699,7 @@ impl MetaMcp {
             }
             self.record_withheld(server, tool, Withholding::Refused, caller, session_id)
                 .await;
+            withheld_for(Withholding::Refused);
             return Some(Err(Error::ToolNotFound(tool.to_string())));
         }
         let backend = self
@@ -684,18 +730,9 @@ impl MetaMcp {
                 Shared::Withheld(reason) => Some(reason),
             },
         };
-        let lens = match judged {
-            Some(reason) => {
-                if reason != Withholding::Lacked {
-                    self.record_withheld(server, tool, reason, caller, session_id)
-                        .await;
-                }
-                Lens::Withheld
-            }
-            // A miss, or a fill that failed: the check below meets the same
-            // state and answers it as F13 does.
-            None => Lens::Catalogue,
-        };
+        let lens = self
+            .gate_lens(judged, (server, tool), caller, session_id)
+            .await;
         let checked_at = std::time::Instant::now();
         let refusal = self
             .undeclared_key_refusal_through(
@@ -707,7 +744,8 @@ impl MetaMcp {
                 (scope, session_id),
                 lens,
             )
-            .await;
+            .await
+            .map(|checked| checked.map(|checked| checked.answer));
         let mut unreserved = None;
         let sealed = self
             .seal_key_refusal(
@@ -763,3 +801,15 @@ mod fill_tests;
 #[cfg(test)]
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
+
+/// A name the gate answers as absent for `reason`: a policy reason (the
+/// caller may not invoke it, or its schema or description failed a check) is
+/// the gateway's refusal; a name a caller's own catalogue lacks is not.
+fn withheld_for(reason: Withholding) {
+    if matches!(
+        reason,
+        Withholding::Refused | Withholding::Schema | Withholding::Descriptor
+    ) {
+        crate::gateway::delivery_facts::withheld();
+    }
+}

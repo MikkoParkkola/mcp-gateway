@@ -52,7 +52,7 @@ impl MetaMcp {
                 crate::security::decision_record::DecisionKind::CostBudget,
                 None,
             );
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32003,
                 result
                     .block_reason
@@ -465,6 +465,7 @@ impl MetaMcp {
         let withheld = response.ingress_withheld;
         let mut result = response.result.unwrap_or(json!(null));
         // Raw receipt (inc3 R1): verify before anything reads the reply.
+        // A refused receipt is the delivered refusal of the backend's answer.
         self.chain_receive(
             chained,
             (
@@ -475,7 +476,8 @@ impl MetaMcp {
             ),
             challenge.as_deref(),
             chain,
-        )?;
+        )
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway

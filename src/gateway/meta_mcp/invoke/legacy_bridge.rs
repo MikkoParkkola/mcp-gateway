@@ -209,6 +209,7 @@ impl MetaMcp {
                     if let Some(execution) = caller.execution {
                         execution.withdraw_dispatch();
                     }
+                    crate::gateway::delivery_facts::refused_while_vouched();
                     return Err(undeclared_gate::bridge_refusal(
                         &key, &method, reason, server, tool, trace_id,
                     ));

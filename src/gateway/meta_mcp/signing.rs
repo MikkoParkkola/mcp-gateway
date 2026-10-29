@@ -17,7 +17,9 @@ use crate::security::message_signing::{NONCE_REASON_INVALID, record_nonce_reject
 
 pub(crate) fn wire_error_message(error: &crate::Error) -> String {
     match error {
-        crate::Error::JsonRpc { message, .. } => message.clone(),
+        crate::Error::JsonRpc { message, .. } | crate::Error::GatewayRefused { message, .. } => {
+            message.clone()
+        }
         _ => error.to_string(),
     }
 }

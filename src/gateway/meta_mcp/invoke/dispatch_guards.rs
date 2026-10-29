@@ -214,7 +214,7 @@ impl MetaMcp {
             trace_id,
             caller_key: None,
         })
-        .map_err(|refusal| self.profile_refusal_as_undefined((server, tool), session_id, refusal))
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))
     }
 
     /// The refusal of [`Self::admit_target`] that says nothing about whether
@@ -227,7 +227,7 @@ impl MetaMcp {
                 crate::security::decision_record::DecisionKind::KillSwitch,
                 None,
             );
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32000,
                 format!("Server '{server}' is currently disabled by operator kill switch"),
             ));
@@ -253,7 +253,7 @@ impl MetaMcp {
                 crate::security::decision_record::DecisionKind::CapabilityDisabled,
                 None,
             );
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32000,
                 format!(
                     "Capability '{tool}' on server '{server}' is temporarily disabled due to \

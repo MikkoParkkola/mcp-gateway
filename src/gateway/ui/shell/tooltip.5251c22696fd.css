@@ -1,0 +1,65 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* Tooltips (frame 36): the landed .has-tip/.tip pattern, with the (i) as a button.
+   Scoped to .has-tip[data-tip], so a plain .has-tip keeps the landed rules.
+   With the controller running (html[data-tips="js"]) only .open shows a popup;
+   without it, hover and focus-within do: the CSS fallback. */
+.has-tip[data-tip] { text-decoration: none; cursor: default; display: inline-flex; vertical-align: middle; }
+/* A placeholder holds the trigger's place while the copy loads, so filling it moves nothing. */
+.has-tip[data-tip].tip-pending { inline-size: var(--size-icon-sm); block-size: var(--size-icon-sm); }
+.has-tip[data-tip][hidden] { display: none; }
+.tip-i { display: inline-grid; place-items: center; inline-size: var(--size-icon-sm); block-size: var(--size-icon-sm); padding: 0;
+  border: var(--size-rule) solid var(--color-text-tertiary); border-radius: var(--radius-full); background: none;
+  color: var(--color-text-tertiary); font: var(--type-caption); line-height: 1; cursor: pointer; }
+/* Frame 36's box: 12 px by 14 px padding, 7 px between rows, 8 px corners, 12.5 px text.
+   Built from the spacing tokens where they add up exactly; the frame's 12.5 px text sits
+   between --type-caption and --type-small, so it is stated as is. */
+.has-tip[data-tip] .tip { top: calc(100% + var(--space-1-5)); left: 0; width: min(calc(var(--space-5) * 15), calc(100vw - 2 * var(--space-2)));
+  max-width: none; padding: var(--space-3) calc(var(--space-3) + var(--space-0-5)); gap: calc(var(--space-1-5) + var(--size-rule));
+  border-color: var(--color-border-default); border-radius: var(--space-2); font-size: 12.5px; overflow-y: auto; text-align: left; }
+.has-tip[data-tip] .tip.flip-y { top: auto; bottom: calc(100% + var(--space-1-5)); }
+/* A closed popup stays rendered (it is the trigger's description) but leaves the
+   page's scroll area: fixed at the corner, so an invisible box near the right edge
+   never widens the page. Open, or shown by the CSS fallback, it sits by its trigger. */
+.has-tip[data-tip] .tip { position: fixed; top: 0; left: 0; }
+.has-tip[data-tip] .tip.open,
+html:not([data-tips]) .has-tip[data-tip]:hover .tip,
+html:not([data-tips]) .has-tip[data-tip]:focus-within .tip { position: absolute; top: calc(100% + var(--space-1-5)); }
+.has-tip[data-tip] .tip.open.flip-y { top: auto; }
+.tip-title { font-weight: var(--font-weight-semibold); font-size: 13px; }
+.tip-rows { display: flex; flex-direction: column; gap: calc(var(--space-1-5) + var(--size-rule)); margin: 0; }
+.tip-rows > div { display: grid; grid-template-columns: calc(var(--space-1-5) * 13) 1fr; gap: var(--space-2); }
+.tip-rows dt { color: var(--color-text-tertiary); }
+.tip-rows dd { margin: 0; }
+
+/* Under the controller the landed hover and focus rules stand down; only .open shows. */
+html[data-tips="js"] .has-tip[data-tip]:hover .tip:not(.open),
+html[data-tips="js"] .has-tip[data-tip]:focus-visible .tip:not(.open),
+html[data-tips="js"] .has-tip[data-tip]:focus-within .tip:not(.open) { opacity: 0; transform: translateY(calc(4px * var(--motion-distance))); pointer-events: none; }
+.has-tip[data-tip] .tip.open { pointer-events: auto; }
+
+/* The fallback: keyboard focus lands on the inner button, which the landed
+   :focus-visible on the wrapper never matches, so :focus-within shows it. */
+html:not([data-tips]) .has-tip[data-tip]:focus-within .tip { opacity: 1; transform: none; }
+html:not([data-tips]) .has-tip[data-tip]:hover .tip,
+html:not([data-tips]) .has-tip[data-tip]:focus-within .tip { pointer-events: auto; }
+/* A bridge over the gap, so moving the pointer onto the popup does not close it. */
+html:not([data-tips]) .has-tip[data-tip]:hover::after { content: ""; position: absolute; left: 0; top: 100%;
+  width: min(calc(var(--space-5) * 15), calc(100vw - 2 * var(--space-2))); height: var(--space-1-5); }
+
+/* Touch: the shell gives every button a touch-sized target. The (i) keeps that target
+   but draws its ring at the frame's size, and its placeholder reserves the same box. */
+@media (pointer: coarse) {
+  .has-tip[data-tip].tip-pending { inline-size: var(--size-touch); block-size: var(--size-touch); }
+  .tip-i { position: relative; justify-content: center; border: none; }
+  .tip-i::before { content: ""; position: absolute; top: 50%; left: 50%; inline-size: var(--size-icon-sm); block-size: var(--size-icon-sm);
+    transform: translate(-50%, -50%); border: var(--size-rule) solid var(--color-text-tertiary); border-radius: var(--radius-full); }
+}
+
+/* Closing: the popup stays by its trigger while it fades out. */
+.has-tip[data-tip] .tip.closing { position: absolute; top: calc(100% + var(--space-1-5)); }
+.has-tip[data-tip] .tip.closing.flip-y { top: auto; }
+/* The same bridge over the gap under the controller, on whichever side the popup opened. */
+.has-tip[data-tip]:has(.tip.open)::after { content: ""; position: absolute; left: 0; top: 100%;
+  width: min(calc(var(--space-5) * 15), calc(100vw - 2 * var(--space-2))); height: var(--space-1-5); }
+.has-tip[data-tip]:has(.tip.open.flip-y)::after { top: auto; bottom: 100%; }
