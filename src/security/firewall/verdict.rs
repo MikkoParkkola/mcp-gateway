@@ -101,16 +101,26 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
     // rule, which is acceptable only because the load refusal comes first.
     let pattern = glob::Pattern::new(&rule.tool_match).ok();
     let globs = |list: &[String]| list.iter().map(|g| glob::Pattern::new(g).ok()).collect();
+    // The same holds for the scopes, which the load also refuses when empty:
+    // a shape that got here anyway may only make the rule stricter. An empty
+    // list leaves an `allow` rule covering no call and a `warn` or `block`
+    // rule covering every call; an exception setting no field exempts none.
+    let unscoped = |list: &Vec<String>| list.is_empty() && rule.action != FirewallAction::Allow;
     CompiledRule {
         pattern,
         action: rule.action,
         scans: rule.scan.clone(),
-        servers: rule.servers.as_deref().map(globs),
-        keys: rule.keys.clone(),
+        servers: rule
+            .servers
+            .as_ref()
+            .filter(|l| !unscoped(l))
+            .map(|l| globs(l)),
+        keys: rule.keys.clone().filter(|l| !unscoped(l)),
         except: rule
             .except
             .iter()
             .flatten()
+            .filter(|entry| entry.server.is_some() || entry.tool.is_some() || entry.key.is_some())
             .map(|entry| CompiledException {
                 server: ExceptGlob::of(entry.server.as_deref()),
                 tool: ExceptGlob::of(entry.tool.as_deref()),

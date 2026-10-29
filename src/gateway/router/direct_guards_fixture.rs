@@ -371,7 +371,7 @@ pub(crate) use egress::fixture_hardened_signed_built_on;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_keyed, fixture_firewalled_on,
     fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_inspection_off_on,
     fixture_observing_on, meta_firewall,
 };
@@ -575,6 +575,8 @@ pub(crate) async fn fixture_hardened_signed_schema_off(
 thread_local! {
     static FIREWALL_RULE: std::cell::Cell<Option<crate::security::firewall::FirewallAction>> =
         const { std::cell::Cell::new(None) };
+    static FIREWALL_RULE_KEYS: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
     static CLIENT_BREAKER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static ANOMALY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Calls per window the call budget allows; 0 leaves the budget off (MIK-8362).
@@ -715,7 +717,7 @@ async fn fixture_inner(
                         reason: None,
                         scan: Vec::new(),
                         servers: None,
-                        keys: None,
+                        keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
                         except: None,
                     })
                     .to_vec()

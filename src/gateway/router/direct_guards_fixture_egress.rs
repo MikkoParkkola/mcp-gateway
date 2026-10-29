@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::answers::{call_answer, listing, question, recording_answer};
 #[cfg(feature = "firewall")]
-use super::{AUDIT_LOG, FIREWALL_RULE, META_FIREWALL};
+use super::{AUDIT_LOG, FIREWALL_RULE, FIREWALL_RULE_KEYS, META_FIREWALL};
 use super::{Answer, TRANSPORT};
 #[cfg(feature = "firewall")]
 use super::{Fx, fixture_inner};
@@ -31,6 +31,22 @@ pub(crate) async fn fixture_firewalled_on(
     let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
     FIREWALL_RULE.with(|r| r.set(None));
     TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`super::fixture_firewalled_with`] whose `read` rule applies only to the
+/// API keys named in `keys`, by their configured names.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_keyed(
+    action: crate::security::firewall::FirewallAction,
+    keys: &[&str],
+) -> Fx {
+    let named = keys.iter().map(|k| (*k).to_owned()).collect();
+    FIREWALL_RULE.with(|r| r.set(Some(action)));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = Some(named));
+    let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = None);
     fx
 }
 

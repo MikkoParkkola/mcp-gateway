@@ -24,7 +24,7 @@ security:
 | `action` | yes | `allow`, `warn` or `block`: what this rule does with a finding it decides. |
 | `reason` | no | Text logged in the audit entry when the rule decides a finding. |
 | `scan` | no | The finding types this rule decides (list below). Absent or empty: every type. |
-| `servers` | no | Globs over the backend's registry name. Absent: every backend. A tool the gateway serves itself has no backend, so a rule with `servers` never covers it. |
+| `servers` | no | Globs over the backend's registry name. Absent: every backend. A call to a tool the gateway serves itself has no backend, so a rule with `servers` never covers the call. An answer that names no single backend (a discovery listing, a notification, a gateway tool's answer) is judged as every registered backend could have sent it, so a `servers` rule does cover it. |
 | `keys` | no | API key names, matched exactly. Absent: every caller. |
 | `except` | no | Calls this rule skips. Each entry sets one or more of `server` (a glob), `tool` (a glob) and `key` (an exact name); a call is skipped when it matches every field the entry sets. |
 

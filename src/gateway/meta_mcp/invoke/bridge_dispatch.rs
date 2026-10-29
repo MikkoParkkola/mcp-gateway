@@ -185,7 +185,8 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
             subject: None,
             trace_id: None,
-            key: crate::security::response_policy::KeyOf::NotKnown,
+            // The caller is known here: its proven API key, or none.
+            key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
