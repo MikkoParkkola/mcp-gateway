@@ -1443,6 +1443,7 @@ async function showEnvironment(auth) {
   chip.setAttribute('role', 'img');
   chip.setAttribute('aria-label', `Environment: ${name}`);
   chip.textContent = name;
+  chip.title = name; // the whole name, also when the chip clips it
   const wrap = document.createElement('span');
   wrap.className = 'envchip';
   wrap.append(chip);
