@@ -70,7 +70,8 @@ async fn the_headers_call_hands_out_a_value_wiped_on_drop() {
         .expect("resolve ok");
     let marker = minted_value(&headers);
 
-    let copy: Vec<(String, String)> = headers.iter().cloned().collect();
+    // The plain copy an embedder makes, as the upgrade note tells them to.
+    let copy = headers.to_vec();
     let ((), control) = scan_frees(marker, || drop(copy));
     assert!(
         control.hits >= 1,
