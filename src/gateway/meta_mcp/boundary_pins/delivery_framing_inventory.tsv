@@ -45,10 +45,10 @@ src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	Error::json_rpc	2
 src/gateway/meta_mcp/invoke/admin.rs	reload_config	Error::json_rpc	2
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	Error::json_rpc	2
 src/gateway/meta_mcp/invoke/admin.rs	webhook_status	Error::json_rpc	1
-src/gateway/meta_mcp/invoke/audit.rs	audit_replay	Error::json_rpc	1
-src/gateway/meta_mcp/invoke/audit.rs	audit_replay	JsonRpcResponse::error	1
-src/gateway/meta_mcp/invoke/audit.rs	audit_replay	error_response_preserving_status	1
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	Error::json_rpc	1
+src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	Error::json_rpc	1
+src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	JsonRpcResponse::error	1
+src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	error_response_preserving_status	1
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	undeclared_input_request	Error::JsonRpc{}	1
 src/gateway/meta_mcp/invoke/continuation.rs	rejected_continuation	Error::JsonRpc{}	1
 src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	Error::JsonRpc{}	1

@@ -19,6 +19,7 @@ src/gateway/meta_mcp/chain_receipt.rs	receive	refusal	4	feeds	chain-receipt refu
 src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	refuse_withheld	1	composite-or-replay	the gated gateway_invoke path re-meeting a name the route stage withheld first (raised)
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	refuse_late	1	not-a-decision	an audit-integrity refusal: a grant decision after the answer's record
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	refuse_unattested_plan	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/audit_decision.rs	decided	Refused::of	1	not-delivered	audit row: the decision object of a call record
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_if_killed	2	recorded	the bridged kill switch, raised while vouched
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_relaying_round	1	recorded	bridged relay block, raised while vouched inside it
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
@@ -101,7 +102,7 @@ src/gateway/meta_mcp/upstream.rs	recover_task_error_with	Error::ResponseFirewall
 src/gateway/meta_mcp/upstream.rs	recover_task_error_with	note_refusal	1	not-delivered	settlement note for a recovered failure; the stored answer is read through tasks/get
 src/gateway/meta_mcp/upstream.rs	recover_task_result	note_refusal	1	not-delivered	audit note
 src/gateway/meta_mcp/visibility.rs	admin_capability_rule	Error::Forbidden{}	1	feeds	delivered by the route stage or the send chokepoint, both raised
-src/gateway/meta_mcp/visibility.rs	may_invoke_before_grants	Error::Forbidden{}	1	feeds	the authorization refusal the route stage delivers and raises
+src/gateway/meta_mcp/visibility.rs	may_invoke_before_grants_explained	Error::Forbidden{}	1	feeds	the authorization refusal the route stage delivers and raises
 src/gateway/meta_mcp/visibility.rs	withheld_surfaced_in	audit_refusal	1	not-delivered	audit row
 src/gateway/router/accounts.rs	revoke_for	refusal	3	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/router/accounts/connections.rs	api_route	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
@@ -116,9 +117,7 @@ src/gateway/router/backend_handlers.rs	apply_backend_tool_call_security	key_refu
 src/gateway/router/backend_handlers.rs	cached_error_response	Error::ResponseFirewallRefused	1	recorded	the frame is marked delivery_refusal
 src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
-src/gateway/router/backend_handlers.rs	guard_tool_call	blocked_tool_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	guard_tool_call	key_refusal	1	recorded	raised above it in this fn (direct withheld call)
-src/gateway/router/backend_handlers.rs	guard_tool_call	profile_refusal	1	recorded	withheld code, raised in this fn
 src/gateway/router/backend_handlers.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
 src/gateway/router/backend_handlers.rs	guard_tool_call	relay_refusal	1	recorded	403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers.rs	guard_tool_call	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
@@ -139,6 +138,8 @@ src/gateway/router/backend_handlers/direct_permit.rs	refused_send	refusal	1	reco
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	direct_refusal	1	not-a-decision	a credential mint failure
 src/gateway/router/backend_handlers/direct_preflight.rs	preflight	refusal	1	not-a-decision	chain challenge mint failure or a malformed _meta
 src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	unforwarded_refusal	1	not-a-decision	a credential that could not be forwarded
+src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	blocked_tool_refusal	1	not-delivered	predicate
+src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	profile_refusal	1	feeds	withheld code returned to guard_tool_call, which raises it before the key refusal answers
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	catalogue_refusal	1	feeds	builds the key refusal guard_tool_call delivers
 src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	no-record	the notification key route; notifications carry no delivery record
 src/gateway/router/backend_handlers/relay.rs	catalogue_refusal	relay_refusal	1	feeds	builds the catalogue relay refusal
@@ -164,6 +165,8 @@ src/gateway/router/hardened_elicitation.rs	direct_refusal	refusal (as value)	1	r
 src/gateway/router/hardened_elicitation.rs	direct_refusal	request_check_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/hardened_elicitation.rs	refuse	refusal	1	no-record	session admission
 src/gateway/router/judged_answer.rs	record_delivery	audit_unavailable_refusal	2	not-a-decision	the audit sink failed
+src/gateway/router/meta_refusal_audit.rs	write	Refused::of	1	not-delivered	audit row: the decision object of a router refusal record
+src/gateway/router/meta_refusal_audit.rs	write	has_refusal	1	not-delivered	predicate: whether a gate already noted the refusal
 src/gateway/router/view_judge.rs	admit_listener	dead_attach_refusal	1	no-record	listener attach
 src/gateway/server/cleartext.rs	reload_posture_refusal	serve_refusal	2	feeds	the posture refusal gateway_reload_config answers; reload_config raises refused for it (start-up advice otherwise)
 src/gateway/server/cleartext.rs	reload_posture_refusal	start_refusal	1	feeds	the restart advice inside the posture refusal reload_config raises refused for
