@@ -705,3 +705,32 @@ fn an_empty_signature_still_counts_as_signed() {
     rewrite_line(&path, 1, |v| v["sig"] = serde_json::Value::Null);
     assert!(keyless(&path).signed_entry_seen);
 }
+
+/// The only signed entry is the live file's first line, rejected by the
+/// seam check before any per-entry check runs: the pass still reports the
+/// signature, because it is noted when the line is parsed.
+#[test]
+fn a_signature_rejected_before_its_checks_is_still_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = log_path(&dir);
+    let l = TransparencyLogger::open(cfg(&path, 12, false)).unwrap();
+    rotate_n(&l, &path, 1);
+    drop(l);
+    let mut all = lines(&path);
+    all[0]["sig"] = "unchecked".into();
+    all[0]["prev_segment_seq"] = 99.into();
+    let body = all
+        .iter()
+        .fold(String::new(), |acc, v| acc + &v.to_string() + "\n");
+    std::fs::write(&path, body).unwrap();
+
+    let r = keyless(&path);
+
+    assert!(!r.ok);
+    let msg = r.error_message.clone().unwrap_or_default();
+    assert!(
+        msg.contains("prev_segment_seq"),
+        "rejected by the seam check: {msg}"
+    );
+    assert!(r.signed_entry_seen);
+}
