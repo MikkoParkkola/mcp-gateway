@@ -5,8 +5,6 @@
 //! or narrowed so the backend is out of its scope, refuses the queued task's
 //! first dispatch and an input round's continuation, with no backend call.
 //! A task whose key the reload keeps still runs.
-use std::time::Duration;
-
 use super::super::*;
 use super::input_round::{STATE_1, answer, ask, done, parked, update};
 use super::support::*;
@@ -38,7 +36,7 @@ fn remove_key_b(keys: &mut Vec<crate::config::ApiKeyConfig>) {
 /// owner's key may be gone, so not through the route).
 async fn settled(state: &Arc<AppState>, task: &str) -> String {
     let owner = admission_principal();
-    tokio::time::timeout(Duration::from_secs(10), async {
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, async {
         loop {
             if let Ok(committed) = state.tasks.get(&owner, task) {
                 use crate::protocol::tasks::TaskStatus;
@@ -119,7 +117,7 @@ async fn k15_a_continuation_after_its_key_is_removed_is_refused() {
             .await
         })
     };
-    tokio::time::timeout(Duration::from_secs(5), pause.reached())
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, pause.reached())
         .await
         .expect("the resume worker reached the point before redeeming");
     reload_keys(&state, remove_key_a);
