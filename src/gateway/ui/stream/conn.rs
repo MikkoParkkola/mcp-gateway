@@ -186,11 +186,12 @@ async fn first_snapshot(
     recheck: &mut tokio::time::Interval,
     deadline: Instant,
 ) -> Result<Snapshot, End> {
-    let fresh = rx.wait_for(|s| s.fresh);
+    // Clone inside the future: a `Ref` holds a lock and must not cross an await.
+    let fresh = async { rx.wait_for(|s| s.fresh).await.map(|s| s.clone()) };
     tokio::pin!(fresh);
     loop {
         tokio::select! {
-            r = &mut fresh => return r.map(|s| s.clone()).map_err(|_| End::ClientGone),
+            r = &mut fresh => return r.map_err(|_| End::ClientGone),
             () = conn.tx.closed() => return Err(End::ClientGone),
             () = tokio::time::sleep_until(deadline) => return Err(End::Lifetime),
             _ = recheck.tick() => conn.upkeep().await?,
