@@ -16,6 +16,9 @@ use crate::Error;
 use crate::chains::{Chain, ChainCheckpointStore, ChainRetryPolicy, ChainStep, StepState};
 use crate::playbook::ToolInvoker;
 
+/// A row's label and the error its first call answers.
+type Case = (&'static str, fn() -> Error);
+
 /// One scripted answer per call; past the script every call succeeds.
 type Answer = Box<dyn FnOnce() -> crate::Result<Value> + Send>;
 
@@ -114,7 +117,7 @@ fn assert_ran_once(invoker: &Scripted, step: &crate::chains::ChainStepResult, wh
 /// call, and the step says it may have run.
 #[tokio::test]
 async fn a_step_whose_request_may_have_reached_the_backend_runs_once() {
-    let cases: Vec<(&str, fn() -> Error)> = vec![
+    let cases: Vec<Case> = vec![
         ("BackendTimeout", || {
             Error::BackendTimeout("no answer".into())
         }),
@@ -135,7 +138,7 @@ async fn a_step_whose_request_may_have_reached_the_backend_runs_once() {
 /// MIK-9042.CHAIN.2: an error raised before the send is still retried.
 #[tokio::test]
 async fn a_step_refused_before_its_send_is_retried() {
-    let cases: Vec<(&str, fn() -> Error)> = vec![
+    let cases: Vec<Case> = vec![
         ("TransportConnect", || {
             Error::TransportConnect("connection refused".into())
         }),

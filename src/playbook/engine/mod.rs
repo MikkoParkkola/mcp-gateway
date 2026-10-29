@@ -189,8 +189,10 @@ impl PlaybookEngine {
             };
             // Checked and interpolated once, outside the retry loop: a retry
             // re-sends the same arguments and must not refill the probe budget.
-            let outcome = match checked_arguments(&ctx, step, invoker) {
-                Ok(arguments) => {
+            // `sent`: the error, if any, came from dispatching the step, not
+            // from refusing its arguments before any send.
+            let (outcome, sent) = match checked_arguments(&ctx, step, invoker) {
+                Ok(arguments) => (
                     dispatch(
                         step,
                         label,
@@ -199,11 +201,12 @@ impl PlaybookEngine {
                         invoker,
                         &mut attempted,
                     )
-                    .await
-                }
+                    .await,
+                    true,
+                ),
                 Err(refusal) => {
                     warn!(step = %step.name, error = %refusal, refused = true, "Step failed");
-                    Err(refusal)
+                    (Err(refusal), false)
                 }
             };
 
@@ -231,6 +234,7 @@ impl PlaybookEngine {
                 Err(e) => {
                     steps_failed.push(step.name.clone());
                     match definition.on_error {
+                        ErrorStrategy::Abort if sent => return Err(abort_error(e)),
                         ErrorStrategy::Abort => return Err(e),
                         ErrorStrategy::Continue | ErrorStrategy::Retry => {
                             // Both arms null-fill and carry on, so both must say
@@ -418,6 +422,31 @@ fn step_reason(error: &crate::Error) -> String {
     // A null-filled step returns success, so no outer settlement sees this
     // error: the reason itself says the step may have run.
     crate::error::step_failure_text(error, reason)
+}
+
+/// The error an `abort` plan ends with when a dispatched step failed. A step
+/// that may have run comes back as a lost round (`Transport`) whose text ends
+/// with the may-have-run sentence, so a caller reading only the error's type
+/// or text knows not to run it again without reconciling (the reader method
+/// is crate-private). Three answers keep their own type: a gateway refusal and
+/// a firewall refusal (each a decision the caller reads by type, with its own
+/// provenance), and a tool's own `isError` answer (its capped text rides in the
+/// error's data). A step never sent is not marked.
+fn abort_error(error: crate::Error) -> crate::Error {
+    let tool_answer = matches!(
+        &error,
+        crate::Error::JsonRpc { data: Some(data), .. } if data[TOOL_TEXT_DATA_KEY].is_string()
+    );
+    if !error.outcome_undetermined()
+        || tool_answer
+        || matches!(
+            error,
+            crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
+        )
+    {
+        return error;
+    }
+    crate::Error::Transport(format!("{error}; {}", crate::error::MAY_HAVE_RUN))
 }
 
 /// The gateway-sealed transient a busy custody raises before any send,

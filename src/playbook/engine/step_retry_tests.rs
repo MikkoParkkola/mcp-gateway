@@ -13,6 +13,9 @@ use serde_json::json;
 
 type Answer = Box<dyn FnOnce() -> crate::Result<Value> + Send>;
 
+/// A row's label and the error its first call answers.
+type Case = (&'static str, fn() -> crate::Error);
+
 /// Answers from a script, then succeeds; counts every call.
 struct Scripted {
     answers: Mutex<VecDeque<Answer>>,
@@ -102,7 +105,7 @@ fn engine(on_error: ErrorStrategy) -> PlaybookEngine {
 /// step after one call.
 #[tokio::test]
 async fn a_step_whose_request_may_have_reached_the_backend_is_not_re_sent() {
-    let cases: Vec<(&str, fn() -> crate::Error)> = vec![
+    let cases: Vec<Case> = vec![
         ("BackendTimeout", || {
             crate::Error::BackendTimeout("no answer".into())
         }),
@@ -135,7 +138,7 @@ async fn a_step_whose_request_may_have_reached_the_backend_is_not_re_sent() {
 /// MIK-9042.PLAY.2: an error raised before the send is still retried.
 #[tokio::test]
 async fn a_step_refused_before_its_send_is_retried() {
-    let cases: Vec<(&str, fn() -> crate::Error)> = vec![
+    let cases: Vec<Case> = vec![
         ("TransportConnect", || {
             crate::Error::TransportConnect("connection refused".into())
         }),
@@ -231,7 +234,7 @@ async fn a_lost_round_after_a_retried_refusal_ends_the_step() {
 /// sentence. A refusal and a tool's own `isError` answer keep their type.
 #[tokio::test]
 async fn an_aborted_step_that_may_have_run_says_so_in_its_error() {
-    let cases: Vec<(&str, fn() -> crate::Error)> = vec![
+    let cases: Vec<Case> = vec![
         ("BackendTimeout", || {
             crate::Error::BackendTimeout("no answer".into())
         }),
