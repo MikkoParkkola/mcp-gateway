@@ -661,3 +661,53 @@ fn every_builder_contributes_to_the_governed_set() {
         );
     }
 }
+
+/// Per-tool allowed folders exempt native tools because none takes a path
+/// argument (row S3). Every native tool's top-level argument names, with
+/// every gate on, are pinned here, so a new native argument fails until
+/// someone checks it is not a path.
+#[test]
+fn native_tool_argument_names_are_pinned_for_the_folder_exemption() {
+    let tools = build_meta_tools(
+        MetaToolGates {
+            stats: true,
+            reload: true,
+            cost_report: true,
+            webhook_status: true,
+            playbooks: true,
+            profiles: true,
+        },
+        ToolTotal::Exact(1),
+        1,
+    );
+    let mut names: Vec<String> = tools
+        .iter()
+        .flat_map(|tool| {
+            tool.input_schema["properties"]
+                .as_object()
+                .map(|props| props.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    let pinned = [
+        "arguments",
+        "chain",
+        "detail",
+        "explain",
+        "limit",
+        "name",
+        "profile",
+        "query",
+        "role",
+        "server",
+        "session_id",
+        "state",
+        "tool",
+    ];
+    assert_eq!(
+        names, pinned,
+        "a native argument changed: is any of them a path?"
+    );
+}
