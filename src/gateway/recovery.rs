@@ -16,7 +16,7 @@
 //! {
 //!   "isError": true,
 //!   "content": [{"type": "text", "text": "Validation failed for 'flights.search'"}],
-//!   "recovery": {
+//!   "_recovery": {
 //!     "error_code": "INVALID_PARAM",
 //!     "message": "departure_date must be YYYY-MM-DD",
 //!     "suggest": "Reformat the date and retry",
@@ -326,7 +326,7 @@ pub(crate) fn recovery_for_surface(
 // ============================================================================
 
 /// Inject a [`RecoveryHint`] into a JSON `Value` (must be an object) under
-/// the `"recovery"` key.
+/// the `"_recovery"` key, a name only the gateway writes.
 ///
 /// If serialization of the hint fails the original value is returned
 /// unchanged — recovery hints are advisory and must not cause cascading
@@ -335,7 +335,7 @@ pub fn attach_recovery(mut value: Value, hint: RecoveryHint) -> Value {
     if let Value::Object(ref mut map) = value
         && let Ok(hint_value) = serde_json::to_value(hint)
     {
-        map.insert("recovery".to_string(), hint_value);
+        map.insert("_recovery".to_string(), hint_value);
     }
     value
 }
@@ -487,7 +487,7 @@ mod tests {
         assert!(enriched["content"].is_array());
 
         // Recovery field added
-        let recovery = &enriched["recovery"];
+        let recovery = &enriched["_recovery"];
         assert_eq!(recovery["error_code"], error_codes::BACKEND_ERROR);
         assert!(recovery["retry"].as_bool().unwrap());
     }

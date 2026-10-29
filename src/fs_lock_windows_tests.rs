@@ -376,3 +376,92 @@ fn a_lock_directory_broad_local_groups_may_write_warns_and_proceeds() {
     assert!(warnings.contains("BUILTIN\\Users"), "{warnings}");
     assert_owner_only("broad", &dir.join(".store.lock"), false);
 }
+
+/// A sidecar name left delete-pending (a healer's delete-on-close replace met
+/// another open handle, as an antivirus or indexer handle does on CI) refuses
+/// a new create with `ERROR_ACCESS_DENIED`. That is contention, not a refusal:
+/// the probe answers `Held`, and the lock is taken once the name is free.
+#[test]
+fn a_delete_pending_sidecar_is_contention_not_an_error() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_DELETE_ON_CLOSE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let share_all = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join(".store.lock");
+    std::fs::write(&path, b"").expect("planted");
+    // A stray reader that shares delete keeps the name alive after the delete.
+    let keeper = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(share_all)
+        .open(&path)
+        .expect("keeper");
+    let deleter = std::fs::OpenOptions::new()
+        .access_mode(DELETE)
+        .share_mode(share_all)
+        .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+        .open(&path)
+        .expect("deleter");
+    drop(deleter);
+    let create = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path);
+    assert_eq!(
+        create.err().and_then(|e| e.raw_os_error()),
+        Some(5),
+        "premise: a delete-pending name refuses a create with ERROR_ACCESS_DENIED"
+    );
+    assert!(
+        matches!(ExclusiveFileLock::try_lease(&path), Ok(Attempt::Held)),
+        "a delete-pending sidecar is contention"
+    );
+    drop(keeper);
+    drop(ExclusiveFileLock::acquire(&path).expect("taken once the name is free"));
+    assert_owner_only("delete-pending", &path, false);
+}
+
+/// The delete-pending race, 50 times in one run: each iteration leaves a
+/// fresh sidecar name delete-pending (the probe answers `Held`), then lets the
+/// other handle close on a second thread while `acquire` races it. Whichever
+/// side wins, `acquire` takes the lock; it never returns an error.
+#[test]
+fn a_delete_pending_race_never_fails_acquire() {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_FLAG_DELETE_ON_CLOSE, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+    let share_all = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    let dir = tempfile::tempdir().expect("dir");
+    for i in 0..50 {
+        let path = dir.path().join(format!(".store-{i}.lock"));
+        std::fs::write(&path, b"").expect("planted");
+        let keeper = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(share_all)
+            .open(&path)
+            .expect("keeper");
+        drop(
+            std::fs::OpenOptions::new()
+                .access_mode(DELETE)
+                .share_mode(share_all)
+                .custom_flags(FILE_FLAG_DELETE_ON_CLOSE)
+                .open(&path)
+                .expect("deleter"),
+        );
+        assert!(
+            matches!(ExclusiveFileLock::try_lease(&path), Ok(Attempt::Held)),
+            "iteration {i}: a delete-pending sidecar is contention"
+        );
+        let release = std::thread::spawn(move || {
+            std::thread::yield_now();
+            drop(keeper);
+        });
+        let lock = ExclusiveFileLock::acquire(&path);
+        release.join().expect("release");
+        assert!(lock.is_ok(), "iteration {i}: {:?}", lock.err());
+        drop(lock);
+        assert_owner_only("delete-pending race", &path, false);
+    }
+}

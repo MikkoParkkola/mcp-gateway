@@ -89,7 +89,7 @@ pub(crate) fn task_envelope(
     result_type: &str,
 ) -> (CommittedTask, Value) {
     let current = held.deliver(crate::gateway::meta_mcp::sealed_hold::HoldSink::Scope);
-    let mut value = serde_json::to_value(current.task.wire()).unwrap_or(Value::Null);
+    let mut value = current.delivered_wire();
     if let Some(object) = value.as_object_mut() {
         object.insert("resultType".into(), json!(result_type));
     }
