@@ -20,6 +20,8 @@ mod seam;
 mod spelling;
 #[path = "allowed_root_fs_tests.rs"]
 mod tree;
+#[path = "allowed_root_warn_tests.rs"]
+mod warn;
 
 /// One precheck case with its expected outcome on each OS family.
 struct Shape {
