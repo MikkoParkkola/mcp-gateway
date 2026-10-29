@@ -572,7 +572,7 @@ async fn a_killed_bridged_round_records_refused_only_while_vouched() {
                 caller_identity: None,
                 caller_proof: CallerProof::Anonymous,
                 credential_owner: None,
-                headers: &[],
+                headers: &crate::transport::LentCredential::default(),
                 cache_binding: None,
                 account_credential: super::propagation::DispatchAccount::default(),
                 api_key_name: None,
