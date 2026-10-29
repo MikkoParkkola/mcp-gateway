@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use super::{FirewallAction, Finding};
+use super::{Finding, FirewallAction};
 use crate::security::response_policy::RuleTarget;
 
 /// The production resolution budget for one call: every value, root and
@@ -142,3 +142,6 @@ pub(crate) fn compile_path_arg(_entry: &str) -> Result<PathArg, String> {
     Err("not a path argument".to_string())
 }
 
+#[cfg(test)]
+#[path = "allowed_root_tests.rs"]
+mod tests;
