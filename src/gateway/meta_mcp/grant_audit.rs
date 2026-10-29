@@ -685,14 +685,19 @@ impl super::MetaMcp {
         let outcome = written.and(invoked.outcome);
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an
-        // audit failure after the call, does not un-dispatch it. An
-        // authorization refusal, or any exit refused before its backend,
-        // proves nothing was sent.
-        if !refused && !matches!(outcome, Err(Error::Forbidden { .. })) {
+        // audit failure after the call, does not un-dispatch it. Only an
+        // authorization refusal proves nothing was attempted. A target is a
+        // call planned or attempted, which a stored read re-checks access
+        // against, so a step refused before its backend stays one.
+        if !matches!(outcome, Err(Error::Forbidden { .. })) {
             super::dispatch_log::note_completed(args);
             // `MIK-8408` H2: the same call, with the plan step label it
-            // ran under, for the replay entry's `calls`.
-            super::invoke::relay::note_replay_call(args);
+            // ran under, for the replay entry's `calls`: the record a stored
+            // read takes "this backend ran it" from, so a step refused before
+            // its backend is never one.
+            if !refused {
+                super::invoke::relay::note_replay_call(args);
+            }
         }
         outcome
     }
