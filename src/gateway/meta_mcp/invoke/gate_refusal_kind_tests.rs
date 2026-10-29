@@ -176,10 +176,10 @@ async fn backstop_effect(refusal: Error) -> serde_json::Value {
         crate::backend::BackendRegistry::new(),
     ));
     scope(async {
-        let answer = crate::playbook::in_step(
+        let answer = Box::pin(crate::playbook::in_step(
             0,
             meta.backstop(("alpha", "read"), &caller(), None, refusal),
-        )
+        ))
         .await;
         assert!(answer.is_err(), "premise: the refusal stands");
         let mut fields = serde_json::Map::new();
@@ -193,11 +193,11 @@ async fn backstop_effect(refusal: Error) -> serde_json::Value {
 /// it is the only recorder, so an authorization refusal records refused.
 #[tokio::test]
 async fn the_backstop_alone_records_a_steps_authorization_refusal() {
-    let refused = backstop_effect(Error::Forbidden {
+    let refused = Box::pin(backstop_effect(Error::Forbidden {
         code: -32003,
         status: 403,
         message: "refused".to_owned(),
-    })
+    }))
     .await;
     assert_eq!(refused, "refused");
 }
@@ -205,6 +205,6 @@ async fn the_backstop_alone_records_a_steps_authorization_refusal() {
 /// Any other error at the same point records nothing.
 #[tokio::test]
 async fn the_backstop_records_nothing_for_a_non_authorization_error() {
-    let effect = backstop_effect(Error::AuditUnavailable).await;
+    let effect = Box::pin(backstop_effect(Error::AuditUnavailable)).await;
     assert_eq!(effect, "delivered");
 }
