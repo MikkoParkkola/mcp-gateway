@@ -46,7 +46,7 @@ pub(super) mod tasks;
 use health::backends_overall_healthy;
 pub(super) use health::health_handler;
 #[cfg(feature = "metrics")]
-pub(super) use metrics_scrape::metrics_handler;
+pub(super) use metrics_scrape::{MetricsState, metrics_handler};
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).

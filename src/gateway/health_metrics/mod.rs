@@ -5,9 +5,18 @@
 
 pub(crate) mod clock;
 pub(crate) mod layers;
+#[cfg(feature = "metrics")]
+pub(crate) mod process;
 
 #[cfg(test)]
 mod classify_tests;
+
+/// Help text for every health metric a recorder holds.
+#[cfg(feature = "metrics")]
+pub(crate) fn register() {
+    layers::register();
+    process::register();
+}
 
 /// Who wrote a JSON-RPC error frame: the gateway, or a backend whose answer
 /// the gateway forwarded.

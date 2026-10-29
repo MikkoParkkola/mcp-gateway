@@ -540,14 +540,17 @@ fn authenticate(
 
 /// `/metrics`, carrying the scrape token resolved once at router build.
 #[cfg(feature = "metrics")]
-fn metrics_route(config: &crate::config::Config) -> Router {
+fn metrics_route(
+    config: &crate::config::Config,
+    multiplexer: Arc<NotificationMultiplexer>,
+) -> Router {
     let token = config
         .server
         .resolve_metrics_token(&config.env_overlay())
         .map(Arc::<str>::from);
     Router::new()
         .route(routes::METRICS, get(handlers::metrics_handler))
-        .with_state(token)
+        .with_state(handlers::MetricsState { token, multiplexer })
 }
 
 /// Routes on the app state that run outside authentication and the E1-f audit
@@ -590,6 +593,9 @@ pub(crate) fn create_router_with_accounts(
 ) -> Router {
     let auth_state = build_auth_state(&state);
     bind_multiplexer(&state, &auth_state);
+    // `state` moves into the router below; `/metrics` keeps this handle.
+    #[cfg(feature = "metrics")]
+    let multiplexer = Arc::clone(&state.multiplexer);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();
@@ -713,7 +719,7 @@ pub(crate) fn create_router_with_accounts(
     // Merge /metrics outside auth: it checks its own scrape token, not the bearer
     #[cfg(feature = "metrics")]
     {
-        app = app.merge(metrics_route(&startup_config));
+        app = app.merge(metrics_route(&startup_config, multiplexer));
     }
 
     // Merge web UI HTML route (unauthenticated — static HTML, no data)

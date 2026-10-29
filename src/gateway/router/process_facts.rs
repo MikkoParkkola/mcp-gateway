@@ -42,6 +42,12 @@ impl ProcessStart {
         }
     }
 
+    #[cfg(feature = "metrics")]
+    /// The wall-clock start; `None` when the host clock could not be read.
+    pub(crate) fn wall(&self) -> Option<DateTime<Utc>> {
+        self.wall
+    }
+
     /// A start a test chooses.
     #[cfg(test)]
     pub(crate) fn at(wall: Option<DateTime<Utc>>, mono: Instant) -> Self {

@@ -40,7 +40,7 @@ pub fn install() {
     match builder().install_recorder() {
         Ok(handle) => {
             if HANDLE.set(handle).is_ok() {
-                crate::gateway::health_metrics::layers::register();
+                crate::gateway::health_metrics::register();
                 tracing::info!("Prometheus metrics recorder installed; scrape at /metrics");
             }
         }

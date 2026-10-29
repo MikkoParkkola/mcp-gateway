@@ -73,7 +73,7 @@ pub(crate) fn register() {
         telemetry_metrics::Unit::Seconds,
         "Time the gateway added to a POST /mcp call: the whole request time minus the time it \
          waited on backend transports. Retries and backoff inside a transport count as backend \
-         wait; the gateway's own admission, semaphore wait and retry backoff count as added \
-         latency."
+         wait, as does waiting on another reader's catalogue fill; the gateway's own admission, \
+         semaphore wait and retry backoff count as added latency."
     );
 }
