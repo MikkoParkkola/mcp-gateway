@@ -48,6 +48,22 @@ impl Transport for Counting {
 /// with an events hub when `hub` is set; the status, the JSON body and how
 /// many requests reached the backend.
 async fn lease(params: Value, hub: bool) -> (StatusCode, Value, usize) {
+    let (status, body, reached, _) = post("events/lease", params, hub).await;
+    (status, body, reached)
+}
+
+/// POST `method` with `params` and a passthrough token to `/mcp/demo`, with
+/// an events hub when `hub` is set; also the hub, to read its lease store.
+async fn post(
+    method: &str,
+    params: Value,
+    hub: bool,
+) -> (
+    StatusCode,
+    Value,
+    usize,
+    Option<Arc<crate::events::EventsHub>>,
+) {
     let reached = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "demo",
@@ -57,13 +73,15 @@ async fn lease(params: Value, hub: bool) -> (StatusCode, Value, usize) {
     ));
     backend.set_transport_for_test(Arc::new(Counting(Arc::clone(&reached))));
     let (state, store) = test_router_app_state_with_auth(&scoped_auth_config(false)).await;
-    if hub {
-        let hub = crate::events::EventsHub::open(
+    let hub = hub.then(|| {
+        crate::events::EventsHub::open(
             &crate::config::EventsConfig::default(),
             &store.path().join("events"),
         )
-        .expect("the events hub opens");
-        state.meta_mcp.set_events(hub);
+        .expect("the events hub opens")
+    });
+    if let Some(hub) = &hub {
+        state.meta_mcp.set_events(Arc::clone(hub));
     }
     assert!(state.backends.register(backend));
     let request = Request::builder()
@@ -73,8 +91,7 @@ async fn lease(params: Value, hub: bool) -> (StatusCode, Value, usize) {
         .header("content-type", "application/json")
         .header(super::super::PASSTHROUGH_HEADER, "Bearer a.b.c")
         .body(Body::from(
-            json!({"jsonrpc": "2.0", "id": 5, "method": "events/lease", "params": params})
-                .to_string(),
+            json!({"jsonrpc": "2.0", "id": 5, "method": method, "params": params}).to_string(),
         ))
         .unwrap();
     let response = create_router(state).oneshot(request).await.unwrap();
@@ -83,7 +100,7 @@ async fn lease(params: Value, hub: bool) -> (StatusCode, Value, usize) {
         .await
         .unwrap();
     let body = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    (status, body, reached.load(Ordering::SeqCst))
+    (status, body, reached.load(Ordering::SeqCst), hub)
 }
 
 #[tokio::test]
@@ -107,4 +124,18 @@ async fn the_hubs_refusals_answer_the_caller_and_never_forward() {
     assert_eq!(body["error"]["code"], -32012, "{body}");
     assert!(body["error"].get("data").is_none(), "{body}");
     assert_eq!(reached, 0, "never forwarded");
+}
+
+/// LEASE-T0: a call that is not `events/lease`, carrying a passthrough
+/// token, is forwarded, and the token never lands in the lease store.
+#[tokio::test]
+async fn lease_t0_a_call_that_is_not_a_lease_leaves_the_store_empty() {
+    let (_, body, reached, hub) = post(
+        "tools/call",
+        json!({"name": "allowed_tool", "arguments": {}}),
+        true,
+    )
+    .await;
+    assert_eq!(reached, 1, "premise: the call reached the backend: {body}");
+    assert_eq!(hub.expect("hub").held_leases().await, 0, "no lease held");
 }
