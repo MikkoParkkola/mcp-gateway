@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The injected-value set's lifetime rules (MIK-9035): a value stays redacted
+//! The injected-value set's lifetime rules: a value stays redacted
 //! for its grace after its last send, a rotation that outruns the grace
 //! fails closed, and a retired value is no longer redacted (the documented
 //! residual).

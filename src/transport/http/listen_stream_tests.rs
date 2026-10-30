@@ -168,7 +168,7 @@ async fn a_session_stream_drops_a_note_the_watch_does_not_admit() {
     assert_eq!(end, None, "an unwatched note crossed the channel");
 }
 
-/// MIK-9035 T1.27 (DELTA-9): the listener reads the backend's LIVE value set.
+/// T1.27 (DELTA-9): the listener reads the backend's LIVE value set.
 /// A value that joins the set after the set was attached is still removed
 /// from a change notice's URI before the note leaves the transport.
 #[tokio::test]

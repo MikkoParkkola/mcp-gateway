@@ -24,7 +24,7 @@ use crate::transport::upstream_tap::{
 type Log = Arc<Mutex<Vec<(String, Option<String>)>>>;
 
 /// A value with a quote in it: serde's error text escapes it, so a literal
-/// match on that text misses it (MIK-9035, G4).
+/// match on that text misses it (G4).
 const BAD_BODY_NEEDLE: &str = "listen-q\"secret-77d1";
 
 /// A one-session spec SSE peer: `GET /sse` names `/messages` and keeps the
@@ -71,11 +71,11 @@ async fn peer() -> (String, Log) {
                         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                     }
                     // A subscribe to an `echo` URI: a change notice for it and
-                    // a refusal quoting it, both on the stream (MIK-9035).
+                    // a refusal quoting it, both on the stream.
                     let uri = frame["params"]["uri"].as_str().unwrap_or_default().to_owned();
                     // A subscribe to a `badbody` URI: a direct answer whose
                     // `error` is a string quoting the value, which no
-                    // response type accepts (MIK-9035, G4).
+                    // response type accepts (G4).
                     if method == "resources/subscribe" && uri.contains("badbody") {
                         let body = json!({"jsonrpc": "2.0", "id": frame["id"],
                             "error": format!("refused {BAD_BODY_NEEDLE}")});
@@ -280,7 +280,7 @@ async fn a_refused_listener_request_names_the_status() {
     );
 }
 
-/// MIK-9035: on a legacy listener session, a change notice and a refusal
+/// on a legacy listener session, a change notice and a refusal
 /// that echo an injected value both arrive scrubbed: neither passes
 /// `read_answer`, so the session scrubs them itself.
 #[tokio::test]
@@ -360,7 +360,7 @@ async fn the_watch_filter_compares_the_redacted_uri() {
     }
 }
 
-/// MIK-9035 G4: a listener answer that fails to parse is named by its
+/// G4: a listener answer that fails to parse is named by its
 /// position, never by its text. serde would quote the string it rejected,
 /// escaped, and an escaped value passes the literal scrub.
 #[tokio::test]

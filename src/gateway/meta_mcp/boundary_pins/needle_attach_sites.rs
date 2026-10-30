@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every transport a backend builds gets the backend's injected-value set
-//! before its first send (MIK-9035 T1.32, DELTA-10): a function in
+//! before its first send (T1.32, DELTA-10): a function in
 //! src/backend that constructs a transport must also attach the set
 //! (`attach_needles`, `attach_needles_to`) or pass it (`self.needles`).
 //! A new construction site without either fails here at review; the send

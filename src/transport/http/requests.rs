@@ -538,7 +538,7 @@ impl HttpTransport {
             // carry `set-cookie`, `authorization` echoes and bearer material.
             // Computed before the macro, as above (MIK-7324).
             let diagnostic_url = sanitize_url_for_diagnostics(message_url);
-            // The count only: a header name is backend text (MIK-9035).
+            // The count only: a header name is backend text.
             let headers = response.headers().len();
             debug!(target: HTTP_TARGET, url = %diagnostic_url, headers, "No session ID in response");
         }

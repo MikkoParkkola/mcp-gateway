@@ -401,7 +401,7 @@ async fn a_null_method_frame_is_not_the_streams_response() {
     );
 }
 
-/// MIK-9035 (T3.8): a notification on the response stream that echoes an
+/// T3.8: a notification on the response stream that echoes an
 /// injected value reaches the caller scrubbed, one whose method holds it is
 /// withheld, and the response still resolves the exchange.
 #[tokio::test]

@@ -412,7 +412,7 @@ fn parse_card(card: Value) -> Result<AgentCard> {
 }
 
 /// `what` did not decode. A serde error can quote a value the agent sent
-/// (`invalid type: string "…"`), so only where it broke is named (MIK-9035).
+/// (`invalid type: string "…"`), so only where it broke is named.
 fn malformed(what: &str, e: &serde_json::Error) -> Error {
     Error::Protocol(format!(
         "{what} is malformed (line {}, column {})",

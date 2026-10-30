@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Control identifiers over WebSocket (MIK-9035 DELTA-5, T1.23): a progress
+//! Control identifiers over WebSocket (DELTA-5, T1.23): a progress
 //! token and a subscription tag equal to an injected value still route, and
 //! the copy the caller gets is scrubbed.
 

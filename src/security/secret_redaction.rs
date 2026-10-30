@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Removing the values of secrets the gateway injected from text and JSON
 //! the gateway did not author: a CLI capability's output, and a backend's
-//! answer. One redactor for every caller (MIK-8065).
+//! answer. One redactor for every caller.
 
 #[cfg(feature = "firewall")]
 use std::sync::LazyLock;
@@ -52,7 +52,7 @@ fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
 /// injected value equal to `Bearer`) would leave the rest of that credential
 /// where the scanner no longer recognises it.
 ///
-/// `None` when nothing matched: a clean text is never copied (MIK-9035).
+/// `None` when nothing matched: a clean text is never copied.
 fn scrub(text: &str, matcher: &AhoCorasick) -> Option<String> {
     let mut covered: Vec<bool> = Vec::new();
     // Matches arrive in order of their end, so a match that starts at or
@@ -180,7 +180,7 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 ///
 /// `secrets` are injected credentials only, never caller values: numbers are
 /// matched by value at any length here, which the caller-value floor
-/// ([`MIN_REDACTED_CALLER_VALUE`]) would forbid (MIK-8065).
+/// ([`MIN_REDACTED_CALLER_VALUE`]) would forbid.
 ///
 /// `true` when anything was replaced.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) -> bool {
@@ -190,7 +190,7 @@ pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) -> bool {
 /// A secret list compiled once for [`redact_value_with`]: the needles longest
 /// first, their automaton, and the ones that read as JSON scalars. A caller
 /// that scrubs many values with one list (a backend's value set) keeps one
-/// and rebuilds it only when the list changes (MIK-9035 DELTA-11).
+/// and rebuilds it only when the list changes (DELTA-11).
 pub(crate) struct Compiled {
     needles: Vec<String>,
     /// `None` when the automaton could not be built: every value is then
@@ -311,9 +311,9 @@ fn scrub_value(
         },
         // A credential that is all digits can come back as a JSON number. It
         // matches a number of the same value only, never one whose digits merely
-        // hold it: 912345 is not the secret 1234 (MIK-7954). Every injected needle
+        // hold it: 912345 is not the secret 1234. Every injected needle
         // is compared, whatever its length: a short one left out leaked as a
-        // number (MIK-8065). An all-digit needle is compared by value: printed as
+        // number. An all-digit needle is compared by value: printed as
         // a number, it loses its leading zeros ("012345" comes back as 12345), and
         // past u64 it parses as a float and prints in exponent form. So "007"
         // redacts the number 7 but never the 7 inside 1771. The sign is ignored on
@@ -336,13 +336,13 @@ fn scrub_value(
                 // below, which also keeps integers past i64 exact. Covered:
                 // JSON number grammar with at most one leading sign, leading
                 // zeros allowed. Other notations ("0x1F", "12_345") are out of
-                // scope here (MIK-7954). Whitespace around it is dropped, as
+                // scope here. Whitespace around it is dropped, as
                 // the JSON parser does ("12345.0\n" is 12345).
                 let needle = needle.trim_ascii();
                 let needle = needle.strip_prefix(['+', '-']).unwrap_or(needle);
                 // A needle with no digit before its exponent ("e123", "+",
                 // whitespace) names no number: read as one it became 0 and
-                // blanked every zero in the result (MIK-8065). So every needle
+                // blanked every zero in the result. So every needle
                 // past this point is non-empty.
                 let coefficient = needle.split(['e', 'E']).next().unwrap_or_default();
                 if !coefficient.bytes().any(|b| b.is_ascii_digit()) {

@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The echo and scrub rows of MIK-9035 run over real transports only. A test
+//! The secret echo and scrub rows run over real transports only. A test
 //! double that claims to redact (`redacts_injected_values` returning `true`)
 //! but scrubs nothing would mask the very leak those rows exist to catch, so
 //! no row file may build, install or name one (lead ruling 2026-10-30).
 //! Recording doubles that claim it are fine elsewhere: their rows check what
 //! a call sends, never what its answer echoes.
 
-/// Every file holding MIK-9035 echo or scrub rows, read at build time.
+/// Every file holding secret echo or scrub rows, read at build time.
 const ROW_FILES: [(&str, &str); 11] = [
     (
         "src/gateway/router/secret_echo_tests.rs",

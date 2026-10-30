@@ -120,7 +120,7 @@ impl McpFrame {
         // All remaining frames must be JSON-RPC 2.0.
         let version = v.get("jsonrpc").and_then(Value::as_str).unwrap_or("");
         // No error below quotes the frame: it is backend text, and can hold
-        // an injected value (MIK-9035).
+        // an injected value.
         if version != "2.0" {
             return Err(Error::Protocol(
                 "Unexpected WebSocket frame: jsonrpc is not \"2.0\"".to_string(),
@@ -221,7 +221,7 @@ struct Inner {
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
     /// The values the backend's rules injected; every frame this transport
-    /// reads is scrubbed of them before it is routed (MIK-9035). Set before
+    /// reads is scrubbed of them before it is routed. Set before
     /// the connect, so the handshake is scrubbed too.
     needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 }
@@ -488,7 +488,7 @@ impl WebSocketTransport {
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
                     } else {
-                        // The id is backend text: its length only (MIK-9035).
+                        // The id is backend text: its length only.
                         warn!(
                             id_len = key.len(),
                             "Received WebSocket response for unknown request"
@@ -549,7 +549,7 @@ impl WebSocketTransport {
 }
 
 /// Logs a close frame by its code and the length of its reason: the reason
-/// is backend text (MIK-9035).
+/// is backend text.
 fn log_close(frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFrame>) {
     debug!(
         code = ?frame.map(|f| f.code),
@@ -616,7 +616,7 @@ async fn run_io_loop(
                         inner.session.lock().await.messages_received += 1;
                         let text_str: &str = &text;
                         if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
-                            // `from_text` errors quote no frame text (MIK-9035).
+                            // `from_text` errors quote no frame text.
                             error!(
                                 error = %e,
                                 len = text_str.len(),

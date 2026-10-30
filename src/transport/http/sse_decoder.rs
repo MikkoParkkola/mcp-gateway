@@ -245,7 +245,7 @@ impl SseDecoder {
 /// before this returns, because returning ends the caller's scope.
 ///
 /// A notification is scrubbed of `needles` before it is published, and one
-/// the scrub withholds is not published (MIK-9035). The response frame is
+/// the scrub withholds is not published. The response frame is
 /// scrubbed by the caller with the rest of the answer.
 fn drain_events(
     events: Vec<SseEvent>,

@@ -322,7 +322,7 @@ mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
 /// An echoed injected secret is kept out of the idempotency cache, task
-/// answers and the task store (MIK-9035).
+/// answers and the task store.
 #[cfg(all(test, feature = "firewall"))]
 mod secret_echo_stored_tests;
 #[cfg(test)]

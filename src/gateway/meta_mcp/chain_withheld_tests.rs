@@ -210,7 +210,7 @@ fn signed_echo(tamper: bool) -> JsonRpcResponse {
     response
 }
 
-/// MIK-9035 T1.29 (DELTA-13): the chain of a signed answer echoing an
+/// T1.29 (DELTA-13): the chain of a signed answer echoing an
 /// injected value verifies over the bytes the backend signed, the
 /// provenance is recorded as verified, and the value never reaches the
 /// result.

@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A preview injects nothing (MIK-9035, T1.17 scope): a backend with secret
+//! A preview injects nothing (T1.17 scope): a backend with secret
 //! rules and credential headers, previewed, sends no value of any of them,
 //! so there is nothing its answers could echo.
 

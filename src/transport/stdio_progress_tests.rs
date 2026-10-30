@@ -303,7 +303,7 @@ fn with_needle() -> std::sync::Arc<StdioTransport> {
     transport
 }
 
-/// MIK-9035 DELTA-5 (T1.23): a progress token equal to an injected value
+/// DELTA-5 (T1.23): a progress token equal to an injected value
 /// routes by the token the backend sent; the caller's copy is scrubbed.
 #[tokio::test]
 async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
@@ -325,7 +325,7 @@ async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
     );
 }
 
-/// MIK-9035 DELTA-5 (T1.23): a subscription tag equal to an injected value
+/// DELTA-5 (T1.23): a subscription tag equal to an injected value
 /// still finds its listen.
 #[tokio::test]
 async fn a_subscription_tag_equal_to_a_secret_still_routes() {

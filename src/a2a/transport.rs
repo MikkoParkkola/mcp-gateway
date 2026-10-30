@@ -64,7 +64,7 @@ pub(crate) struct A2aTransport {
     timeout: Duration,
     /// The backend's injected values. Every answer and error leaves
     /// [`Transport::request`] scrubbed of them; ids and card routing fields
-    /// are read as sent before that (MIK-9035 DELTA-16).
+    /// are read as sent before that (DELTA-16).
     needles: Option<Arc<crate::security::needles::NeedleSet>>,
 }
 

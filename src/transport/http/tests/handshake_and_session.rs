@@ -300,7 +300,7 @@ async fn an_unparseable_message_target_gets_no_oauth_token() {
     );
 }
 
-/// MIK-9035 G4: a 2xx answer that fails to parse is named by its position,
+/// G4: a 2xx answer that fails to parse is named by its position,
 /// never by serde's text. serde would quote the string it rejected with its
 /// quote escaped, past the literal scrub (the byte-budget path, as the
 /// gateway's own backends read).

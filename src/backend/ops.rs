@@ -177,7 +177,7 @@ impl Backend {
     }
 
     /// No injected value goes to a transport that cannot scrub its echo
-    /// (MIK-9035 DELTA-10): a construction site that skipped the attach
+    /// (DELTA-10): a construction site that skipped the attach
     /// refuses here rather than sending.
     fn refuse_unredacted(
         &self,

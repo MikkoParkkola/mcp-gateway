@@ -278,7 +278,7 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         // registry stamps on each backend, and reads no backend.
         "with_secret_resolver",
         // A constructor too: it sets the redaction grace each backend's
-        // value set gets (MIK-9035), and reads no backend.
+        // value set gets, and reads no backend.
         "with_redaction_grace",
         "get",
         "all",

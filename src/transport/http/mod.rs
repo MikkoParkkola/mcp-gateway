@@ -175,7 +175,7 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 
 /// The text for a backend body that did not parse: its category and
 /// position, never serde's message, which can quote (and escape) the bytes it
-/// read, an injected value among them (MIK-9035, DELTA-4).
+/// read, an injected value among them (DELTA-4).
 pub(super) fn parse_failure(what: &str, error: &serde_json::Error) -> String {
     format!(
         "{what}: {:?} error at line {}, column {}",
@@ -303,7 +303,7 @@ pub struct HttpTransport {
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
     /// The values the backend's rules injected; every answer this transport
-    /// reads is scrubbed of them (MIK-9035). Attached before the first send.
+    /// reads is scrubbed of them. Attached before the first send.
     needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 
     /// Request ID counter

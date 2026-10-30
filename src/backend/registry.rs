@@ -227,7 +227,7 @@ pub struct BackendRegistry {
     /// the process environment.
     secret_resolver: Option<Arc<crate::secrets::SecretResolver>>,
     /// Each backend name's injected values, kept across the instances a
-    /// reload builds, so a retired value is still removed (MIK-9035).
+    /// reload builds, so a retired value is still removed.
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
@@ -264,7 +264,7 @@ impl BackendRegistry {
     }
 
     /// This registry's backends keep an injected value redacted for `grace`
-    /// after its last send (MIK-9035).
+    /// after its last send.
     #[must_use]
     pub(crate) fn with_redaction_grace(mut self, grace: std::time::Duration) -> Self {
         self.redaction_grace = grace;
@@ -332,7 +332,7 @@ impl BackendRegistry {
     pub fn register(&self, backend: Arc<Backend>) -> bool {
         // The value set is stamped and seeded before the backend is
         // published, so nothing it answers once visible (a tool description
-        // to a concurrent discovery) can carry a value unscrubbed (MIK-9035).
+        // to a concurrent discovery) can carry a value unscrubbed.
         // Outside any lock: a keychain value may take its time to resolve.
         if let Some(resolver) = &self.secret_resolver {
             backend.stamp_secret_resolver(Arc::clone(resolver));

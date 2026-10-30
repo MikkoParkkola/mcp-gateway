@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every place production code under src/transport, src/a2a and src/backend
 //! parses inbound JSON is listed in `inbound_parse_sites.tsv` with its class
-//! (MIK-9035 T1.31). A new parse site, a changed count, a stale row, or a
+//! (T1.31). A new parse site, a changed count, a stale row, or a
 //! `scrubbed` function that lost its scrub call fails.
 //!
 //! Classes:

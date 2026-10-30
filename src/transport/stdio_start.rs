@@ -314,7 +314,7 @@ impl StdioTransport {
 }
 
 /// Logs a backend line the transport could not handle. A parse error can
-/// quote the line, and the line can hold an injected secret (MIK-9035), so
+/// quote the line, and the line can hold an injected secret, so
 /// it is named by kind; the gateway's own refusals keep their text.
 fn log_unhandled_line(line_len: usize, error: &crate::Error) {
     // Only the gateway's own refusal (a protocol error `handle_response`

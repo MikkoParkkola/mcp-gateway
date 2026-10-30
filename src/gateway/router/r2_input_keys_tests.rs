@@ -45,7 +45,7 @@ fn edit_schema() -> Value {
 impl crate::transport::Transport for Wire {
     /// A recording double: these rows check what a call sends, not what its
     /// answer echoes, so it stands in for a transport holding its set
-    /// (MIK-9035 DELTA-10 refuses an injected call on one that does not).
+    /// (DELTA-10 refuses an injected call on one that does not).
     fn redacts_injected_values(&self) -> bool {
         true
     }

@@ -209,7 +209,7 @@ pub(crate) fn strip_ingress(
     if let Some(result) = response.result.as_mut() {
         // Cloned only where a gateway-only path is present, so an honest
         // answer (a large `tools/list` included) costs no copy. Seeded with
-        // what the transport's scrub kept as sent (MIK-9035 DELTA-13): those
+        // what the transport's scrub kept as sent (DELTA-13): those
         // originals predate this strip, so they win over its copies.
         let mut withheld = response
             .ingress_withheld

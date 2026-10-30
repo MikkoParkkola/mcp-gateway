@@ -213,7 +213,7 @@ pub trait Transport: Send + Sync {
     }
 
     /// Whether this transport scrubs a backend's injected values out of what
-    /// it reads: it holds the backend's value set (MIK-9035 DELTA-10). A call
+    /// it reads: it holds the backend's value set (DELTA-10). A call
     /// carrying an injected value is refused on a transport that does not.
     ///
     /// Defaults to `false` (fail closed): a transport that never attached a

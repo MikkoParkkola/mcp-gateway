@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! An A2A backend's injected values (MIK-9035 DELTA-16): every answer and
+//! An A2A backend's injected values (DELTA-16): every answer and
 //! error leaves the transport scrubbed, while task ids, context ids and the
 //! card's routing fields are read and sent on as the agent gave them.
 //!

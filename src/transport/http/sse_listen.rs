@@ -112,7 +112,7 @@ impl SseListenSession {
 
     /// [`Self::request_unscrubbed`], its answer and error scrubbed of the
     /// backend's injected values: this path does not pass `read_answer`
-    /// (MIK-9035).
+    ///.
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let needles = self.transport().ok().and_then(|t| t.needles.get().cloned());
         let answer = self.request_unscrubbed(method, params).await;
@@ -215,7 +215,7 @@ impl SseListenSession {
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         // Scrubbed, then watched: the filter compares the URI a client knows
-        // (MIK-9035, lead ruling G9).
+        // (lead ruling G9).
         let needles = t.needles.get().cloned();
         let sink = Sink {
             tx,

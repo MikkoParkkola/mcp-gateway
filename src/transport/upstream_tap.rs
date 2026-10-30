@@ -372,7 +372,7 @@ impl Taps {
     /// to the existing routes. The listen tag and the acknowledgement are read
     /// from `original`; the projected note is then scrubbed of `needles`, and
     /// the watch filter compares the scrubbed note, the URI a client knows
-    /// (MIK-9035 DELTA-5, lead ruling G9).
+    /// (DELTA-5, lead ruling G9).
     pub(crate) fn notification_keyed(
         &self,
         method: &str,

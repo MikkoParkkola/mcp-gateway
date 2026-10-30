@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A call carrying an injected value is refused when the transport that
-//! would carry it holds no redaction set (MIK-9035 DELTA-10), for every
+//! would carry it holds no redaction set (DELTA-10), for every
 //! injection kind a `secrets:` rule has: an argument over HTTP, stdio and
 //! WebSocket, and a header over HTTP. Nothing reaches the backend.
 //!

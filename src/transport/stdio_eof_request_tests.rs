@@ -348,7 +348,7 @@ cat > seen"#,
     let _ = t.close().await;
 }
 
-/// MIK-9035 T1.21: a line the transport cannot parse is logged by its
+/// T1.21: a line the transport cannot parse is logged by its
 /// length only; the line is backend text and can hold an injected value.
 #[test]
 fn an_unparsable_line_is_logged_by_length_only() {

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The values a backend's secret rules resolved to, and the scrub that
-//! removes them from what that backend sends back (MIK-9035).
+//! removes them from what that backend sends back.
 //!
 //! One set per backend name, shared by every instance a reload builds under
 //! that name, so a value a rotation replaced is still removed from a late

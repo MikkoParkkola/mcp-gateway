@@ -83,7 +83,7 @@ pub struct StdioTransport {
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
     /// The values the backend's rules injected; every line this transport
-    /// reads is scrubbed of them before it is routed (MIK-9035).
+    /// reads is scrubbed of them before it is routed.
     needles: std::sync::OnceLock<std::sync::Arc<crate::security::needles::NeedleSet>>,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
