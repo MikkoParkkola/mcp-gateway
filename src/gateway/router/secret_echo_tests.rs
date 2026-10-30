@@ -4,9 +4,13 @@
 //! hand that secret back to the caller: the resolved value is the gateway's
 //! credential, not part of the backend's answer.
 //!
-//! The backend here reflects the arguments it received into its result text,
-//! as an echo tool or an error message quoting the request would.
+//! The backend here is a real HTTP MCP server on a loopback port that
+//! reflects the arguments it received, as an echo tool or an error message
+//! quoting the request would. A real transport, not a mock: the secret is
+//! removed where the transport parses the backend's bytes, which a mock
+//! transport would never pass through.
 use axum::body::to_bytes;
+use axum::response::IntoResponse;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,11 +19,13 @@ use tower::ServiceExt;
 use super::create_router;
 use super::tests::test_router_app_state_with_backend;
 use crate::backend::Backend;
-use crate::config::{BackendConfig, FailsafeConfig};
-use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::config::{BackendConfig, FailsafeConfig, TransportConfig};
 
-/// A value no ordinary answer contains, long enough to be redacted.
+/// A value no ordinary answer contains.
 const SECRET: &str = "echo-secret-7f3a9c2e51d84b06";
+
+/// The marker an echoed secret is replaced with.
+const MARKER: &str = "[redacted]";
 
 type Calls = Arc<parking_lot::Mutex<Vec<Value>>>;
 
@@ -28,88 +34,92 @@ type Calls = Arc<parking_lot::Mutex<Vec<Value>>>;
 enum Reply {
     /// The arguments, as JSON text, in the result.
     Echo,
-    /// The secret spelled with a `\u` escape in the wire text, parsed as a
-    /// transport parses a frame: it decodes back to the secret.
+    /// The secret spelled with a `\u` escape in the wire text: it decodes
+    /// back to the secret.
     UnicodeEscaped,
     /// The secret straight after an escape (`\n`) in the wire text.
     AfterEscape,
-    /// A JSON-RPC refusal whose message and data quote the secret, as a
-    /// non-2xx peer refusal arrives (`Error::JsonRpc`).
+    /// A non-2xx JSON-RPC refusal whose message and data quote the secret.
     Refusal,
 }
 
-/// Serves one `echo` tool that reflects the arguments it received.
-struct Echo {
-    calls: Calls,
-    reply: Reply,
+/// A frame's exact wire text, as the backend sends it.
+fn wire(text: String) -> axum::response::Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        text,
+    )
+        .into_response()
 }
 
-/// A frame as the wire carries it, parsed as a transport parses it.
-fn frame(text: &str) -> JsonRpcResponse {
-    serde_json::from_str(text).expect("the fixture frame parses")
-}
-
-#[async_trait::async_trait]
-impl crate::transport::Transport for Echo {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
-        let result = match method {
-            "tools/list" => json!({"tools": [{
-                "name": "echo", "description": "fixture",
-                "inputSchema": {"type": "object"}
-            }]}),
-            "tools/call" => {
-                let params = params.unwrap_or(Value::Null);
-                self.calls.lock().push(params.clone());
-                let key = params["arguments"]["api_key"].as_str().unwrap_or_default();
-                match self.reply {
-                    Reply::Echo => {
-                        let received = params["arguments"].to_string();
-                        json!({"content": [{"type": "text", "text": format!("received {received}")}]})
-                    }
-                    Reply::UnicodeEscaped => {
-                        let (first, rest) = key.split_at(1);
-                        let escaped = format!("\\u{:04x}{rest}", u32::from(first.as_bytes()[0]));
-                        return Ok(frame(&format!(
-                            r#"{{"jsonrpc":"2.0","id":1,"result":{{"content":[{{"type":"text","text":"key {escaped}"}}]}}}}"#
-                        )));
-                    }
-                    Reply::AfterEscape => {
-                        return Ok(frame(&format!(
-                            r#"{{"jsonrpc":"2.0","id":1,"result":{{"content":[{{"type":"text","text":"line\n{key}"}}]}}}}"#
-                        )));
-                    }
-                    Reply::Refusal => {
-                        return Err(crate::Error::JsonRpc {
-                            code: -32602,
-                            message: format!("bad api_key {key}"),
-                            data: Some(json!({"received": key})),
-                        });
+/// A Streamable HTTP MCP server on a loopback port that lists one `echo`
+/// tool and answers each call with `reply`; returns its URL.
+async fn echo_server(calls: Calls, reply: Reply) -> String {
+    let app = axum::Router::new().fallback(move |body: axum::body::Bytes| {
+        let calls = Arc::clone(&calls);
+        async move {
+            let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+            let Some(id) = request.get("id").cloned() else {
+                return axum::http::StatusCode::ACCEPTED.into_response();
+            };
+            let answer = |result: Value| {
+                axum::Json(json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+            };
+            match request["method"].as_str() {
+                Some("initialize") => answer(json!({"protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}}, "serverInfo": {"name": "echoes", "version": "0"}})),
+                Some("tools/list") => answer(json!({"tools": [{
+                    "name": "echo", "description": "fixture", "inputSchema": {"type": "object"}
+                }]})),
+                Some("tools/call") => {
+                    let params = request["params"].clone();
+                    calls.lock().push(params.clone());
+                    let key = params["arguments"]["api_key"].as_str().unwrap_or_default().to_owned();
+                    match reply {
+                        Reply::Echo => {
+                            let received = params["arguments"].to_string();
+                            answer(json!({"content": [{"type": "text", "text": format!("received {received}")}]}))
+                        }
+                        Reply::UnicodeEscaped => {
+                            let (first, rest) = key.split_at(1);
+                            let escaped = format!("\\u{:04x}{rest}", u32::from(first.as_bytes()[0]));
+                            wire(format!(
+                                r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":[{{"type":"text","text":"key {escaped}"}}]}}}}"#
+                            ))
+                        }
+                        Reply::AfterEscape => wire(format!(
+                            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":[{{"type":"text","text":"line\n{key}"}}]}}}}"#
+                        )),
+                        Reply::Refusal => (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            axum::Json(json!({"jsonrpc": "2.0", "id": id, "error": {
+                                "code": -32602,
+                                "message": format!("bad api_key {key}"),
+                                "data": {"received": key}
+                            }})),
+                        )
+                            .into_response(),
                     }
                 }
+                _ => answer(json!({})),
             }
-            _ => json!({}),
-        };
-        Ok(JsonRpcResponse::success(RequestId::Number(1), result))
-    }
-
-    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
-        Ok(())
-    }
-
-    fn is_connected(&self) -> bool {
-        true
-    }
-
-    async fn close(&self) -> crate::Result<()> {
-        Ok(())
-    }
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a loopback port");
+    let address = listener.local_addr().expect("the bound address");
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    format!("http://{address}/mcp")
 }
 
-/// An `echoes` backend whose `api_key` argument the gateway injects.
+/// An `echoes` HTTP backend, served by [`echo_server`], whose own rule
+/// injects [`SECRET`] as the `api_key` argument.
 async fn fixture(reply: Reply) -> (axum::Router, Calls, super::tests::FixtureDir) {
     let calls = Calls::default();
-    // The backend's own rule: since per-backend injection, the registry
-    // stamps the resolver at registration and the send injects.
+    let url = echo_server(Arc::clone(&calls), reply).await;
     let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
         "name": "echo-key", "value": SECRET, "inject_key": "api_key"
     }))
@@ -117,20 +127,18 @@ async fn fixture(reply: Reply) -> (axum::Router, Calls, super::tests::FixtureDir
     let backend = Arc::new(Backend::new(
         "echoes",
         BackendConfig {
+            enabled: true,
+            transport: TransportConfig::Http {
+                http_url: url,
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
             secrets: vec![rule],
             ..BackendConfig::default()
         },
         &FailsafeConfig::default(),
-        Duration::from_secs(60),
+        Duration::from_secs(30),
     ));
-    backend.set_transport_for_test(Arc::new(Echo {
-        calls: Arc::clone(&calls),
-        reply,
-    }));
-    backend
-        .get_tools_for_binding(None, &[])
-        .await
-        .expect("the fixture lists its tools");
     let (state, store) = test_router_app_state_with_backend(backend).await;
     (create_router(state), calls, store)
 }
@@ -178,6 +186,10 @@ async fn an_echoed_secret_does_not_reach_the_client_on_the_meta_route() {
         !body.to_string().contains(SECRET),
         "the injected secret reached the client: {body}"
     );
+    assert!(
+        body.to_string().contains(MARKER),
+        "the echo was dropped, not redacted: {body}"
+    );
 }
 
 /// The meta route's answer to one `echo` call answered with `reply`, after
@@ -213,6 +225,7 @@ async fn a_unicode_escaped_echo_does_not_reach_the_client() {
         !body.to_string().contains(SECRET),
         "the escaped secret reached the client: {body}"
     );
+    assert!(body.to_string().contains(MARKER), "not redacted: {body}");
 }
 
 /// A secret straight after an escape in the wire text is redacted, and the
@@ -230,6 +243,7 @@ async fn a_secret_after_an_escape_is_redacted_and_the_escape_kept() {
         text.contains("line\\n"),
         "the escape before it was lost: {body}"
     );
+    assert!(text.contains(MARKER), "not redacted: {body}");
 }
 
 /// A peer refusal whose message and data quote the secret (a non-2xx
@@ -241,4 +255,64 @@ async fn a_refusal_quoting_the_secret_reaches_the_client_redacted() {
         !body.to_string().contains(SECRET),
         "the refusal carried the secret to the client: {body}"
     );
+    assert!(body.to_string().contains(MARKER), "not redacted: {body}");
+}
+
+/// One `echo` call on the per-backend route `/mcp/echoes`, as a modern
+/// client sends it.
+async fn post_direct(router: &axum::Router) -> Value {
+    let params = json!({"name": "echo", "arguments": {"q": "hi"}, "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+    }});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/echoes")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "echo")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap_or(Value::Null)
+}
+
+/// The per-backend route's answer to one `echo` call answered with
+/// `reply`, after checking the backend received the injected secret.
+async fn direct_answer(reply: Reply) -> Value {
+    let (router, calls, _store) = fixture(reply).await;
+    let body = post_direct(&router).await;
+    let calls = calls.lock();
+    let [call] = calls.as_slice() else {
+        panic!("premise: one call reached the backend: {body}");
+    };
+    assert_eq!(
+        call["arguments"]["api_key"], SECRET,
+        "premise: the gateway injected the secret on the per-backend route"
+    );
+    body
+}
+
+/// The per-backend route: the same four echoes, each redacted, never
+/// dropped.
+#[tokio::test]
+async fn every_echo_is_redacted_on_the_per_backend_route() {
+    for (reply, what) in [
+        (Reply::Echo, "a plain echo"),
+        (Reply::UnicodeEscaped, "a unicode-escaped echo"),
+        (Reply::AfterEscape, "an echo after an escape"),
+        (Reply::Refusal, "a refusal quoting the secret"),
+    ] {
+        let body = direct_answer(reply).await;
+        let text = body.to_string();
+        assert!(!text.contains(SECRET), "{what} reached the client: {body}");
+        assert!(
+            text.contains(MARKER),
+            "{what} was dropped, not redacted: {body}"
+        );
+    }
 }
