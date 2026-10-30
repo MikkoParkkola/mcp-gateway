@@ -85,11 +85,6 @@ impl Backend {
         }
     }
 
-    /// This backend's injected values, once its registry stamped them.
-    pub(crate) fn needles(&self) -> Option<&Arc<crate::security::needles::NeedleSet>> {
-        self.needles.get()
-    }
-
     /// Adds every value this backend's rules resolve to now, so a value is
     /// removed from what the backend sends before any call injects it (a
     /// tool description, an initialize answer). A rule that does not resolve
