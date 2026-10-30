@@ -249,7 +249,8 @@ async fn iso_t7_token_exchange_listener_only_presents_its_users_credential() {
 }
 
 /// Every request after the users subscribe carries a user's own subject, and
-/// the subject its session was issued to: cold start, stream, the resource
+/// the subject its session was issued to: cold start including the era probe
+/// (`server/discover`), stream, the resource
 /// subscription, and re-initialization after a dropped session (the refused
 /// request that triggers it included).
 async fn only_its_users_credential(
@@ -268,7 +269,8 @@ async fn only_its_users_credential(
     }
     let cold: Vec<_> = peer.seen().into_iter().skip(from).collect();
     for user in ["u1", "u2"] {
-        for method in ["initialize", "resources/subscribe"] {
+        // `server/discover` is the era probe: it is seen, and it is the user's.
+        for method in ["server/discover", "initialize", "resources/subscribe"] {
             assert!(
                 cold.iter().any(|r| r.subject == user && r.method == method),
                 "{user}'s listener sent {method} as {user}: {cold:?}"

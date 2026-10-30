@@ -101,6 +101,9 @@ impl Gateway {
         // Restored before anything is served or reloaded.
         let (counters, counter_saver) =
             counter_wiring::start(&data_dir, &meta_mcp, shutdown_tx.subscribe());
+        // The web UI's open decisions: built, replayed and kept current here.
+        #[cfg(feature = "webui")]
+        let _decisions = crate::gateway::ui::decisions::start(&meta_mcp, shutdown_tx.subscribe());
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();

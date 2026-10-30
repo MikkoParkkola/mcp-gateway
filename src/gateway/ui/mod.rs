@@ -16,6 +16,7 @@ pub mod backends;
 pub mod capabilities;
 pub mod control_plane;
 mod dashboard;
+pub(in crate::gateway) mod decisions;
 mod discovery;
 mod errors;
 mod events;
@@ -88,6 +89,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(events::events_router())
         .merge(import::import_router())
         .merge(discovery::discovery_router())
+        .merge(decisions::decisions_router())
         .merge(history::history_router())
         .merge(stream::stream_router());
 

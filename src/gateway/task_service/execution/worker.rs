@@ -308,6 +308,8 @@ async fn run_dispatched(
         .dispatch_log()
         .worker()
         .arm(&executor.service.store);
+    // A round starts unrefused; its invocations decide it.
+    intent.owned.dispatch_log().reset_round();
     // MIK-8154 C2e, F2: the run and its sends compare against what the
     // submit's intake judged, as a synchronous call does.
     let dispatch =

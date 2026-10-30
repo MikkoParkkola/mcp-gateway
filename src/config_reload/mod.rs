@@ -638,6 +638,8 @@ mod writer_lock_tests;
 mod writer_symlink_tests;
 
 #[cfg(test)]
+mod replace_audit_tests;
+#[cfg(test)]
 mod replace_secret_tests;
 #[cfg(test)]
 mod replace_test_support;
