@@ -166,7 +166,8 @@ impl SseListenSession {
                 .await
                 .map_err(|_| Error::Transport(format!("listener {method}: no answer in time")))?;
         }
-        serde_json::from_slice(&body).map_err(|e| Error::Protocol(e.to_string()))
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::Protocol(super::parse_failure("listener answer", &e)))
     }
 
     async fn notify(&self, method: &str) -> Result<()> {

@@ -259,9 +259,10 @@ fn drain_events(
         // message -- a tool result is the last thing to copy into an error.
         let mut message: JsonRpcMessage = serde_json::from_str(&event.data).map_err(|e| {
             Error::Transport(format!(
-                "Failed to parse SSE data ({} data lines, {} bytes): {e}",
+                "Failed to parse SSE data ({} data lines, {} bytes); {}",
                 event.data.lines().count(),
-                event.data.len()
+                event.data.len(),
+                super::parse_failure("cause", &e)
             ))
         })?;
         if matches!(message, JsonRpcMessage::Notification(_)) && withheld(needles, &mut message) {

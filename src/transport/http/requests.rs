@@ -538,12 +538,9 @@ impl HttpTransport {
             // carry `set-cookie`, `authorization` echoes and bearer material.
             // Computed before the macro, as above (MIK-7324).
             let diagnostic_url = sanitize_url_for_diagnostics(message_url);
-            let names: Vec<&str> = response
-                .headers()
-                .keys()
-                .map(header::HeaderName::as_str)
-                .collect();
-            debug!(target: HTTP_TARGET, url = %diagnostic_url, "No session ID in response. Header names: {:?}", names);
+            // The count only: a header name is backend text (MIK-9035).
+            let headers = response.headers().len();
+            debug!(target: HTTP_TARGET, url = %diagnostic_url, headers, "No session ID in response");
         }
 
         let status = response.status();
@@ -636,8 +633,9 @@ impl HttpTransport {
     /// A 2xx JSON body, counted against the byte budget when one is set.
     async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
         match self.body_budget.get() {
-            Some(budget) => serde_json::from_slice(&budget.read(response).await?)
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}"))),
+            Some(budget) => serde_json::from_slice(&budget.read(response).await?).map_err(|e| {
+                Error::Transport(super::parse_failure("Failed to parse response", &e))
+            }),
             None => response
                 .json()
                 .await
@@ -678,7 +676,7 @@ impl HttpTransport {
             return Ok(answer);
         }
         serde_json::from_slice(&body)
-            .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+            .map_err(|e| Error::Transport(super::parse_failure("Failed to parse response", &e)))
     }
 
     /// Get next request ID

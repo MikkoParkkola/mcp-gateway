@@ -432,3 +432,21 @@ async fn a_notification_echoing_a_secret_is_scrubbed_before_it_is_published() {
         "a notification named by the secret is withheld"
     );
 }
+
+/// gpt G4 (DELTA-4): a frame that fails typed parsing is reported by its
+/// category and position; serde's text, which quotes (and escapes) what it
+/// read, never reaches the error.
+#[tokio::test]
+async fn a_frame_that_fails_to_parse_quotes_none_of_itself() {
+    const NEEDLE: &str = "parse-secret-5d02";
+    let frame = format!(
+        "data: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}},\"error\":\"{NEEDLE}\\\\\\\"q\"}}\n\n"
+    );
+    let body = futures::stream::iter(vec![Ok(bytes::Bytes::from(frame))]);
+    let error = decode_sse_exchange(body, None)
+        .await
+        .expect_err("an error that is a string is malformed");
+    let text = error.to_string();
+    assert!(text.contains("Failed to parse SSE data"), "premise: {text}");
+    assert!(!text.contains(NEEDLE), "the error quotes the frame: {text}");
+}

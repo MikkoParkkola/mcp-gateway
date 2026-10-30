@@ -195,6 +195,18 @@ fn status_invites_a_retry(status: reqwest::StatusCode) -> bool {
 /// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
 /// probe reads the code and the retry classifiers read the carriage
 /// (MIK-7217, OUTBOUND.2).
+/// The text for a backend body that did not parse: its category and
+/// position, never serde's message, which can quote (and escape) the bytes it
+/// read, an injected value among them (MIK-9035, DELTA-4).
+pub(super) fn parse_failure(what: &str, error: &serde_json::Error) -> String {
+    format!(
+        "{what}: {:?} error at line {}, column {}",
+        error.classify(),
+        error.line(),
+        error.column()
+    )
+}
+
 fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
     let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
     if response.id.as_ref() != Some(id) {
