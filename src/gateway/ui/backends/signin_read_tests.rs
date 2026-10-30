@@ -3,8 +3,6 @@
 //! The backends read: the one sign-in predicate, evaluated once and shown by
 //! every consumer the same way.
 
-use std::sync::atomic::Ordering;
-
 use super::fixture::Gw;
 use crate::oauth::client::sign_in::SignIn;
 
@@ -38,7 +36,7 @@ async fn needs_sign_in_agrees_across_every_variant() {
             gw.backend
                 .shared_entry_for_test()
                 .auth_wait
-                .store(wait, Ordering::Relaxed);
+                .set_for_test(wait);
             let expected = needs || wait;
 
             assert_eq!(

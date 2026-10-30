@@ -504,7 +504,7 @@ impl Backend {
             Ok(_) => {
                 entry.ever_started.store(true, Ordering::Relaxed);
                 entry.start_failed.store(false, Ordering::Relaxed);
-                entry.auth_wait.store(false, Ordering::Relaxed);
+                entry.auth_wait.clear();
             }
             Err(e) if e.is_authorization_wait() => entry.set_auth_wait(),
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),

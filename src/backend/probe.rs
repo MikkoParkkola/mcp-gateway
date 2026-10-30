@@ -125,9 +125,7 @@ impl Backend {
             Ok(_) => {
                 self.unserved_consecutive.store(0, Ordering::SeqCst);
                 // Answered: nobody is waiting to sign in.
-                self.shared_entry()
-                    .auth_wait
-                    .store(false, Ordering::Relaxed);
+                self.shared_entry().auth_wait.clear();
                 if self.is_circuit_tripped() {
                     info!(
                         backend = %self.name,
@@ -209,9 +207,7 @@ impl Backend {
         if code == METHOD_NOT_FOUND {
             self.unserved_consecutive.store(0, Ordering::SeqCst);
             // Answered: nobody is waiting to sign in.
-            self.shared_entry()
-                .auth_wait
-                .store(false, Ordering::Relaxed);
+            self.shared_entry().auth_wait.clear();
             debug!(
                 backend = %self.name,
                 method,

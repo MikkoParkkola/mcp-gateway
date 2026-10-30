@@ -106,7 +106,7 @@ pub(super) async fn start(
         return Ok(in_progress(backend));
     }
     let client = backend.sign_in_client().await?;
-    let Begin::Lead(mut lead) = backend.login_gate.begin(None, None) else {
+    let Begin::Lead(lead) = backend.login_gate.begin(None, None) else {
         return Ok(in_progress(backend));
     };
     let deadline = Instant::now() + OAUTH_AUTHORIZATION_WINDOW;
@@ -184,11 +184,7 @@ impl Run {
     /// The callback landed: the confirm window starts now.
     fn callback_landed(&self, lead: &Lead) {
         let at = Instant::now() + SIGN_IN_CONFIRM_WINDOW;
-        let generation = self
-            .backend
-            .shared_entry()
-            .auth_wait_gen
-            .load(std::sync::atomic::Ordering::Relaxed);
+        let generation = self.backend.auth_wait_generation();
         self.backend.with_flow(|slot| {
             if let Some(flow) = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id) {
                 flow.phase = Phase::AwaitingConfirm;

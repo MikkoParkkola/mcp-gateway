@@ -160,10 +160,7 @@ async fn a_token_with_auth_wait_reads_expired() {
     backend
         .sign_in_status
         .set(SignIn::SignedIn { expires_at: None });
-    backend
-        .shared_entry_for_test()
-        .auth_wait
-        .store(true, Ordering::Relaxed);
+    backend.shared_entry_for_test().auth_wait.set();
 
     assert_eq!(backend.sign_in(), SignIn::Expired);
     assert!(backend.needs_sign_in());
@@ -247,10 +244,7 @@ async fn a_non_oauth_backend_waiting_reads_waiting_elsewhere() {
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     );
-    backend
-        .shared_entry_for_test()
-        .auth_wait
-        .store(true, Ordering::Relaxed);
+    backend.shared_entry_for_test().auth_wait.set();
 
     assert_eq!(backend.sign_in(), SignIn::WaitingElsewhere);
     assert!(backend.needs_sign_in());

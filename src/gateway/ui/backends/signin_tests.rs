@@ -5,7 +5,7 @@
 //! rows are in `signin_timing_tests.rs`, secrecy rows in
 //! `signin_secrecy_tests.rs`.
 
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 
 use axum::http::StatusCode;
@@ -204,10 +204,7 @@ async fn nothing_is_saved_before_confirm() {
 #[tokio::test]
 async fn owner_confirm_saves_and_clears_its_wait() {
     let gw = Gw::new().await;
-    gw.backend
-        .shared_entry_for_test()
-        .auth_wait
-        .store(true, Ordering::Relaxed);
+    gw.backend.shared_entry_for_test().auth_wait.set();
     let owner = gw.session();
     let attempt = approved(&gw, &owner).await;
 
@@ -219,22 +216,14 @@ async fn owner_confirm_saves_and_clears_its_wait() {
         Some("access-a".to_owned())
     );
     assert!(matches!(gw.backend.sign_in(), SignIn::SignedIn { .. }));
-    assert!(
-        !gw.backend
-            .shared_entry_for_test()
-            .auth_wait
-            .load(Ordering::Relaxed)
-    );
+    assert!(!gw.backend.shared_entry_for_test().auth_wait.get());
 }
 
 // R9: a wait recorded after the callback outlives the confirm.
 #[tokio::test]
 async fn a_newer_wait_survives_confirm() {
     let gw = Gw::new().await;
-    gw.backend
-        .shared_entry_for_test()
-        .auth_wait
-        .store(true, Ordering::Relaxed);
+    gw.backend.shared_entry_for_test().auth_wait.set();
     let owner = gw.session();
     let attempt = approved(&gw, &owner).await;
     gw.backend.note_auth_wait();
@@ -242,12 +231,7 @@ async fn a_newer_wait_survives_confirm() {
     let reply = gw.confirm(&owner, &attempt, "confirm").await;
 
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-    assert!(
-        gw.backend
-            .shared_entry_for_test()
-            .auth_wait
-            .load(Ordering::Relaxed)
-    );
+    assert!(gw.backend.shared_entry_for_test().auth_wait.get());
 }
 
 // R10: the other session presents the owner's real attempt id, so only the
@@ -373,4 +357,38 @@ async fn cli_and_startup_flows_still_save_on_exchange() {
 
     assert_eq!(outcome.expect("the flow completes"), "access-cli");
     assert!(cli.has_valid_token(), "saved and cached on exchange");
+}
+
+// Guard order: a caller with no dashboard session learns nothing about which
+// backends exist, so a missing one gets the session refusal, not a 404.
+#[tokio::test]
+async fn a_bearer_admin_probing_a_missing_backend_gets_the_session_refusal() {
+    let gw = Gw::new().await;
+
+    let reply = gw.start_named(&Who::BearerOnly, "no-such-backend").await;
+
+    assert_refusal(&reply, StatusCode::FORBIDDEN, "dashboard_session_required");
+}
+
+// A4, mutant M19: the wait's compare and its clear share one lock. A failure
+// that lands while the clear is parked inside it must wait, and so land after
+// the clear and survive it. Check-then-clear with no shared lock erases it.
+#[tokio::test]
+async fn a_failure_landing_between_check_and_clear_survives() {
+    let gw = Gw::new().await;
+    let entry = gw.backend.shared_entry_for_test();
+    entry.auth_wait.set();
+    let seen = entry.auth_wait.generation();
+    let (reached, release) = entry.auth_wait.pause.arm();
+    let backend = Arc::clone(&gw.backend);
+    let clear = tokio::task::spawn_blocking(move || backend.clear_auth_wait_if(seen));
+    crate::test_pause::within("the clear reaches its critical section", reached.notified()).await;
+    let backend = Arc::clone(&gw.backend);
+    let failure = tokio::task::spawn_blocking(move || backend.note_auth_wait());
+
+    release.notify_one();
+    clear.await.expect("the clear finished");
+    failure.await.expect("the failure was recorded");
+
+    assert!(entry.auth_wait.get(), "the newer wait survives the clear");
 }

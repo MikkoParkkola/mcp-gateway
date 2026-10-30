@@ -55,6 +55,7 @@ mod secret_send;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
+mod auth_wait;
 #[cfg(feature = "webui")]
 pub(crate) mod sign_in_flow;
 mod status;

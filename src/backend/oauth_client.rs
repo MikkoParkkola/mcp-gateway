@@ -5,7 +5,6 @@
 
 use std::sync::Arc;
 #[cfg(any(test, feature = "webui"))]
-use std::sync::atomic::Ordering;
 
 use tracing::info;
 
@@ -133,7 +132,7 @@ impl Backend {
     /// snapshot, with no storage read, refresh or network call.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn sign_in(&self) -> SignIn {
-        self.sign_in_given(self.shared_entry().auth_wait.load(Ordering::Relaxed))
+        self.sign_in_given(self.shared_entry().auth_wait.get())
     }
 
     /// [`Backend::sign_in`] for a wait already read, so one caller never
@@ -163,7 +162,7 @@ impl Backend {
     /// predicate is evaluated; the server row and the overview both call it.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn needs_sign_in(&self) -> bool {
-        let waiting = self.shared_entry().auth_wait.load(Ordering::Relaxed);
+        let waiting = self.shared_entry().auth_wait.get();
         waiting || self.sign_in_given(waiting).needs_a_person()
     }
 }

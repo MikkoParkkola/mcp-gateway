@@ -359,8 +359,8 @@ fn success_under(entry: &PooledEntry, request_failed: &mut bool, latency: Durati
     entry.failsafe.record_success(latency);
     // A served answer means nobody is waiting to sign in. Load first: the
     // per-call path pays a store only on the rare clear.
-    if entry.auth_wait.load(Ordering::Relaxed) {
-        entry.auth_wait.store(false, Ordering::Relaxed);
+    if entry.auth_wait.get() {
+        entry.auth_wait.clear();
     }
     if entry.failsafe.circuit_breaker.stats().state == CircuitState::Closed {
         *request_failed = false;

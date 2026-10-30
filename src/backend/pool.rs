@@ -166,14 +166,7 @@ pub(crate) struct PooledEntry {
     pub(crate) request_failed_since_close: parking_lot::Mutex<bool>,
     /// The last dispatch or fill waited on a sign-in and nothing has succeeded
     /// since (`Error::is_authorization_wait`); read as `needs_sign_in`.
-    pub(crate) auth_wait: AtomicBool,
-    /// Bumped each time [`PooledEntry::set_auth_wait`] sets `auth_wait`, so a
-    /// later clear can tell a newer wait from the one it saw.
-    #[cfg_attr(
-        not(feature = "webui"),
-        allow(dead_code, reason = "the web UI flow reads it to clear only the wait it saw")
-    )]
-    pub(crate) auth_wait_gen: std::sync::atomic::AtomicU64,
+    pub(crate) auth_wait: super::auth_wait::AuthWait,
     /// This slot has had a transport published at least once.
     pub(crate) ever_started: AtomicBool,
     /// The last start failed (not on a sign-in) and none has succeeded since.
@@ -256,8 +249,7 @@ impl Drop for ActivityGuard {
 impl PooledEntry {
     /// Record that this slot waits on a sign-in, bumping the wait's generation.
     pub(crate) fn set_auth_wait(&self) {
-        self.auth_wait_gen.fetch_add(1, Ordering::Relaxed);
-        self.auth_wait.store(true, Ordering::Relaxed);
+        self.auth_wait.set();
     }
 
     pub(crate) fn new(name: &str, failsafe_config: &crate::config::FailsafeConfig) -> Self {
@@ -280,8 +272,7 @@ impl PooledEntry {
             tools_fill_failed_at: parking_lot::Mutex::new(None),
             tools_refresh_failed_at: parking_lot::Mutex::new(None),
             request_failed_since_close: parking_lot::Mutex::new(false),
-            auth_wait: AtomicBool::new(false),
-            auth_wait_gen: std::sync::atomic::AtomicU64::new(0),
+            auth_wait: super::auth_wait::AuthWait::default(),
             ever_started: AtomicBool::new(false),
             start_failed: AtomicBool::new(false),
 

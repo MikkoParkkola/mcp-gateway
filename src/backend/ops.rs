@@ -524,9 +524,7 @@ impl Backend {
     ) {
         if error.is_authorization_wait() {
             // The backend was never asked: someone must sign in.
-            entry
-                .auth_wait
-                .store(true, std::sync::atomic::Ordering::Relaxed);
+            entry.set_auth_wait();
             return;
         }
         // A busy credential lock is not a backend failure either: the token
