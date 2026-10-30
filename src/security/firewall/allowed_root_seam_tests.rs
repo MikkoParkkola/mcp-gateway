@@ -239,6 +239,9 @@ fn r16b_values_share_one_deadline() {
         let stepping = Stepping::new(&clock, step);
         let (c, s) = (Arc::clone(&clock), Arc::clone(&stepping));
         let fx = seamed(Fx::with_rules(rule), |fw| fw.with_clock(c).with_resolver(s));
+        // `g` exists, so its own metadata read comes before the call's last
+        // read (the final canonicalisation).
+        std::fs::write(fx.dir.path().join("safe/g"), "g").expect("write");
         let args = json!({"a": fx.path("safe/f"), "b": fx.path("safe/g")});
         let got = forced(&fx, &args);
         let ops = stepping.ops.lock().expect("ops").clone();
@@ -251,7 +254,9 @@ fn r16b_values_share_one_deadline() {
     assert_eq!(still, None, "with the clock still the call completes");
     let reads = u32::try_from(ops.len()).expect("few reads");
     assert!(reads >= 3, "a call this short proves nothing: {ops:?}");
-    let (got, ops) = run(ROOT_CHECK_DEADLINE / (reads - 1));
+    // Rounded up, so the budget has run out before the last read.
+    let step = ROOT_CHECK_DEADLINE.as_nanos().div_ceil(u128::from(reads - 1));
+    let (got, ops) = run(Duration::from_nanos(u64::try_from(step).expect("a short step")));
     assert!(
         ops.iter().any(|(op, _)| names_b(op)),
         "the second value was read: {ops:?}"

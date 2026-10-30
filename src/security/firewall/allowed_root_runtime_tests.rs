@@ -135,30 +135,34 @@ fn r16c_all_slots_held_refuses_at_once() {
 }
 
 /// R16e: on a two-worker runtime, two checks blocked on reads leave a third
-/// task free to run before either read is released: when it has run, neither
-/// check has returned, so it did not wait for a worker their timeout freed.
+/// task free to run before either read is released: the third task records
+/// how many checks had returned when it ran, and none had, so it did not
+/// wait for a worker their timeout freed.
 #[test]
 fn r16e_blocked_checks_do_not_pin_the_workers() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .build()
         .expect("runtime");
     let rig = rig();
     let _open = rig.gate.guard();
+    let returned = Arc::new(AtomicUsize::new(0));
     for _ in 0..2 {
-        let (fx, tx) = (Arc::clone(&rig.fx), rig.tx.clone());
-        drop(rt.spawn(async move { report(&fx, &tx) }));
+        let (fx, tx, r) = (Arc::clone(&rig.fx), rig.tx.clone(), Arc::clone(&returned));
+        drop(rt.spawn(async move {
+            report(&fx, &tx);
+            r.fetch_add(1, Ordering::SeqCst);
+        }));
         entered(&rig.rx);
     }
     let (ran_tx, ran_rx) = mpsc::channel();
+    let r = Arc::clone(&returned);
     drop(rt.spawn(async move {
-        let _ = ran_tx.send(());
+        let _ = ran_tx.send(r.load(Ordering::SeqCst));
     }));
-    ran_rx
+    let seen = ran_rx
         .recv_timeout(HANG)
         .expect("a third task ran while both checks waited");
-    assert!(
-        !matches!(rig.rx.try_recv(), Ok(Event::Done(_))),
-        "the third task ran only after a check returned"
-    );
+    assert_eq!(seen, 0, "the third task ran only after a check returned");
 }

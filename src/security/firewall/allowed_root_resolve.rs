@@ -206,11 +206,14 @@ impl Resolve for Real {
                 // folder to the end. The deadline is checked before each
                 // entry, so a slow listing frees its resolver slot once the
                 // call has timed out.
+                let mut listing = std::fs::read_dir(p)?;
                 let mut entries = Vec::new();
-                for entry in std::fs::read_dir(p)?.take(DIRECTORY_ENTRY_CAP + 1) {
+                while entries.len() <= DIRECTORY_ENTRY_CAP {
+                    // Before each read of the next entry, never after it.
                     if Instant::now() >= deadline {
                         return Err(std::io::ErrorKind::TimedOut.into());
                     }
+                    let Some(entry) = listing.next() else { break };
                     entries.push(entry.map(|e| e.file_name()));
                 }
                 Ok(Resolved::Entries(entries))
