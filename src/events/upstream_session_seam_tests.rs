@@ -37,7 +37,7 @@ fn c4_an_identity_credential_never_falls_back_to_the_shared_transport() {
             &'a self,
             send: crate::transport::upstream_tap::CredentialedSend<'a>,
         ) -> futures::future::BoxFuture<'a, crate::Result<reqwest::Response>> {
-            send(Vec::new())
+            send(zeroize::Zeroizing::default())
         }
         fn identity_key(&self) -> Option<&str> {
             Some("k")
