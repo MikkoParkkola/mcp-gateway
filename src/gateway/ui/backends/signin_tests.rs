@@ -28,7 +28,7 @@ async fn started(gw: &Gw, who: &Who) -> (String, String) {
 /// A flow `who` started and the person approved: waiting for the confirm.
 async fn approved(gw: &Gw, who: &Who) -> String {
     let (url, attempt) = started(gw, who).await;
-    gw.approve(&url).await;
+    let _ = gw.approve(&url).await;
     attempt
 }
 

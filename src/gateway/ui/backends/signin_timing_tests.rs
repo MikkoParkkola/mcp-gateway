@@ -54,7 +54,7 @@ async fn approved_then_paused(gw: &Gw, owner: &Who) -> String {
     let reply = gw.start(owner).await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     let (url, attempt) = Gw::link(&reply);
-    gw.approve(&url).await;
+    let _ = gw.approve(&url).await;
     tokio::time::pause();
     attempt
 }
@@ -159,7 +159,7 @@ async fn retry_after_follows_the_confirm_window() {
     );
 
     tokio::time::resume();
-    gw.approve(&url).await;
+    let _ = gw.approve(&url).await;
     tokio::time::pause();
     let right_after = gw.start(&gw.session()).await.json();
     assert_eq!(
@@ -325,4 +325,34 @@ async fn an_exchange_still_running_at_the_confirm_deadline_saves_nothing() {
     assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
     assert!(flow.gw.saved().is_none(), "the late exchange saved nothing");
     assert_eq!(flow.gw.start(&flow.owner).await.status, StatusCode::OK);
+}
+
+// S9: the phase moves at the callback, before the exchange completes, and the
+// read carries only `phase` and `until`.
+#[tokio::test]
+async fn the_flow_phase_moves_at_the_callback() {
+    let flow = gated_flow().await;
+    let waiting = flow.gw.row().await["sign_in_flow"].clone();
+    assert_eq!(waiting["phase"], "awaiting_callback", "{waiting}");
+    let start_until =
+        chrono::DateTime::parse_from_rfc3339(waiting["until"].as_str().unwrap_or_default());
+
+    flow.approve_in_background();
+    pass(Duration::from_secs(1)).await;
+    let confirming = flow.gw.row().await["sign_in_flow"].clone();
+
+    assert_eq!(confirming["phase"], "awaiting_confirm", "{confirming}");
+    let keys: Vec<&String> = confirming
+        .as_object()
+        .map(|o| o.keys().collect())
+        .unwrap_or_default();
+    assert_eq!(keys.len(), 2, "only `phase` and `until`: {confirming}");
+    let until =
+        chrono::DateTime::parse_from_rfc3339(confirming["until"].as_str().unwrap_or_default());
+    let gap = until.expect("until is RFC 3339") - start_until.expect("until is RFC 3339");
+    assert_eq!(
+        gap.num_seconds(),
+        -240,
+        "callback + 60 s against start + 300 s"
+    );
 }

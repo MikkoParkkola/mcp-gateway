@@ -63,6 +63,12 @@ mod gate_tests;
 #[path = "signin_fixture.rs"]
 mod fixture;
 #[cfg(test)]
+#[path = "signin_read_tests.rs"]
+mod read_tests;
+#[cfg(test)]
+#[path = "signin_secrecy_tests.rs"]
+mod secrecy_tests;
+#[cfg(test)]
 #[path = "signin_tests.rs"]
 mod tests;
 #[cfg(test)]

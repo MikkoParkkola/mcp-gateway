@@ -291,3 +291,37 @@ async fn the_status_follows_refresh_delete_and_expiry() {
         "expiry with no refresh token"
     );
 }
+
+// L5a: `PendingGrant` exists and is not `Clone`. A `Clone` type makes the
+// probe's item ambiguous, so the build fails; a missing type fails it too.
+trait AmbiguousIfClone<A> {
+    fn probe() {}
+}
+impl<T: ?Sized> AmbiguousIfClone<()> for T {}
+impl<T: ?Sized + Clone> AmbiguousIfClone<u8> for T {}
+
+const _: fn() = || {
+    let _ = <super::sign_in::PendingGrant as AmbiguousIfClone<_>>::probe;
+};
+
+#[test]
+fn the_pending_grant_cannot_be_cloned() {
+    // The check is the `const` above, at build time.
+}
+
+// L5b: every secret field is `Zeroizing<String>`.
+#[test]
+fn the_pending_grant_secrets_are_zeroizing() {
+    use zeroize::Zeroizing;
+    fn wiped(_: &Zeroizing<String>) {}
+    fn wiped_opt(_: &Option<Zeroizing<String>>) {}
+    let grant = super::sign_in::PendingGrant {
+        access_token: Zeroizing::new("a".into()),
+        refresh_token: Some(Zeroizing::new("r".into())),
+        token_type: None,
+        expires_in: None,
+        scope: None,
+    };
+    wiped(&grant.access_token);
+    wiped_opt(&grant.refresh_token);
+}

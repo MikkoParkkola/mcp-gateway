@@ -54,6 +54,8 @@ pub(super) struct Gw {
     pub issuer: String,
     pub store: tempfile::TempDir,
     pub forms: Forms,
+    /// The audit log the gateway appends admin actions to.
+    pub log: Arc<crate::security::TransparencyLogger>,
     _fixture: FixtureDir,
 }
 
@@ -102,9 +104,27 @@ impl Gw {
             api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
             ..AuthConfig::default()
         };
-        let (state, fixture) =
+        let (mut state, fixture) =
             crate::gateway::router::tests::audience_state(&auth, (None, None), |m| m).await;
         let store = tempfile::tempdir().expect("token store");
+        let log = Arc::new(
+            crate::security::TransparencyLogger::open(Arc::new(
+                crate::security::transparency_log::TransparencyLogConfig {
+                    enabled: true,
+                    path: fixture
+                        .path()
+                        .join("audit.jsonl")
+                        .to_string_lossy()
+                        .into_owned(),
+                    key_id: "signin".to_string(),
+                    ..Default::default()
+                },
+            ))
+            .expect("open log"),
+        );
+        Arc::get_mut(&mut state)
+            .expect("state is unique")
+            .transparency_log = Some(Arc::clone(&log));
         let config = BackendConfig {
             oauth: Some(oauth_block()),
             ..BackendConfig::default()
@@ -128,6 +148,7 @@ impl Gw {
             issuer,
             store,
             forms,
+            log,
             _fixture: fixture,
         }
     }
@@ -152,9 +173,23 @@ impl Gw {
         content_type: &str,
         body: &str,
     ) -> Reply {
+        self.send_from(AUTHORITY, who, method, path, content_type, body)
+            .await
+    }
+
+    /// As [`Gw::send`], addressed to `authority`.
+    pub(super) async fn send_from(
+        &self,
+        authority: &str,
+        who: &Who,
+        method: &str,
+        path: &str,
+        content_type: &str,
+        body: &str,
+    ) -> Reply {
         let mut builder = Request::builder()
             .method(method)
-            .uri(format!("http://{AUTHORITY}{path}"))
+            .uri(format!("http://{authority}{path}"))
             .header(header::CONTENT_TYPE, content_type);
         builder = match who {
             Who::Dashboard(handle) => {
@@ -226,7 +261,7 @@ impl Gw {
 
     /// The person approving at the identity provider: follow the redirect
     /// URI with a code and the link's own state.
-    pub(super) async fn approve(&self, url: &str) {
+    pub(super) async fn approve(&self, url: &str) -> String {
         let link = url::Url::parse(url).expect("an authorization URL");
         let query: std::collections::HashMap<String, String> =
             link.query_pairs().into_owned().collect();
@@ -239,7 +274,7 @@ impl Gw {
             ],
         )
         .expect("a callback URL");
-        reqwest::Client::builder()
+        let page = reqwest::Client::builder()
             .no_proxy()
             .build()
             .unwrap()
@@ -247,6 +282,7 @@ impl Gw {
             .send()
             .await
             .expect("the callback answers");
+        page.text().await.unwrap_or_default()
     }
 
     /// The backend's row in `GET /ui/api/status`.
@@ -275,5 +311,15 @@ impl Gw {
         crate::oauth::TokenStorage::new(self.store.path().to_path_buf())
             .ok()?
             .load(&key, RESOURCE)
+    }
+
+    /// Every `admin_action` record the gateway has appended, as JSON.
+    pub(super) fn admin_actions(&self) -> Vec<Value> {
+        std::fs::read_to_string(self.log.path())
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry["event"] == "admin_action")
+            .collect()
     }
 }
