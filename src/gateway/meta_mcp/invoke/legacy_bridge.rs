@@ -130,6 +130,10 @@ impl MetaMcp {
             *idem_reservation = held.into_inner();
             // A relay refusal answers first, before the parked and generic arms.
             if let Some(refused) = relay_refused.into_inner() {
+                // No call acted: refused before its backend.
+                super::audit::note_pre_send(
+                    crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+                );
                 if let Some(reservation) = idem_reservation.as_mut() {
                     reservation.release();
                 }
@@ -246,6 +250,12 @@ impl MetaMcp {
                 Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
                     let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
+                    if not_admitted {
+                        // Refused at its cold-slot list, before the backend.
+                        super::audit::note_pre_send(
+                            crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+                        );
+                    }
                     match idem_reservation.as_mut() {
                         Some(reservation) if not_admitted => reservation.release(),
                         Some(reservation) => reservation.commit(&uncertain_side_effect()),
