@@ -203,6 +203,7 @@ impl Backend {
                 };
                 if let Some(value) = sent {
                     needles.insert(&self.name, value);
+                    needles.warn_if_short(&self.name, &rule.name, value);
                 }
             }
         }

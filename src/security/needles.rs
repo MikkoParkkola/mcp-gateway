@@ -65,7 +65,13 @@ pub(crate) struct NeedleSet {
     values: RwLock<Vec<Held>>,
     grace: Duration,
     overflowed: AtomicBool,
+    /// Rules already warned about a short value (ECHO.6), by name.
+    short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
 }
+
+/// A value shorter than this matches ordinary text too often: redacting it
+/// can blank unrelated words, so its rule is named once (ECHO.6).
+const SHORT_VALUE_BYTES: usize = 8;
 
 impl Default for NeedleSet {
     fn default() -> Self {
@@ -86,6 +92,7 @@ impl NeedleSet {
             values: RwLock::new(Vec::new()),
             grace,
             overflowed: AtomicBool::new(false),
+            short_warned: parking_lot::Mutex::default(),
         }
     }
 
@@ -125,6 +132,21 @@ impl NeedleSet {
             value: value.to_owned(),
             last_sent: now,
         });
+    }
+
+    /// Warns once per rule when a value it sent is shorter than
+    /// [`SHORT_VALUE_BYTES`]; names the backend and the rule, never the value.
+    /// Called on a send only, so loading or seeding never warns.
+    pub(crate) fn warn_if_short(&self, backend: &str, rule: &str, value: &str) {
+        if value.len() < SHORT_VALUE_BYTES && self.short_warned.lock().insert(rule.to_owned()) {
+            tracing::warn!(
+                backend,
+                rule,
+                bytes = value.len(),
+                "an injected secret this short is redacted wherever it appears in the backend's \
+                 answers, including inside unrelated words"
+            );
+        }
     }
 
     /// Whether the set refused a value: every frame is then withheld.

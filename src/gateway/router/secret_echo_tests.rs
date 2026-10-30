@@ -455,6 +455,62 @@ async fn an_echoed_header_secret_is_redacted_on_both_routes() {
     }
 }
 
+/// T1.30 (ECHO.6): a value under 8 bytes warns once, at its first send, naming
+/// the backend and the rule but never the value; loading the config and a
+/// second call do not warn, an 8-byte value never does, and both are
+/// redacted.
+#[test]
+fn a_short_value_warns_once_at_its_first_send() {
+    for (value, warnings) in [("k3y9z", 1), ("k3y9z8w2", 0)] {
+        let mut bodies = Vec::new();
+        let logged = crate::test_log_capture::records(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime")
+                .block_on(async {
+                    let rule = json!({"name": "echo-key", "value": value, "inject_key": "api_key"});
+                    let (router, _calls, _store) = fixture_with(Reply::Echo, rule).await;
+                    for id in 1..=2 {
+                        bodies.push(
+                            post(
+                                &router,
+                                json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                                    "name": "gateway_invoke",
+                                    "arguments": {"server": "echoes", "tool": "echo",
+                                                  "arguments": {"q": "hi"}}
+                                }}),
+                            )
+                            .await,
+                        );
+                    }
+                });
+        });
+        let short: Vec<&Value> = logged
+            .iter()
+            .filter(|r| r.to_string().contains("this short is redacted"))
+            .collect();
+        assert_eq!(short.len(), warnings, "{value}: {short:?}");
+        for record in &short {
+            let text = record.to_string();
+            assert!(
+                text.contains("echoes") && text.contains("echo-key"),
+                "{text}"
+            );
+            assert!(
+                !text.contains(value),
+                "the warning printed the value: {text}"
+            );
+        }
+        for body in &bodies {
+            assert!(
+                !body.to_string().contains(value),
+                "{value} reached the client: {body}"
+            );
+        }
+    }
+}
+
 /// The meta route's answer for a backend whose rule injects `value` and
 /// which answers with `reply`.
 async fn meta_answer_with(reply: Reply, value: &str) -> Value {
