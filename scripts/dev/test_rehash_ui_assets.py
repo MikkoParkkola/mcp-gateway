@@ -9,6 +9,7 @@ into a temporary tree and runs it there; the real tree is never touched.
     python3 -I scripts/dev/test_rehash_ui_assets.py
 """
 
+import base64
 import hashlib
 import pathlib
 import re
@@ -39,6 +40,8 @@ class Tree:
         self.shell = self.root / "src/gateway/ui/shell"
         self.shell.mkdir(parents=True)
         (self.root / "src/gateway/ui/shell.rs").write_text(TABLE)
+        (self.root / "src/gateway/ui/csp-base.txt").write_text("style-src 'self' {frame}; font-src 'self'\n")
+        self.golden = self.root / "src/gateway/ui/csp.golden"
         # Every document inlines a frame; a case that names its own replaces these.
         self.frame = self.root / "src/gateway/ui/shell-src/frame.css"
         files = {"../shell-src/frame.css": "a{}\n", **files}
@@ -246,6 +249,16 @@ class RehashFrame(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(t.frame.read_bytes(), b"a { color: red; }\nb { color: blue; }\n")
         self.assertEqual(t.inlined().encode(), t.frame.read_bytes())
+
+    def test_the_golden_policy_carries_the_inlined_frames_hash(self):
+        t = self.tree({
+            "index.html": '<style id="frame">stale</style>\n',
+            "../shell-src/frame.css": ".plate { color: red; }\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        digest = base64.b64encode(hashlib.sha256(t.inlined().encode()).digest()).decode()
+        self.assertEqual(t.golden.read_text(), f"style-src 'self' 'sha256-{digest}'; font-src 'self'\n")
 
     def test_a_document_without_the_frame_markers_is_refused(self):
         t = self.tree({"index.html": FRAME_OPEN + "</style>\n"})

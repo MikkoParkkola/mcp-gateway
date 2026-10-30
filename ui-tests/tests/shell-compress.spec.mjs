@@ -107,6 +107,16 @@ test.describe('compression', () => {
       expect(decoded(r).toString(), type).toBe('a'.repeat(len));
     }
   });
+
+  test('Z4 the fixture negotiates Accept-Encoding as the contract rows say, q-values included', async () => {
+    expect(CONTRACT.negotiation.length).toBeGreaterThanOrEqual(10);
+    for (const { accept_encoding: accept, gzip } of CONTRACT.negotiation) {
+      const r = await raw('/ui/overview/status', { 'accept-encoding': accept });
+      expect(r.status, accept).toBe(200);
+      expect(r.headers['content-encoding'] === 'gzip', `Accept-Encoding: ${accept}`).toBe(gzip);
+      expect(decoded(r).toString(), accept).toContain('<style id="frame">');
+    }
+  });
 });
 
 test.describe('inlined frame', () => {
@@ -136,7 +146,7 @@ const FRAME = ['.side', '.brand', 'nav.route-nav', 'nav.route-nav a', '.main', '
   '.top .search', '.top .who', '.top .stream', '.head', '.plate', 'nav.tabs', 'nav.tabs a', 'a.skip', '#content'];
 
 /** Boxes, colours, font families and visibility of the frame, once fonts settle. */
-async function frameLook(page) {
+async function frameLook(page, selectors = FRAME) {
   return page.evaluate(async (selectors) => {
     await document.fonts.ready;
     await new Promise((ok) => requestAnimationFrame(() => requestAnimationFrame(ok)));
@@ -150,24 +160,46 @@ async function frameLook(page) {
       });
     }
     return out;
-  }, FRAME);
+  }, selectors);
 }
 
-async function splitGuard(page) {
+async function splitGuard(page, selectors = FRAME, ready = shellReady) {
   await page.goto('/ui/overview/status');
-  await shellReady(page);
+  await ready(page);
   const rest = page.locator('link[rel="stylesheet"][href^="/ui/assets/shell."]');
   await expect(rest).toHaveCount(1);
-  const styled = await frameLook(page);
+  const styled = await frameLook(page, selectors);
   expect(Object.values(styled).flat().length).toBeGreaterThan(10);
   await rest.evaluate((link) => { link.disabled = true; });
-  expect(await frameLook(page), 'the frame looks the same without the rest of the stylesheet').toEqual(styled);
+  expect(await frameLook(page, selectors), 'the frame looks the same without the rest of the stylesheet').toEqual(styled);
 }
+
+/** Signed in as an admin with decisions waiting: the sign-out button and the count badge show. */
+async function signedInWithCount(page) {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/ui/api/decisions/count', (r) => r.fulfill({ json: { count: 3 } }));
+}
+
+async function signedInReady(page) {
+  await shellReady(page);
+  await expect(page.locator('.top .signout')).toBeVisible();
+  await expect(page.locator(COUNT_BADGE)).toHaveText('3');
+}
+
+// The frame's top bar and nav once they hold the signed-in controls: the sign-out button
+// (a .btn) and the count badge with its words for screen readers.
+const SIGNED_IN = () => [...FRAME, '.top .signout', COUNT_BADGE, `${COUNT_BADGE} + .count-words`];
 
 test.describe('split guard', () => {
   test('Z6 at 1440 px, the rest of the stylesheet changes nothing in the frame', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await splitGuard(page);
+  });
+
+  test('Z6 at 1440 px signed in with decisions waiting, the rest of the stylesheet changes nothing in the frame', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signedInWithCount(page);
+    await splitGuard(page, SIGNED_IN(), signedInReady);
   });
 
   test.describe('phone', () => {

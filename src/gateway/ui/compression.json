@@ -1,7 +1,23 @@
 {
-  "about": "The gateway's one compression rule, as data for the fixture server (ui-tests/server.mjs). It mirrors tower-http's DefaultPredicate at the pinned version (0.7.1, the router's compression()): gzip when the client accepts it and the body is at least min_bytes long, or its length is not known, except for a Content-Type that starts with a never_prefixes entry and with no except_types entry, both matched as prefixes. A Rust test fails if the gateway stops answering by this rule.",
+  "about": "The gateway's one compression rule, as data for the fixture server (ui-tests/server.mjs). It mirrors tower-http's DefaultPredicate at the pinned version (0.7.1, the router's compression()): gzip when the client accepts it and the body is at least min_bytes long, or its length is not known, except for a Content-Type that starts with a never_prefixes entry and with no except_types entry, both matched as prefixes. Whether the client accepts gzip follows tower-http's Accept-Encoding negotiation; negotiation lists headers with the answer the gateway gives. A Rust test fails if the gateway stops answering by this rule.",
   "encoding": "gzip",
   "min_bytes": 32,
   "never_prefixes": ["application/grpc", "image/", "text/event-stream"],
-  "except_types": ["application/grpc-web", "image/svg+xml"]
+  "except_types": ["application/grpc-web", "image/svg+xml"],
+  "negotiation": [
+    { "accept_encoding": "gzip", "gzip": true },
+    { "accept_encoding": "GZIP", "gzip": true },
+    { "accept_encoding": "x-gzip", "gzip": true },
+    { "accept_encoding": "gzip, deflate, br, zstd", "gzip": true },
+    { "accept_encoding": "gzip;q=0", "gzip": false },
+    { "accept_encoding": "gzip;q=0.000", "gzip": false },
+    { "accept_encoding": "deflate, br", "gzip": false },
+    { "accept_encoding": "gzip;q=0.5, identity;q=0.4", "gzip": true },
+    { "accept_encoding": "gzip;q=0.4, identity;q=0.5", "gzip": false },
+    { "accept_encoding": "gzip, identity", "gzip": true },
+    { "accept_encoding": "*", "gzip": true },
+    { "accept_encoding": "*;q=0.5, identity;q=0.1", "gzip": true },
+    { "accept_encoding": "gzip;q=0, *", "gzip": false },
+    { "accept_encoding": "gzip;q=abc", "gzip": false }
+  ]
 }
