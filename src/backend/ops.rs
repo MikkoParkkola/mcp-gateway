@@ -252,7 +252,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -313,7 +313,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -323,7 +323,7 @@ impl Backend {
         .await
     }
 
-    pub(super) async fn send_attempted(
+    pub(super) async fn request_attempted(
         &self,
         method: &str,
         params: Option<Value>,

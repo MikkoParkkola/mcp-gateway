@@ -14,7 +14,7 @@ use crate::Result;
 use crate::protocol::JsonRpcResponse;
 
 impl Backend {
-    pub(super) async fn request_attempted(
+    pub(super) async fn send_in_scope(
         &self,
         method: &str,
         params: Option<Value>,
@@ -24,7 +24,7 @@ impl Backend {
     ) -> Result<JsonRpcResponse> {
         crate::transport::notify_ingress::in_backend(
             std::sync::Arc::clone(&self.notify_origin),
-            self.send_attempted(method, params, extra_headers, identity_key, attempts),
+            self.request_attempted(method, params, extra_headers, identity_key, attempts),
         )
         .await
     }
