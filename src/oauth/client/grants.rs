@@ -556,6 +556,7 @@ impl OAuthClient {
         let auth_meta = self.auth_meta()?;
         // A UI sign-in's link goes to its route; nothing else sees it.
         let held_for_ui = ui.is_some();
+        let confirm_window = super::sign_in::confirm_window_of(ui.as_ref());
         let (link_tx, callback_tx) = super::sign_in::split_hook(ui);
 
         // Generate PKCE parameters
@@ -670,7 +671,7 @@ impl OAuthClient {
             let _ = callback.send(());
         }
         let exchange_by = if held_for_ui {
-            Some(tokio::time::Instant::now() + super::sign_in::SIGN_IN_CONFIRM_WINDOW)
+            Some(tokio::time::Instant::now() + confirm_window)
         } else {
             deadline
         };

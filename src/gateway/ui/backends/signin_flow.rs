@@ -14,7 +14,7 @@ use crate::backend::Backend;
 use crate::backend::sign_in_flow::{Flow, Phase};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
-use crate::oauth::client::sign_in::{SIGN_IN_CONFIRM_WINDOW, UiSink};
+use crate::oauth::client::sign_in::UiSink;
 use crate::oauth::login_gate::{Begin, Lead};
 use crate::oauth::{OAUTH_AUTHORIZATION_WINDOW, OAuthClient};
 use crate::{Error, Result};
@@ -109,7 +109,8 @@ pub(super) async fn start(
     let Begin::Lead(lead) = backend.login_gate.begin(None, None) else {
         return Ok(in_progress(backend));
     };
-    let deadline = Instant::now() + OAUTH_AUTHORIZATION_WINDOW;
+    let windows = backend.sign_in_windows();
+    let deadline = Instant::now() + windows.start;
     lead.set_end(deadline);
     let attempt_id = new_attempt_id();
     let ended = Arc::new(tokio::sync::Notify::new());
@@ -118,7 +119,7 @@ pub(super) async fn start(
         attempt_id: attempt_id.clone(),
         phase: Phase::AwaitingCallback,
         until: deadline,
-        until_at: crate::clock::system_time_or_before_epoch() + OAUTH_AUTHORIZATION_WINDOW,
+        until_at: crate::clock::system_time_or_before_epoch() + windows.start,
         grant: None,
         held_since: None,
         wait_generation: 0,
@@ -142,6 +143,7 @@ pub(super) async fn start(
     let sink = UiSink {
         link: link_tx,
         callback: callback_tx,
+        confirm_window: windows.confirm,
     };
     tokio::spawn(run.drive(lead, sink, callback_rx));
     match link_rx.await {
@@ -183,7 +185,7 @@ impl Run {
 
     /// The callback landed: the confirm window starts now.
     fn callback_landed(&self, lead: &Lead) {
-        let at = Instant::now() + SIGN_IN_CONFIRM_WINDOW;
+        let at = Instant::now() + self.backend.sign_in_windows().confirm;
         let generation = self.backend.auth_wait_generation();
         self.backend.with_flow(|slot| {
             if let Some(flow) = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id) {
@@ -247,7 +249,7 @@ impl Run {
                 if let Some(flow) = self.take_flow() {
                     let expired = Error::AuthorizationIncomplete {
                         backend: self.backend.name.clone(),
-                        window_secs: SIGN_IN_CONFIRM_WINDOW.as_secs(),
+                        window_secs: self.backend.sign_in_windows().confirm.as_secs(),
                     };
                     self.record_end(&flow, &expired);
                     lead.end(Some(&expired));
@@ -389,18 +391,15 @@ pub(super) async fn decide(
         return Decided::Done;
     }
     let cancel = tokio_util::sync::CancellationToken::new();
-    let by = Instant::now() + SIGN_IN_CONFIRM_WINDOW;
+    let by = Instant::now() + backend.sign_in_windows().confirm;
     let saved = client.save_confirmed(grant, held_for, &cancel, by).await;
     release(backend, &ended).await;
-    match saved {
-        Ok(()) => {
-            backend.clear_auth_wait_if(generation);
-            Decided::Done
-        }
-        Err(_) => {
-            record_outcome(state, &backend.name, "failed", caller.as_ref());
-            Decided::SaveFailed
-        }
+    if saved.is_ok() {
+        backend.clear_auth_wait_if(generation);
+        Decided::Done
+    } else {
+        record_outcome(state, &backend.name, "failed", caller.as_ref());
+        Decided::SaveFailed
     }
 }
 

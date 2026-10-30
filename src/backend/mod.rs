@@ -315,6 +315,9 @@ pub struct Backend {
     /// The UI sign-in in flight, if one is.
     #[cfg(feature = "webui")]
     pub(crate) sign_in_flow: parking_lot::Mutex<Option<sign_in_flow::Flow>>,
+    /// How long a sign-in waits at each stage.
+    #[cfg(feature = "webui")]
+    sign_in_windows: parking_lot::Mutex<sign_in_flow::SignInWindows>,
     /// A test's pre-built OAuth client for the sign-in flow.
     #[cfg(all(test, feature = "webui"))]
     installed_oauth_client: parking_lot::Mutex<Option<Arc<crate::oauth::OAuthClient>>>,

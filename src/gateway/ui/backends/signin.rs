@@ -348,3 +348,6 @@ mod tests;
 #[cfg(test)]
 #[path = "signin_timing_tests.rs"]
 mod timing_tests;
+#[cfg(test)]
+#[path = "signin_window_tests.rs"]
+mod window_tests;

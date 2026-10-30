@@ -33,6 +33,24 @@ impl Phase {
     }
 }
 
+/// How long a sign-in waits at each stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SignInWindows {
+    /// From the start to the callback.
+    pub(crate) start: std::time::Duration,
+    /// From the callback to the person's confirm.
+    pub(crate) confirm: std::time::Duration,
+}
+
+impl Default for SignInWindows {
+    fn default() -> Self {
+        Self {
+            start: crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+            confirm: crate::oauth::client::sign_in::SIGN_IN_CONFIRM_WINDOW,
+        }
+    }
+}
+
 /// One sign-in in flight. Holds no link and no verifier.
 pub(crate) struct Flow {
     /// The keyed digest of the starting session's handle.
@@ -74,6 +92,17 @@ impl Flow {
 }
 
 impl Backend {
+    /// The windows a sign-in on this backend waits at each stage.
+    pub(crate) fn sign_in_windows(&self) -> SignInWindows {
+        *self.sign_in_windows.lock()
+    }
+
+    /// Test-only: run sign-ins on this backend with these windows.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn set_sign_in_windows_for_test(&self, windows: SignInWindows) {
+        *self.sign_in_windows.lock() = windows;
+    }
+
     /// Run `f` on the flow slot under its lock.
     pub(crate) fn with_flow<R>(&self, f: impl FnOnce(&mut Option<Flow>) -> R) -> R {
         f(&mut self.sign_in_flow.lock())

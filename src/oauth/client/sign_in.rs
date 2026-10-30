@@ -171,6 +171,9 @@ pub(crate) struct UiSink {
     pub(crate) link: tokio::sync::oneshot::Sender<String>,
     /// Told when the callback has landed and its code is being redeemed.
     pub(crate) callback: tokio::sync::oneshot::Sender<()>,
+    /// How long the redemption of the code may take from the callback: the
+    /// flow's confirm window.
+    pub(crate) confirm_window: Duration,
 }
 
 /// The sink a login may carry: only the web UI starts one that has it.
@@ -179,6 +182,18 @@ pub(super) type Hook = UiSink;
 /// The sink a login may carry: none, without the web UI.
 #[cfg(not(feature = "webui"))]
 pub(super) type Hook = std::convert::Infallible;
+
+/// The confirm window a sink carries, else the default.
+#[cfg(feature = "webui")]
+pub(super) fn confirm_window_of(ui: Option<&Hook>) -> Duration {
+    ui.map_or(SIGN_IN_CONFIRM_WINDOW, |sink| sink.confirm_window)
+}
+
+/// The confirm window a sink carries, else the default.
+#[cfg(not(feature = "webui"))]
+pub(super) fn confirm_window_of(_ui: Option<&Hook>) -> Duration {
+    SIGN_IN_CONFIRM_WINDOW
+}
 
 /// The two channels of a sink, if the login has one.
 #[cfg(feature = "webui")]

@@ -133,6 +133,8 @@ impl Backend {
             login_gate: Arc::default(),
             #[cfg(feature = "webui")]
             sign_in_flow: parking_lot::Mutex::new(None),
+            #[cfg(feature = "webui")]
+            sign_in_windows: parking_lot::Mutex::default(),
             #[cfg(all(test, feature = "webui"))]
             installed_oauth_client: parking_lot::Mutex::new(None),
             #[cfg(all(test, feature = "webui"))]

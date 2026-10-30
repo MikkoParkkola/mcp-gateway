@@ -26,7 +26,7 @@ async fn pass(by: Duration) {
 
 /// A token endpoint that answers only once `release` is notified: the
 /// exchange, held for as long as a test needs.
-async fn gated_token_endpoint() -> (String, Arc<Notify>) {
+pub(super) async fn gated_token_endpoint() -> (String, Arc<Notify>) {
     use axum::{Json, Router, routing::post};
     let release = Arc::new(Notify::new());
     let held = Arc::clone(&release);
@@ -227,42 +227,6 @@ async fn gated_flow() -> Gated {
     }
 }
 
-impl Gated {
-    /// The person approving in the background: the callback answers only
-    /// after the held exchange.
-    fn approve_in_background(&self) {
-        let (gw, url) = (Arc::clone(&self.gw), self.url.clone());
-        tokio::spawn(async move { gw.approve(&url).await });
-    }
-}
-
-// T4: the callback lands at 299 s and the exchange takes 20 s; the window runs
-// from the callback, so a window measured from the exchange would accept
-// callback + 61 s and fail the last case.
-#[tokio::test]
-async fn a_callback_near_300s_still_gets_60s_to_confirm() {
-    for (after_exchange, expect) in [
-        (0, StatusCode::OK),
-        (39, StatusCode::OK),
-        (41, StatusCode::NOT_FOUND),
-    ] {
-        let flow = gated_flow().await;
-        pass(Duration::from_secs(299)).await;
-        flow.approve_in_background();
-        pass(Duration::from_secs(20)).await;
-        flow.release.notify_one();
-        pass(Duration::from_secs(after_exchange)).await;
-
-        let reply = flow.gw.confirm(&flow.owner, &flow.attempt, "confirm").await;
-
-        assert_eq!(
-            reply.status, expect,
-            "exchange + {after_exchange}s: {}",
-            reply.body
-        );
-    }
-}
-
 // T7: one outcome wins, at most one save, and the gate is released once.
 #[tokio::test]
 async fn confirm_cancel_and_expiry_race_on_one_attempt() {
@@ -304,59 +268,6 @@ async fn confirm_cancel_and_expiry_race_on_one_attempt() {
         flow.gw.start(&flow.owner).await.status,
         StatusCode::CONFLICT,
         "and only once"
-    );
-}
-
-// T8: an exchange still running when callback + 60 s passes saves nothing.
-#[tokio::test]
-async fn an_exchange_still_running_at_the_confirm_deadline_saves_nothing() {
-    let flow = gated_flow().await;
-    flow.approve_in_background();
-    pass(Duration::from_secs(30)).await;
-    let during = flow.gw.start(&flow.gw.session()).await.json();
-    assert_eq!(
-        secs(&during),
-        30,
-        "the second start follows the confirm window: {during}"
-    );
-
-    pass(SIGN_IN_CONFIRM_WINDOW).await;
-    flow.release.notify_one();
-    pass(Duration::from_secs(1)).await;
-
-    let reply = flow.gw.confirm(&flow.owner, &flow.attempt, "confirm").await;
-    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
-    assert!(flow.gw.saved().is_none(), "the late exchange saved nothing");
-    assert_eq!(flow.gw.start(&flow.owner).await.status, StatusCode::OK);
-}
-
-// S9: the phase moves at the callback, before the exchange completes, and the
-// read carries only `phase` and `until`.
-#[tokio::test]
-async fn the_flow_phase_moves_at_the_callback() {
-    let flow = gated_flow().await;
-    let waiting = flow.gw.row().await["sign_in_flow"].clone();
-    assert_eq!(waiting["phase"], "awaiting_callback", "{waiting}");
-    let start_until =
-        chrono::DateTime::parse_from_rfc3339(waiting["until"].as_str().unwrap_or_default());
-
-    flow.approve_in_background();
-    pass(Duration::from_secs(1)).await;
-    let confirming = flow.gw.row().await["sign_in_flow"].clone();
-
-    assert_eq!(confirming["phase"], "awaiting_confirm", "{confirming}");
-    let keys: Vec<&String> = confirming
-        .as_object()
-        .map(|o| o.keys().collect())
-        .unwrap_or_default();
-    assert_eq!(keys.len(), 2, "only `phase` and `until`: {confirming}");
-    let until =
-        chrono::DateTime::parse_from_rfc3339(confirming["until"].as_str().unwrap_or_default());
-    let gap = until.expect("until is RFC 3339") - start_until.expect("until is RFC 3339");
-    assert_eq!(
-        gap.num_seconds(),
-        -240,
-        "callback + 60 s against start + 300 s"
     );
 }
 
