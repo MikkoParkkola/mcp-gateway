@@ -130,18 +130,11 @@ impl MetaMcp {
             *idem_reservation = held.into_inner();
             // A relay refusal answers first, before the parked and generic arms.
             if let Some(refused) = relay_refused.into_inner() {
-                // No call acted: refused before its backend.
-                super::audit::note_pre_send(
-                    crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
-                );
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.release();
-                }
-                // The outer lease was marked before round one; this refusal
-                // is no result of a call that acted, so it is not retained.
-                if let Some(execution) = caller.execution {
-                    execution.withdraw_dispatch();
-                }
+                // Round one reached the backend before this refusal, and a
+                // backend that answered may have acted: the key is kept as
+                // may-have-run (MIK-9095 F12). Only an exchange that sent
+                // nothing is refused before its backend.
+                settle_bridged(idem_reservation, caller.execution, true);
                 return Err(refused);
             }
             match bridged {
@@ -245,22 +238,12 @@ impl MetaMcp {
                 }
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
-                // Settled like any round that reached the backend; one refused
-                // at its cold-slot list (NotAdmitted, F13) is released.
+                // Settled like any round that reached the backend; only an
+                // exchange that sent nothing is released (MIK-9095 F9).
                 Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
                     let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
-                    if not_admitted {
-                        // Refused at its cold-slot list, before the backend.
-                        super::audit::note_pre_send(
-                            crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
-                        );
-                    }
-                    match idem_reservation.as_mut() {
-                        Some(reservation) if not_admitted => reservation.release(),
-                        Some(reservation) => reservation.commit(&uncertain_side_effect()),
-                        None => {}
-                    }
+                    settle_bridged(idem_reservation, caller.execution, not_admitted);
                     if crate::personal_accounts::refusal::marked(&refused).is_some() {
                         return self
                             .with_connect_offer(Err(refused), verified_identity)
@@ -279,34 +262,15 @@ impl MetaMcp {
                     ))));
                 }
                 Err(error) => {
-                    // A round that reached the backend may have acted, so its
-                    // key must not be readmitted. `BackendFailed` is the only
-                    // variant raised from the backend call itself; `NotAdmitted`
-                    // was refused above the dispatch, and `Deadline`,
-                    // `RequestBudgetExhausted`, `Refused`, `Delivery` and `MalformedInterim` all
-                    // leave the backend parked on a question that was never
-                    // answered, and a backend that stopped to ask has not
-                    // acted yet — the premise the `Ok` arm below rests on too.
-                    // So their release-on-drop default still stands. A round
-                    // that never left the gateway — no such backend, no such
-                    // tool, an open circuit, a transport that never connected
-                    // — is `NotAdmitted` rather than
-                    // `BackendFailed`, because `classify_bridged_dispatch_error`
-                    // defers to the error type's own pre-dispatch allowlist; it
-                    // is provably unexecuted, so it keeps the default too. Only
-                    // a round that may have acted settles with the
-                    // uncertain-side-effect marker, which tells a retry of the
-                    // same key that the effect is unknown — not that it ran.
-                    if matches!(
-                        error,
-                        crate::gateway::input_bridge::BridgeError::BackendFailed {
-                            dispatch: crate::gateway::input_bridge::Dispatch::MayHaveActed,
-                            ..
-                        }
-                    ) && let Some(reservation) = idem_reservation.as_mut()
-                    {
-                        reservation.commit(&uncertain_side_effect());
-                    }
+                    // Every bridged round keeps its key: round one reached the
+                    // backend, and a backend that stopped to ask may already
+                    // have acted (MIK-9095 F12). A drop at the deadline or the
+                    // request budget, a refusal, a malformed interim: each
+                    // settles may-have-run. Only an exchange whose delivery
+                    // sent nothing (`NotAdmitted` with no counted send) is
+                    // refused before its backend and released.
+                    let not_admitted = matches!(error, BridgeError::NotAdmitted { .. });
+                    settle_bridged(idem_reservation, caller.execution, not_admitted);
                     warn!(target: INVOKE_TARGET,
                         server,
                         tool,
@@ -326,5 +290,26 @@ impl MetaMcp {
             }
         }
         Ok(None)
+    }
+}
+
+/// How a bridged exchange that did not complete settles its key: refused
+/// before its backend (marked, released, the outer lease withdrawn) only when
+/// `refused_above` and this delivery counted no send; otherwise may-have-run.
+fn settle_bridged(
+    idem_reservation: &mut Option<IdempotencyReservation>,
+    execution: Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+    refused_above: bool,
+) {
+    if refused_above && crate::gateway::delivery_facts::nothing_sent() {
+        super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
+        if let Some(mut reservation) = idem_reservation.take() {
+            reservation.release();
+        }
+        if let Some(execution) = execution {
+            execution.withdraw_dispatch();
+        }
+    } else if let Some(reservation) = idem_reservation.as_mut() {
+        reservation.commit(&uncertain_side_effect());
     }
 }

@@ -262,12 +262,17 @@ pub(crate) fn before_send<T>(result: crate::Result<T>) -> crate::Result<T> {
 /// backend (`is_pre_dispatch`) or a refusal its send recorded. The one
 /// predicate every settlement reads before it releases a key.
 pub(crate) fn unsent(error: &crate::Error) -> bool {
+    nothing_sent() && (error.is_pre_dispatch() || refused_before_send_seen())
+}
+
+/// Whether no send of this delivery is still counted: none entered a
+/// transport, or each that did returned a never-sent error. Outside a cell
+/// nothing is known, so `true`, and [`unsent`] falls back to the error's own
+/// verdict.
+pub(crate) fn nothing_sent() -> bool {
     FACTS
-        .try_with(|cell| {
-            let facts = cell.borrow();
-            facts.sends_entered == 0 && (error.is_pre_dispatch() || facts.refused_before_send)
-        })
-        .unwrap_or_else(|_| error.is_pre_dispatch())
+        .try_with(|cell| cell.borrow().sends_entered == 0)
+        .unwrap_or(true)
 }
 
 /// Whether this delivery's send refused it before any byte left, read by the

@@ -75,7 +75,9 @@ fn is_reservation(expr: &syn::Expr) -> bool {
 impl Body {
     fn call(&mut self, name: &str) {
         match name {
-            "ask_refund" | "ask_if_transient" | "is_pre_dispatch" | "unsent" => self.exits += 1,
+            "ask_refund" | "ask_if_transient" | "is_pre_dispatch" | "unsent" | "nothing_sent" => {
+                self.exits += 1;
+            }
             "settle_pre_send" => self.settles = true,
             _ => {}
         }
