@@ -6,6 +6,8 @@
 
 use crate::yaml::{Mapping, Value};
 
+use super::super::eol::split_ending;
+
 use super::{Change, FieldPath, Segment};
 
 /// The document `original` means with `changes` applied: missing mappings
@@ -184,13 +186,12 @@ impl Lines {
     /// file without a final newline keeps none.
     pub(super) fn insert(&mut self, after: Option<usize>, new: &[String]) {
         let ending = after
-            .map(|n| &self.lines[n].0)
-            .map(|line| &line[line.trim_end_matches(['\n', '\r']).len()..])
+            .map(|n| split_ending(&self.lines[n].0).1)
             .filter(|e| !e.is_empty())
             .or_else(|| {
                 self.lines
                     .iter()
-                    .map(|(l, _)| &l[l.trim_end_matches(['\n', '\r']).len()..])
+                    .map(|(l, _)| split_ending(l).1)
                     .find(|e| !e.is_empty())
             })
             .unwrap_or("\n")
@@ -233,10 +234,14 @@ impl Lines {
     /// a final newline needs); a replaced line keeps everything around its
     /// value.
     pub(super) fn bytes_hold(&self, original: &str) -> bool {
-        fn split(s: &str) -> (&str, &str) {
-            s.split_at(s.trim_end_matches(['\n', '\r']).len())
-        }
         let orig: Vec<&str> = original.split_inclusive('\n').collect();
+        // The ending an insert gives a file's unterminated last line: the
+        // file's own, else `\n` (as `insert` picks it).
+        let own = orig
+            .iter()
+            .map(|l| split_ending(l).1)
+            .find(|e| !e.is_empty())
+            .unwrap_or("\n");
         let mut last: Option<usize> = None;
         let count = self.lines.len();
         self.lines.iter().enumerate().all(|(n, (text, origin))| {
@@ -248,12 +253,13 @@ impl Lines {
                 return false;
             }
             last = Some(index);
-            let ((text, ending), (was, was_ending)) = (split(text), split(orig[index]));
+            let ((text, ending), (was, was_ending)) =
+                (split_ending(text), split_ending(orig[index]));
             // Endings are compared apart from content: only a file without
             // a final newline may see its last line gain one (something was
             // inserted after it) or its new last line lose one.
             let ending_holds = ending == was_ending
-                || (index + 1 == orig.len() && was_ending.is_empty())
+                || (index + 1 == orig.len() && was_ending.is_empty() && ending == own)
                 || (n + 1 == count && !original.ends_with('\n') && ending.is_empty());
             ending_holds
                 && match origin {
@@ -570,3 +576,7 @@ pub(super) fn drop_emptied(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "config_persistence_keyedit_shape_tests.rs"]
+mod tests;

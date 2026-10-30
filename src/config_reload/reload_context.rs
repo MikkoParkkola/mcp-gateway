@@ -193,6 +193,14 @@ pub struct ReloadContext {
     /// the reload lock reloads before its own work. Cleared only by an
     /// accepted reload, so a reload that fails is retried, never forgotten.
     pub(super) reload_owed: std::sync::atomic::AtomicBool,
+    /// Where an audited gateway's recovery intents go, set once at start
+    /// from the audit posture: every in-gateway holder of the config lock
+    /// appends one before it recovers a crashed write or pays an owed
+    /// reload.
+    pub(super) recovery_audit: parking_lot::Mutex<Option<Box<dyn replace::IntentSink>>>,
+    /// Test-only: parks an audited recovery inside its task, lock held.
+    #[cfg(test)]
+    pub(super) recovery_pause: std::sync::Arc<crate::test_pause::Slot>,
     /// gateway.yaml as this gateway resolved it at start, through any
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
@@ -266,6 +274,9 @@ impl ReloadContext {
             config_path,
             trusted_config,
             reload_owed: std::sync::atomic::AtomicBool::new(false),
+            recovery_audit: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            recovery_pause: std::sync::Arc::default(),
             live_config,
             registry,
             failsafe_config,
@@ -469,10 +480,20 @@ impl ReloadContext {
         let reader = tokio::select! {
             biased;
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+            reader = self.reader_lock_for_reload(deadline) => reader,
         };
         let (_sidecar, target) = match reader {
             crate::config_persistence::lock::ReaderLock::Held(locked) => {
+                // An audited gateway's lock recovered nothing yet: the
+                // recovery intent comes first.
+                let locked = match self.recover_for_reload(locked).await {
+                    Ok(locked) => locked,
+                    Err(why) => {
+                        return Err(format!(
+                            "config reload skipped: {why}; the next change retries"
+                        ));
+                    }
+                };
                 if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
                     self.reload_owed
                         .store(true, std::sync::atomic::Ordering::SeqCst);

@@ -229,3 +229,41 @@ fn parked_input_requests_lose_planted_members() {
         "{delivered}"
     );
 }
+
+/// A row whose answer the gateway wrote (a round refused before its
+/// backend) is delivered byte for byte as the same row with no author:
+/// delivery reads the stored task and its write record, never the author;
+/// only `backend_result()` and `backend_error()` read it.
+#[test]
+fn a_gateway_authored_row_is_delivered_as_before() {
+    use super::ErrorAuthor;
+    let result = json!({"content": [{"type": "text", "text": "no such tool"}], "isError": true});
+    let mut task = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    task.complete(&result).expect("a live task completes");
+    let plain = row(task.clone(), Vec::new());
+    let mut authored = row(task, Vec::new());
+    authored.error_author = Some(ErrorAuthor::Gateway);
+    assert_eq!(authored.delivered_wire(), plain.delivered_wire());
+    assert!(
+        plain.backend_result().is_some(),
+        "premise: the plain row is backend output"
+    );
+    assert!(
+        authored.backend_result().is_none(),
+        "the gateway's answer is not"
+    );
+
+    let mut failed = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    failed
+        .fail(&JsonRpcError {
+            code: -32601,
+            message: "no such tool".into(),
+            data: None,
+        })
+        .expect("a live task fails");
+    let plain = row(failed.clone(), Vec::new());
+    let mut authored = row(failed, Vec::new());
+    authored.error_author = Some(ErrorAuthor::Gateway);
+    assert_eq!(authored.delivered_wire(), plain.delivered_wire());
+    assert!(authored.backend_error().is_none());
+}
