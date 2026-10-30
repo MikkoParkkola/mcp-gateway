@@ -278,7 +278,7 @@ impl Gw {
         let link = url::Url::parse(url).expect("an authorization URL");
         let query: std::collections::HashMap<String, String> =
             link.query_pairs().into_owned().collect();
-        let callback = url::Url::parse_with_params(
+        let mut callback = url::Url::parse_with_params(
             &query["redirect_uri"],
             &[
                 ("code", "fixture-code"),
@@ -287,11 +287,23 @@ impl Gw {
             ],
         )
         .expect("a callback URL");
+        // Never resolve a name: connect to the literal address and send the
+        // configured name as `Host`.
+        let named = callback.host_str().map(str::to_owned).unwrap_or_default();
+        if named == "localhost" {
+            callback
+                .set_host(Some("127.0.0.1"))
+                .expect("a literal host");
+        }
         let page = reqwest::Client::builder()
             .no_proxy()
             .build()
             .unwrap()
             .get(callback)
+            .header(
+                header::HOST,
+                format!("{named}:{}", link_port(&query["redirect_uri"])),
+            )
             .send()
             .await
             .expect("the callback answers");
@@ -388,6 +400,36 @@ pub(super) async fn stream_text(stream: &mut axum::body::BodyDataStream, span: D
     let mut text = String::new();
     let end = std::time::Instant::now() + span;
     while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+        match tokio::time::timeout(left, stream.next()).await {
+            Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
+            _ => break,
+        }
+    }
+    text
+}
+
+/// The port of a redirect URI.
+fn link_port(redirect_uri: &str) -> u16 {
+    url::Url::parse(redirect_uri)
+        .ok()
+        .and_then(|u| u.port())
+        .unwrap_or(80)
+}
+
+/// Everything the stream sends until `needle` has arrived or `span` of the real
+/// clock has passed.
+pub(super) async fn stream_until(
+    stream: &mut axum::body::BodyDataStream,
+    needle: &str,
+    span: Duration,
+) -> String {
+    use futures::StreamExt;
+    let mut text = String::new();
+    let end = std::time::Instant::now() + span;
+    while !text.contains(needle) {
+        let Some(left) = end.checked_duration_since(std::time::Instant::now()) else {
+            break;
+        };
         match tokio::time::timeout(left, stream.next()).await {
             Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
             _ => break,

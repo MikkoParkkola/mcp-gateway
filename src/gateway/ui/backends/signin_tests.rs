@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 
-use super::fixture::{Gw, Reply, Who, stream_text};
+use super::fixture::{Gw, Reply, Who, stream_text, stream_until};
 use crate::oauth::client::sign_in::SignIn;
 
 fn assert_refusal(reply: &Reply, status: StatusCode, code: &str) {
@@ -96,12 +96,20 @@ async fn a_form_post_is_refused() {
     );
 }
 
-// R4
+// R4: the stream's opening frames are conditional: `hello` and the first
+// snapshot go out only once a snapshot is published (`stream/conn.rs:167-170`).
+// The row waits for the real watcher to publish one, so the stream is proven
+// live before the flow starts, then asserts the link never reaches it.
 #[tokio::test]
 async fn start_returns_the_link_once_with_no_store() {
     let gw = Gw::new().await;
     let who = gw.session();
     let mut stream = gw.open_stream(&who).await;
+    let mut frames = stream_until(&mut stream, "event: hello", Duration::from_secs(10)).await;
+    assert!(
+        frames.contains("event: hello"),
+        "a snapshot was published: {frames}"
+    );
     let reply = gw.start(&who).await;
 
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
@@ -117,8 +125,7 @@ async fn start_returns_the_link_once_with_no_store() {
     let url = body["authorization_url"].as_str().unwrap_or("-");
     let read = gw.row().await.to_string();
     assert!(!read.contains(url), "{read}");
-    let frames = stream_text(&mut stream, std::time::Duration::from_millis(300)).await;
-    assert!(!frames.is_empty(), "the stream emitted frames");
+    frames.push_str(&stream_text(&mut stream, Duration::from_millis(300)).await);
     assert!(
         !frames.contains(url),
         "the link reached the stream: {frames}"
@@ -167,6 +174,7 @@ async fn nothing_is_saved_before_confirm() {
     let _ = approved(&gw, &gw.session()).await;
 
     assert!(gw.saved().is_none(), "no token on disk before confirm");
+    assert_eq!(gw.forms.lock().unwrap().len(), 1, "the code was exchanged");
     assert!(
         gw.backend.installed_client_token_for_test().is_none(),
         "no token in the client's memory before confirm"

@@ -486,7 +486,10 @@ impl OAuthClient {
         self.open_browser = Box::new(move |url: &str| open(url));
         self
     }
+}
 
+#[cfg(all(test, feature = "webui"))]
+impl OAuthClient {
     /// This client with `record` standing in for the terminal announcement.
     pub(crate) fn with_announce(
         mut self,
