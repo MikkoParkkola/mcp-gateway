@@ -1608,6 +1608,55 @@ function showWho(auth) {
   const signedIn = Boolean(auth?.signed_in);
   document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
   for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
+  showEnvironment(auth);
+}
+
+/** The sign-in whose environment chip is drawn or on its way; null while there is none. */
+let envEpoch = null;
+
+/**
+ * The environment chip: the gateway environment name, in the top bar of every
+ * page, for an admin key only. Read once per sign-in. Any refusal or failure
+ * (a 403 for another key, a 404 from a gateway without the route) leaves it
+ * out, silently: the chip is a hint, never an error. A name the gateway fell
+ * back to (the hostname, or its default) says so in a tooltip.
+ */
+async function showEnvironment(auth) {
+  const epoch = authEpoch;
+  if (envEpoch === epoch && auth?.admin === true) return;
+  document.querySelector('.top .envchip')?.remove();
+  envEpoch = null;
+  if (!auth?.signed_in || auth.admin !== true) return;
+  envEpoch = epoch;
+  let environment;
+  try {
+    ({ environment } = await api('/ui/api/gateway'));
+  } catch {
+    return;
+  }
+  const name = environment?.name;
+  if (epoch !== authEpoch || envEpoch !== epoch || typeof name !== 'string' || name === '') return;
+  const chip = document.createElement('span');
+  chip.className = 'env';
+  chip.setAttribute('role', 'img');
+  chip.setAttribute('aria-label', `Environment: ${name}`);
+  chip.textContent = name;
+  chip.title = name; // the whole name, also when the chip clips it
+  const wrap = document.createElement('span');
+  wrap.className = 'envchip';
+  wrap.append(chip);
+  document.querySelector('.top .mbrand').after(wrap);
+  const source = environment.source;
+  if (source !== 'hostname' && source !== 'default') return;
+  // The tooltip module and its stylesheet load only when a fallback name needs them.
+  let m;
+  try {
+    m = await import('/ui/assets/tooltip.32447d51da98.js');
+  } catch {
+    return;
+  }
+  if (!wrap.isConnected) return;
+  wrap.append(source === 'hostname' ? m.tip('gateway.status.environment-from-hostname') : m.tip('gateway.status.environment-not-set'));
 }
 
 /**
