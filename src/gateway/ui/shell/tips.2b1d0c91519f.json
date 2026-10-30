@@ -299,6 +299,14 @@
   "title": "Connected clients",
   "text": "Clients with an open session right now, and the key each one uses."
  },
+ "gateway.status.environment-from-hostname": {
+  "title": "Environment",
+  "text": "Named after this machine. Set a name in Gateway › Settings › General."
+ },
+ "gateway.status.environment-not-set": {
+  "title": "Environment",
+  "text": "No environment name set. Set one in Gateway › Settings › General."
+ },
  "gateway.status.gateway-errors-last-hour": {
   "title": "Gateway errors, last hour",
   "text": "Calls the gateway itself failed (bad request, auth, internal), not errors a server returned."

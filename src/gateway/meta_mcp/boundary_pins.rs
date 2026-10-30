@@ -7,6 +7,7 @@ mod allow_pins;
 mod ci_wiring;
 mod creation_sites;
 mod delivery_framing;
+mod discarded_sends;
 mod echo_rows_real_transports;
 mod guard_tests;
 mod inbound_parse_sites;
