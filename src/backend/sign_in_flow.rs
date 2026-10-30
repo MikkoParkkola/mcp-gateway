@@ -94,18 +94,18 @@ impl Flow {
 impl Backend {
     /// The windows a sign-in on this backend waits at each stage.
     pub(crate) fn sign_in_windows(&self) -> SignInWindows {
-        *self.sign_in_windows.lock()
+        *self.sign_in.windows.lock()
     }
 
     /// Test-only: run sign-ins on this backend with these windows.
     #[cfg(all(test, feature = "webui"))]
     pub(crate) fn set_sign_in_windows_for_test(&self, windows: SignInWindows) {
-        *self.sign_in_windows.lock() = windows;
+        *self.sign_in.windows.lock() = windows;
     }
 
     /// Run `f` on the flow slot under its lock.
     pub(crate) fn with_flow<R>(&self, f: impl FnOnce(&mut Option<Flow>) -> R) -> R {
-        f(&mut self.sign_in_flow.lock())
+        f(&mut self.sign_in.flow.lock())
     }
 
     /// Clear the slot's wait unless a newer one was recorded since the

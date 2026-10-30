@@ -114,7 +114,7 @@ impl Backend {
             },
         )
         .with_login_gate(Arc::clone(&self.login_gate))
-        .with_sign_in_status(Arc::clone(&self.sign_in_status));
+        .with_sign_in_status(Arc::clone(&self.sign_in.status));
 
         #[cfg(test)]
         let oauth = match seam {
@@ -151,7 +151,7 @@ impl Backend {
                 SignIn::NotOAuth
             };
         }
-        match self.sign_in_status.snapshot() {
+        match self.sign_in.status.snapshot() {
             SignIn::SignedIn { .. } if waiting => SignIn::Expired,
             held => held,
         }
@@ -177,7 +177,7 @@ impl Backend {
     /// endpoint, or discovery fails.
     pub(crate) async fn sign_in_client(&self) -> Result<Arc<OAuthClient>> {
         #[cfg(test)]
-        if let Some(client) = self.installed_oauth_client.lock().clone() {
+        if let Some(client) = self.sign_in.installed_client.lock().clone() {
             return Ok(client);
         }
         let crate::config::TransportConfig::Http { http_url, .. } = &self.config.transport else {
@@ -210,12 +210,12 @@ impl Backend {
     /// Test-only: the OAuth client the sign-in flow uses, in place of the one
     /// a start would build.
     pub(crate) fn install_oauth_client_for_test(&self, client: OAuthClient) {
-        *self.installed_oauth_client.lock() = Some(Arc::new(client));
+        *self.sign_in.installed_client.lock() = Some(Arc::new(client));
     }
 
     /// Test-only: the installed client's in-memory token.
     pub(crate) fn installed_client_token_for_test(&self) -> Option<crate::oauth::TokenInfo> {
-        let client = self.installed_oauth_client.lock().clone()?;
+        let client = self.sign_in.installed_client.lock().clone()?;
         client.cached_token_for_test()
     }
 

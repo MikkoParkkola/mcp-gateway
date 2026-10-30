@@ -72,12 +72,7 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
-        // OAuth-ness is config's: an `oauth` block, never whether a client exists.
-        let initial_sign_in = if config.oauth.as_ref().is_some_and(|oauth| oauth.enabled) {
-            crate::oauth::client::sign_in::SignIn::NotYetChecked
-        } else {
-            crate::oauth::client::sign_in::SignIn::NotOAuth
-        };
+        let sign_in = super::sign_in_state::SignInState::boxed_for(&config);
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
@@ -131,17 +126,7 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
-            #[cfg(feature = "webui")]
-            sign_in_flow: parking_lot::Mutex::new(None),
-            #[cfg(feature = "webui")]
-            sign_in_windows: parking_lot::Mutex::default(),
-            #[cfg(all(test, feature = "webui"))]
-            installed_oauth_client: parking_lot::Mutex::new(None),
-            #[cfg(all(test, feature = "webui"))]
-            sign_in_expiry_pause: crate::test_pause::Slot::default(),
-            sign_in_status: Arc::new(crate::oauth::client::sign_in::SignInStatus::new(
-                initial_sign_in,
-            )),
+            sign_in,
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),

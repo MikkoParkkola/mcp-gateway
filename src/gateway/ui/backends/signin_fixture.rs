@@ -145,7 +145,7 @@ impl Gw {
         let announced = Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorder = Arc::clone(&announced);
         let oauth = client_on(store.path(), Some(&issuer), callback_host)
-            .with_sign_in_status(Arc::clone(&backend.sign_in_status))
+            .with_sign_in_status(Arc::clone(&backend.sign_in.status))
             .with_announce(Arc::new(move |url: &str| {
                 recorder.lock().unwrap().push(url.to_owned());
             }));

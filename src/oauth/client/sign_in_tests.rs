@@ -158,7 +158,8 @@ async fn each_sign_in_variant_from_its_fixture() {
 async fn a_token_with_auth_wait_reads_expired() {
     let backend = oauth_backend("waiting");
     backend
-        .sign_in_status
+        .sign_in
+        .status
         .set(SignIn::SignedIn { expires_at: None });
     backend.shared_entry_for_test().auth_wait.set();
 
@@ -189,7 +190,7 @@ async fn the_read_does_no_storage_io() {
     let (issuer, hits) = counting_server().await;
     let backend = oauth_backend_at("quiet", Some(&issuer));
     let client =
-        client(dir.path(), Some(&issuer)).with_sign_in_status(Arc::clone(&backend.sign_in_status));
+        client(dir.path(), Some(&issuer)).with_sign_in_status(Arc::clone(&backend.sign_in.status));
     let storage = Arc::clone(&client.storage);
 
     client.publish_sign_in();
@@ -222,7 +223,7 @@ async fn the_status_survives_a_transport_restart() {
     let seeded = SignIn::SignedIn {
         expires_at: Some(UNIX_EPOCH + Duration::from_secs(FAR_FUTURE)),
     };
-    backend.sign_in_status.set(seeded);
+    backend.sign_in.status.set(seeded);
     assert_eq!(backend.sign_in(), seeded, "the seeded status is read back");
 
     backend.stop().await.expect("the transport stops");

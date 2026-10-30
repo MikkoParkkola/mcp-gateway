@@ -32,7 +32,7 @@ async fn needs_sign_in_agrees_across_every_variant() {
     let gw = Gw::new().await;
     for wait in [false, true] {
         for (status, _word, needs) in truth_table() {
-            gw.backend.sign_in_status.set(status);
+            gw.backend.sign_in.status.set(status);
             gw.backend
                 .shared_entry_for_test()
                 .auth_wait
@@ -62,7 +62,7 @@ async fn the_read_names_each_variant_in_snake_case() {
         if status == SignIn::NotOAuth {
             continue;
         }
-        gw.backend.sign_in_status.set(status);
+        gw.backend.sign_in.status.set(status);
         let row = gw.row().await;
         assert_eq!(row["sign_in"]["status"], word, "{row}");
     }
@@ -114,7 +114,7 @@ async fn a_refused_backend_keeps_its_state_and_still_needs_sign_in() {
         std::time::Duration::from_secs(60),
         Some(denied_plan()),
     );
-    refused.sign_in_status.set(SignIn::NeverSignedIn);
+    refused.sign_in.status.set(SignIn::NeverSignedIn);
     gw.add_backend(refused);
 
     let row = gw.row_named("refused-one").await;

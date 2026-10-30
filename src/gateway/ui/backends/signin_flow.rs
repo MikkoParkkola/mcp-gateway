@@ -245,7 +245,7 @@ impl Run {
             () = self.ended.notified() => lead.end(None),
             () = tokio::time::sleep_until(until) => {
                 #[cfg(test)]
-                self.backend.sign_in_expiry_pause.pause().await;
+                self.backend.sign_in.expiry_pause.pause().await;
                 if let Some(flow) = self.take_flow() {
                     let expired = Error::AuthorizationIncomplete {
                         backend: self.backend.name.clone(),

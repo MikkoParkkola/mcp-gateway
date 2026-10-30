@@ -4,8 +4,9 @@
 //! The windows come through the backend's own sign-in windows, the same path
 //! production reads; a row that expires mid-exchange uses a short window and
 //! releases the held exchange only after it has observed the expired state,
-//! and a row that completes inside its window uses a generous one. Nothing
-//! sleeps for a fixed span and nothing pauses time.
+//! and a row that completes inside its window uses a generous one. Polls
+//! sleep a few milliseconds between looks at observed state, bounded by
+//! `HANG_BOUND`, and nothing pauses time.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -60,7 +61,7 @@ impl Flow {
             if seen["phase"] == phase {
                 return seen;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("the flow never reached {phase}");
     }
@@ -72,7 +73,7 @@ impl Flow {
             if self.gw.row().await["sign_in_flow"].is_null() {
                 return;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("the flow never ended");
     }
@@ -118,8 +119,9 @@ async fn the_window_counts_from_the_callback_not_the_exchange() {
     flow.gw.wait_until_held().await;
     let ends = parse(&confirming["until"]);
     let began = std::time::Instant::now();
-    while chrono::Utc::now() < ends && began.elapsed() < HANG_BOUND {
-        tokio::task::yield_now().await;
+    while crate::clock::utc_now().expect("a readable clock") < ends && began.elapsed() < HANG_BOUND
+    {
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let reply = flow.gw.confirm(&flow.owner, &flow.attempt, "confirm").await;
@@ -164,7 +166,7 @@ async fn the_flow_phase_moves_at_the_callback() {
     let keys = confirming.as_object().map_or(0, serde_json::Map::len);
     assert_eq!(keys, 2, "only `phase` and `until`: {confirming}");
     let gap = parse(&confirming["until"]) - parse(&waiting["until"]);
-    let ten = chrono::Duration::seconds(10);
+    let ten = crate::duration_bound::delta!(seconds, 10);
     let slack = chrono::Duration::from_std(HANG_BOUND).expect("a small bound");
     assert!(
         gap <= -ten + slack && gap >= -ten,

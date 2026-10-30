@@ -53,11 +53,12 @@ mod restart;
 mod runtime_launch;
 mod secret_send;
 // The web UI's status rows are its only reader.
-#[cfg(feature = "webui")]
-pub(crate) mod server_state;
 mod auth_wait;
 #[cfg(feature = "webui")]
+pub(crate) mod server_state;
+#[cfg(feature = "webui")]
 pub(crate) mod sign_in_flow;
+mod sign_in_state;
 mod status;
 mod stdio_start;
 mod stop;
@@ -309,21 +310,8 @@ pub struct Backend {
     /// The one interactive login at a time every start of this backend
     /// shares (MIK-7982).
     pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
-    /// This backend's sign-in status, written by its OAuth client and read in
-    /// memory, so it outlives any one transport.
-    pub(crate) sign_in_status: Arc<crate::oauth::client::sign_in::SignInStatus>,
-    /// The UI sign-in in flight, if one is.
-    #[cfg(feature = "webui")]
-    pub(crate) sign_in_flow: parking_lot::Mutex<Option<sign_in_flow::Flow>>,
-    /// How long a sign-in waits at each stage.
-    #[cfg(feature = "webui")]
-    sign_in_windows: parking_lot::Mutex<sign_in_flow::SignInWindows>,
-    /// A test's pre-built OAuth client for the sign-in flow.
-    #[cfg(all(test, feature = "webui"))]
-    installed_oauth_client: parking_lot::Mutex<Option<Arc<crate::oauth::OAuthClient>>>,
-    /// Where a test holds the sign-in flow's expiry task.
-    #[cfg(all(test, feature = "webui"))]
-    pub(crate) sign_in_expiry_pause: crate::test_pause::Slot,
+    /// Everything this backend keeps about signing in.
+    pub(crate) sign_in: Box<sign_in_state::SignInState>,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.

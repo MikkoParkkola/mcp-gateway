@@ -277,7 +277,7 @@ async fn confirm_cancel_and_expiry_race_on_one_attempt() {
 async fn a_late_confirm_is_refused_before_the_expiry_task_runs() {
     let gw = Gw::new().await;
     let owner = gw.session();
-    let (reached, release) = gw.backend.sign_in_expiry_pause.arm();
+    let (reached, release) = gw.backend.sign_in.expiry_pause.arm();
     let attempt = approved_then_paused(&gw, &owner).await;
 
     pass(SIGN_IN_CONFIRM_WINDOW + Duration::from_secs(1)).await;
