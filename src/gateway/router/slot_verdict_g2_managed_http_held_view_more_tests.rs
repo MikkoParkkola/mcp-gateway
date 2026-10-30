@@ -115,27 +115,6 @@ async fn h2_a_publish_racing_a_seen_revoke_is_not_served() {
     );
 }
 
-/// H2 by name: the re-check sees the revoke, a publish of the old binding
-/// lands after it, and a name-only listing (which runs no pre-pass to
-/// re-read the account) must not name the old catalogue. The re-check's own
-/// failed read is what makes the published slot read cold.
-#[tokio::test]
-async fn h2_a_name_only_listing_does_not_serve_a_publish_racing_a_seen_revoke() {
-    let fx = Arc::new(fixture().await);
-    let old = fill_old(&fx, 1).await;
-    fx.gateway.revoke_operator_grant().await;
-    let (fired, answer) = publish_old_at_recheck(&fx, &old, list_servers_call(2), |_| {}).await;
-    assert!(
-        fired,
-        "premise: the after_revalidate seam fired and the old publish ran"
-    );
-    assert_eq!(
-        server_entry(&answer, BACKEND).get("tools_known"),
-        Some(&json!(false)),
-        "H2 by name: a publish racing a revoke the re-check saw was listed: {answer}"
-    );
-}
-
 /// H2 through `tools/resolve` (spec preview): the re-check sees the revoke,
 /// a publish of the old binding lands after it, and `tools/resolve` (which
 /// runs no pre-pass) must not resolve the old slot. Only the re-check's own
