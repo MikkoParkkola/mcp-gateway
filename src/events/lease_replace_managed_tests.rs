@@ -49,7 +49,8 @@ impl ListenerMint for Grants {
             headers: vec![(
                 "authorization".to_owned(),
                 self.tokens[Self::index(subject)].clone(),
-            )],
+            )]
+            .into(),
             fence: Some(self.binding(subject)),
         })
     }
