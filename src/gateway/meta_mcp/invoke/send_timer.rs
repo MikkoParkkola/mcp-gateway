@@ -251,7 +251,12 @@ mod send_site_scan {
                     .expect("under the root")
                     .to_string_lossy()
                     .replace('\\', "/");
-                if rel.ends_with("_tests.rs") || rel.contains("/tests/") {
+                // Test files and test-module directories (`*_tests.rs`,
+                // `*_tests/`, `tests/`) are not production sends.
+                let test_only = rel.split('/').any(|part| {
+                    part == "tests" || part.ends_with("_tests") || part.ends_with("_tests.rs")
+                });
+                if test_only {
                     continue;
                 }
                 let text = production_text(&std::fs::read_to_string(&path).expect("readable"));
