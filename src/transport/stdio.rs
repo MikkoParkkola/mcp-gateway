@@ -82,6 +82,9 @@ pub struct StdioTransport {
     start: early_exit::StartState,
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
+    /// The values the backend's rules injected; every line this transport
+    /// reads is scrubbed of them before it is routed (MIK-9035).
+    needles: std::sync::OnceLock<std::sync::Arc<crate::security::needles::NeedleSet>>,
     /// Longest frame the reader accepts; set before `start`.
     max_frame_bytes: AtomicUsize,
     /// What a failed start said, kept only long enough to classify it (#1759).
@@ -252,10 +255,37 @@ impl StdioTransport {
     /// for the caller that supplied its progress token and otherwise ignored; a
     /// peer *request* is refused, because routing one to a pending caller would
     /// answer that caller with a frame carrying neither `result` nor `error`.
+    /// The backend's injected values, attached before the child starts; the
+    /// first attach wins.
+    pub(crate) fn attach_needles(
+        &self,
+        needles: std::sync::Arc<crate::security::needles::NeedleSet>,
+    ) {
+        let _ = self.needles.set(needles);
+    }
+
     fn handle_response(&self, line: &str) -> Result<()> {
         let line_len = line.len();
         debug!(line_len, "Parsing response");
-        let response = match JsonRpcMessage::from_line(line)? {
+        let mut message = JsonRpcMessage::from_line(line)?;
+        if let Some(needles) = self.needles.get() {
+            use crate::security::needles::{Scrubbed, ingress_scrub, refused_response};
+            match ingress_scrub(needles, &mut message) {
+                Scrubbed::Withhold => return Ok(()),
+                Scrubbed::Refuse => {
+                    if let JsonRpcMessage::Response(response) = &message {
+                        message = JsonRpcMessage::Response(refused_response(
+                            needles,
+                            response.id.clone(),
+                        ));
+                    } else {
+                        return Ok(());
+                    }
+                }
+                Scrubbed::Clean | Scrubbed::Redacted => {}
+            }
+        }
+        let response = match message {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
                 self.capture_notification(notification);

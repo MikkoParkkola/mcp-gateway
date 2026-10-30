@@ -153,13 +153,6 @@ pub(crate) enum Scrubbed {
     /// At least one value was replaced.
     Redacted,
     /// A notification whose method holds a value: the caller drops it.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first callers: the transport notification parse sites"
-        )
-    )]
     Withhold,
     /// The set overflowed, or an `error.code` equals a value: the caller
     /// answers with the fixed refusal instead.
@@ -169,13 +162,6 @@ pub(crate) enum Scrubbed {
 /// Removes every value in `needles` from `message`, in place: a result, an
 /// error's message and data, a notification's params, and a request's params.
 /// The envelope's `id` is never touched, so a response still routes.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "first callers: the transport notification parse sites"
-    )
-)]
 pub(crate) fn ingress_scrub(needles: &NeedleSet, message: &mut JsonRpcMessage) -> Scrubbed {
     if needles.overflowed() {
         return Scrubbed::Refuse;
@@ -302,6 +288,28 @@ pub(crate) fn scrub_answer(
             Scrubbed::Refuse => Err(refusal(needles)),
             _ => Err(error),
         },
+    }
+}
+
+/// A response carrying the fixed refusal, under the answer's own `id` so the
+/// caller still gets its answer.
+pub(crate) fn refused_response(
+    needles: &NeedleSet,
+    id: Option<crate::protocol::RequestId>,
+) -> JsonRpcResponse {
+    let crate::Error::JsonRpc { code, message, .. } = refusal(needles) else {
+        unreachable!("the refusal is a JSON-RPC error")
+    };
+    JsonRpcResponse {
+        jsonrpc: "2.0".to_owned(),
+        id,
+        result: None,
+        error: Some(crate::protocol::JsonRpcError {
+            code,
+            message,
+            data: None,
+        }),
+        confirmation_refusal: false,
     }
 }
 

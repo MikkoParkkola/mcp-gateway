@@ -130,8 +130,10 @@ impl StdioTransport {
                             debug!("Transport dropped while reading; stopping reader task");
                             return;
                         };
-                        if let Err(e) = transport.handle_response(&line) {
-                            error!(error = %e, line_len, "Failed to handle response");
+                        // The length only: a parse error can quote the line, and
+                        // the line can hold an injected secret (MIK-9035).
+                        if transport.handle_response(&line).is_err() {
+                            error!(line_len, "Failed to handle a line from the backend");
                         }
                     }
                     Ok(None) => {
