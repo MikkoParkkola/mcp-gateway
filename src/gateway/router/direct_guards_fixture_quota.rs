@@ -108,26 +108,33 @@ thread_local! {
     /// The `secrets:` rules every fixture backend carries; empty for none.
     static SECRETS: std::cell::RefCell<Vec<crate::secret_injection::CredentialRule>> =
         const { std::cell::RefCell::new(Vec::new()) };
-    /// A real HTTP MCP server both fixture backends talk to instead of the
-    /// scripted transport: the transport then parses the server's bytes, as
-    /// the echo-redaction rows need (MIK-9035).
-    static SERVED_BY: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// What the fixture backends talk to.
+    static BACKENDS: std::cell::RefCell<Backends> = const { std::cell::RefCell::new(Backends::Scripted) };
 }
 
-/// The real server the fixture backends use, when one is set.
-pub(super) fn served_by() -> Option<String> {
-    SERVED_BY.with(|url| url.borrow().clone())
+/// What the two fixture backends talk to.
+#[derive(Clone)]
+pub(crate) enum Backends {
+    /// The scripted in-process transport (every fixture but the echo rows).
+    Scripted,
+    /// A real HTTP MCP server at this URL: the transport parses the
+    /// server's bytes, as the echo-redaction rows need (MIK-9035).
+    HttpServer(String),
 }
 
-/// [`fixture_with_secrets`] whose two backends are HTTP backends of the MCP
-/// server at `url`, with no scripted transport.
-pub(crate) async fn fixture_with_secrets_served_by(
+/// What the fixture backends talk to now.
+pub(super) fn backends() -> Backends {
+    BACKENDS.with(|backends| backends.borrow().clone())
+}
+
+/// [`fixture_with_secrets`] whose two backends talk to `backends`.
+pub(crate) async fn fixture_with_secrets_on(
     rules: Vec<crate::secret_injection::CredentialRule>,
-    url: String,
+    backends: Backends,
 ) -> Fx {
-    SERVED_BY.with(|served| *served.borrow_mut() = Some(url));
+    BACKENDS.with(|held| *held.borrow_mut() = backends);
     let fx = fixture_with_secrets(rules, None, None).await;
-    SERVED_BY.with(|served| *served.borrow_mut() = None);
+    BACKENDS.with(|held| *held.borrow_mut() = Backends::Scripted);
     fx
 }
 
@@ -174,7 +181,7 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
         secrets: SECRETS.with(|s| s.borrow().clone()),
         // A propagating backend validates an HTTP base URL before it
         // reaches the scripted transport.
-        transport: if let Some(http_url) = served_by() {
+        transport: if let Backends::HttpServer(http_url) = backends() {
             crate::config::TransportConfig::Http {
                 http_url,
                 streamable_http: Some(true),

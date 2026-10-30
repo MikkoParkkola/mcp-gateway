@@ -9,7 +9,9 @@
 use serde_json::json;
 use std::sync::Arc;
 
-use super::direct_guards_fixture::{fixture_with_secrets_served_by, initialize, post_meta_invoke};
+use super::direct_guards_fixture::{
+    Backends, fixture_with_secrets_on, initialize, post_meta_invoke,
+};
 use super::secret_echo_tests::{Calls, Reply, echo_server};
 use super::secret_injection_direct_tests::{
     SECRET, argument_rule, files_under, finished_task, holds, submit_task,
@@ -25,7 +27,7 @@ const MARKER: &str = "[redacted]";
 async fn an_echo_is_redacted_in_every_answer_and_everything_kept() {
     let calls = Calls::default();
     let url = echo_server(Arc::clone(&calls), Reply::Echo).await;
-    let fx = fixture_with_secrets_served_by(vec![argument_rule()], url).await;
+    let fx = fixture_with_secrets_on(vec![argument_rule()], Backends::HttpServer(url)).await;
     let session = initialize(&fx, "k-std").await;
     let mut answers = Vec::new();
     for _ in 0..2 {
