@@ -47,6 +47,7 @@ async fn deliver(
             targets: &[ResponsePolicyTarget {
                 server: "backend".into(),
                 tool: "echo".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "chain-session",
@@ -55,6 +56,7 @@ async fn deliver(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing,
             chain_source: source,
@@ -300,6 +302,9 @@ async fn link_out_covers_firewall_redaction_stdio() {
                     action: FirewallAction::Allow,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

@@ -140,8 +140,11 @@ steps:
     );
 }
 
-/// An ordinary error still retries. Without this control, an implementation
-/// that stopped retrying *everything* would satisfy the case above.
+/// A failure that is not proven raised before the send is attempted once, like
+/// a denial. An invalid tool name is refused before the send, but
+/// is not on `Error::is_pre_dispatch`'s allowlist, so the engine does not
+/// re-send it. The retried case, a failure raised before the send, is pinned at
+/// the engine (`playbook::engine::step_retry_tests`).
 ///
 /// The failure has to be a genuine `Err`, and that is narrower than it looks:
 /// a missing backend comes back as `Ok` carrying an `isError` envelope, so the
@@ -149,7 +152,7 @@ steps:
 /// invalid tool name is rejected after the chokepoint and does return `Err`,
 /// so the authorizer is consulted once per attempt.
 #[tokio::test]
-async fn authz_17b_ordinary_error_still_retries() {
+async fn authz_17b_an_error_not_proven_unsent_is_attempted_once() {
     let registry = Arc::new(BackendRegistry::new());
     let meta = MetaMcp::new(registry);
     let counting = CountingAuthorizer::new(AllowAll);
@@ -172,9 +175,8 @@ steps:
 
     assert_eq!(
         counting.count_for("alpha", "bad/name"),
-        3,
-        "an ordinary failure must still be retried max_retries times; only a \
-         denial short-circuits"
+        1,
+        "a failure not proven raised before the send is not re-sent"
     );
     let value = result.expect("retry continues past a failed step");
     assert!(

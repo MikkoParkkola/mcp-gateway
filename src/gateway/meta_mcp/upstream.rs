@@ -190,7 +190,12 @@ impl NativeUpstreamTasks {
             // its own `tools/call` will, and `query`/`cancel` run this under
             // `non_interactive`. A non-interactive discovery is refused while a
             // start holds the backend, which would silently disarm recovery.
-            backend.request_with_headers("server/discover", None, &[], None),
+            backend.request_with_headers_lent(
+                "server/discover",
+                None,
+                crate::transport::LentCredential::default(),
+                None,
+            ),
         )
         .await;
         // Silence, a transport failure and a JSON-RPC REFUSAL are all "the peer
@@ -241,10 +246,10 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             // method, and nothing that writes upstream.
             match tokio::time::timeout(
                 deadline,
-                backend.request_with_task_capability(
+                backend.request_with_task_capability_lent(
                     "tasks/get",
                     Some(json!({ "taskId": handle.handle })),
-                    &[],
+                    crate::transport::LentCredential::default(),
                     None,
                 ),
             )
@@ -298,10 +303,10 @@ impl UpstreamRecovery for NativeUpstreamTasks {
             // a JSON-RPC error included, means the peer received it.
             let sent = tokio::time::timeout(
                 deadline,
-                backend.request_with_task_capability(
+                backend.request_with_task_capability_lent(
                     "tasks/cancel",
                     Some(json!({ "taskId": handle.handle })),
-                    &[],
+                    crate::transport::LentCredential::default(),
                     None,
                 ),
             )
@@ -545,6 +550,7 @@ impl MetaMcp {
         let target = super::response_security::ResponsePolicyTarget {
             server: server.to_owned(),
             tool: tool.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         };
         self.inspect_task_result(&[target], trace_id, &mut gated)?;
         // Stamped last, as the live path is (MIK-6909): a peer receipt is

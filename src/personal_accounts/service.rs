@@ -112,6 +112,10 @@ pub(crate) enum RejectionOutcome {
 pub(crate) struct ReleasedCredentials {
     pub(crate) access_token: String,
     pub(crate) token_type: String,
+    /// When the released access token stops working (unix seconds), as the
+    /// durable grant records it. A send checks it again, because a lease that
+    /// still matches says nothing about a token that has since run out.
+    pub(crate) expires_at: u64,
 }
 
 impl std::fmt::Debug for ReleasedCredentials {
@@ -370,6 +374,7 @@ impl<P: RefreshProvider, O: CredentialReleaseObserver> AccountService<P, O> {
         let credentials = ReleasedCredentials {
             access_token: current.access_token.clone(),
             token_type: current.token_type.clone(),
+            expires_at: current.expires_at,
         };
         // Exactly once, and only past the recheck above.
         self.observer
