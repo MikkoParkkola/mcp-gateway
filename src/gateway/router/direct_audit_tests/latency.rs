@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Latency at the counting sites (test plan rows 19, 20, 23, 24, 25, 26b,
-//! 29): one sample per counted call that reached a backend, none for a call
+//! 27b, 29): one sample per counted call that reached a backend, none for a call
 //! the gateway answered itself.
 
 use std::time::Duration;
 
-use super::counting::{attach, keyed_meta_invoke, meta_invoke};
+use super::counting::{attach, keyed_meta_invoke, meta_invoke, totals};
 use super::*;
 use crate::counters::{CounterStore, Window};
 use crate::gateway::meta_mcp::invoke::send_timer::seam;
@@ -174,4 +174,37 @@ async fn an_uncounted_request_records_nothing() {
         "{:?}",
         points(&store, None)
     );
+}
+
+/// Row 27b: the whole call is dropped while its send waits on the backend
+/// (the client went away). Nothing finished, so nothing records: no count and
+/// no sample.
+#[tokio::test]
+async fn a_dropped_call_records_nothing() {
+    let fx = fixture(Setup {
+        extras: &[Extra::Hang],
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    seam::inject(SEND);
+    let body = tools_call("t");
+    // Boxed, so the drop below ends the call itself, not a pin of it.
+    let mut call = Box::pin(post(&fx, "alpha", &body, &Caller::Anonymous));
+    // Wait on the event: `alpha` took the call. The 30 s bound is a hang
+    // guard; `alpha` answers nothing, so the call cannot answer first.
+    let sent = tokio::time::timeout(Duration::from_secs(30), async {
+        while fx.calls.load(Ordering::SeqCst) < 1 {
+            tokio::task::yield_now().await;
+        }
+    });
+    tokio::select! {
+        biased;
+        answered = &mut call => panic!("a hung backend answered: {answered:?}"),
+        sent = sent => assert!(sent.is_ok(), "alpha was never sent the call"),
+    }
+    drop(call);
+    seam::clear();
+    assert_eq!(totals(&store), [0; 5]);
+    assert!(points(&store, None).is_empty(), "{:?}", points(&store, None));
 }

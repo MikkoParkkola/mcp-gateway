@@ -161,6 +161,30 @@ async fn surfaced_bench_state() -> (
     (state, store)
 }
 
+/// A counter store on `state`, as the HTTP server attaches one, so every
+/// timed call pays its counting (and on a head that times sends, its latency
+/// sample). Names no latency type: the gate overlays this file onto BASE.
+fn attach_counters(
+    state: &Arc<crate::gateway::router::AppState>,
+) -> Arc<crate::counters::CounterStore> {
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    let store = Arc::new(crate::counters::CounterStore::new(now));
+    state.meta_mcp.set_counters(Arc::clone(&store));
+    store
+}
+
+/// The calls `store` counted over the last 24 hours.
+fn calls_counted(store: &crate::counters::CounterStore) -> u64 {
+    use crate::counters::{Filter, Metric, Query, Window};
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    store
+        .series(&Query::new(Metric::Calls, Window::Day, Filter::All), now, &chrono::Local)
+        .points
+        .iter()
+        .map(|p| p.v)
+        .sum()
+}
+
 /// The `tools/call` body a row times: `gateway_invoke` at `bench`, or the
 /// surfaced `search` name directly.
 fn http_call(stage: &str, blob: usize) -> String {
@@ -339,6 +363,8 @@ fn per_call_timing() {
     super::signing_nonce_allocations_support::runtime().block_on(async {
         let (state, _store) = bench_state().await;
         let (surfaced, _surfaced_store) = surfaced_bench_state().await;
+        // Attached last: `surfaced_bench_state` replaces its `meta_mcp`.
+        let counted = [attach_counters(&state), attach_counters(&surfaced)];
         for &(stage, _, blob, _) in STAGES.iter().filter(|stage| stage.1) {
             let on = if stage == "http_surfaced_tiny" {
                 &surfaced
@@ -349,6 +375,16 @@ fn per_call_timing() {
                 "PER_CALL_NS {stage} {}",
                 median_ns(on, http_call(stage, blob)).await
             );
+        }
+        let rows = |surfaced_row: bool| {
+            STAGES
+                .iter()
+                .filter(|stage| stage.1 && (stage.0 == "http_surfaced_tiny") == surfaced_row)
+                .count()
+        };
+        for (store, rows) in counted.iter().zip([rows(false), rows(true)]) {
+            let calls = u64::try_from((WARMUP + CALLS) * rows).expect("a small count");
+            assert_eq!(calls_counted(store), calls, "the store counts every timed call");
         }
         let mut stdio = StdioLoop::start().await;
         for &(stage, _, blob, batch) in STAGES.iter().filter(|stage| !stage.1) {

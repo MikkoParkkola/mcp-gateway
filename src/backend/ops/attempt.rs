@@ -50,3 +50,7 @@ pub(super) async fn send_timed(
     };
     timer.finish_with(result)
 }
+
+#[cfg(test)]
+#[path = "attempt_tests.rs"]
+mod tests;

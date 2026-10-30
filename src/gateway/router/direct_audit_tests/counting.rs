@@ -32,7 +32,7 @@ fn count(store: &CounterStore, metric: Metric, filter: Filter<'_>) -> u64 {
 }
 
 /// `[calls, blocks, errors, firewall, cache hits]` on the global series.
-fn totals(store: &CounterStore) -> [u64; 5] {
+pub(super) fn totals(store: &CounterStore) -> [u64; 5] {
     Metric::ALL.map(|metric| count(store, metric, Filter::All))
 }
 

@@ -459,8 +459,8 @@ impl CounterStore {
         self.record_timed(call, at, zone, None);
     }
 
-    /// [`Self::record`], plus the call's backend send time when a send began
-    ///: one sample per counted call, under the same lock, in the
+    /// [`Self::record`], plus the call's backend send time when a send began:
+    /// one sample per counted call, under the same lock, in the
     /// same bucket and on the same server label as its count.
     pub(crate) fn record_timed<Tz: TimeZone>(
         &self,
