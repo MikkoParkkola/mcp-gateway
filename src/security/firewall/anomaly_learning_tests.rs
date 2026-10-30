@@ -85,6 +85,9 @@ fn allow_all() -> FirewallRule {
         action: FirewallAction::Allow,
         reason: Some("allow everything".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 
