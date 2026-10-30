@@ -245,7 +245,8 @@ pub(crate) fn scrub_text(needles: &NeedleSet, text: &mut String) -> Scrubbed {
 }
 
 /// Redacts a peer refusal's message and data (`Error::JsonRpc`,
-/// `Error::JsonRpcRetryable`); other errors carry no backend text.
+/// `Error::JsonRpcRetryable`) and the text of a protocol or transport
+/// diagnostic; other errors carry no backend text.
 pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scrubbed {
     if needles.overflowed() {
         return Scrubbed::Refuse;
@@ -265,6 +266,17 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
             };
             let second = scrub_option(&secrets, data);
             merge(first, second)
+        }
+        // Diagnostics a transport built from backend text (an A2A start's
+        // card routing fields, a wrapped send failure).
+        crate::Error::Protocol(message) | crate::Error::Transport(message) => {
+            let mut text = Value::String(std::mem::take(message));
+            let outcome = scrub_in_place(&secrets, &mut text);
+            *message = match text {
+                Value::String(redacted) => redacted,
+                other => other.to_string(),
+            };
+            outcome
         }
         _ => Scrubbed::Clean,
     }

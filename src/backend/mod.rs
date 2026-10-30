@@ -483,6 +483,7 @@ impl Backend {
             self.config.timeout,
             destination,
             lender,
+            self.needles.get().cloned(),
         )
         .await
     }
