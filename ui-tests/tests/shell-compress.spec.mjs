@@ -206,7 +206,7 @@ async function signedOutReady(page) {
   await expect(page.locator('#signin')).toBeVisible();
 }
 // The chrome the frame hides while signed out; the sign-in's own look waits for the rest.
-const SIGNIN = ['.side', '.main', 'a.skip', 'nav.route-nav a', 'header.top'];
+const SIGNED_OUT_CHROME = ['.side', '.main', 'a.skip', 'nav.route-nav a', 'header.top'];
 const signedOut = (page) => page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
 
 test.describe('split guard', () => {
@@ -224,7 +224,7 @@ test.describe('split guard', () => {
   test('Z6 at 1440 px signed out, the frame already hides the chrome', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signedOut(page);
-    await splitGuard(page, SIGNIN, signedOutReady);
+    await splitGuard(page, SIGNED_OUT_CHROME, signedOutReady);
     // The rest is disabled now: the frame alone hides the chrome.
     for (const sel of ['.side', '.main']) await expect(page.locator(sel), sel).toBeHidden();
   });
@@ -233,7 +233,9 @@ test.describe('split guard', () => {
     test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
     test('Z6 at 390 px with a coarse pointer signed out, the frame already hides the chrome', async ({ page }) => {
       await signedOut(page);
-      await splitGuard(page, SIGNIN, signedOutReady);
+      await page.goto('/ui/classic');
+      expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
+      await splitGuard(page, SIGNED_OUT_CHROME, signedOutReady);
       // The rest is disabled now: the frame alone hides the chrome.
       for (const sel of ['.side', '.main']) await expect(page.locator(sel), sel).toBeHidden();
     });
