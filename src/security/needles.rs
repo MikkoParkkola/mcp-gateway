@@ -546,23 +546,27 @@ pub(crate) fn refused_response(
     needles: &NeedleSet,
     id: Option<crate::protocol::RequestId>,
 ) -> JsonRpcResponse {
-    let crate::Error::JsonRpc { code, message, .. } = refusal(needles) else {
-        unreachable!("the refusal is a JSON-RPC error")
-    };
-    JsonRpcResponse::error(id, code, message)
+    JsonRpcResponse::error(id, REFUSAL_CODE, refusal_message(needles))
 }
 
 /// The fixed refusal an answer is replaced with; it names no value.
 fn refusal(needles: &NeedleSet) -> crate::Error {
-    let message = if needles.overflowed() {
+    crate::Error::JsonRpc {
+        code: REFUSAL_CODE,
+        message: refusal_message(needles).to_owned(),
+        data: None,
+    }
+}
+
+/// The JSON-RPC code of the fixed refusal.
+const REFUSAL_CODE: i32 = -32603;
+
+/// The fixed refusal's text: the set overflowed, or the answer held a value.
+fn refusal_message(needles: &NeedleSet) -> &'static str {
+    if needles.overflowed() {
         OVERFLOW_REFUSAL
     } else {
         "the backend's answer contained a credential the gateway injected"
-    };
-    crate::Error::JsonRpc {
-        code: -32603,
-        message: message.to_owned(),
-        data: None,
     }
 }
 
