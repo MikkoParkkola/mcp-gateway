@@ -513,7 +513,9 @@ impl MetaMcp {
         // would confirm it exists.
         let scope = caller.scope();
         if !self.admits_backend(server, scope, session_id) {
-            return Err(Error::BackendNotFound(server.to_string()));
+            return Err(crate::gateway::delivery_facts::refused(
+                Error::BackendNotFound(server.to_string()),
+            ));
         }
 
         // Check if it's the capability backend

@@ -376,7 +376,9 @@ impl MetaMcp {
         }
 
         let Some(principal) = principal else {
-            return refuse("the request carries no verified end-user identity".to_string()).await;
+            // The one refusal here that is a decision about the caller; the
+            // others are configuration the operator has not finished.
+            return refuse(NO_IDENTITY.into()).await.inspect_err(raise);
         };
         // An explicit account reference requires its own installed strategy.
         // A missing or stale install must never borrow an unrelated global
@@ -703,4 +705,13 @@ impl ResolvedDispatch {
     pub(super) fn minted(&self) -> bool {
         self.caller_credential.cache_binding.is_some() || self.caller_credential.attempted
     }
+}
+
+/// The required-identity denial's reason.
+const NO_IDENTITY: &str = "the request carries no verified end-user identity";
+
+/// The delivered answer is the gateway refusing the caller: raised while the
+/// cell still vouches for it, so a composite that goes on is not marked.
+fn raise(_: &Error) {
+    crate::gateway::delivery_facts::refused_while_vouched();
 }

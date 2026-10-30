@@ -613,3 +613,28 @@ pub(crate) mod seams {
         }
     }
 }
+
+#[cfg(test)]
+mod withholding_tests {
+    use super::Withholding;
+
+    /// Every reason is classified: a new variant fails to compile here until
+    /// it is named policy or not.
+    #[test]
+    fn every_withholding_says_whether_it_is_policy() {
+        for reason in [
+            Withholding::Refused,
+            Withholding::Schema,
+            Withholding::Descriptor,
+            Withholding::Unselected,
+            Withholding::Lacked,
+            Withholding::Absent,
+        ] {
+            let policy = match reason {
+                Withholding::Refused | Withholding::Schema | Withholding::Descriptor => true,
+                Withholding::Unselected | Withholding::Lacked | Withholding::Absent => false,
+            };
+            assert_eq!(reason.is_policy(), policy, "{reason:?}");
+        }
+    }
+}

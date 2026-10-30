@@ -203,6 +203,9 @@ mod secret_injection_direct_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+/// The web UI API's access answers per path, method and caller, pinned.
+#[cfg(all(test, feature = "webui"))]
+mod ui_access_matrix_tests;
 /// U3: the UI live stream.
 #[cfg(all(test, feature = "webui"))]
 mod ui_stream_tests;
@@ -218,6 +221,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// A lent-only call carrying no credential records `refused`.
+#[cfg(test)]
+mod lend_refusal_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;

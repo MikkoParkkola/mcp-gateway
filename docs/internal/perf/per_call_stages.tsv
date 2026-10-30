@@ -241,6 +241,7 @@ src/gateway/meta_mcp/invoke/gate.rs	filled_since	http_invoke_tiny	on the HTTP ga
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
+src/gateway/meta_mcp/invoke/gate.rs	is_authorization_refusal	-	on-path, untimed: a playbook step refused at dispatch only; the timed rows are lone calls that succeed
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's visibility judgement)
 src/gateway/meta_mcp/invoke/gate.rs	invisible_call	http_invoke_tiny	on the HTTP gateway_invoke path (the route stage's whole-call gate)
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
@@ -373,6 +374,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	-	off-path: th
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	-	off-path: a per-user events listener mints through it per upstream request, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
+src/gateway/meta_mcp/invoke/propagation.rs	raise	-	on-path, untimed: the required-identity denial only; the timed caller is not refused
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential_as	-	on-path, untimed: identity-propagation backends only; the timed backend has no propagation config

@@ -26,8 +26,8 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use super::admin_audit::{AuditDetail, record_admin_action_as};
-use super::errors::admin_auth_required;
-use super::{AppState, AuthenticatedClient, is_admin};
+use super::guard::Guard;
+use super::{AppState, AuthenticatedClient};
 use crate::gateway::ui_call::{Confirm, Outcome, UiCall};
 use crate::key_server::oidc::VerifiedIdentity;
 
@@ -79,16 +79,21 @@ impl Disposition {
 }
 
 /// The handler.
-pub(super) async fn call(State(state): State<Arc<AppState>>, request: Request) -> Response {
+pub(super) async fn call(
+    State(state): State<Arc<AppState>>,
+    guard: Guard,
+    request: Request,
+) -> Response {
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
-    if !is_admin(client.as_ref()) {
+    // The refusal is recorded as an admin action before it is answered, so it
+    // goes through `finish` rather than straight back to the caller.
+    if let Err(refused) = guard.admit() {
         let mut detail = Map::new();
         detail.insert(
             "via".into(),
             via_label(&state, client.as_ref(), request.extensions()).into(),
         );
-        let refused = admin_auth_required().into_response();
-        return finish(refused, detail, Disposition::NotRun, None);
+        return finish(refused.into_response(), detail, Disposition::NotRun, None);
     }
     let (parts, body) = request.into_parts();
     // A JSON body only: a cross-site form post cannot send this type without
