@@ -16,7 +16,10 @@ use crate::commands::doctor::CheckStatus;
 
 #[path = "npm_pin_wire_fixture.rs"]
 mod fixture;
-use fixture::{Cert, Fake, Proxy, Reply, STALL_OUTLASTS_BUDGET};
+use fixture::{
+    Cert, Fake, HANG_GUARD, Proxy, Reply, STALL_OUTLASTS_BUDGET, assert_all_released,
+    assert_budget_ended, check_within_guard, lookup_within_guard,
+};
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -199,13 +202,6 @@ async fn every_off_reason_sends_nothing_and_prints_one_skipped_pass() {
 
 // ── fail-soft: every failure is silence, inside the budget ─────────────────
 
-/// How long a budget row waits for the check before failing. The rows prove
-/// the budget by its effect, not by the clock: their lookups outlast every
-/// bound but the budget, so a check that returns at all was ended by it. This
-/// guard only turns a check that ignores the budget into a failure instead of
-/// a hung job, so it sits far past the budget, where no slow host reaches.
-const HANG_GUARD: Duration = Duration::from_secs(60);
-
 #[test]
 fn the_bounds_nest_budget_hang_guard_stall() {
     assert_eq!(
@@ -227,36 +223,6 @@ fn production_keeps_its_request_bounds() {
     assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(3));
 }
 
-/// The check under [`HANG_GUARD`], and how long it took.
-async fn check_within_guard(config: &Config, cfg: &ClientCfg) -> (Vec<CheckResult>, Duration) {
-    let started = Instant::now();
-    let rows = tokio::time::timeout(HANG_GUARD, check(config, cfg, Lookup::On))
-        .await
-        .unwrap_or_else(|_| panic!("the check outlived its budget: it ignores BUDGET"));
-    (rows, started.elapsed())
-}
-
-/// The budget, not an early error, ended the check. A lower bound only, so a
-/// slow host cannot fail it.
-fn assert_budget_ended(took: Duration) {
-    // Each row prints its time, so CI runs record the spread.
-    eprintln!("the check took {took:?}");
-    assert!(
-        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
-        "the budget ran out: {took:?}"
-    );
-}
-
-/// The client let go of every stalled lookup. The fake sees a close a moment
-/// after the client drops it: wait for that, under the guard.
-async fn assert_all_released(fake: &Fake) {
-    let deadline = Instant::now() + HANG_GUARD;
-    while fake.in_flight() > 0 && Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert_eq!(fake.in_flight(), 0, "a stalled lookup was left open");
-}
-
 /// One stalled lookup on the production request bounds, with no budget
 /// around it: only the request bound can end it.
 #[tokio::test]
@@ -265,12 +231,7 @@ async fn the_request_timeout_alone_ends_one_stalled_lookup() {
     let cfg = fake.cfg(&[]);
     let http = client(&cfg).expect("the fake builds a client");
     let started = Instant::now();
-    let doc = tokio::time::timeout(
-        HANG_GUARD,
-        fetch_doc(&http, &cfg, "@modelcontextprotocol/server-memory"),
-    )
-    .await
-    .unwrap_or_else(|_| panic!("the lookup outlived its request bound"));
+    let doc = lookup_within_guard(&http, &cfg, "@modelcontextprotocol/server-memory").await;
     let took = started.elapsed();
     eprintln!("the lookup took {took:?}");
     assert!(doc.is_none(), "a stalled lookup is no answer");

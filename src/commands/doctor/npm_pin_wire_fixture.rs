@@ -7,18 +7,72 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use url::Url;
 
-use super::super::super::{ClientCfg, ProxyEnv};
+use mcp_gateway::config::Config;
+
+use super::super::super::{BUDGET, ClientCfg, Lookup, ProxyEnv, check, fetch_doc};
+use crate::commands::doctor::CheckResult;
 
 /// A request bound far past the budget and the rows' hang guard: with it, a
 /// stalled lookup outlives every bound but the budget, so only the budget
 /// can end the check.
 pub(super) const STALL_OUTLASTS_BUDGET: Duration = Duration::from_secs(120);
+
+/// How long a budget row waits for the check before failing. The rows prove
+/// the budget by its effect, not by the clock: their lookups outlast every
+/// bound but the budget, so a check that returns at all was ended by it. This
+/// guard only turns a check that ignores the budget into a failure instead of
+/// a hung job, so it sits far past the budget, where no slow host reaches.
+pub(super) const HANG_GUARD: Duration = Duration::from_secs(60);
+
+/// The check under [`HANG_GUARD`], and how long it took.
+pub(super) async fn check_within_guard(
+    config: &Config,
+    cfg: &ClientCfg,
+) -> (Vec<CheckResult>, Duration) {
+    let started = Instant::now();
+    let rows = tokio::time::timeout(HANG_GUARD, check(config, cfg, Lookup::On))
+        .await
+        .unwrap_or_else(|_| panic!("the check outlived its budget: it ignores BUDGET"));
+    (rows, started.elapsed())
+}
+
+/// One lookup under [`HANG_GUARD`].
+pub(super) async fn lookup_within_guard(
+    http: &reqwest::Client,
+    cfg: &ClientCfg,
+    name: &str,
+) -> Option<Vec<u8>> {
+    tokio::time::timeout(HANG_GUARD, fetch_doc(http, cfg, name))
+        .await
+        .unwrap_or_else(|_| panic!("the lookup outlived its request bound"))
+}
+
+/// The budget, not an early error, ended the check. A lower bound only, so a
+/// slow host cannot fail it.
+pub(super) fn assert_budget_ended(took: Duration) {
+    // Each row prints its time, so CI runs record the spread.
+    eprintln!("the check took {took:?}");
+    assert!(
+        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
+        "the budget ran out: {took:?}"
+    );
+}
+
+/// The client let go of every stalled lookup. The fake sees a close a moment
+/// after the client drops it: wait for that, under the guard.
+pub(super) async fn assert_all_released(fake: &Fake) {
+    let deadline = Instant::now() + HANG_GUARD;
+    while fake.in_flight() > 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(fake.in_flight(), 0, "a stalled lookup was left open");
+}
 
 /// How the fake answers one path.
 #[derive(Clone)]
