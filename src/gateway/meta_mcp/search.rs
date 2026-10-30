@@ -206,7 +206,8 @@ impl MetaMcp {
             .await;
             // Indexed after every fill attempt, an empty fill included; a slot
             // a failed fill left unfilled is never recorded (MIK-8356).
-            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref())
+                .await;
             if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
@@ -318,7 +319,8 @@ impl MetaMcp {
                     .await;
             // Indexed after every fill attempt, an empty fill included; a slot
             // a failed fill left unfilled is never recorded (MIK-8356).
-            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref())
+                .await;
             if let Some(tools) = fetched {
                 let enriched: Vec<_> = tools
                     .iter()
@@ -559,7 +561,8 @@ impl MetaMcp {
         let fetched = backend
             .get_tools_for_binding_lent(binding.as_deref(), headers.clone())
             .await?;
-        self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+        self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref())
+            .await;
         let tools: Vec<_> = fetched
             .as_ref()
             .clone()
@@ -643,7 +646,8 @@ impl MetaMcp {
                     .await;
             // Indexed after every fill attempt, an empty fill included; a slot
             // a failed fill left unfilled is never recorded (MIK-8356).
-            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
+            self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref())
+                .await;
             if let Some(tools) = fetched {
                 for tool in tools.iter() {
                     if !profile.tool_allowed(&tool.name)
