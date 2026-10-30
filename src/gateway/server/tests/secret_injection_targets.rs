@@ -471,10 +471,11 @@ async fn a_reloaded_rule_resolves_a_value_only_an_env_file_assigns() {
 }
 
 /// A backend's rules are its own: `beta`, which holds no rule, is sent its
-/// call untouched while `alpha`, registered beside it in the same registry
-/// with an argument rule, gets the secret. A coverage row: each backend reads
-/// only its own `secrets:`, so it holds on the line; it fails if rules were
-/// ever looked up by name or from a shared table.
+/// call untouched, a caller's own `api_key` included, while `alpha`,
+/// registered beside it in the same registry with an argument rule, gets the
+/// secret. A coverage row: each backend reads only its own `secrets:`, so it
+/// holds on the line; it fails if a backend without rules applied another
+/// backend's, such as rules read from one shared table.
 #[tokio::test]
 async fn a_backend_without_a_rule_gets_none_of_another_backends_secret() {
     let registry = gateway_registry();
@@ -508,30 +509,39 @@ async fn a_backend_without_a_rule_gets_none_of_another_backends_secret() {
         recorders.push(seen);
     }
     let meta = Arc::new(MetaMcp::new(registry));
+    let caller = json!({"q": 1, "api_key": "the-callers-own"});
 
-    let answer = invoke_read_on(&meta, "beta", json!({"q": 1})).await;
-    assert_succeeded(&answer);
-    let beta = std::mem::take(&mut *recorders[1].lock().expect("recorder"));
-    let sent = beta.params.expect("premise: beta received its call");
-    assert_eq!(
-        sent["arguments"],
-        json!({"q": 1}),
-        "beta's arguments were changed: {sent}"
-    );
-    assert!(
-        !sent.to_string().contains(SECRET)
-            && !beta.headers.iter().any(|(_, value)| value.contains(SECRET)),
-        "beta received alpha's secret: {sent} {:?}",
-        beta.headers
-    );
-
-    // Control: the same registry still applies alpha's own rule to alpha.
-    let answer = invoke_read_on(&meta, "alpha", json!({"q": 1})).await;
-    assert_succeeded(&answer);
-    let alpha = std::mem::take(&mut *recorders[0].lock().expect("recorder"));
-    let sent = alpha.params.expect("premise: alpha received its call");
-    assert_eq!(
-        sent["arguments"]["api_key"], SECRET,
-        "control: alpha's rule applies: {sent}"
-    );
+    // beta is called before and after alpha, so neither a rule shared at
+    // registration nor a value left over from alpha's send can pass.
+    for round in ["before alpha", "after alpha"] {
+        if round == "after alpha" {
+            // Control: the same registry applies alpha's own rule to alpha.
+            let answer = invoke_read_on(&meta, "alpha", json!({"q": 1})).await;
+            assert_succeeded(&answer);
+            let alpha = std::mem::take(&mut *recorders[0].lock().expect("recorder"));
+            let sent = alpha.params.expect("premise: alpha received its call");
+            assert_eq!(
+                sent["arguments"],
+                json!({"q": 1, "api_key": SECRET}),
+                "control: alpha's rule applies to the same call shape: {sent}"
+            );
+        }
+        let answer = invoke_read_on(&meta, "beta", caller.clone()).await;
+        assert_succeeded(&answer);
+        let beta = std::mem::take(&mut *recorders[1].lock().expect("recorder"));
+        let sent = beta.params.expect("premise: beta received its call");
+        assert_eq!(
+            sent["arguments"], caller,
+            "{round}: beta's arguments were changed: {sent}"
+        );
+        assert!(
+            !sent.to_string().contains(SECRET)
+                && !beta
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.contains(SECRET) || value.contains(SECRET)),
+            "{round}: beta received alpha's secret: {sent} {:?}",
+            beta.headers
+        );
+    }
 }
