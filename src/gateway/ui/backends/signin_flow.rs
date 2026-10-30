@@ -209,14 +209,18 @@ impl Run {
         tokio::pin!(callback);
         let mut called = false;
         let granted = loop {
+            // Biased to the callback: it is sent before the code is redeemed,
+            // so when both are ready the callback must be seen first, or the
+            // confirm window would never start.
             tokio::select! {
-                result = &mut auth => break result,
+                biased;
                 landed = &mut callback, if !called => {
                     called = true;
                     if landed.is_ok() {
                         self.callback_landed(&lead);
                     }
                 }
+                result = &mut auth => break result,
             }
         };
         match granted {
