@@ -318,7 +318,8 @@ impl MetaMcp {
         let timeout = self.prompts_resources_fetch_timeout;
         let results = join_all(credentialed.iter().map(
             |(backend, (headers, binding))| async move {
-                let fetch = backend.get_resources_for_binding(binding.as_deref(), headers);
+                let fetch =
+                    backend.get_resources_for_binding_lent(binding.as_deref(), headers.clone());
                 match tokio::time::timeout(timeout, fetch).await {
                     Ok(Ok(resources)) => Ok(resources.as_ref().clone()),
                     Ok(Err(e)) => Err(e),
@@ -421,7 +422,7 @@ impl MetaMcp {
                 continue;
             };
             match backend
-                .get_resource_templates_for_binding(binding.as_deref(), &headers)
+                .get_resource_templates_for_binding_lent(binding.as_deref(), headers.clone())
                 .await
             {
                 Ok(templates) => {
@@ -473,7 +474,7 @@ impl MetaMcp {
                 continue;
             };
             if let Ok(resources) = backend
-                .get_resources_for_binding(binding.as_deref(), &headers)
+                .get_resources_for_binding_lent(binding.as_deref(), headers.clone())
                 .await
                 && resources.iter().any(|r| r.uri == uri)
             {
