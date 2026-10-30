@@ -278,6 +278,12 @@ impl Gw {
     /// The person approving at the identity provider: follow the redirect
     /// URI with a code and the link's own state.
     pub(super) async fn approve(&self, url: &str) -> String {
+        self.try_approve(url).await.expect("the callback answers")
+    }
+
+    /// [`Gw::approve`] for a callback that may find nobody listening: `None`
+    /// when the connection is refused.
+    pub(super) async fn try_approve(&self, url: &str) -> Option<String> {
         let link = url::Url::parse(url).expect("an authorization URL");
         let query: std::collections::HashMap<String, String> =
             link.query_pairs().into_owned().collect();
@@ -309,8 +315,8 @@ impl Gw {
             )
             .send()
             .await
-            .expect("the callback answers");
-        page.text().await.unwrap_or_default()
+            .ok()?;
+        Some(page.text().await.unwrap_or_default())
     }
 
     /// The backend's row in `GET /ui/api/status`.

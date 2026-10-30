@@ -173,3 +173,92 @@ async fn the_flow_phase_moves_at_the_callback() {
         "callback + 30 s against start + 40 s: {gap}"
     );
 }
+
+// R17: the owner's cancel works before the callback, frees the gate, and a new
+// sign-in then runs to a saved token. Mutant M21 refuses the early cancel.
+#[tokio::test]
+async fn the_owner_cancels_while_awaiting_the_callback_and_a_new_start_succeeds() {
+    let gw = Gw::new().await;
+    let owner = gw.session();
+    let (_, first) = Gw::link(&gw.start(&owner).await);
+
+    let cancel = gw.confirm(&owner, &first, "cancel").await;
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+
+    let (url, second) = Gw::link(&gw.start(&owner).await);
+    let _ = gw.approve(&url).await;
+    gw.wait_until_held().await;
+    let confirm = gw.confirm(&owner, &second, "confirm").await;
+    assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
+    assert!(gw.saved().is_some(), "the second sign-in saved its token");
+}
+
+// R18: a provider's late callback for a cancelled attempt reaches nothing: the
+// cancelled login's listener is gone (the connection is refused), so there is
+// no exchange, nothing saved, and the second flow keeps its own phase and the
+// gate alone. Mutant M22 lets the late callback exchange.
+#[tokio::test]
+async fn a_late_callback_after_cancel_is_ignored() {
+    let gw = Gw::new().await;
+    let owner = gw.session();
+    let (first_url, first) = Gw::link(&gw.start(&owner).await);
+    let cancel = gw.confirm(&owner, &first, "cancel").await;
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    let second = gw.start(&owner).await;
+    assert_eq!(second.status, StatusCode::OK, "{}", second.body);
+
+    let late = gw.try_approve(&first_url).await;
+
+    assert!(
+        late.is_none_or(|page| !page.contains("access-a") && !page.contains("fixture-code")),
+        "a late callback shows no token and no code"
+    );
+    assert_eq!(gw.forms.lock().unwrap().len(), 0, "no exchange happened");
+    assert!(gw.saved().is_none());
+    let row = gw.row().await["sign_in_flow"].clone();
+    assert_eq!(
+        row["phase"], "awaiting_callback",
+        "the second flow is untouched"
+    );
+    let third = gw.start(&owner).await;
+    assert_eq!(
+        third.status,
+        StatusCode::CONFLICT,
+        "the gate is the second flow's alone"
+    );
+}
+
+// R19: a cancel that lands while the exchange is in flight wins: whatever the
+// exchange returns afterwards is dropped, never saved, held, or attached to a
+// later attempt, and the gate is free for a new start.
+#[tokio::test]
+async fn a_cancel_during_the_exchange_discards_the_token() {
+    let flow = flow_under(windows(60, 30)).await;
+    flow.approve_in_background();
+    flow.until_phase("awaiting_confirm").await;
+
+    let cancel = flow.gw.confirm(&flow.owner, &flow.attempt, "cancel").await;
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    let again = flow.gw.start(&flow.owner).await;
+    assert_eq!(
+        again.status,
+        StatusCode::OK,
+        "the gate is free: {}",
+        again.body
+    );
+    flow.release.notify_one();
+    for _ in 0..2000 {
+        tokio::task::yield_now().await;
+    }
+
+    assert!(flow.gw.saved().is_none(), "the late exchange saved nothing");
+    let held = flow
+        .gw
+        .backend
+        .with_flow(|slot| slot.as_ref().map(|f| f.grant.is_some()));
+    assert_eq!(
+        held,
+        Some(false),
+        "the new flow holds no token from the old one"
+    );
+}
