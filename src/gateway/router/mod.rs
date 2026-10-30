@@ -189,6 +189,9 @@ mod mik8154_lease_rows_tests;
 mod overview_sources_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A call refused in its own send releases its key on the direct route.
+#[cfg(test)]
+mod presend_refusal_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]
 mod protocol_member_scope_tests;
