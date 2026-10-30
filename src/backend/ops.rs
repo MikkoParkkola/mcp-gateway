@@ -408,7 +408,7 @@ impl Backend {
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
         let send = |params: Option<Value>, extra_headers: Vec<(String, String)>| {
-            send::attempt(
+            attempt::send_timed(
                 std::sync::Arc::clone(&transport),
                 method.to_string(),
                 (params, extra_headers),
@@ -783,5 +783,4 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;
 
-#[path = "ops_send.rs"]
-mod send;
+mod attempt;

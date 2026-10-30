@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! One send of `request_attempted`: the transport request a dispatch's retry
+//! One attempt of `request_attempted`: the transport send a dispatch's retry
 //! loop repeats, timed for the web UI's latency history.
 
 use std::sync::Arc;
@@ -16,7 +16,7 @@ use crate::transport::{ResendPermission, Transport};
 /// Send `method` once on `transport`, as `attempts` allows. A `tools/call`
 /// send is timed from here, after the slot, the start and every wait the
 /// caller did, so the time is the backend's alone.
-pub(super) async fn attempt(
+pub(super) async fn send_timed(
     transport: Arc<dyn Transport>,
     method: String,
     (params, extra_headers): (Option<Value>, Vec<(String, String)>),
