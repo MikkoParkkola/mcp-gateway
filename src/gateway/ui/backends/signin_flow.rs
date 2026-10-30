@@ -14,7 +14,7 @@ use crate::backend::Backend;
 use crate::backend::sign_in_flow::{Flow, Phase};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
-use crate::oauth::client::sign_in::UiSink;
+use crate::oauth::client::sign_in::{PendingGrant, UiSink};
 use crate::oauth::login_gate::{Begin, Lead};
 use crate::oauth::{OAUTH_AUTHORIZATION_WINDOW, OAuthClient};
 use crate::{Error, Result};
@@ -205,10 +205,33 @@ impl Run {
         let auth = self
             .client
             .authorize_for_ui(&cancel, listeners, self.deadline, ui);
+        let granted = self.watch_login(&lead, auth, callback).await;
+        match granted {
+            Ok(grant) => self.hold(lead, grant).await,
+            Err(error) => {
+                if let Some(flow) = self.take_flow() {
+                    self.record_end(&flow, &error);
+                }
+                lead.end(Some(&error));
+            }
+        }
+    }
+
+    /// Wait for the login, starting the confirm window the moment its callback
+    /// signal is seen.
+    async fn watch_login<F>(
+        &self,
+        lead: &Lead,
+        auth: F,
+        callback: oneshot::Receiver<()>,
+    ) -> Result<PendingGrant>
+    where
+        F: std::future::Future<Output = Result<PendingGrant>>,
+    {
         tokio::pin!(auth);
         tokio::pin!(callback);
         let mut called = false;
-        let granted = loop {
+        loop {
             // Biased to the callback: it is sent before the code is redeemed,
             // so when both are ready the callback must be seen first, or the
             // confirm window would never start.
@@ -217,19 +240,10 @@ impl Run {
                 landed = &mut callback, if !called => {
                     called = true;
                     if landed.is_ok() {
-                        self.callback_landed(&lead);
+                        self.callback_landed(lead);
                     }
                 }
-                result = &mut auth => break result,
-            }
-        };
-        match granted {
-            Ok(grant) => self.hold(lead, grant).await,
-            Err(error) => {
-                if let Some(flow) = self.take_flow() {
-                    self.record_end(&flow, &error);
-                }
-                lead.end(Some(&error));
+                result = &mut auth => return result,
             }
         }
     }
@@ -418,3 +432,7 @@ async fn release(backend: &Backend, ended: &tokio::sync::Notify) {
         tokio::task::yield_now().await;
     }
 }
+
+#[cfg(test)]
+#[path = "signin_flow_tests.rs"]
+mod tests;
