@@ -244,6 +244,10 @@ impl Transport for HttpTransport {
     // actually applies `extra_headers` to the wire (see
     // `send_request_with_headers` above) — the identity-propagation dispatch
     // gate relies on this override to allow a `required` backend to proceed.
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.get().is_some()
+    }
+
     fn carries_identity_headers(&self) -> bool {
         true
     }

@@ -600,6 +600,10 @@ impl Transport for A2aTransport {
         )
     }
 
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.is_some()
+    }
+
     fn carries_identity_headers(&self) -> bool {
         true
     }

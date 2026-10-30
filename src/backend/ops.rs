@@ -168,11 +168,12 @@ impl Backend {
         params: Option<Value>,
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
-    ) -> Result<super::secret_send::Outbound> {
+    ) -> Result<(super::secret_send::Outbound, bool)> {
         let secrets = self.prepare_secrets(method, params)?;
+        let injects = secrets.injects();
         let headers =
             self.param_header_set(method, secrets.params.as_ref(), extra_headers, identity_key);
-        Ok(secrets.apply(headers))
+        Ok((secrets.apply(headers), injects))
     }
 
     /// This request's resend decision: the permission the transport carries,
@@ -352,7 +353,7 @@ impl Backend {
         // does not resolve holds no permit. The caller's own credential is taken first, before the
         // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
-        let (params, extra_headers) =
+        let ((params, extra_headers), injects) =
             self.outbound(method, params, &credential.headers, identity_key)?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
@@ -399,6 +400,23 @@ impl Backend {
             let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
             self.start_judged(&key, &entry, start_time, method).await?
         };
+        // No injected value goes to a transport that cannot scrub its echo
+        // (MIK-9035 DELTA-10): a construction site that skipped the attach
+        // refuses here rather than sending.
+        if injects && !transport.redacts_injected_values() {
+            tracing::error!(
+                backend = %self.name,
+                "a call carrying an injected secret was refused: its transport holds no \
+                 redaction set"
+            );
+            return Err(Error::JsonRpc {
+                code: -32603,
+                message: "the gateway refused to send an injected credential over a transport \
+                          that cannot redact it"
+                    .to_owned(),
+                data: None,
+            });
+        }
 
         // Execute with retry
         let name = self.name.clone();

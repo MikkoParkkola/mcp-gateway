@@ -390,6 +390,10 @@ impl Drop for ProgressRegistrationGuard<'_> {
 
 #[async_trait]
 impl Transport for StdioTransport {
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.get().is_some()
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id();
         let request = JsonRpcRequest {

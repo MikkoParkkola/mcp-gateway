@@ -43,6 +43,11 @@ pub(super) struct Prepared {
 }
 
 impl Prepared {
+    /// Whether the call carries a value a rule injected.
+    pub(super) fn injects(&self) -> bool {
+        self.injected.is_some()
+    }
+
     /// The params and headers to send: the resolved values added, each
     /// header replacing any of the same name, compared case-insensitively.
     pub(super) fn apply(self, mut headers: Vec<(String, String)>) -> Outbound {
@@ -248,3 +253,7 @@ impl Backend {
 #[cfg(test)]
 #[path = "secret_send_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "secret_attach_refusal_tests.rs"]
+mod attach_refusal_tests;

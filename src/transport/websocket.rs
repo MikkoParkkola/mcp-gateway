@@ -681,6 +681,10 @@ async fn run_io_loop(
 
 #[async_trait]
 impl Transport for WebSocketTransport {
+    fn redacts_injected_values(&self) -> bool {
+        self.inner.needles.get().is_some()
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         let id = self.next_id();
         let request = JsonRpcRequest {
