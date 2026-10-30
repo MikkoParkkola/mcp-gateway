@@ -235,6 +235,8 @@ pub struct TransparencyLogger {
     last_failure_cause: std::sync::atomic::AtomicUsize,
     /// F20: the append permit and stall state.
     bound: bounded::Bound,
+    /// Readers told of each appended record of their kind.
+    subscribers: append::Subscribers,
 }
 
 /// Which rung of the correlation chain supplied an invocation entry's
@@ -359,6 +361,7 @@ impl TransparencyLogger {
             append_failures: std::sync::atomic::AtomicU64::new(0),
             last_failure_cause: std::sync::atomic::AtomicUsize::new(usize::MAX),
             bound: bounded::Bound::default(),
+            subscribers: append::Subscribers::default(),
         })
     }
 

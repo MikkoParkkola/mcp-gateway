@@ -16,6 +16,7 @@ mod invoke_stages_rules;
 mod invoke_stages_tests;
 mod keyed_request;
 mod packaged;
+mod presend_exits;
 mod response_funnels;
 mod scan;
 mod scan_tests;

@@ -81,6 +81,8 @@ owned_routes! {
     UI_DISCOVERY = "/ui/api/discovery",
     /// One of those servers made a disabled backend.
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
+    /// The decisions an admin has open.
+    UI_DECISIONS = "/ui/api/decisions",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.
