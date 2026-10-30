@@ -225,6 +225,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// A lent-only call carrying no credential records `refused`.
+#[cfg(test)]
+mod lend_refusal_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;

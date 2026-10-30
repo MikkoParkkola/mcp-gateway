@@ -122,12 +122,22 @@ async fn a_replay_after_a_slot_refusal_serves_the_refusal() {
 
 /// The playbook `yaml` registered on `fx`, run on `/mcp`: its answer.
 pub(super) async fn run_playbook(fx: &Fixture, yaml: &str, name: &str) -> (StatusCode, Value) {
+    run_playbook_as(fx, yaml, name, &Caller::Anonymous).await
+}
+
+/// [`run_playbook`] as `caller`.
+pub(super) async fn run_playbook_as(
+    fx: &Fixture,
+    yaml: &str,
+    name: &str,
+    caller: &Caller,
+) -> (StatusCode, Value) {
     let mut engine = crate::playbook::PlaybookEngine::new();
     engine.register(crate::yaml::from_str(yaml).expect("the playbook parses"));
     fx.state.meta_mcp.set_playbook_engine(engine);
     let call = json!({"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
         "name": "gateway_run_playbook", "arguments": {"name": name, "arguments": {}}}});
-    post_to(fx, "/mcp", &call.to_string(), &Caller::Anonymous).await
+    post_to(fx, "/mcp", &call.to_string(), caller).await
 }
 
 /// The last delivery record states neither an effect nor findings.
