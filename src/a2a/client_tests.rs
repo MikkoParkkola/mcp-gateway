@@ -273,14 +273,17 @@ const NEEDLE: &str = "a2a-secret-9d2c41";
 #[test]
 fn a_malformed_card_or_reply_quotes_no_value() {
     let card = parse_card(json!({"name": "a", "supportedInterfaces": NEEDLE})).unwrap_err();
-    let reply = decode_reply(&json!({"jsonrpc": "2.0", "id": "1",
+    let Err(reply) = decode_reply(&json!({"jsonrpc": "2.0", "id": "1",
         "result": {"task": NEEDLE}}))
-    .unwrap_err();
-    let task = decode_task(
+    else {
+        panic!("a malformed reply decoded");
+    };
+    let Err(task) = decode_task(
         &json!({"jsonrpc": "2.0", "id": "1", "result": {"id": "t", "status": NEEDLE}}),
         "GetTask",
-    )
-    .unwrap_err();
+    ) else {
+        panic!("a malformed task decoded");
+    };
     for error in [card, reply, task] {
         let text = error.to_string();
         assert!(text.contains("malformed"), "{text}");

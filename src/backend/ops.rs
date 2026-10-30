@@ -176,6 +176,31 @@ impl Backend {
         Ok((secrets.apply(headers), injects))
     }
 
+    /// No injected value goes to a transport that cannot scrub its echo
+    /// (MIK-9035 DELTA-10): a construction site that skipped the attach
+    /// refuses here rather than sending.
+    fn refuse_unredacted(
+        &self,
+        injects: bool,
+        transport: &dyn crate::transport::Transport,
+    ) -> Result<()> {
+        if injects && !transport.redacts_injected_values() {
+            tracing::error!(
+                backend = %self.name,
+                "a call carrying an injected secret was refused: its transport holds no \
+                 redaction set"
+            );
+            return Err(Error::JsonRpc {
+                code: -32603,
+                message: "the gateway refused to send an injected credential over a transport \
+                          that cannot redact it"
+                    .to_owned(),
+                data: None,
+            });
+        }
+        Ok(())
+    }
+
     /// This request's resend decision: the permission the transport carries,
     /// and the retry policy this layer may resend under.
     ///
@@ -400,23 +425,7 @@ impl Backend {
             let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
             self.start_judged(&key, &entry, start_time, method).await?
         };
-        // No injected value goes to a transport that cannot scrub its echo
-        // (MIK-9035 DELTA-10): a construction site that skipped the attach
-        // refuses here rather than sending.
-        if injects && !transport.redacts_injected_values() {
-            tracing::error!(
-                backend = %self.name,
-                "a call carrying an injected secret was refused: its transport holds no \
-                 redaction set"
-            );
-            return Err(Error::JsonRpc {
-                code: -32603,
-                message: "the gateway refused to send an injected credential over a transport \
-                          that cannot redact it"
-                    .to_owned(),
-                data: None,
-            });
-        }
+        self.refuse_unredacted(injects, transport.as_ref())?;
 
         // Execute with retry
         let name = self.name.clone();
