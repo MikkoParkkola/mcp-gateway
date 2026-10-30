@@ -13,8 +13,10 @@ use axum::http::StatusCode;
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
+use super::super::errors::admin_auth_required;
 use super::*;
 use crate::config::AuthConfig;
+use crate::gateway::auth::AuthenticatedClient;
 use crate::security::audit::AuditEnvelope;
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
