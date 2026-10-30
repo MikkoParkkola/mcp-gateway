@@ -381,7 +381,10 @@ async fn the_schema_check_lists_the_captured_backend_not_the_replacement() {
             "read",
             &json!({"invented": 1}),
             Some("alice@alpha"),
-            &[("Authorization".to_string(), "Bearer minted".to_string())],
+            crate::transport::LentCredential::unchecked(&[(
+                "Authorization".to_string(),
+                "Bearer minted".to_string(),
+            )]),
             (InvokeScope::allow_all(CallerStanding::Standard), None),
         )
         .await;

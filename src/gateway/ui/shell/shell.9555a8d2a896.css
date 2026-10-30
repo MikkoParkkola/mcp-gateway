@@ -778,6 +778,12 @@ a { color: inherit; text-decoration: none; }
 .top .search { margin-left: auto; width: 300px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: none; color: var(--color-text-tertiary); font: var(--type-body); cursor: pointer; }
 .top .search kbd { font: var(--type-small); font-family: var(--font-family-mono); }
 .top .who { font: var(--type-small); }
+/* The live stream: shown once it has said hello; a dot before the word, amber while stopped. */
+.top .stream { font: var(--type-small); color: var(--color-text-secondary); white-space: nowrap; }
+.top .stream[hidden] { display: none; }
+.top .stream::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; vertical-align: middle; background: var(--color-status-success-fg); }
+.top .stream[data-stream="down"] { color: var(--color-status-warning-fg); }
+.top .stream[data-stream="down"]::before { background: var(--color-status-warning-fg); }
 /* Sign-out sits in the top bar; on a phone it is the menu's last row instead.
    `hidden` must win over the button's own display. */
 .signout[hidden], .side-signout { display: none; }
@@ -860,6 +866,8 @@ body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { disp
   .menu { display: grid; place-items: center; width: 44px; height: 44px; font-size: 18px; color: var(--color-text-primary); background: none; border: 0; }
   .mbrand { display: flex; align-items: center; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; font-size: 15px; }
   .top .who { display: none; }
+  /* Hidden visually on a phone, where the page banner carries a drop; still in the accessibility tree. */
+  .top .stream { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .top .signout { display: none; }
   .menu-open .side-signout:not([hidden]) { display: flex; justify-content: center; margin: 16px; }
   .top .search { width: 44px; height: 44px; border: 0; padding: 0; justify-content: center; }
