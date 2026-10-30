@@ -1,0 +1,16 @@
+# file	function	exits	marks	class	reason
+src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	1	1	marks	a meta tool name that matches nothing: marks the worker's round
+src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	2	3	marks	the destructive-confirmation and unadmitted-nonce refusals: mark the worker's round; the web UI task refusal is refused before its task exists: no row, no invocation, no call recorded
+src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	1	0	excluded	a task submit refused before its task exists: no row, no invocation, no call recorded
+src/gateway/meta_mcp/invoke/bridge_settle.rs	classify_bridged_dispatch_error	1	0	excluded	a classifier: its NotAdmitted is marked where the bridge settles it (bridge_legacy_ask)
+src/gateway/meta_mcp/invoke/intake.rs	directives	0	1	marks	an unparsable argument object: refused before the backend
+src/gateway/meta_mcp/invoke/keys.rs	admit_keys	0	1	settles	an unproven stored replay: refused before the backend (its served exits settle through settle_pre_send)
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	2	2	marks	the relay refusal and a cold-slot NotAdmitted round
+src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_refused_submit	1	0	excluded	a task submit refused before its task exists: no row, no invocation, no call recorded
+src/gateway/meta_mcp/invoke/nonce_settle.rs	refused_submit_answer	1	0	excluded	a task submit refused before its task is begun: no row, no invocation, no call recorded
+src/gateway/meta_mcp/invoke/nonce_settle.rs	settle_pre_send	4	1	marks	the one pre-send settlement: marks every refusal exit, Served clears
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	2	1	marks	a dispatch error the backend never saw
+src/gateway/meta_mcp/invoke/resolve.rs	resolve	1	3	marks	a resolution that answers for itself or fails, and the cooldown after the credential
+src/gateway/meta_mcp/invoke/stored_proof.rs	lift_deferred	0	1	marks	a deferred lift refused at its serving point: nothing replayed, nothing sent
+src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	1	0	excluded	the repeated-task account check: runs outside any invocation and records no call
+src/gateway/meta_mcp/search.rs	asking	1	0	excluded	a meta tool refusing its own arguments (the plan argument parse): a composite task is not marked
