@@ -216,6 +216,8 @@ test.describe('split guard', () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await signedOut(page);
     await splitGuard(page, SIGNIN, signedOutReady);
+    // The rest is disabled now: the frame alone hides the chrome.
+    for (const sel of ['.side', '.main']) await expect(page.locator(sel), sel).toBeHidden();
   });
 
   test.describe('phone', () => {
@@ -223,6 +225,8 @@ test.describe('split guard', () => {
     test('Z6 at 390 px with a coarse pointer signed out, the frame already hides the chrome', async ({ page }) => {
       await signedOut(page);
       await splitGuard(page, SIGNIN, signedOutReady);
+      // The rest is disabled now: the frame alone hides the chrome.
+      for (const sel of ['.side', '.main']) await expect(page.locator(sel), sel).toBeHidden();
     });
     test('Z6 at 390 px with a coarse pointer, the rest of the stylesheet changes nothing in the frame', async ({ page }) => {
       await page.goto('/ui/classic');
