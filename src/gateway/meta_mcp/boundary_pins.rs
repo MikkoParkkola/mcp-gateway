@@ -19,6 +19,7 @@ mod invoke_stages_tests;
 mod keyed_request;
 mod needle_attach_sites;
 mod packaged;
+mod presend_exits;
 mod scan;
 mod scan_tests;
 mod shipped_reads;

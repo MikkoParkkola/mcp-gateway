@@ -19,6 +19,7 @@ const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
 const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
+const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -46,6 +47,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ),
     // The table's body names no find, so its admin answer is 422; this test
     // adopts real finds from a client file and pins the served 201.
+    // The table's fixture never starts the decision set, so its admin
+    // answer is 503; this test starts it over a real log and pins the 200.
+    (
+        "/ui/api/decisions",
+        Method::GET,
+        &[(
+            DECISIONS_ROUTE,
+            "an_admin_is_served_the_open_decisions_and_no_one_else",
+        )],
+    ),
     (
         "/ui/api/discovery/adopt",
         Method::POST,

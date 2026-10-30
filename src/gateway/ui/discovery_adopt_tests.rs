@@ -126,7 +126,7 @@ fn stdio_backend() -> BackendConfig {
 
 fn run(
     text: &str,
-    slots: Slots,
+    slots: &[(bool, String)],
     references: &[String],
     mut backend: BackendConfig,
     env: &[(&str, &str)],
@@ -134,8 +134,18 @@ fn run(
     for (key, value) in env {
         backend.env.insert((*key).to_owned(), (*value).to_owned());
     }
-    compute("tool".to_owned(), backend, slots)(text.as_bytes(), references)
+    let template = compute("tool".to_owned(), backend, slots.to_vec())(text.as_bytes())?;
+    // The writer fills each slot once its entry exists; too few references
+    // leave a slot unfilled, which the fill refuses.
+    let refs: std::collections::BTreeMap<_, _> = slots
+        .iter()
+        .zip(references)
+        .map(|((header, key), reference)| (adopt_slot("tool", *header, key), reference.clone()))
+        .collect();
+    template
+        .fill(&refs)
         .map(|bytes| String::from_utf8(bytes).expect("utf-8"))
+        .map_err(|_| REFERENCES.to_owned())
 }
 
 /// The compute splices the backend in, disabled, each literal key holding
@@ -146,7 +156,7 @@ fn the_compute_splices_a_disabled_backend_with_references() {
     let reference = "file:/secrets/tool-key".to_owned();
     let out = run(
         text,
-        vec![(false, "API_KEY".to_owned())],
+        &[(false, "API_KEY".to_owned())],
         std::slice::from_ref(&reference),
         stdio_backend(),
         &[("TOKEN", "${TOKEN}")],
@@ -164,13 +174,13 @@ fn the_compute_splices_a_disabled_backend_with_references() {
 /// spliced and is refused, never re-serialised.
 #[test]
 fn a_populated_flow_mapping_is_refused_and_an_empty_one_spliced() {
-    assert!(run("backends: {}\n", vec![], &[], stdio_backend(), &[]).is_ok());
+    assert!(run("backends: {}\n", &[], &[], stdio_backend(), &[]).is_ok());
     for text in [
         "backends: {other: {command: other}}\n",
         "# note\nbackends: {other: {command: other}}\n",
     ] {
         assert_eq!(
-            run(text, vec![], &[], stdio_backend(), &[]),
+            run(text, &[], &[], stdio_backend(), &[]),
             Err(NOT_IN_PLACE.to_owned()),
             "{text}"
         );
@@ -184,7 +194,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     assert_eq!(
         run(
             "backends:\n  tool:\n    command: x\n",
-            vec![],
+            &[],
             &[],
             stdio_backend(),
             &[]
@@ -194,7 +204,7 @@ fn the_compute_refuses_a_managed_name_and_a_short_reference_list() {
     assert_eq!(
         run(
             "backends: {}\n",
-            vec![(false, "API_KEY".to_owned())],
+            &[(false, "API_KEY".to_owned())],
             &[],
             stdio_backend(),
             &[]
@@ -313,5 +323,39 @@ fn a_store_that_cannot_be_chosen_has_a_fixed_answer() {
         let (got, json) = futures::executor::block_on(body_of(refused));
         assert_eq!(got, status, "{json}");
         assert!(!json.to_string().contains(CANARY), "{json}");
+    }
+}
+
+/// A literal whose key a serializer must quote (here `: `) is adopted with
+/// its reference under that key, as before slots.
+#[test]
+fn a_key_the_serializer_quotes_is_adopted() {
+    let reference = "file:/secrets/tool-key".to_owned();
+    let out = run(
+        "backends: {}\n",
+        &[(false, "X: Y".to_owned())],
+        std::slice::from_ref(&reference),
+        stdio_backend(),
+        &[],
+    )
+    .expect("spliced");
+    let config = crate::config::Config::from_file_text(&out).expect("loads");
+    assert_eq!(config.backends["tool"].env["X: Y"], reference);
+}
+
+/// Keys whose bytes the placeholder escapes (`~`, Unicode, both quotes),
+/// and two keys that would collide if `~` itself were not escaped: each
+/// reference lands under its own key.
+#[test]
+fn escaped_keys_each_take_their_own_reference() {
+    let keys = ["T~1", "ключ", "say \"hi\"", "it's", "X~3aY", "X:Y"];
+    let slots: Vec<(bool, String)> = keys.iter().map(|k| (false, (*k).to_owned())).collect();
+    let references: Vec<String> = (0..keys.len())
+        .map(|n| format!("file:/secrets/k{n}"))
+        .collect();
+    let out = run("backends: {}\n", &slots, &references, stdio_backend(), &[]).expect("spliced");
+    let config = crate::config::Config::from_file_text(&out).expect("loads");
+    for (key, reference) in keys.iter().zip(&references) {
+        assert_eq!(&config.backends["tool"].env[*key], reference, "{key}");
     }
 }
