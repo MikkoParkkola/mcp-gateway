@@ -88,7 +88,10 @@ pub(super) async fn echo_server(calls: Calls, reply: Reply) -> String {
                         format!("fixture, key {SECRET}")
                     } else {
                         "fixture".to_owned()
-                    }, "inputSchema": {"type": "object"}},
+                    }, "inputSchema": {"type": "object"},
+                    // A transient refusal is retried only for a tool the
+                    // backend declares safe to resend.
+                    "annotations": {"idempotentHint": matches!(reply, Reply::RetryableRefusal)}},
                     {"name": "read", "description": "fixture", "inputSchema": {"type": "object"}}
                 ]})),
                 Some("tools/call") => {

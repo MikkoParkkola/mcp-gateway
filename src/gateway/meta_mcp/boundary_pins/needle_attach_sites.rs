@@ -41,7 +41,7 @@ impl<'ast> Visit<'ast> for Body {
                 .collect();
             if segs.len() >= 2 {
                 let tail = [segs[segs.len() - 2].as_str(), segs[segs.len() - 1].as_str()];
-                if CONSTRUCTORS.iter().any(|c| *c == tail) {
+                if CONSTRUCTORS.contains(&tail) {
                     self.constructs = true;
                 }
             }

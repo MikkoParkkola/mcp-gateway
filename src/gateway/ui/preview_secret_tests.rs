@@ -4,6 +4,7 @@
 //! rules and credential headers, previewed, sends no value of any of them,
 //! so there is nothing its answers could echo.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use axum::response::IntoResponse;
@@ -28,7 +29,7 @@ async fn recording_server(seen: Seen) -> String {
                 async move {
                     let mut line = format!("{uri} {}", String::from_utf8_lossy(&body));
                     for (name, value) in &headers {
-                        line.push_str(&format!(" {name}={}", value.to_str().unwrap_or("")));
+                        let _ = write!(line, " {name}={}", value.to_str().unwrap_or(""));
                     }
                     seen.lock().push(line);
                     let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);

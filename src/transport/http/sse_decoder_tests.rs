@@ -411,7 +411,7 @@ async fn a_notification_echoing_a_secret_is_scrubbed_before_it_is_published() {
         crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
     needles.insert("b", NEEDLE);
     let frames = format!(
-        "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/message\",\"params\":{{\"data\":\"got {NEEDLE}\"}}}}\n\n\
+        "data: {{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\",\"params\":{{\"progressToken\":\"t\",\"progress\":1,\"message\":\"got {NEEDLE}\"}}}}\n\n\
          data: {{\"jsonrpc\":\"2.0\",\"method\":\"{NEEDLE}\"}}\n\n\
          data: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n\n"
     );

@@ -160,7 +160,10 @@ struct Row {
     reason: String,
 }
 
-fn listed() -> (BTreeMap<(String, String, String), Row>, Vec<String>) {
+/// The table's rows by (file, function, kind).
+type Rows = BTreeMap<(String, String, String), Row>;
+
+fn listed() -> (Rows, Vec<String>) {
     let mut rows = BTreeMap::new();
     let mut bad = Vec::new();
     for line in LISTED
@@ -193,7 +196,8 @@ fn listed() -> (BTreeMap<(String, String, String), Row>, Vec<String>) {
 
 /// The function a `scrubbed-by` reason names: `by <file>::<function>:`.
 fn named_scrubber(reason: &str) -> Option<(String, String)> {
-    let named = reason.strip_prefix("by ")?.split(':').next()?;
+    // Up to the first ": ", so the `::` inside the name is kept.
+    let (named, _) = reason.strip_prefix("by ")?.split_once(": ")?;
     let (file, func) = named.rsplit_once("::")?;
     Some((file.to_owned(), func.to_owned()))
 }

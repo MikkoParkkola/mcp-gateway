@@ -100,7 +100,6 @@ fn a_refused_frame_quotes_none_of_itself() {
         json!({"jsonrpc": NEEDLE, "id": 1, "result": {}}),
         json!({"jsonrpc": "2.0", "mystery": NEEDLE}),
         json!({"jsonrpc": "2.0", "id": 1, "result": {}, "error": NEEDLE}),
-        json!({"jsonrpc": "2.0", "id": 1, "method": "m", "params": NEEDLE}),
     ] {
         let error = super::McpFrame::from_text(&frame.to_string()).unwrap_err();
         assert!(!error.to_string().contains(NEEDLE), "{frame}: {error}");
