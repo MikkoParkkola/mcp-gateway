@@ -11,7 +11,6 @@ use std::time::Duration;
 use tracing::{debug, warn};
 
 use crate::Error;
-use crate::backend::Backend;
 use crate::jitter::full_jitter;
 
 /// Schedule for retrying warm-start until a backend's tools are cached.

@@ -12,6 +12,8 @@ use crate::backend::tools_nudge::NudgeKind;
 use crate::backend::{Backend, BackendRegistry};
 use crate::config::Config;
 use crate::config_reload::{OnRegistered, RegisteredChange};
+#[cfg(test)]
+use crate::jitter::full_jitter;
 
 mod retry;
 #[cfg(test)]
