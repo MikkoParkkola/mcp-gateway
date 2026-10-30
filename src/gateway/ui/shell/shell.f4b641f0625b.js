@@ -1276,6 +1276,8 @@ function draw(seq, held = null) {
 const LOADING_MS = 300;
 /** Once shown, the loading state stays this long, so it never flickers. */
 const LOADING_MIN_MS = 400;
+/** The latest the other screens start to preload after first paint, idle or not. */
+const PRELOAD_DEADLINE_MS = 2000;
 
 /**
  * Show the loading state above `body`, and say it once, if this attempt has
@@ -1860,8 +1862,11 @@ function boot() {
   // The other screens load once the first paint is out, when the browser is idle,
   // so the palette lists their actions and settings and a later visit is instant.
   // Without paint timing they load after this first render instead; either way
-  // the rest of boot runs.
-  const preload = () => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  // the rest of boot runs. The idle request carries a deadline: a browser that never
+  // sees the page as idle may otherwise hold the preload back indefinitely.
+  const preload = () => (window.requestIdleCallback
+    ? window.requestIdleCallback(loadAllScreens, { timeout: PRELOAD_DEADLINE_MS })
+    : setTimeout(loadAllScreens, 50));
   try {
     if (!PerformanceObserver.supportedEntryTypes?.includes('paint')) throw new Error('no paint timing');
     new PerformanceObserver((list, observer) => {
