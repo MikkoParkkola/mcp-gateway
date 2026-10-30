@@ -67,7 +67,28 @@ impl RetryPolicy {
 ///
 /// Returns the last error from `f` if all retry attempts are exhausted or
 /// the error is not retryable.
-pub async fn with_retry<F, Fut, T>(policy: &RetryPolicy, name: &str, mut f: F) -> Result<T, Error>
+pub async fn with_retry<F, Fut, T>(policy: &RetryPolicy, name: &str, f: F) -> Result<T, Error>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, Error>>,
+{
+    with_retry_unless(policy, name, || false, f).await
+}
+
+/// [`with_retry`], which also stops once `stop` answers `true` after a
+/// failure: a caller that knows a resend cannot succeed (its credential was
+/// refused) returns the failure it has instead of repeating it.
+///
+/// # Errors
+///
+/// Returns the last error from `f` if all retry attempts are exhausted, the
+/// error is not retryable, or `stop` ended the retries.
+pub(crate) async fn with_retry_unless<F, Fut, T>(
+    policy: &RetryPolicy,
+    name: &str,
+    stop: impl Fn() -> bool,
+    mut f: F,
+) -> Result<T, Error>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, Error>>,
@@ -81,7 +102,7 @@ where
 
     (move || f())
         .retry(builder)
-        .when(is_retryable)
+        .when(|error| is_retryable(error) && !stop())
         .notify(|e: &Error, dur| {
             debug!(
                 operation = op_name,
@@ -183,6 +204,31 @@ mod tests {
             3,
             "the shipped default: three attempts, not four"
         );
+    }
+
+    // A refused credential repeats its refusal, so a caller that knows the
+    // send was refused ends the retries after the failure it already has.
+    #[tokio::test]
+    async fn retries_stop_once_the_caller_says_stop() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicUsize::new(0));
+        let (seen, marked) = (Arc::clone(&calls), Arc::clone(&stop));
+        let result: Result<(), Error> = with_retry_unless(
+            &policy(5),
+            "test",
+            || stop.load(Ordering::SeqCst) > 0,
+            move || {
+                let (seen, marked) = (Arc::clone(&seen), Arc::clone(&marked));
+                async move {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    marked.fetch_add(1, Ordering::SeqCst);
+                    Err(Error::Transport("refused".to_string()))
+                }
+            },
+        )
+        .await;
+        assert!(result.is_err(), "the failure is returned, not swallowed");
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "no resend after the stop");
     }
 
     // Degenerate config still sends the request once. Zero attempts would mean

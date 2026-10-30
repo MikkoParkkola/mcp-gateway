@@ -43,6 +43,7 @@ owned_routes! {
     DASHBOARD_LOGOUT = "/dashboard/logout",
     UI_STATUS = "/ui/api/status",
     UI_TOOLS = "/ui/api/tools",
+    UI_TOOLS_CALL = "/ui/api/tools/call",
     UI_CONFIG = "/ui/api/config",
     UI_RELOAD = "/ui/api/reload",
     UI_DASHBOARD_LINK = "/ui/api/dashboard-link",

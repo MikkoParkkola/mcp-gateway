@@ -309,6 +309,10 @@ impl TransparencyLogger {
     }
 
     fn mark_hwm(&self, inner: &Inner, path: &Path, sync: bool) {
+        #[cfg(test)]
+        self.hooks
+            .created_by
+            .witness("audit log high-water mark", path);
         let mark = HighWater {
             counter: inner.counter,
             entry_hash: inner.last_entry_hash.clone(),

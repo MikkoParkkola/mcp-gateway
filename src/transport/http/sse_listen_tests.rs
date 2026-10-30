@@ -102,7 +102,7 @@ impl CredentialSource for Counting {
             if n >= self.refuse_from {
                 return Err(crate::Error::Transport("credential withdrawn".to_owned()));
             }
-            send(vec![("x-cred".to_owned(), format!("v{n}"))]).await
+            send(vec![("x-cred".to_owned(), format!("v{n}"))].into()).await
         })
     }
 

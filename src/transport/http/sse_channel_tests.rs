@@ -256,7 +256,7 @@ async fn the_replacing_tasks_own_request_fails_fast() {
     streams.lock().expect("streams").insert(1, None);
     wait_closed(&transport).await;
     let Err(refused) = super::REPLACING
-        .scope((), transport.live_sse_channel())
+        .scope((), transport.live_sse_channel(&[]))
         .await
     else {
         panic!("the replacing task's own request must fail fast");

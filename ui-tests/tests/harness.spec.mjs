@@ -56,6 +56,9 @@ test('every asset the shell document names is served, cached immutable', async (
   const asset = (url) => new URL(url).pathname.startsWith('/ui/assets/');
   page.on('requestfailed', (r) => { if (asset(r.url())) failed.push(`failed ${r.url()}`); });
   page.on('response', (r) => { if (asset(r.url()) && r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
+  // The fixture stream is held open by default and would keep the network busy;
+  // a 404 is retried only at the 30 s ceiling, so the network goes idle.
+  await page.route('**/ui/api/stream', (r) => r.fulfill({ status: 404, body: '' }));
   await page.goto('/ui/overview');
   await page.waitForLoadState('networkidle');
   expect(failed).toEqual([]);
