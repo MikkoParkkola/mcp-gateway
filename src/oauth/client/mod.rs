@@ -88,6 +88,10 @@ pub struct OAuthClient {
     /// Hands the authorization URL to its approver (the browser; a test in tests).
     open_browser: Box<dyn Fn(&str) -> bool + Send + Sync>,
 
+    /// Shows the authorization URL to a person at the terminal (stderr in
+    /// production; a recorder in tests).
+    announce: Box<dyn Fn(&str) + Send + Sync>,
+
     /// Fixed callback port (None = OS-assigned).
     callback_port: Option<u16>,
 
@@ -226,6 +230,7 @@ impl OAuthClient {
             client_secret: cfg.client_secret,
             callback_host: cfg.callback_host,
             open_browser: Box::new(browser::open_browser),
+            announce: Box::new(browser::announce_on_stderr),
             callback_port: cfg.callback_port,
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
@@ -480,6 +485,20 @@ impl OAuthClient {
     ) -> Self {
         self.open_browser = Box::new(move |url: &str| open(url));
         self
+    }
+
+    /// This client with `record` standing in for the terminal announcement.
+    pub(crate) fn with_announce(
+        mut self,
+        record: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
+    ) -> Self {
+        self.announce = Box::new(move |url: &str| record(url));
+        self
+    }
+
+    /// The token this client holds in memory.
+    pub(crate) fn cached_token_for_test(&self) -> Option<TokenInfo> {
+        self.current_token.read().clone()
     }
 }
 #[cfg(test)]

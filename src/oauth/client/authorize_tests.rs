@@ -72,6 +72,15 @@ async fn token_endpoint_issuing(
 /// A client whose authorization server is `issuer`, with a configured client
 /// id (no registration) and a loopback callback on a port the OS picks.
 pub(crate) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
+    client_on(dir, issuer, "127.0.0.1")
+}
+
+/// [`client`] with its callback server on `callback_host`.
+pub(crate) fn client_on(
+    dir: &std::path::Path,
+    issuer: Option<&str>,
+    callback_host: &str,
+) -> OAuthClient {
     let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
     let mut client = OAuthClient::new(
         Client::builder().no_proxy().build().unwrap(),
@@ -81,7 +90,7 @@ pub(crate) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient
         storage,
         OAuthClientConfig {
             client_id: Some(CLIENT_ID.to_string()),
-            callback_host: Some("127.0.0.1".to_string()),
+            callback_host: Some(callback_host.to_string()),
             ..OAuthClientConfig::default()
         },
     );

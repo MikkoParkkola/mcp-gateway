@@ -560,7 +560,7 @@ impl OAuthClient {
         // Always, on stderr (MIK-8197): a launcher that started can still be
         // blocked (an endpoint-security tool may stop it), and stdout is the
         // stdio transport's JSON-RPC stream.
-        eprintln!("\nIf no browser opened, authorize this client by visiting:\n{auth_url_str}\n");
+        (self.announce)(&auth_url_str);
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server

@@ -125,6 +125,10 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
+            #[cfg(all(test, feature = "webui"))]
+            installed_oauth_client: parking_lot::Mutex::new(None),
+            #[cfg(all(test, feature = "webui"))]
+            sign_in_expiry_pause: crate::test_pause::Slot::default(),
             sign_in_status: Arc::new(crate::oauth::client::sign_in::SignInStatus::new(
                 crate::oauth::client::sign_in::SignIn::NotOAuth,
             )),

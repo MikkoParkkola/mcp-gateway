@@ -78,6 +78,13 @@ pub(super) fn open_browser(url: &str) -> bool {
     }
 }
 
+/// Tell the person at the terminal where to authorize, on stderr (MIK-8197):
+/// a launcher that started can still be blocked, and stdout is the stdio
+/// transport's JSON-RPC stream.
+pub(super) fn announce_on_stderr(url: &str) {
+    eprintln!("\nIf no browser opened, authorize this client by visiting:\n{url}\n");
+}
+
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;

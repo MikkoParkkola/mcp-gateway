@@ -149,12 +149,19 @@ impl Backend {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 impl Backend {
     /// Test-only: the OAuth client the sign-in flow uses, in place of the one
-    /// a start would build. Skeleton: it installs nothing.
-    #[expect(clippy::unused_self, reason = "skeleton: the flow reads it once built")]
-    pub(crate) fn install_oauth_client_for_test(&self, _client: OAuthClient) {}
+    /// a start would build.
+    pub(crate) fn install_oauth_client_for_test(&self, client: OAuthClient) {
+        *self.installed_oauth_client.lock() = Some(Arc::new(client));
+    }
+
+    /// Test-only: the installed client's in-memory token.
+    pub(crate) fn installed_client_token_for_test(&self) -> Option<crate::oauth::TokenInfo> {
+        let client = self.installed_oauth_client.lock().clone()?;
+        client.cached_token_for_test()
+    }
 }
 
 impl Backend {

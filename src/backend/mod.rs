@@ -309,6 +309,12 @@ pub struct Backend {
     /// memory, so it outlives any one transport.
     #[allow(dead_code, reason = "skeleton: the first readers land with the read")]
     pub(crate) sign_in_status: Arc<crate::oauth::client::sign_in::SignInStatus>,
+    /// A test's pre-built OAuth client for the sign-in flow.
+    #[cfg(all(test, feature = "webui"))]
+    installed_oauth_client: parking_lot::Mutex<Option<Arc<crate::oauth::OAuthClient>>>,
+    /// Where a test holds the sign-in flow's expiry task.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) sign_in_expiry_pause: crate::test_pause::Slot,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.
