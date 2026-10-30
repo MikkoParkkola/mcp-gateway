@@ -33,6 +33,9 @@ impl Error {
             | Self::ConfigWatcher(_)
             | Self::CapabilityHashMismatch { .. }
             | Self::BackendNotFound(_)
+            // Built only by the gateway when a name is both a backend and the
+            // capability backend: its own refusal.
+            | Self::AmbiguousBackend { .. }
             | Self::RateLimited(_)
             | Self::IdentitySlotsExhausted { .. }
             | Self::ToolNotFound(_)
