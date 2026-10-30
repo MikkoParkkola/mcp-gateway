@@ -9,12 +9,15 @@ src/backend/input_keys.rs	undeclared_key_refusal_held	blocked_tool_refusal	1	fee
 src/backend/input_keys.rs	undeclared_key_refusal_inner	blocked_tool_refusal	2	feeds	a descriptor-withheld answer (KeyAnswerKind::Withheld) its callers raise
 src/backend/lend.rs	lend_to_slot	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/lifecycle.rs	start_entry_as	refuse_shared_start	1	not-delivered	only internal shared fills reach it; no route delivers it (the outlet would record it if one did)
+src/backend/metadata.rs	get_cached_list_for	refuse_during_refresh_cooldown	1	not-a-decision	a backend whose stale tools refresh failed recently: an availability failure
 src/backend/metadata.rs	get_cached_list_for	refuse_shared_start	1	not-delivered	only internal shared fills reach it; no route delivers it (the outlet would record it if one did)
 src/backend/ops.rs	blocked_call_refusal	blocked_tool_refusal	1	feeds	the backend's send backstop for a withheld tool
 src/backend/ops.rs	notify_with_headers_lent	blocked_call_refusal	1	no-record	a notification to a backend; notifications carry no delivery record
 src/backend/ops.rs	request_attempted	blocked_call_refusal	1	composite-or-replay	the send backstop: every route's gate withholds the name first (raised there); reached only by a name the gates missed
 src/backend/pool.rs	refuse_shared_start	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/pool_eviction.rs	arm_refusal_eviction	on_definitive_refusal	1	not-delivered	registers the slot's eviction on a definitive refusal
+src/backend/secret_send.rs	prepare_secrets	refuse_secret_target	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
+src/backend/secret_send.rs	refuse_secret_target	refusal	3	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/capability/backend.rs	call_tool_with_context	refuse_unless_read_only	1	pending:capability-refusals	a capability refused inside a read-only call; fixed by the capability-refusals follow-up
 src/capability/discovery/chain.rs	probe_single	record_ssrf_refusal	1	no-record	capability discovery probing, not a call
 src/capability/discovery/mod.rs	discover	ssrf_refusal	1	no-record	capability discovery, not a call
@@ -44,14 +47,19 @@ src/config/secret_file.rs	class_refusal	integrity_file_refusal	1	no-record	secre
 src/config/secret_file.rs	class_refusal	secret_file_refusal	1	no-record	secret file load
 src/config/secret_ref.rs	expand_template	refuse_stray	2	no-record	config load
 src/config/secret_ref.rs	is_template_syntax	refuse_stray	2	not-delivered	predicate
+src/config/secret_rules.rs	check	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	refusal	1	no-record	config load
 src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	config load
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
+src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
 src/config_reload/grant_reload.rs	reload_identity_grants	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
-src/config_reload/reload_context.rs	reload_transaction	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
-src/config_reload/reload_context.rs	reload_transaction	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
+src/config_reload/reload_context.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
+src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
+src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
+src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
@@ -294,6 +302,7 @@ src/protocol/mrtr.rs	undeclared	refusal	1	feeds	the undeclared-question refusal 
 src/provider/mcp_provider.rs	invoke	blocked_tool_refusal	1	feeds	the provider's withheld-tool answer; the meta gate withholds first (raised)
 src/registry/mod.rs	build_index	refuse_unloadable	1	no-record	registry index build
 src/registry/mod.rs	fetch_capability	ssrf_refusal	1	no-record	registry fetch (admin), not a call
+src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capability-refusals	an OAuth destination refusal, reached in a call by a token refresh (refresh_flight); fixed by the capability-refusals follow-up
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry

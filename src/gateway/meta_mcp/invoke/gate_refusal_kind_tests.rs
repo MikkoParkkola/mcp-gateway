@@ -213,3 +213,16 @@ async fn the_backstop_records_nothing_for_a_non_authorization_error() {
     let effect = Box::pin(backstop_effect(Error::AuditUnavailable)).await;
     assert_eq!(effect, "delivered");
 }
+
+/// A merge-time decision, pinned: a name that is both a backend and the
+/// capability backend is refused for the gateway's configuration clash, not
+/// as a decision about the caller, so the backstop records no refusal for it.
+#[tokio::test]
+async fn an_ambiguous_backend_is_not_recorded_as_a_refusal() {
+    let effect = Box::pin(backstop_effect(Error::AmbiguousBackend {
+        server: "alpha".to_owned(),
+        rule: None,
+    }))
+    .await;
+    assert_eq!(effect, "delivered");
+}
