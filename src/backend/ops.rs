@@ -621,7 +621,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::default(),
@@ -660,7 +660,7 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::unchecked(extra_headers),

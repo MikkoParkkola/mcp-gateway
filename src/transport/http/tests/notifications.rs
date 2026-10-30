@@ -154,11 +154,20 @@ async fn sse_decode_withholds_a_backend_tasks_notification() {
         "method": "notifications/tasks",
         "params": {"taskId": "FORGED-TASK", "status": "completed"},
     });
-    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(sse_with(&frame))),
     )
     .await;
+    // The decode succeeded, so an empty sink is the withholding, not a
+    // failed read.
+    assert!(
+        response
+            .expect("the response must still decode")
+            .result
+            .is_some(),
+        "the answer after the withheld frame was lost"
+    );
     assert!(
         notifications.is_empty(),
         "a backend notifications/tasks reached the caller: {notifications:?}"

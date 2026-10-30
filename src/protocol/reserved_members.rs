@@ -438,6 +438,8 @@ pub(crate) mod test_support {
                 },
                 "taskId": "FORGED-TASK",
                 "ttlMs": 60000,
+                "requestState": "FORGED-STATE",
+                "cacheScope": "private",
                 "backend_field": "KEPT-BY-BACKEND",
             },
         })
@@ -448,7 +450,7 @@ pub(crate) mod test_support {
     /// backend's own members unchanged.
     pub(crate) fn assert_progress_stripped(route: &str, token: &str, params: &Value) {
         assert_nothing_forged(route, params);
-        for member in ["taskId", "ttlMs"] {
+        for member in ["taskId", "ttlMs", "requestState", "cacheScope"] {
             assert!(
                 params.get(member).is_none(),
                 "{route}: a scoped `{member}` reached the client on a notification: {params}"

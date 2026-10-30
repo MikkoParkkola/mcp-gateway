@@ -202,6 +202,8 @@ const SINK_ENTRIES: &[(&str, &str, usize)] = &[
 ];
 
 const NEEDLES: &[&str] = &[
+    // A brace import would let a bare `publish(` escape the needles below.
+    "notification_sink::{",
     "notification_sink::publish",
     "publish_as(",
     "DeliveryHandle::capture(",
