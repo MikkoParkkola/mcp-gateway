@@ -496,6 +496,7 @@ mod issuer_provenance_tests;
 mod prm_discovery_tests;
 mod registration;
 mod renewal;
+pub(crate) mod sign_in;
 #[cfg(test)]
 mod tests;
 mod token_access;

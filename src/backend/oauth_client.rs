@@ -122,3 +122,21 @@ impl Backend {
         Ok(Some(oauth))
     }
 }
+
+impl Backend {
+    /// This backend's sign-in as an operator acts on it: one in-memory
+    /// snapshot, with no storage read, refresh or network call.
+    // Skeleton value: wrong for every backend on purpose.
+    #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
+    pub(crate) fn sign_in(&self) -> crate::oauth::client::sign_in::SignIn {
+        crate::oauth::client::sign_in::SignIn::WaitingElsewhere
+    }
+
+    /// Whether this backend needs a person to sign in. The one place the
+    /// predicate is evaluated; the server row and the overview both call it.
+    // Skeleton value: wrong for every backend on purpose.
+    #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
+    pub(crate) fn needs_sign_in(&self) -> bool {
+        false
+    }
+}

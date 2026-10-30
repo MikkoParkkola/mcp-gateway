@@ -207,6 +207,17 @@ pub(crate) fn subscription_alias(key: &RecordPrincipalKey, stored_id: &str) -> S
     keyed(key, SUBSCRIPTION_DOMAIN, stored_id, 16)
 }
 
+/// The secret-free owner tag of a UI sign-in: the keyed digest of the
+/// dashboard session `handle`, so the raw handle is never stored.
+// Skeleton value: wrong on purpose.
+#[allow(
+    dead_code,
+    reason = "skeleton: the first callers land with the sign-in flow"
+)]
+pub(crate) fn sign_in_owner(_key: &RecordPrincipalKey, _handle: &str) -> String {
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

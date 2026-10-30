@@ -64,6 +64,10 @@ owned_routes! {
     UI_BACKENDS = "/ui/api/backends",
     UI_BACKEND = "/ui/api/backends/{name}",
     UI_BACKEND_REVIVE = "/ui/api/backends/{name}/revive",
+    /// Starts a person's sign-in to an OAuth backend.
+    UI_BACKEND_SIGNIN = "/ui/api/backends/{name}/signin",
+    /// Confirms or cancels the sign-in the callback just completed.
+    UI_BACKEND_SIGNIN_CONFIRM = "/ui/api/backends/{name}/signin/confirm",
     UI_REGISTRY = "/ui/api/registry",
     UI_REGISTRY_SEARCH = "/ui/api/registry/search",
     UI_DEAD_LETTERS = "/ui/api/events/dead-letters",

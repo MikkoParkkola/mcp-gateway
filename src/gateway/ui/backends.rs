@@ -48,6 +48,7 @@ use crate::registry::server_registry;
 
 mod requests;
 pub use requests::{AddBackendRequest, UpdateBackendRequest};
+mod signin;
 
 /// Query parameters for `GET /ui/api/registry/search`.
 #[derive(Debug, Deserialize)]
@@ -136,6 +137,11 @@ pub fn backends_router() -> Router<Arc<AppState>> {
         .route(routes::UI_BACKEND, delete(remove_backend))
         .route(routes::UI_BACKEND, patch(update_backend))
         .route(routes::UI_BACKEND_REVIVE, post(revive_backend))
+        .route(routes::UI_BACKEND_SIGNIN, post(signin::start_sign_in))
+        .route(
+            routes::UI_BACKEND_SIGNIN_CONFIRM,
+            post(signin::confirm_sign_in),
+        )
         .route(routes::UI_REGISTRY, get(list_registry))
         .route(routes::UI_REGISTRY_SEARCH, get(search_registry))
 }
