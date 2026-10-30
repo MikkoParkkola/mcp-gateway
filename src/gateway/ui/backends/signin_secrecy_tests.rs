@@ -136,6 +136,7 @@ async fn a_failed_save_after_conversion_leaves_no_plain_copy() {
     let owner = gw.session();
     let (url, attempt) = Gw::link(&gw.start(&owner).await);
     let _ = gw.approve(&url).await;
+    gw.wait_until_held().await;
     std::fs::set_permissions(gw.store.path(), std::fs::Permissions::from_mode(0o500)).unwrap();
 
     let reply = gw.confirm(&owner, &attempt, "confirm").await;
@@ -248,6 +249,7 @@ async fn the_request_authority_never_reaches_the_redirect_uri() {
         assert_eq!(host.as_deref(), Some(configured), "{authority}: {redirect}");
 
         let _ = gw.approve(&url).await;
+        gw.wait_until_held().await;
         let confirm = gw.confirm(&who, &attempt, "confirm").await;
         assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
         let sent = forms
@@ -272,6 +274,7 @@ async fn a_ui_flow_never_announces_the_link_at_the_terminal() {
     let (url, attempt) = Gw::link(&gw.start(&who).await);
     assert!(!url.is_empty(), "the flow started");
     let _ = gw.approve(&url).await;
+    gw.wait_until_held().await;
     let _ = gw.confirm(&who, &attempt, "confirm").await;
 
     let announced = gw.announced.lock().unwrap().clone();

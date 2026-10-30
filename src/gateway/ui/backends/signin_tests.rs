@@ -29,6 +29,8 @@ async fn started(gw: &Gw, who: &Who) -> (String, String) {
 async fn approved(gw: &Gw, who: &Who) -> String {
     let (url, attempt) = started(gw, who).await;
     let _ = gw.approve(&url).await;
+    // The exchange runs after the callback page answers: wait for the token.
+    gw.wait_until_held().await;
     attempt
 }
 
