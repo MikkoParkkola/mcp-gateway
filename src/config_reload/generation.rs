@@ -76,9 +76,13 @@ impl Generation {
             #[cfg(feature = "firewall")]
             detector: previous.detector,
             #[cfg(feature = "firewall")]
-            collusion: Arc::new(crate::security::firewall::CollusionView::compile(
-                &config.security.firewall.collusion,
-            )),
+            collusion: if previous.detector.runs(&config.security.firewall) {
+                Arc::new(crate::security::firewall::CollusionView::compile(
+                    &config.security.firewall.collusion,
+                ))
+            } else {
+                Arc::clone(&previous.collusion)
+            },
             config: Arc::new(config),
         }
     }
