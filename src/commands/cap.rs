@@ -11,10 +11,6 @@ use mcp_gateway::{
         parse_capability_file, validate_capability, validate_capability_definition,
     },
     cli::CapCommand,
-    discovery::{
-        AutoDiscovery,
-        shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},
-    },
     registry::Registry,
 };
 
