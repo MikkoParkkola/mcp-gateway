@@ -543,6 +543,23 @@ impl OAuthClient {
         Ok(())
     }
 
+    /// A CLI or startup login's link: open the browser and announce it.
+    fn show_link_at_terminal(&self, auth_url_str: &str) {
+        // The link carries the state and the PKCE challenge: the log keeps the
+        // endpoint and path only.
+        info!(
+            url = %crate::security::sanitize::redact_url_keep_path(auth_url_str),
+            "Opening browser for authorization"
+        );
+        if !(self.open_browser)(auth_url_str) {
+            warn!("Failed to open browser automatically");
+        }
+        // Always, on stderr (MIK-8197): a launcher that started can still
+        // be blocked (an endpoint-security tool may stop it), and stdout
+        // is the stdio transport's JSON-RPC stream.
+        (self.announce)(auth_url_str);
+    }
+
     /// Everything of a login up to and including the redemption of its code:
     /// the callback server, PKCE, the link, the callback and the exchange. It
     /// saves nothing; the caller decides what to do with the token.
@@ -622,21 +639,7 @@ impl OAuthClient {
             // browser opens, nothing is logged and nothing is announced.
             let _ = link.send(auth_url_str);
         } else {
-            // Open browser
-            // The link carries the state and the PKCE challenge: the log keeps the
-            // endpoint and path only.
-            info!(
-                url = %crate::security::sanitize::redact_url_keep_path(&auth_url_str),
-                "Opening browser for authorization"
-            );
-
-            if !(self.open_browser)(&auth_url_str) {
-                warn!("Failed to open browser automatically");
-            }
-            // Always, on stderr (MIK-8197): a launcher that started can still
-            // be blocked (an endpoint-security tool may stop it), and stdout
-            // is the stdio transport's JSON-RPC stream.
-            (self.announce)(&auth_url_str);
+            self.show_link_at_terminal(&auth_url_str);
         }
 
         // Wait for callback
