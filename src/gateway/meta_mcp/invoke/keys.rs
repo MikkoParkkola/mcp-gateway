@@ -252,7 +252,23 @@ impl MetaMcp {
             backend.as_deref(),
             dispatch_binding.as_deref(),
         );
+        // U12: a web UI call runs only as the call the route checked, and a
+        // tool this slot did not declare read-only only when confirmed. Here
+        // the backend instance and the caller's binding are the dispatched
+        // ones, so a replaced backend or a cold per-user slot asks.
+        #[cfg(feature = "webui")]
+        if let Err(refusal) =
+            crate::gateway::ui_call::gate((server, tool), caller.credential_principal, read_only)
+        {
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::AskRefund,
+            );
+            return Err(refusal);
+        }
+        // A web UI call runs the tool itself: a stored answer is not a run.
         if read_only
+            && !crate::gateway::ui_call_runs_live()
             && let Some(cached) = self.serve_cached_response(
                 caller,
                 session_id,

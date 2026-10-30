@@ -118,7 +118,9 @@ pub(super) const S5_PRE_SEND_ALLOW: &[&str] = &[
     "support::note_cache_bypass", // invoke.rs:361 canonical: `super::` stripped for the move
     "self.is_chained",            // invoke.rs:364
     "self.cache_admits",          // invoke.rs:370
-    "self.serve_cached_response", // invoke.rs:376
+    "crate::gateway::ui_call::gate", // U12: a web UI call's confirm and caller gate, before the cache
+    "crate::gateway::ui_call_runs_live", // U12: a web UI call skips the response cache
+    "self.serve_cached_response",    // invoke.rs:376
     "nonce_settle::PreSendExit::Served", // invoke.rs:394
     "TracedOutcome::Live", // invoke.rs:355 the refusal and hit exits; listed from the live body, also :396
 ];
