@@ -78,7 +78,8 @@ pub(super) async fn key_refusal(
         failed
             .state
             .meta_mcp
-            .remember_caller_slot(backend, proof, identity_key);
+            .remember_caller_slot(backend, proof, identity_key)
+            .await;
         match verdict {
             // A withheld entry (descriptor, schema) is the gateway refusing the
             // call, as the meta gate records it; a lacked name is not.

@@ -90,6 +90,7 @@ mod cost_test_support;
 #[cfg(test)]
 mod declared_label_carry_tests;
 mod direct_route;
+pub(in crate::gateway::meta_mcp) mod publish_gate;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;

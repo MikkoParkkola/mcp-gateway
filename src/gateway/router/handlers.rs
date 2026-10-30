@@ -387,7 +387,7 @@ async fn meta_mcp_dispatch(
                 Some(Ok(response)) => {
                     let subject = intake.view_subject();
                     let (response, pending) = state
-                        .after_call((session_id, &subject), params, response)
+                        .after_call((session_id, &subject), invoke_scope.caller, params, response)
                         .await;
                     pending_view = pending;
                     response
@@ -539,6 +539,12 @@ async fn meta_mcp_dispatch(
         // SEP-1862: resolve a single tool schema by name (spec-preview feature).
         #[cfg(feature = "spec-preview")]
         "tools/resolve" => {
+            // The same managed-grant recheck as every listing, so a rotated
+            // grant's slot never resolves a tool.
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
             state
                 .meta_mcp
                 .handle_tools_resolve(id, params, Some(session_id.as_str()), invoke_scope)

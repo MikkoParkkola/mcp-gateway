@@ -493,7 +493,7 @@ impl MetaMcp {
         proof: CallerProof<'_>,
     ) -> crate::Result<SlotJudgement> {
         let verdict = backend.catalogue_verdict(binding, headers, tool).await;
-        self.remember_caller_slot(backend, proof, binding);
+        self.remember_caller_slot(backend, proof, binding).await;
         let (recorded, judgement) = match verdict? {
             CatalogueVerdict::Offers => (Some(Visibility::Visible), SlotJudgement::Offered),
             CatalogueVerdict::Withholds => {
@@ -581,6 +581,9 @@ pub(in crate::gateway::meta_mcp) struct ColdAttempt {
     backend: std::sync::Arc<Backend>,
     principal_id: String,
     generation: u64,
+    /// What the publish gate reads the grant with, captured when the claim
+    /// was won; `None` on a backend with no managed account.
+    gate: Option<crate::gateway::meta_mcp::publish_gate::GateInputs>,
 }
 
 impl ColdAttempt {
@@ -589,11 +592,25 @@ impl ColdAttempt {
         backend: std::sync::Arc<Backend>,
         principal_id: String,
         generation: u64,
+        gate: Option<crate::gateway::meta_mcp::publish_gate::GateInputs>,
     ) -> Self {
         Self {
             backend,
             principal_id,
             generation,
+            gate,
+        }
+    }
+
+    /// Whether the publish gate lets `binding` be indexed now: a fresh
+    /// custody read must still give it. No gate inputs, nothing to read.
+    async fn gate_allows(&self, binding: &str) -> bool {
+        match &self.gate {
+            Some(gate) => {
+                gate.judge(&self.backend, binding).await
+                    == crate::gateway::meta_mcp::publish_gate::Publish::Allow
+            }
+            None => true,
         }
     }
 }
@@ -641,7 +658,7 @@ impl ColdFill {
             .tools_for_check(Some(&binding), &headers, false)
             .await;
         drop(headers);
-        if filled.is_ok() {
+        if filled.is_ok() && attempt.gate_allows(&binding).await {
             backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
         }
     }
