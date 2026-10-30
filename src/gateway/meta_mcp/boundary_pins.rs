@@ -8,6 +8,7 @@ mod ci_wiring;
 mod creation_sites;
 mod delivery_framing;
 mod guard_tests;
+mod inbound_parse_sites;
 mod invoke_stages;
 mod invoke_stages_allow;
 mod invoke_stages_dest;
