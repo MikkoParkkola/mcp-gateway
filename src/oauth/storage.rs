@@ -232,7 +232,7 @@ pub struct TokenStorage {
     base_dir: PathBuf,
     /// Test-only: token loads and legacy-file checks served, as `(loads, exists)`.
     #[cfg(test)]
-    io_counts: [std::sync::atomic::AtomicUsize; 2],
+    pub(crate) io_counts: [std::sync::atomic::AtomicUsize; 2],
 }
 
 impl TokenStorage {
@@ -253,17 +253,6 @@ impl TokenStorage {
             #[cfg(test)]
             io_counts: Default::default(),
         })
-    }
-
-    /// Test-only: how many token loads and legacy-file checks this storage
-    /// has served, as `(loads, exists)`.
-    #[cfg(test)]
-    pub(crate) fn io_counts_for_test(&self) -> (usize, usize) {
-        let [loads, exists] = &self.io_counts;
-        (
-            loads.load(std::sync::atomic::Ordering::SeqCst),
-            exists.load(std::sync::atomic::Ordering::SeqCst),
-        )
     }
 
     /// Whether a 3.x token file sits under the legacy key of this backend and

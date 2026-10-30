@@ -167,6 +167,12 @@ async fn a_token_with_auth_wait_reads_expired() {
     assert!(backend.needs_sign_in());
 }
 
+/// How many token loads and legacy-file checks `storage` has served.
+fn io_counts(storage: &TokenStorage) -> (usize, usize) {
+    let [loads, exists] = &storage.io_counts;
+    (loads.load(Ordering::SeqCst), exists.load(Ordering::SeqCst))
+}
+
 /// A server that only counts the connections it is offered: the network
 /// double for a read that must reach nothing.
 async fn counting_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
@@ -194,7 +200,7 @@ async fn the_read_does_no_storage_io() {
     let storage = Arc::clone(&client.storage);
 
     client.publish_sign_in();
-    let after_resolution = storage.io_counts_for_test();
+    let after_resolution = io_counts(&storage);
     assert_eq!(
         after_resolution,
         (1, 1),
@@ -205,7 +211,7 @@ async fn the_read_does_no_storage_io() {
         let _ = (backend.sign_in(), backend.needs_sign_in());
     }
     assert_eq!(
-        storage.io_counts_for_test(),
+        io_counts(&storage),
         after_resolution,
         "a read costs no I/O"
     );

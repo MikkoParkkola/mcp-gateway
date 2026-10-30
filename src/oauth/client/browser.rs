@@ -78,7 +78,7 @@ pub(super) fn open_browser(url: &str) -> bool {
     }
 }
 
-/// Tell the person at the terminal where to authorize, on stderr (MIK-8197):
+/// Tell the person at the terminal where to authorize, on stderr:
 /// a launcher that started can still be blocked, and stdout is the stdio
 /// transport's JSON-RPC stream.
 pub(super) fn announce_on_stderr(url: &str) {

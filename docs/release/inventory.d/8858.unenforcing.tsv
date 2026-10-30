@@ -1,0 +1,24 @@
+src/oauth/client/browser.rs	announce_on_stderr	1	Prints the visit-this-link prompt on stderr for a command-line or startup login; decides nothing.
+src/oauth/client/browser.rs	announce_to	1	Writes the prompt text to a writer; decides nothing.
+src/oauth/client/grants.rs	authorize_for_ui	1	Starts a login for the web UI by handing its link and callback signal to the route and holding the token; the checks are in issue_token and the confirm step.
+src/oauth/client/grants.rs	save_confirmed	1	Saves, caches and publishes a grant the person already confirmed; the owner and attempt checks are in the confirm route.
+src/oauth/client/grants.rs	show_link_at_terminal	1	Opens the browser and prints the link for a command-line or startup login, logging only the endpoint and path; decides nothing.
+src/oauth/client/sign_in.rs	rfc3339	1	Formats an expiry as RFC 3339 for the status read.
+src/oauth/client/sign_in.rs	needs_a_person	1	Classifies a sign-in state for display; it gates no request.
+src/oauth/client/sign_in.rs	new	1	Builds the sign-in status cell.
+src/oauth/client/sign_in.rs	set	1	Stores the sign-in status for display.
+src/oauth/client/sign_in.rs	snapshot	1	Reads the sign-in status for display.
+src/oauth/client/sign_in.rs	from_token	1	Moves a redeemed token into wiped buffers to hold until the person confirms; decides nothing.
+src/oauth/client/sign_in.rs	into_token	1	Turns a confirmed grant into the token to save, shortening its lifetime by the time held; the confirm decision was made before.
+src/oauth/client/sign_in.rs	confirm_window_of	1	Reads the confirm window a UI login carries, else the default.
+src/oauth/client/sign_in.rs	confirm_window_of	2	Returns the default confirm window when the web UI is off.
+src/oauth/client/sign_in.rs	split_hook	1	Splits a UI login hook into its two channels.
+src/oauth/client/sign_in.rs	split_hook	2	Has no hook to split when the web UI is off.
+src/oauth/client/sign_in.rs	with_sign_in_status	1	Attaches the status cell a client publishes to.
+src/oauth/client/sign_in.rs	publish_sign_in	1	Evaluates and publishes the sign-in status for display.
+src/oauth/client/sign_in.rs	publish_token_state	1	Writes the status a held token puts a client in, for display.
+src/oauth/client/sign_in.rs	sign_in_of	1	Derives the sign-in status from the issuer state and the held token; it describes, and gates no request.
+src/oauth/client/sign_in.rs	token_state	1	Reads a held token as signed in or expired for display; the token check that gates a call is is_expired.
+src/oauth/login_gate.rs	set_end	1	Records when a login ends, for the retry hint.
+src/oauth/login_gate.rs	current_end	1	Reads when the login in flight ends, for the retry hint.
+src/oauth/storage.rs	legacy_token_exists	1	Reports whether a 3.x token file exists so the status can say a re-sign-in is needed; it reads nothing from it.

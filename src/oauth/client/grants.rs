@@ -554,7 +554,7 @@ impl OAuthClient {
         if !(self.open_browser)(auth_url_str) {
             warn!("Failed to open browser automatically");
         }
-        // Always, on stderr (MIK-8197): a launcher that started can still
+        // Always, on stderr: a launcher that started can still
         // be blocked (an endpoint-security tool may stop it), and stdout
         // is the stdio transport's JSON-RPC stream.
         (self.announce)(auth_url_str);
