@@ -169,9 +169,9 @@ pub(crate) struct PooledEntry {
     pub(crate) auth_wait: AtomicBool,
     /// Bumped each time [`PooledEntry::set_auth_wait`] sets `auth_wait`, so a
     /// later clear can tell a newer wait from the one it saw.
-    #[allow(
-        dead_code,
-        reason = "the confirm step reads it to clear only the wait it saw"
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "the web UI flow reads it to clear only the wait it saw")
     )]
     pub(crate) auth_wait_gen: std::sync::atomic::AtomicU64,
     /// This slot has had a transport published at least once.

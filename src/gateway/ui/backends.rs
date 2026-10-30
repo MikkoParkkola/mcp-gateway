@@ -49,6 +49,7 @@ use crate::registry::server_registry;
 mod requests;
 pub use requests::{AddBackendRequest, UpdateBackendRequest};
 mod signin;
+mod signin_flow;
 
 /// Query parameters for `GET /ui/api/registry/search`.
 #[derive(Debug, Deserialize)]

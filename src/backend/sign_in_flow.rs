@@ -54,6 +54,8 @@ pub(crate) struct Flow {
     pub(crate) caller: Option<AuthenticatedClient>,
     /// Woken when a decision has ended the flow, so its task lets go.
     pub(crate) ended: Arc<Notify>,
+    /// The client the login ran on, which saves the grant on a confirm.
+    pub(crate) client: Arc<crate::oauth::OAuthClient>,
 }
 
 impl Flow {
@@ -74,6 +76,24 @@ impl Backend {
     /// Run `f` on the flow slot under its lock.
     pub(crate) fn with_flow<R>(&self, f: impl FnOnce(&mut Option<Flow>) -> R) -> R {
         f(&mut self.sign_in_flow.lock())
+    }
+
+    /// Clear the slot's `auth_wait` unless a newer wait was recorded since the
+    /// generation `seen`.
+    // ponytail: check then store, not one atomic step; a wait recorded in
+    // between is lost. Pack the flag and the generation into one word if it
+    // ever matters.
+    pub(crate) fn clear_auth_wait_if(&self, seen: u64) {
+        let entry = self.shared_entry();
+        if entry
+            .auth_wait_gen
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == seen
+        {
+            entry
+                .auth_wait
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// The phase and wall-clock end of the flow in flight, for the status

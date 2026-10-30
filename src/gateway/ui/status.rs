@@ -73,9 +73,13 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
             cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
             needs_sign_in: backend.needs_sign_in(),
             sign_in: Some(backend.sign_in()).filter(|sign_in| *sign_in != SignIn::NotOAuth),
-            // The hook for the flow record: a backend with a sign-in in flight
-            // reports `{"phase", "until"}` here, once the record exists.
-            sign_in_flow: None,
+            // A sign-in in flight: only its phase and end, never a secret.
+            sign_in_flow: backend.sign_in_flow_view().map(|(phase, until)| {
+                json!({
+                    "phase": phase.word(),
+                    "until": chrono::DateTime::<chrono::Utc>::from(until).to_rfc3339(),
+                })
+            }),
             calls_24h: None,
             calls_prev_24h: None,
             name: bs.name,
