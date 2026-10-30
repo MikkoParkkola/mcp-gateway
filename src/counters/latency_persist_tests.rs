@@ -157,9 +157,9 @@ fn full_cap_bytes(fill: &Fill) -> usize {
     series.half.live = (94..96).map(|b| live(base + b)).collect();
     series.day.closed = (0..29).map(|d| closed(base + d)).collect();
     series.day.live = std::iter::once(live(base + 29)).collect();
-    let file = series.to_file();
+    let encoded = series.to_file();
     let labels: Vec<(String, _)> = (0..514)
-        .map(|i| (format!("{i:03}{}", "x".repeat(125)), file.clone()))
+        .map(|i| (format!("{i:03}{}", "x".repeat(125)), encoded.clone()))
         .collect();
     serde_json::to_vec(&labels).unwrap().len()
 }

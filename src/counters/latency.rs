@@ -420,8 +420,12 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         }
         for ClosedRow(row) in &file.closed {
             let (bucket, p95_ms, calls, failed, timed_out, late) = match *row.as_slice() {
-                [a, b, c, d, e] => (a, b, c, d, e, 0),
-                [a, b, c, d, e, f] => (a, b, c, d, e, f),
+                [bucket, p95, calls, failed, timed_out] => {
+                    (bucket, p95, calls, failed, timed_out, 0)
+                }
+                [bucket, p95, calls, failed, timed_out, late] => {
+                    (bucket, p95, calls, failed, timed_out, late)
+                }
                 _ => continue,
             };
             ring.closed.push_back(Closed {

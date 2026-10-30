@@ -8,7 +8,7 @@ use std::time::Duration;
 use reqwest::Client;
 
 use crate::counters::End;
-use crate::gateway::meta_mcp::invoke::send_timer::SendTimer;
+use crate::gateway::SendTimer;
 use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::{Error, Result};
 
