@@ -135,16 +135,22 @@ impl Fixture {
     }
 
     fn raw(&self) -> String {
-        std::fs::read_to_string(self.log.path()).unwrap_or_default()
+        std::fs::read_to_string(self.log.path()).expect("the audit log reads")
+    }
+
+    /// Every admin action on `surface`, in order. A line that is not JSON
+    /// fails the row rather than vanishing from what it checks.
+    fn actions(&self, surface: &str) -> Vec<Value> {
+        self.raw()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("an audit line is JSON"))
+            .filter(|e| e["event"] == "admin_action" && e["surface"] == surface)
+            .collect()
     }
 
     /// The `capability_editor` records, in order.
     fn edits(&self) -> Vec<Value> {
-        self.raw()
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|e| e["event"] == "admin_action" && e["surface"] == "capability_editor")
-            .collect()
+        self.actions("capability_editor")
     }
 
     /// No record, of any kind, carries the file's content.
@@ -233,30 +239,26 @@ async fn caped11_a_delete_records_the_change_never_the_content() {
     let edits = fx.edits();
     assert_eq!(edits.len(), 1, "{edits:#?}");
     assert_record(&edits[0], "delete", &base, None);
+    assert_eq!(
+        edits[0]["pin"], "none",
+        "a delete rewrites no pin: {}",
+        edits[0]
+    );
     fx.assert_no_content();
 }
 
-/// CAPED.11: when the audit log refuses the editor's record (fail-closed),
-/// the handler withholds the save's answer itself. Only the editor's append
-/// fails: the log's one-shot fault, scoped to this log instance, takes the
-/// next append, which is the handler's; the UI-write layer's own `admin_ui`
-/// record after it is written. With every append failing, that layer's 503
-/// would hide whether the handler withholds at all.
-#[tokio::test]
-async fn caped11_a_refused_record_withholds_the_answer() {
-    let before = capability(CANARY_BEFORE);
-    let after = capability(CANARY_AFTER);
-    let fx = fixture(&before, AuditFailurePolicy::FailClosed).await;
+/// Refuse only the editor's next record, send `request`, and check what a
+/// withheld answer means: the editor's record is absent, the UI-write layer's
+/// own `admin_ui` record carries the 503, the answer is exactly the withheld
+/// error and nothing else, and no record carries the content.
+///
+/// Only the editor's append fails: the log's one-shot fault, scoped to this
+/// log instance, takes the next append, which is the handler's; the layer's
+/// record after it is written. With every append failing, that layer's own
+/// 503 would hide whether the handler withholds at all.
+async fn assert_withheld(fx: &Fixture, request: axum::http::Request<axum::body::Body>) {
     fx.log.fail_next_append_for_test();
-    let base = sha256_hex(before.as_bytes());
-    let (status, body) = fx
-        .send(request("PUT", "/ui/api/capabilities/kept", &base, &after))
-        .await;
-    assert_eq!(
-        std::fs::read_to_string(&fx.file).expect("the file"),
-        after,
-        "the handler ran and the save committed before its record was refused"
-    );
+    let (status, body) = fx.send(request).await;
     // 1. The editor's record was refused.
     assert!(
         fx.edits().is_empty(),
@@ -264,22 +266,54 @@ async fn caped11_a_refused_record_withholds_the_answer() {
         fx.raw()
     );
     // 2. The layer's record was written, with the withheld status.
-    let layer: Vec<Value> = fx
-        .raw()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|e| e["event"] == "admin_action" && e["surface"] == "admin_ui")
-        .collect();
+    let layer = fx.actions("admin_ui");
     assert_eq!(layer.len(), 1, "one layer record: {}", fx.raw());
     assert_eq!(layer[0]["http_status"], 503, "{}", layer[0]);
-    // 3. The answer is withheld: a 503 that names no saved result.
+    // 3. The answer is the withheld error, exactly: no saved result anywhere.
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
-    let answer: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
-    for key in ["status", "name", "sha256"] {
-        assert!(
-            answer.get(key).is_none(),
-            "the withheld answer names {key}: {body}"
-        );
-    }
-    assert!(!body.contains(CANARY_AFTER), "{body}");
+    let answer: Value = serde_json::from_str(&body).expect("the withheld answer is JSON");
+    assert_eq!(
+        answer,
+        serde_json::json!({ "error": crate::Error::AuditUnavailable.to_string() }),
+        "the answer is the withheld error and nothing else"
+    );
+    // 4. Still no content in any record.
+    fx.assert_no_content();
+}
+
+/// CAPED.11: when the audit log refuses the editor's record of a save
+/// (fail-closed), the save has committed and the handler withholds its answer.
+#[tokio::test]
+async fn caped11_a_refused_record_withholds_the_answer() {
+    let before = capability(CANARY_BEFORE);
+    let after = capability(CANARY_AFTER);
+    let fx = fixture(&before, AuditFailurePolicy::FailClosed).await;
+    let base = sha256_hex(before.as_bytes());
+    assert_withheld(
+        &fx,
+        request("PUT", "/ui/api/capabilities/kept", &base, &after),
+    )
+    .await;
+    assert_eq!(
+        std::fs::read_to_string(&fx.file).expect("the file"),
+        after,
+        "the handler ran and the save committed before its record was refused"
+    );
+}
+
+/// CAPED.11: the same for a delete, whose handler withholds on its own path.
+#[tokio::test]
+async fn caped11_a_refused_delete_record_withholds_the_answer() {
+    let before = capability(CANARY_BEFORE);
+    let fx = fixture(&before, AuditFailurePolicy::FailClosed).await;
+    let base = sha256_hex(before.as_bytes());
+    assert_withheld(
+        &fx,
+        request("DELETE", "/ui/api/capabilities/kept", &base, ""),
+    )
+    .await;
+    assert!(
+        !fx.file.exists(),
+        "the handler ran and the delete committed before its record was refused"
+    );
 }
