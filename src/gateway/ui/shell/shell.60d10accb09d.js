@@ -1293,11 +1293,15 @@ function watchLoading(content, body, label, current) {
   let shownAt = 0;
   let withdraw = null;
   const guard = { epoch: authEpoch, seq: renderSeq };
+  // Marks the timer's start and the state's arrival where each happens, so a
+  // test can time the onset by the page's own clock.
+  performance.mark('ui-loading-armed');
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
     if (!current() || body.hasChildNodes() || !body.isConnected) return;
     node = state('loading');
     content.insertBefore(node, body);
+    performance.mark('ui-loading-shown');
     shownAt = Date.now();
     withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
   }, LOADING_MS);
