@@ -264,3 +264,40 @@ fn a_null_error_beside_a_result_is_a_success() {
         "an error of null is no error"
     );
 }
+
+/// A value the agent sent, standing in for an injected secret (MIK-9035).
+const NEEDLE: &str = "a2a-secret-9d2c41";
+
+/// MIK-9035 DELTA-8 (T1.26): a malformed card, reply or task names where it
+/// broke, never a value it carried.
+#[test]
+fn a_malformed_card_or_reply_quotes_no_value() {
+    let card = parse_card(json!({"name": "a", "supportedInterfaces": NEEDLE})).unwrap_err();
+    let reply = decode_reply(&json!({"jsonrpc": "2.0", "id": "1",
+        "result": {"task": NEEDLE}}))
+    .unwrap_err();
+    let task = decode_task(
+        &json!({"jsonrpc": "2.0", "id": "1", "result": {"id": "t", "status": NEEDLE}}),
+        "GetTask",
+    )
+    .unwrap_err();
+    for error in [card, reply, task] {
+        let text = error.to_string();
+        assert!(text.contains("malformed"), "{text}");
+        assert!(
+            !text.contains(NEEDLE),
+            "the diagnostic quotes the agent's value: {text}"
+        );
+    }
+}
+
+/// MIK-9035 (T1.41): a body that is not JSON is named by its category and
+/// length only. A pin: serde's syntax errors quote no input today.
+#[tokio::test]
+async fn a_body_that_is_not_json_quotes_none_of_it() {
+    let body = format!("oops {NEEDLE}").into_bytes();
+    let error = read_capped_json(response(body), "reply").await.unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("not JSON"), "{text}");
+    assert!(!text.contains(NEEDLE), "{text}");
+}
