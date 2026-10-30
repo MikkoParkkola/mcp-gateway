@@ -514,11 +514,8 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
-            // An authorization refusal (`Forbidden`, the one a step answers
-            // neutrally) that the gate, judging the name alone, let through:
-            // a decision about the caller, so the step records it. Any other
-            // error here (an audit failure, an undefined capability, an
-            // absent name) is not one.
+            // A decision about the caller the gate, judging the name alone,
+            // let through: the step records it (see is_authorization_refusal).
             if is_authorization_refusal(&refusal) {
                 crate::gateway::delivery_facts::refused_while_vouched();
             }
