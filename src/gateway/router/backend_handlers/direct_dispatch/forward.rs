@@ -80,7 +80,7 @@ pub(super) async fn forward_sanitized(
                 &route.backend,
                 id,
                 Some(sanitized_params),
-                (&propagation.headers, propagation.identity_key.as_deref()),
+                (propagation.lent(), propagation.identity_key.as_deref()),
             ),
         ),
     ))
@@ -145,7 +145,7 @@ pub(super) async fn forward_plain(
     let client = caller.client.as_ref();
     let method = envelope.method.as_str();
     if method == "tools/list" {
-        let (headers, key) = (&propagation.headers, propagation.identity_key.as_deref());
+        let (headers, key) = (propagation.lent(), propagation.identity_key.as_deref());
         // Success is recorded after the firewall pass: a listing it refuses is
         // not a client success.
         let drain = direct_list::drain(

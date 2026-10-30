@@ -241,6 +241,7 @@ async fn a_private_literal_a2a_url_is_refused_under_the_hardened_policy() {
             &HashMap::new(),
             Duration::from_secs(5),
             DestinationPolicy::Public,
+            None,
         )
         .await;
         let Err(error) = refused else {
