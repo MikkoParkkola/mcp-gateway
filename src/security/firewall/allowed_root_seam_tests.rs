@@ -247,16 +247,18 @@ fn r16b_values_share_one_deadline() {
         let ops = stepping.ops.lock().expect("ops").clone();
         (got, ops)
     };
-    let names_b = |op: &ResolveOp| {
-        matches!(op, ResolveOp::Metadata(p) | ResolveOp::Canonicalize(p) if p.ends_with("g"))
-    };
+    let names_b = |op: &ResolveOp| matches!(op, ResolveOp::Metadata(p) | ResolveOp::Canonicalize(p) if p.ends_with("g"));
     let (still, ops) = run(Duration::ZERO);
     assert_eq!(still, None, "with the clock still the call completes");
     let reads = u32::try_from(ops.len()).expect("few reads");
     assert!(reads >= 3, "a call this short proves nothing: {ops:?}");
     // Rounded up, so the budget has run out before the last read.
-    let step = ROOT_CHECK_DEADLINE.as_nanos().div_ceil(u128::from(reads - 1));
-    let (got, ops) = run(Duration::from_nanos(u64::try_from(step).expect("a short step")));
+    let step = ROOT_CHECK_DEADLINE
+        .as_nanos()
+        .div_ceil(u128::from(reads - 1));
+    let (got, ops) = run(Duration::from_nanos(
+        u64::try_from(step).expect("a short step"),
+    ));
     assert!(
         ops.iter().any(|(op, _)| names_b(op)),
         "the second value was read: {ops:?}"
