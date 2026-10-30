@@ -291,6 +291,8 @@ async fn callback_flow_error_from_provider() {
 }
 
 /// MIK-8658 (K3): provider text holding the busy marker is no busy lock.
+/// The provider's text no longer reaches the error at all (only its RFC 6749
+/// code does), so the marker cannot reach the busy check either.
 #[tokio::test]
 async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
     let server = start_callback_server("s".to_string(), None, None, None)
@@ -307,7 +309,7 @@ async fn provider_error_text_with_the_busy_marker_is_not_a_busy_lock() {
     let error = server.wait_for_callback().await.expect_err("login ended");
     let busy = crate::oauth::client::is_credential_lock_busy(&error);
     assert!(
-        matches!(&error, Error::OAuth(m) if m == "OAuth error: access_denied - credential lock busy: x"),
+        matches!(&error, Error::OAuth(m) if m == "OAuth error: access_denied"),
         "{error:?}"
     );
     assert!(!busy, "{error}");
