@@ -203,6 +203,8 @@ impl CapabilityExecutor {
         auth: &super::super::AuthConfig,
         context: &CapabilityExecutionContext,
     ) -> Result<String> {
+        #[cfg(test)]
+        crate::secrets::lookup_probe::hit();
         let key = &auth.key;
 
         // A managed or external account's credential is a per-caller HEADER
