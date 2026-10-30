@@ -705,9 +705,11 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
     }
     assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
     // Exactly the inventory (design r11 section 4): a site added or removed
-    // updates this count and its row together.
+    // updates this count and its row together. 17 = the 15 of r11, plus the
+    // web UI tool route's two refusals before the send: its gate in keys.rs
+    // and its send-point check in send.rs (both ask for the nonce back).
     let total: usize = mapped.iter().map(|(_, calls)| calls).sum();
-    assert_eq!(total, 15, "the invoke path calls the mapping: {mapped:?}");
+    assert_eq!(total, 17, "the invoke path calls the mapping: {mapped:?}");
 }
 
 /// The text of one pairing arm: from `start` to the first `end` after it.
