@@ -576,6 +576,10 @@ impl Shared {
     }
 
     fn commit(&self, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        #[cfg(test)]
+        self.seams
+            .created_by
+            .witness("task record", &self.dir.join(LEASE));
         let hook = self.hook();
         match write_record(&self.dir, name, bytes, hook.as_ref(), &self.temp) {
             Ok(()) => Ok(()),
