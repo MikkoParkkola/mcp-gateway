@@ -413,7 +413,7 @@ async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
 }
 
 /// Test plan rows 21 and 25 (CLI): a run notes one send time, its end from
-/// the run: Answered when the child ran (whatever its status), TimedOut past
+/// the run: Answered when the child ran (whatever its status), `TimedOut` past
 /// the capability's timeout.
 #[tokio::test]
 async fn a_cli_run_notes_its_send_time() {

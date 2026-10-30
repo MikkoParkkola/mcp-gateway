@@ -52,7 +52,7 @@ async fn an_answered_http_send_notes_one_sample() {
     assert_eq!(notes.backend_sample(), Some((SEND, End::Answered)));
 }
 
-/// Row 25 (HTTP): a send past the client's timeout notes TimedOut, read from
+/// Row 25 (HTTP): a send past the client's timeout notes `TimedOut`, read from
 /// reqwest's own flag although the error is wrapped as `Transport`. A short
 /// client timeout keeps the real wait short; only the end is asserted.
 #[tokio::test]
