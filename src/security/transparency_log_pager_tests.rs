@@ -307,6 +307,10 @@ const READERS: &[(&str, &str)] = &[
     ),
     ("src/gateway/ui/activity/reader.rs", "Activity's pages"),
     (
+        "src/gateway/ui/decisions.rs",
+        "the decisions read model's retention edge",
+    ),
+    (
         "src/security/transparency_log_lease.rs",
         "names segments for the lease, opens none",
     ),
