@@ -10,10 +10,11 @@ use serde_json::Value;
 
 use super::Backend;
 use crate::failsafe::{RetryPolicy, with_retry_unless};
+use crate::gateway::meta_mcp::invoke::send_timer::SendTimer;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
-use crate::{Error, Result, gateway::meta_mcp::invoke::send_timer::SendTimer};
+use crate::{Error, Result};
 
 /// Which transport entry point one outbound request takes, and how many times.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -407,34 +408,14 @@ impl Backend {
         let identity_key = identity_key.map(str::to_string);
         let (perm, policy) = Self::resend_decision(&entry, method, params.as_ref());
         let send = |params: Option<Value>, extra_headers: Vec<(String, String)>| {
-            let transport = std::sync::Arc::clone(&transport);
-            let method = method.to_string();
-            let identity_key = identity_key.clone();
-            async move {
-                SendTimer::start_if(method == "tools/call").finish_with(match attempts {
-                    Attempts::WithRetry => {
-                        transport
-                            .request_with_headers(
-                                &method,
-                                params,
-                                &extra_headers,
-                                identity_key.as_deref(),
-                                perm,
-                            )
-                            .await
-                    }
-                    Attempts::TaskCapabilityOnce => {
-                        transport
-                            .request_with_task_capability(
-                                &method,
-                                params,
-                                &extra_headers,
-                                identity_key.as_deref(),
-                            )
-                            .await
-                    }
-                })
-            }
+            send::attempt(
+                std::sync::Arc::clone(&transport),
+                method.to_string(),
+                (params, extra_headers),
+                identity_key.clone(),
+                perm,
+                attempts,
+            )
         };
         // A call sent at most once (as `with_retry` sends under a disabled
         // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
@@ -801,3 +782,6 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 #[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;
+
+#[path = "ops_send.rs"]
+mod send;

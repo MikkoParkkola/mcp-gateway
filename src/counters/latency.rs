@@ -119,6 +119,12 @@ impl Sketch {
         self.p95_bin().map(bin_ms)
     }
 
+    /// A sketch holding exactly `bins` (ascending, non-zero), for the size rows.
+    #[cfg(test)]
+    pub(crate) fn from_bins(bins: Vec<(u8, u32)>) -> Self {
+        Self(bins)
+    }
+
     /// The bins, ascending.
     #[cfg(test)]
     pub(crate) fn bins(&self) -> &[(u8, u32)] {

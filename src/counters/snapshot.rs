@@ -236,3 +236,7 @@ pub(super) fn from_bytes<Tz: TimeZone>(
     let cut = a || b || c || d || subjects_cut || markers > MAX_MARKERS;
     Ok((inner, file.binary_version, cut))
 }
+
+#[cfg(test)]
+#[path = "latency_persist_tests.rs"]
+mod latency_persist_tests;
