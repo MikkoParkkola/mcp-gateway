@@ -52,10 +52,44 @@ const CSP = buildCsp();
 const ASSETS = parseAssets(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
 
+/** A q-value as tower-http parses it: "q=" then 0 or 1 with at most 3 decimals, else null. */
+function qvalue(param) {
+  const m = /^q=(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/i.exec(param);
+  return m ? Math.round(Number(m[1]) * 1000) : null;
+}
+
+/**
+ * Whether tower-http 0.7.1, built with gzip only, picks gzip for this Accept-Encoding
+ * (content_encoding.rs, preferred_encoding_with_wildcard). An entry with a bad q-value is
+ * dropped; "*" gives its q-value to gzip and identity when they are not listed; the highest
+ * q-value above 0 wins, and gzip wins a tie (it sorts after identity). compression.json's negotiation rows pin it.
+ */
+function acceptsGzip(header) {
+  const listed = [];
+  for (const part of (header ?? '').split(',')) {
+    const cut = part.indexOf(';');
+    const coding = (cut < 0 ? part : part.slice(0, cut)).trim();
+    const param = cut < 0 ? undefined : part.slice(cut + 1).trim();
+    if (!coding) continue;
+    const q = param === undefined ? 1000 : qvalue(param);
+    if (q !== null) listed.push([coding.toLowerCase(), q]);
+  }
+  const of = (names) => listed.filter(([c]) => names.includes(c)).map(([, q]) => q);
+  const wildcard = of(['*'])[0];
+  let gzip, identity;
+  if (wildcard === undefined) {
+    gzip = Math.max(-1, ...of(['gzip', 'x-gzip']));
+    identity = Math.max(-1, ...of(['identity']));
+  } else {
+    gzip = of(['gzip', 'x-gzip'])[0] ?? wildcard;
+    identity = of(['identity'])[0] ?? wildcard;
+  }
+  return gzip > 0 && gzip >= identity;
+}
+
 /** Whether the contract compresses this answer for this request. */
 function gzips(req, type, len) {
-  // ponytail: a plain token match ignores q=0; no test client sends it.
-  if (!/\bgzip\b/i.test(req.headers['accept-encoding'] ?? '')) return false;
+  if (!acceptsGzip(req.headers['accept-encoding'])) return false;
   const never = CONTRACT.never_prefixes.some((p) => type.startsWith(p)) && !CONTRACT.except_types.some((e) => type.startsWith(e));
   return len >= CONTRACT.min_bytes && !never;
 }

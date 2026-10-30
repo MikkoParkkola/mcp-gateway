@@ -17,10 +17,13 @@ The shell's frame stylesheet, src/gateway/ui/shell-src/frame.css, is not an
 asset: once its references are rewritten (and its line ends made LF), it is
 copied byte for byte into index.html's <style id="frame">, whose text the
 gateway's CSP allows by its hash. A document without that element is refused.
+src/gateway/ui/csp.golden, the policy the gateway must send, is then written
+from csp-base.txt with that hash, so a frame edit cannot leave it stale.
 
     python3 -I scripts/dev/rehash_ui_assets.py
 """
 
+import base64
 import hashlib
 import pathlib
 import re
@@ -30,6 +33,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 SHELL = ROOT / "src/gateway/ui/shell"
 SHELL_RS = ROOT / "src/gateway/ui/shell.rs"
 FRAME = ROOT / "src/gateway/ui/shell-src/frame.css"
+CSP_BASE = ROOT / "src/gateway/ui/csp-base.txt"
+CSP_GOLDEN = ROOT / "src/gateway/ui/csp.golden"
 FRAME_STYLE = re.compile(r'(<style id="frame">)(.*?)(</style>)', re.S)
 HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|json|woff2|svg|png)$")
 TABLE = re.compile(r"pub\(super\) const ASSETS: &\[\(&str, &\[u8\]\)\] = &\[.*?\];", re.S)
@@ -109,6 +114,14 @@ def inline_frame() -> None:
         document.write_text(updated)
 
 
+def write_golden() -> None:
+    """The policy for the inlined frame: csp-base.txt with the frame's hash source."""
+    frame = FRAME_STYLE.search((SHELL / "index.html").read_text())[2]
+    digest = base64.b64encode(hashlib.sha256(frame.encode()).digest()).decode()
+    policy = CSP_BASE.read_text().strip().replace("{frame}", f"'sha256-{digest}'")
+    CSP_GOLDEN.write_text(policy + "\n")
+
+
 def main() -> int:
     # Refused before anything moves: the frame has nowhere to go.
     if len(FRAME_STYLE.findall((SHELL / "index.html").read_text())) != 1:
@@ -122,6 +135,7 @@ def main() -> int:
             path.rename(path.with_name(name))
         rewrite_refs(m["stem"], m["ext"], name)
     inline_frame()
+    write_golden()
     # The order above makes this hold; checking it keeps a future mistake loud.
     stale = stale_names()
     if stale:

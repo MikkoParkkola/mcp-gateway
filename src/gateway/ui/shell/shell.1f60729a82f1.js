@@ -1876,10 +1876,10 @@ function boot() {
       const error = document.querySelector('.signin-error');
       signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
     });
+    // The other screens load after that, when the browser is idle, so the palette
+    // lists their actions and settings and a later visit is instant.
+    (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
   });
-  // The other screens load once the first paint is out, when the browser is idle,
-  // so the palette lists their actions and settings and a later visit is instant.
-  afterFirstPaint(() => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens));
 }
 
 /**
