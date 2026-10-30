@@ -41,6 +41,8 @@ pub(super) enum Reply {
     AfterEscape,
     /// A non-2xx JSON-RPC refusal whose message and data quote the secret.
     Refusal,
+    /// [`Reply::Refusal`] under a 503: transient, so the call is retried.
+    RetryableRefusal,
     /// The value of the `X-Api-Key` header the call arrived with, in the
     /// result.
     EchoHeader,
@@ -127,8 +129,12 @@ pub(super) async fn echo_server(calls: Calls, reply: Reply) -> String {
                             "content": [{"type": "text", "text": "plain words, a/b c-d_e"}],
                             "structuredContent": {"keep me": "unchanged: x=1; y=2", "k": key}
                         })),
-                        Reply::Refusal => (
-                            axum::http::StatusCode::BAD_REQUEST,
+                        Reply::Refusal | Reply::RetryableRefusal => (
+                            if matches!(reply, Reply::Refusal) {
+                                axum::http::StatusCode::BAD_REQUEST
+                            } else {
+                                axum::http::StatusCode::SERVICE_UNAVAILABLE
+                            },
                             axum::Json(json!({"jsonrpc": "2.0", "id": id, "error": {
                                 "code": -32602,
                                 "message": format!("bad api_key {key}"),
@@ -305,6 +311,47 @@ async fn a_refusal_quoting_the_secret_reaches_the_client_redacted() {
         "the refusal carried the secret to the client: {body}"
     );
     assert!(body.to_string().contains(MARKER), "not redacted: {body}");
+}
+
+/// T1.22: a transient refusal quoting the secret is retried, and neither the
+/// retry log nor the client's answer holds the secret: the scrub runs inside
+/// the attempt, before the retry layer sees its error.
+#[test]
+fn a_retried_refusal_quoting_the_secret_leaves_no_trace_in_the_retry_log() {
+    let mut body = Value::Null;
+    let mut attempts = 0;
+    let logged = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (router, calls, _store) = fixture(Reply::RetryableRefusal).await;
+                body = post(
+                    &router,
+                    json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                        "name": "gateway_invoke",
+                        "arguments": {"server": "echoes", "tool": "echo", "arguments": {"q": "hi"}}
+                    }}),
+                )
+                .await;
+                attempts = calls.lock().len();
+            });
+    });
+    let logs = serde_json::to_string(&logged).expect("records serialise");
+    assert!(
+        attempts > 1,
+        "premise: the refusal was retried ({attempts} attempts)"
+    );
+    assert!(
+        logs.contains("Retrying after backoff"),
+        "premise: the retry was logged"
+    );
+    assert!(!logs.contains(SECRET), "the retry log holds the secret");
+    assert!(
+        !body.to_string().contains(SECRET),
+        "the client got the secret: {body}"
+    );
 }
 
 /// One `echo` call on the per-backend route `/mcp/echoes`, as a modern
