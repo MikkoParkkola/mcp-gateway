@@ -45,12 +45,15 @@ impl Reply {
     }
 }
 
+/// The forms a token endpoint double received.
+pub(super) type Forms = Arc<std::sync::Mutex<Vec<std::collections::HashMap<String, String>>>>;
+
 pub(super) struct Gw {
     pub state: Arc<AppState>,
     pub backend: Arc<Backend>,
     pub issuer: String,
     pub store: tempfile::TempDir,
-    pub forms: Arc<std::sync::Mutex<Vec<std::collections::HashMap<String, String>>>>,
+    pub forms: Forms,
     _fixture: FixtureDir,
 }
 
@@ -88,6 +91,12 @@ impl Gw {
     /// A gateway whose backend `BACKEND` signs in at a token endpoint that
     /// answers `access-a`.
     pub(super) async fn new() -> Self {
+        let (issuer, forms) = token_endpoint(Some("access-a")).await;
+        Self::over(issuer, forms).await
+    }
+
+    /// As [`Gw::new`], over the token endpoint at `issuer`.
+    pub(super) async fn over(issuer: String, forms: Forms) -> Self {
         let auth = AuthConfig {
             enabled: true,
             api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -96,7 +105,6 @@ impl Gw {
         let (state, fixture) =
             crate::gateway::router::tests::audience_state(&auth, (None, None), |m| m).await;
         let store = tempfile::tempdir().expect("token store");
-        let (issuer, forms) = token_endpoint(Some("access-a")).await;
         let config = BackendConfig {
             oauth: Some(oauth_block()),
             ..BackendConfig::default()

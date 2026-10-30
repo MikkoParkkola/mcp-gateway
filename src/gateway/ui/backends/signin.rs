@@ -65,3 +65,6 @@ mod fixture;
 #[cfg(test)]
 #[path = "signin_tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "signin_timing_tests.rs"]
+mod timing_tests;
