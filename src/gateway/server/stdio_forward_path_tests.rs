@@ -17,6 +17,10 @@ fn plain_reads() -> crate::gateway::outbound::StdioReads {
     )
 }
 
+/// How long a row waits for a frame before failing by name: the test holds
+/// the queue's sender, so a withheld frame would otherwise wait forever.
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
+
 fn progress(token: &str) -> JsonRpcNotification {
     JsonRpcNotification {
         jsonrpc: "2.0".to_string(),
@@ -55,9 +59,9 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
         .0
     });
 
-    let first = queue
-        .recv()
+    let first = tokio::time::timeout(HANG_GUARD, queue.recv())
         .await
+        .expect("the progress notification never reached the writer queue")
         .expect("nothing was queued")
         .stdio_value()
         .map(std::borrow::Cow::into_owned)
@@ -105,9 +109,9 @@ async fn a_late_notification_is_drained_before_the_response() {
         None,
     )
     .await;
-    let late = queue
-        .recv()
+    let late = tokio::time::timeout(HANG_GUARD, queue.recv())
         .await
+        .expect("the late gw-late notification never reached the writer queue")
         .expect("the late notification was dropped")
         .stdio_value()
         .map(std::borrow::Cow::into_owned)

@@ -582,7 +582,7 @@ async fn ws_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
         None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
-    tokio::time::timeout(WAIT, call)
+    tokio::time::timeout(std::time::Duration::from_secs(30), call)
         .await
         .expect("the call must not hang")
         .expect("the call must succeed");
