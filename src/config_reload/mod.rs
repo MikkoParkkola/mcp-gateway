@@ -789,6 +789,8 @@ mod pattern_grammar_reload_tests;
 mod principal_collision_tests;
 #[cfg(test)]
 mod reload_load_tests;
+#[cfg(test)]
+mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod tests;

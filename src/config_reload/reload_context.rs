@@ -403,6 +403,30 @@ impl ReloadContext {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
 
+    /// The capabilities section applies only at restart, so the attached
+    /// capability backend keeps its name through a reload that renames it. A
+    /// backend registered under that name would be judged as itself and
+    /// answered by the capability; load refuses the pair, and so does this.
+    fn refuse_capability_name_clash(&self, patch: &ConfigPatch) -> std::result::Result<(), String> {
+        let Some(cap) = self.capabilities.as_ref() else {
+            return Ok(());
+        };
+        let Some((name, _)) = patch
+            .backends_added
+            .iter()
+            .chain(&patch.backends_modified)
+            .find(|(name, _)| *name == cap.name)
+        else {
+            return Ok(());
+        };
+        Err(format!(
+            "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
+             backend, and a capabilities.name change applies only at restart. Restart first, \
+             or rename the backend. No backend was started or stopped, and no configuration \
+             was published."
+        ))
+    }
+
     /// Reload the config file and return a structured outcome for callers/UI.
     ///
     /// # Errors
@@ -498,6 +522,93 @@ impl ReloadContext {
         Ok(outcome)
     }
 
+    /// The refusals a reload answers before `apply_patch` stops or starts any
+    /// backend: each says nothing was started, stopped or published.
+    fn refuse_before_apply(
+        &self,
+        new_config: &Config,
+        patch: &ConfigPatch,
+    ) -> std::result::Result<(), String> {
+        // Before `apply_patch`, which stops and starts backends: a refusal that
+        // ran after it could not say nothing was applied. And before the
+        // publish, which is what the origin gate would re-read.
+        if let Some(refusal) =
+            crate::gateway::reload_posture_refusal(self.live_config.running(), new_config)
+        {
+            // What a restart does with this same file is the operator's next
+            // decision, and it differs. A file that also enables authentication
+            // is right on a restart and only wrong to apply live; a file that
+            // just declares the name refuses at the next start, planned or not.
+            let restart = if refusal.restart_would_also_refuse {
+                "This configuration is on disk, so the next start, including an \
+                 unplanned one, will refuse to serve. Revert it, or close the \
+                 tool paths."
+            } else {
+                // "accepts", not "is safe". The one file that reaches this
+                // branch while still leaving the tools open is the one that
+                // sets the escape hatch, and calling that safe would have the
+                // gateway endorse a choice the operator made deliberately and
+                // owns.
+                // "would not refuse it for this reason", not "accepts it".
+                // `network_bind_refusal` is the only question asked here; a
+                // restart still reads the whole file and can fail on a missing
+                // env: reference, an unreadable certificate, or anything else
+                // validation catches. Promising acceptance is how an operator
+                // restarts a working gateway into a different outage — the same
+                // overclaiming that cost this message three earlier rewrites.
+                "A restart would not refuse it for this reason, and applies the \
+                 parts a reload cannot."
+            };
+            // Two bounded facts, and no summary of "what is still in force".
+            //
+            // The clause that kept being wrong went out with its cause. Env
+            // files once reached the PROCESS environment inside `Config::load`
+            // before it returned, so a refused candidate had already mutated
+            // the process that refused it — that is the defect MIK-7256 names,
+            // and it is closed: the candidate's env files build an `EnvOverlay`
+            // that is published only on success (`self.env.set(overlay)`, below
+            // and unreachable from this path), the overlay parses in memory
+            // (`dotenvy::from_read_iter`, `src/config/env_overlay.rs:362`)
+            // rather than through `dotenvy::dotenv`, and `rg set_var src/` is
+            // empty.
+            //
+            // Say that, not "impossible". `#![deny(unsafe_code)]` is not
+            // `forbid`, an `#[allow]` overrides it, and neither binds a
+            // dependency. What holds this closed is the ABSENT call site plus
+            // the parse path — a switch to `dotenvy::from_path` would reopen
+            // it, and that is the line to watch.
+            //
+            // The summary is still not written, for a different reason: this
+            // check asks `network_bind_refusal` and nothing else, while a
+            // restart reads the whole file. Claiming more than the two facts
+            // below is how a security message starts the next report.
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
+                 and no configuration was published. {restart}",
+                refusal.reason
+            ));
+        }
+
+        // A changed account binding cannot reuse the credentials minted under
+        // the descriptor it replaces: the descriptor's authority, resource,
+        // issuer, client id and requested scopes define the account key and the
+        // descriptor revision every existing lease carries. Eager replacement
+        // of those is not implemented in this slice, so this refuses and
+        // mutates nothing rather than pretending a live replacement happened.
+        // Compared against what is RUNNING, so it stays true until a restart.
+        if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
+            self.live_config.running(),
+            new_config,
+        ) {
+            return Err(format!(
+                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+                 configuration was published."
+            ));
+        }
+
+        self.refuse_capability_name_clash(patch)
+    }
+
     /// A refusal when `evaluated` changes a security field only a restart
     /// applies: message signing, the signature chain or the record key.
     fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
@@ -568,83 +679,7 @@ impl ReloadContext {
             ));
         }
 
-        // Before `apply_patch`, which stops and starts backends: a refusal that
-        // ran after it could not say nothing was applied. And before the
-        // publish, which is what the origin gate would re-read.
-        if let Some(refusal) =
-            crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
-        {
-            // What a restart does with this same file is the operator's next
-            // decision, and it differs. A file that also enables authentication
-            // is right on a restart and only wrong to apply live; a file that
-            // just declares the name refuses at the next start, planned or not.
-            let restart = if refusal.restart_would_also_refuse {
-                "This configuration is on disk, so the next start, including an \
-                 unplanned one, will refuse to serve. Revert it, or close the \
-                 tool paths."
-            } else {
-                // "accepts", not "is safe". The one file that reaches this
-                // branch while still leaving the tools open is the one that
-                // sets the escape hatch, and calling that safe would have the
-                // gateway endorse a choice the operator made deliberately and
-                // owns.
-                // "would not refuse it for this reason", not "accepts it".
-                // `network_bind_refusal` is the only question asked here; a
-                // restart still reads the whole file and can fail on a missing
-                // env: reference, an unreadable certificate, or anything else
-                // validation catches. Promising acceptance is how an operator
-                // restarts a working gateway into a different outage — the same
-                // overclaiming that cost this message three earlier rewrites.
-                "A restart would not refuse it for this reason, and applies the \
-                 parts a reload cannot."
-            };
-            // Two bounded facts, and no summary of "what is still in force".
-            //
-            // The clause that kept being wrong went out with its cause. Env
-            // files once reached the PROCESS environment inside `Config::load`
-            // before it returned, so a refused candidate had already mutated
-            // the process that refused it — that is the defect MIK-7256 names,
-            // and it is closed: the candidate's env files build an `EnvOverlay`
-            // that is published only on success (`self.env.set(overlay)`, below
-            // and unreachable from this path), the overlay parses in memory
-            // (`dotenvy::from_read_iter`, `src/config/env_overlay.rs:362`)
-            // rather than through `dotenvy::dotenv`, and `rg set_var src/` is
-            // empty.
-            //
-            // Say that, not "impossible". `#![deny(unsafe_code)]` is not
-            // `forbid`, an `#[allow]` overrides it, and neither binds a
-            // dependency. What holds this closed is the ABSENT call site plus
-            // the parse path — a switch to `dotenvy::from_path` would reopen
-            // it, and that is the line to watch.
-            //
-            // The summary is still not written, for a different reason: this
-            // check asks `network_bind_refusal` and nothing else, while a
-            // restart reads the whole file. Claiming more than the two facts
-            // below is how a security message starts the next report.
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {} No backend was started or stopped, \
-                 and no configuration was published. {restart}",
-                refusal.reason
-            ));
-        }
-
-        // A changed account binding cannot reuse the credentials minted under
-        // the descriptor it replaces: the descriptor's authority, resource,
-        // issuer, client id and requested scopes define the account key and the
-        // descriptor revision every existing lease carries. Eager replacement
-        // of those is not implemented in this slice, so this refuses and
-        // mutates nothing rather than pretending a live replacement happened.
-        // Compared against what is RUNNING, so it stays true until a restart.
-        if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
-            self.live_config.running(),
-            &new_config,
-        ) {
-            return Err(format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            ));
-        }
-
+        self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
         let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {

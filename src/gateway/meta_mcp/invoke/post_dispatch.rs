@@ -99,6 +99,13 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
+        // Every failure of a sent call: a web UI call answers "may have run",
+        // unless the backend cannot have acted.
+        #[cfg(feature = "webui")]
+        crate::gateway::ui_call::note_send_error(matches!(
+            e,
+            Error::BackendNotFound(_) | Error::ToolNotFound(_)
+        ));
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
         // returned as the refusal it is) or tells the caller whether a
