@@ -23,6 +23,12 @@
 //! reach follows callee names within one tree, to every function of that
 //! name, and never into macros or across trees; a `via` hop is named, not
 //! proven. The behaviour rows stay the primary proof.
+//!
+//! Each parse's error must go through a [`SAFE_ERRORS`] helper or be
+//! dropped unread; a raw one (a bare `?`) is listed in [`RAW_ERRORS`] with
+//! why it cannot quote a value. Limits: a closure that calls a helper and
+//! also formats the error itself passes, and a parse whose result is bound
+//! first and handled later counts as raw.
 
 use std::collections::{BTreeMap, BTreeSet};
 
