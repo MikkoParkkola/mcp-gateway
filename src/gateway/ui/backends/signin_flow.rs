@@ -125,6 +125,7 @@ pub(super) async fn start(
         wait_generation: 0,
         caller,
         ended: Arc::clone(&ended),
+        cancel: lead.cancel_token().clone(),
         client: Arc::clone(&client),
     };
     let expires_at = flow.until_at;
@@ -250,6 +251,12 @@ impl Run {
 
     /// Keep the grant until a decision takes it or the window ends.
     async fn hold(&self, lead: Lead, grant: crate::oauth::client::sign_in::PendingGrant) {
+        // Re-checked under the flow lock after the exchange: a cancel that won
+        // while the code was being redeemed took the flow out (and cancelled
+        // the login, `grants.rs` `issue_token`'s biased cancel arm, so the
+        // exchange normally never returns), and a later attempt's flow has
+        // another id. Either way the grant is dropped and wiped here, never
+        // stored on a flow that is not this attempt's.
         let until = self.backend.with_flow(|slot| {
             let flow = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id)?;
             flow.grant = Some(grant);
@@ -383,6 +390,25 @@ fn take_for(backend: &Backend, owner: &str, attempt: &str) -> std::result::Resul
     })
 }
 
+/// End the sign-in `owner` started as `attempt`, in any phase: discard what it
+/// holds, cancel the login so its callback listener closes and a late callback
+/// reaches no exchange, and hand the gate back.
+async fn cancel_flow(backend: &Backend, owner: &str, attempt: &str) -> Decided {
+    use crate::gateway::record_principal::same_owner;
+    let ended = backend.with_flow(|slot| {
+        let theirs = slot
+            .as_ref()
+            .is_some_and(|f| same_owner(&f.owner, owner) && same_owner(&f.attempt_id, attempt));
+        if theirs { slot.take() } else { None }
+    });
+    let Some(flow) = ended else {
+        return Decided::NoSignIn;
+    };
+    flow.cancel.cancel();
+    release(backend, &flow.ended).await;
+    Decided::Done
+}
+
 /// Confirm or cancel the sign-in `owner` started as `attempt`.
 pub(super) async fn decide(
     state: &AppState,
@@ -391,6 +417,9 @@ pub(super) async fn decide(
     attempt: &str,
     decision: Decision,
 ) -> Decided {
+    if decision == Decision::Cancel {
+        return cancel_flow(backend, owner, attempt).await;
+    }
     let taken = match take_for(backend, owner, attempt) {
         Ok(taken) => taken,
         Err(refused) => return refused,
@@ -403,11 +432,6 @@ pub(super) async fn decide(
         client,
         caller,
     } = taken;
-    if decision == Decision::Cancel {
-        drop(grant);
-        release(backend, &ended).await;
-        return Decided::Done;
-    }
     let cancel = tokio_util::sync::CancellationToken::new();
     let by = Instant::now() + backend.sign_in_windows().confirm;
     let saved = client.save_confirmed(grant, held_for, &cancel, by).await;

@@ -72,6 +72,9 @@ pub(crate) struct Flow {
     pub(crate) caller: Option<AuthenticatedClient>,
     /// Woken when a decision has ended the flow, so its task lets go.
     pub(crate) ended: Arc<Notify>,
+    /// Ends the login itself: cancelling it closes the callback listener and
+    /// stops any exchange, so a callback that comes late reaches nothing.
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
     /// The client the login ran on, which saves the grant on a confirm.
     pub(crate) client: Arc<crate::oauth::OAuthClient>,
 }

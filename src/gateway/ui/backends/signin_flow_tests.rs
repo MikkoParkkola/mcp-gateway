@@ -41,6 +41,7 @@ fn seeded_flow(client: &Arc<crate::oauth::OAuthClient>) -> Flow {
         wait_generation: 0,
         caller: None,
         ended: Arc::new(tokio::sync::Notify::new()),
+        cancel: tokio_util::sync::CancellationToken::new(),
         client: Arc::clone(client),
     }
 }
