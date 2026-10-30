@@ -243,12 +243,20 @@ async fn caped11_a_refused_record_withholds_the_answer() {
     let before = capability(CANARY_BEFORE);
     let after = capability(CANARY_AFTER);
     let fx = fixture(&before, AuditFailurePolicy::FailClosed).await;
+    // Fail the next append without priming it: the log is still healthy when
+    // the request is admitted, so the save commits and only its record is
+    // refused. A primed, degraded log would refuse the request before the
+    // handler, which says nothing about the record.
     fx.log.set_append_failure_for_test(true);
-    assert!(fx.log.probe().is_err(), "the priming append fails");
     let base = sha256_hex(before.as_bytes());
     let (status, body) = fx
         .send(request("PUT", "/ui/api/capabilities/kept", &base, &after))
         .await;
+    assert_eq!(
+        std::fs::read_to_string(&fx.file).expect("the file"),
+        after,
+        "the handler ran and the save committed before the record was refused"
+    );
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     let answer: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     for key in ["status", "name", "sha256"] {
