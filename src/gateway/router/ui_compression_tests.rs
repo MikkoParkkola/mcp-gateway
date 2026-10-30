@@ -393,12 +393,20 @@ async fn z3_the_gateway_rule_is_the_contract() {
 async fn z4_accept_encoding_negotiation_matches_the_contract_rows() {
     let v: serde_json::Value = serde_json::from_str(CONTRACT).expect("compression.json parses");
     let rows = v["negotiation"].as_array().expect("negotiation rows");
-    assert!(rows.len() >= 10, "the negotiation rows cover the q-value cases");
+    assert!(
+        rows.len() >= 10,
+        "the negotiation rows cover the q-value cases"
+    );
     let (state, _dir) = fixture().await;
     for row in rows {
         let accept = row["accept_encoding"].as_str().expect("a header value");
         let want = row["gzip"].as_bool().expect("a yes or no");
-        let reply = send(&state, "/ui/overview/status", &[("accept-encoding", accept)]).await;
+        let reply = send(
+            &state,
+            "/ui/overview/status",
+            &[("accept-encoding", accept)],
+        )
+        .await;
         assert_eq!(reply.status, StatusCode::OK, "{accept}");
         assert_eq!(
             reply.header(&header::CONTENT_ENCODING) == Some("gzip"),
