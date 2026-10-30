@@ -391,3 +391,7 @@ mod withheld_tests;
 #[cfg(test)]
 #[path = "delivery_facts_composite_tests.rs"]
 mod composite_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_send_tests.rs"]
+mod send_tests;
