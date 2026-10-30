@@ -128,6 +128,10 @@ impl Backend {
     /// snapshot, with no storage read, refresh or network call.
     // Skeleton value: wrong for every backend on purpose.
     #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
+    #[expect(
+        clippy::unused_self,
+        reason = "skeleton: a fixed answer until the status cell is read"
+    )]
     pub(crate) fn sign_in(&self) -> crate::oauth::client::sign_in::SignIn {
         crate::oauth::client::sign_in::SignIn::WaitingElsewhere
     }
@@ -136,6 +140,10 @@ impl Backend {
     /// predicate is evaluated; the server row and the overview both call it.
     // Skeleton value: wrong for every backend on purpose.
     #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
+    #[expect(
+        clippy::unused_self,
+        reason = "skeleton: a fixed answer until the predicate is read"
+    )]
     pub(crate) fn needs_sign_in(&self) -> bool {
         false
     }
