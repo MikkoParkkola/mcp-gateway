@@ -66,6 +66,20 @@ async fn peer() -> (String, Log) {
                     if method == "resources/unsubscribe" {
                         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                     }
+                    // A subscribe to an `echo` URI: a change notice for it and
+                    // a refusal quoting it, both on the stream (MIK-9035).
+                    let uri = frame["params"]["uri"].as_str().unwrap_or_default().to_owned();
+                    if method == "resources/subscribe" && uri.contains("echo") {
+                        let notice = json!({"jsonrpc": "2.0",
+                            "method": "notifications/resources/updated", "params": {"uri": uri}});
+                        let refusal = json!({"jsonrpc": "2.0", "id": frame["id"],
+                            "error": {"code": -32602, "message": format!("bad uri {uri}")}});
+                        if let Some(tx) = stream.lock().expect("stream").as_ref() {
+                            let _ = tx.send(notice.to_string());
+                            let _ = tx.send(refusal.to_string());
+                        }
+                        return StatusCode::ACCEPTED.into_response();
+                    }
                     if let Some(id) = frame.get("id") {
                         let answer = json!({"jsonrpc": "2.0", "id": id, "result": {}});
                         if let Some(tx) = stream.lock().expect("stream").as_ref() {
@@ -251,5 +265,50 @@ async fn a_refused_listener_request_names_the_status() {
     assert!(
         refused.to_string().contains("returned HTTP 500"),
         "names the status: {refused}"
+    );
+}
+
+/// MIK-9035: on a legacy listener session, a change notice and a refusal
+/// that echo an injected value both arrive scrubbed: neither passes
+/// `read_answer`, so the session scrubs them itself.
+#[tokio::test]
+async fn a_legacy_listener_scrubs_its_notices_and_answers() {
+    const NEEDLE: &str = "legacy-listen-secret-08aa";
+    let (url, _log) = peer().await;
+    let (transport, session) = session(&url, None);
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    transport.attach_needles(Arc::new(needles));
+    let mut stream = Arc::clone(&session)
+        .unsolicited(Watched::default())
+        .await
+        .map_err(|_| "refused")
+        .expect("handshake");
+    let answer = Arc::clone(&session)
+        .legacy_interest(
+            LegacyPin::default(),
+            &format!("file:///echo?k={NEEDLE}"),
+            true,
+        )
+        .await
+        .expect("the refusal arrives on the stream");
+    let refusal = format!("{:?}", answer.error);
+    assert!(
+        refusal.contains("bad uri"),
+        "premise: the refusal: {refusal}"
+    );
+    assert!(
+        !refusal.contains(NEEDLE),
+        "the refusal carried the value: {refusal}"
+    );
+    let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+        .await
+        .expect("the notice arrives")
+        .expect("a note");
+    let text = format!("{note:?}");
+    assert!(text.contains("file:///echo"), "premise: the notice: {text}");
+    assert!(
+        !text.contains(NEEDLE),
+        "the notice carried the value: {text}"
     );
 }

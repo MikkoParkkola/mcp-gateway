@@ -365,7 +365,7 @@ async fn next_events(
 /// `note` with the injected values removed from its URIs; `None` when it
 /// must not be handed on (the value set overflowed). The note is projected
 /// from the frame as sent, so its listen tag routed it first (DELTA-5).
-fn scrubbed(
+pub(super) fn scrubbed(
     needles: Option<&crate::security::needles::NeedleSet>,
     mut note: UpstreamNote,
 ) -> Option<UpstreamNote> {

@@ -110,10 +110,26 @@ impl SseListenSession {
             .ok_or_else(|| Error::Transport("listener SSE stream ended".to_owned()))
     }
 
+    /// [`Self::request_unscrubbed`], its answer and error scrubbed of the
+    /// backend's injected values: this path does not pass `read_answer`
+    /// (MIK-9035).
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        let needles = self.transport().ok().and_then(|t| t.needles.get().cloned());
+        let answer = self.request_unscrubbed(method, params).await;
+        match needles {
+            Some(needles) => crate::security::needles::scrub_answer(&needles, answer),
+            None => answer,
+        }
+    }
+
     /// One request on this session: its place on the stream first, then the
     /// POST; the answer from the body, or from the stream when the body is
     /// empty.
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+    async fn request_unscrubbed(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<JsonRpcResponse> {
         let t = self.transport()?;
         let channel = self.channel()?;
         let request = JsonRpcRequest {
@@ -197,9 +213,15 @@ impl SseListenSession {
             _ => {}
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
+        // Watched on the note as sent, then scrubbed (DELTA-5, MIK-9035).
+        let needles = t.needles.get().cloned();
         let sink = Sink {
             tx,
-            map: Box::new(move |data| unsolicited_frame(data).filter(|note| watched.admits(note))),
+            map: Box::new(move |data| {
+                unsolicited_frame(data)
+                    .filter(|note| watched.admits(note))
+                    .and_then(|note| super::listen::scrubbed(needles.as_deref(), note))
+            }),
         };
         let channel = SseChannel::open(
             response,
