@@ -49,6 +49,16 @@ impl OAuthClient {
 
     /// Perform the authorization flow
     ///
+    /// This is ungated: it never takes the backend's login gate. Its only
+    /// production caller is the gate-less fallback of
+    /// [`authorize_shared_with`](Self::authorize_shared_with) (below), taken
+    /// only when the client has no gate. Every serving client carries the
+    /// backend's shared gate (`src/backend/oauth_client.rs`, where the client
+    /// is built `with_login_gate`), and the HTTP transport keeps an existing
+    /// gate (`src/transport/http/mod.rs`), so in a serving gateway that
+    /// fallback is unreachable. Tests that mean to hold the gate call
+    /// [`authorize_shared`](Self::authorize_shared).
+    ///
     /// # Errors
     ///
     /// Returns an error if any step of the OAuth authorization flow fails
