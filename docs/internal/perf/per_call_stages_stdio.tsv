@@ -401,24 +401,24 @@ src/gateway/server/warmstart.rs	apply	-	hot-reload registration warming, off the
 src/gateway/server/warmstart.rs	build_warm_start_list	-	startup warm-start, before serving
 src/gateway/server/warmstart.rs	cancel	-	warm-start guard teardown (shutdown or reload), off the request path
 src/gateway/server/warmstart.rs	closed	-	hot-reload registration warming, off the request path
-src/gateway/server/warmstart.rs	default	-	warm-start retry policy default, read at startup
-src/gateway/server/warmstart.rs	dormant_action	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	drop	-	warm-start guards dropped at shutdown or reload
-src/gateway/server/warmstart.rs	effective_attempt_timeout	-	startup warm-start retry loop, off the request path
-src/gateway/server/warmstart.rs	gap_before_attempt	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	hook	-	hot-reload registration warming hook, off the request path
-src/gateway/server/warmstart.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
-src/gateway/server/warmstart.rs	is_transient_io	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	lock	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	new	-	hot-reload warmer registration, off the request path
 src/gateway/server/warmstart.rs	resolve_warm_start_names	-	startup warm-start, before serving
-src/gateway/server/warmstart.rs	retry_warm_start_attempts	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	seal_and_abort	-	hot-reload registration warming teardown, off the request path
 src/gateway/server/warmstart.rs	spawn	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	warm	-	hot-reload registration warming (tools/list on (re)registration), off the request path
 src/gateway/server/warmstart.rs	warm_locked	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	warm_start_prefetches_tools	-	startup warm-start (tools/list prefetch), before serving
 src/gateway/server/warmstart.rs	warm_start_until_cached	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	default	-	warm-start retry policy default, read at startup
+src/gateway/server/warmstart/retry.rs	dormant_action	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	effective_attempt_timeout	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	gap_before_attempt	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	is_transient_io	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	retry_warm_start_attempts	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart/tests.rs	a_backend_that_becomes_reachable_later_is_still_cached	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_backend_that_really_has_no_tools_is_accepted	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_dormant_backend_whose_cache_was_filled_elsewhere_finishes	-	test-only (the module is cfg(test))

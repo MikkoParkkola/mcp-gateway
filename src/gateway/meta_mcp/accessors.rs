@@ -121,3 +121,22 @@ impl MetaMcp {
         self.profile_registry.get_shared(&name)
     }
 }
+
+#[cfg(feature = "webui")]
+impl MetaMcp {
+    /// Attach the decision set. Called once by the HTTP server; a second call
+    /// is ignored.
+    pub(crate) fn set_decisions(&self, decisions: Arc<crate::decisions::Shared>) {
+        let _ = self.decisions.set(decisions);
+    }
+
+    /// The decision set, when the server attached one.
+    pub(crate) fn decisions(&self) -> Option<&Arc<crate::decisions::Shared>> {
+        self.decisions.get()
+    }
+
+    /// Every live grant row, copied: what the decision set closes against.
+    pub(crate) fn grant_rows(&self) -> Vec<crate::identity_grants::IdentityGrant> {
+        self.identity_grants.read().values().cloned().collect()
+    }
+}
