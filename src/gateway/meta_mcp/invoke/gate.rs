@@ -258,7 +258,13 @@ impl MetaMcp {
     ) -> Shared {
         // Under `off` no call lists the catalogue: judged from what is held.
         let verdict = if backend.checks_membership() {
-            backend.catalogue_verdict(None, headers, tool).await
+            backend
+                .catalogue_verdict(
+                    None,
+                    crate::transport::LentCredential::unchecked(headers),
+                    tool,
+                )
+                .await
         } else {
             Ok(backend.held_verdict(None, tool))
         };
@@ -712,7 +718,7 @@ impl MetaMcp {
                 tool,
                 // Never read: the gate checks only names the list lacks.
                 &Value::Null,
-                (None, headers),
+                (None, crate::transport::LentCredential::unchecked(headers)),
                 (scope, session_id),
                 lens,
             )

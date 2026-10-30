@@ -123,7 +123,7 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) caller_proof: CallerProof<'a>,
     /// Names an MCP child when nothing else does (MIK-7825).
     pub(super) credential_owner: Option<&'a str>,
-    pub(super) headers: &'a [(String, String)],
+    pub(super) headers: &'a crate::transport::LentCredential,
     pub(super) cache_binding: Option<&'a str>,
     pub(super) account_credential: super::propagation::DispatchAccount,
     pub(super) api_key_name: Option<&'a str>,
@@ -176,6 +176,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         let targets = [crate::security::response_policy::ResponsePolicyTarget {
             server: self.server.to_owned(),
             tool: self.tool.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = crate::security::response_policy::ResponseCorrelation {
             session_id: self.session_id.unwrap_or_default(),
@@ -184,6 +185,8 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
             subject: None,
             trace_id: None,
+            // The caller is known here: its proven API key, or none.
+            key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
@@ -253,7 +256,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.tool,
             self.arguments,
             self.cache_binding,
-            self.headers,
+            self.headers.clone(),
             (self.scope, self.session_id),
         );
         let refusal = match refusal.await {

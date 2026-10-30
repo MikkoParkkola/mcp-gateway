@@ -103,7 +103,15 @@ fn backend(pages: Vec<Page>) -> (Arc<Backend>, Arc<Wire>) {
 }
 
 async fn drain(backend: &Backend) -> crate::Result<JsonRpcResponse> {
-    super::drain(backend, &RequestId::Number(1), None, &[], None, "ledger").await
+    super::drain(
+        backend,
+        &RequestId::Number(1),
+        None,
+        crate::transport::LentCredential::default(),
+        None,
+        "ledger",
+    )
+    .await
 }
 
 fn assert_revoked_and_nothing_stored(backend: &Backend) {

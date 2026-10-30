@@ -60,6 +60,9 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
                 action: crate::security::firewall::FirewallAction::Warn,
                 reason: None,
                 scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
             }];
         })
     });
