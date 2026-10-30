@@ -144,15 +144,20 @@ fn classify(
         .capabilities
         .as_ref()
         .is_some_and(|slot| slot.read().as_ref().is_some_and(|caps| caps.name == server));
-    if capability && backends.get(server).is_none() {
+    // One live read per call. `Registry` is the gateway's own type, out of
+    // this module's reach, so the read takes the ban's leaf allow.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Discovery: the folder check classifies the backend a call is sent to, for any caller"
+    )]
+    let registered = backends.get(server);
+    if capability && registered.is_none() {
         return Err(RootReason::CapabilityNotCheckable);
     }
-    let live;
-    let instance = if let Some(instance) = sending {
-        instance
-    } else {
-        live = backends.get(server).ok_or(RootReason::UnknownBackend)?;
-        &*live
+    let instance = match (sending, registered.as_deref()) {
+        (Some(instance), _) => instance,
+        (None, Some(live)) => live,
+        (None, None) => return Err(RootReason::UnknownBackend),
     };
     if !instance.is_local_process() {
         return Err(RootReason::RemoteBackend);

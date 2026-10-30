@@ -98,3 +98,5 @@ Each value must be an absolute native path with no `.` or `..` segment. The gate
 | `directory_too_large` | A folder on the path holds more than 10,000 entries. |
 | `timeout` | Resolving the call took longer than 2 seconds. |
 | `resolver_busy` | Every resolver thread is busy with another call. |
+
+A name that is both a configured backend and the capability backend is not a folder-rule refusal: the gateway refuses every `gateway_invoke` call to it before dispatch, with error `-32001` and data reason `ambiguous_backend`, and refuses a reload that would create the clash. Under a covering rule, an outside path may be refused earlier, as `path_outside_root`.

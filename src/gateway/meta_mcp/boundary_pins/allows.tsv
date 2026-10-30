@@ -73,3 +73,4 @@ src/home_dir.rs	-	item	the one place the platform lookups are called
 src/gateway/ui/overview.rs	backends_by_name	statement	Admin	allx1
 src/config_reload/override_audit.rs	drain	statement	Lifecycle	lock_reloadx1
 src/config_reload/override_audit.rs	in_effect	statement	Lifecycle	allx1
+src/security/firewall/allowed_root_check.rs	classify	statement	Discovery	getx1

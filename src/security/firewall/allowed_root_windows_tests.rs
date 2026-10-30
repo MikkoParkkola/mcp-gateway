@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Windows rows: the resolve and compare halves of the W table on a real
-//! TempDir, and the verbatim UNC comparison through the resolver seam (W5b,
+//! `TempDir`, and the verbatim UNC comparison through the resolver seam (W5b,
 //! W10, W11, W14, R14). Run in Windows CI. Batch 4c.
 
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use super::super::*;
 use super::seam::{forced, real, seamed};
 use super::tree::{Fx, Seen, both, root_rule};
 
-/// W10, W11: the TempDir inside path spelt with backslashes, forward
+/// W10, W11: the `TempDir` inside path spelt with backslashes, forward
 /// slashes, a verbatim prefix and changed case is allowed; each spelling's
 /// outside twin gives the root finding.
 #[test]

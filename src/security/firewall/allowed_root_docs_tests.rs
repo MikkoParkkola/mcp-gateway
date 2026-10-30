@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Docs rows for per-tool allowed folders (D1, D2, D3): the upgrading
 //! fragment names the setting, the reason, the grammar, the section 1
-//! example and every limit; the changelog fragment exists; the firewall
-//! reference documents folder rules. Batch 6.
+//! example and every limit; the firewall reference documents folder rules.
+//! The changelog fragment's existence is the release line's fragment check.
+//! Batch 6.
 
 use super::super::RootReason;
 use super::config::EXAMPLE;
 
 const UPGRADING: &str = "upgrading.d/8939.md";
-const CHANGELOG: &str = "changelog.d/8939.added.md";
 
 fn read(rel: &str) -> String {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
@@ -67,11 +67,10 @@ fn d1_upgrading_fragment_states_the_setting_and_its_limits() {
     );
 }
 
-/// D2: both fragments exist; the upgrading one has the front matter and the
-/// startup line the fragment check reads.
+/// D2: the upgrading fragment has the front matter and the startup line the
+/// fragment check reads.
 #[test]
 fn d2_fragments_exist_with_their_front_matter() {
-    assert!(!read(CHANGELOG).trim().is_empty(), "{CHANGELOG} is empty");
     let text = read(UPGRADING);
     assert!(
         text.starts_with("---\nchange: "),
