@@ -126,7 +126,7 @@ impl MetaMcp {
             // Settled like every dispatched failure (ADR-012), unless nothing
             // was sent: then it is refused before its backend, as below.
             if unsent {
-                refuse_unsent(idem_reservation, execution);
+                settle_unsent(idem_reservation, execution);
             } else if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.commit(&withheld_side_effect());
             }
@@ -146,7 +146,7 @@ impl MetaMcp {
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
         if unsent {
-            refuse_unsent(idem_reservation, execution);
+            settle_unsent(idem_reservation, execution);
         }
         // MIK-7979: a lost round settles with the uncertainty notice, and the
         // reservation leaves the `Option` for the same reason as above: the
@@ -638,7 +638,7 @@ fn refuse_unbindable(server: &str, tool: &str, trace_id: &str) -> crate::Error {
 /// that follows would re-insert it), and the outer lease withdrawn, or a keyed
 /// retry replays a stale refusal and its hint (MIK-7974). A refusal the
 /// backend's own send recorded is the gateway's: its delivery says refused.
-fn refuse_unsent(
+fn settle_unsent(
     idem_reservation: &mut Option<IdempotencyReservation>,
     execution: Option<&crate::gateway::meta_mcp::admission::SyncLease>,
 ) {

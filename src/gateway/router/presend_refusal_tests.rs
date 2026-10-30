@@ -43,7 +43,13 @@ fn message(body: &Value) -> String {
 #[tokio::test]
 async fn a_direct_call_refused_in_its_send_releases_its_key() {
     let fx = fixture_with_secrets(vec![query_rule()], None, None).await;
-    let (_, first) = call(&fx, "alpha", None, keyed("k-direct", json!({"a": 1}))).await;
+    let (_, first) = call(
+        &fx,
+        "alpha",
+        None,
+        keyed("k-direct", json!({"cmd": "first"})),
+    )
+    .await;
     assert!(
         message(&first).contains("secret rule 'api'"),
         "premise: refused for the rule: {first}"
@@ -52,7 +58,13 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
         fx.seen.lock().expect("recorder").is_empty(),
         "premise: nothing was sent"
     );
-    let (_, second) = call(&fx, "alpha", None, keyed("k-direct", json!({"a": 2}))).await;
+    let (_, second) = call(
+        &fx,
+        "alpha",
+        None,
+        keyed("k-direct", json!({"cmd": "second"})),
+    )
+    .await;
     assert!(
         !message(&second).contains("already in use for a different request"),
         "the refused call kept its key: {second}"
