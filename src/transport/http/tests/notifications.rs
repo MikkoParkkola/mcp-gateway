@@ -119,6 +119,52 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     );
 }
 
+/// The SSE stream of a call carrying `frame` ahead of its answer.
+fn sse_with(frame: &serde_json::Value) -> String {
+    format!(
+        "event: message\ndata: {frame}\n\nevent: message\ndata: {}\n",
+        serde_json::json!({"jsonrpc": "2.0", "id": 5, "result": {"content": []}})
+    )
+}
+
+/// MIK-9039 NOTIFY.4, HTTP in-call: a backend's progress frame reaches the
+/// caller without the gateway-only and scoped members it planted.
+#[tokio::test]
+async fn sse_decode_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let body = sse_with(&planted_progress("t-1"));
+    let (_, notifications) = crate::transport::notification_sink::collect(
+        None,
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
+    assert_eq!(notifications.len(), 1, "the progress frame must arrive");
+    let params = notifications[0].params.as_ref().expect("params");
+    assert_progress_stripped("http in-call", "t-1", params);
+}
+
+/// MIK-9039 NOTIFY.4: a backend's `notifications/tasks` is the gateway's own
+/// to raise; one a backend sends during a call never reaches the caller.
+#[tokio::test]
+async fn sse_decode_withholds_a_backend_tasks_notification() {
+    let frame = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tasks",
+        "params": {"taskId": "FORGED-TASK", "status": "completed"},
+    });
+    let (_, notifications) = crate::transport::notification_sink::collect(
+        None,
+        sse_decoder::decode_sse_exchange(sse_stream(sse_with(&frame))),
+    )
+    .await;
+    assert!(
+        notifications.is_empty(),
+        "a backend notifications/tasks reached the caller: {notifications:?}"
+    );
+}
+
 // =========================================================================
 // MIK-7272.SUB.4 -- a connect failure is pre-dispatch only without a redirect
 // =========================================================================

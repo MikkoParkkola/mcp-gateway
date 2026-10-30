@@ -193,6 +193,26 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     assert_eq!(drained[0].method, "notifications/progress");
 }
 
+/// MIK-9039 NOTIFY.4, stdio in-call: the reader task's delivery strips what
+/// the backend planted, as the batched path does.
+#[tokio::test]
+async fn stdio_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let t = make_transport("cat");
+    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+        let _ = t.register_progress_token("tok-live");
+        t.handle_response(&planted_progress("tok-live").to_string())
+            .unwrap();
+    })
+    .await;
+
+    assert_eq!(drained.len(), 1, "the progress frame must arrive");
+    let params = drained[0].params.as_ref().expect("params");
+    assert_progress_stripped("stdio in-call", "tok-live", params);
+}
+
 /// Negative control for stdio: a notification whose token nobody registered
 /// reaches no sink, even with a call in flight that has one.
 #[tokio::test]
