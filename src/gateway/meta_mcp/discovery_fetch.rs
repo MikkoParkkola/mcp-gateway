@@ -176,15 +176,15 @@ impl MetaMcp {
 
     /// Re-check this caller's indexed slot on every managed-account backend
     /// against its current grant, read without refreshing or minting, and
-    /// forget an entry the current grant no longer yields (MIK-8356 design
-    /// R4.2, gpt r3 F2). Run at a listing's async entry, so the synchronous
+    /// forget an entry the current grant no longer yields. Run at a listing's
+    /// async entry, so the synchronous
     /// readers after it read a rotated or revoked grant's slot as cold, never
     /// as the caller's. One classified read per managed-account backend, with
     /// or without a slot indexed; it also becomes this request's account
     /// read (`memo::held_view_current`), so a publish that lands after it is
     /// judged against the grant it saw. A revoked caller's entry becomes
-    /// `NoView` even over a stored read's running cold lease (MIK-8392 d1
-    /// F9): intended, the revocation is the newer fact. A busy custody is not
+    /// `NoView` even over a stored read's running cold lease: intended, the
+    /// revocation is the newer fact. A busy custody is not
     /// a revocation: it leaves a running cold lease standing, so that lease's
     /// winner can still publish once its gate reads the grant. With no lease
     /// standing, a busy read records `NoView` as before.
