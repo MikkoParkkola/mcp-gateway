@@ -256,7 +256,7 @@ fn with_profile(name: &'static str) -> impl FnOnce(&mut crate::gateway::meta_mcp
 /// new view for the change notice. That refresh must run the account
 /// re-check first, so a publish of the old binding after it is judged
 /// against the current grant. RED on base: the refresh runs no re-check, so
-/// the after_revalidate seam never fires. The view itself is read only for
+/// the `after_revalidate` seam never fires. The view itself is read only for
 /// a session holding a listener record, which this fixture does not open.
 #[tokio::test]
 async fn r7_a_set_profile_refresh_rechecks_the_account_first() {
