@@ -506,6 +506,8 @@ mod registration;
 mod renewal;
 pub(crate) mod sign_in;
 #[cfg(test)]
+mod sign_in_tests;
+#[cfg(test)]
 mod tests;
 mod token_access;
 
