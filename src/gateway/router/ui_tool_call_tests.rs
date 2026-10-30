@@ -424,6 +424,13 @@ async fn t9_a_non_admin_is_refused_before_anything_runs() {
     let actions = admin_actions(&fx);
     assert_eq!(actions.len(), 1, "{actions:?}");
     assert_eq!(actions[0]["disposition"], "not_run", "{}", actions[0]);
+    assert_eq!(
+        actions[0]["via"],
+        format!("ui:key:{USER}"),
+        "{}",
+        actions[0]
+    );
+    assert_eq!(actions[0]["http_status"], 403, "{}", actions[0]);
 }
 
 /// T10: a server that is not registered is refused as a denied tool is,
