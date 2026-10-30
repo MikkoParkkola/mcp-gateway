@@ -21,10 +21,9 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
-use super::errors::{admin_auth_required, flat_error};
-use super::is_admin;
+use super::errors::flat_error;
+use super::guard::Guard;
 use crate::capability::{GeneratedCapability, OpenApiConverter};
 use crate::security::validate_url_not_ssrf;
 
@@ -98,12 +97,11 @@ pub fn import_router() -> Router<Arc<AppState>> {
 /// No files are written.
 async fn preview_handler(
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Json(body): Json<ImportRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let spec_content = match resolve_spec(&generation, &body).await {
@@ -147,12 +145,11 @@ async fn preview_handler(
 async fn import_handler(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Json(body): Json<ImportRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     // Determine output directory — use first configured cap dir, fall back to "capabilities".

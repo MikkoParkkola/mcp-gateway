@@ -4,11 +4,12 @@
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
+use super::access_table::CpCheck;
 use super::errors::{auth_required, flat_error};
+use super::guard::Guard;
+use crate::control_plane::ControlPlaneRbac;
 use crate::control_plane::role_mapping::ControlPlaneBaseSource;
-use crate::control_plane::{ControlPlaneAction, ControlPlaneRbac};
 use crate::gateway::routes;
-use crate::key_server::oidc::VerifiedIdentity;
 use axum::extract::{Extension, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -21,7 +22,9 @@ use crate::control_plane::{ControlPlaneHealth, ControlPlaneServerStatus};
 
 #[cfg(test)]
 mod grant_projection_tests;
-mod mutations;
+// Widened within the UI so the status report derives the control-plane
+// actor with the function the routes use, not a copy of its role rules.
+pub(in crate::gateway::ui) mod mutations;
 #[cfg(test)]
 mod read_reflect_tests;
 #[cfg(test)]
@@ -88,16 +91,22 @@ async fn require_authenticated(
 /// (via a `configured: false` body) when export is not running.
 async fn export_status_handler(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let actor = actor_from_client(
-        client.map(|Extension(c)| c).as_ref(),
-        identity.map(|Extension(id)| id).as_ref(),
-        &state.live_config.get().control_plane.role_mapping,
-    );
-    if !ControlPlaneRbac::authorize(&actor, ControlPlaneAction::ReadInventory).allowed {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    let config = state.live_config.get();
+    let admitted = guard.admit_control_plane(|client, identity, check| {
+        let actor = actor_from_client(client, identity, &config.control_plane.role_mapping);
+        match check {
+            CpCheck::Action(action) if ControlPlaneRbac::authorize(&actor, action).allowed => {
+                Ok(())
+            }
+            _ => Err(Box::new(
+                auth_required(StatusCode::FORBIDDEN).into_response(),
+            )),
+        }
+    });
+    if let Err(refused) = admitted {
+        return *refused;
     }
     match state.export_status.as_ref() {
         Some(status) => Json(serde_json::json!({
@@ -116,16 +125,26 @@ async fn export_status_handler(
 async fn control_plane_snapshot(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(client)| client);
-    let identity = identity.map(|Extension(id)| id);
-    let actor = actor_from_client(
-        client.as_ref(),
-        identity.as_ref(),
-        &generation.config().control_plane.role_mapping,
-    );
+    // The read check is `read_only_view` below, after the clock check, where
+    // it always stood; admission here derives the actor.
+    // A row that asks for anything but the read view is refused here, so a
+    // table edit cannot change this route without changing this handler.
+    let actor = match guard.admit_control_plane(|client, identity, check| match check {
+        CpCheck::Read => Ok(actor_from_client(
+            client,
+            identity,
+            &generation.config().control_plane.role_mapping,
+        )),
+        CpCheck::Action(_) | CpCheck::FromBody(_) => Err(Box::new(
+            super::guard::Refused::AdminRequired.into_response(),
+        )),
+    }) {
+        Ok(actor) => actor,
+        Err(refused) => return *refused,
+    };
+    let client = guard.client;
     // Grant status is judged against the time; on a clock before 1970 it
     // cannot be, so the view is refused rather than guessed (MIK-8202).
     let Ok(now) = crate::clock::utc_now() else {
