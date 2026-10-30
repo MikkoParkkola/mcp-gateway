@@ -470,7 +470,7 @@ fn scrub_response(secrets: &Compiled, response: &mut JsonRpcResponse) -> Scrubbe
     // The envelope's version is backend text too; it is normalised, never
     // passed on as sent (design: envelope).
     if response.jsonrpc != "2.0" {
-        response.jsonrpc = "2.0".to_owned();
+        "2.0".clone_into(&mut response.jsonrpc);
         outcome = merge(outcome, Scrubbed::Redacted);
     }
     outcome

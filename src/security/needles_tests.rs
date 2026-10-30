@@ -270,8 +270,7 @@ fn cost_of_the_scrub_against_the_parse() {
                     "the set overflowed: not a redaction cost"
                 );
                 println!(
-                    "T1.33 size={size} needles={} kind={kind} parse={parse:?} scrub={scrub:?} outcome={outcome:?}",
-                    count
+                    "T1.33 size={size} needles={count} kind={kind} parse={parse:?} scrub={scrub:?} outcome={outcome:?}"
                 );
             }
         }
