@@ -127,12 +127,15 @@ pub(super) fn backends() -> Backends {
     BACKENDS.with(|backends| backends.borrow().clone())
 }
 
-/// [`fixture_with_secrets`] whose two backends talk to `backends`.
-pub(crate) async fn fixture_with_secrets_on(
+/// [`fixture_with_secrets`] whose two backends talk to the real HTTP MCP
+/// server at `url`. Only a real server: an echo row must run over a
+/// transport that parses and scrubs the backend's bytes, never a scripted
+/// double that claims to redact (MIK-9035).
+pub(crate) async fn fixture_with_secrets_over_http(
     rules: Vec<crate::secret_injection::CredentialRule>,
-    backends: Backends,
+    url: String,
 ) -> Fx {
-    BACKENDS.with(|held| *held.borrow_mut() = backends);
+    BACKENDS.with(|held| *held.borrow_mut() = Backends::HttpServer(url));
     let fx = fixture_with_secrets(rules, None, None).await;
     BACKENDS.with(|held| *held.borrow_mut() = Backends::Scripted);
     fx
