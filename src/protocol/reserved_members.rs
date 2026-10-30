@@ -208,8 +208,14 @@ pub(crate) fn strip_ingress(
     let mut misplaced = Vec::new();
     if let Some(result) = response.result.as_mut() {
         // Cloned only where a gateway-only path is present, so an honest
-        // answer (a large `tools/list` included) costs no copy.
-        let mut withheld = serde_json::Map::new();
+        // answer (a large `tools/list` included) costs no copy. Seeded with
+        // what the transport's scrub kept as sent (MIK-9035 DELTA-13): those
+        // originals predate this strip, so they win over its copies.
+        let mut withheld = response
+            .ingress_withheld
+            .take()
+            .map(|kept| kept.0)
+            .unwrap_or_default();
         for member in MEMBERS.iter().filter(|m| m.origin == Origin::GatewayOnly) {
             let key = member.path[0];
             if digest_covers(key)
@@ -300,6 +306,11 @@ pub(crate) fn strip_ingress(
 pub(crate) struct Withheld(serde_json::Map<String, Value>);
 
 impl Withheld {
+    /// Members kept as the backend sent them before the gateway changed them.
+    pub(crate) fn from_members(members: serde_json::Map<String, Value>) -> Self {
+        Self(members)
+    }
+
     pub(crate) fn members(&self) -> &serde_json::Map<String, Value> {
         &self.0
     }

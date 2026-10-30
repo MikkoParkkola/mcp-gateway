@@ -271,7 +271,37 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
 }
 
 fn scrub_response(secrets: &[String], response: &mut JsonRpcResponse) -> Scrubbed {
+    // A signed result keeps, as sent, each top-level member the scrub
+    // changes, so its chain is verified over what the backend signed
+    // (DELTA-13). Cloned only for a result that carries a chain.
+    let signed = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("_meta"))
+        .is_some_and(|meta| {
+            meta.get(crate::security::signature_chain::CHAIN_META)
+                .is_some()
+        })
+        .then(|| response.result.clone())
+        .flatten();
     let mut outcome = scrub_option(secrets, &mut response.result);
+    if outcome == Scrubbed::Redacted
+        && let (Some(Value::Object(sent)), Some(Value::Object(scrubbed))) =
+            (signed, response.result.as_ref())
+    {
+        let kept: serde_json::Map<String, Value> = sent
+            .into_iter()
+            .filter(|(key, value)| {
+                crate::protocol::reserved_members::digest_covers(key)
+                    && scrubbed.get(key) != Some(value)
+            })
+            .collect();
+        if !kept.is_empty() {
+            response.ingress_withheld = Some(Box::new(
+                crate::protocol::reserved_members::Withheld::from_members(kept),
+            ));
+        }
+    }
     if let Some(error) = response.error.as_mut() {
         if secrets
             .iter()
