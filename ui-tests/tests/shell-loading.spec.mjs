@@ -55,21 +55,15 @@ test('G1 a slow page shows the loading state after about 300 ms, says so once, a
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
-  // When the tab's body and the loading state enter the page, by the page's own clock,
-  // so a loaded machine cannot make the test's timing disagree with the page's.
-  await page.addInitScript(() => {
-    // Watched from the start: the shell puts the body in before DOMContentLoaded listeners run.
-    window.__times = {};
-    new MutationObserver(() => {
-      const now = performance.now();
-      if (!window.__times.body && document.querySelector('#content > .body[data-rendered]')) window.__times.body = now;
-      if (!window.__times.loading && document.querySelector('#content [data-state="loading"]')) window.__times.loading = now;
-    }).observe(document, { childList: true, subtree: true });
-  });
   await page.goto('/ui/policies/status');
   await expect(loading(page)).toBeVisible();
-  const times = await page.evaluate(() => window.__times);
-  expect(times.loading - times.body, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
+  // The shell marks when it starts the loading timer and when it shows the
+  // state, as it does each, so a busy runner cannot shorten the measured gap.
+  const gap = await page.evaluate(() => {
+    const at = (name) => performance.getEntriesByName(name, 'mark')[0]?.startTime;
+    return at('ui-loading-shown') - at('ui-loading-armed');
+  });
+  expect(gap, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual(['Loading Policies.']);
   probe.release();
