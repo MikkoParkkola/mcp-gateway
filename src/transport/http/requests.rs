@@ -551,9 +551,19 @@ impl HttpTransport {
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             match self.body_budget.get() {
                 Some(budget) => {
-                    super::sse_decoder::decode_sse_exchange(budget.metered(stream)).await
+                    super::sse_decoder::decode_sse_exchange(
+                        budget.metered(stream),
+                        self.needles.get().map(AsRef::as_ref),
+                    )
+                    .await
                 }
-                None => super::sse_decoder::decode_sse_exchange(stream).await,
+                None => {
+                    super::sse_decoder::decode_sse_exchange(
+                        stream,
+                        self.needles.get().map(AsRef::as_ref),
+                    )
+                    .await
+                }
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await

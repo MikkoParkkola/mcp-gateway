@@ -34,7 +34,7 @@ async fn sse_decode_captures_the_notification_seen_before_the_response() {
     // WHEN: the transport decodes it inside the caller's sink scope
     let (response, notifications) = crate::transport::notification_sink::collect(
         None,
-        sse_decoder::decode_sse_exchange(sse_stream(body)),
+        sse_decoder::decode_sse_exchange(sse_stream(body), None),
     )
     .await;
 
@@ -79,7 +79,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
         // only if the caller declared a level, so the request this row is
         // about declares one. What the row asserts is unchanged.
         crate::transport::notification_sink::set_request_log_level(Some("debug"));
-        sse_decoder::decode_sse_exchange(sse_stream(body)).await
+        sse_decoder::decode_sse_exchange(sse_stream(body), None).await
     })
     .await;
 
@@ -103,7 +103,7 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
     let (response, notifications) = crate::transport::notification_sink::collect(
         None,
-        sse_decoder::decode_sse_exchange(sse_stream(body)),
+        sse_decoder::decode_sse_exchange(sse_stream(body), None),
     )
     .await;
     assert!(
