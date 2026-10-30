@@ -45,10 +45,18 @@ pub(crate) enum SignIn {
     /// Resolved, with no 4.x token but a 3.x token file under the legacy key.
     ReSignInAfterUpgrade,
     /// No `oauth` block, but the slot waits on a sign-in made elsewhere.
+    #[cfg_attr(
+        not(any(test, feature = "webui")),
+        expect(dead_code, reason = "constructed only on the web UI read path")
+    )]
     WaitingElsewhere,
 }
 
 /// `expires_at` as RFC 3339.
+#[expect(
+    clippy::ref_option,
+    reason = "serde's `serialize_with` hands the field over as `&Option<T>`"
+)]
 fn rfc3339<S: Serializer>(at: &Option<SystemTime>, out: S) -> Result<S::Ok, S::Error> {
     match at {
         Some(at) => out.serialize_str(&chrono::DateTime::<chrono::Utc>::from(*at).to_rfc3339()),
@@ -59,6 +67,7 @@ fn rfc3339<S: Serializer>(at: &Option<SystemTime>, out: S) -> Result<S::Ok, S::E
 impl SignIn {
     /// Whether a person must sign in for this state to clear. A wait on a
     /// sign-in needs one whatever the state says.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn needs_a_person(self) -> bool {
         matches!(
             self,
@@ -91,6 +100,7 @@ impl SignInStatus {
 
     /// The current value: one snapshot, so a variant and its `expires_at`
     /// cannot disagree.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn snapshot(&self) -> SignIn {
         *self.cell.lock()
     }

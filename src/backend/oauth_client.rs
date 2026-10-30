@@ -9,6 +9,7 @@ use std::sync::atomic::Ordering;
 use tracing::info;
 
 use super::Backend;
+#[cfg(any(test, feature = "webui"))]
 use crate::oauth::client::sign_in::SignIn;
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::{Error, Result};
@@ -137,6 +138,7 @@ impl Backend {
     /// [`Backend::sign_in`] for a wait already read, so one caller never
     /// sees two answers to one question. Order: no `oauth` block, then an
     /// unchecked issuer, then a wait over a held token, then the token cases.
+    #[cfg(any(test, feature = "webui"))]
     fn sign_in_given(&self, waiting: bool) -> SignIn {
         if !self
             .config
@@ -158,6 +160,7 @@ impl Backend {
 
     /// Whether this backend needs a person to sign in. The one place the
     /// predicate is evaluated; the server row and the overview both call it.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn needs_sign_in(&self) -> bool {
         let waiting = self.shared_entry().auth_wait.load(Ordering::Relaxed);
         waiting || self.sign_in_given(waiting).needs_a_person()

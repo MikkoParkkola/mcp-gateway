@@ -120,6 +120,10 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
     })
 }
 
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is one independent fact on the wire; no two encode a state"
+)]
 #[derive(Debug, Serialize)]
 struct ServerStatus {
     name: String,
