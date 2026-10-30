@@ -1,0 +1,3 @@
+src/gateway/task_service/store_reads.rs	admits_upstream_descriptor	1	critical	c	TaskStore::admits_upstream_descriptor	Reads the candidate record only through the owner filter
+src/gateway/task_service/store_reads.rs	operation_digest_of	1	critical	borderline	TaskStore::operation_digest_of	Owner-scoped digest read used as the descriptor binding source
+src/gateway/task_service/store_reads.rs	upstream_of	1	critical	c	TaskStore::upstream_of	Owner-scoped descriptor read; inconsistent descriptors filtered out
