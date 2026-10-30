@@ -11,6 +11,7 @@
 
 use crate::capability::validator::input_schema_is_structurally_valid;
 use crate::protocol::Tool;
+use crate::transport::LentCredential;
 
 use super::Backend;
 use super::fill_check::{Completeness, is_transport_failure};
@@ -76,7 +77,7 @@ impl Backend {
     pub(crate) fn catalogue_verdict<'a>(
         &'a self,
         binding: Option<&'a str>,
-        headers: &'a [(String, String)],
+        headers: LentCredential,
         tool: &'a str,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<CatalogueVerdict>> + Send + 'a>> {
         Box::pin(self.catalogue_verdict_inner(binding, headers, tool))
@@ -85,7 +86,7 @@ impl Backend {
     async fn catalogue_verdict_inner(
         &self,
         binding: Option<&str>,
-        headers: &[(String, String)],
+        headers: LentCredential,
         tool: &str,
     ) -> crate::Result<CatalogueVerdict> {
         if self.blocked_tool_refusal(binding, tool).is_some() {
@@ -98,7 +99,7 @@ impl Backend {
         let cached = self.with_cached_tool_for(binding, tool, judged);
         // A3: a shared slot is never fetched for a caller that sent its own
         // credential (the fill runs under the gateway's login).
-        if !self.fetch_carries_caller_identity(binding) && !headers.is_empty() {
+        if !self.fetch_carries_caller_identity(binding) && !headers.headers.is_empty() {
             return Ok(cached.unwrap_or(CatalogueVerdict::Unknown));
         }
         let (tools, completeness) = match self

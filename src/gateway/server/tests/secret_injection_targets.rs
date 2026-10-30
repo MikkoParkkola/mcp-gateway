@@ -147,13 +147,18 @@ async fn invoke_read(meta: &Arc<MetaMcp>) -> Value {
 
 /// `gateway_invoke read` with `arguments` on `alpha` over stdio: the answer.
 async fn invoke_read_with(meta: &Arc<MetaMcp>, arguments: Value) -> Value {
+    invoke_read_on(meta, "alpha", arguments).await
+}
+
+/// `gateway_invoke read` with `arguments` on `server` over stdio: the answer.
+async fn invoke_read_on(meta: &Arc<MetaMcp>, server: &str, arguments: Value) -> Value {
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
         &crate::mtls::MtlsConfig::default(),
     ));
     let request = json!({"jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": {"name": "gateway_invoke",
-                   "arguments": {"server": "alpha", "tool": "read", "arguments": arguments}}});
+                   "arguments": {"server": server, "tool": "read", "arguments": arguments}}});
     super::super::Gateway::dispatch_single(meta, &policy, &mtls, &request, "stdio-inject")
         .await
         .expect("a request is answered")
@@ -463,4 +468,80 @@ async fn a_reloaded_rule_resolves_a_value_only_an_env_file_assigns() {
         Some(json!("from-the-file-ff06")),
         "the env file's value was not sent"
     );
+}
+
+/// A backend's rules are its own: `beta`, which holds no rule, is sent its
+/// call untouched, a caller's own `api_key` included, while `alpha`,
+/// registered beside it in the same registry with an argument rule, gets the
+/// secret. A coverage row: each backend reads only its own `secrets:`, so it
+/// holds on the line; it fails if a backend without rules applied another
+/// backend's, such as rules read from one shared table.
+#[tokio::test]
+async fn a_backend_without_a_rule_gets_none_of_another_backends_secret() {
+    let registry = gateway_registry();
+    let mut recorders = Vec::new();
+    for (name, secrets) in [
+        (
+            "alpha",
+            vec![CredentialRule {
+                name: "api".to_string(),
+                credential_type: CredentialType::ApiKey,
+                value: SECRET.to_string(),
+                inject_as: InjectTarget::Argument,
+                inject_key: "api_key".to_string(),
+                tools: vec!["*".to_string()],
+            }],
+        ),
+        ("beta", Vec::new()),
+    ] {
+        let seen = Arc::new(Mutex::new(Received::default()));
+        let backend = Arc::new(Backend::new(
+            name,
+            BackendConfig {
+                secrets,
+                ..BackendConfig::default()
+            },
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        backend.set_transport_for_test(Arc::new(recording(Arc::clone(&seen))));
+        assert!(registry.register(backend));
+        recorders.push(seen);
+    }
+    let meta = Arc::new(MetaMcp::new(registry));
+    let caller = json!({"q": 1, "api_key": "the-callers-own"});
+
+    // beta is called before and after alpha, so neither a rule shared at
+    // registration nor a value left over from alpha's send can pass.
+    for round in ["before alpha", "after alpha"] {
+        if round == "after alpha" {
+            // Control: the same registry applies alpha's own rule to alpha.
+            let answer = invoke_read_on(&meta, "alpha", json!({"q": 1})).await;
+            assert_succeeded(&answer);
+            let alpha = std::mem::take(&mut *recorders[0].lock().expect("recorder"));
+            let sent = alpha.params.expect("premise: alpha received its call");
+            assert_eq!(
+                sent["arguments"],
+                json!({"q": 1, "api_key": SECRET}),
+                "control: alpha's rule applies to the same call shape: {sent}"
+            );
+        }
+        let answer = invoke_read_on(&meta, "beta", caller.clone()).await;
+        assert_succeeded(&answer);
+        let beta = std::mem::take(&mut *recorders[1].lock().expect("recorder"));
+        let sent = beta.params.expect("premise: beta received its call");
+        assert_eq!(
+            sent["arguments"], caller,
+            "{round}: beta's arguments were changed: {sent}"
+        );
+        assert!(
+            !sent.to_string().contains(SECRET)
+                && !beta
+                    .headers
+                    .iter()
+                    .any(|(name, value)| name.contains(SECRET) || value.contains(SECRET)),
+            "{round}: beta received alpha's secret: {sent} {:?}",
+            beta.headers
+        );
+    }
 }

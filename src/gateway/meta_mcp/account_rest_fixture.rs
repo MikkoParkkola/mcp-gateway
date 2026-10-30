@@ -585,6 +585,7 @@ impl crate::identity_propagation::IdentityPropagation for AlreadyExpiredStrategy
     > {
         let subject_key = identity.stable_actor_id();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {EXPIRED_EXTERNAL_TOKEN}"),

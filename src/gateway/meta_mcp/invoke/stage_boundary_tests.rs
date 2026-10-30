@@ -377,11 +377,14 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
     // The whole invoke path is read (design r12.2 D3), so the boxes on its
     // other paths are named too: a box added anywhere, a new stage file
     // included, changes this inventory. Only send.rs's is the dispatch.
+    // account_mint.rs's is a managed account's send check, boxed once per
+    // send on a lent-only slot, never on a call without a managed account.
     let mut box_sites = sites("Box::pin(");
     box_sites.sort_unstable();
     assert_eq!(
         box_sites,
         [
+            ("account_mint.rs", 1),
             ("caller_verdict.rs", 1),
             ("legacy_bridge.rs", 1),
             ("policy.rs", 1),
@@ -702,11 +705,13 @@ fn every_pre_send_settlement_goes_through_the_mapping() {
     }
     assert!(direct.is_empty(), "settled outside the mapping: {direct:?}");
     // Exactly the inventory (design r11 section 4): a site added or removed
-    // updates this count and its row together.
+    // updates this count and its row together. 19 = the 15 of r11, plus the
+    // web UI tool route's two refusals before the send (its gate in keys.rs
+    // and its send-point check in send.rs, both ask for the nonce back), plus
+    // the undeclared-key check's two hand-released keys (an absent slot, a
+    // refused fill's connect offer), routed through the mapping.
     let total: usize = mapped.iter().map(|(_, calls)| calls).sum();
-    // 17 since the undeclared-key check routes its two hand-released keys
-    // (an absent slot, a refused fill's connect offer) through the mapping.
-    assert_eq!(total, 17, "the invoke path calls the mapping: {mapped:?}");
+    assert_eq!(total, 19, "the invoke path calls the mapping: {mapped:?}");
 }
 
 /// The text of one pairing arm: from `start` to the first `end` after it.

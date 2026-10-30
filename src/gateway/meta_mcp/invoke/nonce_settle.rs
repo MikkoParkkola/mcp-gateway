@@ -87,6 +87,9 @@ pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &s
     // A send after an earlier refusal in the same call (a fill retry, a
     // backstop that falls through) is a call: the refusal no longer stands.
     super::audit::note_pre_send(PreSend::Clear);
+    // A web UI call learns the backend may act from here on (U12).
+    #[cfg(feature = "webui")]
+    crate::gateway::ui_call::note_dispatched(step);
     if let Some(execution) = caller.execution {
         execution.mark_dispatched();
     }

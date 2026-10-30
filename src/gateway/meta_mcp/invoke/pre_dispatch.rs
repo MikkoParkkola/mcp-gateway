@@ -260,7 +260,7 @@ impl MetaMcp {
                             (server, tool),
                             backend,
                             dispatch_binding,
-                            &caller_credential.headers,
+                            caller_credential.lent(),
                             proof,
                         );
                         match judged.await {
@@ -294,7 +294,7 @@ impl MetaMcp {
                     tool,
                     arguments,
                     dispatch_binding,
-                    &caller_credential.headers,
+                    caller_credential.lent(),
                     (caller.scope(), session_id),
                 )
                 .await

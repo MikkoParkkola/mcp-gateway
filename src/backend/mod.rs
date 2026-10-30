@@ -37,6 +37,7 @@ mod logging_scan_tests;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
+mod lend;
 mod lifecycle;
 mod list_drain;
 pub(crate) mod listen;
@@ -123,7 +124,7 @@ pub struct Backend {
     /// own transport and start lock, so concurrent warm-start/client requests do
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
-    pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    pool: Arc<DashMap<PoolKey, Arc<PooledEntry>>>,
     /// Which per-user slot holds each caller's own catalogue (MIK-8356,
     /// design R3.5): caller principal id to that slot's binding and entry.
     /// Written when a fill stores into the slot, removed with the entry
@@ -453,6 +454,8 @@ impl Backend {
     #[cfg(feature = "a2a")]
     async fn start_a2a(
         &self,
+        key: &pool::PoolKey,
+        entry: &pool::PooledEntry,
         destination: crate::security::ssrf::DestinationPolicy,
     ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
         let crate::config::TransportConfig::A2a {
@@ -465,12 +468,18 @@ impl Backend {
                 self.name
             )));
         };
+        // A lent-only per-user slot sends only what its dispatches lend: the
+        // transport takes the slot's lender and no static header.
+        let lender = (matches!(key, pool::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly)
+            .then(|| Arc::clone(&entry.lender));
         crate::a2a::transport::A2aTransport::start(
             a2a_url,
             a2a_agent_card_path.as_deref(),
             &self.config.headers,
             self.config.timeout,
             destination,
+            lender,
         )
         .await
     }
@@ -612,6 +621,10 @@ mod silence_resend_tests;
 mod slot_eviction_tests;
 
 #[cfg(test)]
+#[path = "send_check_eviction_tests.rs"]
+mod send_check_eviction_tests;
+
+#[cfg(test)]
 #[path = "caller_slots_g3_tests.rs"]
 mod caller_slots_g3_tests;
 
@@ -654,6 +667,10 @@ mod era_per_slot_tests;
 #[cfg(test)]
 #[path = "era_lent_reprobe_tests.rs"]
 mod era_lent_reprobe_tests;
+
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_lent_slot_tests.rs"]
+mod a2a_lent_slot_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

@@ -64,6 +64,8 @@ impl MetaMcp {
             verified_identity,
             surface,
         } = input;
+        // Before any credential, replay, key or cache (see the method).
+        self.refuse_name_clash(server)?;
         let (backend, resolved) = match self
             .dispatch_resolution(
                 &self.scoped(caller.scope().authorizer.backend_grant()),
