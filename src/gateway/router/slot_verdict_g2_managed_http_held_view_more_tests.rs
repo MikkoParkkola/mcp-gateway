@@ -5,33 +5,6 @@
 //! re-check, and the optional backend's pin. Uses the parent's helpers.
 use super::*;
 
-/// A backend with no identity propagation, its shared slot holding one tool.
-fn shared_backend(fx: &Fx) -> Arc<crate::backend::Backend> {
-    let backend = Arc::new(crate::backend::Backend::new(
-        "shared-ledger",
-        crate::config::BackendConfig {
-            enabled: true,
-            transport: crate::config::TransportConfig::Http {
-                http_url: "https://shared-ledger.invalid/mcp".to_string(),
-                streamable_http: Some(true),
-                protocol_version: None,
-            },
-            ..crate::config::BackendConfig::default()
-        },
-        &crate::config::FailsafeConfig::default(),
-        std::time::Duration::from_secs(60),
-    ));
-    let tool: crate::protocol::Tool =
-        serde_json::from_value(json!({"name": "ledger_read", "inputSchema": {"type": "object"}}))
-            .expect("a tool");
-    backend.store_shared_tools_for_test(vec![tool]);
-    assert!(
-        fx.gateway.backends().register(Arc::clone(&backend)),
-        "premise: the shared backend registers"
-    );
-    backend
-}
-
 /// R5: the re-check's custody read is busy, then a publish of the old grant
 /// lands, then the listing reads. The per-user backend's tools are hidden
 /// for that request; a shared backend's still list. The next request, with
