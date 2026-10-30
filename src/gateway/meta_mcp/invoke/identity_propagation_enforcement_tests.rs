@@ -623,16 +623,20 @@ mod resolution;
 /// check passes for a freshly minted credential.
 #[tokio::test]
 async fn the_mint_attaches_the_send_check_to_what_it_lends() {
-    use tempfile::NamedTempFile;
-
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    // A required binding mints only with a durable audit record.
-    let file = NamedTempFile::new().expect("tempfile");
+    // A required binding mints only with a durable audit record. The log
+    // lives in its own directory: it writes sidecar files beside its path,
+    // and the directory takes them with it.
+    let dir = tempfile::tempdir().expect("a log directory");
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
-        path: file.path().to_string_lossy().to_string(),
+        path: dir
+            .path()
+            .join("audit.jsonl")
+            .to_string_lossy()
+            .into_owned(),
         key_id: "test".to_string(),
         ..TransparencyLogConfig::default()
     });
