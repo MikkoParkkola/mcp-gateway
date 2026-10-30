@@ -482,6 +482,8 @@ use url::Url;
 mod grants;
 pub(crate) use grants::OAUTH_AUTHORIZATION_WINDOW;
 #[cfg(test)]
+mod grants_log_tests;
+#[cfg(test)]
 mod grants_tests;
 mod refresh_flight;
 #[cfg(all(test, feature = "metrics"))]

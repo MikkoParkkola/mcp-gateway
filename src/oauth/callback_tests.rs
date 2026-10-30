@@ -528,7 +528,8 @@ async fn a_wrong_or_missing_state_without_an_error_is_refused_and_the_login_cont
 }
 
 /// CBSTATE.3: a provider error with the right state ends the login with it.
-/// (Passes today; pins the branch the fix reorders.)
+/// The provider's free text stays on the page the person sees and leaves the
+/// error the login ends with (retargeted from pinning it there).
 #[tokio::test]
 async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
     let (server, url, client) = start_test_server("expected").await;
@@ -555,8 +556,8 @@ async fn a_provider_error_with_the_right_state_ends_the_login_with_it() {
         Ok((_, result)) => panic!("a provider error ends the login, got code: {}", result.code),
     };
     assert!(
-        matches!(err, crate::Error::OAuth(ref t) if t.contains("access_denied") && t.contains("User denied")),
-        "the login ends with the provider error: {err:?}"
+        matches!(err, crate::Error::OAuth(ref t) if t.contains("access_denied") && !t.contains("User denied")),
+        "the login ends with the provider's error code and not its free text: {err:?}"
     );
 }
 
@@ -672,5 +673,67 @@ async fn three_refusals_then_cancellation_ends_the_wait() {
     assert!(
         matches!(outcome, Err(Unanswered::Cancelled)),
         "cancellation ends the wait after refusals: {outcome:?}"
+    );
+}
+
+/// Send a right-state provider error and return the log it left and the text
+/// of the error the login ended with. Current-thread callers only: `capture()`
+/// is thread-local.
+async fn provider_error_trace(query: &str) -> (String, String) {
+    let (guard, buffer) = capture();
+    let (server, url, client) = start_test_server("expected").await;
+    let full = format!("{url}?{query}&state=expected");
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, client.get(full).send())
+        .await
+        .expect("the provider error is answered")
+        .expect("the provider error sends");
+    let outcome = tokio::time::timeout(crate::test_wait::HANG_BOUND, server.wait_for_callback())
+        .await
+        .expect("the login answers the provider error");
+    drop(guard);
+    let err = match outcome {
+        Err(err) => err.to_string(),
+        Ok((_, result)) => panic!("a provider error ends the login, got code: {}", result.code),
+    };
+    let bytes = buffer.lock().expect("the log buffer locks").clone();
+    (String::from_utf8_lossy(&bytes).into_owned(), err)
+}
+
+/// L4: a provider can echo a state, a code or a URL in its error text, so the
+/// text reaches neither the log nor the error the login ends with. Only an
+/// RFC 6749 error code from the allow-list does, and `other` stands in for any
+/// code off it.
+// Current-thread on purpose: `capture()` is thread-local.
+#[tokio::test(flavor = "current_thread")]
+async fn a_provider_error_description_is_never_logged() {
+    let (log, err) = provider_error_trace(
+        "error=access_denied&error_description=state%3DDESCCANARY7f3%26code%3Dc1",
+    )
+    .await;
+    assert!(
+        log.contains("oauth.callback.provider_error"),
+        "the provider error is logged:\n{log}"
+    );
+    assert!(
+        log.contains("access_denied") && err.contains("access_denied"),
+        "the allow-listed code is kept:\nlog: {log}\nerror: {err}"
+    );
+    assert!(
+        !log.contains("DESCCANARY7f3") && !err.contains("DESCCANARY7f3"),
+        "the description must not be logged or returned:\nlog: {log}\nerror: {err}"
+    );
+
+    let (log, err) = provider_error_trace("error=ERRCANARY9a1&error_description=x").await;
+    assert!(
+        log.contains("oauth.callback.provider_error"),
+        "the provider error is logged:\n{log}"
+    );
+    assert!(
+        !log.contains("ERRCANARY9a1") && !err.contains("ERRCANARY9a1"),
+        "a code off the allow-list must not be logged or returned:\nlog: {log}\nerror: {err}"
+    );
+    assert!(
+        err.contains("other"),
+        "a code off the allow-list reads as `other`: {err}"
     );
 }

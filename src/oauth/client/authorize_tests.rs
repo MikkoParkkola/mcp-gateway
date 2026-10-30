@@ -24,7 +24,7 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
-async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+pub(super) async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
     token_endpoint_issuing(answer, Some("r-next")).await
 }
 
@@ -71,7 +71,7 @@ async fn token_endpoint_issuing(
 
 /// A client whose authorization server is `issuer`, with a configured client
 /// id (no registration) and a loopback callback on a port the OS picks.
-fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
+pub(super) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
     let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
     let mut client = OAuthClient::new(
         Client::builder().no_proxy().build().unwrap(),
@@ -134,7 +134,10 @@ enum Browser {
 /// Run the flow while playing the person at the browser: read the URL it
 /// hands over, then call its callback with `code`, the URL's own state and
 /// `iss`. Returns the flow's outcome and the authorization URL's query.
-async fn approve(client: &mut OAuthClient, iss: &str) -> (Result<String>, HashMap<String, String>) {
+pub(super) async fn approve(
+    client: &mut OAuthClient,
+    iss: &str,
+) -> (Result<String>, HashMap<String, String>) {
     approve_via(client, iss, Entry::Authorize, Browser::Opens).await
 }
 

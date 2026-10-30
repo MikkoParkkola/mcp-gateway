@@ -54,3 +54,7 @@ fn placeholder(client: Option<Extension<AuthenticatedClient>>) -> Response {
 fn is_gateway_host_authority(_authority: &str) -> bool {
     false
 }
+
+#[cfg(test)]
+#[path = "signin_gate_tests.rs"]
+mod gate_tests;
