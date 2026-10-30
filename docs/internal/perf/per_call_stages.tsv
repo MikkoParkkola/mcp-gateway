@@ -174,7 +174,9 @@ src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, u
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
 src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	http_invoke_tiny	on the HTTP gateway_invoke path (resolve's name-clash check)
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	account_dispatch	http_invoke_tiny	S3 accounting at every accounted dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	http_invoke_tiny	S1 policy after the credential step, before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	http_invoke_tiny	S1 kill-switch check, before every dispatch

@@ -65,6 +65,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_shared_oauth_
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	composite-or-replay	the unminted proof a stored replay is refused with
+src/gateway/meta_mcp/invoke/resolve.rs	resolve	refuse_name_clash	1	not-a-decision	a name that is both a registry backend and the capability backend: a configuration clash (-32001, the BackendNotFound class), not a decision about the caller
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
