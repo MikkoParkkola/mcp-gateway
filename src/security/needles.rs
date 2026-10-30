@@ -53,10 +53,11 @@ pub(crate) fn redaction_grace(config: &crate::config::Config) -> Duration {
     .unwrap_or(MIN_GRACE)
 }
 
-/// One value and when it was last sent (unix seconds, from the crate clock).
+/// One value and when it was last sent. Monotonic time: a wall-clock jump
+/// (NTP, a resumed laptop, a manual set) must not retire live values.
 struct Held {
     value: String,
-    last_sent: u64,
+    last_sent: tokio::time::Instant,
 }
 
 /// One backend name's injected values. Never printed: `Debug` names the count.
@@ -78,11 +79,6 @@ impl std::fmt::Debug for NeedleSet {
     }
 }
 
-/// Now, in unix seconds; a clock before the epoch reads 0 (nothing retires).
-fn now_secs() -> u64 {
-    crate::clock::unix_secs().unwrap_or(0)
-}
-
 impl NeedleSet {
     /// An empty set whose values retire `grace` after their last send.
     pub(crate) fn with_grace(grace: Duration) -> Self {
@@ -93,8 +89,8 @@ impl NeedleSet {
         }
     }
 
-    fn retired(&self, held: &Held, now: u64) -> bool {
-        now.saturating_sub(held.last_sent) > self.grace.as_secs()
+    fn retired(&self, held: &Held, now: tokio::time::Instant) -> bool {
+        now.saturating_duration_since(held.last_sent) > self.grace
     }
 
     /// Adds `value`, or renews its last send (empty values are never
@@ -104,7 +100,7 @@ impl NeedleSet {
         if value.is_empty() {
             return;
         }
-        let now = now_secs();
+        let now = tokio::time::Instant::now();
         let mut values = self.values.write();
         if let Some(held) = values.iter_mut().find(|held| held.value == value) {
             held.last_sent = now;
@@ -139,7 +135,7 @@ impl NeedleSet {
     /// The values still inside their grace. A retired value is not removed
     /// from an answer: the documented residual (UPGRADING).
     fn snapshot(&self) -> Vec<String> {
-        let now = now_secs();
+        let now = tokio::time::Instant::now();
         self.values
             .read()
             .iter()

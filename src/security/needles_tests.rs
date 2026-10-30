@@ -60,13 +60,11 @@ fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
 }
 
 /// A value inside its grace is redacted.
-#[test]
-fn a_value_inside_its_grace_is_redacted() {
+#[tokio::test(start_paused = true)]
+async fn a_value_inside_its_grace_is_redacted() {
     let needles = NeedleSet::with_grace(GRACE);
-    let clock = at_secs(T0);
     needles.insert("b", "token-one-value");
-    drop(clock);
-    let _clock = at_secs(T0 + GRACE.as_secs());
+    tokio::time::advance(GRACE).await;
     let (outcome, text) = scrubbed(&needles, "echo token-one-value");
     assert_eq!(outcome, Scrubbed::Redacted);
     assert!(!text.contains("token-one-value"), "{text}");
@@ -74,33 +72,45 @@ fn a_value_inside_its_grace_is_redacted() {
 
 /// A retired value (past its grace since its last send) is no longer
 /// redacted: the documented residual, pinned so a change to it is a choice.
-#[test]
-fn a_retired_value_is_no_longer_redacted() {
+#[tokio::test(start_paused = true)]
+async fn a_retired_value_is_no_longer_redacted() {
     let needles = NeedleSet::with_grace(GRACE);
-    let clock = at_secs(T0);
     needles.insert("b", "token-one-value");
-    drop(clock);
-    let _clock = at_secs(T0 + GRACE.as_secs() + 1);
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
     let (outcome, text) = scrubbed(&needles, "echo token-one-value");
     assert_eq!(outcome, Scrubbed::Clean);
     assert!(text.contains("token-one-value"), "{text}");
 }
 
-/// Rotation past 1,024 values, each retired before the next batch: traffic
-/// keeps flowing and the newest value is redacted.
-#[test]
-fn rotation_past_the_bound_with_the_grace_elapsed_keeps_answers_flowing() {
+/// A wall-clock jump of 48 h with no monotonic time elapsed retires
+/// nothing: a value sent a minute ago is still redacted.
+#[tokio::test(start_paused = true)]
+async fn a_wall_clock_jump_does_not_retire_a_live_value() {
+    let needles = NeedleSet::with_grace(GRACE);
+    let wall = at_secs(T0);
+    needles.insert("b", "token-one-value");
+    tokio::time::advance(Duration::from_secs(60)).await;
+    drop(wall);
+    let _wall = at_secs(T0 + 48 * 3_600);
+    let (outcome, text) = scrubbed(&needles, "echo token-one-value");
+    assert_eq!(outcome, Scrubbed::Redacted, "{text}");
+}
+
+/// Rotation past 1,024 values, each retired before the next: traffic keeps
+/// flowing and the newest value is redacted.
+#[tokio::test(start_paused = true)]
+async fn rotation_past_the_bound_with_the_grace_elapsed_keeps_answers_flowing() {
     let needles = NeedleSet::with_grace(GRACE);
     for step in 0..2_000_u64 {
-        let _clock = at_secs(T0 + step * (GRACE.as_secs() + 1));
         needles.insert("b", &format!("rotated-token-{step:05}"));
+        tokio::time::advance(GRACE + Duration::from_secs(1)).await;
     }
+    needles.insert("b", "rotated-token-02000");
     assert!(
         !needles.overflowed(),
         "rotation slower than the grace overflowed"
     );
-    let _clock = at_secs(T0 + 1_999 * (GRACE.as_secs() + 1));
-    let (outcome, text) = scrubbed(&needles, "echo rotated-token-01999");
+    let (outcome, text) = scrubbed(&needles, "echo rotated-token-02000");
     assert_eq!(outcome, Scrubbed::Redacted, "{text}");
 }
 
@@ -109,7 +119,6 @@ fn rotation_past_the_bound_with_the_grace_elapsed_keeps_answers_flowing() {
 #[test]
 fn rotation_faster_than_the_grace_fails_closed() {
     let needles = NeedleSet::with_grace(GRACE);
-    let _clock = at_secs(T0);
     let logged = logs(|| {
         for step in 0..=super::MAX_NEEDLES {
             needles.insert("rotating-backend", &format!("fast-token-{step:05}"));
@@ -137,7 +146,6 @@ fn rotation_faster_than_the_grace_fails_closed() {
 #[test]
 fn the_last_value_inside_the_bound_still_answers() {
     let needles = NeedleSet::with_grace(GRACE);
-    let _clock = at_secs(T0);
     for step in 0..super::MAX_NEEDLES {
         needles.insert("b", &format!("fill-token-{step:05}"));
     }
