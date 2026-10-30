@@ -616,6 +616,111 @@ async fn a_bridged_round_after_a_counted_send_may_have_acted() {
     .await;
 }
 
+/// A legacy, elicitation-declaring call to `asking_backend` under key
+/// `key`, in a delivery cell, over `script` and `channel`; the backend handle
+/// and whether the key is still held after the call.
+async fn bridged_keyed(
+    script: Vec<serde_json::Value>,
+    channel: &dyn crate::gateway::input_bridge::ClientChannel,
+    key: &str,
+) -> (
+    std::result::Result<serde_json::Value, crate::Error>,
+    Arc<ScriptedToolCallTransport>,
+    bool,
+) {
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "asking_backend",
+        crate::config::BackendConfig::r2_off(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport = Arc::new(ScriptedToolCallTransport::new(script));
+    backend.set_transport_for_test(transport.clone());
+    let _ = registry.register(Arc::clone(&backend));
+    BRIDGED_BACKEND.with(|b| *b.borrow_mut() = Some(backend));
+    let mut meta = MetaMcp::new(registry);
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some(key.to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+        }})),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = channel;
+    ctx.retry = &retry;
+    let result = crate::gateway::delivery_facts::scope(meta.invoke_tool(
+        &json!({"server": "asking_backend", "tool": "book", "arguments": {}}),
+        Some("session-presend"),
+        &ctx,
+    ))
+    .await;
+    (result, transport, !cache.is_empty())
+}
+
+thread_local! {
+    /// The backend [`bridged_keyed`] built, for a channel that acts on it.
+    static BRIDGED_BACKEND: std::cell::RefCell<Option<Arc<crate::backend::Backend>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A client that answers round one's question, and trips the backend's
+/// circuit breaker as it does, so round two meets an open circuit.
+struct TrippingChannel;
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for TrippingChannel {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError> {
+        BRIDGED_BACKEND.with(|b| {
+            b.borrow()
+                .as_ref()
+                .expect("the backend is built")
+                .trip_circuit_breaker_for_test();
+        });
+        Ok(
+            json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"account": "work"}}}),
+        )
+    }
+}
+
+/// R14 (MIK-9095 D6): round one reached the backend and asked; round two
+/// meets an open circuit, a pre-dispatch error. The exchange may have acted
+/// on round one, so the key is kept, not released.
+#[tokio::test(flavor = "current_thread")]
+async fn a_bridged_round_refused_by_an_open_circuit_after_round_one_keeps_its_key() {
+    let (result, transport, key_held) = bridged_keyed(
+        vec![question(), json!({"content": []})],
+        &TrippingChannel,
+        "k-r14",
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "premise: round two was refused: {result:?}"
+    );
+    assert_eq!(
+        transport.calls().len(),
+        1,
+        "premise: only round one reached the backend"
+    );
+    assert!(key_held, "the key was released after round one was sent");
+}
+
 /// MIK-7903: a meta-routed call settles its reservation with its spend, so a
 /// check that runs inside the settle sees the call once.
 #[cfg(feature = "cost-governance")]
