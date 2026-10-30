@@ -311,7 +311,7 @@ pub struct Backend {
     /// shares (MIK-7982).
     pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// Everything this backend keeps about signing in.
-    pub(crate) sign_in: Box<sign_in_state::SignInState>,
+    pub(crate) sign_in: sign_in_state::SignInState,
     /// A test's pause point in an HTTP start, after it read the policy it
     /// builds under and before it builds anything from it or
     /// [`Backend::begin_connecting`] checks and marks.

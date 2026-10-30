@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Everything a backend keeps about signing in, behind one box so the
-//! backend itself stays the size it was.
+//! Everything a backend keeps about signing in, grouped so the backend's
+//! constructor builds it in one line.
 
 use std::sync::Arc;
 
@@ -30,13 +30,13 @@ pub(crate) struct SignInState {
 impl SignInState {
     /// The state of a backend with `config`. OAuth-ness is config's: an
     /// `oauth` block, never whether a client exists.
-    pub(crate) fn boxed_for(config: &BackendConfig) -> Box<Self> {
+    pub(crate) fn for_config(config: &BackendConfig) -> Self {
         let initial = if config.oauth.as_ref().is_some_and(|oauth| oauth.enabled) {
             SignIn::NotYetChecked
         } else {
             SignIn::NotOAuth
         };
-        Box::new(Self {
+        Self {
             status: Arc::new(SignInStatus::new(initial)),
             #[cfg(feature = "webui")]
             flow: parking_lot::Mutex::new(None),
@@ -46,6 +46,6 @@ impl SignInState {
             installed_client: parking_lot::Mutex::new(None),
             #[cfg(all(test, feature = "webui"))]
             expiry_pause: crate::test_pause::Slot::default(),
-        })
+        }
     }
 }

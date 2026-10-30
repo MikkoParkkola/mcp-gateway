@@ -72,7 +72,7 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
-        let sign_in = super::sign_in_state::SignInState::boxed_for(&config);
+        let sign_in = super::sign_in_state::SignInState::for_config(&config);
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
