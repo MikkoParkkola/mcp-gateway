@@ -49,8 +49,10 @@ src/gateway/meta_mcp/grant_audit.rs	write_owned	-	on-path, untimed: grant-audit 
 src/gateway/meta_mcp/grant_audit.rs	write_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/invoke.rs	invoke_tool_traced	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/account_mint.rs	descriptor_for	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/account_mint.rs	expiry_of	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/account_mint.rs	invalid_header	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/account_mint.rs	mint_held	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
+src/gateway/meta_mcp/invoke/account_mint.rs	send_check_for	-	on-path, untimed: identity-propagation mints only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/admin.rs	cost_section	-	the gateway_get_stats cost section only, not the tools/call path
 src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	-	gateway_get_cost_report meta-tool only, not the tools/call path
 src/gateway/meta_mcp/invoke/admin.rs	get_stats	-	gateway_get_stats meta-tool only, not the tools/call path
@@ -125,6 +127,7 @@ src/gateway/meta_mcp/invoke/cache_reads.rs	note_delivered_reading	http_invoke_ti
 src/gateway/meta_mcp/invoke/cache_reads.rs	reading	-	on-path, untimed: only when a result is stored (a read-only cache write or an idempotency completion); the timed rows store neither
 src/gateway/meta_mcp/invoke/cache_reads.rs	restore	-	on-path, untimed: response-cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/caller_credential.rs	fmt	-	Debug formatting (redacting); not called per call
+src/gateway/meta_mcp/invoke/caller_credential.rs	lent	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: clones the caller's credential headers (none without propagation) and one Arc'd check, no lock
 src/gateway/meta_mcp/invoke/caller_verdict.rs	backend_bound	-	on-path, untimed: the deadline bound of a cold per-user view's fill (ColdFill::backend_bound), cold tools/list warms only; the timed backend keeps no per-user catalogue
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict_acting	-	on-path, untimed: per-user-catalogue backends only; the timed backend keeps none
@@ -362,6 +365,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	caller_principal	-	on-path, untimed: 
 src/gateway/meta_mcp/invoke/propagation.rs	into_parts	http_invoke_tiny	on the HTTP gateway_invoke path, once per dispatch: moves the resolved fields into a tuple, no allocation and no lock (MIK-8407)
 src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	-	off-path: the events fence read a delivery and a listener run make, never a tools/call
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	-	off-path: a per-user events listener mints through it per upstream request, never a tools/call
+src/gateway/meta_mcp/invoke/propagation.rs	minted_credential	-	on-path, untimed: minted propagation credentials only; the timed backend has no propagation config
 src/gateway/meta_mcp/invoke/propagation.rs	minted	http_invoke_tiny	whether the credential step may have reached an issuer, once per dispatch
 src/gateway/meta_mcp/invoke/propagation.rs	refuse_unbound_account_backend	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_caller_credential	-	test-only helper (cfg(test))
