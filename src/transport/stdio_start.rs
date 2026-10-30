@@ -130,17 +130,8 @@ impl StdioTransport {
                             debug!("Transport dropped while reading; stopping reader task");
                             return;
                         };
-                        // A parse error can quote the line, and the line can
-                        // hold an injected secret (MIK-9035): it is named by
-                        // kind. The gateway's own refusals keep their text.
                         if let Err(error) = transport.handle_response(&line) {
-                            let why = match &error {
-                                crate::Error::Json(_) => {
-                                    "the line is not a JSON-RPC message".to_owned()
-                                }
-                                other => other.to_string(),
-                            };
-                            error!(line_len, error = %why, "Failed to handle a line from the backend");
+                            log_unhandled_line(line_len, &error);
                         }
                     }
                     Ok(None) => {
@@ -320,4 +311,15 @@ impl StdioTransport {
 
         Ok(())
     }
+}
+
+/// Logs a backend line the transport could not handle. A parse error can
+/// quote the line, and the line can hold an injected secret (MIK-9035), so
+/// it is named by kind; the gateway's own refusals keep their text.
+fn log_unhandled_line(line_len: usize, error: &crate::Error) {
+    let why = match error {
+        crate::Error::Json(_) => "the line is not a JSON-RPC message".to_owned(),
+        other => other.to_string(),
+    };
+    error!(line_len, error = %why, "Failed to handle a line from the backend");
 }

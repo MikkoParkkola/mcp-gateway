@@ -7,21 +7,52 @@
 //! Recording doubles that claim it are fine elsewhere: their rows check what
 //! a call sends, never what its answer echoes.
 
-use super::packaged::crate_root;
-
-/// Every file holding MIK-9035 echo or scrub rows.
-const ROW_FILES: [&str; 11] = [
-    "src/gateway/router/secret_echo_tests.rs",
-    "src/gateway/router/secret_echo_stored_tests.rs",
-    "src/transport/websocket_scrub_tests.rs",
-    "src/transport/stdio_progress_tests.rs",
-    "src/transport/http/sse_decoder_tests.rs",
-    "src/transport/http/listen_stream_tests.rs",
-    "src/transport/http/sse_listen_tests.rs",
-    "src/a2a/transport_needles_tests.rs",
-    "src/gateway/meta_mcp/chain_withheld_tests.rs",
-    "src/gateway/ui/preview_secret_tests.rs",
-    "src/security/needles_tests.rs",
+/// Every file holding MIK-9035 echo or scrub rows, read at build time.
+const ROW_FILES: [(&str, &str); 11] = [
+    (
+        "src/gateway/router/secret_echo_tests.rs",
+        include_str!("../../../../src/gateway/router/secret_echo_tests.rs"),
+    ),
+    (
+        "src/gateway/router/secret_echo_stored_tests.rs",
+        include_str!("../../../../src/gateway/router/secret_echo_stored_tests.rs"),
+    ),
+    (
+        "src/transport/websocket_scrub_tests.rs",
+        include_str!("../../../../src/transport/websocket_scrub_tests.rs"),
+    ),
+    (
+        "src/transport/stdio_progress_tests.rs",
+        include_str!("../../../../src/transport/stdio_progress_tests.rs"),
+    ),
+    (
+        "src/transport/http/sse_decoder_tests.rs",
+        include_str!("../../../../src/transport/http/sse_decoder_tests.rs"),
+    ),
+    (
+        "src/transport/http/listen_stream_tests.rs",
+        include_str!("../../../../src/transport/http/listen_stream_tests.rs"),
+    ),
+    (
+        "src/transport/http/sse_listen_tests.rs",
+        include_str!("../../../../src/transport/http/sse_listen_tests.rs"),
+    ),
+    (
+        "src/a2a/transport_needles_tests.rs",
+        include_str!("../../../../src/a2a/transport_needles_tests.rs"),
+    ),
+    (
+        "src/gateway/meta_mcp/chain_withheld_tests.rs",
+        include_str!("../../../../src/gateway/meta_mcp/chain_withheld_tests.rs"),
+    ),
+    (
+        "src/gateway/ui/preview_secret_tests.rs",
+        include_str!("../../../../src/gateway/ui/preview_secret_tests.rs"),
+    ),
+    (
+        "src/security/needles_tests.rs",
+        include_str!("../../../../src/security/needles_tests.rs"),
+    ),
 ];
 
 /// What a row file must not mention: an override claiming redaction, the
@@ -48,10 +79,8 @@ fn violations(file: &str, text: &str) -> Vec<String> {
 #[test]
 fn echo_rows_never_use_a_double_that_claims_to_redact() {
     let mut wrong = Vec::new();
-    for file in ROW_FILES {
-        let text = std::fs::read_to_string(crate_root().join(file))
-            .unwrap_or_else(|e| panic!("{file} is listed but unreadable: {e}"));
-        wrong.extend(violations(file, &text));
+    for (file, text) in ROW_FILES {
+        wrong.extend(violations(file, text));
     }
     assert!(
         wrong.is_empty(),
