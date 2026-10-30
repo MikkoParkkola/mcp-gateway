@@ -159,9 +159,9 @@ fn t6b_the_csp_allows_nothing_inline_or_foreign() {
         "frame-ancestors 'none'",
         "base-uri 'none'",
     ] {
-        assert!(CSP.contains(directive), "{directive}");
+        assert!(csp().contains(directive), "{directive}");
     }
-    assert!(!CSP.contains("unsafe"), "{CSP}");
+    assert!(!csp().contains("unsafe"), "{}", csp());
 }
 
 #[test]
@@ -263,4 +263,71 @@ fn t8_the_meta_tool_count_on_screen_is_the_gateways() {
 fn t8a_the_count_reader_finds_a_planted_number() {
     assert_eq!(load_counts("Agents load 12 tools and"), vec![12]);
     assert_eq!(load_counts("load the tools"), Vec::<u64>::new());
+}
+
+/// The text between the document's `<style id="frame">` and its `</style>`.
+fn inlined_frame() -> &'static str {
+    let open = r#"<style id="frame">"#;
+    let start = DOCUMENT.find(open).map(|i| i + open.len());
+    let text = start.and_then(|s| DOCUMENT[s..].find("</style>").map(|e| &DOCUMENT[s..s + e]));
+    text.unwrap_or_default()
+}
+
+#[test]
+fn t9_the_document_inlines_the_frame_css_byte_for_byte() {
+    assert_eq!(
+        DOCUMENT.matches("<style").count(),
+        1,
+        "one inline style, the frame"
+    );
+    assert!(
+        inlined_frame() == FRAME_CSS,
+        "the inlined frame is shell-src/frame.css: run scripts/dev/rehash_ui_assets.py"
+    );
+}
+
+#[test]
+fn t9a_the_rest_of_the_stylesheet_is_linked_at_the_end_of_the_body() {
+    let (head, body) = DOCUMENT.split_once("<body>").unwrap_or_default();
+    assert!(
+        !head.contains(r#"rel="stylesheet""#),
+        "nothing in the head blocks the first paint"
+    );
+    let link = body
+        .find(r#"<link rel="stylesheet" href="/ui/assets/shell."#)
+        .expect("the rest of the stylesheet is linked in the body");
+    let tail = &body[link..];
+    assert!(
+        !tail.contains("<section") && !tail.contains("<div"),
+        "the link comes after the page"
+    );
+}
+
+#[test]
+fn t9b_the_csp_allows_exactly_the_inlined_frame() {
+    let frame = inlined_frame();
+    assert!(!frame.is_empty(), "the document inlines a frame");
+    let source = format!(
+        "'sha256-{}'",
+        crate::hashing::sha256_base64(frame.as_bytes())
+    );
+    let style = csp()
+        .split(';')
+        .map(str::trim)
+        .find(|d| d.starts_with("style-src "))
+        .unwrap_or_default();
+    assert_eq!(style, format!("style-src 'self' {source}"), "{}", csp());
+    assert!(!csp().contains("unsafe-inline"), "{}", csp());
+}
+
+/// The fixture server checks its own policy against this file, so the
+/// gateway's must match it; a stale golden fails here first.
+#[test]
+fn t9c_the_csp_golden_is_the_gateways_policy() {
+    let golden = include_str!("csp.golden").trim_end();
+    assert!(
+        golden == csp(),
+        "src/gateway/ui/csp.golden is stale; its one line must be:\n{}",
+        csp()
+    );
 }

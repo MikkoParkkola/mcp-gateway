@@ -44,6 +44,16 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
     hex::encode(hasher.finalize())
 }
 
+/// SHA-256 of `bytes` in RFC 4648 standard base64 with padding: the form a
+/// CSP hash source takes (`'sha256-<this>'`), which the browser compares.
+#[cfg(feature = "webui")]
+pub(crate) fn sha256_base64(bytes: &[u8]) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    // red stub: the real digest lands with the shell's hashed policy.
+    let _ = bytes;
+    STANDARD.encode(b"")
+}
+
 /// `sha256:` followed by [`sha256_hex`] of `bytes`, the tagged form stored in
 /// digests that name their algorithm.
 pub(crate) fn sha256_tagged(bytes: &[u8]) -> String {
@@ -74,6 +84,20 @@ mod tests {
         let combined = b"prefix\0payload";
         let chunked = sha256_hex_chunks([&combined[..6], &combined[6..7], &combined[7..]]);
         assert_eq!(chunked, sha256_hex(combined));
+    }
+
+    /// The FIPS 180-2 `abc` vector in the CSP's standard, padded base64.
+    #[cfg(feature = "webui")]
+    #[test]
+    fn sha256_base64_is_standard_padded_base64() {
+        assert_eq!(
+            sha256_base64(b"abc"),
+            "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0="
+        );
+        assert_eq!(
+            sha256_base64(b""),
+            "47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+        );
     }
 
     /// MIK-8668: the FIPS 180-2 `abc` vector, tagged.

@@ -72,6 +72,16 @@ pub(super) const CSP: &str = "default-src 'none'; script-src 'self'; style-src '
      img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
      form-action 'self'; frame-ancestors 'none'";
 
+/// The frame stylesheet the document inlines (`<style id="frame">`).
+#[cfg(test)]
+const FRAME_CSS: &str = include_str!("shell-src/frame.css");
+
+/// The policy the document is served with. red stub: the hashed frame lands
+/// with the inlined frame.
+pub(super) fn csp() -> &'static str {
+    CSP
+}
+
 /// `GET /ui/{*path}`: the shell document, except under `api` and `assets`,
 /// which answer 404 so an unrouted API or asset path never gets HTML.
 pub(super) async fn document(Path(path): Path<String>) -> Response {

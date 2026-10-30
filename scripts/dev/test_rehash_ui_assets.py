@@ -21,6 +21,8 @@ import unittest
 HERE = pathlib.Path(__file__).resolve().parent
 SCRIPT = HERE / "rehash_ui_assets.py"
 REAL_SHELL = HERE.parents[1] / "src/gateway/ui/shell"
+REAL_FRAME = HERE.parents[1] / "src/gateway/ui/shell-src/frame.css"
+FRAME_OPEN = '<style id="frame">'
 HASHED = re.compile(r"^(?P<stem>.+?)\.(?P<digest>[0-9a-f]{12})\.(?P<ext>css|js|json|woff2|svg|png)$")
 ASSET_EXTS = {"css", "js", "json", "woff2", "svg", "png"}
 TABLE = 'pub(super) const ASSETS: &[(&str, &[u8])] = &[\n];\n'
@@ -37,10 +39,22 @@ class Tree:
         self.shell = self.root / "src/gateway/ui/shell"
         self.shell.mkdir(parents=True)
         (self.root / "src/gateway/ui/shell.rs").write_text(TABLE)
+        # Every document inlines a frame; a case that names its own replaces these.
+        self.frame = self.root / "src/gateway/ui/shell-src/frame.css"
+        files = {"../shell-src/frame.css": "a{}\n", **files}
+        if "index.html" in files and FRAME_OPEN not in files["index.html"]:
+            files["index.html"] = FRAME_OPEN + "</style>\n" + files["index.html"]
         for rel, text in files.items():
             path = self.shell / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
+            # Bytes as given: a case may carry CRLF line ends.
+            path.write_bytes(text.encode())
+
+    def inlined(self):
+        """The document's frame text, between its markers."""
+        doc = (self.shell / "index.html").read_text()
+        start = doc.index(FRAME_OPEN) + len(FRAME_OPEN)
+        return doc[start:doc.index("</style>", start)]
 
     def run(self):
         return subprocess.run(
@@ -181,11 +195,64 @@ class RehashOrder(unittest.TestCase):
         self.addCleanup(t.close)
         shutil.rmtree(t.shell)
         shutil.copytree(REAL_SHELL, t.shell)
+        shutil.copy(REAL_FRAME, t.frame)
         before = sorted(p.name for p in t.shell.rglob("*") if p.is_file())
+        document = (t.shell / "index.html").read_bytes()
         run = t.run()
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(t.stale(), [])
         self.assertEqual(sorted(p.name for p in t.shell.rglob("*") if p.is_file()), before)
+        self.assertEqual((t.shell / "index.html").read_bytes(), document)
+        self.assertEqual(t.inlined().encode(), REAL_FRAME.read_bytes())
+
+
+class RehashFrame(unittest.TestCase):
+    """The frame stylesheet is copied into the document, unchanged."""
+
+    def tree(self, files):
+        t = Tree(files)
+        self.addCleanup(t.close)
+        return t
+
+    def test_the_frame_is_inlined_byte_for_byte(self):
+        t = self.tree({
+            "index.html": '<head><style id="frame">old</style></head>\n',
+            "../shell-src/frame.css": "body { color: red; }\n.plate { font: 1em x; }\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(t.inlined().encode(), t.frame.read_bytes())
+        self.assertEqual(t.inlined(), "body { color: red; }\n.plate { font: 1em x; }\n")
+
+    def test_a_font_rename_lands_in_the_inlined_frame(self):
+        t = self.tree({
+            "index.html": '<style id="frame"></style>\n',
+            "fonts/Face-400.woff2": "font bytes",
+            "../shell-src/frame.css": "@font-face { src: url(/ui/assets/Face-400.woff2); }\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        font = next(t.shell.glob("fonts/Face-400.*.woff2")).name
+        self.assertIn(f"/ui/assets/{font}", t.frame.read_text())
+        self.assertIn(f"/ui/assets/{font}", t.inlined())
+        self.assertEqual(t.inlined().encode(), t.frame.read_bytes())
+
+    def test_crlf_line_ends_in_the_frame_are_normalised(self):
+        t = self.tree({
+            "index.html": '<style id="frame"></style>\n',
+            "../shell-src/frame.css": "a { color: red; }\r\nb { color: blue; }\r\n",
+        })
+        run = t.run()
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(t.frame.read_bytes(), b"a { color: red; }\nb { color: blue; }\n")
+        self.assertEqual(t.inlined().encode(), t.frame.read_bytes())
+
+    def test_a_document_without_the_frame_markers_is_refused(self):
+        t = self.tree({"index.html": FRAME_OPEN + "</style>\n"})
+        (t.shell / "index.html").write_text("<head></head>\n")
+        run = t.run()
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("frame", run.stderr)
 
 
 if __name__ == "__main__":
