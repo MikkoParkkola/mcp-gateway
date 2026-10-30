@@ -188,7 +188,10 @@ impl MetaMcp {
             let Some(indexed) = backend.caller_slot_binding(&id) else {
                 continue;
             };
-            if vault.view_binding(principal).await.as_deref() != Some(indexed.as_str()) {
+            let read = vault.view_binding(principal).await;
+            #[cfg(test)]
+            super::visible::seams::custody_read().await;
+            if read.as_deref() != Some(indexed.as_str()) {
                 backend.forget_caller_principal(&id);
             }
         }

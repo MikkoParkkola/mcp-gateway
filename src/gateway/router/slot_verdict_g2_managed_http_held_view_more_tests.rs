@@ -356,3 +356,31 @@ async fn pin8_a_required_backends_bound_read_is_not_no_view() {
         "pin8: the listing did not show the caller's own catalogue: {listed}"
     );
 }
+
+/// R8: the re-check reads the old binding, the grant rotates, and a publish
+/// of the new binding lands before the re-check judges. The re-check keeps
+/// the concurrently published new slot (it compares what it captured, not
+/// the index now), and the next listing shows the current grant's catalogue.
+#[tokio::test]
+async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
+    let fx = Arc::new(fixture().await);
+    let old = fill_old(&fx, 1).await;
+    let (reached, release) = seams::after_custody_read();
+    let listing = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let new = rotate(&fx, &old).await;
+    fx.gateway.rearm_operator_slot_at_for_test(&new);
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    backend.record_caller_slot(&operator_id(), &new);
+    release.notify_one();
+    listing.await.expect("the listing");
+    assert_eq!(
+        backend.caller_slot_binding(&operator_id()),
+        Some(new),
+        "R8: the re-check forgot the new slot published while it was reading"
+    );
+    current_grant_lists(&fx, 3, "R8").await;
+}
