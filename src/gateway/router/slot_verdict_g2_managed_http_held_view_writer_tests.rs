@@ -18,7 +18,8 @@ async fn r2b_an_equal_binding_publish_reads_no_custody() {
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     let reads = fx.gateway.resolves();
     fx.meta
-        .remember_caller_slot(&backend, operator_proof(), Some(&old));
+        .remember_caller_slot(&backend, operator_proof(), Some(&old))
+        .await;
     assert_eq!(
         fx.gateway.resolves(),
         reads,
@@ -81,7 +82,8 @@ async fn r2c_a_publish_while_custody_is_busy_is_not_indexed() {
     backend.forget_caller_principal(&operator_id());
     fx.gateway.fail_custody_for_test(true);
     fx.meta
-        .remember_caller_slot(&backend, operator_proof(), Some(&old));
+        .remember_caller_slot(&backend, operator_proof(), Some(&old))
+        .await;
     fx.gateway.fail_custody_for_test(false);
     assert_eq!(
         backend.caller_slot_binding(&operator_id()),
@@ -134,7 +136,8 @@ async fn a_publish_after_a_revoke_is_not_indexed() {
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     backend.forget_caller_principal(&operator_id());
     fx.meta
-        .remember_caller_slot(&backend, operator_proof(), Some(&old));
+        .remember_caller_slot(&backend, operator_proof(), Some(&old))
+        .await;
     assert_eq!(
         backend.caller_slot_binding(&operator_id()),
         None,

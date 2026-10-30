@@ -88,7 +88,8 @@ async fn publish_old_at_recheck(
     before(fx);
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
     fx.meta
-        .remember_caller_slot(&backend, operator_proof(), Some(old));
+        .remember_caller_slot(&backend, operator_proof(), Some(old))
+        .await;
     release.notify_one();
     (true, request.await.expect("the request"))
 }
