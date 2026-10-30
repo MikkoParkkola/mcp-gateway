@@ -62,7 +62,7 @@ impl MetaMcp {
             )));
         };
         let caller = CallerProof::new(Some(identity), CallerProvenance::Anonymous);
-        let minted = self
+        let mut minted = self
             .resolve_caller_credential_as(server, backend.as_deref(), &idp_cfg, caller)
             .await?;
         if minted.headers.is_empty() {
@@ -79,7 +79,7 @@ impl MetaMcp {
                 Error::Config(format!("events listener for backend '{server}': {error}"))
             })?;
         Ok(crate::events::ListenerGrant {
-            headers: minted.headers,
+            headers: std::mem::take(&mut minted.headers),
             fence,
         })
     }
@@ -143,7 +143,10 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
-            .map(|(headers, cache_binding, _)| (headers, cache_binding))
+            // A public API that has returned a plain `Vec` since before the
+            // send recheck: the secret is moved out, never copied, and from
+            // here its owner is the caller. Changing the type is an API change.
+            .map(|(mut lent, cache_binding, _)| (std::mem::take(&mut *lent.headers), cache_binding))
     }
 
     /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
@@ -189,17 +192,27 @@ impl MetaMcp {
     ) -> Result<(DispatchCredential, bool, Option<Error>)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok(((Vec::new(), None, None), false, None));
+            return Ok((
+                (crate::transport::LentCredential::default(), None, None),
+                false,
+                None,
+            ));
         };
-        let cred = self
+        let mut cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
         let unproven = cred
             .cache_binding
             .is_none()
             .then(|| super::stored_proof::unminted_refusal(server));
+        // Moved, not cloned: no second copy of the caller's secret is left
+        // behind outside the zeroizing holder.
+        let lent = crate::transport::LentCredential {
+            headers: std::mem::take(&mut cred.headers),
+            check: cred.check.take(),
+        };
         Ok((
-            (cred.headers, cred.cache_binding, cred.managed),
+            (lent, cred.cache_binding, cred.managed),
             cred.attempted,
             unproven,
         ))
@@ -267,6 +280,31 @@ impl MetaMcp {
         match self.account_strategies.managed_vault(descriptor_id) {
             Some(vault) => vault.principal(caller),
             None => caller.verified().map(Principal::Verified),
+        }
+    }
+
+    /// A minted credential as a dispatch carries it, with the per-send check
+    /// every lent-only send of it runs first: the managed lease's recheck,
+    /// else its expiry.
+    fn minted_credential(
+        &self,
+        cred: crate::identity_propagation::PropagatedCredential,
+        managed: Option<crate::personal_accounts::ManagedLease>,
+        descriptor_id: Option<&str>,
+    ) -> CallerCredential {
+        let expiry = account_mint::expiry_of(&cred);
+        let check = account_mint::send_check_for(
+            &self.account_strategies,
+            (descriptor_id, managed.as_ref()),
+            (expiry, &cred.headers),
+        );
+        CallerCredential {
+            headers: cred.headers.into(),
+            cache_binding: Some(cred.cache_binding),
+            managed,
+            attempted: false,
+            expiry: Some(expiry),
+            check: Some(check),
         }
     }
 
@@ -385,12 +423,7 @@ impl MetaMcp {
                         )
                         .await?;
                     }
-                    Ok(CallerCredential {
-                        headers: cred.headers,
-                        cache_binding: Some(cred.cache_binding),
-                        managed,
-                        attempted: false,
-                    })
+                    Ok(self.minted_credential(cred, managed, descriptor_id.as_deref()))
                 }
                 // A busy custody at the mint released nothing (MIK-8428):
                 // the one transient record and sealed retryable answer
