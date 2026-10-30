@@ -136,6 +136,33 @@ async fn h2_a_name_only_listing_does_not_serve_a_publish_racing_a_seen_revoke() 
     );
 }
 
+/// H2 through `tools/resolve` (spec preview): the re-check sees the revoke,
+/// a publish of the old binding lands after it, and `tools/resolve` (which
+/// runs no pre-pass) must not resolve the old slot. Only the re-check's own
+/// failed read can make the published slot read cold here.
+#[cfg(feature = "spec-preview")]
+#[tokio::test]
+async fn h2_tools_resolve_does_not_resolve_a_publish_racing_a_seen_revoke() {
+    let fx = Arc::new(fixture().await);
+    let old = fill_old(&fx, 1).await;
+    fx.gateway.revoke_operator_grant().await;
+    let (fired, answer) = publish_old_at_recheck(
+        &fx,
+        &old,
+        (2, "tools/resolve", json!({"name": TOOL})),
+        |_| {},
+    )
+    .await;
+    assert!(
+        fired,
+        "premise: the after_revalidate seam fired and the old publish ran"
+    );
+    assert!(
+        answer.pointer("/result/tool").is_none(),
+        "H2 tools/resolve: a publish racing a revoke the re-check saw resolved: {answer}"
+    );
+}
+
 /// An optional (`required: false`) per-user backend on the managed account,
 /// the operator's slot on it held: no config compiles this (a managed
 /// account is always `required`), so it is built directly.
