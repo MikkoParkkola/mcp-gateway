@@ -326,6 +326,9 @@ mod suggestion_authz_tests;
 mod f13_bridge_tests;
 
 #[cfg(test)]
+mod bridge_round_recheck_tests;
+
+#[cfg(test)]
 mod captured_invoke_tests;
 
 #[cfg(test)]

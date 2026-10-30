@@ -206,6 +206,7 @@ impl crate::identity_propagation::IdentityPropagation for Minting {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let binding = format!("{}@{}", identity.subject, backend.audience);
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: binding,
@@ -286,6 +287,7 @@ impl crate::identity_propagation::IdentityPropagation for FailingMint {
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if self.bad_header {
             return Ok(crate::identity_propagation::PropagatedCredential {
+                expiry_synthetic: false,
                 headers: vec![("bad header".to_string(), "minted".to_string())],
                 expires_at: i64::MAX,
                 cache_binding: format!("{}@{}", identity.subject, backend.audience),

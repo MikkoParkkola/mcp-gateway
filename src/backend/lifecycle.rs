@@ -77,14 +77,14 @@ impl Backend {
             metric_label: Arc::<str>::from(name).into(),
             config,
             runtime_plan,
-            pool: {
+            pool: Arc::new({
                 let pool = DashMap::new();
                 pool.insert(
                     PoolKey::Shared,
                     Arc::new(PooledEntry::new(name, failsafe_config)),
                 );
                 pool
-            },
+            }),
             caller_slots: DashMap::new(),
             caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
@@ -605,7 +605,7 @@ impl Backend {
                 let era = match era_mode {
                     EraResolution::Shared => self.resolve_era(&peer, entry).await,
                     EraResolution::Deferred => {
-                        let probe = self.probe_candidate_era(&peer).await;
+                        let probe = self.probe_candidate_era(&peer, entry).await;
                         let era = probe.era();
                         deferred = Some(probe);
                         era
@@ -646,7 +646,7 @@ impl Backend {
                 built_under = self.mark_connecting();
                 self.begin_connecting(built_under)?;
                 listen = None;
-                self.start_a2a(built_under).await?
+                self.start_a2a(key, entry, built_under).await?
             }
         };
 
