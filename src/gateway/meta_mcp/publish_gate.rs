@@ -23,8 +23,8 @@ use crate::personal_accounts::{VaultStrategy, ViewBinding};
 pub(crate) enum Publish {
     /// The binding is the grant's current one: index it.
     Allow,
-    /// The grant has moved past `binding` (rotated or revoked): leave the
-    /// index alone.
+    /// The grant has moved past `binding` (rotated or revoked): do not index
+    /// it, and forget an indexed entry that still holds it.
     Superseded,
     /// The grant could not be read (busy or unavailable custody): fail
     /// closed, leave the index alone.
