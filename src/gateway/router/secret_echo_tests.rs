@@ -44,6 +44,13 @@ enum Reply {
     /// The value of the `X-Api-Key` header the call arrived with, in the
     /// result.
     EchoHeader,
+    /// `structuredContent.n` is this number literal, written as given.
+    Number(&'static str),
+    /// An error whose `code` is the injected value as a string, which a
+    /// typed parse of the answer cannot accept.
+    CodeIsSecret,
+    /// Clean text and keys beside one field that holds the injected value.
+    MixedClean,
 }
 
 /// A frame's exact wire text, as the backend sends it.
@@ -101,6 +108,16 @@ async fn echo_server(calls: Calls, reply: Reply) -> String {
                         Reply::EchoHeader => {
                             answer(json!({"content": [{"type": "text", "text": format!("header {header}")}]}))
                         }
+                        Reply::Number(literal) => wire(format!(
+                            r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":[{{"type":"text","text":"n"}}],"structuredContent":{{"n":{literal}}}}}}}"#
+                        )),
+                        Reply::CodeIsSecret => wire(format!(
+                            r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":"{key}","message":"refused"}}}}"#
+                        )),
+                        Reply::MixedClean => answer(json!({
+                            "content": [{"type": "text", "text": "plain words, a/b c-d_e"}],
+                            "structuredContent": {"keep me": "unchanged: x=1; y=2", "k": key}
+                        })),
                         Reply::Refusal => (
                             axum::http::StatusCode::BAD_REQUEST,
                             axum::Json(json!({"jsonrpc": "2.0", "id": id, "error": {
@@ -368,5 +385,72 @@ async fn an_echoed_header_secret_is_redacted_on_both_routes() {
             "{route}: the header secret reached the client: {body}"
         );
         assert!(text.contains(MARKER), "{route}: not redacted: {body}");
+    }
+}
+
+/// The meta route's answer for a backend whose rule injects `value` and
+/// which answers with `reply`.
+async fn meta_answer_with(reply: Reply, value: &str) -> Value {
+    let rule = json!({"name": "echo-key", "value": value, "inject_key": "api_key"});
+    let (router, _calls, _store) = fixture_with(reply, rule).await;
+    post(
+        &router,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "echoes", "tool": "echo", "arguments": {"q": "hi"}}
+        }}),
+    )
+    .await
+}
+
+/// A numeric secret echoed as a JSON number, without its leading zero or in
+/// exponent form, is matched by value and redacted (T1.13).
+#[tokio::test]
+async fn a_numeric_secret_echoed_as_a_number_is_redacted() {
+    for (value, literal, shown) in [
+        ("0739154", "739154", "739154"),
+        ("12345", "1.2345e4", "12345"),
+    ] {
+        let body = meta_answer_with(Reply::Number(literal), value).await;
+        let text = body.to_string();
+        assert!(body["result"].is_object(), "premise: answered: {body}");
+        assert!(
+            !text.contains(shown),
+            "the number {literal} (secret {value}) reached the client: {body}"
+        );
+        assert!(text.contains(MARKER), "{literal}: not redacted: {body}");
+    }
+}
+
+/// An answer whose `error.code` is the secret string fails a typed parse;
+/// the error the client gets carries no part of the body (T1.20).
+#[tokio::test]
+async fn a_secret_error_code_never_reaches_the_client_through_a_parse_error() {
+    let body = meta_answer(Reply::CodeIsSecret).await;
+    assert!(
+        !body.to_string().contains(SECRET),
+        "the malformed answer's secret reached the client: {body}"
+    );
+}
+
+/// Text and keys that hold no secret pass byte for byte; only the field that
+/// holds it changes (T1.35).
+#[tokio::test]
+async fn text_without_a_secret_passes_unchanged() {
+    let body = meta_answer(Reply::MixedClean).await;
+    let text = body.to_string();
+    assert!(
+        !text.contains(SECRET),
+        "the secret reached the client: {body}"
+    );
+    assert!(
+        text.contains(MARKER),
+        "the field holding it was not redacted: {body}"
+    );
+    for clean in ["plain words, a/b c-d_e", "keep me", "unchanged: x=1; y=2"] {
+        assert!(
+            text.contains(clean),
+            "clean text changed: {clean:?} missing from {body}"
+        );
     }
 }
