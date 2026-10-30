@@ -124,3 +124,111 @@ async fn a_legacy_bridged_exchange_dropped_after_round_two_keeps_its_key() {
         "the dropped exchange released its key after round two was sent"
     );
 }
+
+/// Answers each `tools/call` with the next scripted result, counted.
+struct Scripted(std::sync::Mutex<Vec<serde_json::Value>>, AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Scripted {
+    async fn request(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        self.1.fetch_add(1, Ordering::SeqCst);
+        let next = self.0.lock().expect("script").remove(0);
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            next,
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<serde_json::Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// Answers every question.
+struct Answering;
+
+#[async_trait::async_trait]
+impl crate::gateway::input_bridge::ClientChannel for Answering {
+    async fn send_request(
+        &self,
+        _session_id: &str,
+        _id: &str,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::gateway::input_bridge::DeliveryError> {
+        Ok(
+            json!({"jsonrpc": "2.0", "result": {"action": "accept", "content": {"account": "work"}}}),
+        )
+    }
+}
+
+/// R23c (F12): a bridged exchange that ends in an error other than a failed
+/// send (here round two's malformed interim, the same arm as a deadline or a
+/// spent budget) after round one reached the backend keeps its key.
+#[tokio::test]
+async fn a_bridged_exchange_ending_in_a_malformed_round_keeps_its_key() {
+    let question = json!({
+        "resultType": "input_required",
+        "inputRequests": {"k1": {
+            "method": "elicitation/create",
+            "params": {"message": "Which account?", "requestedSchema": {"type": "object"}}
+        }},
+        "requestState": "state"
+    });
+    let malformed = json!({"resultType": "input_required"});
+    let registry = Arc::new(BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "asking_backend",
+        crate::config::BackendConfig::r2_off(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    let transport = Arc::new(Scripted(
+        std::sync::Mutex::new(vec![question, malformed]),
+        AtomicUsize::new(0),
+    ));
+    backend.set_transport_for_test(transport.clone());
+    let _ = registry.register(backend);
+    let mut meta = MetaMcp::new(registry);
+    let cache = Arc::new(crate::idempotency::IdempotencyCache::new());
+    meta.enable_idempotency(Arc::clone(&cache), Duration::from_secs(300));
+    let retry = crate::protocol::mrtr::RetryFields {
+        idempotency_key: Some("k-r23c".to_string()),
+        ..Default::default()
+    };
+    let mut ctx = allow_all_ctx();
+    ctx.era = crate::protocol::meta::Era::Legacy;
+    ctx.input_capabilities = crate::protocol::meta::classify_request(
+        Some(&json!({"_meta": {
+            crate::protocol::meta::KEY_PROTOCOL_VERSION: "2026-07-28",
+            crate::protocol::meta::KEY_CLIENT_CAPABILITIES: {"elicitation": {"form": {}}}
+        }})),
+        None,
+    )
+    .declared_capabilities();
+    ctx.channel = &Answering;
+    ctx.retry = &retry;
+    let call = json!({"server": "asking_backend", "tool": "book", "arguments": {}});
+    let result =
+        crate::gateway::delivery_facts::scope(meta.invoke_tool(&call, Some("session-r23c"), &ctx))
+            .await;
+    assert!(result.is_err(), "premise: the exchange failed: {result:?}");
+    assert_eq!(
+        transport.1.load(Ordering::SeqCst),
+        2,
+        "premise: both rounds reached the backend"
+    );
+    assert!(
+        !cache.is_empty(),
+        "the failed exchange released its key after rounds were sent"
+    );
+}
