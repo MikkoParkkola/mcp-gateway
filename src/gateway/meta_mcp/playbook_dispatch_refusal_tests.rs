@@ -18,7 +18,7 @@ use crate::protocol::RequestId;
 
 /// Refuses a call that carries arguments and allows one that carries none,
 /// so the name stays visible and only the dispatch-time check refuses it.
-struct RefusesArguments;
+pub(super) struct RefusesArguments;
 
 impl ToolAuthorizer for RefusesArguments {
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
