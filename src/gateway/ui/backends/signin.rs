@@ -6,9 +6,10 @@
 //!   POST `/ui/api/backends/:name/signin`          — start a sign-in
 //!   POST `/ui/api/backends/:name/signin/confirm`  — confirm or cancel it
 //!
-//! Guards, in order: admin, the gateway-host gate, a JSON body, the backend
-//! (404, then 409 `not_oauth`), and a valid dashboard session. The flow itself
-//! is `signin_flow.rs`.
+//! Guards, in order: admin, a JSON body, a valid dashboard session (so a
+//! caller without one learns nothing about which backends exist), the backend
+//! (404, then 409 `not_oauth`), and the gateway-host gate. The flow itself is
+//! `signin_flow.rs`.
 
 use std::sync::Arc;
 
@@ -60,20 +61,21 @@ fn is_json(headers: &HeaderMap) -> bool {
         .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"))
 }
 
-/// The refusal for a caller that is not on the gateway host, or the JSON-only
-/// rule broken; `None` to go on.
-fn refuse_request(uri: &Uri, headers: &HeaderMap) -> Option<Response> {
+/// The refusal for a caller that is not on the gateway host; `None` to go on.
+fn refuse_host(uri: &Uri, headers: &HeaderMap) -> Option<Response> {
     let on_host = request_authority(uri, headers).is_some_and(|a| is_gateway_host_authority(&a));
-    if !on_host {
-        return Some(
-            structured_error(
-                StatusCode::CONFLICT,
-                "gateway_host_required",
-                GATEWAY_HOST_REASON,
-            )
-            .into_response(),
-        );
-    }
+    (!on_host).then(|| {
+        structured_error(
+            StatusCode::CONFLICT,
+            "gateway_host_required",
+            GATEWAY_HOST_REASON,
+        )
+        .into_response()
+    })
+}
+
+/// The refusal for a body that is not JSON; `None` to go on.
+fn refuse_body(headers: &HeaderMap) -> Option<Response> {
     (!is_json(headers)).then(|| {
         flat_error(StatusCode::BAD_REQUEST, "the body must be application/json").into_response()
     })
@@ -156,20 +158,23 @@ pub(super) async fn start_sign_in(
     if !is_admin(client.as_ref()) {
         return admin_auth_required().into_response();
     }
-    if let Some(refused) = refuse_request(&uri, &headers) {
+    if let Some(refused) = refuse_body(&headers) {
         return refused;
     }
     if serde_json::from_slice::<Value>(&body).is_err() {
         return flat_error(StatusCode::BAD_REQUEST, "the body must be JSON").into_response();
     }
+    let owner = match session_owner(&state, &headers) {
+        Ok(owner) => owner,
+        Err(refused) => return refused,
+    };
     let backend = match find_backend(&state, &name, true) {
         Ok(backend) => backend,
         Err(refused) => return refused,
     };
-    let owner = match session_owner(&state, &headers) {
-        Ok(owner) => owner,
-        Err(refused) => return audited(refused, &name, "refused"),
-    };
+    if let Some(refused) = refuse_host(&uri, &headers) {
+        return audited(refused, &name, "refused");
+    }
     let (response, outcome) = match start(&state, &backend, owner, client).await {
         Ok(Started::Link {
             url,
@@ -244,7 +249,7 @@ pub(super) async fn confirm_sign_in(
     if !is_admin(client.as_ref()) {
         return admin_auth_required().into_response();
     }
-    if let Some(refused) = refuse_request(&uri, &headers) {
+    if let Some(refused) = refuse_body(&headers) {
         return refused;
     }
     let Ok(ask) = serde_json::from_slice::<ConfirmBody>(&body) else {
@@ -254,14 +259,17 @@ pub(super) async fn confirm_sign_in(
         )
         .into_response();
     };
+    let owner = match session_owner(&state, &headers) {
+        Ok(owner) => owner,
+        Err(refused) => return refused,
+    };
     let backend = match find_backend(&state, &name, false) {
         Ok(backend) => backend,
         Err(refused) => return refused,
     };
-    let owner = match session_owner(&state, &headers) {
-        Ok(owner) => owner,
-        Err(refused) => return audited(refused, &name, "refused"),
-    };
+    if let Some(refused) = refuse_host(&uri, &headers) {
+        return audited(refused, &name, "refused");
+    }
     let decided = decide(&state, &backend, &owner, &ask.attempt_id, ask.decision).await;
     let (response, outcome) = match decided {
         Decided::Done => {

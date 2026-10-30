@@ -168,13 +168,7 @@ impl Gw {
 
     /// A new dashboard session.
     pub(super) fn session(&self) -> Who {
-        let config = self.state.live_config.get();
-        let limits = SessionLimits::from(&config.auth.dashboard_session);
-        Who::Dashboard(
-            self.state
-                .dashboard_bootstrap
-                .issue_session_at(Now::read(), &limits),
-        )
+        Who::Dashboard(session_handle(&self.state))
     }
 
     /// Send `method` `path` as `who` with `content_type` and `body`.
@@ -431,4 +425,14 @@ pub(super) async fn stream_until(
         }
     }
     text
+}
+
+/// The handle of a new dashboard session in `state`, as a redeemed link
+/// would issue it.
+pub(super) fn session_handle(state: &AppState) -> String {
+    let config = state.live_config.get();
+    let limits = SessionLimits::from(&config.auth.dashboard_session);
+    state
+        .dashboard_bootstrap
+        .issue_session_at(Now::read(), &limits)
 }

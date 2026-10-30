@@ -16,11 +16,11 @@ use tower::ServiceExt;
 
 use super::super::backends_router;
 use super::is_gateway_host_authority;
-use crate::config::{AuthConfig, BackendConfig, FailsafeConfig};
+use crate::config::{AuthConfig, BackendConfig, FailsafeConfig, OAuthConfig};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 
-const START: &str = "/ui/api/backends/missing/signin";
+const START: &str = "/ui/api/backends/oauthy/signin";
 const FOREIGN: [&str; 4] = [
     "gw.example:39400",
     "localhost.evil.example:39400",
@@ -55,8 +55,34 @@ fn admin() -> AuthenticatedClient {
     }
 }
 
+/// A gateway with one OAuth backend, `oauthy`, that has no HTTP endpoint to
+/// sign in to: a start that passes the gate ends there.
 async fn state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
-    crate::gateway::router::tests::audience_state(&AuthConfig::default(), (None, None), |m| m).await
+    let (state, dir) =
+        crate::gateway::router::tests::audience_state(&AuthConfig::default(), (None, None), |m| m)
+            .await;
+    let config = BackendConfig {
+        oauth: Some(OAuthConfig {
+            enabled: true,
+            scopes: Vec::new(),
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: None,
+            shared_account: false,
+        }),
+        ..BackendConfig::default()
+    };
+    let backend = crate::backend::Backend::new(
+        "oauthy",
+        config,
+        &FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    );
+    assert!(state.backends.register(Arc::new(backend)), "registration");
+    (state, dir)
 }
 
 /// A JSON POST of `{}` to `path` from `authority`, as an admin.
@@ -69,6 +95,14 @@ async fn post(
     let builder = Request::builder()
         .method("POST")
         .header("content-type", "application/json")
+        .header(
+            "cookie",
+            format!(
+                "{}={}",
+                crate::gateway::auth::SESSION_COOKIE,
+                super::fixture::session_handle(state)
+            ),
+        )
         .header("origin", format!("http://{authority}"));
     let builder = match wire {
         Wire::Http1Host => builder.uri(path).header("host", authority),
@@ -110,14 +144,16 @@ fn a_non_loopback_authority_is_not_the_gateway_host() {
     }
 }
 
-// G1: past the gate the missing backend answers 404, never the gate's 409.
+// G1: past the gate the start meets the backend's missing HTTP endpoint (502
+// `sign_in_unavailable`), never the gate's 409.
 #[tokio::test]
 async fn loopback_authorities_with_a_port_start_a_flow() {
     let (state, _dir) = state().await;
     for wire in WIRES {
         for authority in LOOPBACK {
             let (status, body) = post(&state, START, authority, wire).await;
-            assert_eq!(status, StatusCode::NOT_FOUND, "{authority}: {body}");
+            assert_eq!(status, StatusCode::BAD_GATEWAY, "{authority}: {body}");
+            assert_eq!(body["error"], "sign_in_unavailable", "{authority}: {body}");
         }
     }
 }
