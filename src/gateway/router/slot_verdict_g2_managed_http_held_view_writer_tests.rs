@@ -166,6 +166,8 @@ async fn a_cold_fill_finishing_after_a_revoke_leaves_no_backoff() {
     fx.gateway.revoke_operator_grant().await;
     first.await.expect("the first listing");
     fx.gateway.reconnect_operator_grant_for_test().await;
+    let current = current_binding(&fx).await;
+    fx.gateway.rearm_operator_slot_at_for_test(&current);
     let again = rpc(&fx, 2, "tools/list", json!({})).await;
     assert!(
         super::surfaced_on(&again, BACKEND)

@@ -347,9 +347,21 @@ async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
     });
     reached.notified().await;
     let new = rotate(&fx, &old).await;
+    // A real fill of the new grant's slot, indexed through the writer gate.
     fx.gateway.rearm_operator_slot_at_for_test(&new);
+    let filled = rpc(
+        &fx,
+        3,
+        "tools/call",
+        json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
+    )
+    .await;
     let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
-    backend.record_caller_slot(&operator_id(), &new);
+    assert_eq!(
+        backend.caller_slot_binding(&operator_id()),
+        Some(new.clone()),
+        "premise: the new grant's fill was indexed: {filled}"
+    );
     release.notify_one();
     listing.await.expect("the listing");
     assert_eq!(
@@ -357,7 +369,7 @@ async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
         Some(new),
         "R8: the re-check forgot the new slot published while it was reading"
     );
-    current_grant_lists(&fx, 3, "R8").await;
+    current_grant_lists(&fx, 4, "R8").await;
 }
 
 /// A deadline that cuts the account pre-pass short fails closed, even over a
