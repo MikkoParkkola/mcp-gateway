@@ -287,9 +287,9 @@ async fn a_secret_after_an_escape_is_redacted_and_the_escape_kept() {
         "the secret reached the client: {body}"
     );
     assert!(
-        // `\n` as the backend wrote it, or once more escaped where the
-        // meta route carries the answer as JSON text.
-        text.contains("line\\n") || text.contains("line\\\\n"),
+        // The meta route carries the answer as JSON text: the backend's
+        // `\n` arrives escaped once more, exactly once.
+        text.contains("line\\\\n") && !text.contains("line\\\\\\n"),
         "the escape before it was lost: {body}"
     );
     assert!(text.contains(MARKER), "not redacted: {body}");
@@ -359,6 +359,14 @@ async fn every_echo_is_redacted_on_the_per_backend_route() {
     ] {
         let body = direct_answer(reply).await;
         let text = body.to_string();
+        if let Reply::AfterEscape = reply {
+            // The per-backend route hands the answer on as the backend wrote
+            // it: the `\n` escape exactly as sent.
+            assert!(
+                text.contains("line\\n") && !text.contains("line\\\\n"),
+                "{what}: the escape changed: {body}"
+            );
+        }
         assert!(!text.contains(SECRET), "{what} reached the client: {body}");
         assert!(
             text.contains(MARKER),
