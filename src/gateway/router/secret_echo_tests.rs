@@ -41,6 +41,9 @@ enum Reply {
     AfterEscape,
     /// A non-2xx JSON-RPC refusal whose message and data quote the secret.
     Refusal,
+    /// The value of the `X-Api-Key` header the call arrived with, in the
+    /// result.
+    EchoHeader,
 }
 
 /// A frame's exact wire text, as the backend sends it.
@@ -55,7 +58,7 @@ fn wire(text: String) -> axum::response::Response {
 /// A Streamable HTTP MCP server on a loopback port that lists one `echo`
 /// tool and answers each call with `reply`; returns its URL.
 async fn echo_server(calls: Calls, reply: Reply) -> String {
-    let app = axum::Router::new().fallback(move |body: axum::body::Bytes| {
+    let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
         let calls = Arc::clone(&calls);
         async move {
             let request: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
@@ -75,6 +78,11 @@ async fn echo_server(calls: Calls, reply: Reply) -> String {
                     let params = request["params"].clone();
                     calls.lock().push(params.clone());
                     let key = params["arguments"]["api_key"].as_str().unwrap_or_default().to_owned();
+                    let header = headers
+                        .get("x-api-key")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
                     match reply {
                         Reply::Echo => {
                             let received = params["arguments"].to_string();
@@ -90,6 +98,9 @@ async fn echo_server(calls: Calls, reply: Reply) -> String {
                         Reply::AfterEscape => wire(format!(
                             r#"{{"jsonrpc":"2.0","id":{id},"result":{{"content":[{{"type":"text","text":"line\n{key}"}}]}}}}"#
                         )),
+                        Reply::EchoHeader => {
+                            answer(json!({"content": [{"type": "text", "text": format!("header {header}")}]}))
+                        }
                         Reply::Refusal => (
                             axum::http::StatusCode::BAD_REQUEST,
                             axum::Json(json!({"jsonrpc": "2.0", "id": id, "error": {
@@ -118,12 +129,22 @@ async fn echo_server(calls: Calls, reply: Reply) -> String {
 /// An `echoes` HTTP backend, served by [`echo_server`], whose own rule
 /// injects [`SECRET`] as the `api_key` argument.
 async fn fixture(reply: Reply) -> (axum::Router, Calls, super::tests::FixtureDir) {
+    fixture_with(
+        reply,
+        json!({"name": "echo-key", "value": SECRET, "inject_key": "api_key"}),
+    )
+    .await
+}
+
+/// [`fixture`] with `rule` as the backend's one secret rule.
+async fn fixture_with(
+    reply: Reply,
+    rule: Value,
+) -> (axum::Router, Calls, super::tests::FixtureDir) {
     let calls = Calls::default();
     let url = echo_server(Arc::clone(&calls), reply).await;
-    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
-        "name": "echo-key", "value": SECRET, "inject_key": "api_key"
-    }))
-    .expect("rule parses");
+    let rule: crate::secret_injection::CredentialRule =
+        serde_json::from_value(rule).expect("rule parses");
     let backend = Arc::new(Backend::new(
         "echoes",
         BackendConfig {
@@ -314,5 +335,38 @@ async fn every_echo_is_redacted_on_the_per_backend_route() {
             text.contains(MARKER),
             "{what} was dropped, not redacted: {body}"
         );
+    }
+}
+
+/// A header rule is the only injection: the backend echoes the header value
+/// it received, and the client sees it redacted on both routes (T1.40).
+#[tokio::test]
+async fn an_echoed_header_secret_is_redacted_on_both_routes() {
+    let rule = json!({
+        "name": "echo-header", "value": SECRET,
+        "inject_as": "header", "inject_key": "X-Api-Key"
+    });
+    let (router, _calls, _store) = fixture_with(Reply::EchoHeader, rule.clone()).await;
+    let meta = post(
+        &router,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "echoes", "tool": "echo", "arguments": {"q": "hi"}}
+        }}),
+    )
+    .await;
+    let (router, _calls, _store) = fixture_with(Reply::EchoHeader, rule).await;
+    let direct = post_direct(&router).await;
+    for (route, body) in [("meta", meta), ("per-backend", direct)] {
+        let text = body.to_string();
+        assert!(
+            text.contains("header "),
+            "premise: {route}: the echo answered: {body}"
+        );
+        assert!(
+            !text.contains(SECRET),
+            "{route}: the header secret reached the client: {body}"
+        );
+        assert!(text.contains(MARKER), "{route}: not redacted: {body}");
     }
 }
