@@ -259,6 +259,9 @@ impl Run {
         // attempt's flow in its place. The grant is then dropped and wiped
         // here, never stored on a flow that is not this attempt's.
         let until = self.backend.with_flow(|slot| {
+            // A backstop: while this task holds the login gate no other attempt
+            // can have a flow, so this filter cannot take effect today. The live
+            // guard is `cancel_flow` taking the flow out of the slot.
             let flow = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id)?;
             flow.grant = Some(grant);
             flow.held_since = Some(Instant::now());

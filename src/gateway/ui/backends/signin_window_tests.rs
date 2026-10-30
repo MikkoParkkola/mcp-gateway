@@ -229,12 +229,11 @@ async fn a_late_callback_after_cancel_is_ignored() {
 }
 
 // R19: a cancel that lands after the exchange has returned but before the
-// flow task stores the grant wins. Until that task ends it keeps the login
-// gate, so no other attempt can have a flow yet (a start is refused); when it
-// resumes, the re-check under the flow lock finds its attempt gone and drops
-// the grant. Nothing is saved, nothing is held, and the gate is then free. The
-// `attempt_id` filter in `hold` (mutant M23 drops it) is what keeps the grant
-// off any flow that is not this attempt's.
+// flow task stores the grant wins. The cancel takes the flow out of the slot
+// under the lock the task stores through, so the late grant has nowhere to go
+// (mutant M23 leaves the flow in the slot, and the grant lands on it). The old
+// task keeps the login gate until it ends, so no other attempt has a flow in
+// the meantime: a start is refused until it resumes.
 #[tokio::test]
 async fn a_cancel_during_the_exchange_discards_the_token() {
     let gw = Gw::new().await;
@@ -254,6 +253,19 @@ async fn a_cancel_during_the_exchange_discards_the_token() {
         blocked.body
     );
     release.notify_one();
+    let began = std::time::Instant::now();
+    while gw.backend.login_gate.in_flight() && began.elapsed() < HANG_BOUND {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        gw.row().await["sign_in_flow"].is_null(),
+        "no flow is left to hold the old token"
+    );
+    let held = gw
+        .backend
+        .with_flow(|slot| slot.as_ref().is_some_and(|f| f.grant.is_some()));
+    assert!(!held, "a grant is held for the cancelled attempt");
     let began = std::time::Instant::now();
     let mut again = gw.start(&owner).await;
     while again.status != StatusCode::OK && began.elapsed() < HANG_BOUND {
