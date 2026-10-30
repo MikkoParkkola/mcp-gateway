@@ -344,6 +344,13 @@ fn l3c_extra_separators_after_tilde_stay_home() {
     assert_eq!(expand_root("~//"), Some(home.clone()));
     assert_eq!(expand_root("~///x"), Some(home.join("x")));
     assert_eq!(expand_root("~/x"), Some(home.join("x")));
+    // A backslash after the tilde is not expanded: refused at load.
+    assert_eq!(expand_root(r"~\x"), None);
+    assert_refused(
+        &format!("{{{ROOT}, allowed_roots: [\"~\\\\data\"], path_args: [\"path\"]}}"),
+        "security.firewall.rules[0].allowed_roots[0]",
+        "must be absolute",
+    );
 }
 
 /// L4: entries outside the `path_args` grammar are refused, naming the entry.

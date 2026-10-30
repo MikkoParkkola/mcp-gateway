@@ -335,10 +335,16 @@ pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
 }
 
 /// Whether `value` names the Windows device namespace: `\\.\`, `//./` or any
-/// mix of the two separators, which Windows reads alike.
+/// mix of the two separators, which Windows reads alike, or any other
+/// spelling the standard library parses as a device-namespace prefix.
 fn device_namespace(value: &str) -> bool {
     let sep = |c: &u8| *c == b'/' || *c == b'\\';
     matches!(value.as_bytes(), [a, b, b'.', c, ..] if sep(a) && sep(b) && sep(c))
+        || matches!(
+            std::path::Path::new(value).components().next(),
+            Some(std::path::Component::Prefix(p))
+                if matches!(p.kind(), std::path::Prefix::DeviceNS(_))
+        )
 }
 
 /// The string-only half of the check: is `value` a normalised absolute native
