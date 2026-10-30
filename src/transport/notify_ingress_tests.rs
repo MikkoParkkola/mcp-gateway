@@ -235,8 +235,13 @@ fn every_way_into_the_sink_is_classified() {
             .and_then(|n| n.to_str())
             .unwrap_or_default();
         // The sink and the ingress define these; tests and test fixtures
-        // publish as a backend's call would.
-        if name.contains("test")
+        // publish as a backend's call would. By path component, so a
+        // production path like `attestation/` is still scanned.
+        let in_tests = rel
+            .split('/')
+            .any(|part| part == "tests" || part.ends_with("_tests"));
+        if in_tests
+            || name.contains("test")
             || name.contains("fixture")
             || rel.ends_with("transport/notification_sink.rs")
             || rel.ends_with("transport/notify_ingress.rs")

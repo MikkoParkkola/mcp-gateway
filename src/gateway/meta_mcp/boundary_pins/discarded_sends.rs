@@ -33,10 +33,7 @@ enum Fate {
 /// Every send site, by `file\tfunction`.
 const SITES: [(&str, Fate); 15] = [
     ("src/backend/era.rs\tprobe", Fate::Dropped),
-    (
-        "src/backend/list_drain.rs\tdrain_list_pages",
-        Fate::Delivered,
-    ),
+    ("src/backend/list_drain.rs\tdrain_pages", Fate::Delivered),
     ("src/backend/ops.rs\tnotify", Fate::Delivered),
     ("src/backend/ops.rs\tnotify_with_headers", Fate::Delivered),
     (
