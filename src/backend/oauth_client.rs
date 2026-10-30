@@ -168,6 +168,45 @@ impl Backend {
     }
 }
 
+#[cfg(feature = "webui")]
+impl Backend {
+    /// The client a person's sign-in runs on, its issuer resolved. A test's
+    /// installed client stands in for the one a start would build.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend has no `oauth` block or no HTTP
+    /// endpoint, or discovery fails.
+    pub(crate) async fn sign_in_client(&self) -> Result<Arc<OAuthClient>> {
+        #[cfg(test)]
+        if let Some(client) = self.installed_oauth_client.lock().clone() {
+            return Ok(client);
+        }
+        let crate::config::TransportConfig::Http { http_url, .. } = &self.config.transport else {
+            return Err(Error::Config(format!(
+                "backend '{}' has no HTTP endpoint to sign in to",
+                self.name
+            )));
+        };
+        let Some(mut client) = self.create_oauth_client(http_url, self.destination())? else {
+            return Err(Error::Config(format!(
+                "backend '{}' has no oauth block",
+                self.name
+            )));
+        };
+        client.initialize().await?;
+        Ok(Arc::new(client))
+    }
+
+    /// Whether this backend is configured for OAuth sign-in.
+    pub(crate) fn has_oauth(&self) -> bool {
+        self.config
+            .oauth
+            .as_ref()
+            .is_some_and(|oauth| oauth.enabled)
+    }
+}
+
 #[cfg(all(test, feature = "webui"))]
 impl Backend {
     /// Test-only: the OAuth client the sign-in flow uses, in place of the one

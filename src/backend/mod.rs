@@ -55,6 +55,8 @@ mod secret_send;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
+#[cfg(feature = "webui")]
+pub(crate) mod sign_in_flow;
 mod status;
 mod stdio_start;
 mod stop;
@@ -309,6 +311,9 @@ pub struct Backend {
     /// This backend's sign-in status, written by its OAuth client and read in
     /// memory, so it outlives any one transport.
     pub(crate) sign_in_status: Arc<crate::oauth::client::sign_in::SignInStatus>,
+    /// The UI sign-in in flight, if one is.
+    #[cfg(feature = "webui")]
+    pub(crate) sign_in_flow: parking_lot::Mutex<Option<sign_in_flow::Flow>>,
     /// A test's pre-built OAuth client for the sign-in flow.
     #[cfg(all(test, feature = "webui"))]
     installed_oauth_client: parking_lot::Mutex<Option<Arc<crate::oauth::OAuthClient>>>,

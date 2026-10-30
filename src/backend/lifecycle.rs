@@ -131,6 +131,8 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
+            #[cfg(feature = "webui")]
+            sign_in_flow: parking_lot::Mutex::new(None),
             #[cfg(all(test, feature = "webui"))]
             installed_oauth_client: parking_lot::Mutex::new(None),
             #[cfg(all(test, feature = "webui"))]
