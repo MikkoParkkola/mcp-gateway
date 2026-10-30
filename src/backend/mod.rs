@@ -492,6 +492,7 @@ impl Backend {
             self.config.timeout,
             protocol_version,
             destination,
+            self.needles.get().cloned(),
         )
         .await
     }

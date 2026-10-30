@@ -213,6 +213,10 @@ struct Inner {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
+    /// The values the backend's rules injected; every frame this transport
+    /// reads is scrubbed of them before it is routed (MIK-9035). Set before
+    /// the connect, so the handshake is scrubbed too.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 }
 
 impl Inner {
@@ -226,6 +230,7 @@ impl Inner {
             task: parking_lot::Mutex::new(None),
             progress_destinations: dashmap::DashMap::new(),
             taps: super::upstream_tap::Taps::default(),
+            needles: std::sync::OnceLock::new(),
         })
     }
 }
@@ -305,6 +310,7 @@ impl WebSocketTransport {
             timeout,
             protocol_version,
             DestinationPolicy::Configured,
+            None,
         )
         .await?;
         Ok(started)
@@ -442,7 +448,12 @@ impl WebSocketTransport {
     /// Dispatch an inbound text frame to a pending request or log it.
     fn dispatch_inbound(inner: &Arc<Inner>, text: &str) -> Result<()> {
         debug!(len = text.len(), "Dispatching inbound WebSocket frame");
-        let frame = McpFrame::from_text(text)?;
+        let mut frame = McpFrame::from_text(text)?;
+        if let Some(needles) = inner.needles.get()
+            && !scrub_frame(needles, &mut frame)
+        {
+            return Ok(());
+        }
 
         match frame {
             McpFrame::Response(response) => {
@@ -503,6 +514,39 @@ impl WebSocketTransport {
             messages_received: s.messages_received,
             messages_sent: s.messages_sent,
         }
+    }
+}
+
+/// Removes the injected values from `frame`; `false` when it is withheld. A
+/// refused answer is replaced with the fixed refusal under its own `id`, so
+/// the call still gets its answer.
+fn scrub_frame(needles: &crate::security::needles::NeedleSet, frame: &mut McpFrame) -> bool {
+    use crate::protocol::JsonRpcMessage;
+    use crate::security::needles::{
+        Scrubbed, ingress_scrub, refused_response, scrub_response_with,
+    };
+    match frame {
+        McpFrame::Response(response) => {
+            if scrub_response_with(needles, response) == Scrubbed::Refuse {
+                *response = refused_response(needles, response.id.clone());
+            }
+            true
+        }
+        McpFrame::Notification { method, params } => {
+            let mut message = JsonRpcMessage::Notification(JsonRpcNotification {
+                jsonrpc: "2.0".to_string(),
+                method: std::mem::take(method),
+                params: params.take(),
+            });
+            let outcome = ingress_scrub(needles, &mut message);
+            if let JsonRpcMessage::Notification(notification) = message {
+                *method = notification.method;
+                *params = notification.params;
+            }
+            matches!(outcome, Scrubbed::Clean | Scrubbed::Redacted)
+        }
+        // A server-initiated request is only logged, never relayed.
+        McpFrame::Request(_) | McpFrame::Ping | McpFrame::Pong => true,
     }
 }
 
