@@ -56,7 +56,9 @@ fn p95_uses_the_trackers_rank() {
 }
 
 /// Row 3 (LAT.4): two half-hour slots at a fixed clock, each p95 the rank
-/// bin's midpoint exactly.
+/// bin's midpoint exactly. 400 ms is in bin 27, [1.25^26, 1.25^27) =
+/// [330.87, 413.59) ms, midpoint 1.25^26.5 = 369.93, reported 370; 130 ms is
+/// in bin 22, [108.42, 135.53) ms, midpoint 121.22, reported 121.
 #[test]
 fn lat4_fixed_clock_two_buckets() {
     let t0 = 1_800 * 1_000_000;
@@ -71,12 +73,13 @@ fn lat4_fixed_clock_two_buckets() {
     series.finalize(t0 + 3 * 1_800, None);
     let slots = series.half.slots();
     assert_eq!(slots.len(), 2, "{slots:?}");
-    assert_eq!(slots[0].p95_ms, bin_ms(bin_of(ms(400.0))));
-    assert_eq!(slots[1].p95_ms, bin_ms(bin_of(ms(130.0))));
+    assert_eq!(slots[0].p95_ms, 370);
+    assert_eq!(slots[1].p95_ms, 121);
     assert_eq!((slots[0].calls, slots[1].calls), (4, 4));
 }
 
-/// Row 4: on interior bins the reported p95 is within √1.25 of the exact one.
+/// Row 4a: the sketch's p95 bin is exactly the bin of the exact p95 sample,
+/// on every set (which, with row 4b's midpoints, bounds the reported value).
 #[test]
 #[expect(
     clippy::cast_precision_loss,
@@ -84,8 +87,7 @@ fn lat4_fixed_clock_two_buckets() {
     clippy::cast_sign_loss,
     reason = "a test generator's uniform floats and small counts"
 )]
-fn interior_p95_within_root_ratio() {
-    let bound = RATIO.sqrt();
+fn p95_bin_is_the_exact_samples_bin() {
     // A fixed LCG: deterministic, no new dependency.
     let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
     let mut next = || {
@@ -107,12 +109,33 @@ fn interior_p95_within_root_ratio() {
         let bin = sketch.p95_bin().unwrap();
         assert!((1..BINS - 1).contains(&bin), "set {set}: bin {bin}");
         let exact = exact_p95(&mut samples);
-        let ratio = RATIO.powf(f64::from(bin) - 0.5) / exact;
-        assert!(
-            (1.0 / bound..=bound).contains(&ratio),
-            "set {set}: ratio {ratio}"
-        );
+        assert_eq!(bin, bin_of(ms(exact)), "set {set}: exact p95 {exact} ms");
     }
+}
+
+/// Row 4b: the value each bin reports, hand-computed as the round-half-up of
+/// its geometric midpoint 1.25^(b - 0.5) ms: bin 10 [7.45, 9.31) -> 8.33 -> 8,
+/// bin 22 -> 121.22 -> 121, bin 27 -> 369.93 -> 370, bin 40 -> 6728.92 -> 6729,
+/// bin 62 -> 911939.02 -> 911939. From bin 11 (9.31 ms) up the reported
+/// value is within √1.25 of any sample in its bin.
+#[test]
+fn interior_bins_report_their_midpoint() {
+    for (bin, reported) in [(10, 8), (22, 121), (27, 370), (40, 6_729), (62, 911_939)] {
+        assert_eq!(Sketch::from_bins(vec![(bin, 1)]).p95_ms(), Some(reported), "bin {bin}");
+    }
+}
+
+/// Sub-10 ms p95s are whole milliseconds by design (a recorded LAT.4
+/// deviation): bin 2, [1.25, 1.5625) ms, reports exactly 1 and bin 3,
+/// [1.5625, 1.95) ms, exactly 2, so below ~9.3 ms the reported value can sit
+/// outside √1.25 of the sample. A change to this rounding is a decision.
+#[test]
+fn sub_10ms_p95_is_whole_ms_rounded() {
+    let one_and_a_half = Sketch::from_bins(vec![(bin_of(ms(1.5)), 1)]);
+    assert_eq!(bin_of(ms(1.5)), 2);
+    assert_eq!(one_and_a_half.p95_ms(), Some(1));
+    assert_eq!(Sketch::from_bins(vec![(3, 1)]).p95_ms(), Some(2));
+    assert_eq!(Sketch::from_bins(vec![(5, 1)]).p95_ms(), Some(3));
 }
 
 /// Row 5: the open bins report their edges.
