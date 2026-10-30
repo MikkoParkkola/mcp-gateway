@@ -25,8 +25,6 @@ pub(crate) use meta_mcp::admission::EXECUTION_DIRECTIVES;
 /// record (MIK-7926.FIX.2), without `meta_mcp` becoming crate-visible.
 pub(crate) use meta_mcp::invoke::audit::note_process;
 /// Test seams for the send timer's rows outside `gateway`.
-#[cfg(test)]
-pub(crate) use meta_mcp::invoke::audit::with_dispatch_scope;
 /// Times one backend send for the web UI's latency history.
 pub(crate) use meta_mcp::invoke::send_timer::SendTimer;
 #[cfg(test)]
