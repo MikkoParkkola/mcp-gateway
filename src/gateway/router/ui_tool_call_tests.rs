@@ -412,13 +412,18 @@ async fn t7_audited_as_ui_principal_and_linked_to_the_invocation() {
     }
 }
 
-/// T9 (API12.3): a non-admin key is refused 403 and nothing is sent.
+/// T9 (API12.3): a non-admin key is refused 403 and nothing is sent, and the
+/// refusal is still written as an `admin_action` (not run) before it is answered.
+/// Mutant: the guard's refusal answered straight back, skipping `finish`.
 #[tokio::test]
 async fn t9_a_non_admin_is_refused_before_anything_runs() {
     let fx = fixture().await;
     let (status, _) = post(&fx, USER, call("read", false)).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(sent(&fx), 0);
+    let actions = admin_actions(&fx);
+    assert_eq!(actions.len(), 1, "{actions:?}");
+    assert_eq!(actions[0]["disposition"], "not_run", "{}", actions[0]);
 }
 
 /// T10: a server that is not registered is refused as a denied tool is,
