@@ -269,7 +269,16 @@ impl Gw {
     pub(super) fn link(reply: &Reply) -> (String, String) {
         let body = reply.json();
         let text = |key: &str| body[key].as_str().unwrap_or_default().to_owned();
-        (text("authorization_url"), text("attempt_id"))
+        let url = text("authorization_url");
+        // Every row that follows a link first needs a started flow: a missing
+        // link fails here, naming the start answer, not later in a URL parse.
+        assert!(
+            reply.status == StatusCode::OK && !url.is_empty(),
+            "the start answer carries an authorization link: {} {}",
+            reply.status,
+            reply.body
+        );
+        (url, text("attempt_id"))
     }
 
     /// The person approving at the identity provider: follow the redirect

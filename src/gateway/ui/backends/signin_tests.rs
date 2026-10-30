@@ -105,10 +105,10 @@ async fn start_returns_the_link_once_with_no_store() {
     let gw = Gw::new().await;
     let who = gw.session();
     let mut stream = gw.open_stream(&who).await;
-    let mut frames = stream_until(&mut stream, "event: hello", Duration::from_secs(10)).await;
+    let mut frames = stream_until(&mut stream, "event: hello", crate::test_wait::HANG_BOUND).await;
     assert!(
         frames.contains("event: hello"),
-        "a snapshot was published: {frames}"
+        "the stream sent no hello: no first snapshot was published: {frames}"
     );
     let reply = gw.start(&who).await;
 
