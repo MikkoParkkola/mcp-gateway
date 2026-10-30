@@ -184,28 +184,72 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 ///
 /// `true` when anything was replaced.
 pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) -> bool {
-    let needles = needles(secrets, &[]);
-    if needles.is_empty() {
-        return false;
-    }
-    let Some(matcher) = matcher(&needles) else {
-        // Fail closed: no automaton, no value.
-        *value = Value::String(marker_for(&needles).to_owned());
-        return true;
-    };
-    {
+    redact_value_with(value, &Compiled::new(secrets))
+}
+
+/// A secret list compiled once for [`redact_value_with`]: the needles longest
+/// first, their automaton, and the ones that read as JSON scalars. A caller
+/// that scrubs many values with one list (a backend's value set) keeps one
+/// and rebuilds it only when the list changes (MIK-9035 DELTA-11).
+pub(crate) struct Compiled {
+    needles: Vec<String>,
+    /// `None` when the automaton could not be built: every value is then
+    /// replaced whole (fail closed).
+    matcher: Option<AhoCorasick>,
+    literals: Vec<Value>,
+}
+
+impl Compiled {
+    pub(crate) fn new(secrets: &[String]) -> Self {
+        let needles: Vec<String> = needles(secrets, &[])
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let borrowed: Vec<&str> = needles.iter().map(String::as_str).collect();
+        let matcher = if borrowed.is_empty() {
+            None
+        } else {
+            matcher(&borrowed)
+        };
         // A secret that reads as a JSON number or as `true`, `false` or
         // `null`: a result scalar equal to it by exact JSON equality is
         // redacted whatever the secret's length, before any by-value
         // comparison. "007" and "TRUE" are not JSON: no match here, and
         // "007" is then compared by value below.
-        let literals: Vec<Value> = needles
+        let literals = borrowed
             .iter()
             .filter_map(|n| serde_json::from_str::<Value>(n).ok())
             .filter(|v| !matches!(v, Value::String(_) | Value::Array(_) | Value::Object(_)))
             .collect();
-        scrub_value(value, &needles, &literals, &matcher)
+        Self {
+            needles,
+            matcher,
+            literals,
+        }
     }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.needles.is_empty()
+    }
+
+    /// The needles, longest first.
+    pub(crate) fn needles(&self) -> &[String] {
+        &self.needles
+    }
+}
+
+/// [`redact_value`] with a list compiled beforehand.
+pub(crate) fn redact_value_with(value: &mut Value, compiled: &Compiled) -> bool {
+    if compiled.needles.is_empty() {
+        return false;
+    }
+    let needles: Vec<&str> = compiled.needles.iter().map(String::as_str).collect();
+    let Some(matcher) = &compiled.matcher else {
+        // Fail closed: no automaton, no value.
+        *value = Value::String(marker_for(&needles).to_owned());
+        return true;
+    };
+    scrub_value(value, &needles, &compiled.literals, matcher)
 }
 
 /// The exact integer a JSON number's text names, as canonical digits, read

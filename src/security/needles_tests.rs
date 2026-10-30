@@ -364,3 +364,28 @@ fn every_listed_percent_spelling_is_redacted() {
         assert!(!text.contains("tok"), "{echo} -> {text}");
     }
 }
+
+/// DELTA-11: the compiled set is reused but never stale: a value added after
+/// a scrub is matched by the next one, and a cached build stops matching a
+/// value once its grace passes.
+#[tokio::test(start_paused = true)]
+async fn the_cached_matcher_follows_inserts_and_retirement() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    assert_eq!(
+        scrubbed(&needles, "echo token-one-value").0,
+        Scrubbed::Redacted
+    );
+    needles.insert("b", "token-two-value");
+    assert_eq!(
+        scrubbed(&needles, "echo token-two-value").0,
+        Scrubbed::Redacted
+    );
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    let (outcome, text) = scrubbed(&needles, "echo token-one-value");
+    assert_eq!(
+        outcome,
+        Scrubbed::Clean,
+        "a retired value is still matched: {text}"
+    );
+}

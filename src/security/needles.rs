@@ -17,6 +17,7 @@ use parking_lot::RwLock;
 use serde_json::Value;
 
 use crate::protocol::{JsonRpcMessage, JsonRpcResponse};
+use crate::security::secret_redaction::Compiled;
 
 /// The most values one backend name may hold inside their grace. Past it
 /// every frame from that backend is refused rather than a value dropped.
@@ -70,6 +71,19 @@ pub(crate) struct NeedleSet {
     overflowed: AtomicBool,
     /// Rules already warned about a short value (ECHO.6), by name.
     short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
+    /// Bumped whenever `values` gains or loses a value.
+    version: std::sync::atomic::AtomicU64,
+    /// The live values compiled once, swapped when the list changes or its
+    /// earliest value retires (DELTA-11).
+    compiled: RwLock<Option<Cached>>,
+}
+
+/// A compiled snapshot, the `version` it was built at, and the moment its
+/// earliest value retires.
+struct Cached {
+    compiled: std::sync::Arc<Compiled>,
+    version: u64,
+    valid_until: Option<tokio::time::Instant>,
 }
 
 /// A value shorter than this matches ordinary text too often: redacting it
@@ -96,6 +110,8 @@ impl NeedleSet {
             grace,
             overflowed: AtomicBool::new(false),
             short_warned: parking_lot::Mutex::default(),
+            version: std::sync::atomic::AtomicU64::new(0),
+            compiled: RwLock::new(None),
         }
     }
 
@@ -116,7 +132,11 @@ impl NeedleSet {
             held.last_sent = now;
             return;
         }
+        let before = values.len();
         values.retain(|held| !self.retired(held, now));
+        if values.len() != before {
+            self.version.fetch_add(1, Ordering::SeqCst);
+        }
         if values.len() >= MAX_NEEDLES {
             if !self.overflowed.swap(true, Ordering::SeqCst) {
                 tracing::warn!(
@@ -136,6 +156,7 @@ impl NeedleSet {
             encoded: percent_forms(value),
             last_sent: now,
         });
+        self.version.fetch_add(1, Ordering::SeqCst);
     }
 
     /// Warns once per rule when a value it sent is shorter than
@@ -160,15 +181,34 @@ impl NeedleSet {
 
     /// The values still inside their grace. A retired value is not removed
     /// from an answer: the documented residual (UPGRADING).
-    fn snapshot(&self) -> Vec<String> {
+    fn snapshot(&self) -> std::sync::Arc<Compiled> {
         let now = tokio::time::Instant::now();
-        self.values
-            .read()
+        let version = self.version.load(Ordering::SeqCst);
+        if let Some(cached) = &*self.compiled.read()
+            && cached.version == version
+            && cached.valid_until.is_none_or(|until| now <= until)
+        {
+            return std::sync::Arc::clone(&cached.compiled);
+        }
+        let values = self.values.read();
+        let live: Vec<&Held> = values
             .iter()
             .filter(|held| !self.retired(held, now))
+            .collect();
+        let secrets: Vec<String> = live
+            .iter()
             .flat_map(|held| std::iter::once(&held.value).chain(&held.encoded))
             .cloned()
-            .collect()
+            .collect();
+        let valid_until = live.iter().map(|held| held.last_sent + self.grace).min();
+        drop(values);
+        let compiled = std::sync::Arc::new(Compiled::new(&secrets));
+        *self.compiled.write() = Some(Cached {
+            compiled: std::sync::Arc::clone(&compiled),
+            version,
+            valid_until,
+        });
+        compiled
     }
 }
 
@@ -249,6 +289,7 @@ pub(crate) fn ingress_scrub(needles: &NeedleSet, message: &mut JsonRpcMessage) -
         JsonRpcMessage::Response(response) => scrub_response(&secrets, response),
         JsonRpcMessage::Notification(notification) => {
             if secrets
+                .needles()
                 .iter()
                 .any(|secret| notification.method.contains(secret.as_str()))
             {
@@ -363,7 +404,7 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
 }
 
 /// Redacts `text` in place.
-fn scrub_string(secrets: &[String], text: &mut String) -> Scrubbed {
+fn scrub_string(secrets: &Compiled, text: &mut String) -> Scrubbed {
     let mut value = Value::String(std::mem::take(text));
     let outcome = scrub_in_place(secrets, &mut value);
     *text = match value {
@@ -375,12 +416,12 @@ fn scrub_string(secrets: &[String], text: &mut String) -> Scrubbed {
 
 /// Whether an `error.code` equals a value by the shared numeric rule: the
 /// same comparison a result number gets, so `0739154` matches 739154.
-fn code_matches(secrets: &[String], code: i32) -> bool {
+fn code_matches(secrets: &Compiled, code: i32) -> bool {
     let mut number = Value::from(code);
     scrub_in_place(secrets, &mut number) == Scrubbed::Redacted
 }
 
-fn scrub_response(secrets: &[String], response: &mut JsonRpcResponse) -> Scrubbed {
+fn scrub_response(secrets: &Compiled, response: &mut JsonRpcResponse) -> Scrubbed {
     // A signed result keeps, as sent, each top-level member the scrub
     // changes, so its chain is verified over what the backend signed
     // (DELTA-13). Cloned only for a result that carries a chain.
@@ -428,7 +469,7 @@ fn scrub_response(secrets: &[String], response: &mut JsonRpcResponse) -> Scrubbe
     outcome
 }
 
-fn scrub_option(secrets: &[String], value: &mut Option<Value>) -> Scrubbed {
+fn scrub_option(secrets: &Compiled, value: &mut Option<Value>) -> Scrubbed {
     value
         .as_mut()
         .map_or(Scrubbed::Clean, |value| scrub_in_place(secrets, value))
@@ -436,8 +477,8 @@ fn scrub_option(secrets: &[String], value: &mut Option<Value>) -> Scrubbed {
 
 /// The shared renderer (strings, keys, numbers by value, overlaps merged,
 /// output capped), and whether it changed anything.
-fn scrub_in_place(secrets: &[String], value: &mut Value) -> Scrubbed {
-    if crate::security::secret_redaction::redact_value(value, secrets) {
+fn scrub_in_place(secrets: &Compiled, value: &mut Value) -> Scrubbed {
+    if crate::security::secret_redaction::redact_value_with(value, secrets) {
         Scrubbed::Redacted
     } else {
         Scrubbed::Clean
