@@ -62,7 +62,6 @@ pub struct OAuthClient {
 
     /// Where this client publishes its backend's sign-in status, if it has
     /// one.
-    #[allow(dead_code, reason = "skeleton: the client publishes once built")]
     sign_in_status: Option<Arc<sign_in::SignInStatus>>,
 
     /// Current token (cached)
@@ -306,12 +305,14 @@ impl OAuthClient {
         self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
         // Load any cached token
-        if let Some(token) = self
+        let loaded = self
             .storage
-            .load(&self.credential_key()?, &self.resource_url)
-        {
-            *self.current_token.write() = Some(token);
+            .load(&self.credential_key()?, &self.resource_url);
+        if let Some(token) = &loaded {
+            *self.current_token.write() = Some(token.clone());
         }
+        // The issuer is known now: say what the token file says, once.
+        self.publish_token_state(loaded.as_ref());
 
         // Restore a previously-registered dynamic client id so we do NOT
         // re-register (and pop a fresh browser authorize tab) every time the

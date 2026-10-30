@@ -7,6 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{AppState, call_windows};
+use crate::oauth::client::sign_in::SignIn;
 
 /// Which of the two views a caller gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,6 +71,11 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
                 .next_retry_at
                 .and_then(crate::config_reload::refusals::rfc3339),
             cleartext_credentials_accepted: backend.cleartext_override_in_effect(),
+            needs_sign_in: backend.needs_sign_in(),
+            sign_in: Some(backend.sign_in()).filter(|sign_in| *sign_in != SignIn::NotOAuth),
+            // The hook for the flow record: a backend with a sign-in in flight
+            // reports `{"phase", "until"}` here, once the record exists.
+            sign_in_flow: None,
             calls_24h: None,
             calls_prev_24h: None,
             name: bs.name,
@@ -143,6 +149,16 @@ struct ServerStatus {
     /// Loads only because `allow_cleartext_credentials` accepts sending its
     /// credentials in cleartext.
     cleartext_credentials_accepted: bool,
+    /// Whether a person must sign in: the one predicate
+    /// (`Backend::needs_sign_in`), shown beside `state` so display keys on it.
+    needs_sign_in: bool,
+    /// Its sign-in, for a backend that has an `oauth` block or waits on a
+    /// sign-in made elsewhere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in: Option<SignIn>,
+    /// A sign-in in flight: only `phase` and `until`, never a secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sign_in_flow: Option<Value>,
 }
 
 #[cfg(test)]

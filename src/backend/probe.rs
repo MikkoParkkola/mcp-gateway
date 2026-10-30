@@ -139,7 +139,7 @@ impl Backend {
             }
             // The token step wanted a login: skip the tick, keep the login.
             Err(e) if e.is_authorization_wait() => {
-                self.shared_entry().auth_wait.store(true, Ordering::Relaxed);
+                self.shared_entry().set_auth_wait();
                 Err(e)
             }
             // A busy lock skips the rebuild too: no breaker sample, debug,

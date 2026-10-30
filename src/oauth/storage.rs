@@ -230,6 +230,9 @@ impl TokenInfo {
 pub struct TokenStorage {
     /// Base directory for token storage
     base_dir: PathBuf,
+    /// Test-only: token loads and legacy-file checks served, as `(loads, exists)`.
+    #[cfg(test)]
+    io_counts: [std::sync::atomic::AtomicUsize; 2],
 }
 
 impl TokenStorage {
@@ -245,15 +248,30 @@ impl TokenStorage {
                 .map_err(|e| Error::OAuth(format!("Failed to create token storage dir: {e}")))?;
         }
 
-        Ok(Self { base_dir })
+        Ok(Self {
+            base_dir,
+            #[cfg(test)]
+            io_counts: Default::default(),
+        })
     }
 
-    /// Test-only: how many token loads and existence checks this storage has
-    /// served, as `(loads, exists)`. Skeleton: always `(0, 0)`.
+    /// Test-only: how many token loads and legacy-file checks this storage
+    /// has served, as `(loads, exists)`.
     #[cfg(test)]
-    #[expect(clippy::unused_self, reason = "skeleton: counting lands with the read")]
     pub(crate) fn io_counts_for_test(&self) -> (usize, usize) {
-        (0, 0)
+        let [loads, exists] = &self.io_counts;
+        (
+            loads.load(std::sync::atomic::Ordering::SeqCst),
+            exists.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    /// Whether a 3.x token file sits under the legacy key of this backend and
+    /// resource. 4.0.0 does not read it, so a person must sign in again.
+    pub(crate) fn legacy_token_exists(&self, backend_name: &str, resource_url: &str) -> bool {
+        #[cfg(test)]
+        self.io_counts[1].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.token_path(backend_name, resource_url).exists()
     }
 
     /// Create token storage in the default location (~/.mcp-gateway/oauth)
@@ -287,6 +305,8 @@ impl TokenStorage {
 
     /// Load tokens for a backend
     pub fn load(&self, backend_name: &str, resource_url: &str) -> Option<TokenInfo> {
+        #[cfg(test)]
+        self.io_counts[0].fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let path = self.token_path(backend_name, resource_url);
 
         if !path.exists() {

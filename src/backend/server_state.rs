@@ -54,8 +54,8 @@ pub(crate) struct StateInputs {
     /// The runtime plan is denied; `denial_reasons` says why.
     pub denied: bool,
     pub denial_reasons: Vec<RuntimeDenyReason>,
-    /// The last dispatch or fill on the shared slot waited on a sign-in, and
-    /// nothing has succeeded since.
+    /// A person must sign in: the backend's one predicate
+    /// (`Backend::needs_sign_in`), which includes a recorded wait.
     pub auth_wait: bool,
     pub breaker: CircuitState,
     /// Time until the open breaker admits a probe.

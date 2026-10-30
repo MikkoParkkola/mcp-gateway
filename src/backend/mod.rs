@@ -308,7 +308,6 @@ pub struct Backend {
     pub(crate) login_gate: Arc<crate::oauth::login_gate::LoginGate>,
     /// This backend's sign-in status, written by its OAuth client and read in
     /// memory, so it outlives any one transport.
-    #[allow(dead_code, reason = "skeleton: the first readers land with the read")]
     pub(crate) sign_in_status: Arc<crate::oauth::client::sign_in::SignInStatus>,
     /// A test's pre-built OAuth client for the sign-in flow.
     #[cfg(all(test, feature = "webui"))]

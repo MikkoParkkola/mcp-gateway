@@ -41,7 +41,10 @@ impl OAuthClient {
 
         if has_refresh_token {
             match self.refresh_token().await {
-                Ok(_) => return Renewal::Renewed,
+                Ok(_) => {
+                    self.publish_sign_in();
+                    return Renewal::Renewed;
+                }
                 Err(e) if is_ssrf_refusal(&e) => return self.refused(&e),
                 // A busy lock skips `client_credentials`, which takes the same
                 // lease and would wait another bound, then mislog as exhausted.

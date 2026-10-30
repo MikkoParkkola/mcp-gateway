@@ -72,6 +72,12 @@ impl Backend {
         cache_ttl: Duration,
         runtime_plan: Option<RuntimePlan>,
     ) -> Self {
+        // OAuth-ness is config's: an `oauth` block, never whether a client exists.
+        let initial_sign_in = if config.oauth.as_ref().is_some_and(|oauth| oauth.enabled) {
+            crate::oauth::client::sign_in::SignIn::NotYetChecked
+        } else {
+            crate::oauth::client::sign_in::SignIn::NotOAuth
+        };
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
@@ -130,7 +136,7 @@ impl Backend {
             #[cfg(all(test, feature = "webui"))]
             sign_in_expiry_pause: crate::test_pause::Slot::default(),
             sign_in_status: Arc::new(crate::oauth::client::sign_in::SignInStatus::new(
-                crate::oauth::client::sign_in::SignIn::NotOAuth,
+                initial_sign_in,
             )),
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
@@ -498,7 +504,7 @@ impl Backend {
                 entry.start_failed.store(false, Ordering::Relaxed);
                 entry.auth_wait.store(false, Ordering::Relaxed);
             }
-            Err(e) if e.is_authorization_wait() => entry.auth_wait.store(true, Ordering::Relaxed),
+            Err(e) if e.is_authorization_wait() => entry.set_auth_wait(),
             Err(_) => entry.start_failed.store(true, Ordering::Relaxed),
         }
         started

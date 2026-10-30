@@ -4,10 +4,12 @@
 //! that file from growing.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 use tracing::info;
 
 use super::Backend;
+use crate::oauth::client::sign_in::SignIn;
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::{Error, Result};
 
@@ -111,7 +113,8 @@ impl Backend {
                 token_refresh_buffer_secs: oauth_config.token_refresh_buffer_secs,
             },
         )
-        .with_login_gate(Arc::clone(&self.login_gate));
+        .with_login_gate(Arc::clone(&self.login_gate))
+        .with_sign_in_status(Arc::clone(&self.sign_in_status));
 
         #[cfg(test)]
         let oauth = match seam {
@@ -126,26 +129,38 @@ impl Backend {
 impl Backend {
     /// This backend's sign-in as an operator acts on it: one in-memory
     /// snapshot, with no storage read, refresh or network call.
-    // Skeleton value: wrong for every backend on purpose.
-    #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
-    #[expect(
-        clippy::unused_self,
-        reason = "skeleton: a fixed answer until the status cell is read"
-    )]
-    pub(crate) fn sign_in(&self) -> crate::oauth::client::sign_in::SignIn {
-        crate::oauth::client::sign_in::SignIn::WaitingElsewhere
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn sign_in(&self) -> SignIn {
+        self.sign_in_given(self.shared_entry().auth_wait.load(Ordering::Relaxed))
+    }
+
+    /// [`Backend::sign_in`] for a wait already read, so one caller never
+    /// sees two answers to one question. Order: no `oauth` block, then an
+    /// unchecked issuer, then a wait over a held token, then the token cases.
+    fn sign_in_given(&self, waiting: bool) -> SignIn {
+        if !self
+            .config
+            .oauth
+            .as_ref()
+            .is_some_and(|oauth| oauth.enabled)
+        {
+            return if waiting {
+                SignIn::WaitingElsewhere
+            } else {
+                SignIn::NotOAuth
+            };
+        }
+        match self.sign_in_status.snapshot() {
+            SignIn::SignedIn { .. } if waiting => SignIn::Expired,
+            held => held,
+        }
     }
 
     /// Whether this backend needs a person to sign in. The one place the
     /// predicate is evaluated; the server row and the overview both call it.
-    // Skeleton value: wrong for every backend on purpose.
-    #[allow(dead_code, reason = "skeleton: the first callers land with the read")]
-    #[expect(
-        clippy::unused_self,
-        reason = "skeleton: a fixed answer until the predicate is read"
-    )]
     pub(crate) fn needs_sign_in(&self) -> bool {
-        false
+        let waiting = self.shared_entry().auth_wait.load(Ordering::Relaxed);
+        waiting || self.sign_in_given(waiting).needs_a_person()
     }
 }
 
@@ -162,15 +177,10 @@ impl Backend {
         let client = self.installed_oauth_client.lock().clone()?;
         client.cached_token_for_test()
     }
-}
 
-impl Backend {
-    /// Record that this backend's slot now waits on a sign-in, bumping the
-    /// wait's generation. Skeleton: it records nothing.
-    #[expect(
-        clippy::unused_self,
-        reason = "skeleton: the generation lands with the flow"
-    )]
-    #[allow(dead_code, reason = "skeleton: the first callers land with the flow")]
-    pub(crate) fn note_auth_wait(&self) {}
+    /// Test-only: record that this backend's slot now waits on a sign-in,
+    /// bumping the wait's generation.
+    pub(crate) fn note_auth_wait(&self) {
+        self.shared_entry().set_auth_wait();
+    }
 }

@@ -310,7 +310,7 @@ fn record_fill(
     // MIK-8619).
     if error.is_authorization_wait() || is_credential_lock_busy(error) {
         if error.is_authorization_wait() {
-            entry.auth_wait.store(true, Ordering::Relaxed);
+            entry.set_auth_wait();
         }
         return;
     }
