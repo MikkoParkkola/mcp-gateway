@@ -67,6 +67,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         | Error::ConfigWatcher(..)
 ///         | Error::CapabilityHashMismatch { .. }
 ///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
 ///         | Error::BackendUnavailable(..)
 ///         | Error::CircuitOpen { .. }
 ///         | Error::RateLimited(..)
@@ -112,6 +113,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         | Error::ConfigWatcher(..)
 ///         | Error::CapabilityHashMismatch { .. }
 ///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
 ///         | Error::BackendUnavailable(..)
 ///         | Error::CircuitOpen { .. }
 ///         | Error::RateLimited(..)
@@ -218,6 +220,22 @@ pub enum Error {
     /// Backend not found
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
+
+    /// A name that is both a registry backend and the capability backend: the
+    /// checks judge the registry backend while dispatch would reach the
+    /// capability, so the call takes neither route. Gateway-authored only, so
+    /// its fixed data reaches the client (a backend's error data does not).
+    #[error(
+        "Backend name '{server}' is both a configured backend and the capability backend; \
+         the call was refused because the checks judged one and dispatch would reach the \
+         other. Restart the gateway, then rename one of them if the clash remains."
+    )]
+    AmbiguousBackend {
+        /// The clashing name.
+        server: String,
+        /// The policy rule covering the call, when one does.
+        rule: Option<String>,
+    },
 
     /// The backend could not take the request: it would not start, its
     /// concurrency limit closed, its tools could not be read in time.
@@ -579,6 +597,7 @@ impl Error {
                 | Self::RateLimited(_)
                 | Self::IdentitySlotsExhausted { .. }
                 | Self::BackendNotFound(_)
+                | Self::AmbiguousBackend { .. }
                 | Self::ToolNotFound(_)
                 | Self::TransportConnect(_)
                 | Self::BackendUnavailable(_)
@@ -671,6 +690,7 @@ impl Error {
             | Self::AuditUnavailable
             | Self::CapabilityHashMismatch { .. }
             | Self::BackendNotFound(_)
+            | Self::AmbiguousBackend { .. }
             | Self::BackendUnavailable(_)
             | Self::CircuitOpen { .. }
             | Self::RateLimited(_)
@@ -724,7 +744,9 @@ impl Error {
             | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
             Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
-            Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
+            Self::BackendNotFound(_) | Self::ToolNotFound(_) | Self::AmbiguousBackend { .. } => {
+                -32001
+            }
             Self::AuditUnavailable => -32005,
             Self::CliCredentialRefused { .. } => {
                 crate::security::http_diagnostics::CLI_UNAUTHORIZED
@@ -748,23 +770,11 @@ impl Error {
     }
 }
 
+#[path = "error_ambiguous.rs"]
+mod ambiguous;
 /// Standard JSON-RPC error codes
-pub mod rpc_codes {
-    /// Parse error - Invalid JSON
-    pub const PARSE_ERROR: i32 = -32700;
-    /// Invalid Request - Not a valid Request object
-    pub const INVALID_REQUEST: i32 = -32600;
-    /// Method not found
-    pub const METHOD_NOT_FOUND: i32 = -32601;
-    /// Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
-    /// Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
-    /// Server error range start
-    pub const SERVER_ERROR_START: i32 = -32000;
-    /// Server error range end
-    pub const SERVER_ERROR_END: i32 = -32099;
-}
+#[path = "error_rpc_codes.rs"]
+pub mod rpc_codes;
 
 #[path = "error_origin.rs"]
 mod origin;

@@ -157,6 +157,8 @@ pub(crate) mod test_day;
 #[cfg(test)]
 pub(crate) mod test_fixture_host;
 #[cfg(test)]
+pub(crate) mod test_late_write;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
 mod test_ports;

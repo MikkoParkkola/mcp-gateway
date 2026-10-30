@@ -55,6 +55,8 @@ pub(crate) struct HttpSegmentSink {
     lock_path: PathBuf,
     index: usize,
     identity: WriterIdentity,
+    #[cfg(test)]
+    created_by: crate::test_late_write::Creator,
 }
 
 impl HttpSegmentSink {
@@ -89,6 +91,8 @@ impl HttpSegmentSink {
             lock_path,
             index,
             identity,
+            #[cfg(test)]
+            created_by: crate::test_late_write::Creator::default(),
         })
     }
 
@@ -120,6 +124,9 @@ impl HttpSegmentSink {
                 stall_seam::Role::Checkpoint
             },
         );
+        #[cfg(test)]
+        self.created_by
+            .witness("telemetry window", &self.window_path);
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
         let mut window = read_window_v2(&self.window_path)?;
         let segment = window

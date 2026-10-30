@@ -126,6 +126,19 @@ pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
+#[cfg(feature = "webui")]
+pub(crate) mod ui_call;
+
+/// Whether a web UI tool call (U12) is in scope: such a call runs the tool
+/// itself and is never answered from a cache. Always `false` without the web
+/// UI.
+pub(crate) fn ui_call_runs_live() -> bool {
+    #[cfg(feature = "webui")]
+    let live = ui_call::in_scope();
+    #[cfg(not(feature = "webui"))]
+    let live = false;
+    live
+}
 pub mod webhooks;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};

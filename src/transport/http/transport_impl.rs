@@ -131,7 +131,7 @@ impl Transport for HttpTransport {
                     None
                 };
                 self.sessions.write().remove(bucket);
-                let handshake = self.initialize().await;
+                let handshake = self.initialize_as(extra_headers).await;
                 if shared {
                     self.reinit_needed
                         .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
@@ -321,9 +321,11 @@ impl Transport for HttpTransport {
             // A close uses or refreshes a credential, never a login (MIK-8339):
             // this one choke point covers every close path (restart, stop,
             // idle stop, pool eviction, identity-slot teardown).
-            let request = match crate::oauth::login_gate::short_contention(
-                self.build_mcp_headers(HeaderMode::Close, Some(&bucket)),
-            )
+            let request = match crate::oauth::login_gate::short_contention(self.build_mcp_headers(
+                HeaderMode::Close,
+                Some(&bucket),
+                &[],
+            ))
             .await
             {
                 Ok(headers) => self.client.delete(&message_url).headers(headers),
