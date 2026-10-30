@@ -415,20 +415,10 @@ src/gateway/meta_mcp/invoke/receipt_test_support.rs	backend_failure	-	test-only 
 src/gateway/meta_mcp/invoke/receipt_test_support.rs	detectable	-	test-only support (the module is cfg(all(test, firewall)))
 src/gateway/meta_mcp/invoke/receipt_test_support.rs	distinct_prose	-	test-only support (the module is cfg(all(test, firewall)))
 src/gateway/meta_mcp/invoke/receipt_test_support.rs	own_hint_text	-	test-only support (the module is cfg(all(test, firewall)))
-src/gateway/meta_mcp/invoke/relay.rs	collecting	-	direct-route and task-executor receipt scopes only; meta HTTP uses collecting_http and stdio collecting_staged
-src/gateway/meta_mcp/invoke/relay.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on); with relay detection OFF it opens the gateway-writes scope (MIK-8408 D5), +3 allocations and about 735 B per tiny gateway_invoke (371 to 374, measured); removal ticketed as MIK-8545 (v4.1.0)
-src/gateway/meta_mcp/invoke/relay.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
-src/gateway/meta_mcp/invoke/relay.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
 src/gateway/meta_mcp/invoke/relay.rs	commit_staged_relay	-	task-executor executions only, not a live request-thread call
-src/gateway/meta_mcp/invoke/relay.rs	commit_with	-	direct-route and task-executor receipt commits only
 src/gateway/meta_mcp/invoke/relay.rs	delivered_form	-	on-path, untimed: bridged prompts and their records only; the timed backend asks nothing
-src/gateway/meta_mcp/invoke/relay.rs	discard_staged	-	task executions and task replays only, not a live tools/call
-src/gateway/meta_mcp/invoke/relay.rs	drop_replay_capture	stdio_invoke_tiny	every stdio delivery admission did not retain (every unkeyed call): clears one Option field; no allocation
-src/gateway/meta_mcp/invoke/relay.rs	in_plan_step	-	on-path, untimed: read on interim and task-worker clock checks only
-src/gateway/meta_mcp/invoke/relay.rs	new	-	on-path, untimed: relay-detection constructions (a relay key, deferred receipts) only; relay detection is off in the harness
-src/gateway/meta_mcp/invoke/relay.rs	none	stdio_invoke_tiny	the no-receipts staged value each stdio dispatch returns with relay detection off
+src/gateway/meta_mcp/invoke/relay.rs	new	-	on-path, untimed: relay-detection constructions (a relay key) only; relay detection is off in the harness
 src/gateway/meta_mcp/invoke/relay.rs	outbound_params	http_invoke_tiny	on the HTTP gateway_invoke path (every dispatch's backend params)
-src/gateway/meta_mcp/invoke/relay.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
 src/gateway/meta_mcp/invoke/relay.rs	receipt	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/relay.rs	receipt_with	-	on-path, untimed: receipt building with a firewall instance and relay detection active only
 src/gateway/meta_mcp/invoke/relay.rs	recorded_prompt	-	on-path, untimed: bridged input prompts only; the timed backend asks nothing
@@ -444,9 +434,20 @@ src/gateway/meta_mcp/invoke/relay.rs	settle_relay_receipts	http_invoke_tiny	on t
 src/gateway/meta_mcp/invoke/relay.rs	stage_relay_receipt	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/relay.rs	stage_replay	-	on-path, untimed: replayed executions only; the timed rows execute fresh
 src/gateway/meta_mcp/invoke/relay.rs	stage_upstream_result	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
-src/gateway/meta_mcp/invoke/relay.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
-src/gateway/meta_mcp/invoke/relay.rs	take_staged_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay.rs	unkeyed_for_test	-	test-only helper (cfg(test))
+src/gateway/meta_mcp/invoke/relay_staging.rs	collecting	-	direct-route and task-executor receipt scopes only; meta HTTP uses collecting_http and stdio collecting_staged
+src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_http	http_invoke_tiny	wraps every HTTP delivery (collects only with relay detection on); with relay detection OFF it opens the gateway-writes scope (MIK-8408 D5), +3 allocations and about 735 B per tiny gateway_invoke (371 to 374, measured); removal ticketed as MIK-8545 (v4.1.0)
+src/gateway/meta_mcp/invoke/relay_staging.rs	collecting_staged	-	on-path, untimed: only with relay detection active; the harness routes configure none
+src/gateway/meta_mcp/invoke/relay_staging.rs	commit	stdio_invoke_tiny	commits or drops the staged receipts of every judged stdio answer
+src/gateway/meta_mcp/invoke/relay_staging.rs	commit_with	-	direct-route and task-executor receipt commits only
+src/gateway/meta_mcp/invoke/relay_staging.rs	discard_staged	-	task executions and task replays only, not a live tools/call
+src/gateway/meta_mcp/invoke/relay_staging.rs	drop_replay_capture	stdio_invoke_tiny	every stdio delivery admission did not retain (every unkeyed call): clears one Option field; no allocation
+src/gateway/meta_mcp/invoke/relay_staging.rs	in_plan_step	-	on-path, untimed: read on interim and task-worker clock checks only
+src/gateway/meta_mcp/invoke/relay_staging.rs	new	-	on-path, untimed: relay-detection constructions (deferred receipts) only; relay detection is off in the harness
+src/gateway/meta_mcp/invoke/relay_staging.rs	none	stdio_invoke_tiny	the no-receipts staged value each stdio dispatch returns with relay detection off
+src/gateway/meta_mcp/invoke/relay_staging.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_staging.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
+src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	catalogue_refusal	-	prompts/get and resources/read only, not the tools/call path
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	-	prompts/get and resources/read only, not the tools/call path
