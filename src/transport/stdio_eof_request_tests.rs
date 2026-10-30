@@ -364,10 +364,10 @@ fn an_unparsable_line_is_logged_by_length_only() {
                 let _ = t.close().await;
             });
     });
-    let text = serde_json::to_string(&logged).expect("records serialise");
+    let log = serde_json::to_string(&logged).expect("records serialise");
     assert!(
-        text.contains("Failed to handle a line"),
-        "premise: the line was refused: {text}"
+        log.contains("Failed to handle a line"),
+        "premise: the line was refused: {log}"
     );
-    assert!(!text.contains(NEEDLE), "the log quotes the line: {text}");
+    assert!(!log.contains(NEEDLE), "the log quotes the line: {log}");
 }

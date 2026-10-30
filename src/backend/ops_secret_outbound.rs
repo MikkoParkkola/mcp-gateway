@@ -5,8 +5,8 @@
 
 use serde_json::Value;
 
-use crate::backend::Backend;
 use crate::Result;
+use crate::backend::Backend;
 
 impl Backend {
     /// The params and headers a call is sent with: this backend's `secrets:`
