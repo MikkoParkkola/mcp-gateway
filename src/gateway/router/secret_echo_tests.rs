@@ -106,11 +106,20 @@ impl crate::transport::Transport for Echo {
 }
 
 /// An `echoes` backend whose `api_key` argument the gateway injects.
-async fn fixture(reply: Reply) -> (axum::Router, Calls, tempfile::TempDir) {
+async fn fixture(reply: Reply) -> (axum::Router, Calls, super::tests::FixtureDir) {
     let calls = Calls::default();
+    // The backend's own rule: since per-backend injection, the registry
+    // stamps the resolver at registration and the send injects.
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
+        "name": "echo-key", "value": SECRET, "inject_key": "api_key"
+    }))
+    .expect("rule parses");
     let backend = Arc::new(Backend::new(
         "echoes",
-        BackendConfig::default(),
+        BackendConfig {
+            secrets: vec![rule],
+            ..BackendConfig::default()
+        },
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
@@ -122,17 +131,7 @@ async fn fixture(reply: Reply) -> (axum::Router, Calls, tempfile::TempDir) {
         .get_tools_for_binding(None, &[])
         .await
         .expect("the fixture lists its tools");
-    let (mut state, store) = test_router_app_state_with_backend(backend).await;
-    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
-        "name": "echo-key", "value": SECRET, "inject_key": "api_key"
-    }))
-    .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(
-        [("echoes".to_string(), vec![rule])].into_iter().collect(),
-    );
-    let state_mut = Arc::get_mut(&mut state).expect("state is unique");
-    let meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state_mut.backends));
-    state_mut.meta_mcp = Arc::new(meta.with_secret_injector(injector));
+    let (state, store) = test_router_app_state_with_backend(backend).await;
     (create_router(state), calls, store)
 }
 
