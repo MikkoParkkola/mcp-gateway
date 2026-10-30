@@ -270,3 +270,73 @@ fn cost_of_the_scrub_against_the_parse() {
         }
     }
 }
+
+/// gpt G2: an `error.code` equal to a value by number, not only by text, is
+/// refused on a response and on a retryable error, and the refusal keeps the
+/// error retryable.
+#[test]
+fn an_error_code_equal_to_a_value_by_number_is_refused() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "0739154");
+    let mut message = JsonRpcMessage::Response(JsonRpcResponse::error(
+        Some(RequestId::Number(1)),
+        739_154,
+        "nope",
+    ));
+    assert_eq!(ingress_scrub(&needles, &mut message), Scrubbed::Refuse);
+    let answer = super::scrub_answer(
+        &needles,
+        Err(crate::Error::JsonRpcRetryable {
+            code: 739_154,
+            message: "busy".to_owned(),
+            status: 503,
+            data: None,
+        }),
+    );
+    let Err(crate::Error::JsonRpcRetryable {
+        code,
+        message,
+        status,
+        ..
+    }) = answer
+    else {
+        panic!("not a retryable refusal: {answer:?}");
+    };
+    assert_eq!((code, status), (-32603, 503));
+    assert!(!message.contains("739154"), "{message}");
+}
+
+/// gpt G3: the envelope's `jsonrpc` is normalised, so a value placed there
+/// never passes.
+#[test]
+fn a_value_in_the_jsonrpc_field_is_normalised_away() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), json!({}));
+    response.jsonrpc = "token-one-value".to_owned();
+    let mut message = JsonRpcMessage::Response(response);
+    assert_eq!(ingress_scrub(&needles, &mut message), Scrubbed::Redacted);
+    let JsonRpcMessage::Response(response) = message else {
+        unreachable!()
+    };
+    assert_eq!(response.jsonrpc, "2.0");
+}
+
+/// gpt G5: a supported-version list holding a value is refused, never shown.
+#[test]
+fn a_supported_version_holding_a_value_is_refused() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    let answer = super::scrub_answer(
+        &needles,
+        Err(crate::Error::ProtocolVersionRejected {
+            supported: vec!["2025-06-18".to_owned(), "token-one-value".to_owned()],
+        }),
+    );
+    let text = format!("{answer:?}");
+    assert!(!text.contains("token-one-value"), "{text}");
+    assert!(
+        matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
+        "{text}"
+    );
+}

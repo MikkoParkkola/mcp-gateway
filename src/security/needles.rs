@@ -235,19 +235,16 @@ pub(crate) fn scrub_text(needles: &NeedleSet, text: &mut String) -> Scrubbed {
     if secrets.is_empty() {
         return Scrubbed::Clean;
     }
-    let mut value = Value::String(std::mem::take(text));
-    let outcome = scrub_in_place(&secrets, &mut value);
-    *text = match value {
-        Value::String(redacted) => redacted,
-        other => other.to_string(),
-    };
-    outcome
+    scrub_string(&secrets, text)
 }
 
-/// Redacts a peer refusal's message and data (`Error::JsonRpc`,
-/// `Error::JsonRpcRetryable`) and the text of a protocol or transport
-/// diagnostic; other errors carry no backend text.
+/// Redacts the text an error carries. Every variant is listed, not `_`, so a
+/// new one is a compile-time decision here: a variant whose text a transport
+/// can build from backend bytes is scrubbed; one carrying only the gateway's
+/// own text, or none, is clean. A supported-version token holding a value
+/// cannot be redacted without changing what it names, so it refuses.
 pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scrubbed {
+    use crate::Error as E;
     if needles.overflowed() {
         return Scrubbed::Refuse;
     }
@@ -256,30 +253,84 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         return Scrubbed::Clean;
     }
     match error {
-        crate::Error::JsonRpc { message, data, .. }
-        | crate::Error::JsonRpcRetryable { message, data, .. } => {
-            let mut text = Value::String(std::mem::take(message));
-            let first = scrub_in_place(&secrets, &mut text);
-            *message = match text {
-                Value::String(redacted) => redacted,
-                other => other.to_string(),
-            };
-            let second = scrub_option(&secrets, data);
-            merge(first, second)
+        E::JsonRpc {
+            code,
+            message,
+            data,
         }
-        // Diagnostics a transport built from backend text (an A2A start's
-        // card routing fields, a wrapped send failure).
-        crate::Error::Protocol(message) | crate::Error::Transport(message) => {
-            let mut text = Value::String(std::mem::take(message));
-            let outcome = scrub_in_place(&secrets, &mut text);
-            *message = match text {
-                Value::String(redacted) => redacted,
-                other => other.to_string(),
-            };
-            outcome
+        | E::JsonRpcRetryable {
+            code,
+            message,
+            data,
+            ..
+        } => {
+            if code_matches(&secrets, *code) {
+                return Scrubbed::Refuse;
+            }
+            merge(
+                scrub_string(&secrets, message),
+                scrub_option(&secrets, data),
+            )
         }
-        _ => Scrubbed::Clean,
+        E::ProtocolVersionRejected { supported } => {
+            let mut tokens = Value::from(supported.clone());
+            if scrub_in_place(&secrets, &mut tokens) == Scrubbed::Redacted {
+                Scrubbed::Refuse
+            } else {
+                Scrubbed::Clean
+            }
+        }
+        E::Protocol(m)
+        | E::Transport(m)
+        | E::TransportPermanent(m)
+        | E::TransportConnect(m)
+        | E::BackendTimeout(m)
+        | E::Internal(m)
+        | E::OAuth(m)
+        | E::Tls(m) => scrub_string(&secrets, m),
+        E::Config(_)
+        | E::ConfigValidation(_)
+        | E::ConfigWatcher(_)
+        | E::CliCredentialRefused { .. }
+        | E::Forbidden { .. }
+        | E::GatewayRefused { .. }
+        | E::ResponseFirewallRefused
+        | E::AuditUnavailable
+        | E::CapabilityHashMismatch { .. }
+        | E::BackendNotFound(_)
+        | E::AmbiguousBackend { .. }
+        | E::BackendUnavailable(_)
+        | E::CircuitOpen { .. }
+        | E::RateLimited(_)
+        | E::IdentitySlotsExhausted { .. }
+        | E::ToolNotFound(_)
+        | E::AuthorizationIncomplete { .. }
+        | E::AuthorizationCancelled { .. }
+        | E::AuthorizationRequired { .. }
+        | E::AuthorizationPending { .. }
+        | E::Io(_)
+        | E::Json(_)
+        | E::Http(_)
+        | E::Shutdown => Scrubbed::Clean,
     }
+}
+
+/// Redacts `text` in place.
+fn scrub_string(secrets: &[String], text: &mut String) -> Scrubbed {
+    let mut value = Value::String(std::mem::take(text));
+    let outcome = scrub_in_place(secrets, &mut value);
+    *text = match value {
+        Value::String(redacted) => redacted,
+        other => other.to_string(),
+    };
+    outcome
+}
+
+/// Whether an `error.code` equals a value by the shared numeric rule: the
+/// same comparison a result number gets, so `0739154` matches 739154.
+fn code_matches(secrets: &[String], code: i32) -> bool {
+    let mut number = Value::from(code);
+    scrub_in_place(secrets, &mut number) == Scrubbed::Redacted
 }
 
 fn scrub_response(secrets: &[String], response: &mut JsonRpcResponse) -> Scrubbed {
@@ -315,19 +366,17 @@ fn scrub_response(secrets: &[String], response: &mut JsonRpcResponse) -> Scrubbe
         }
     }
     if let Some(error) = response.error.as_mut() {
-        if secrets
-            .iter()
-            .any(|secret| secret == &error.code.to_string())
-        {
+        if code_matches(secrets, error.code) {
             return Scrubbed::Refuse;
         }
-        let mut text = Value::String(std::mem::take(&mut error.message));
-        outcome = merge(outcome, scrub_in_place(secrets, &mut text));
-        error.message = match text {
-            Value::String(redacted) => redacted,
-            other => other.to_string(),
-        };
+        outcome = merge(outcome, scrub_string(secrets, &mut error.message));
         outcome = merge(outcome, scrub_option(secrets, &mut error.data));
+    }
+    // The envelope's version is backend text too; it is normalised, never
+    // passed on as sent (design: envelope).
+    if response.jsonrpc != "2.0" {
+        response.jsonrpc = "2.0".to_owned();
+        outcome = merge(outcome, Scrubbed::Redacted);
     }
     outcome
 }
@@ -369,7 +418,20 @@ pub(crate) fn scrub_answer(
             _ => Ok(response),
         },
         Err(mut error) => match scrub_error(needles, &mut error) {
-            Scrubbed::Refuse => Err(refusal(needles)),
+            // The retry classification is kept: a transient refusal stays
+            // transient (design: envelope).
+            Scrubbed::Refuse => Err(match (refusal(needles), error) {
+                (
+                    crate::Error::JsonRpc { code, message, .. },
+                    crate::Error::JsonRpcRetryable { status, .. },
+                ) => crate::Error::JsonRpcRetryable {
+                    code,
+                    message,
+                    status,
+                    data: None,
+                },
+                (refused, _) => refused,
+            }),
             _ => Err(error),
         },
     }
