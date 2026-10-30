@@ -403,7 +403,7 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("{what} is not JSON: {e}")))
+    serde_json::from_slice(&body).map_err(|e| malformed(what, &e))
 }
 
 /// The card the agent served.

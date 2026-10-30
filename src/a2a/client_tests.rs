@@ -294,13 +294,13 @@ fn a_malformed_card_or_reply_quotes_no_value() {
     }
 }
 
-/// MIK-9035 (T1.41): a body that is not JSON is named by its category and
-/// length only. A pin: serde's syntax errors quote no input today.
+/// MIK-9035 (T1.41): a body that is not JSON is named by its position only,
+/// never by serde's text.
 #[tokio::test]
 async fn a_body_that_is_not_json_quotes_none_of_it() {
     let body = format!("oops {NEEDLE}").into_bytes();
     let error = read_capped_json(response(body), "reply").await.unwrap_err();
     let text = error.to_string();
-    assert!(text.contains("not JSON"), "{text}");
+    assert!(text.contains("reply is malformed"), "{text}");
     assert!(!text.contains(NEEDLE), "{text}");
 }

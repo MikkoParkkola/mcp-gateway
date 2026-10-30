@@ -78,6 +78,102 @@ struct Body {
     depth: usize,
     first_sink: Option<usize>,
     first_top_scrub: Option<usize>,
+    /// Parses whose error goes through a [`SAFE_ERRORS`] helper or is
+    /// dropped unread.
+    safe_errors: usize,
+}
+
+/// The helpers that name a parse failure by category and position, never by
+/// serde's text (which quotes a rejected string, escaped past the literal
+/// scrub).
+const SAFE_ERRORS: [&str; 3] = ["parse_failure", "malformed", "safe_request_error"];
+
+/// The parse beneath `expr`, through `.await`, parentheses and `.map(..)`.
+fn is_parse(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Paren(inner) => is_parse(&inner.expr),
+        syn::Expr::Await(inner) => is_parse(&inner.base),
+        syn::Expr::MethodCall(call) if call.method == "map" => is_parse(&call.receiver),
+        syn::Expr::MethodCall(call) => call.method == "json" && call.args.is_empty(),
+        syn::Expr::Call(call) => {
+            let syn::Expr::Path(p) = call.func.as_ref() else {
+                return false;
+            };
+            let segs = segments(&p.path);
+            let tail: Vec<&str> = segs
+                .iter()
+                .rev()
+                .take(2)
+                .rev()
+                .map(String::as_str)
+                .collect();
+            matches!(
+                tail.as_slice(),
+                [
+                    "serde_json",
+                    "from_str" | "from_slice" | "from_value" | "from_reader"
+                ] | ["JsonRpcMessage", "from_line"]
+                    | ["McpFrame", "from_text"]
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Whether a pattern binds an `Err(..)` payload to a name.
+#[derive(Default)]
+struct BindsErr(bool);
+
+impl<'ast> Visit<'ast> for BindsErr {
+    fn visit_pat_tuple_struct(&mut self, pat: &'ast syn::PatTupleStruct) {
+        if pat.path.segments.last().is_some_and(|s| s.ident == "Err")
+            && pat.elems.iter().any(|e| matches!(e, syn::Pat::Ident(_)))
+        {
+            self.0 = true;
+        }
+        syn::visit::visit_pat_tuple_struct(self, pat);
+    }
+}
+
+fn binds_err(pat: &syn::Pat) -> bool {
+    let mut binds = BindsErr::default();
+    binds.visit_pat(pat);
+    binds.0
+}
+
+/// Whether an expression calls a [`SAFE_ERRORS`] helper, in code or inside
+/// a macro's tokens (a `format!` argument).
+#[derive(Default)]
+struct NamesSafe(bool);
+
+impl<'ast> Visit<'ast> for NamesSafe {
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        self.0 |= SAFE_ERRORS.iter().any(|name| ident == name);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        let tokens = mac.tokens.to_string();
+        self.0 |= SAFE_ERRORS.iter().any(|name| tokens.contains(name));
+        syn::visit::visit_macro(self, mac);
+    }
+}
+
+/// A `map_err` closure that drops the error (`|_|`) or hands it to a
+/// [`SAFE_ERRORS`] helper.
+fn safe_closure(arg: Option<&syn::Expr>) -> bool {
+    let Some(syn::Expr::Closure(closure)) = arg else {
+        return arg.is_some_and(|f| {
+            let mut names = NamesSafe::default();
+            names.visit_expr(f);
+            names.0
+        });
+    };
+    if closure.inputs.len() == 1 && matches!(closure.inputs[0], syn::Pat::Wild(_)) {
+        return true;
+    }
+    let mut names = NamesSafe::default();
+    names.visit_expr(&closure.body);
+    names.0
 }
 
 fn segments(path: &syn::Path) -> Vec<String> {
@@ -163,6 +259,15 @@ impl<'ast> Visit<'ast> for Body {
     }
 
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if is_parse(&call.receiver) {
+            let safe = match call.method.to_string().as_str() {
+                "map_err" => safe_closure(call.args.first()),
+                "ok" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_or_default"
+                | "unwrap_or_else" => true,
+                _ => false,
+            };
+            self.safe_errors += usize::from(safe);
+        }
         syn::visit::visit_expr_method_call(self, call);
         let method = call.method.to_string();
         if method == "json" && call.args.is_empty() {
@@ -185,7 +290,24 @@ impl<'ast> Visit<'ast> for Body {
         }
     }
 
+    fn visit_expr_let(&mut self, expr: &'ast syn::ExprLet) {
+        self.safe_errors += usize::from(is_parse(&expr.expr) && !binds_err(&expr.pat));
+        syn::visit::visit_expr_let(self, expr);
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if let Some(init) = &local.init
+            && init.diverge.is_some()
+        {
+            self.safe_errors += usize::from(is_parse(&init.expr) && !binds_err(&local.pat));
+        }
+        syn::visit::visit_local(self, local);
+    }
+
     fn visit_expr_match(&mut self, expr: &'ast syn::ExprMatch) {
+        if is_parse(&expr.expr) && !expr.arms.iter().any(|arm| binds_err(&arm.pat)) {
+            self.safe_errors += 1;
+        }
         self.visit_expr(&expr.expr);
         self.branched(|body| {
             for arm in &expr.arms {
@@ -208,6 +330,8 @@ struct Sites {
     guards: BTreeMap<Func, Guard>,
     /// Callee names of every function in the three trees.
     calls: BTreeMap<Func, BTreeSet<String>>,
+    /// Parses whose error is neither a [`SAFE_ERRORS`] helper's nor dropped.
+    raw_errors: BTreeMap<Func, usize>,
 }
 
 /// The tree (one of [`SCOPES`]) a file sits in.
@@ -235,6 +359,13 @@ impl Sites {
             .entry(at)
             .or_default()
             .extend(body.calls.iter().cloned());
+        let parses: usize = body.kinds.values().sum();
+        if parses > body.safe_errors {
+            *self
+                .raw_errors
+                .entry((file.to_owned(), func.to_owned()))
+                .or_default() += parses - body.safe_errors;
+        }
         for (kind, n) in body.kinds {
             *self
                 .counts
@@ -531,4 +662,118 @@ fn a_disconnected_scrubber_fails() {
                 && w.contains("does not reach")),
         "a disconnected scrubber passed"
     );
+}
+
+/// Parses whose error leaves raw (a bare `?`), each with why serde's text
+/// cannot carry a value there. A new raw site, or a listed one that no
+/// longer is, fails.
+const RAW_ERRORS: [(&str, &str, &str); 7] = [
+    (
+        "src/transport/stdio.rs",
+        "handle_response",
+        "log_unhandled_line prints fixed text for every error kind but the gateway's own refusal",
+    ),
+    (
+        "src/transport/websocket.rs",
+        "from_text",
+        "a syntax error from a Value parse, which names a position; the typed parses drop theirs",
+    ),
+    (
+        "src/transport/websocket.rs",
+        "dispatch_inbound",
+        "from_text's own errors, above",
+    ),
+    (
+        "src/backend/metadata.rs",
+        "tools_fill",
+        "post-transport: the result was scrubbed as values, so no value is left to quote",
+    ),
+    (
+        "src/backend/metadata_catalogues.rs",
+        "get_prompts_for_binding_lent",
+        "post-transport, as tools_fill",
+    ),
+    (
+        "src/backend/metadata_catalogues.rs",
+        "get_resource_templates_for_binding_lent",
+        "post-transport, as tools_fill",
+    ),
+    (
+        "src/backend/metadata_catalogues.rs",
+        "get_resources_for_binding_lent",
+        "post-transport, as tools_fill",
+    ),
+];
+
+fn raw_differences(sites: &Sites) -> Vec<String> {
+    let listed: BTreeSet<Func> = RAW_ERRORS
+        .iter()
+        .map(|(file, func, _)| ((*file).to_owned(), (*func).to_owned()))
+        .collect();
+    let found: BTreeSet<Func> = sites.raw_errors.keys().cloned().collect();
+    let mut wrong: Vec<String> = found
+        .difference(&listed)
+        .map(|(file, func)| format!("raw parse error, not a SAFE_ERRORS helper: {file}\t{func}"))
+        .collect();
+    wrong.extend(
+        listed
+            .difference(&found)
+            .map(|(file, func)| format!("stale RAW_ERRORS entry: {file}\t{func}")),
+    );
+    wrong
+}
+
+/// Lead ruling on G4: every parse in the three trees names its failure
+/// through a [`SAFE_ERRORS`] helper or drops it, unless [`RAW_ERRORS`] says
+/// why its raw error cannot quote a value.
+#[test]
+fn every_parse_error_is_named_safely() {
+    let wrong = raw_differences(&scanned());
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// The error check's own proof: a raw `{e}` in a `map_err` and a bare `?`
+/// both count as raw; the helper, `|_|`, `.ok()` and an unbound `Err(_)`
+/// do not.
+#[test]
+fn a_raw_parse_error_is_caught() {
+    let raw: [syn::Block; 2] = [
+        syn::parse_quote!({
+            serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("bad: {e}")))
+        }),
+        syn::parse_quote!({
+            let v: Value = serde_json::from_str(text)?;
+        }),
+    ];
+    let safe: [syn::Block; 5] = [
+        syn::parse_quote!({
+            serde_json::from_slice(&body).map_err(|e| Error::Protocol(parse_failure("x", &e)))
+        }),
+        syn::parse_quote!({
+            serde_json::from_value(v).map_err(|_| malformed("request"))?;
+        }),
+        syn::parse_quote!({
+            let r: JsonRpcResponse = serde_json::from_str(body).ok()?;
+        }),
+        syn::parse_quote!({
+            match serde_json::from_value::<Tool>(entry) {
+                Ok(tool) => tool,
+                Err(_) => return,
+            }
+        }),
+        syn::parse_quote!({
+            let Ok(value) = serde_json::from_str::<Value>(data) else {
+                return;
+            };
+        }),
+    ];
+    let mut sites = Sites::default();
+    for (n, block) in raw.iter().enumerate() {
+        sites.function("src/transport/fake.rs", &format!("raw{n}"), block);
+    }
+    for (n, block) in safe.iter().enumerate() {
+        sites.function("src/transport/fake.rs", &format!("safe{n}"), block);
+    }
+    let flagged: Vec<&str> = sites.raw_errors.keys().map(|(_, f)| f.as_str()).collect();
+    assert_eq!(flagged, ["raw0", "raw1"]);
 }
