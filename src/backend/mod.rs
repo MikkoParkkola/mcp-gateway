@@ -52,6 +52,7 @@ mod repin;
 mod restart;
 mod runtime_launch;
 mod secret_send;
+mod send_scope;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;

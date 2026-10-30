@@ -17,7 +17,7 @@ use crate::{Error, Result};
 
 /// Which transport entry point one outbound request takes, and how many times.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Attempts {
+pub(super) enum Attempts {
     /// The ordinary path: the slot's retry policy decides.
     WithRetry,
     /// The upstream-tasks declaration, sent exactly once. A duplicate would
@@ -323,25 +323,7 @@ impl Backend {
         .await
     }
 
-    /// Every send, inside this backend's notification scope: a notification
-    /// raised anywhere in it, a start's handshake included, names this
-    /// backend at the sink's ingress (`transport::notify_ingress`).
-    async fn request_attempted(
-        &self,
-        method: &str,
-        params: Option<Value>,
-        extra_headers: crate::transport::LentCredential,
-        identity_key: Option<&str>,
-        attempts: Attempts,
-    ) -> Result<JsonRpcResponse> {
-        crate::transport::notify_ingress::in_backend(
-            std::sync::Arc::clone(&self.notify_origin),
-            self.send_attempted(method, params, extra_headers, identity_key, attempts),
-        )
-        .await
-    }
-
-    async fn send_attempted(
+    pub(super) async fn send_attempted(
         &self,
         method: &str,
         params: Option<Value>,
