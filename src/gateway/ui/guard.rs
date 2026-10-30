@@ -104,6 +104,7 @@ impl From<AdminShape> for Refused {
         match shape {
             AdminShape::AdminRequired => Self::AdminRequired,
             AdminShape::Forbidden => Self::Forbidden,
+            #[cfg(feature = "cost-governance")]
             AdminShape::Unauthorized => Self::Unauthorized,
             AdminShape::Html => Self::Html,
         }

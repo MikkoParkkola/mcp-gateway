@@ -23,7 +23,9 @@ pub(super) enum AdminShape {
     AdminRequired,
     /// `auth_required(403)`.
     Forbidden,
-    /// `auth_required(401)`.
+    /// `auth_required(401)`. Only the costs route answers with it, so it
+    /// exists only in builds that serve that route.
+    #[cfg(feature = "cost-governance")]
     Unauthorized,
     /// The dashboard's HTML page.
     Html,
