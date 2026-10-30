@@ -15,10 +15,10 @@ use super::direct_guards_fixture::{initialize, post_meta_invoke, send_with_heade
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
 /// The secret the rule injects: a literal, so no environment is read.
-const SECRET: &str = "direct-route-secret-4c1e";
+pub(super) const SECRET: &str = "direct-route-secret-4c1e";
 
 /// One `argument` rule injecting [`SECRET`] as `api_key`.
-fn argument_rule() -> CredentialRule {
+pub(super) fn argument_rule() -> CredentialRule {
     CredentialRule {
         name: "api".to_string(),
         credential_type: CredentialType::ApiKey,
@@ -141,7 +141,7 @@ async fn the_direct_route_applies_a_header_rule() {
 /// `store.lease` (`task_service/store.rs`, custody state, never a record); no
 /// store's data file has either name.
 #[cfg(feature = "firewall")]
-fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
+pub(super) fn files_under(dir: &std::path::Path) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     let mut files = Vec::new();
     for entry in std::fs::read_dir(dir).expect("the store directory reads") {
         let path = entry.expect("a directory entry reads").path();
@@ -171,7 +171,7 @@ fn locked_sidecar(path: &std::path::Path, error: &std::io::Error) -> bool {
 
 /// Whether `bytes` holds `text`.
 #[cfg(feature = "firewall")]
-fn holds(bytes: &[u8], text: &str) -> bool {
+pub(super) fn holds(bytes: &[u8], text: &str) -> bool {
     bytes
         .windows(text.len())
         .any(|window| window == text.as_bytes())
@@ -190,7 +190,7 @@ fn task_meta() -> serde_json::Value {
 /// Submits `gateway_invoke read` on `alpha` as a task under idempotency key
 /// `key`: the task id and the creating answer.
 #[cfg(feature = "firewall")]
-async fn submit_task(
+pub(super) async fn submit_task(
     fx: &super::direct_guards_fixture::Fx,
     key: &str,
 ) -> (String, serde_json::Value) {
@@ -216,7 +216,10 @@ async fn submit_task(
 
 /// Polls task `id` until it leaves `working`; it must have completed.
 #[cfg(feature = "firewall")]
-async fn finished_task(fx: &super::direct_guards_fixture::Fx, id: &str) -> serde_json::Value {
+pub(super) async fn finished_task(
+    fx: &super::direct_guards_fixture::Fx,
+    id: &str,
+) -> serde_json::Value {
     let headers = [
         ("mcp-protocol-version", "2026-07-28"),
         ("mcp-method", "tasks/get"),

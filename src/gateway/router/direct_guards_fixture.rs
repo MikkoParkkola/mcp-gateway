@@ -382,13 +382,13 @@ pub(crate) use egress::{
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
-pub(crate) use quota::fixture_with_secrets;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
 use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
+pub(crate) use quota::{fixture_with_secrets, fixture_with_secrets_served_by};
 pub(crate) use requests::{
     initialize, post_direct, post_meta_invoke, post_meta_invoke_nonce, send, send_with_headers,
 };
@@ -698,7 +698,9 @@ async fn fixture_inner(
             &fixture_failsafe(),
             Duration::from_secs(60),
         ));
-        backend.set_transport_for_test(backend_transport((&calls, &seen), answer));
+        if quota::served_by().is_none() {
+            backend.set_transport_for_test(backend_transport((&calls, &seen), answer));
+        }
         assert!(state_mut.backends.register(backend), "fixture registration");
     }
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends)).admitting_as(&state_mut.meta_mcp);

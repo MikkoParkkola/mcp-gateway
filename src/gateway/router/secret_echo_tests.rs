@@ -27,11 +27,11 @@ const SECRET: &str = "echo-secret-7f3a9c2e51d84b06";
 /// The marker an echoed secret is replaced with.
 const MARKER: &str = "[redacted]";
 
-type Calls = Arc<parking_lot::Mutex<Vec<Value>>>;
+pub(super) type Calls = Arc<parking_lot::Mutex<Vec<Value>>>;
 
 /// How the `echo` tool reflects the arguments it received.
 #[derive(Clone, Copy)]
-enum Reply {
+pub(super) enum Reply {
     /// The arguments, as JSON text, in the result.
     Echo,
     /// The secret spelled with a `\u` escape in the wire text: it decodes
@@ -64,7 +64,7 @@ fn wire(text: String) -> axum::response::Response {
 
 /// A Streamable HTTP MCP server on a loopback port that lists one `echo`
 /// tool and answers each call with `reply`; returns its URL.
-async fn echo_server(calls: Calls, reply: Reply) -> String {
+pub(super) async fn echo_server(calls: Calls, reply: Reply) -> String {
     let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
         let calls = Arc::clone(&calls);
         async move {
@@ -78,9 +78,10 @@ async fn echo_server(calls: Calls, reply: Reply) -> String {
             match request["method"].as_str() {
                 Some("initialize") => answer(json!({"protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}}, "serverInfo": {"name": "echoes", "version": "0"}})),
-                Some("tools/list") => answer(json!({"tools": [{
-                    "name": "echo", "description": "fixture", "inputSchema": {"type": "object"}
-                }]})),
+                Some("tools/list") => answer(json!({"tools": [
+                    {"name": "echo", "description": "fixture", "inputSchema": {"type": "object"}},
+                    {"name": "read", "description": "fixture", "inputSchema": {"type": "object"}}
+                ]})),
                 Some("tools/call") => {
                     let params = request["params"].clone();
                     calls.lock().push(params.clone());

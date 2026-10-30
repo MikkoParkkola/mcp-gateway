@@ -108,6 +108,27 @@ thread_local! {
     /// The `secrets:` rules every fixture backend carries; empty for none.
     static SECRETS: std::cell::RefCell<Vec<crate::secret_injection::CredentialRule>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// A real HTTP MCP server both fixture backends talk to instead of the
+    /// scripted transport: the transport then parses the server's bytes, as
+    /// the echo-redaction rows need (MIK-9035).
+    static SERVED_BY: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The real server the fixture backends use, when one is set.
+pub(super) fn served_by() -> Option<String> {
+    SERVED_BY.with(|url| url.borrow().clone())
+}
+
+/// [`fixture_with_secrets`] whose two backends are HTTP backends of the MCP
+/// server at `url`, with no scripted transport.
+pub(crate) async fn fixture_with_secrets_served_by(
+    rules: Vec<crate::secret_injection::CredentialRule>,
+    url: String,
+) -> Fx {
+    SERVED_BY.with(|served| *served.borrow_mut() = Some(url));
+    let fx = fixture_with_secrets(rules, None, None).await;
+    SERVED_BY.with(|served| *served.borrow_mut() = None);
+    fx
 }
 
 /// [`super::fixture`] whose two backends each carry `rules`, answering over
@@ -153,7 +174,13 @@ pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendCo
         secrets: SECRETS.with(|s| s.borrow().clone()),
         // A propagating backend validates an HTTP base URL before it
         // reaches the scripted transport.
-        transport: if super::PROPAGATING.with(std::cell::Cell::get) {
+        transport: if let Some(http_url) = served_by() {
+            crate::config::TransportConfig::Http {
+                http_url,
+                streamable_http: Some(true),
+                protocol_version: None,
+            }
+        } else if super::PROPAGATING.with(std::cell::Cell::get) {
             crate::config::TransportConfig::Http {
                 http_url: format!("https://{name}.internal/mcp"),
                 streamable_http: Some(true),
