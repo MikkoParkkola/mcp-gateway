@@ -58,8 +58,11 @@ impl<'ast> Visit<'ast> for Body {
     }
 
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
+        // `self.needles` only: a field of that name on anything else hands
+        // nothing on.
         if let syn::Member::Named(name) = &field.member
             && name == "needles"
+            && matches!(field.base.as_ref(), syn::Expr::Path(p) if p.path.is_ident("self"))
         {
             self.hands_needles = true;
         }

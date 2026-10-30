@@ -317,9 +317,12 @@ impl StdioTransport {
 /// quote the line, and the line can hold an injected secret (MIK-9035), so
 /// it is named by kind; the gateway's own refusals keep their text.
 fn log_unhandled_line(line_len: usize, error: &crate::Error) {
+    // Only the gateway's own refusal (a protocol error `handle_response`
+    // builds from fixed text) keeps its words; every other kind is named.
     let why = match error {
         crate::Error::Json(_) => "the line is not a JSON-RPC message".to_owned(),
-        other => other.to_string(),
+        crate::Error::Protocol(text) => text.clone(),
+        _ => "the line could not be handled".to_owned(),
     };
     error!(line_len, error = %why, "Failed to handle a line from the backend");
 }

@@ -249,12 +249,6 @@ impl StdioTransport {
         }
     }
 
-    /// Handle a response line from stdout
-    ///
-    /// The line is classified before it is routed. A peer notification is kept
-    /// for the caller that supplied its progress token and otherwise ignored; a
-    /// peer *request* is refused, because routing one to a pending caller would
-    /// answer that caller with a frame carrying neither `result` nor `error`.
     /// The backend's injected values, attached before the child starts; the
     /// first attach wins.
     pub(crate) fn attach_needles(
@@ -264,6 +258,12 @@ impl StdioTransport {
         let _ = self.needles.set(needles);
     }
 
+    /// Handle a response line from stdout
+    ///
+    /// The line is classified before it is routed. A peer notification is kept
+    /// for the caller that supplied its progress token and otherwise ignored; a
+    /// peer *request* is refused, because routing one to a pending caller would
+    /// answer that caller with a frame carrying neither `result` nor `error`.
     fn handle_response(&self, line: &str) -> Result<()> {
         let line_len = line.len();
         debug!(line_len, "Parsing response");

@@ -182,7 +182,7 @@ fn listed() -> (Rows, Vec<String>) {
             bad.push(format!("count is not a number: {line}"));
             continue;
         };
-        rows.insert(
+        let previous = rows.insert(
             (file.to_owned(), func.to_owned(), kind.to_owned()),
             Row {
                 count,
@@ -190,6 +190,9 @@ fn listed() -> (Rows, Vec<String>) {
                 reason: reason.to_owned(),
             },
         );
+        if previous.is_some() {
+            bad.push(format!("duplicate row: {line}"));
+        }
     }
     (rows, bad)
 }
