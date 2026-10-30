@@ -799,5 +799,8 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 }
 
 #[cfg(test)]
+#[path = "ops_presend_pin_tests.rs"]
+mod presend_pin_tests;
+#[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;
