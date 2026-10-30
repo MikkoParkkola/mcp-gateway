@@ -53,6 +53,7 @@ async fn run(end: End) -> (Vec<(&'static str, String)>, Vec<String>) {
         End::Confirmed => drop(gw.confirm(&owner, &attempt, "confirm").await),
         End::Cancelled => drop(gw.confirm(&owner, &attempt, "cancel").await),
         End::Expired => {
+            gw.wait_until_held().await;
             tokio::time::pause();
             tokio::time::advance(Duration::from_secs(61)).await;
         }
@@ -192,6 +193,7 @@ async fn expiry_writes_a_flow_end_record() {
     let (url, _) = Gw::link(&gw.start(&owner).await);
     let _ = gw.approve(&url).await;
     let before = gw.admin_actions().len();
+    gw.wait_until_held().await;
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(61)).await;
 

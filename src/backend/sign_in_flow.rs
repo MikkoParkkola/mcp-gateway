@@ -61,7 +61,8 @@ pub(crate) struct Flow {
 impl Flow {
     /// Move the flow's end to `at`, `from_now` away.
     pub(crate) fn end_at(&mut self, at: Instant) {
-        self.until_at = SystemTime::now() + at.saturating_duration_since(Instant::now());
+        self.until_at = crate::clock::system_time_or_before_epoch()
+            + at.saturating_duration_since(Instant::now());
         self.until = at;
     }
 

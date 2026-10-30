@@ -11,7 +11,6 @@
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use super::LIST_MAX_PAGES;

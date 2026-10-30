@@ -55,6 +55,7 @@ async fn approved_then_paused(gw: &Gw, owner: &Who) -> String {
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     let (url, attempt) = Gw::link(&reply);
     let _ = gw.approve(&url).await;
+    gw.wait_until_held().await;
     tokio::time::pause();
     attempt
 }
@@ -160,6 +161,7 @@ async fn retry_after_follows_the_confirm_window() {
 
     tokio::time::resume();
     let _ = gw.approve(&url).await;
+    gw.wait_until_held().await;
     tokio::time::pause();
     let right_after = gw.start(&gw.session()).await.json();
     assert_eq!(
@@ -268,6 +270,7 @@ async fn confirm_cancel_and_expiry_race_on_one_attempt() {
     tokio::time::resume();
     flow.release.notify_one();
     flow.gw.approve(&flow.url).await;
+    flow.gw.wait_until_held().await;
     tokio::time::pause();
     pass(SIGN_IN_CONFIRM_WINDOW.saturating_sub(Duration::from_millis(1))).await;
 

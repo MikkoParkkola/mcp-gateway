@@ -83,25 +83,31 @@ fn refuse_body(headers: &HeaderMap) -> Option<Response> {
 
 /// The backend `name`, or the answer for its absence (404) or, when
 /// `need_oauth`, for its having no `oauth` block (409).
-fn find_backend(state: &AppState, name: &str, need_oauth: bool) -> Result<Arc<Backend>, Response> {
+fn find_backend(
+    state: &AppState,
+    name: &str,
+    need_oauth: bool,
+) -> Result<Arc<Backend>, Box<Response>> {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
     )]
     let found = state.backends.get(name);
     let Some(backend) = found else {
-        return Err(
+        return Err(Box::new(
             flat_error(StatusCode::NOT_FOUND, format!("Backend '{name}' not found"))
                 .into_response(),
-        );
+        ));
     };
     if need_oauth && !backend.has_oauth() {
-        return Err(structured_error(
-            StatusCode::CONFLICT,
-            "not_oauth",
-            "this backend does not sign in with OAuth",
-        )
-        .into_response());
+        return Err(Box::new(
+            structured_error(
+                StatusCode::CONFLICT,
+                "not_oauth",
+                "this backend does not sign in with OAuth",
+            )
+            .into_response(),
+        ));
     }
     Ok(backend)
 }
@@ -109,14 +115,16 @@ fn find_backend(state: &AppState, name: &str, need_oauth: bool) -> Result<Arc<Ba
 /// The owner tag of the caller's valid dashboard session. A caller with no
 /// handle, or a handle that is not valid, gets 403: no owner is ever derived
 /// from nothing.
-fn session_owner(state: &AppState, headers: &HeaderMap) -> Result<String, Response> {
+fn session_owner(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Response>> {
     let refused = || {
-        structured_error(
-            StatusCode::FORBIDDEN,
-            "dashboard_session_required",
-            "sign in from a dashboard session",
+        Box::new(
+            structured_error(
+                StatusCode::FORBIDDEN,
+                "dashboard_session_required",
+                "sign in from a dashboard session",
+            )
+            .into_response(),
         )
-        .into_response()
     };
     let handle = crate::gateway::auth::session_cookie_value(headers).ok_or_else(refused)?;
     let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
@@ -166,11 +174,11 @@ pub(super) async fn start_sign_in(
     }
     let owner = match session_owner(&state, &headers) {
         Ok(owner) => owner,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     let backend = match find_backend(&state, &name, true) {
         Ok(backend) => backend,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     if let Some(refused) = refuse_host(&uri, &headers) {
         return audited(refused, &name, "refused");
@@ -261,11 +269,11 @@ pub(super) async fn confirm_sign_in(
     };
     let owner = match session_owner(&state, &headers) {
         Ok(owner) => owner,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     let backend = match find_backend(&state, &name, false) {
         Ok(backend) => backend,
-        Err(refused) => return refused,
+        Err(refused) => return *refused,
     };
     if let Some(refused) = refuse_host(&uri, &headers) {
         return audited(refused, &name, "refused");
@@ -308,7 +316,7 @@ pub(super) async fn confirm_sign_in(
                 .into_response(),
             "refused",
         ),
-        Decided::SaveFailed(_) => (
+        Decided::SaveFailed => (
             structured_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "sign_in_save_failed",

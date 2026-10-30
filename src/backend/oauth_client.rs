@@ -4,7 +4,6 @@
 //! that file from growing.
 
 use std::sync::Arc;
-#[cfg(any(test, feature = "webui"))]
 
 use tracing::info;
 

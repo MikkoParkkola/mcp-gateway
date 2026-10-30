@@ -84,7 +84,7 @@ fn in_progress(backend: &Backend) -> Started {
         });
     Started::InProgress {
         holder: Holder::Gateway,
-        expires_at: std::time::SystemTime::now() + left,
+        expires_at: crate::clock::system_time_or_before_epoch() + left,
         retry_after_secs: left.as_secs() + u64::from(left.subsec_nanos() > 0),
     }
 }
@@ -118,7 +118,7 @@ pub(super) async fn start(
         attempt_id: attempt_id.clone(),
         phase: Phase::AwaitingCallback,
         until: deadline,
-        until_at: std::time::SystemTime::now() + OAUTH_AUTHORIZATION_WINDOW,
+        until_at: crate::clock::system_time_or_before_epoch() + OAUTH_AUTHORIZATION_WINDOW,
         grant: None,
         held_since: None,
         wait_generation: 0,
@@ -318,7 +318,7 @@ pub(super) enum Decided {
     /// The callback has not landed and its code is not redeemed yet.
     NotReady { retry_after_secs: u64 },
     /// The save failed; the grant is discarded.
-    SaveFailed(Error),
+    SaveFailed,
 }
 
 /// What a decision takes out of the flow.
@@ -397,9 +397,9 @@ pub(super) async fn decide(
             backend.clear_auth_wait_if(generation);
             Decided::Done
         }
-        Err(error) => {
+        Err(_) => {
             record_outcome(state, &backend.name, "failed", caller.as_ref());
-            Decided::SaveFailed(error)
+            Decided::SaveFailed
         }
     }
 }

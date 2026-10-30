@@ -436,3 +436,22 @@ pub(super) fn session_handle(state: &AppState) -> String {
         .dashboard_bootstrap
         .issue_session_at(Now::read(), &limits)
 }
+
+impl Gw {
+    /// Wait, without moving any clock, until the flow holds the token the
+    /// callback bought: the exchange has finished. A row that pauses time
+    /// does so only after this, so a paused clock never runs ahead of a
+    /// request still in flight.
+    pub(super) async fn wait_until_held(&self) {
+        for _ in 0..20_000 {
+            if self
+                .backend
+                .with_flow(|slot| slot.as_ref().is_some_and(|flow| flow.grant.is_some()))
+            {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("the exchange did not finish");
+    }
+}
