@@ -12,8 +12,8 @@ use super::*;
 /// executors are entered at `execute()`, which runs the guards first: an IP
 /// literal is rejected outright (`security/ssrf/mod.rs:164`) and a domain name,
 /// which does pass (`security/ssrf/mod.rs:185`), is then stopped at DNS by the
-/// production client's `PinningResolver` (`executor/mod.rs:175`). A plain
-/// client plus a domain host clears both.
+/// production client's `PinningResolver` (`executor/mod.rs:175`). The fixture
+/// host plus a client that resolves it to the listener clears both.
 ///
 /// LIMIT: swapping the client means the production client's own SSRF and
 /// redirect posture is not exercised here. What the two tests below pin is
@@ -47,8 +47,10 @@ async fn loopback_status_backend() -> (CapabilityExecutor, String) {
     });
 
     let mut executor = CapabilityExecutor::new();
-    executor.client = reqwest::Client::new();
-    (executor, format!("http://localhost:{port}"))
+    executor.client = crate::test_fixture_host::fixture_client_builder()
+        .build()
+        .unwrap();
+    (executor, crate::test_fixture_host::fixture_url(port))
 }
 
 /// A capability the protocol executors will dispatch without prerequisites:
@@ -314,7 +316,13 @@ async fn a_capability_429_is_a_typed_http_error_at_every_protocol_site() {
     assert_untyped_500(&rest[1], "REST");
 
     let leaked = rest[0].to_string();
-    for secret in ["CANARY", "api_key", "localhost", "/throttled", "slow down"] {
+    for secret in [
+        "CANARY",
+        "api_key",
+        crate::test_fixture_host::FIXTURE_HOST,
+        "/throttled",
+        "slow down",
+    ] {
         assert!(
             !leaked.contains(secret),
             "the typed error leaked {secret:?}: {leaked}"

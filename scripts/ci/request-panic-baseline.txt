@@ -45,7 +45,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	let id = id.expect("id should
 src/gateway/router/helpers.rs	Some(RequestId::Number(value.as_i64().unwrap()))	1
 src/gateway/router/helpers.rs	Some(RequestId::String(value.as_str().unwrap().to_string()))	1
 src/gateway/router/judged_answer.rs	.expect("an answer frame stays an answer through its replacements"),	1
-src/gateway/server/build_meta.rs	.expect("no other Arc references at this point")	8
+src/gateway/server/build_meta.rs	.expect("no other Arc references at this point")	7
 src/gateway/server/identity_grants.rs	.expect("the sink was just built")	2
 src/gateway/server/run_steps.rs	GatewayKeyPair::generate().expect("RSA key pair generation failed twice")	1
 src/gateway/server/stdio_loop.rs	.expect("the admission semaphore is never closed");	2

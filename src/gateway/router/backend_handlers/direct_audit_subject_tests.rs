@@ -155,7 +155,7 @@ fn guarded() -> Preflight {
 
 #[tokio::test]
 async fn the_mint_audit_subject_is_the_captured_backends_principal() {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,

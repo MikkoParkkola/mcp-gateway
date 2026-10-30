@@ -287,3 +287,76 @@ fn a_key_starting_with_a_non_breaking_space_keeps_its_depth() {
         .expect("an in-place edit, not a refusal");
     assert_eq!(got, original.replace("BAR: two", "BAR: three"));
 }
+
+/// The gateway's own YAML writes a block list at its key's depth
+/// (`allowed_tools:` then `- read_a` under it, not indented). Those items
+/// belong to the key, so replacing or removing the list takes them too.
+const LIST_AT_KEY_DEPTH: &str = "backends:\n  svc:\n    command: x\n    allowed_tools:\n    - read_a\n  other:\n    command: y\n";
+
+#[test]
+fn a_list_at_its_keys_depth_is_replaced_whole() {
+    let old = "command: x\nallowed_tools: [read_a]\n";
+    let new = "command: x\nallowed_tools: [read_a, write_b]\n";
+    assert_eq!(
+        edited(LIST_AT_KEY_DEPTH, old, new).as_deref(),
+        Some(
+            "backends:\n  svc:\n    command: x\n    allowed_tools:\n    - read_a\n    - write_b\n  \
+             other:\n    command: y\n"
+        )
+    );
+}
+
+#[test]
+fn a_list_at_its_keys_depth_is_removed_whole() {
+    let old = "command: x\nallowed_tools: [read_a]\n";
+    assert_eq!(
+        edited(LIST_AT_KEY_DEPTH, old, "command: x\n").as_deref(),
+        Some("backends:\n  svc:\n    command: x\n  other:\n    command: y\n")
+    );
+}
+
+/// Control: a list indented under its key was already handled.
+#[test]
+fn an_indented_list_is_replaced_whole() {
+    let original = "backends:\n  svc:\n    command: x\n    allowed_tools:\n      - read_a\n";
+    let old = "command: x\nallowed_tools: [read_a]\n";
+    let new = "command: x\nallowed_tools: [write_b]\n";
+    let text = edited(original, old, new).expect("spliced");
+    assert!(text.ends_with("allowed_tools:\n    - write_b\n"), "{text}");
+    assert!(!text.contains("read_a"), "{text}");
+}
+
+/// Edge: a list at its key's depth followed by a sibling key. The sibling
+/// ends the list's span, so replacing or removing the list keeps it.
+#[test]
+fn a_list_at_its_keys_depth_keeps_the_sibling_after_it() {
+    let original = "backends:\n  svc:\n    allowed_tools:\n    - a\n    - b\n    enabled: true\n";
+    let old = "allowed_tools: [a, b]\nenabled: true\n";
+    assert_eq!(
+        edited(original, old, "allowed_tools: [c]\nenabled: true\n").as_deref(),
+        Some("backends:\n  svc:\n    allowed_tools:\n    - c\n    enabled: true\n")
+    );
+    assert_eq!(
+        edited(original, old, "enabled: true\n").as_deref(),
+        Some("backends:\n  svc:\n    enabled: true\n")
+    );
+}
+
+/// Edge: inside a sequence of mappings, a key's same-depth list items belong
+/// to it, but the next item of the enclosing sequence (`- name: y`, shallower
+/// than the key) ends its span; and an item line's own span never takes the
+/// sibling item at its depth.
+#[test]
+fn a_sibling_sequence_item_ends_the_span() {
+    let lines = ["- name: x", "  allowed_tools:", "  - a", "- name: y"];
+    assert_eq!(
+        super::key_span(&lines, 1, lines.len()),
+        3,
+        "the key keeps `- a`"
+    );
+    assert_eq!(
+        super::key_span(&lines, 0, lines.len()),
+        3,
+        "the item stops at `- name: y`"
+    );
+}

@@ -47,7 +47,7 @@ async fn poll_terminal(
 }
 
 #[tokio::test]
-async fn tasks_get_returns_a_retained_public_claim_as_private() {
+async fn tasks_get_never_returns_a_retained_public_claim() {
     // The fixture really claims `public`: asked on a separate instance so the
     // counted backend under test still sees exactly one dispatch.
     let probe = CountedBackend::claiming_public();
@@ -93,9 +93,7 @@ async fn tasks_get_returns_a_retained_public_claim_as_private() {
         Some(&json!(fixture::MARKER)),
         "the retained result is the backend's own: {done}"
     );
-    assert_eq!(
-        done.pointer("/result/result/cacheScope"),
-        Some(&json!("private")),
-        "{done}"
-    );
+    // A `tools/call` answer may not carry `cacheScope`: ingress removed the
+    // backend's `public` before the task stored its result.
+    assert_eq!(done.pointer("/result/result/cacheScope"), None, "{done}");
 }

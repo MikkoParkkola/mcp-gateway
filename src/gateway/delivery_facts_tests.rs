@@ -7,28 +7,28 @@ use serde_json::{Map, Value, json};
 use super::{Part, ResponseEffect, found, raise, record_fields, scanned, scope, snapshot};
 use crate::security::Severity;
 
-/// The fields the open cell records, given the frame's refusal and annotation.
-fn recorded(frame_refused: bool, annotated: bool) -> Map<String, Value> {
+/// The fields the open cell records, given the frame's refusal.
+fn recorded(frame_refused: bool) -> Map<String, Value> {
     let mut fields = Map::new();
-    record_fields(snapshot().as_ref(), frame_refused, annotated, &mut fields);
+    record_fields(snapshot().as_ref(), frame_refused, &mut fields);
     fields
 }
 
 #[tokio::test]
 async fn outside_a_cell_nothing_is_recorded() {
     let mut fields = Map::new();
-    record_fields(snapshot().as_ref(), true, true, &mut fields);
+    record_fields(snapshot().as_ref(), true, &mut fields);
     assert!(fields.is_empty(), "{fields:?}");
 }
 
 #[tokio::test]
 async fn unscanned_is_null_findings_and_scanned_clean_is_empty() {
     scope(async {
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         assert_eq!(fields["response_effect"], "delivered");
         assert_eq!(fields["response_findings"], Value::Null);
         scanned();
-        assert_eq!(recorded(false, false)["response_findings"], json!([]));
+        assert_eq!(recorded(false)["response_findings"], json!([]));
     })
     .await;
 }
@@ -38,12 +38,14 @@ async fn the_strongest_effect_wins_whatever_the_order() {
     scope(async {
         raise(ResponseEffect::Refused);
         raise(ResponseEffect::Rewritten);
-        assert_eq!(recorded(false, true)["response_effect"], "refused");
+        raise(ResponseEffect::Annotated);
+        assert_eq!(recorded(false)["response_effect"], "refused");
     })
     .await;
     scope(async {
-        assert_eq!(recorded(false, true)["response_effect"], "annotated");
-        assert_eq!(recorded(true, false)["response_effect"], "refused");
+        raise(ResponseEffect::Annotated);
+        assert_eq!(recorded(false)["response_effect"], "annotated");
+        assert_eq!(recorded(true)["response_effect"], "refused");
     })
     .await;
 }
@@ -55,7 +57,7 @@ async fn findings_are_most_severe_first_capped_at_32_with_a_total() {
             found(format!("firewall:k{i:02}"), Severity::Low, Part::Result);
         }
         found("firewall:z".into(), Severity::Critical, Part::Error);
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         let listed = fields["response_findings"].as_array().expect("a list");
         assert_eq!(listed.len(), 32);
         assert_eq!(
@@ -72,8 +74,8 @@ async fn an_unvouched_delivery_records_only_a_refusal() {
     scope(async {
         found("firewall:k".into(), Severity::High, Part::Result);
         super::unvouched();
-        assert!(recorded(false, false).is_empty());
-        let fields = recorded(true, false);
+        assert!(recorded(false).is_empty());
+        let fields = recorded(true);
         assert_eq!(fields["response_effect"], "refused");
         assert!(fields.get("response_findings").is_none(), "{fields:?}");
     })
@@ -87,7 +89,7 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
             raise(ResponseEffect::Refused);
             found("firewall:k".into(), Severity::High, Part::Result);
         });
-        let fields = recorded(false, false);
+        let fields = recorded(false);
         assert_eq!(fields["response_effect"], "delivered");
         assert_eq!(fields["response_findings"], Value::Null);
     })
@@ -271,4 +273,100 @@ fn every_stored_answer_read_is_inventoried() {
         found, listed,
         "a stored-answer read changed: unvouch its delivery, add a row that fails without it, then list it"
     );
+}
+
+/// How a caller of the context-integrity transform treats its result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TransformUse {
+    /// The function itself, or a call inside the transform.
+    Inside,
+    /// The result is the answer delivered: its raises and notes count.
+    Delivering,
+    /// The result is a copy never delivered: it runs with the facts cell and
+    /// the gateway-write notes suspended.
+    Suspended,
+}
+
+/// Every production occurrence of the transform's three entry points.
+const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        1,
+        TransformUse::Inside,
+    ),
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/policy.rs",
+        1,
+        TransformUse::Delivering,
+    ),
+    (
+        "apply_context_integrity(",
+        "src/gateway/meta_mcp/invoke/relay.rs",
+        1,
+        TransformUse::Suspended,
+    ),
+    (
+        "context_integrity_delivered_result(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+    (
+        "attach_context_integrity_metadata(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+];
+
+/// The scan row (lead ruling): a new caller of the transform would raise
+/// and note into whatever delivery is open. It cannot land unclassified,
+/// and a suspended caller must hold both suspensions.
+#[test]
+fn every_context_integrity_caller_is_classified() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    production_sources(root, &root.join("src"), &mut files);
+    let needles: std::collections::BTreeSet<&str> =
+        TRANSFORM_CALLS.iter().map(|(needle, ..)| *needle).collect();
+    let mut found = std::collections::BTreeMap::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).expect("a source file reads");
+        let name = file
+            .strip_prefix(root)
+            .expect("under the crate")
+            .to_string_lossy()
+            .replace('\\', "/");
+        for needle in &needles {
+            let count = text.matches(needle).count();
+            if count > 0 {
+                found.insert((*needle, name.clone()), count);
+            }
+        }
+    }
+    let listed: std::collections::BTreeMap<_, _> = TRANSFORM_CALLS
+        .iter()
+        .map(|(needle, file, count, _)| ((*needle, (*file).to_owned()), *count))
+        .collect();
+    assert_eq!(
+        found, listed,
+        "a context-integrity caller changed: classify it as delivering or suspended, then list it"
+    );
+    // The suspensions must wrap the call itself: each opens in the few
+    // lines just before it, so one elsewhere in the file cannot stand in.
+    for (needle, file, _, class) in TRANSFORM_CALLS {
+        if *class == TransformUse::Suspended {
+            let text = std::fs::read_to_string(root.join(file)).expect("reads");
+            let at = text.find(needle).expect("listed above");
+            let lead_in = &text[text[..at].len().saturating_sub(300)..at];
+            for guard in ["delivery_facts::suspended(", "gateway_writes::suspended("] {
+                assert!(
+                    lead_in.contains(guard),
+                    "{file}: {needle} is not inside {guard}"
+                );
+            }
+        }
+    }
 }

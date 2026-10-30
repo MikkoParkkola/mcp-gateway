@@ -41,7 +41,7 @@ def main() -> None:
 
     # The routing failure this check exists to catch.
     if inner.get("isError"):
-        detail = inner.get("recovery", {}).get("message") or inner.get("content")
+        detail = inner.get("_recovery", {}).get("message") or inner.get("content")
         fail(f"gateway_invoke returned an error payload: {detail}")
 
     # A well-formed envelope is not a routed call. Only upstream data proves one.

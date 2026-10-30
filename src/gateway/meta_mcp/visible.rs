@@ -42,6 +42,14 @@ impl Withholding {
     pub(crate) fn is_backend_gate(self) -> bool {
         matches!(self, Self::Descriptor | Self::Unselected)
     }
+
+    /// Whether the gateway withholds for a policy reason (the caller may not
+    /// invoke it, or its schema or description failed a check): answered
+    /// absent, it is the gateway's refusal. A name the caller's catalogue
+    /// lacks, or a backend it cannot reach, is not.
+    pub(in crate::gateway::meta_mcp) fn is_policy(self) -> bool {
+        matches!(self, Self::Refused | Self::Schema | Self::Descriptor)
+    }
 }
 
 /// Whether a caller may be shown a tool.
@@ -440,6 +448,7 @@ pub(crate) mod seams {
     thread_local! {
         static AFTER_ROUTE_STAGE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static BEFORE_TASK_DISPATCH: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_READMIT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_INTAKE: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
@@ -523,6 +532,21 @@ pub(crate) mod seams {
     /// Called where a task worker starts its dispatch.
     pub(crate) fn task_dispatch_starts() {
         if let Some(hook) = BEFORE_TASK_DISPATCH.with(|slot| slot.borrow_mut().take()) {
+            hook();
+        }
+    }
+
+    /// Run `hook` once, the next time a task worker on this thread has
+    /// re-admitted its call: between the re-admission's judgement and the run
+    /// (the C2e6 row).
+    #[cfg(feature = "firewall")]
+    pub(crate) fn after_readmit(hook: impl FnOnce() + 'static) {
+        AFTER_READMIT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    }
+
+    /// Called where a task worker's re-admission has succeeded.
+    pub(crate) fn readmitted() {
+        if let Some(hook) = AFTER_READMIT.with(|slot| slot.borrow_mut().take()) {
             hook();
         }
     }

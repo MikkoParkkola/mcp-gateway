@@ -63,7 +63,7 @@ struct Fixture {
     router: axum::Router,
     log: Arc<TransparencyLogger>,
     calls: Arc<AtomicUsize>,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 /// One logger, shared by the meta route and `AppState`, as the server wires it.
@@ -380,6 +380,7 @@ async fn delivery_attempt_append_is_bounded() {
                 targets: &[ResponsePolicyTarget {
                     server: "alpha".into(),
                     tool: "read".into(),
+                    origin: crate::security::response_policy::TargetOrigin::Routed,
                 }],
                 correlation: ResponseCorrelation {
                     session_id: "s",
@@ -388,6 +389,7 @@ async fn delivery_attempt_append_is_bounded() {
                     external_tool: "gateway_invoke",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
@@ -429,6 +431,7 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                 targets: &[ResponsePolicyTarget {
                     server: "alpha".into(),
                     tool: "read".into(),
+                    origin: crate::security::response_policy::TargetOrigin::Routed,
                 }],
                 correlation: ResponseCorrelation {
                     session_id: "s",
@@ -437,6 +440,7 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                     external_tool: "gateway_invoke",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,

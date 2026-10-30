@@ -11,24 +11,20 @@
 use std::sync::Arc;
 
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
-use dashmap::DashMap;
-use governor::{
-    RateLimiter,
-    clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
-};
 use tracing::{debug, warn};
 
 use super::middleware::{
     bearer_unauthorized_response, circuit_open_response, rate_limited_response,
 };
 use crate::config::CircuitBreakerConfig;
-use crate::failsafe::CircuitBreaker;
 use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
 pub(crate) mod live;
+
+#[path = "auth_runtime.rs"]
+pub(crate) mod runtime;
 use live::key_server_credential;
 #[path = "auth_quota.rs"]
 mod quota;
@@ -56,9 +52,6 @@ pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handof
 /// child included: code moved into a child module keeps the target a log
 /// filter already names.
 const AUTH_TARGET: &str = module_path!();
-
-/// Type alias for our rate limiter
-type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 /// Short, non-reversible fingerprint of a secret for log correlation (CWE-532).
 ///
@@ -143,12 +136,11 @@ pub struct ResolvedAuthConfig {
     api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
-    /// Rate limiters per client, keyed by credential (`client_state_key`).
-    rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
     /// Optional client circuit-breaker policy shared across per-client breaker instances.
     client_circuit_breaker: Option<CircuitBreakerConfig>,
-    /// Circuit breakers per client, keyed by credential (`client_state_key`).
-    client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// Per-client rate-limit buckets and circuit breakers, keyed by credential
+    /// (`client_state_key`): one store shared by every config built over it.
+    runtime: Arc<runtime::AuthRuntime>,
     /// The record key every client minted here computes its record principal
     /// with (MIK-8697 §16): resolved once at startup and injected, never picked.
     record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
@@ -476,7 +468,8 @@ mod clients;
 pub(crate) use clients::presented_bearer_sha256;
 pub use clients::{anonymous_client, session_cookie_value};
 use clients::{
-    dashboard_client, is_poll, presented_credential, public_client, session_ended_response,
+    dashboard_client, is_poll, is_ui_stream, presented_credential, public_client,
+    session_ended_response,
 };
 
 /// Combined auth state: static config + optional key server.
@@ -540,7 +533,7 @@ pub async fn auth_middleware(
     // live once the clock reads (MIK-8202).
     let mut keep_cookie = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
-        let touch = if has_authorization || is_poll(&request) {
+        let touch = if has_authorization || is_poll(&request) || is_ui_stream(&request) {
             Touch::No
         } else {
             Touch::Yes

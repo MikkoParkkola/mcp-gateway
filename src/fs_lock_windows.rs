@@ -234,6 +234,15 @@ fn sidecar(path: &Path) -> io::Result<Sidecar> {
         Ok(file) => return Ok(Sidecar::Private(file)),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
         Err(error) if error.raw_os_error() == Some(SHARING_VIOLATION) => return Ok(Sidecar::Held),
+        // A name still in place but refused a create is delete-pending: a
+        // healer's delete-on-close replace met another open handle (an
+        // indexer, an antivirus scan), and the name frees once that closes.
+        Err(error) if error.raw_os_error() == Some(ACCESS_DENIED) => match denied_create(path) {
+            Denied::Pending => return Ok(Sidecar::Held),
+            Denied::Directory => {}
+            Denied::Created(file) => return Ok(Sidecar::Private(file)),
+            Denied::Unwritable => return Err(error),
+        },
         // A directory this account may not create in is an error, as it
         // always was: the grant journal reads it as an unreadable file.
         Err(error) => return Err(error),
@@ -295,6 +304,42 @@ fn sidecar(path: &Path) -> io::Result<Sidecar> {
                 path.display()
             ),
         ))),
+    }
+}
+
+/// What a create refused with `ERROR_ACCESS_DENIED` met.
+enum Denied {
+    /// The name is still in place: delete-pending, contention to wait out.
+    Pending,
+    /// A directory holds the name: the caller's directory error follows.
+    Directory,
+    /// The delete finished in between, and a second create took the name.
+    Created(File),
+    /// The name is absent and a create is still refused: this account may
+    /// not create in the directory.
+    Unwritable,
+}
+
+/// Tell a delete-pending name (whose metadata reads, or is itself refused)
+/// from a directory this account may not create in (no such name). One more
+/// create covers a delete that finished between the two reads.
+fn denied_create(path: &Path) -> Denied {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_dir() => Denied::Directory,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            match create_file_private(path, Share::LockSidecar) {
+                Ok(file) => Denied::Created(file),
+                Err(again)
+                    if again.raw_os_error() == Some(ACCESS_DENIED)
+                        && std::fs::symlink_metadata(path)
+                            .is_err_and(|e| e.kind() == io::ErrorKind::NotFound) =>
+                {
+                    Denied::Unwritable
+                }
+                Err(_) => Denied::Pending,
+            }
+        }
+        _ => Denied::Pending,
     }
 }
 

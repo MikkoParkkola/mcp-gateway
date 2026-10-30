@@ -171,8 +171,8 @@ mod source_checks {
             "src/protocol/tasks/scope_clamp_tests.rs",
             // MIK-8398 seal rows: they write the key only into backend
             // fixtures (a `public` claim) and read it back from the delivered
-            // result: clamped to `private` at the top level, and left
-            // `public` inside a chain step, which the wire never clamps.
+            // result, where ingress has removed it from a `tools/call`
+            // answer, at the top level and inside a chain step alike.
             "src/gateway/meta_mcp/provenance_delivery_tests.rs",
             "src/gateway/meta_mcp/provenance_seal_rules_tests.rs",
             "src/gateway/router/tests/task_execution_adapter/provenance_seal.rs",
@@ -181,9 +181,8 @@ mod source_checks {
             // refuses it.
             "src/gateway/route_check_matrix_tests/response_rows.rs",
             // MIK-8689 HTTP driver (/mcp and Direct): its one write is a
-            // backend fixture's top-level key stuffed with prose
-            // (`stuffed_scope`), which the clamp must overwrite; the rows
-            // read the delivered result.
+            // backend fixture's key: a public `resources/read` for the
+            // read clamp row; the row reads the delivered result.
             "src/gateway/router/route_matrix_driver_response_tests.rs",
             // The member table names the key to classify it (a member a
             // backend may send, so never stripped), and its tests put the key
@@ -191,6 +190,13 @@ mod source_checks {
             // writes it into a delivered answer.
             "src/protocol/reserved_members.rs",
             "src/protocol/reserved_members_tests.rs",
+            // The scope table names the key to say where a backend may send
+            // it; its tests, the route rows and the chain rows put it in
+            // planted backend answers and read back whether it was removed.
+            "src/protocol/member_scope.rs",
+            "src/protocol/member_scope_tests.rs",
+            "src/gateway/router/protocol_member_scope_tests.rs",
+            "src/gateway/meta_mcp/chain_withheld_tests.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -362,6 +368,7 @@ mod fixture {
         .await
         .expect("the fixture task store opens");
         let state = Arc::new(AppState {
+            process: std::sync::Arc::default(),
             session_lifecycle: None,
             env: None,
             meta_mcp,
@@ -489,6 +496,14 @@ mod routes {
         assert_eq!(body["result"]["cacheScope"], "private", "{body}");
     }
 
+    /// A `tools/call` answer may not carry `cacheScope` at all: ingress
+    /// removes the backend's `public`, so none is delivered.
+    fn assert_scopeless_success(status: StatusCode, body: &Value) {
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert!(body.get("error").is_none(), "must be a success: {body}");
+        assert!(body["result"].get("cacheScope").is_none(), "{body}");
+    }
+
     async fn direct_tool_call(passthrough: bool) -> (StatusCode, Value) {
         assert_fixture_is_public();
         let url = spawn_backend(Arc::new(AtomicUsize::new(0))).await;
@@ -499,22 +514,22 @@ mod routes {
 
     /// Test 1 (a): the sanitized-dispatch arm.
     #[tokio::test]
-    async fn direct_sanitized_tools_call_is_delivered_private() {
+    async fn direct_sanitized_tools_call_is_never_delivered_public() {
         let (status, body) = direct_tool_call(false).await;
-        assert_private_success(status, &body);
+        assert_scopeless_success(status, &body);
     }
 
     /// Test 1 (b): the passthrough arm.
     #[tokio::test]
-    async fn direct_passthrough_tools_call_is_delivered_private() {
+    async fn direct_passthrough_tools_call_is_never_delivered_public() {
         let (status, body) = direct_tool_call(true).await;
-        assert_private_success(status, &body);
+        assert_scopeless_success(status, &body);
     }
 
     /// Test 1 (c) and test 10: a replay of a stored public result, with no
     /// second dispatch.
     #[tokio::test]
-    async fn direct_idempotency_replay_is_delivered_private() {
+    async fn direct_idempotency_replay_is_never_delivered_public() {
         assert_fixture_is_public();
         let calls = Arc::new(AtomicUsize::new(0));
         let url = spawn_backend(Arc::clone(&calls)).await;
@@ -530,8 +545,8 @@ mod routes {
             1,
             "the replay must not dispatch"
         );
-        assert_private_success(first_status, &first);
-        assert_private_success(status, &replay);
+        assert_scopeless_success(first_status, &first);
+        assert_scopeless_success(status, &replay);
         assert_eq!(replay["result"]["content"], first["result"]["content"]);
     }
 
@@ -555,7 +570,7 @@ mod routes {
     /// Test 3 (HTTP leg): a surfaced backend tool on the meta route returns the
     /// backend's envelope directly.
     #[tokio::test]
-    async fn meta_route_surfaced_tool_is_delivered_private() {
+    async fn meta_route_surfaced_tool_is_never_delivered_public() {
         assert_fixture_is_public();
         let url = spawn_backend(Arc::new(AtomicUsize::new(0))).await;
         let (state, _dir) = fixture::state(true).await;
@@ -563,7 +578,7 @@ mod routes {
 
         let (status, body) = fixture::post(&state, "/mcp", tool_call(6, None)).await;
 
-        assert_private_success(status, &body);
+        assert_scopeless_success(status, &body);
         assert_eq!(body["result"]["content"][0]["text"], "call-1", "{body}");
     }
 }

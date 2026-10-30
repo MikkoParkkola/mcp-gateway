@@ -108,8 +108,9 @@ fn a_new_backend_whose_address_is_of_the_other_scheme_keeps_its_alias() {
     assert!(Config::from_file_text(&text).is_ok(), "{text}");
 }
 
-/// A file the splice cannot edit (flow style) is rewritten in full; the
-/// rewrite keeps `url` where the file had it and uses it for a new backend.
+/// Under `--force` a file the splice cannot edit (flow style) is rewritten
+/// in full; the rewrite keeps `url` where the file had it and uses it for a
+/// new backend.
 #[test]
 fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -125,7 +126,7 @@ fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
     .expect("config loads");
     crate::config_persistence::edit_config(
         &path,
-        crate::config_persistence::CommentLoss::Refuse,
+        crate::config_persistence::CommentLoss::Rewrite,
         |c| {
             *c = config.clone();
             Ok(())
@@ -138,8 +139,8 @@ fn a_full_rewrite_keeps_url_and_uses_it_for_a_new_backend() {
     assert!(!text.contains("http_url"), "{text}");
 }
 
-/// A full rewrite that adds no backend leaves every alias as it was, and the
-/// file it writes passes the gateway's own load.
+/// A `--force` full rewrite that adds no backend leaves every alias as it
+/// was, and the file it writes passes the gateway's own load.
 #[test]
 fn a_full_rewrite_that_adds_nothing_keeps_the_aliases() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -150,7 +151,7 @@ fn a_full_rewrite_that_adds_nothing_keeps_the_aliases() {
     config.backends.get_mut("a").expect("a").description = "edited".into();
     crate::config_persistence::edit_config(
         &path,
-        crate::config_persistence::CommentLoss::Refuse,
+        crate::config_persistence::CommentLoss::Rewrite,
         |c| {
             *c = config.clone();
             Ok(())

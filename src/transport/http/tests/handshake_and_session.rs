@@ -221,6 +221,34 @@ async fn a_single_tenant_transport_never_holds_a_second_callers_session() {
     let _ = t.request("tools/call", None).await;
 }
 
+// An optional binding's per-user slot holds the session its start opened as
+// the gateway and, apart, its subscriber's own: two sessions, one caller's.
+// Only a lent-only slot, whose start runs as its subscriber, holds one.
+#[tokio::test]
+async fn an_optional_binding_slot_keeps_its_starts_session_beside_the_callers() {
+    let (base, _) = peer(json_result_with_session(b"callers-session")).await;
+    let t = make_transport(&format!("{base}/mcp"));
+    t.mark_per_user_slot(
+        crate::transport::SlotCredential::Configured,
+        std::sync::Arc::new(crate::transport::Lender::default()),
+    );
+    t.sessions
+        .write()
+        .insert(String::new(), "starts-session".to_string());
+    t.request_with_headers(
+        "tools/call",
+        None,
+        &[],
+        Some("subscriber"),
+        crate::transport::ResendPermission::Permitted,
+    )
+    .await
+    .unwrap();
+    let sessions = t.sessions.read();
+    assert_eq!(sessions.get("").map(String::as_str), Some("starts-session"));
+    assert_eq!(sessions.len(), 2, "{sessions:?}");
+}
+
 // =========================================================================
 // OAuth token on the wire
 // =========================================================================

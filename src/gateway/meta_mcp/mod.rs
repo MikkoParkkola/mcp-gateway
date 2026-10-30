@@ -93,6 +93,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
 pub(crate) mod grant_audit;
@@ -125,6 +126,7 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
 pub(crate) mod visible;
@@ -278,7 +280,6 @@ pub struct MetaMcp {
     /// capability carrying a `projection` spec changes no response contract
     /// until an operator opts in. `experimental` drives the A/B split.
     pub(super) projection_mode: crate::projection::ProjectionMode,
-    pub(super) secret_injector: crate::secret_injection::SecretInjector,
     /// Cost tracker — per-session and per-API-key spend accounting.
     pub(super) cost_tracker: Arc<CostTracker>,
     /// Engram-inspired O(1) tool registry with prefetching (optional).
@@ -406,12 +407,10 @@ pub struct MetaMcp {
     /// MIK-7116.MIN.2: auditor of withheld frames, built on first use.
     rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
 
-    /// Response-side anomaly screening action mode (issue #133, D2).
-    ///
-    /// When `true`, responses with HIGH/CRITICAL inspection findings are blocked
-    /// before delivery to the client.  When `false` (default), findings are
-    /// logged but the response passes through.
-    pub(super) response_inspection_action_mode: bool,
+    /// Response-side anomaly screening (issue #133, D2): off, observe (the
+    /// default: findings logged and annotated) or action (a HIGH/CRITICAL
+    /// finding blocks the answer).
+    pub(super) response_inspection: crate::security::response_inspect::ResponseInspectionMode,
 
     /// Response contract config (issue #133, D1). Set when enabled.
     pub(super) response_contract: Option<Arc<crate::config::ResponseContractConfig>>,

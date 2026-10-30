@@ -386,41 +386,15 @@ fn certificates() -> (
     rustls::pki_types::PrivateKeyDer<'static>,
     String,
 ) {
-    use rcgen::{BasicConstraints, CertificateParams, IsCa, Issuer, KeyPair};
-
-    let ca_key = KeyPair::generate().expect("fixture CA key");
-    let mut ca_params = CertificateParams::new(Vec::new()).expect("fixture CA params");
-    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    // A subject of its own. rcgen gives the CA and the leaf the same default
-    // name, and a leaf whose subject equals its issuer's reads as self-issued:
-    // the Windows chain engine then fails it as TRUST_E_CERT_SIGNATURE.
-    ca_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, "wire fixture CA");
-    let ca_certificate = ca_params
-        .clone()
-        .self_signed(&ca_key)
-        .expect("fixture CA self-signs");
-    let issuer = Issuer::new(ca_params, ca_key);
-
-    let leaf_key = KeyPair::generate().expect("fixture leaf key");
-    let mut leaf_params =
-        CertificateParams::new(vec![HOST.to_string()]).expect("fixture leaf params");
-    leaf_params
-        .distinguished_name
-        .push(rcgen::DnType::CommonName, HOST);
-    let leaf = leaf_params
-        .signed_by(&leaf_key, &issuer)
-        .expect("the fixture CA signs the leaf");
-
+    let pki = crate::test_fixture_host::test_pki(HOST, "wire fixture CA");
     let chain = vec![
-        rustls::pki_types::CertificateDer::from(leaf.der().to_vec()),
-        rustls::pki_types::CertificateDer::from(ca_certificate.der().to_vec()),
+        rustls::pki_types::CertificateDer::from(pki.leaf.der().to_vec()),
+        rustls::pki_types::CertificateDer::from(pki.ca.der().to_vec()),
     ];
     let key = rustls::pki_types::PrivateKeyDer::from(rustls::pki_types::PrivatePkcs8KeyDer::from(
-        leaf_key.serialize_der(),
+        pki.leaf_key.serialize_der(),
     ));
-    (chain, key, ca_certificate.pem())
+    (chain, key, pki.ca.pem())
 }
 
 /// The production client, trusting the fixture CA IN ADDITION to the default

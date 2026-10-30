@@ -8,27 +8,60 @@
 //! goes into `degraded`. Every list is capped and reports what it folded, so
 //! the body does not grow with the number of servers.
 //!
-//! Not available in this version, and so absent: the needs-you sign-in row
-//! (it waits on per-server OAuth state) and the pending-decisions count (its
-//! only source runs a discovery scan per request).
+//! Counter fields (the 24-hour totals, each server's calls, the top flows, the
+//! chart markers and `checklist.tool_tried`) come from the counter store, all
+//! read at one instant. With no store they are absent. With a store but an
+//! unreadable clock they are absent and named in `degraded`.
+//!
+//! Not available in this version, and so absent:
+//! - `checklist.client_connected`: a caller label exists only once it has
+//!   made a call, so it would repeat `tool_tried` as a second fact;
+//! - the needs-you sign-in row: nothing yet lets the operator sign a server
+//!   back in, so the row would lead nowhere;
+//! - the pending-decisions count: its only source runs a discovery scan per
+//!   request.
 
+use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
-use super::{admin_auth_required, is_admin, uptime_secs};
+use super::{admin_auth_required, is_admin};
+use crate::backend::Backend;
+use crate::config_reload::refusals::{Refusal, RefusalCode, RefusalKind, startup_refusal};
+use crate::counters::{CounterStore, Filter, Metric, Query, Window};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
-use crate::security::transparency_log::pager::{Tail, lines_newest_first, tail_window};
+use crate::security::transparency_log::pager::{
+    Tail, lines_newest_first, open_segment, tail_window_in,
+};
+use crate::security::transparency_log::segments::listing;
 
 /// Server rows shown; the rest fold into `servers.more`.
 const SERVER_ROWS: usize = 24;
 /// Needs-you rows shown; the rest fold into `needs_you.more`.
 const NEEDS_YOU_ROWS: usize = 20;
+/// Caller x server flows shown; the rest fold into `edges.more`.
+const EDGE_ROWS: usize = 48;
+/// Chart markers shown, newest first; the rest fold into `markers.more`.
+const MARKER_ROWS: usize = 50;
+/// Seconds in the 24-hour window the counter fields cover.
+const DAY_SECS: u64 = 86_400;
+/// Every counter field, as `degraded` names it when the clock cannot be read.
+const COUNTER_FIELDS: [&str; 7] = [
+    "kpi.calls_24h",
+    "kpi.blocks_24h",
+    "kpi.errors_24h",
+    "servers.calls_24h",
+    "edges",
+    "markers",
+    "checklist.tool_tried",
+];
 /// Admin actions shown.
 const ACTION_ROWS: usize = 5;
 /// Bytes of the transparency log scanned for those actions, newest first.
@@ -65,10 +98,15 @@ pub(super) async fn overview(
     if let Ok(now) = crate::clock::utc_now() {
         body.insert("generated_at".into(), now.to_rfc3339().into());
     }
-    let (kpi, servers) = kpi_and_servers(&state);
-    body.insert("kpi".into(), kpi);
+    // One instant for the counter reads and the server states alike.
+    let at = crate::clock::system_time_or_before_epoch();
+    let source = Source::open(&state, at);
+    let (mut kpi, servers, denied) = kpi_and_servers(&state, &source, at);
+    source.add_totals(&mut kpi);
+    body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
-    body.insert("needs_you".into(), needs_you(&state));
+    body.insert("needs_you".into(), needs_you(&state, &denied));
+    source.add_flows(&mut body);
     if let Some(log) = &state.transparency_log {
         match last_actions(&log.path()) {
             Ok(actions) => {
@@ -80,69 +118,339 @@ pub(super) async fn overview(
             }
         }
     }
-    body.insert(
-        "checklist".into(),
-        json!({ "has_key": !state.auth_config.api_keys().is_empty() }),
+    let mut checklist = Map::new();
+    checklist.insert(
+        "has_key".into(),
+        (!state.auth_config.api_keys().is_empty()).into(),
     );
+    source.add_tool_tried(&mut checklist);
+    body.insert("checklist".into(), checklist.into());
+    degraded.extend_from_slice(source.degraded());
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
     }
     Json(Value::Object(body)).into_response()
 }
 
-/// The KPI strip and the server list, from one pass over the backends. A
-/// server is up when it is running. Rows are in name order; the rest fold
-/// into `more` with their up and down counts.
-fn kpi_and_servers(state: &AppState) -> (Value, Value) {
+/// All backends, in name order. Sort on the full name; clipping first could
+/// tie or reorder names that differ only past the cut, and keep the wrong
+/// rows.
+fn backends_by_name(state: &AppState) -> Vec<Arc<Backend>> {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator overview behind admin auth; not a tenant read"
     )]
-    let backends = state.backends.all();
-    let mut rows: Vec<(String, bool, usize)> = backends
+    let mut backends = state.backends.all();
+    backends.sort_by(|a, b| a.name.cmp(&b.name));
+    backends
+}
+
+/// The KPI strip, the server list and the startup refusals, from one pass
+/// over the backends. A server is up when it is running. Rows are best first
+/// by calls (by name when calls are not counted); the rest fold into `more`
+/// with their up and down counts.
+fn kpi_and_servers(
+    state: &AppState,
+    source: &Source,
+    at: SystemTime,
+) -> (Map<String, Value>, Value, Vec<Refusal>) {
+    let backends = backends_by_name(state);
+    // Not `status()`: it also sorts latency samples this view never shows.
+    let up: HashMap<&str, bool> = backends
         .iter()
-        // Not `status()`: it also sorts latency samples this view never shows.
-        .map(|backend| {
-            (
-                backend.name.clone(),
-                backend.is_running(),
-                backend.cached_tools_count(),
-            )
+        .map(|backend| (backend.name.as_str(), backend.is_running()))
+        .collect();
+    let tools: usize = backends.iter().map(|b| b.cached_tools_count()).sum();
+    let denied = backends
+        .iter()
+        .filter_map(|b| Some(startup_refusal(&b.name, b.startup_denial()?)))
+        .collect();
+    let mut kpi = Map::new();
+    kpi.insert("servers_total".into(), backends.len().into());
+    kpi.insert(
+        "servers_up".into(),
+        up.values().filter(|up| **up).count().into(),
+    );
+    kpi.insert("tools_total".into(), tools.into());
+    kpi.insert("uptime_secs".into(), state.process.uptime_secs().into());
+    kpi.insert("version".into(), env!("CARGO_PKG_VERSION").into());
+    (kpi, server_list(source, &backends, &up, at), denied)
+}
+
+/// The server rows and what folded. Servers are ranked first; only the rows
+/// shown have their state worked out, because that reads health metrics.
+fn server_list(
+    source: &Source,
+    backends: &[Arc<Backend>],
+    up: &HashMap<&str, bool>,
+    at: SystemTime,
+) -> Value {
+    let counts = source.server_calls(backends);
+    let names = backends.iter().map(|b| b.name.clone());
+    let mut ranked: Vec<(String, Option<u64>)> = match &counts {
+        Some(counts) => rank_servers(names.zip(counts.iter().copied()).collect()),
+        None => names.map(|name| (name, None)).collect(),
+    };
+    let folded = ranked.split_off(ranked.len().min(SERVER_ROWS));
+    let folded_up = folded.iter().filter(|(name, _)| up[name.as_str()]).count();
+    let by_name: HashMap<&str, &Arc<Backend>> =
+        backends.iter().map(|b| (b.name.as_str(), b)).collect();
+    let rows: Vec<Value> = ranked
+        .into_iter()
+        .map(|(name, calls)| {
+            let mut row = server_row(by_name[name.as_str()], up[name.as_str()], at);
+            if counts.is_some() {
+                row["calls_24h"] = calls.into();
+            }
+            row
         })
         .collect();
-    // Sort on the full name; clipping first could tie or reorder names that
-    // differ only past the cut, and keep the wrong rows.
-    rows.sort_by(|a, b| a.0.cmp(&b.0));
-    let up = rows.iter().filter(|row| row.1).count();
-    let tools: usize = rows.iter().map(|row| row.2).sum();
-    let kpi = json!({
-        "servers_total": rows.len(),
-        "servers_up": up,
-        "tools_total": tools,
-        "uptime_secs": uptime_secs(),
-        "version": env!("CARGO_PKG_VERSION"),
-    });
-    let folded = rows.split_off(rows.len().min(SERVER_ROWS));
-    let folded_up = folded.iter().filter(|row| row.1).count();
-    let servers = json!({
-        "rows": rows
-            .into_iter()
-            .map(|(name, up, tools)| json!({ "name": clip(&name), "up": up, "tools": tools }))
-            .collect::<Vec<_>>(),
+    json!({
+        "rows": rows,
         "more": {
             "count": folded.len(),
             "up": folded_up,
             "down": folded.len() - folded_up,
         },
-    });
-    (kpi, servers)
+    })
 }
 
-/// What needs the operator, highest priority first, capped with `more`.
-fn needs_you(state: &AppState) -> Value {
-    let mut rows = limit_rows(state);
+/// One server row: its name, whether it is up, its tools, and the operator's
+/// state with the reason.
+fn server_row(backend: &Backend, up: bool, at: SystemTime) -> Value {
+    let view = backend.server_state(at);
+    json!({
+        "name": clip(&backend.name),
+        "up": up,
+        "tools": backend.cached_tools_count(),
+        "state": view.state,
+        "reason": clip(&view.reason),
+    })
+}
+
+/// Servers with their calls in the last 24 hours (`None` when the count may
+/// be low), best first: positive counts by calls descending, then `None`,
+/// then zeros; ties by name.
+fn rank_servers(mut rows: Vec<(String, Option<u64>)>) -> Vec<(String, Option<u64>)> {
+    let class = |calls: Option<u64>| match calls {
+        Some(0) => 2,
+        None => 1,
+        Some(_) => 0,
+    };
+    rows.sort_by(|a, b| {
+        class(a.1)
+            .cmp(&class(b.1))
+            .then_with(|| b.1.cmp(&a.1))
+            .then_with(|| a.0.cmp(&b.0))
+    });
+    rows
+}
+
+/// Where the counter fields come from, fixed once per request so every read
+/// uses one store and one instant.
+enum Source {
+    /// No store is configured: the counter fields are absent, not degraded.
+    Off,
+    /// A store, but the clock cannot be read: absent, and named in `degraded`.
+    Unreadable,
+    /// The store and unix seconds now.
+    On(Arc<CounterStore>, u64),
+}
+
+impl Source {
+    fn open(state: &AppState, at: SystemTime) -> Self {
+        let Some(store) = state.meta_mcp.counters() else {
+            return Self::Off;
+        };
+        at.duration_since(UNIX_EPOCH)
+            .map_or(Self::Unreadable, |since| {
+                Self::On(Arc::clone(store), since.as_secs())
+            })
+    }
+
+    /// The counter fields that could not be read.
+    fn degraded(&self) -> &'static [&'static str] {
+        if matches!(self, Self::Unreadable) {
+            &COUNTER_FIELDS
+        } else {
+            &[]
+        }
+    }
+
+    /// Each backend's calls in the last 24 hours, in the order given; `None`
+    /// inside when the count may be low. The whole outer value is `None`
+    /// without a readable store.
+    ///
+    /// ponytail: this takes the store lock once and does one map lookup per
+    /// server, so it is linear in the server count under the lock, capped by
+    /// the 512-label Server dimension. Declined for now: a current-window-only
+    /// sum, and ranking from the Server dimension with names resolved outside
+    /// the lock. Either is an upgrade if the 140-server read shows lock
+    /// contention.
+    fn server_calls(&self, backends: &[Arc<Backend>]) -> Option<Vec<Option<u64>>> {
+        let Self::On(store, now) = self else {
+            return None;
+        };
+        let filters: Vec<Filter<'_>> = backends.iter().map(|b| Filter::Server(&b.name)).collect();
+        let sums = store.window_sums(&filters, *now, &crate::local_day::host_zone());
+        Some(sums.counts.into_iter().map(|(day, _)| day).collect())
+    }
+
+    /// One metric's 24-hour total, the previous 24 hours' total when the
+    /// store covers all of it, and when counting began.
+    fn day_total(&self, metric: Metric) -> Option<(u64, Option<u64>, u64)> {
+        let Self::On(store, now) = self else {
+            return None;
+        };
+        let query = Query {
+            metric,
+            window: Window::Day,
+            filter: Filter::All,
+            compare: true,
+        };
+        let view = store.series(&query, *now, &crate::local_day::host_zone());
+        let previous = view
+            .previous
+            .filter(|_| view.previous_complete)
+            .map(|points| points.iter().map(|p| p.v).sum());
+        Some((view.points.iter().map(|p| p.v).sum(), previous, view.since))
+    }
+
+    /// The 24-hour totals, each with the previous 24 hours when the store
+    /// covers all of it, and when counting began.
+    fn add_totals(&self, kpi: &mut Map<String, Value>) {
+        for (metric, name) in [
+            (Metric::Calls, "calls"),
+            (Metric::Blocks, "blocks"),
+            (Metric::Errors, "errors"),
+        ] {
+            let Some((total, previous, since)) = self.day_total(metric) else {
+                return;
+            };
+            kpi.insert(format!("{name}_24h"), total.into());
+            if let Some(previous) = previous {
+                kpi.insert(format!("{name}_prev_24h"), previous.into());
+            }
+            kpi.insert("counting_since".into(), since.into());
+        }
+    }
+
+    /// The top flows and the chart markers.
+    fn add_flows(&self, body: &mut Map<String, Value>) {
+        let Self::On(store, now) = self else {
+            return;
+        };
+        let pairs = store.top_pairs(*now, &crate::local_day::host_zone(), EDGE_ROWS);
+        let edges: Vec<Value> = pairs
+            .rows
+            .iter()
+            .map(|row| {
+                let (caller, server) = (clip(&row.caller), clip(&row.server));
+                json!({ "caller": caller, "server": server, "calls": row.calls, "blocks": row.blocks })
+            })
+            .collect();
+        body.insert(
+            "edges".into(),
+            json!({
+                "rows": edges,
+                "more": {
+                    "count": pairs.more_count,
+                    "calls": pairs.more_calls,
+                    "overflow_calls": pairs.overflow_calls,
+                },
+            }),
+        );
+        body.insert("markers".into(), marker_rows(store, *now));
+    }
+
+    /// Whether any call was counted in the last 30 local days.
+    fn add_tool_tried(&self, checklist: &mut Map<String, Value>) {
+        let Self::On(store, now) = self else {
+            return;
+        };
+        let query = Query {
+            metric: Metric::Calls,
+            window: Window::Month,
+            filter: Filter::All,
+            compare: false,
+        };
+        let view = store.series(&query, *now, &crate::local_day::host_zone());
+        checklist.insert(
+            "tool_tried".into(),
+            view.points.iter().any(|p| p.v > 0).into(),
+        );
+    }
+}
+
+/// The newest [`MARKER_ROWS`] markers of the last 24 hours, newest first.
+fn marker_rows(store: &CounterStore, now: u64) -> Value {
+    let (markers, total) = store.newest_markers(now.saturating_sub(DAY_SECS), MARKER_ROWS);
+    let rows: Vec<Value> = markers
+        .iter()
+        .map(|m| json!({ "t": m.at, "kind": m.kind, "subject": m.subject.as_deref().map(clip) }))
+        .collect();
+    json!({ "rows": rows, "more": { "count": total - markers.len() } })
+}
+
+/// What needs the operator, highest priority first, capped with `more`: the
+/// newest invalid config, then every refusal, then budgets near their limit.
+fn needs_you(state: &AppState, startup: &[Refusal]) -> Value {
+    let (invalid, mut rows) = ledger_rows(state);
+    // A denied server has no ledger entry and never ages out, so it leads.
+    let denied = startup
+        .iter()
+        .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
+    rows.splice(0..0, denied);
+    rows.splice(0..0, invalid);
+    rows.extend(limit_rows(state));
     let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS)).len();
     json!({ "rows": rows, "more": { "count": folded } })
+}
+
+/// The newest active invalid-config reload refusal as its own row (never
+/// folded: it is first), and the other active ledger refusals, newest first.
+/// An older invalid-config refusal is the same problem and is left out.
+fn ledger_rows(state: &AppState) -> (Option<Value>, Vec<Value>) {
+    let Some(context) = state.meta_mcp.reload_context() else {
+        return (None, Vec::new());
+    };
+    let is_invalid =
+        |r: &Refusal| r.kind == RefusalKind::Reload && r.code == RefusalCode::InvalidConfig;
+    let active: Vec<Refusal> = context
+        .refusals()
+        .list()
+        .into_iter()
+        .filter(|r| r.active)
+        .collect();
+    let invalid = active.iter().find(|r| is_invalid(r)).map(|r| {
+        let mut detail = refusal_detail(r);
+        detail.remove("code");
+        detail.insert("repeats".into(), r.repeats.into());
+        json!({ "kind": "invalid_config", "subject": "config", "detail": detail })
+    });
+    let refused = active
+        .iter()
+        .filter(|r| !is_invalid(r))
+        .map(|r| refused_row(r, &refusal_detail(r)))
+        .collect();
+    (invalid, refused)
+}
+
+/// A refusal's code, cause, fix and time. The cause and fix are fixed text
+/// the ledger rebuilds, never a configured value; they are clipped anyway.
+fn refusal_detail(refusal: &Refusal) -> Map<String, Value> {
+    let mut detail = Map::new();
+    detail.insert("code".into(), json!(refusal.code));
+    detail.insert("cause".into(), clip(&refusal.cause).into());
+    detail.insert("fix".into(), clip(refusal.fix).into());
+    detail.insert("at".into(), json!(refusal.at));
+    detail
+}
+
+/// A `refused` needs-you row for `refusal`, about its server or the config.
+fn refused_row(refusal: &Refusal, detail: &Map<String, Value>) -> Value {
+    let subject = refusal.backend.as_deref().unwrap_or("config");
+    json!({ "kind": "refused", "subject": clip(subject), "detail": detail })
 }
 
 /// One row per daily budget whose spend has reached the configured Notify
@@ -217,19 +525,35 @@ fn limit_rows(_state: &AppState) -> Vec<Value> {
 /// rotated-out segment behind it. Otherwise an action may exist that was not
 /// read.
 fn last_actions(path: &std::path::Path) -> io::Result<Value> {
-    let mut end = match std::fs::metadata(path) {
-        Ok(meta) if meta.is_file() => meta.len(),
-        // A directory reports length 0 on Windows and would read as an empty
-        // log; anything but a regular file is a log that cannot be read.
-        Ok(_) => return Err(io::Error::other("transparency log is not a file")),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => 0,
-        Err(error) => return Err(error),
+    // The live segment, opened once: every window is read from this handle,
+    // so a rotation mid-read cannot hand later windows another file's bytes.
+    let files = listing(path)?;
+    let file = match files.active {
+        Some(seq) => open_segment(path, seq, || {})?,
+        None => None,
+    };
+    let mut end = match &file {
+        Some(file) => {
+            let meta = file.metadata()?;
+            // A directory reports length 0 on Windows and would read as an
+            // empty log; anything but a regular file cannot be read.
+            if !meta.is_file() {
+                return Err(io::Error::other("transparency log is not a file"));
+            }
+            meta.len()
+        }
+        // A log never written, or its live segment gone since it was listed:
+        // no rows from it, and not complete if anything is sealed behind it.
+        None => 0,
     };
     let mut scanned = 0u64;
     let mut skipped = false;
     let mut rows = Vec::new();
-    while end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES {
-        let (tail, window_len) = tail_window(path, end, ACTION_WINDOW_BYTES)?;
+    while let Some(file) = file
+        .as_ref()
+        .filter(|_| end > 0 && rows.len() < ACTION_ROWS && scanned < ACTION_SCAN_BYTES)
+    {
+        let (tail, window_len) = tail_window_in(file, end, ACTION_WINDOW_BYTES)?;
         scanned += window_len;
         let Tail::Lines { start, .. } = &tail else {
             // One line longer than a window: skip past it rather than loop.
@@ -263,9 +587,27 @@ fn last_actions(path: &std::path::Path) -> io::Result<Value> {
         }
         end = *start;
     }
-    let rotated = !crate::security::transparency_log::segments::list_segments(path)?.is_empty();
+    let rotated = !files.sealed.is_empty();
     // A skipped line may have been a newer action than any row found, so any
     // skip makes the list incomplete, even with all five rows.
     let complete = !skipped && (rows.len() == ACTION_ROWS || (end == 0 && !rotated));
     Ok(json!({ "rows": rows, "complete": complete }))
+}
+
+#[cfg(test)]
+mod rank_tests {
+    use super::rank_servers;
+
+    /// S2b: a count that may be low ranks after every positive count and
+    /// before a zero; ties go by name.
+    #[test]
+    fn s2b_a_count_that_may_be_low_ranks_between_positive_and_zero() {
+        let rows = ["a", "b", "c", "d", "e"]
+            .into_iter()
+            .zip([Some(5), None, Some(9), Some(5), Some(0)])
+            .map(|(name, calls)| (name.to_owned(), calls))
+            .collect();
+        let names: Vec<String> = rank_servers(rows).into_iter().map(|row| row.0).collect();
+        assert_eq!(names, ["c", "a", "d", "b", "e"]);
+    }
 }

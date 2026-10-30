@@ -386,6 +386,9 @@ fn g11_router(rig: &Rig, redact: bool) -> Arc<Firewall> {
                     action: FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -420,7 +423,9 @@ fn with_unredacted_router(rig: Rig) -> Rig {
 
 /// G11's second gateway: `rig`'s retained answers and relay
 /// firewall, with the tightened (redacting) router policy.
-async fn redacting_gateway(rig: &Rig) -> (Arc<AppState>, tempfile::TempDir) {
+async fn redacting_gateway(
+    rig: &Rig,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let router_fw = g11_router(rig, true);
     let admission = Arc::clone(rig.state.meta_mcp.execution_admission());
     let shared = Arc::clone(&rig.relay);

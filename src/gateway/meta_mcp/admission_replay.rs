@@ -243,7 +243,7 @@ impl MetaMcp {
         // are served as today. `?` would answer `None` here, which the caller
         // reads as "deferred", re-running the call live (S6).
         let Some(target) = target else {
-            if !matches!(tool_name, "gateway_execute" | "gateway_run_playbook") {
+            if !crate::gateway::meta_mcp::is_composite_meta_tool(tool_name) {
                 return Some((response, facts(audit)));
             }
             // Boxed: the walk's state (resolution, custody) would otherwise

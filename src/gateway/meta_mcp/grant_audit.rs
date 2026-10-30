@@ -637,7 +637,7 @@ impl super::MetaMcp {
         let trace_id = crate::gateway::trace::generate();
         // Each step's facts stay in a cell of its own: a step refusal the
         // composite carries on past never marks what the composite delivers.
-        let sourced = crate::gateway::delivery_facts::scope(
+        let sourced = crate::gateway::delivery_facts::step(
             self.invoke_tool_with_source(args, session_id, caller, trace_id),
         )
         .await;

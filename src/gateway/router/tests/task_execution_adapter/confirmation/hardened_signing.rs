@@ -9,7 +9,9 @@ use crate::security::message_signing::MessageSigner;
 
 const NONCE: &str = "task-gate-follow-up-nonce";
 
-async fn hardened(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn hardened(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut config = crate::config::Config::default();
     config.security.posture = crate::security::SecurityPosture::Hardened;
     fixture_with(mock, config, |meta| {

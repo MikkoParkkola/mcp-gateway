@@ -28,11 +28,18 @@ fn chained() -> MetaMcp {
 
 /// An upstream gateway's answer: its own finding, signed into its link.
 fn signed_upstream_answer() -> JsonRpcResponse {
-    let mut result = json!({
-        "content": [{"type": "text", "text": "hello"}],
-        "isError": false,
-        "_security_findings": ["the upstream gateway's own finding"],
-    });
+    signed(
+        "tools/call",
+        json!({
+            "content": [{"type": "text", "text": "hello"}],
+            "isError": false,
+            "_security_findings": ["the upstream gateway's own finding"],
+        }),
+    )
+}
+
+/// `result`, signed into an upstream link, as ingress leaves it for `method`.
+fn signed(method: &str, mut result: Value) -> JsonRpcResponse {
     let hop = Hop {
         prefix: &[],
         up: Upstream::None,
@@ -50,7 +57,12 @@ fn signed_upstream_answer() -> JsonRpcResponse {
     )
     .expect("the link attaches");
     let mut response = JsonRpcResponse::success(RequestId::Number(1), result);
-    strip_ingress("upstream", "tools/call", &mut response);
+    strip_ingress(
+        "upstream",
+        method,
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut response,
+    );
     response
 }
 
@@ -107,4 +119,50 @@ fn without_the_withheld_members_the_chain_does_not_verify() {
         outcome.is_err(),
         "the digest must not match the stripped result"
     );
+}
+
+/// Verify `response` over what ingress withheld; the chain must hold.
+fn verifies(response: &JsonRpcResponse) -> Value {
+    let meta = chained();
+    let mut result = response.result.clone().expect("a result");
+    let withheld = response
+        .ingress_withheld
+        .as_deref()
+        .map(crate::protocol::reserved_members::Withheld::members);
+    let (outcome, _) = receive(&meta, &mut result, withheld);
+    outcome.expect("the chain verifies over the signed result");
+    result
+}
+
+/// A scoped member removed at the root alone is withheld for the chain.
+#[test]
+fn a_scoped_removal_at_the_root_still_verifies() {
+    let response = signed(
+        "prompts/get",
+        json!({"messages": [], "resultType": "complete", "cacheScope": "private"}),
+    );
+    let result = verifies(&response);
+    assert!(result.get("cacheScope").is_none(), "{result}");
+}
+
+/// A scoped member removed from a task envelope's slot alone still verifies.
+#[test]
+fn a_scoped_removal_in_the_task_slot_still_verifies() {
+    let response = signed(
+        "tasks/result",
+        json!({"result": {"content": [], "taskId": "inner"}}),
+    );
+    let result = verifies(&response);
+    assert_eq!(result["result"], json!({"content": []}));
+}
+
+/// A gateway-only and a scoped removal in one slot: one snapshot covers both.
+#[test]
+fn a_gateway_only_and_a_scoped_removal_in_one_slot_still_verify() {
+    let response = signed(
+        "tasks/result",
+        json!({"result": {"content": [], "ttlMs": 5, "_security_findings": ["f"]}}),
+    );
+    let result = verifies(&response);
+    assert_eq!(result["result"], json!({"content": []}));
 }

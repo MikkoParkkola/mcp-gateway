@@ -66,7 +66,6 @@ impl MetaMcp {
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
-            secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
             tool_registry: None,
             #[cfg(feature = "cost-governance")]
@@ -99,7 +98,7 @@ impl MetaMcp {
             require_nonce: false,
             transparency_logger: None,
             rejection_audit: std::sync::OnceLock::new(),
-            response_inspection_action_mode: false,
+            response_inspection: crate::security::response_inspect::ResponseInspectionMode::Observe,
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,

@@ -22,6 +22,7 @@
 //! the second fill overwrites the first, so the earlier identity's slot answers
 //! with the later identity's permissions and the "must not" half fails.
 
+use super::slot_eviction_tests::subscriber_credential;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -164,11 +165,11 @@ async fn one_identity_fill_does_not_decide_another_identity_resend_verdict() {
     let backend = per_user_backend();
 
     backend
-        .get_tools_for_binding(Some("alpha"), &[])
+        .get_tools_for_binding(Some("alpha"), &subscriber_credential("alpha"))
         .await
         .expect("alpha catalogue fill");
     backend
-        .get_tools_for_binding(Some("beta"), &[])
+        .get_tools_for_binding(Some("beta"), &subscriber_credential("beta"))
         .await
         .expect("beta catalogue fill");
 
@@ -210,7 +211,7 @@ async fn a_per_identity_fill_never_reaches_the_shared_resend_set() {
     let backend = per_user_backend();
 
     backend
-        .get_tools_for_binding(Some("alpha"), &[])
+        .get_tools_for_binding(Some("alpha"), &subscriber_credential("alpha"))
         .await
         .expect("alpha catalogue fill");
 

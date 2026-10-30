@@ -6,6 +6,7 @@
 //! withholds or lacks answers as a name the gateway does not know (-32601),
 //! and nothing reaches the upstream (O1, O2).
 
+use crate::security::transparency_log::temp::TempLog;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
@@ -33,8 +34,8 @@ pub(super) struct Gateway {
     pub(super) shared: Arc<Asked>,
     /// Every credential resolution the gateway made.
     pub(super) mints: Arc<AtomicUsize>,
-    _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: [TempLog; 2],
 }
 
 impl Gateway {
@@ -121,10 +122,7 @@ pub(super) async fn gateway_tuned(
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     tune(state_mut);
     assert!(state_mut.backends.register(backend), "fixture registration");
-    let audit = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
-    ];
+    let audit = [TempLog::new(), TempLog::new()];
     let mut meta = crate::gateway::test_helpers::MetaMcp::new(Arc::clone(&state_mut.backends))
         .with_surfaced_tools(surfaced.configs());
     let mints = Arc::new(AtomicUsize::new(0));

@@ -56,12 +56,12 @@ impl From<String> for ConfigWriteError {
 }
 
 /// Why a guarded read-modify-write did not happen: a [`ConfigWriteError`],
-/// or, under [`CommentLoss::Refuse`], a write that would drop the file's
-/// comments.
+/// or, under [`CommentLoss::Refuse`], a write that cannot be made in place
+/// in the file.
 #[derive(Debug)]
 pub(crate) enum MutateError {
     Write(ConfigWriteError),
-    /// The message names the comments a full rewrite would drop.
+    /// The message says why, naming any comments a full rewrite would drop.
     CommentLoss(String),
 }
 

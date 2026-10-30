@@ -294,7 +294,10 @@ async fn write_config_and_reload_outcome_without_context_returns_none() {
 /// import back.
 #[test]
 fn config_persistence_does_not_depend_on_config_reload() {
-    let source = include_str!("../../config_persistence.rs");
+    let source = concat!(
+        include_str!("../../config_persistence.rs"),
+        include_str!("../../config_persistence_scratch.rs")
+    );
 
     let offenders: Vec<_> = source
         .lines()

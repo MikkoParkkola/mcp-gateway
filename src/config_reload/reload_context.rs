@@ -197,7 +197,7 @@ pub struct ReloadContext {
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "webui")),
         expect(
             dead_code,
             reason = "read only by the byte writer, whose first caller lands next"
@@ -728,3 +728,9 @@ pub(super) fn with_pending_restart(
     }
     outcome
 }
+
+// Mounted here, not under `reload_tally`: they drive the lock-recovery and
+// lock-skip paths, which are private to this module.
+#[cfg(test)]
+#[path = "reload_tally_tests.rs"]
+mod tally_tests;

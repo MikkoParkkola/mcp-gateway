@@ -457,8 +457,8 @@ pub enum Command {
         #[arg(short = 'e', long = "env", value_name = "KEY=VALUE")]
         env_vars: Vec<String>,
 
-        /// Rewrite the whole file when the change cannot keep its comments
-        /// (the comments are lost); without it such a write is refused
+        /// Rewrite the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused
         #[arg(long)]
         force: bool,
 
@@ -473,8 +473,8 @@ pub enum Command {
         /// Name of the backend to remove
         name: String,
 
-        /// Rewrite the whole file when the change cannot keep its comments
-        /// (the comments are lost); without it such a write is refused
+        /// Rewrite the whole file when the change cannot be made in place
+        /// (comments and layout are lost); without it such a write is refused
         #[arg(long)]
         force: bool,
     },

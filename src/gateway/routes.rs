@@ -78,6 +78,8 @@ owned_routes! {
     UI_PREVIEWS = "/ui/api/previews",
     /// Servers named in other MCP clients' config files on this host.
     UI_DISCOVERY = "/ui/api/discovery",
+    /// One of those servers made a disabled backend.
+    UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.
@@ -96,4 +98,8 @@ owned_routes! {
     ACCOUNTS_COMPLETE_SCRIPT = "/accounts/v1/assets/complete.js",
     UI_OVERVIEW = "/ui/api/overview",
     UI_REFUSALS = "/ui/api/refusals",
+    /// The Gateway page's facts: process, reloads, TLS, upgrade, clients.
+    UI_GATEWAY = "/ui/api/gateway",
+    /// The UI's live event feed (server-sent events).
+    UI_STREAM = "/ui/api/stream",
 }

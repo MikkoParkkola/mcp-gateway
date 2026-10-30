@@ -392,7 +392,35 @@ async fn meta_mcp_dispatch(
                     pending_view = pending;
                     response
                 }
-                Some(Err(response)) => return response,
+                Some(Err(response)) => {
+                    // Refused before dispatch: recorded here, as the tail is skipped.
+                    let correlation = crate::security::response_policy::ResponseCorrelation {
+                        session_id,
+                        caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+                        external_server: "gateway",
+                        external_tool,
+                        subject: grant_subject.as_ref(),
+                        trace_id: None,
+                        key: crate::security::response_policy::KeyOf::of_client(
+                            client.as_ref().and_then(
+                                crate::gateway::auth::AuthenticatedClient::api_key_identity,
+                            ),
+                        ),
+                    };
+                    let credential =
+                        crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
+                            client.as_ref(),
+                            state.auth_config.record_key(),
+                        );
+                    return super::judged_answer::record_error_exit(
+                        &state.meta_mcp,
+                        response,
+                        &correlation,
+                        credential,
+                        session_id,
+                    )
+                    .await;
+                }
                 None => {
                     // Not counted against the client: the cancel was its
                     // own choice. The admission lease settles on drop as
@@ -579,6 +607,11 @@ async fn meta_mcp_dispatch(
             external_tool,
             subject: grant_subject.as_ref(),
             trace_id: invocation_trace.as_deref(),
+            key: crate::security::response_policy::KeyOf::of_client(
+                client
+                    .as_ref()
+                    .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+            ),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,

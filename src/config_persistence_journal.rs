@@ -90,7 +90,7 @@ pub(crate) fn exists(config: &Path) -> bool {
 /// copy left by a crash before its journal existed is debris, removed first;
 /// the caller holds the config lock, so no other replacement owns it.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "called only by the byte writer, whose first caller lands next"
@@ -112,7 +112,7 @@ pub(crate) fn stage_original(target: &Path, bytes: &[u8]) -> std::io::Result<Pat
 /// refuses an existing journal: a crash never leaves half a journal, and a
 /// second replacement never overwrites the first's.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "called only by the byte writer, whose first caller lands next"
@@ -142,7 +142,7 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
 /// Mark the journal `all_renamed`: the reload accepted the new bytes. Durable
 /// once this returns `Ok`.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "called only by the byte writer, whose first caller lands next"

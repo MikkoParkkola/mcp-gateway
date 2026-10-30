@@ -37,10 +37,7 @@ impl MetaMcp {
         let to = (target.server.as_str(), target.tool.as_str());
         match stored.task.status() {
             TaskStatus::Completed => {
-                if matches!(
-                    stored.task.tool(),
-                    "gateway_execute" | "gateway_run_playbook"
-                ) {
+                if crate::gateway::meta_mcp::is_composite_meta_tool(stored.task.tool()) {
                     // A plan whose steps all ran on one distinct target:
                     // the deduplicated targets record a single target, but
                     // the task is still a plan, so it takes the plan replay

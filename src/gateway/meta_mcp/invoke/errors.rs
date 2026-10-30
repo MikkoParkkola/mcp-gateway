@@ -6,8 +6,7 @@ use serde_json::{Value, json};
 
 use super::audit;
 use crate::gateway::recovery::{
-    ErrorCategory, MetaSurface, RecoveryContext, Revive, SurfaceRequest, attach_recovery,
-    recovery_for_surface,
+    ErrorCategory, MetaSurface, RecoveryContext, Revive, SurfaceRequest, recovery_for_surface,
 };
 use crate::gateway::router::CallerStanding;
 use crate::{Error, Result};
@@ -44,15 +43,19 @@ pub(super) fn dispatch_error_result(
         rejection.error_code.clone_into(&mut hint.error_code);
         hint.retry = rejection.retry;
     }
-    let answer = attach_recovery(
-        json!({
-            "isError": true,
-            "content": [{"type": "text", "text": e.to_string()}],
-        }),
-        hint,
-    );
+    let mut answer = json!({
+        "isError": true,
+        "content": [{"type": "text", "text": e.to_string()}],
+    });
     // MIK-7939: the hint is the gateway's text, never a receipt's.
-    super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &answer);
+    if let Ok(hint) = serde_json::to_value(hint) {
+        super::gateway_writes::insert_noted(
+            super::gateway_writes::Layer::Value,
+            &["_recovery"],
+            &mut answer,
+            hint,
+        );
+    }
     answer
 }
 
@@ -114,7 +117,10 @@ pub(super) fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) 
         // (e.g. "API returned 429 Too Many Requests"). Inspect the text so a
         // rate limit or transient 5xx is not mislabelled as a param error.
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
-        Error::JsonRpc { message, .. } => (ErrorCategory::BackendError, message.clone()),
+        // A gateway refusal reads exactly as the JSON-RPC error it replaces.
+        Error::JsonRpc { message, .. } | Error::GatewayRefused { message, .. } => {
+            (ErrorCategory::BackendError, message.clone())
+        }
         // A capability 429 arrives as a typed `Http` error and no longer says
         // "429" in its message, so the prose classifier above cannot see it.
         // Without this arm the hint silently degrades to `BackendError` and the

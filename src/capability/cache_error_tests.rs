@@ -54,12 +54,10 @@ async fn scripted_executor(
 
     let mut executor =
         CapabilityExecutor::new().with_policy_epoch(Arc::new(std::sync::atomic::AtomicU64::new(0)));
-    // `localhost` clears SSRF without relaxing loopback egress; a finite
+    // The fixture host clears SSRF without relaxing loopback egress; a finite
     // timeout keeps a hung listener from stalling the suite.
-    executor.client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let capability = crate::capability::parse_capability(&format!(
         r"
 name: cache_error_probe
@@ -73,7 +71,7 @@ providers:
   primary:
     service: rest
     config:
-      base_url: http://localhost:{port}
+      base_url: {base_url}
       path: /probe
       method: GET
 "

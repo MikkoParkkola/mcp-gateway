@@ -24,6 +24,43 @@ pub(crate) enum Lens {
     Withheld,
 }
 
+/// What the argument-key check's answer is, beside its text. The delivery
+/// record reads the kind, never the wording.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KeyAnswerKind {
+    /// The arguments carry keys the tool's schema does not declare.
+    Refused,
+    /// The descriptor gate withholds the tool.
+    Withheld,
+    /// A complete list does not hold the tool (text A).
+    Absent,
+    /// The tool is not in the part of a truncated list read (text P).
+    Truncated,
+    /// The schema could not be read (text U).
+    Unreadable,
+}
+
+impl KeyAnswerKind {
+    /// Whether the answer is the gateway refusing the call, not a name it
+    /// cannot serve.
+    pub(crate) const fn refuses(self) -> bool {
+        matches!(self, Self::Refused | Self::Withheld)
+    }
+}
+
+/// The argument-key check's answer: its kind and the text the caller gets.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct KeyAnswer {
+    pub(crate) kind: KeyAnswerKind,
+    pub(crate) text: String,
+}
+
+impl KeyAnswer {
+    fn new(kind: KeyAnswerKind, text: String) -> Self {
+        Self { kind, text }
+    }
+}
+
 /// A miss the check cannot judge: `closed`, or a withheld name, refuses with
 /// `text`, counted by `labels[0]`; `standard` forwards, counted by `labels[1]`.
 fn miss(
@@ -41,12 +78,13 @@ fn miss(
 }
 
 /// The schema could not be read (design §2 step 4, first column).
-fn unavailable(mode: (InputSchemaEnforcement, Lens)) -> Option<String> {
+fn unavailable(mode: (InputSchemaEnforcement, Lens)) -> Option<KeyAnswer> {
     miss(
         mode,
         ["input_schema_refused_unavailable", "input_schema_unknown"],
         || TEXT_UNAVAILABLE.to_owned(),
     )
+    .map(|text| KeyAnswer::new(KeyAnswerKind::Unreadable, text))
 }
 
 /// The answer to a name a list of `completeness` does not hold. A complete
@@ -57,11 +95,11 @@ fn absent_from(
     tool: &str,
     completeness: Completeness,
     mode: (InputSchemaEnforcement, Lens),
-) -> Option<String> {
+) -> Option<KeyAnswer> {
     match completeness {
         Completeness::Complete => {
             count("input_schema_refused_absent");
-            Some(text_absent(tool))
+            Some(KeyAnswer::new(KeyAnswerKind::Absent, text_absent(tool)))
         }
         Completeness::Truncated => miss(
             mode,
@@ -70,7 +108,8 @@ fn absent_from(
                 "input_schema_truncated_forward",
             ],
             text_partial,
-        ),
+        )
+        .map(|text| KeyAnswer::new(KeyAnswerKind::Truncated, text)),
         Completeness::Unknown => unavailable(mode),
     }
 }
@@ -171,7 +210,9 @@ impl Backend {
         // cached tool, even when the answer was already held (#613). The
         // held answer is decided here; only a miss or stale slot pays for the
         // fill, whose path below re-checks everything from the start.
-        self.catalogue_refusal((identity_key, headers), tool, arguments, Lens::Catalogue)
+        let answer =
+            self.catalogue_refusal((identity_key, headers), tool, arguments, Lens::Catalogue);
+        Box::pin(async move { answer.await.map(|answer| answer.map(|answer| answer.text)) })
     }
 
     /// The F13 catalogue check (`undeclared_key_refusal`) through `lens`. Under
@@ -189,7 +230,7 @@ impl Backend {
         tool: &'a str,
         arguments: &'a Value,
         lens: Lens,
-    ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
+    ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<KeyAnswer>>> + Send + 'a>> {
         if let Some(answer) = self.undeclared_key_refusal_held(identity_key, tool, arguments, lens)
         {
             return Box::pin(std::future::ready(answer));
@@ -207,17 +248,18 @@ impl Backend {
         tool: &str,
         arguments: &Value,
         lens: Lens,
-    ) -> Option<crate::Result<Option<String>>> {
+    ) -> Option<crate::Result<Option<KeyAnswer>>> {
         // A withheld name answers as a lacked one, never with its reason.
         if lens == Lens::Catalogue
             && let Some(refusal) = self.blocked_tool_refusal(identity_key, tool)
         {
-            return Some(Ok(Some(refusal)));
+            return Some(Ok(Some(KeyAnswer::new(KeyAnswerKind::Withheld, refusal))));
         }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
             // Off checks no membership; a withheld name is still not sent.
-            return Some(Ok((lens == Lens::Withheld).then(|| text_absent(tool))));
+            return Some(Ok((lens == Lens::Withheld)
+                .then(|| KeyAnswer::new(KeyAnswerKind::Absent, text_absent(tool)))));
         }
         if !(self.has_cached_tools_for(identity_key) || self.stale_refresh_cooling(identity_key)) {
             return None;
@@ -247,17 +289,18 @@ impl Backend {
         tool: &str,
         arguments: &Value,
         lens: Lens,
-    ) -> crate::Result<Option<String>> {
+    ) -> crate::Result<Option<KeyAnswer>> {
         // Before the enforcement mode: a withheld tool is refused whatever
         // the argument-key setting, and for every caller (#1441).
         if lens == Lens::Catalogue
             && let Some(refusal) = self.blocked_tool_refusal(identity_key, tool)
         {
-            return Ok(Some(refusal));
+            return Ok(Some(KeyAnswer::new(KeyAnswerKind::Withheld, refusal)));
         }
         let mode = self.config.input_schema_enforcement;
         if mode == InputSchemaEnforcement::Off {
-            return Ok((lens == Lens::Withheld).then(|| text_absent(tool)));
+            return Ok((lens == Lens::Withheld)
+                .then(|| KeyAnswer::new(KeyAnswerKind::Absent, text_absent(tool))));
         }
         // A4: a hit is judged from the cache while the slot is fresh; a stale
         // hit refreshes once, and falls back to the held schema (design E)
@@ -332,7 +375,7 @@ impl Backend {
             return Ok(absent_from(tool, completeness, (mode, lens)));
         }
         if let Some(refusal) = self.blocked_tool_refusal(identity_key, tool) {
-            return Ok(Some(refusal));
+            return Ok(Some(KeyAnswer::new(KeyAnswerKind::Withheld, refusal)));
         }
         if let Some(found) = tools.iter().find(|t| t.name == tool) {
             return Ok(self.judge_keys(&found.input_schema, tool, arguments, mode));
@@ -346,7 +389,7 @@ impl Backend {
         tool: &str,
         arguments: &Value,
         mode: InputSchemaEnforcement,
-    ) -> Option<String> {
+    ) -> Option<KeyAnswer> {
         let empty = Value::Object(serde_json::Map::new());
         let arguments = if arguments.is_null() {
             &empty
@@ -359,7 +402,7 @@ impl Backend {
             tool = %tool,
             "tool call refused: undeclared argument keys"
         );
-        Some(refusal)
+        Some(KeyAnswer::new(KeyAnswerKind::Refused, refusal))
     }
 
     /// Fill this caller's catalogue slot from a `tools/list` the direct route
@@ -437,7 +480,7 @@ impl Backend {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
             };
-            self.commit_verdicts(source, listing, verdicts);
+            self.commit_verdicts(source, listing, verdicts).emit();
             return withheld;
         }
         // Evicted since the fetch and refused a new slot: store nothing (#2300).
@@ -451,8 +494,9 @@ impl Backend {
             PoolKey::PerUser { binding } => binding.clone(),
             PoolKey::Shared => String::new(),
         };
+        let mut logs = None;
         entry.tools_cache.replace(parsed, || {
-            self.commit_verdicts(&source, listing, verdicts);
+            logs = Some(self.commit_verdicts(&source, listing, verdicts));
             // Display only, so replaced outright: it labels this list.
             *entry.hint_declared.write() = hint_declared;
             entry
@@ -473,9 +517,18 @@ impl Backend {
                 .write()
                 .retain(|tool| read_only.contains(tool));
         });
+        // After the cache's write guard is released.
+        if let Some(logs) = logs {
+            logs.emit();
+        }
         withheld
     }
 }
+
+// Each key-check answer names its kind.
+#[cfg(test)]
+#[path = "input_keys_kind_tests.rs"]
+mod kind_tests;
 
 // MIK-8399: partial and abandoned listings revoke resend permission.
 #[cfg(test)]

@@ -74,8 +74,8 @@ async fn dests_after(playbook: &str, name: &str) -> Vec<Value> {
 async fn an_unmapped_steps_notes_sit_under_its_name_in_the_output() {
     let dests = dests_after(UNMAPPED, "unmapped").await;
     assert!(
-        dests.contains(&json!(["output", "read", "trace_id"])),
-        "the step's trace_id note was not carried under its name: {dests:?}"
+        dests.contains(&json!(["output", "read", "_trace_id"])),
+        "the step's _trace_id note was not carried under its name: {dests:?}"
     );
 }
 
@@ -83,8 +83,8 @@ async fn an_unmapped_steps_notes_sit_under_its_name_in_the_output() {
 async fn a_mapped_steps_notes_sit_under_its_property_in_the_output() {
     let dests = dests_after(MAPPED, "mapped").await;
     assert!(
-        dests.contains(&json!(["output", "answer", "trace_id"])),
-        "the step's trace_id note was not carried under its property: {dests:?}"
+        dests.contains(&json!(["output", "answer", "_trace_id"])),
+        "the step's _trace_id note was not carried under its property: {dests:?}"
     );
 }
 
@@ -169,11 +169,11 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
     assert_eq!(dests, vec![json!(["output", "p", "1", "_cost_warnings"])]);
 
     // F4: a repeated step name means its last result.
-    let first = json!({"trace_id": "first"});
+    let first = json!({"_trace_id": "first"});
     let last = json!({"_cost_warnings": ["last"]});
     let dests = carried(
         vec![
-            (&["trace_id"], first, Vec::new()),
+            (&["_trace_id"], first, Vec::new()),
             (&["_cost_warnings"], last, Vec::new()),
         ],
         vec!["s", "s"],
@@ -186,7 +186,7 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
     // result: the first call's note is not carried under the name.
     let dests = carried(
         vec![
-            (&["trace_id"], json!({"trace_id": "first"}), Vec::new()),
+            (&["_trace_id"], json!({"_trace_id": "first"}), Vec::new()),
             (
                 &["_cost_warnings"],
                 json!({"_cost_warnings": ["last"]}),
@@ -200,9 +200,9 @@ async fn a_carry_follows_the_engines_reading_of_its_mappings() {
     assert_eq!(dests, vec![json!(["output", "s", "_cost_warnings"])]);
 
     // F5: `$inputs.x` is the caller's input, even beside a step of that name.
-    let named_inputs = json!({"trace_id": "t"});
+    let named_inputs = json!({"_trace_id": "t"});
     let dests = carried(
-        vec![(&["trace_id"], named_inputs, Vec::new())],
+        vec![(&["_trace_id"], named_inputs, Vec::new())],
         vec!["inputs"],
         Some(mapping(&[("p", "$inputs")])),
     )
@@ -275,7 +275,7 @@ steps:
         .map(|entry| entry["dest"].clone())
         .collect();
     assert!(
-        dests.contains(&json!(["output", "read", "trace_id"])),
+        dests.contains(&json!(["output", "read", "_trace_id"])),
         "PBERR.1: the completed step's notes were not carried: {dests:?}"
     );
     assert!(

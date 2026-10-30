@@ -162,7 +162,7 @@ async fn a_minted_credential_is_validated_and_audited_before_it_is_used() {
 /// the audit error text to the caller.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = Arc::new(crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -185,6 +185,15 @@ async fn a_failed_mint_audit_refuses_the_credential_without_the_error_text() {
         "identity-propagation audit unavailable for account 'acct'"
     );
     release.release();
+    // The released write recreates the log's folder: let it land before
+    // `file` drops, or the folder is left behind.
+    let late = Arc::clone(&logger);
+    let cleared = tokio::task::spawn_blocking(move || {
+        late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+    })
+    .await
+    .expect("the wait does not panic");
+    assert!(cleared, "the late write never finished");
 }
 
 fn who(subject: &str) -> crate::key_server::oidc::VerifiedIdentity {

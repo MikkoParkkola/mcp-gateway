@@ -170,6 +170,28 @@ impl DiscoveryCache {
         Ok((listing, false))
     }
 
+    /// The find `find_id` names, from a fresh scan of the client files: the
+    /// whole find, values included, for an adopt. Never cached, takes no
+    /// cache lock and leaves the listing's time-out back-off alone. A find
+    /// without a client entry is never one (ADR-021).
+    ///
+    /// # Errors
+    ///
+    /// [`ScanTimedOut`] when the scan outlasts [`SCAN_TIMEOUT`].
+    pub(crate) async fn resolve(
+        &self,
+        find_id: &str,
+    ) -> Result<Option<DiscoveredServer>, ScanTimedOut> {
+        let scan = tokio::time::timeout(SCAN_TIMEOUT, self.source.scan())
+            .await
+            .map_err(|_| ScanTimedOut)?;
+        Ok(scan.finds.into_iter().find(|server| {
+            !server.entry_digest.is_empty()
+                && crate::hashing::hmac_sha256_hex(&self.key, server.entry_digest.as_bytes())
+                    == find_id
+        }))
+    }
+
     /// Reduce a scan to what may be cached, then drop the scan, values and
     /// all. A find without a client entry is not listed (ADR-021).
     fn project(&self, scan: ClientScan) -> Listing {

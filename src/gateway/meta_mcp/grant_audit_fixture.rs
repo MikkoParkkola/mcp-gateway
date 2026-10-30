@@ -3,7 +3,7 @@
 //! D3-a fixture: one personal capability served by a loopback endpoint, its
 //! grants, a transparency log, and readers for what the log holds.
 //!
-//! The capability answers through a swapped HTTP client and a `localhost`
+//! The capability answers through a swapped HTTP client and the fixture-host
 //! base URL, the `account_rest_fixture` pattern, so a granted call succeeds
 //! and a chain can take a second step. The endpoint can hold a request until
 //! released, which is the barrier the cancellation and stall cells use.
@@ -126,6 +126,7 @@ pub(crate) fn capability_backend_exposed(
     owner: (&str, &str),
     exposure: &str,
 ) -> Arc<CapabilityBackend> {
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: {PERSONAL}\n\
          description: Read one calendar day\n\
@@ -139,16 +140,13 @@ pub(crate) fn capability_backend_exposed(
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://localhost:{port}\n\
+         \x20     base_url: {base_url}\n\
          \x20     path: /read\n\
          \x20     method: GET\n",
         owner.0, owner.1
     ))
     .expect("the fixture capability parses");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("the fixture HTTP client builds");
+    let client = crate::test_fixture_host::fixture_client(std::time::Duration::from_secs(5));
     let executor = Arc::new(CapabilityExecutor::new().with_test_http_client(client));
     let backend = Arc::new(CapabilityBackend::new(CAPS, executor));
     backend

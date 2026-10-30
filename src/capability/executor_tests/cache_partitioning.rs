@@ -14,7 +14,8 @@ fn finite_http_client() -> reqwest::Client {
 }
 
 /// Counting loopback server plus a cacheable Shared capability. The client is
-/// swapped so `localhost` clears SSRF without relaxing `allow_loopback_egress`.
+/// swapped so the fixture host clears SSRF without relaxing
+/// `allow_loopback_egress`.
 async fn cacheable_counting_executor()
 -> (CapabilityExecutor, CapabilityDefinition, Arc<AtomicUsize>) {
     let hits = Arc::new(AtomicUsize::new(0));
@@ -40,7 +41,8 @@ async fn cacheable_counting_executor()
     });
 
     let mut executor = CapabilityExecutor::new();
-    executor.client = finite_http_client();
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let capability = crate::capability::parse_capability(&format!(
         r"
 name: cache_probe
@@ -54,7 +56,7 @@ providers:
   primary:
     service: rest
     config:
-      base_url: http://localhost:{port}
+      base_url: {base_url}
       path: /probe
       method: GET
 "

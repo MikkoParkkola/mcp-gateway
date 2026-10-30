@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 use super::pool::{PoolKey, PooledEntry};
 
 use super::Backend;
+use super::era::EraResolution;
 use crate::config::{BackendConfig, TransportConfig};
 use crate::runtime::RuntimePlan;
 use crate::transport::{HttpTransport, Transport};
@@ -87,6 +88,8 @@ impl Backend {
             caller_slots: DashMap::new(),
             caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
+            #[cfg(all(test, feature = "webui"))]
+            server_state_evaluations: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
             #[cfg(test)]
@@ -123,6 +126,7 @@ impl Backend {
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
+            secret_resolver: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -493,24 +497,6 @@ impl Backend {
         started
     }
 
-    /// A per-user-sessions-only backend's Shared slot never starts or fills,
-    /// whoever asks: refused before anything is built, charged or counted,
-    /// with the isolation refusal's code (a denial, so never retried).
-    pub(super) fn refuse_shared_start(&self, key: &PoolKey) -> Result<()> {
-        if matches!(key, PoolKey::Shared) && self.shared_slot_refused() {
-            debug!(backend = %self.name, "Not starting the shared slot: per-user sessions only");
-            return Err(Error::Forbidden {
-                code: -32001,
-                status: 403,
-                message: format!(
-                    "backend '{}' takes per-user sessions only; the gateway opens no shared session to it",
-                    self.name
-                ),
-            });
-        }
-        Ok(())
-    }
-
     async fn start_entry_inner(
         &self,
         key: &PoolKey,
@@ -579,22 +565,24 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                let oauth_client = self.create_oauth_client(http_url, built_under)?;
+                let (slot, statics, oauth_client) =
+                    self.slot_gateway_credentials(key, http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
-                    self.config.headers.clone(),
+                    statics,
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
                     protocol_version.clone(),
                     built_under,
                 )?;
-                // MIK-6735 fix 2: a per-user pool slot's transport serves
-                // exactly one caller identity for its whole lifetime, which
-                // is what makes the transport's internal session-map
-                // single-tenant debug_assert provably safe -- tell it so.
-                if matches!(key, PoolKey::PerUser { .. }) {
-                    transport.mark_single_tenant();
+                // A per-user pool slot's transport serves one caller identity
+                // for life (MIK-6735 fix 2): tell it so, with the slot's
+                // lender its dispatches lend through. It marks itself single
+                // tenant only when lent-only, the one kind holding a single
+                // session.
+                if let Some(slot) = slot {
+                    transport.mark_per_user_slot(slot, Arc::clone(&entry.lender));
                 }
                 #[cfg(test)]
                 {
@@ -786,15 +774,4 @@ pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
         }
         other => other,
     }
-}
-
-/// How a start resolves its slot's era (MIK-8012).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EraResolution {
-    /// Discard and probe under the slot cache's lock: nothing else serves
-    /// from the slot while it starts.
-    Shared,
-    /// Probe without the lock and install at the publish: the transport being
-    /// replaced still serves from the slot (a build-first restart).
-    Deferred,
 }

@@ -8,7 +8,7 @@
 
 pub(crate) mod account_bindings;
 mod account_refs;
-mod backend_add;
+pub(crate) mod backend_add;
 mod backend_config;
 mod backend_debug;
 mod backend_ownership;
@@ -16,6 +16,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod env_provider;
+pub(crate) mod secret_rules;
 use env_provider::{EnvFileConfig, Expansion, OverlayEnv, Tolerance};
 mod features;
 pub(crate) mod load_error;
@@ -34,6 +35,7 @@ mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
+mod per_user_headers_posture;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
@@ -709,6 +711,10 @@ mod cwe532_debug_redaction;
 #[cfg(test)]
 #[path = "cleartext_credential_guard_tests.rs"]
 mod cleartext_credential_guard;
+
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_secrets_tests.rs"]
+mod a2a_secrets;
 
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]

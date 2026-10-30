@@ -40,7 +40,7 @@ impl Reply {
 }
 
 /// Auth on with a static bearer, so `/ui/api` answers its auth refusal.
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some("u17-bearer".to_string()),

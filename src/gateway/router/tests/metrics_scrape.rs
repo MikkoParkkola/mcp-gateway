@@ -15,7 +15,7 @@ const ADMIN: &str = "admin-bearer-c7";
 const SCRAPE: &str = "scrape-token-c7";
 
 /// A gateway with auth on (admin bearer `ADMIN`) and the given config.
-async fn router_with(config: Config) -> (axum::Router, tempfile::TempDir) {
+async fn router_with(config: Config) -> (axum::Router, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) = test_router_app_state_with(StreamingConfig::default(), config).await;
     Arc::get_mut(&mut state)
         .expect("state is uniquely owned here")

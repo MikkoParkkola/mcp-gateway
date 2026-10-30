@@ -282,17 +282,18 @@ async fn a_replay_is_shaped_for_its_own_request() {
     }
 }
 
-/// Lead ruling 2026-10-07: a replay of a backend `"public"` scope is
-/// `"private"` on the wire. The serialiser (`serialize_delivered_result`)
-/// and signing both clamp; this pins the bytes a retrying caller receives.
+/// Lead ruling 2026-10-07: a replay of a backend `"public"` scope is never
+/// `"public"` on the wire. A `tools/call` answer may not carry `cacheScope`,
+/// so ingress removes it before anything stores the answer; this pins the
+/// bytes a retrying caller receives.
 #[tokio::test]
 async fn a_replayed_public_scope_is_private_on_the_wire() {
     for backend in BACKENDS {
         let fx = fixture(Answer::PublicScope, |_| {}).await;
         for (id, era) in [(1, true), (2, true), (3, false)] {
             let body = keyed(&fx, backend, (era, id), "scoped").await;
-            assert_eq!(
-                body["result"]["cacheScope"], "private",
+            assert!(
+                body["result"].get("cacheScope").is_none(),
                 "{backend} #{id}: {body}"
             );
         }
@@ -568,8 +569,9 @@ async fn a_direct_legacy_call_delivers_a_bound_public_signature() {
 
 /// R18 (MIK-8398 C1g): the same as R17 on the direct route. The backend
 /// answers `cacheScope: "public"` (`Answer::PublicScope`, as the replay row
-/// above reasons about); the delivered body carries `private`, and the seal
-/// verifies Bound against those delivered bytes.
+/// above reasons about); ingress removes it, as a `tools/call` answer may not
+/// carry it, so the delivered body differs from the backend's, and the seal
+/// verifies Bound against the delivered bytes.
 #[tokio::test]
 async fn a_direct_public_scope_is_sealed_as_delivered() {
     use crate::attestation::{BnautAttestationSigner, RESULT_PROVENANCE_DOMAIN_INFO};
@@ -591,9 +593,9 @@ async fn a_direct_public_scope_is_sealed_as_delivered() {
         .await;
         let body = modern(&fx, backend, "tools/call", call_params()).await;
         assert_eq!(
-            body["result"].get("cacheScope").and_then(|v| v.as_str()),
-            Some("private"),
-            "{backend}: the wire clamp delivers private: {body}"
+            body["result"].get("cacheScope"),
+            None,
+            "{backend}: ingress removed the backend's scope: {body}"
         );
         let prov = body
             .pointer("/result/_meta/provenance")

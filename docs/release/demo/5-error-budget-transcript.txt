@@ -13,7 +13,7 @@ flaky_peer -> {
       "type": "text"
     }
   ],
-  "trace_id": "gw-745aca52-d2f4-4d23-9e4b-52bbb7e7fd8b"
+  "_trace_id": "gw-745aca52-d2f4-4d23-9e4b-52bbb7e7fd8b"
 }
 [PASS] S5.HEALTHY_CALL_SUCCEEDS
         expected: budget_ping ok present
@@ -74,7 +74,7 @@ flaky_peer -> {
       "type": "text"
     }
   ],
-  "trace_id": "gw-baf529f1-2bfa-4297-8d3e-b0d1676f2036"
+  "_trace_id": "gw-baf529f1-2bfa-4297-8d3e-b0d1676f2036"
 }
 [PASS] S5.CALL_SUCCEEDS_AFTER_REVIVE
         expected: budget_ping ok present

@@ -20,6 +20,8 @@ on:
       - "src/transport/http/**"
       - "src/gateway/router/**"
       - "src/transport/stdio.rs"
+      - "src/transport/stdio_start.rs"
+      - "src/transport/stdio_env.rs"
       - "src/transport/command_split.rs"
       - "src/gateway/input_bridge.rs"
       - "src/gateway/input_bridge/**"

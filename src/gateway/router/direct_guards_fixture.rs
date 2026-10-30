@@ -132,7 +132,12 @@ pub(crate) struct Fx {
     pub calls: Arc<AtomicUsize>,
     /// The params every `tools/call` reached the backend with.
     pub seen: Arc<std::sync::Mutex<Vec<Value>>>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
+    /// The meta layer's audit log, when a builder gives it one; last, so it
+    /// drops after the router and state that hold the logger.
+    _audit: Option<crate::security::transparency_log::temp::TempLog>,
+    /// The route's audit log, on a propagating fixture.
+    _route_audit: Option<crate::security::transparency_log::temp::TempLog>,
 }
 
 fn key(name: &str) -> ApiKeyConfig {
@@ -371,14 +376,16 @@ pub(crate) use egress::fixture_hardened_signed_built_on;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on,
-    fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_observing_on, meta_firewall,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_keyed, fixture_firewalled_on,
+    fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_inspection_off_on,
+    fixture_observing_on, meta_firewall,
 };
 #[cfg(feature = "firewall")]
 pub(crate) use quota::Minting;
+pub(crate) use quota::fixture_with_secrets;
 #[cfg(feature = "cost-governance")]
 pub(crate) use quota::{MINT_MODES, fixture_optional_failing_mint};
-use quota::{fixture_backend_config, fixture_failsafe, leaked_transparency_log};
+use quota::{fixture_backend_config, fixture_failsafe, propagating_route_log};
 #[cfg(feature = "firewall")]
 pub(crate) use quota::{fixture_firewalled_budget_built, fixture_propagating_budgeted};
 pub(crate) use quota::{fixture_propagating, fixture_propagating_signed};
@@ -640,7 +647,10 @@ fn fixture_auth() -> AuthConfig {
 }
 
 /// The router state the per-thread knobs ask for.
-async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
+async fn fixture_state() -> (
+    Arc<super::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let auth = fixture_auth();
     let hardened = HARDENED.with(std::cell::Cell::get);
     let modern_off = MODERN_OFF.with(std::cell::Cell::get);
@@ -662,6 +672,9 @@ async fn fixture_state() -> (Arc<super::AppState>, tempfile::TempDir) {
 
 /// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
 /// tasks share one, as `server/task_runtime.rs` wires it.
+// One literal per fixture switch, as the cells read it: splitting would hide
+// which knob a cell turns.
+#[allow(clippy::too_many_lines)]
 async fn fixture_inner(
     answer: Answer,
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
@@ -674,11 +687,7 @@ async fn fixture_inner(
     let mut config = (*state_mut.live_config.get()).clone();
     config.security.sanitize_input = SANITIZE.with(std::cell::Cell::get);
     state_mut.live_config.set(config);
-    // A required propagation refuses to mint without a durable audit sink
-    // (MIK-6740), so a propagating fixture gets a transparency log.
-    if PROPAGATING.with(std::cell::Cell::get) {
-        state_mut.transparency_log = Some(leaked_transparency_log());
-    }
+    let route_log = propagating_route_log(state_mut);
     if let Some(log) = STATE_LOG.with(|l| l.borrow().clone()) {
         state_mut.transparency_log = Some(log);
     }
@@ -702,17 +711,7 @@ async fn fixture_inner(
         use crate::security::firewall::{Firewall, FirewallConfig};
         let rules = FIREWALL_RULE
             .with(std::cell::Cell::get)
-            // `send_message` is the A2A backend's one tool (MIK-8139).
-            .map_or_else(Vec::new, |action| {
-                ["read", "send_message"]
-                    .map(|tool| crate::security::firewall::FirewallRule {
-                        tool_match: tool.to_string(),
-                        action,
-                        reason: None,
-                        scan: Vec::new(),
-                    })
-                    .to_vec()
-            });
+            .map_or_else(Vec::new, egress::firewall_rules);
         let anomaly = ANOMALY.with(std::cell::Cell::get);
         let tracker = anomaly.then(|| {
             let tracker = Arc::new(crate::transition::TransitionTracker::new());
@@ -767,6 +766,8 @@ async fn fixture_inner(
         calls,
         seen,
         _store: store,
+        _audit: None,
+        _route_audit: route_log,
     }
 }
 

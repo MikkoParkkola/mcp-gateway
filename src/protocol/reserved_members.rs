@@ -49,10 +49,6 @@ pub(crate) struct Member {
     /// Segments from the answer's root. `*` is every element of an array; a
     /// `_meta` key is one segment, reverse-DNS dots included.
     pub(crate) path: &'static [&'static str],
-    #[expect(
-        dead_code,
-        reason = "the delivery record's annotated raise reads it; that change follows this one"
-    )]
     pub(crate) class: Class,
     pub(crate) origin: Origin,
     pub(crate) writer: Writer,
@@ -83,7 +79,7 @@ pub(crate) const MEMBERS: &[Member] = &[
     row(&["_contract_reason"], Counted, GatewayOnly, Noted),
     row(&["_cost_warnings"], Counted, GatewayOnly, Noted),
     row(&["_cost_suggestion"], Counted, GatewayOnly, Noted),
-    // Outside until the delivery record notes it at its attach site.
+    // Raised where it is attached, never noted: a receipt copy keeps it.
     row(&["_context_integrity"], Counted, GatewayOnly, Outside),
     row(&["tools", "*", "trustCard"], Counted, GatewayOnly, Outside),
     row(&["_signature"], Envelope, GatewayOnly, Noted),
@@ -100,10 +96,11 @@ pub(crate) const MEMBERS: &[Member] = &[
         GatewayOnly,
         Outside,
     ),
-    // Plain names a backend may use for its own data.
-    row(&["recovery"], Counted, BackendMayCarry, Noted),
-    row(&["predicted_next"], Counted, BackendMayCarry, Noted),
-    row(&["trace_id"], Envelope, BackendMayCarry, Noted),
+    // The gateway's recovery hint, prediction and correlation id. Written
+    // under the plain names before 4.0, which a backend may also use.
+    row(&["_recovery"], Counted, GatewayOnly, Noted),
+    row(&["_predicted_next"], Counted, GatewayOnly, Noted),
+    row(&["_trace_id"], Envelope, GatewayOnly, Noted),
     // Protocol members a backend sends.
     row(&["taskId"], Envelope, BackendMayCarry, Noted),
     row(&["requestState"], Envelope, BackendMayCarry, Noted),
@@ -161,6 +158,24 @@ pub(crate) fn strip_with(table: &[Member], value: &mut Value) -> Vec<String> {
     removed
 }
 
+/// Remove from a stored value every [`Writer::Noted`] gateway-only member
+/// that `kept` does not claim as the gateway's own write (a row
+/// stored before ingress stripped, or before the rename, can hold a backend's
+/// copy). [`Writer::Outside`] members are never noted, so they stay as stored.
+/// Returns whether a removed member was one a content digest covers, so a
+/// seal over the old bytes no longer holds.
+pub(crate) fn strip_unnoted(value: &mut Value, kept: impl Fn(&Member) -> bool) -> bool {
+    let unclaimed: Vec<Member> = MEMBERS
+        .iter()
+        .filter(|m| m.origin == Origin::GatewayOnly && m.writer == Writer::Noted && !kept(m))
+        .copied()
+        .collect();
+    let removed = strip_with(&unclaimed, value);
+    removed
+        .iter()
+        .any(|path| digest_covers(path.split('.').next().unwrap_or_default()))
+}
+
 /// The top-level members a signature chain's content digest covers: every one
 /// but `_meta` and `_signature`. `signature_chain::content_digest` reads this,
 /// so what ingress withholds and what the digest hashes cannot drift apart.
@@ -169,17 +184,28 @@ pub(crate) fn digest_covers(key: &str) -> bool {
 }
 
 /// Remove a backend's copy of every gateway-only member from its
-/// answer, before any gate reads it. Called once, where every backend answer
-/// enters (`Backend::request_attempted`).
+/// answer, before any gate reads it, and every protocol member it sent where
+/// the protocol does not let it ([`super::member_scope`]). Called once, where
+/// every backend answer enters (`Backend::request_attempted`), with whether
+/// that send declared the tasks extension.
 ///
 /// The result loses each member at the root and, for a `tasks/*` method, in
-/// the task envelope's `result` slot; an object `error.data` loses them too.
-/// A digest-covered top-level member the strip changed is kept, as the backend
-/// sent it, in [`JsonRpcResponse::ingress_withheld`], so a signature chain is
-/// verified over what the backend signed ([`chain_view`]). One warn per answer
-/// names the backend, the method and the paths, never the values.
-pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcResponse) {
+/// the task envelope's `result` slot, the original request's final result,
+/// which loses every scoped member whatever it claims; an object `error.data`
+/// loses the gateway-only ones too. A digest-covered top-level member the
+/// strip changed is kept, as the backend sent it, in
+/// [`JsonRpcResponse::ingress_withheld`], so a signature chain is verified
+/// over what the backend signed ([`chain_view`]). One warn per answer for
+/// each kind of removal names the backend, the method and the paths, never
+/// the values.
+pub(crate) fn strip_ingress(
+    backend: &str,
+    method: &str,
+    declared: super::member_scope::Declared,
+    response: &mut JsonRpcResponse,
+) {
     let mut removed = Vec::new();
+    let mut misplaced = Vec::new();
     if let Some(result) = response.result.as_mut() {
         // Cloned only where a gateway-only path is present, so an honest
         // answer (a large `tools/list` included) costs no copy.
@@ -194,15 +220,37 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
                 withheld.insert(key.to_owned(), original.clone());
             }
         }
+        // Judged before the gateway-only pass: it reads the answer's shape,
+        // which that pass does not touch.
+        let scoped = super::member_scope::misplaced(method, result, declared);
+        for member in &scoped {
+            if digest_covers(member)
+                && !withheld.contains_key(*member)
+                && let Some(original) = result.get(*member)
+            {
+                withheld.insert((*member).to_owned(), original.clone());
+            }
+        }
         removed.extend(strip_with(MEMBERS, result));
+        if let Value::Object(map) = result {
+            for member in scoped {
+                map.remove(member);
+                misplaced.push(member.to_owned());
+            }
+        }
         if method.starts_with("tasks/")
             && let Some(slot) = result.get_mut("result")
         {
-            // The slot is digest-covered content too: withhold it as sent.
+            let scoped_in_slot: Vec<&str> = super::member_scope::every_scoped()
+                .filter(|member| slot.get(*member).is_some())
+                .collect();
+            // The slot is digest-covered content too: withhold it as sent,
+            // before either pass changes it.
             if !withheld.contains_key("result")
-                && MEMBERS
-                    .iter()
-                    .any(|m| m.origin == Origin::GatewayOnly && has_path(slot, m.path))
+                && (!scoped_in_slot.is_empty()
+                    || MEMBERS
+                        .iter()
+                        .any(|m| m.origin == Origin::GatewayOnly && has_path(slot, m.path)))
             {
                 withheld.insert("result".to_owned(), slot.clone());
             }
@@ -211,6 +259,12 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
                     .into_iter()
                     .map(|p| format!("result.{p}")),
             );
+            if let Value::Object(map) = slot {
+                for member in scoped_in_slot {
+                    map.remove(member);
+                    misplaced.push(format!("result.{member}"));
+                }
+            }
         }
         response.ingress_withheld = (!withheld.is_empty()).then(|| Box::new(Withheld(withheld)));
     }
@@ -227,6 +281,14 @@ pub(crate) fn strip_ingress(backend: &str, method: &str, response: &mut JsonRpcR
             method,
             members = ?removed,
             "removed gateway-only members a backend put in its answer"
+        );
+    }
+    if !misplaced.is_empty() {
+        tracing::warn!(
+            backend,
+            method,
+            members = ?misplaced,
+            "removed protocol members a backend sent where the protocol does not let it"
         );
     }
 }
@@ -338,6 +400,9 @@ pub(crate) mod test_support {
                 "io.mcp-gateway/reason": "FORGED-10",
             },
             "tools": [{"name": "t", "trustCard": {"verdict": "FORGED-11"}}],
+            "_recovery": {"hint": "FORGED-12"},
+            "_predicted_next": ["FORGED-13"],
+            "_trace_id": "FORGED-14",
             "backend_field": "KEPT-BY-BACKEND",
         })
     }

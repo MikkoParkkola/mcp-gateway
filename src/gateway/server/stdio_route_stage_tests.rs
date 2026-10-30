@@ -124,7 +124,6 @@ async fn a_lone_withheld_target_records_refused() {
         crate::gateway::delivery_facts::record_fields(
             crate::gateway::delivery_facts::snapshot().as_ref(),
             false,
-            false,
             &mut fields,
         );
         fields["response_effect"].clone()

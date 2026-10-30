@@ -11,7 +11,7 @@
 #   * first person: i, i'm, i've, my, mine; we added/fixed/caught/found/
 #     decided/realised/realized
 #   * authoring process: sub-agent, agent session, scratchpad, worktree
-#   * the tool as an actor: any assistant or model name
+#   * the tool as an actor, or a reviewing model: any assistant or model name
 #   * session narration: this session, the session transcript, earlier turn,
 #     compaction, context window
 #   * internal shorthand: review seat, the operator, the reviewer said/asked/
@@ -21,8 +21,8 @@
 #   * private content, from scripts/dev/public-hygiene-patterns.sh: a private
 #     project name, a home-directory or agent-configuration path, a
 #     private-network address -- trailers included, except Co-Authored-By
-#   * a tracker id, anywhere in the message, trailers included, on a commit
-#     made after the cutoff below
+#   * a tracker id or a reviewing model's name, anywhere in the message,
+#     trailers included, on a commit made after the cutoff below
 #
 # RUN IT BEFORE YOU PUSH, and gate the push on its exit status with `&&`, not
 # `;` -- a check whose verdict is not read is not a check:
@@ -49,7 +49,7 @@ checks=(
   "\\b(i|i'm|i've|my|mine)\\b::first person: state facts about the code, not about the author"
   "\\bwe (added|fixed|caught|found|decided|realised|realized)\\b::first person: describe the change, not the people who made it"
   "\\b(sub-?agent|agent session|scratchpad|worktree)\\b::authoring-process narration"
-  "\\b(claude|codex|kimi|chatgpt|gpt-[0-9]|grok|copilot)\\b::names the authoring tool as an actor"
+  "\\b(claude|codex|kimi|chatgpt|gpt|grok|copilot|muse|glm)\\b|\\breview models?\\b::names an AI tool or a reviewing model"
   "\\bcursor('s)? (suggest(ed|ion|s)?|ide)\\b::names the authoring tool as an actor"
   "\\b(this session|the session transcript|earlier turn|compaction|context window)\\b::session narration"
   "\\b(review seat|the operator|the reviewer (said|asked|caught)|per the ruling|ruling [0-9])\\b::internal process shorthand"
@@ -122,9 +122,9 @@ while IFS= read -r sha; do
 
 done <<<"$commits"
 
-# Private content and tracker ids, in every commit of the range, merges too,
-# and in every line of the message: a trailer or a merge subject leaks as
-# easily as the body.
+# Private content, tracker ids and reviewing models, in every commit of the
+# range, merges too, and in every line of the message: a trailer or a merge
+# subject leaks as easily as the body.
 all_commits="$(git rev-list "$range" 2>/dev/null || true)"
 while IFS= read -r sha; do
   [[ -n "$sha" ]] || continue
@@ -146,6 +146,11 @@ while IFS= read -r sha; do
   if (( $(git log -1 --format='%at' "$sha") >= ticket_id_cutoff )); then
     if match="$(printf '%s\n' "$full" | sed -E "s/$ac_id_regex//g" | grep -E -n -m 1 -e "$ticket_id_regex" || true)"; [[ -n "$match" ]]; then
       printf 'FAIL %s: cites a tracker id; describe the change instead -- %s\n' "${sha:0:8}" "$match" >&2
+      failures=$((failures + 1))
+    fi
+    # Co-Authored-By and the authoring footer name the authoring tool.
+    if match="$(printf '%s\n' "$full" | grep -E -v -i -e '^co-authored-by:' -e "$authoring_footer_regex" | grep -E -i -m 1 -e "$reviewer_regex" || true)"; [[ -n "$match" ]]; then
+      printf 'FAIL %s: names a reviewing model -- %s\n' "${sha:0:8}" "$match" >&2
       failures=$((failures + 1))
     fi
   fi

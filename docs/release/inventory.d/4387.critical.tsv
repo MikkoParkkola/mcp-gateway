@@ -1,0 +1,1 @@
+src/transport/stdio_env.rs	forwarded_npm_config	1	critical	d	forwarded_npm_config	Decides which of the operator's npm settings reach a backend child: only the six allowlisted non-secret names, never npm_config_cache, and none a backend already names in any spelling, so no other operator variable leaks and a backend's explicit choice is not overruled.

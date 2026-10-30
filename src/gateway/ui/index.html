@@ -277,6 +277,13 @@ tr:hover td { background: var(--bg3); }
 .tool-check-item input[type=checkbox] { margin-top: 0.15rem; flex-shrink: 0; }
 .tool-check-name { font-weight: 600; color: var(--fg); }
 .tool-check-desc { color: var(--fg2); font-size: 0.8rem; margin-top: 0.15rem; }
+.add-preview {
+  background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.75rem; margin-bottom: 0.75rem; max-height: 50vh; overflow-y: auto; font-size: 0.85rem;
+}
+.add-preview p { margin: 0 0 0.5rem; color: var(--fg2); }
+.add-preview .preview-actions { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.tool-tag { margin-left: 0.4rem; font-size: 0.75rem; font-weight: 400; color: var(--fg2); }
 .modal-footer { display: flex; gap: 0.5rem; justify-content: flex-end; align-items: center; }
 .modal-msg { flex: 1; font-size: 0.85rem; }
 .modal-msg.ok { color: var(--green); }
@@ -412,8 +419,12 @@ tr:hover td { background: var(--bg3); }
           </div>
         </div>
 
+        <!-- Filled by previewServerTools(); built with DOM calls only -->
+        <div id="add-preview" class="add-preview" aria-live="polite" style="display:none"></div>
+
         <div class="form-actions">
-          <button class="btn" onclick="submitAddServer()">Add Server</button>
+          <button class="btn" id="add-server-btn" onclick="submitAddServer()">Add Server</button>
+          <button class="btn btn-secondary" id="preview-tools-btn" onclick="previewServerTools()">Preview tools</button>
           <button class="btn btn-secondary" onclick="toggleAddServerForm()">Cancel</button>
           <span id="add-server-msg" class="form-msg"></span>
         </div>
@@ -1110,6 +1121,7 @@ function resetAddServerForm() {
   document.getElementById('custom-transport').value = 'stdio';
   document.getElementById('custom-command-row').style.display = '';
   document.getElementById('custom-url-row').style.display = 'none';
+  clearAddPreview();
 }
 
 function setServerMode(mode) {
@@ -1310,34 +1322,56 @@ function collectEnvVars() {
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
+// The add body the form describes, as `{ body }`, or `{ error }`. Preview and
+// Add both send it, so a preview always describes the server Add would write.
+function addServerBody() {
+  if (serverMode === 'registry') {
+    if (!regSelected) return { error: 'Select a server from the registry first.' };
+    // The server resolves the entry by its registry name, so it writes the
+    // env templates, OAuth stanza and default-off state the entry declares.
+    // Sending its command or URL instead would add it as a custom server.
+    return { body: {
+      name: document.getElementById('reg-name-override').value.trim() || regSelected.name,
+      registry: regSelected.name,
+    } };
+  }
+  const name = document.getElementById('custom-name').value.trim();
+  if (!name) return { error: 'Name is required.' };
+  const transport = document.getElementById('custom-transport').value;
+  const body = { name };
+  if (transport === 'stdio') {
+    const cmd = document.getElementById('custom-command').value.trim();
+    if (cmd) body.command = cmd;
+  } else {
+    const url = document.getElementById('custom-url').value.trim();
+    if (url) body.url = url;
+  }
+  const env = collectEnvVars();
+  if (env) body.env = env;
+  return { body };
+}
+
 async function submitAddServer() {
   const msg = document.getElementById('add-server-msg');
   msg.textContent = '';
 
-  let body;
-  if (serverMode === 'registry') {
-    if (!regSelected) { msg.textContent = 'Select a server from the registry first.'; msg.className = 'form-msg err'; return; }
-    // The server resolves the entry by its registry name, so it writes the
-    // env templates, OAuth stanza and default-off state the entry declares.
-    // Sending its command or URL instead would add it as a custom server.
-    body = {
-      name: document.getElementById('reg-name-override').value.trim() || regSelected.name,
-      registry: regSelected.name,
-    };
-  } else {
-    const name = document.getElementById('custom-name').value.trim();
-    if (!name) { msg.textContent = 'Name is required.'; msg.className = 'form-msg err'; return; }
-    const transport = document.getElementById('custom-transport').value;
-    body = { name };
-    if (transport === 'stdio') {
-      const cmd = document.getElementById('custom-command').value.trim();
-      if (cmd) body.command = cmd;
-    } else {
-      const url = document.getElementById('custom-url').value.trim();
-      if (url) body.url = url;
+  const built = addServerBody();
+  if (built.error) { msg.textContent = built.error; msg.className = 'form-msg err'; return; }
+  const body = built.body;
+  // A listing in force decides the tools: only for the body it was taken of.
+  if (addPreview) {
+    const refuse = (text) => { msg.textContent = text; msg.className = 'form-msg err'; };
+    if (JSON.stringify(body) !== addPreview.snapshot) {
+      return refuse('The form changed since the preview. Preview again, or clear the preview to add every tool.');
     }
-    const env = collectEnvVars();
-    if (env) body.env = env;
+    if (addPreview.truncated) {
+      return refuse('The preview list is incomplete. Clear the preview to add every tool.');
+    }
+    const ticked = [...document.querySelectorAll('#add-preview input[data-tool]:checked')].map(cb => cb.dataset.tool);
+    if (ticked.length === 0) {
+      return refuse('Tick at least one tool, or clear the preview to add every tool.');
+    }
+    body.allowed_tools = ticked;
   }
 
   try {
@@ -1370,6 +1404,219 @@ async function submitAddServer() {
     msg.textContent = 'Failed: ' + e.message;
     msg.className = 'form-msg err';
   }
+}
+
+// Add from a preview. A listing is installed only from a successful start,
+// together with the body it was taken of (`snapshot`). Every attempt takes a
+// generation number, and an answer for an older one installs nothing, so a
+// selection never outlives the form it describes.
+let addPreview = null;
+let addPreviewGen = 0;
+
+function addPreviewPanel() { return document.getElementById('add-preview'); }
+
+function clearAddPreview() {
+  addPreviewGen++;
+  addPreview = null;
+  const panel = addPreviewPanel();
+  panel.replaceChildren();
+  panel.style.display = 'none';
+  setStartRunning(false);
+}
+
+// While a start runs, neither a second Preview (it would meet "a preview is
+// already running" and lose this listing) nor an Add (it would save every
+// tool the operator chose to preview first) may begin.
+function setStartRunning(running) {
+  document.getElementById('preview-tools-btn').disabled = running;
+  document.getElementById('add-server-btn').disabled = running;
+}
+
+function addPreviewError(text) {
+  const msg = document.getElementById('add-server-msg');
+  msg.textContent = text;
+  msg.className = 'form-msg err';
+}
+
+// One POST to the preview route: `{ status, body, error }`, never a throw
+// for an HTTP answer, so each step can show the server's own reason.
+async function postPreview(body) {
+  const r = await uiFetch('/ui/api/previews', {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  return { status: r.status, body: data, error: (data && data.error) || r.statusText || `HTTP ${r.status}` };
+}
+
+function previewEl(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function previewButton(label, onClick, secondary = true) {
+  const b = previewEl('button', secondary ? 'btn btn-sm btn-secondary' : 'btn btn-sm', label);
+  b.type = 'button';
+  b.addEventListener('click', onClick);
+  return b;
+}
+
+// Step 1: describe what would be contacted, and wait for Start.
+async function previewServerTools() {
+  document.getElementById('add-server-msg').textContent = '';
+  const built = addServerBody();
+  if (built.error) return addPreviewError(built.error);
+  clearAddPreview();
+  const gen = addPreviewGen;
+  const previewBtn = document.getElementById('preview-tools-btn');
+  previewBtn.disabled = true;
+  let answer;
+  try {
+    answer = await postPreview(built.body);
+  } catch (e) {
+    if (gen === addPreviewGen) { previewBtn.disabled = false; addPreviewError('Preview failed: ' + e.message); }
+    return;
+  }
+  if (gen !== addPreviewGen) return;
+  previewBtn.disabled = false;
+  if (answer.status !== 202 || !answer.body.confirm) return addPreviewError('Preview refused: ' + answer.error);
+  renderDescribed(answer.body.preview || {}, built.body, answer.body.confirm, gen);
+}
+
+function withheldText(w) {
+  if (!w) return '';
+  const parts = [];
+  if (w.env && w.env.length) parts.push('env ' + w.env.join(', '));
+  if (w.headers && w.headers.length) parts.push('headers ' + w.headers.join(', '));
+  if (w.oauth) parts.push('the OAuth login');
+  if (w.secrets) parts.push(w.secrets + ' secret' + (w.secrets === 1 ? '' : 's'));
+  if (w.identity_propagation) parts.push('identity propagation');
+  if (w.account) parts.push('the account');
+  return parts.length ? 'Withheld for the preview: ' + parts.join('; ') + '.' : '';
+}
+
+function renderDescribed(described, body, confirm, gen) {
+  const panel = addPreviewPanel();
+  panel.replaceChildren();
+  const where = described.url ? `${described.transport || 'server'} at ${described.url}` : (described.transport || 'the server');
+  panel.appendChild(previewEl('p', '', `The preview starts ${where} once, lists its tools, then stops it. Nothing is saved.`));
+  const withheld = withheldText(described.withheld);
+  if (withheld) panel.appendChild(previewEl('p', '', withheld));
+  const verified = described.publisher && described.publisher.verified;
+  panel.appendChild(previewEl('p', '', verified ? 'Publisher: verified.' : 'Publisher: unverified.'));
+  const actions = previewEl('div', 'preview-actions');
+  const start = previewButton('Start preview', () => startServerPreview(body, confirm, gen, start), false);
+  actions.append(start, previewButton('Clear preview', clearAddPreview));
+  panel.appendChild(actions);
+  panel.style.display = '';
+}
+
+// Step 2: start the server once and list its tools. Only a 200 for the
+// current generation installs a listing.
+async function startServerPreview(body, confirm, gen, start) {
+  document.getElementById('add-server-msg').textContent = '';
+  start.disabled = true;
+  setStartRunning(true);
+  let answer;
+  try {
+    answer = await postPreview({ ...body, confirm });
+  } catch (e) {
+    if (gen === addPreviewGen) { setStartRunning(false); start.remove(); addPreviewError('Preview failed: ' + e.message); }
+    return;
+  }
+  if (gen !== addPreviewGen) return;
+  setStartRunning(false);
+  if (answer.status !== 200) {
+    // A spent or expired confirmation cannot be retried, so its button goes:
+    // the next step is Preview tools again.
+    start.remove();
+    return addPreviewError('Preview failed: ' + answer.error);
+  }
+  const listing = answer.body;
+  addPreview = {
+    snapshot: JSON.stringify(body),
+    truncated: !!(listing.preview && listing.preview.truncated),
+  };
+  renderPreviewTools(mergeTools(listing.tools || []), listing.withheld_tools || []);
+}
+
+// One entry per name: `allowed_tools` grants by name, so copies of a name
+// cannot be ticked apart. An entry is read only if every copy is, and
+// selectable only if every copy is.
+function mergeTools(tools) {
+  const byName = new Map();
+  for (const t of tools) {
+    const name = String(t.name);
+    if (!byName.has(name)) byName.set(name, []);
+    byName.get(name).push(t);
+  }
+  return [...byName].map(([name, copies]) => ({
+    name,
+    copies,
+    read: copies.every(t => t.class === 'read'),
+    selectable: copies.every(t => t.selectable === true),
+  }));
+}
+
+function toolTag(t) {
+  const cls = t.class === 'read'
+    ? (t.class_source === 'declared' ? 'read (declared)' : 'read (guessed from the name)')
+    : 'write';
+  return t.destructive ? cls + ', destructive' : cls;
+}
+
+function renderPreviewTools(entries, withheld) {
+  const panel = addPreviewPanel();
+  panel.replaceChildren();
+  const count = previewEl('p');
+  const recount = () => {
+    const boxes = panel.querySelectorAll('input[data-tool]');
+    const ticked = panel.querySelectorAll('input[data-tool]:checked');
+    count.textContent = `${ticked.length} of ${boxes.length} ticked. Only the ticked tools are saved; `
+      + 'tools the server adds later stay off until you tick them.';
+  };
+  if (entries.length === 0) panel.appendChild(previewEl('p', '', 'The server lists no tools.'));
+  for (const entry of entries) {
+    const row = previewEl('label', 'tool-check-item');
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.dataset.tool = entry.name;
+    box.checked = entry.selectable && entry.read;
+    box.disabled = !entry.selectable;
+    box.addEventListener('change', recount);
+    const text = previewEl('div');
+    const head = previewEl('div', 'tool-check-name', entry.name);
+    if (entry.copies.length === 1) head.appendChild(previewEl('span', 'tool-tag', toolTag(entry.copies[0])));
+    text.appendChild(head);
+    for (const copy of entry.copies) {
+      const line = entry.copies.length === 1 ? (copy.description || '') : `${copy.description || ''} (${toolTag(copy)})`;
+      if (line) text.appendChild(previewEl('div', 'tool-check-desc', line));
+    }
+    if (!entry.selectable) {
+      text.appendChild(previewEl('div', 'tool-check-desc', 'Cannot be ticked: the gateway does not call a tool by this name.'));
+    }
+    row.append(box, text);
+    panel.appendChild(row);
+  }
+  for (const w of withheld) {
+    const issues = Array.isArray(w.issues) ? w.issues.join('; ') : String(w.issues || '');
+    panel.appendChild(previewEl('p', '', `Not offered: ${w.name}${issues ? ' (' + issues + ')' : ''}`));
+  }
+  if (addPreview && addPreview.truncated) {
+    panel.appendChild(previewEl('p', '', 'The list is incomplete, so a selection would leave out tools you cannot see.'));
+  }
+  panel.appendChild(count);
+  const actions = previewEl('div', 'preview-actions');
+  actions.appendChild(previewButton('Clear preview', clearAddPreview));
+  panel.appendChild(actions);
+  recount();
+  panel.style.display = '';
+  // The Start button that had focus is gone: hand focus to the list.
+  const first = panel.querySelector('input[data-tool]:not(:disabled)') || panel.querySelector('button');
+  if (first) first.focus();
 }
 
 // Tools

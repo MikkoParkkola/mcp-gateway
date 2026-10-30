@@ -279,6 +279,14 @@ pub struct HttpTransport {
     /// the `debug_assert!` at the session-write site below for the invariant
     /// this hint unlocks.
     single_tenant_hint: AtomicBool,
+    /// A per-user slot of a backend whose identity binding is required: no
+    /// send carries the backend's static headers or a gateway token, and each
+    /// carries only the credential the dispatch in flight lends (ADR-007
+    /// IDP.7). Nothing lent: nothing is sent.
+    lent_only: AtomicBool,
+    /// The slot's lender: the credentials its dispatches in flight lend,
+    /// read by every send of a lent-only transport.
+    lender: std::sync::OnceLock<Arc<crate::transport::Lender>>,
     /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
@@ -379,6 +387,17 @@ enum HeaderMode<'a> {
 fn bearer_header_value(token: &str) -> Result<header::HeaderValue> {
     header::HeaderValue::from_str(&format!("Bearer {token}"))
         .map_err(|_| Error::OAuth("OAuth token is not a valid HTTP header value".into()))
+}
+
+/// What a per-user slot's transport may send with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlotCredential {
+    /// A may-share backend: the backend's static headers as configured, and
+    /// the caller's credential over them on each call.
+    Configured,
+    /// A backend whose identity binding is required: only the credential the
+    /// dispatch in flight lends.
+    LentOnly,
 }
 
 impl HttpTransport {
@@ -490,6 +509,8 @@ impl HttpTransport {
             era: std::sync::OnceLock::new(),
             sessions: RwLock::new(HashMap::new()),
             single_tenant_hint: AtomicBool::new(false),
+            lent_only: AtomicBool::new(false),
+            lender: std::sync::OnceLock::new(),
             body_budget: std::sync::OnceLock::new(),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
@@ -566,6 +587,48 @@ impl HttpTransport {
 
     pub(crate) fn mark_single_tenant(&self) {
         self.single_tenant_hint.store(true, Ordering::Relaxed);
+    }
+
+    /// Mark this transport as a per-user pool slot's. For `credential`
+    /// [`SlotCredential::LentOnly`] it sends only the credential a dispatch in
+    /// flight lends and holds one session, its subscriber's, so it is single
+    /// tenant. An optional binding's slot also holds the session its start
+    /// opened as the gateway, beside its subscriber's, so it is not.
+    pub(crate) fn mark_per_user_slot(
+        &self,
+        credential: SlotCredential,
+        lender: Arc<crate::transport::Lender>,
+    ) {
+        if credential == SlotCredential::LentOnly {
+            self.mark_single_tenant();
+        }
+        let _ = self.lender.set(lender);
+        self.lent_only
+            .store(credential == SlotCredential::LentOnly, Ordering::Relaxed);
+    }
+
+    /// Whether every send must carry a dispatch's lent credential.
+    pub(crate) fn is_lent_only(&self) -> bool {
+        self.lent_only.load(Ordering::Relaxed)
+    }
+
+    /// The credential of the newest dispatch in flight on this slot, if any
+    /// lends one.
+    fn lent_now(&self) -> Option<Vec<(String, String)>> {
+        self.lender.get().and_then(|lender| lender.now())
+    }
+
+    /// The session bucket a send under `identity_key` reads and writes. A
+    /// lent-only slot has one: its start runs as its one subscriber, so its
+    /// calls ride that start's session. Any other transport keeps the
+    /// caller's own, as an optional binding's slot did before (its start runs
+    /// as the gateway).
+    fn bucket<'a>(&self, identity_key: Option<&'a str>) -> &'a str {
+        if self.is_lent_only() {
+            ""
+        } else {
+            Self::bucket_key(identity_key)
+        }
     }
 
     /// Refuse any body past `per_response` bytes, and everything read past

@@ -301,3 +301,46 @@ async fn a_find_without_a_client_entry_is_not_listed() {
     let (listing, _) = cache(&fake).listing().await.expect("listing");
     assert!(listing.finds.is_empty());
 }
+
+/// `resolve` gives back the whole find the listing named, values included,
+/// and never one without a client entry.
+#[tokio::test]
+async fn resolve_returns_the_listed_find_with_its_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let listed = find(
+        "tool",
+        &json!({"command": "npx", "env": {"API_KEY": "zq-value"}}),
+    );
+    let mut no_entry = listed.clone();
+    no_entry.name = "env-find".to_owned();
+    no_entry.entry_digest = String::new();
+    let fake = Arc::new(Fake::new(
+        vec![listed, no_entry],
+        &dir.path().join("w.json"),
+    ));
+    let cache = cache(&fake);
+    let (listing, _) = cache.listing().await.expect("listing");
+    let id = listing.finds[0].find_id.clone();
+
+    let resolved = cache.resolve(&id).await.expect("scan").expect("found");
+    assert_eq!(resolved.name, "tool");
+    assert_eq!(resolved.to_backend_config().env["API_KEY"], "zq-value");
+    assert!(cache.resolve("not-an-id").await.expect("scan").is_none());
+    let unkeyed = crate::hashing::hmac_sha256_hex(&[7; 32], b"");
+    assert!(cache.resolve(&unkeyed).await.expect("scan").is_none());
+}
+
+/// A `resolve` that times out answers so, and leaves the listing's own
+/// time-out back-off alone.
+#[tokio::test(start_paused = true)]
+async fn a_resolve_time_out_leaves_the_listing_alone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));
+    let cache = cache(&fake);
+    fake.hang.store(true, Ordering::SeqCst);
+    assert!(cache.resolve("any").await.is_err());
+
+    fake.hang.store(false, Ordering::SeqCst);
+    let (_, stale) = cache.listing().await.expect("a fresh listing");
+    assert!(!stale, "the listing scanned instead of backing off");
+}

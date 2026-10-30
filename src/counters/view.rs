@@ -84,7 +84,10 @@ impl Inner {
     /// The series `filter` names and, for a label, its dimension's overflow.
     /// `Err` when the label is not held: the overflow, and whether the
     /// dimension is full.
-    fn find(&self, filter: Filter<'_>) -> Result<(&Series, Option<&Series>), (&Series, bool)> {
+    pub(super) fn find(
+        &self,
+        filter: Filter<'_>,
+    ) -> Result<(&Series, Option<&Series>), (&Series, bool)> {
         fn held<'s, K: std::hash::Hash + Eq>(
             dim: &'s super::Dimension<K>,
             key: &K,
@@ -111,9 +114,9 @@ impl Inner {
 /// One bucket of a window: its start in unix seconds, and its key in the
 /// ring the window reads.
 #[derive(Clone, Copy)]
-struct Slot {
-    t: u64,
-    key: u64,
+pub(super) struct Slot {
+    pub(super) t: u64,
+    pub(super) key: u64,
 }
 
 /// The ring `window` reads, as one bucket's counts.
@@ -126,7 +129,12 @@ fn counts(series: &Series, window: Window, key: u64) -> Option<[u64; 5]> {
 
 /// The buckets `window` reads at unix second `now`, oldest first, none
 /// before `since`.
-fn window_slots<Tz: TimeZone>(window: Window, now: u64, since: u64, zone: &Tz) -> Vec<Slot> {
+pub(super) fn window_slots<Tz: TimeZone>(
+    window: Window,
+    now: u64,
+    since: u64,
+    zone: &Tz,
+) -> Vec<Slot> {
     match window {
         Window::Day | Window::TwoDays => {
             let n = if window == Window::Day { 48 } else { 96 };
@@ -169,7 +177,7 @@ impl CounterStore {
         now: u64,
         zone: &Tz,
     ) -> SeriesView {
-        let inner = self.inner.lock();
+        let inner = self.read_lock();
         let mut since = inner.since;
         let mut slots = window_slots(query.window, now, since, zone);
         let overflowed =
@@ -265,15 +273,41 @@ fn previous_day<Tz: TimeZone>(
     zone: &Tz,
 ) -> (Vec<Point>, bool) {
     let held_from = series.half.window_start(now_bucket);
-    let mut previous: Vec<Point> = Vec::new();
-    let mut complete = true;
-    for point in points {
-        let Some(local) = i64::try_from(point.t)
+    let (buckets, mapped) = previous_buckets(points.iter().map(|p| p.t), zone);
+    let mut complete = mapped;
+    let previous = buckets
+        .into_iter()
+        .filter(|&bucket| {
+            let kept = bucket >= held_from && (bucket + 1) * HALF > since;
+            complete &= kept;
+            kept
+        })
+        .map(|bucket| Point {
+            t: bucket * HALF,
+            v: series.half.get(bucket).map_or(0, |c| c[m]),
+        })
+        .collect();
+    (previous, complete)
+}
+
+/// The half-hour buckets holding, for each of `times` (unix seconds), the
+/// same local wall-clock time on the previous local date: oldest first, each
+/// once. A wall time that occurred twice there gives both buckets; one that
+/// did not exist gives none. The flag is false when a time could not be
+/// mapped at all (outside the zone's range), so its bucket is unknown.
+pub(super) fn previous_buckets<Tz: TimeZone>(
+    times: impl Iterator<Item = u64>,
+    zone: &Tz,
+) -> (Vec<u64>, bool) {
+    let mut buckets: Vec<u64> = Vec::new();
+    let mut mapped = true;
+    for time in times {
+        let Some(local) = i64::try_from(time)
             .ok()
             .and_then(|t| zone.timestamp_opt(t, 0).single())
             .map(|t| t.naive_local())
         else {
-            complete = false;
+            mapped = false;
             continue;
         };
         let Some(wall) = local
@@ -281,7 +315,7 @@ fn previous_day<Tz: TimeZone>(
             .pred_opt()
             .map(|date| date.and_time(local.time()))
         else {
-            complete = false;
+            mapped = false;
             continue;
         };
         let instants: Vec<_> = match zone.from_local_datetime(&wall) {
@@ -291,23 +325,15 @@ fn previous_day<Tz: TimeZone>(
         };
         for instant in instants {
             let Ok(t) = u64::try_from(instant.timestamp()) else {
-                complete = false;
+                mapped = false;
                 continue;
             };
-            let bucket = t / HALF;
-            if bucket < held_from || (bucket + 1) * HALF <= since {
-                complete = false;
-                continue;
-            }
-            previous.push(Point {
-                t: bucket * HALF,
-                v: series.half.get(bucket).map_or(0, |c| c[m]),
-            });
+            buckets.push(t / HALF);
         }
     }
-    // A repeated hour on either side maps two points to one bucket, and an
+    // A repeated hour on either side maps two times to one bucket, and an
     // ambiguous wall time adds a later bucket before an earlier one.
-    previous.sort_unstable_by_key(|p| p.t);
-    previous.dedup_by_key(|p| p.t);
-    (previous, complete)
+    buckets.sort_unstable();
+    buckets.dedup();
+    (buckets, mapped)
 }

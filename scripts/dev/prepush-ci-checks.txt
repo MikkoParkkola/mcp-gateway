@@ -23,6 +23,7 @@ python3 scripts/ci/test_check_per_call_stages.py	0	closed
 python3 scripts/ci/test_docker_pr_scope.py	0	closed
 python3 scripts/ci/test_docs_only_gating.py	1	closed
 python3 scripts/ci/test_feature_shards.py	0	closed
+python3 scripts/ci/test_heavy_train_gating.py	1	closed
 python3 scripts/ci/test_os_shards.py	1	closed
 python3 scripts/ci/test_throwaway_routing.py	1	closed
 python3 scripts/dev/check-event-source-scope.py <BASE_TIP>	1	closed
@@ -44,6 +45,7 @@ python3 scripts/dev/test_events8_run.py	8	closed
 python3 scripts/dev/test_mcp_events_failfast.py	1	closed
 python3 scripts/dev/test_mcp_events_oauth_shim.py	1	closed
 python3 scripts/dev/test_pipefail_quiet_grep.py	2	closed
+python3 -I scripts/dev/test_rehash_ui_assets.py	0	closed
 python3 scripts/perf/test_per_call_gate.py	1	closed
 python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
 python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed

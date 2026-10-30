@@ -4,6 +4,12 @@
 // The harness's own checks: the fixture server answers like the gateway, the
 // network is closed, and axe runs. Screen behaviour lives in its own specs.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { fileURLToPath } from 'node:url';
+
+test('the fixture server answering is this worktree\'s own, never another lane\'s left on the port', async ({ request }) => {
+  const reply = await request.get('/ui/classic');
+  expect(reply.headers()['x-fixture-root']).toBe(fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, ''));
+});
 
 test('a deep link answers the shell document with the gateway CSP', async ({ request }) => {
   const reply = await request.get('/ui/servers/status', { maxRedirects: 0 });

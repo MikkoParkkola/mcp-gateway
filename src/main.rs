@@ -610,48 +610,58 @@ async fn run_server(cli: Cli) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// Write discovered servers to a config file. Returns the file and how many
-/// servers were written: a server named like `capabilities.name` is skipped.
+/// Write discovered servers to a config file, literal env and header values
+/// through the secret store. Returns the file, how many servers were written
+/// and how many were skipped; each skipped one is named on stderr with its
+/// reasons, never a value.
+///
+/// # Errors
+///
+/// Nothing was written: every server was skipped, the secret store refused,
+/// or the file could not be loaded or saved.
 pub fn write_discovered_to_config(
     servers: &[mcp_gateway::discovery::DiscoveredServer],
     config_path: Option<&Path>,
     mode: crate::commands::config_write::CommentLoss,
-) -> mcp_gateway::Result<(std::path::PathBuf, usize)> {
+) -> mcp_gateway::Result<(std::path::PathBuf, usize, usize)> {
+    use mcp_gateway::cli_support::{Outcome, adopt_literals, describe_skipped};
+
     let path = config_path.map_or_else(
         || std::path::PathBuf::from("mcp-gateway-discovered.yaml"),
         std::path::Path::to_path_buf,
     );
 
-    let mut written = 0;
-    commands::config_write::write(&path, mode, |config| {
-        for server in servers {
-            // The capabilities backend owns `capabilities.name`, and config
-            // validation refuses a backend of the same name (MIK-8358). The
-            // default `setup export` entry is named `gateway`, so a discovered
-            // entry of that name is usually this gateway: importing it would
-            // proxy the gateway to itself. It is skipped, never renamed.
-            if server.name == config.capabilities.name {
-                eprintln!(
-                    "⚠️  Skipped discovered server {:?} ({:?}): the name is capabilities.name. \
-                     Add it under another name with `mcp-gateway add` if it is not this gateway.",
-                    server.name, server.source
-                );
-                continue;
-            }
-            let backend_config = server.to_backend_config();
-            discovered_config::refuse_unresolved(&backend_config, &server.name, config)?;
-            config.backends.insert(server.name.clone(), backend_config);
-            written += 1;
-        }
+    let mut adoption = None;
+    let saved = commands::config_write::write(&path, mode, |config| {
+        adoption = Some(adopt_literals(&path, config, servers)?);
         Ok(())
-    })
-    .map_err(mcp_gateway::Error::Config)?;
-
-    Ok((path, written))
+    });
+    let Some(mut adoption) = adoption else {
+        return Err(mcp_gateway::Error::Config(saved.err().unwrap_or_default()));
+    };
+    let outcomes = std::mem::take(&mut adoption.outcomes);
+    adoption.settle(&saved);
+    saved.map_err(mcp_gateway::Error::Config)?;
+    for skipped in outcomes
+        .iter()
+        .filter(|o| matches!(o, Outcome::Skipped { .. }))
+    {
+        eprintln!(
+            "⚠️  Skipped discovered server {}",
+            describe_skipped(std::slice::from_ref(skipped))
+        );
+    }
+    let written = outcomes
+        .iter()
+        .filter(|o| matches!(o, Outcome::Adopted { .. }))
+        .count();
+    Ok((path, written, outcomes.len() - written))
 }
 
 #[path = "main_discovered_config.rs"]
 mod discovered_config;
+#[cfg(test)]
+mod test_source_text;
 #[cfg(test)]
 #[path = "main_tests.rs"]
 mod tests;

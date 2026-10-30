@@ -228,12 +228,7 @@ async fn append_delivery_attempt(
     // What the gateway did to the answer, from the delivery's cell.
     if let Facts::Answer { frame_refused } = facts {
         let facts = crate::gateway::delivery_facts::snapshot();
-        crate::gateway::delivery_facts::record_fields(
-            facts.as_ref(),
-            frame_refused,
-            false,
-            &mut fields,
-        );
+        crate::gateway::delivery_facts::record_fields(facts.as_ref(), frame_refused, &mut fields);
     }
     // Named as the invocation record names the same call (MIK-7938): a
     // certificate or agent caller is the client `anonymous` or `public`, so

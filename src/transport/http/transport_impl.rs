@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 
 use async_trait::async_trait;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::super::sanitize_url_for_diagnostics;
 use super::super::{ResendPermission, Transport, resend_permission};
@@ -106,7 +106,7 @@ impl Transport for HttpTransport {
         // bucket is dropped (MIK-6784) — one identity's expiry must not evict
         // another's live session. `initialize()` calls `send_request` directly
         // (not `request`), so this cannot recurse.
-        let bucket = Self::bucket_key(identity_key);
+        let bucket = self.bucket(identity_key);
         let had_session = self.sessions.read().contains_key(bucket);
         let session_expired = match &result {
             Err(err) => is_session_expired_error(err),
@@ -284,6 +284,14 @@ impl Transport for HttpTransport {
         // create_oauth_client — the F3 reload sink-completeness hole (MIK-6746).
         if let Some(handle) = self.refresh_task.write().take() {
             handle.abort();
+        }
+
+        // A lent-only slot closes with no subscriber in flight to send as:
+        // its session is left to the backend's own expiry rather than ended
+        // with a request carrying no subscriber's credential.
+        if self.is_lent_only() {
+            debug!(target: HTTP_TARGET, "Lent-only slot closed: no session DELETE without a subscriber");
+            return Ok(());
         }
 
         // Send session termination for every per-identity session (MIK-6784).

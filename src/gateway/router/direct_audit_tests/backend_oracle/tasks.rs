@@ -287,3 +287,37 @@ fn r3_a_stored_read_refused_for_scope_logs_the_refusal_and_an_absent_one_does_no
         "R3: ghost's read logged a refusal; read {ghost_read:?}; log:\n{ghost}"
     );
 }
+
+/// A stored read records `refused` only for the gateway's policy refusal:
+/// `beta`'s read, refused for the key's scope, records it; `ghost`'s, an
+/// unregistered backend answered as absent, records no effect (a miss is
+/// not a refusal).
+#[tokio::test]
+async fn only_a_stored_read_refused_for_policy_records_refused() {
+    for (name, refused) in [(WITHHELD, true), (GHOST, false)] {
+        let fx = scoped_fixture(MetaMode::CodeMode).await;
+        let (_, made) = submit_mixed_chain(&fx, name).await;
+        let id = made
+            .pointer("/result/task/taskId")
+            .or_else(|| made.pointer("/result/taskId"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("{name}: premise: a task was made: {made}"))
+            .to_owned();
+        let (_, read) = settled(&fx, &id, name).await;
+        assert!(
+            read.get("error").is_some(),
+            "{name}: premise: refused: {read}"
+        );
+        let last = std::fs::read_to_string(&fx.path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+            .rfind(|entry| entry["event"] == "response_delivery_attempt")
+            .expect("the read's delivery record");
+        assert_eq!(
+            last["response_effect"] == "refused",
+            refused,
+            "{name}: {last}"
+        );
+    }
+}

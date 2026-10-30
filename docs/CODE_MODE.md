@@ -49,7 +49,7 @@ Then execute, using the name exactly as search returned it:
 {"name": "gateway_execute", "arguments": {"tool": "tidebook:tide_table", "arguments": {"harbour": "Oslo"}}}
 ```
 
-The answer is the backend tool's own result, plus a `trace_id` you can find in the gateway log.
+The answer is the backend tool's own result, plus a `_trace_id` you can find in the gateway log.
 
 To run several calls in order, pass `chain` instead of `tool`:
 
@@ -78,10 +78,10 @@ A failed call comes back as a normal tool result whose payload has `"isError": t
 | You did | You get |
 |---------|---------|
 | Named a tool the backend does not have (`tidebook:no_such_tool`) | `isError: true`, "the backend does not list a tool named `no_such_tool`" |
-| Named a server that is not configured (`nosuch:tool`) | `isError: true`, "Backend not found: nosuch", `recovery.error_code: TOOL_NOT_FOUND` |
+| Named a server that is not configured (`nosuch:tool`) | `isError: true`, "Backend not found: nosuch", `_recovery.error_code: TOOL_NOT_FOUND` |
 | Passed a bare tool name (`tide_table`) | JSON-RPC error `-32602`: the reference is missing its server prefix; use `server:tool_name` from `gateway_search` |
 | Sent a query over 256 characters | JSON-RPC error `-32602`: 'query' is longer than 256 characters; shorten it (a glob like `file_*` needs only a few) |
-| Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3): missing_module, stderr matched \"Cannot find module\"", `recovery.error_code: BACKEND_ERROR`, `recovery.retry: true` |
+| Called a backend whose server will not start | `isError: true`, a transport error such as "stdio backend ... exited before initialize (exit status: 3): missing_module, stderr matched \"Cannot find module\"", `_recovery.error_code: BACKEND_ERROR`, `_recovery.retry: true` |
 | Called a tool `security.tool_policy` denies | HTTP 403 with JSON-RPC error `-32600`: "Tool '...' on server '...' is blocked by security policy" |
 
 On a backend where each user has their own tool catalogue (identity propagation), a tool your
@@ -92,4 +92,4 @@ A backend that fails does not take the gateway down: other backends keep answeri
 
 ## Tested
 
-`tests/e2e_code_mode_journey.rs` runs this page against the built binary in CI: the two-tool listing, search, execute (with its `trace_id`), a two-step chain, every error in the table with the fields shown, and `gateway_invoke` by name, including the policy refusal it shares with `gateway_execute`.
+`tests/e2e_code_mode_journey.rs` runs this page against the built binary in CI: the two-tool listing, search, execute (with its `_trace_id`), a two-step chain, every error in the table with the fields shown, and `gateway_invoke` by name, including the policy refusal it shares with `gateway_execute`.

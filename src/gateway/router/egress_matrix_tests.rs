@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::direct_guards_fixture::{
-    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on, fixture_observing_on,
-    meta_firewall,
+    Fx, fixture_audited_on, fixture_firewalled_on, fixture_inspecting_on,
+    fixture_inspection_off_on, fixture_observing_on, meta_firewall,
 };
 use crate::gateway::egress_fixture::{
     BACKEND_METHODS, Delivery, NAME, Part, Planted, URI, secret, unclassified_additions,
@@ -133,6 +133,8 @@ enum Setup {
     InspectionOnly,
     /// No firewall; response inspection in observe mode, which annotates.
     ObserveOnly,
+    /// No firewall and response inspection turned off: no screen at all.
+    InspectionOff,
 }
 
 /// What one cell observed.
@@ -152,6 +154,7 @@ async fn cell(setup: Setup, route: Route, method: &'static str, part: Part, text
         Setup::Warn => fixture_firewalled_on(backend, Some(FirewallAction::Warn)).await,
         Setup::InspectionOnly => fixture_inspecting_on(backend).await,
         Setup::ObserveOnly => fixture_observing_on(backend).await,
+        Setup::InspectionOff => fixture_inspection_off_on(backend).await,
     };
     let firewalls = [fx.state.firewall.clone(), meta_firewall()];
     let count = || -> usize {
@@ -586,6 +589,68 @@ async fn every_member_the_gateway_adds_is_in_the_member_table() {
                                 "{setup:?} {route:?} {method} {part:?}: `{path}` added outside the member table"
                             ));
                         }
+                    }
+                }
+            }
+        }
+    }
+    report(&failures);
+}
+
+/// `security.response_inspection.enabled: false`: on every route, for a
+/// tool result, a backend error and another method's answer, a text carrying
+/// a pattern inspection finds is delivered and not inspected at all: no
+/// refusal, no `_security_findings` annotation, no "Response inspection
+/// finding" log and no inspection run. The same text under action-mode
+/// inspection, in the same process (whose inspection memo is shared), is
+/// still inspected and screened: the pattern is one inspection finds, and Off
+/// leaves another gateway's mode alone.
+#[test]
+fn inspection_off_inspects_nothing_on_any_route() {
+    use crate::test_classification_count::{MARKER, runs};
+    let cells = [
+        ("tools/call", Part::ResultText),
+        ("tools/call", Part::ErrorMessage),
+        ("prompts/get", Part::ResultText),
+    ];
+    let mut failures = Vec::new();
+    for route in ROUTES {
+        for (n, (method, part)) in cells.into_iter().enumerate() {
+            let marker = format!("{MARKER}inspection-off-{route:?}-{n}");
+            let text = format!("{} {marker}", secret());
+            for setup in [Setup::InspectionOff, Setup::InspectionOnly] {
+                let at = format!("{route:?} {method} {part:?} {setup:?}");
+                let before = runs("d2_inspection", &marker);
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime");
+                let (seen, warnings) = crate::test_log_capture::capture_warnings(|| {
+                    runtime.block_on(cell(setup, route, method, part, text.clone()))
+                });
+                let inspected = runs("d2_inspection", &marker) - before;
+                if seen.calls == 0 {
+                    failures.push(format!("{at}: never reached the backend"));
+                }
+                if matches!(setup, Setup::InspectionOff) {
+                    if inspected != 0 {
+                        failures.push(format!("{at}: inspected {inspected} times"));
+                    }
+                    if refused(&seen.body) || !seen.body.contains(&marker) {
+                        failures.push(format!("{at}: not delivered: {}", seen.body));
+                    }
+                    if seen.body.contains("_security_findings") {
+                        failures.push(format!("{at}: annotated: {}", seen.body));
+                    }
+                    if warnings.contains("Response inspection finding") {
+                        failures.push(format!("{at}: logged a finding: {warnings}"));
+                    }
+                } else {
+                    if inspected == 0 {
+                        failures.push(format!("{at}: premise: never inspected"));
+                    }
+                    if seen.body.contains(&secret()) {
+                        failures.push(format!("{at}: premise: not screened: {}", seen.body));
                     }
                 }
             }

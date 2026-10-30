@@ -10,7 +10,7 @@ use super::*;
 // that lets an IP-literal endpoint be reached — also suppresses the response
 // cache by design, so none of those cases can say anything about a cached
 // entry. The cases below therefore run the OTHER way round: an explicit
-// positive TTL, a `localhost` base URL that clears the SSRF guard on its own,
+// positive TTL, a fixture-host base URL that clears the SSRF guard on its own,
 // no loopback relaxation, and a swapped (finite-timeout, unpinned) client. The
 // endpoint's request COUNT is the oracle for a real cache hit, and its echoed
 // body is the oracle for whose entry was served.
@@ -29,10 +29,10 @@ use super::*;
 /// rechecked BEFORE the cache is consulted, not skipped by a hit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_identical_second_request_from_alice_is_served_from_the_warm_cache() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
 
@@ -73,6 +73,36 @@ async fn an_identical_second_request_from_alice_is_served_from_the_warm_cache() 
     );
 }
 
+/// The fixture host is not loopback, so the same credentialed call over plain
+/// `http://` is refused by the cleartext-credential rule before the wire. This
+/// is why the caching cases are served over https.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_credential_to_the_fixture_host_over_plain_http_is_refused() {
+    let (port, captured) = capture_endpoint().await;
+    let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))]);
+    let installed: Arc<dyn AccountCustody> = custody.installed();
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let executor = caching_executor(&registry, None);
+    let capability = cacheable_capability(
+        &crate::test_fixture_host::fixture_url(port),
+        "oauth:google",
+        Some(WORK),
+    );
+
+    let refused = executor
+        .execute_with_context(&capability, json!({}), caching_context("alice"))
+        .await
+        .expect_err("a credential must not go in cleartext to a host off this machine");
+
+    assert!(
+        refused
+            .to_string()
+            .contains("credential in cleartext to a host off this machine"),
+        "the cleartext-credential rule must be the refusal: {refused}"
+    );
+    assert_eq!(captured.count(), 0, "nothing may reach the endpoint");
+}
+
 /// BOB IS NEVER SERVED ALICE'S CACHED RESPONSE.
 ///
 /// Same capability, same arguments, same executor and a cache that is provably
@@ -82,13 +112,13 @@ async fn an_identical_second_request_from_alice_is_served_from_the_warm_cache() 
 /// body carrying HIS credential; Alice's entry must survive his call intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bob_is_never_served_alices_warm_cache_entry() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let custody = custody_with(&[
         (account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH)),
         (account_key("bob", WORK), grant(BOB_WORK_TOKEN, FRESH)),
     ]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let executor = caching_executor(&registry, None);
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
 
@@ -148,11 +178,11 @@ async fn bob_is_never_served_alices_warm_cache_entry() {
 /// unmentioned.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_revocation_after_prepare_refuses_the_warm_cache_entry_and_the_wire() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
     let custody = custody_with(&[(alice.clone(), grant(ALICE_WORK_TOKEN, FRESH))]);
     let installed: Arc<dyn AccountCustody> = custody.installed();
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));
@@ -213,7 +243,7 @@ async fn a_revocation_after_prepare_refuses_the_warm_cache_entry_and_the_wire() 
 /// back to the seeded legacy token.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_already_expired_external_credential_refuses_before_cache_and_wire() {
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let registry = installed_expired_external(PERSONAL);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));

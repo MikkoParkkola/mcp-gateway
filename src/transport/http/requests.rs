@@ -70,6 +70,27 @@ impl HttpTransport {
         identity_key: Option<&str>,
         origin: CredentialOrigin,
     ) -> Result<header::HeaderMap> {
+        // A lent-only per-user slot sends nothing of the gateway's: no static
+        // header and no gateway token, only what the dispatch in flight lends,
+        // merged last. With nothing lent there is no subscriber to send as,
+        // so nothing is sent. A send whose credential a source lends (an
+        // event listener's stream) already carries nothing of the gateway's,
+        // and its source is its lender.
+        let lent = if self.is_lent_only() && origin == CredentialOrigin::Gateway {
+            let lent = self.lent_now().filter(|headers| !headers.is_empty());
+            Some(lent.ok_or_else(|| {
+                Error::Transport(
+                    "per-user send refused: no calling subscriber's credential is lent".to_string(),
+                )
+            })?)
+        } else {
+            None
+        };
+        let origin = if lent.is_some() {
+            CredentialOrigin::Lent
+        } else {
+            origin
+        };
         let version = self
             .protocol_version
             .read()
@@ -121,11 +142,7 @@ impl HttpTransport {
         // request. `None` selects the shared default bucket (`""`). send_request
         // logs whether session is present or absent; notify includes the header
         // silently; SSE skips it entirely.
-        let session = self
-            .sessions
-            .read()
-            .get(Self::bucket_key(identity_key))
-            .cloned();
+        let session = self.sessions.read().get(self.bucket(identity_key)).cloned();
         if let Some(session_id) = session {
             match mode {
                 HeaderMode::Request { method } => {
@@ -179,6 +196,10 @@ impl HttpTransport {
             && let Ok(v) = trace_id.parse::<reqwest::header::HeaderValue>()
         {
             headers.insert("x-trace-id", v);
+        }
+
+        if let Some(lent) = lent {
+            super::extra_headers::merge_extra_headers(&mut headers, &lent);
         }
 
         Ok(headers)
@@ -312,7 +333,13 @@ impl HttpTransport {
 
         // Armed before the POST, disarmed with no await between the read and
         // the disarm: a drop in between is a drop before the reply was read.
-        let cancel = CancelOnDrop::arm(&self.client, &message_url, &headers, request, era);
+        // A lent-only slot sends nothing once its dispatch is gone, so a
+        // dropped call is not followed by a cancel carrying its credential.
+        let cancel = if self.is_lent_only() {
+            CancelOnDrop::unarmed()
+        } else {
+            CancelOnDrop::arm(&self.client, &message_url, &headers, request, era)
+        };
         let result = self
             .post_and_read(request, headers, &message_url, identity_key, waiting)
             .await;
@@ -405,7 +432,7 @@ impl HttpTransport {
         // a legacy fallback would then send its `initialize` already carrying a
         // session id, which is not the message this gateway has ever sent, and
         // a modern peer's shape strips the header anyway.
-        let bucket = Self::bucket_key(identity_key);
+        let bucket = self.bucket(identity_key);
         if is_era_probe(&request.method) {
             debug!(target: HTTP_TARGET, "Era probe: not binding a session before the handshake decision");
         } else if self.sessions.read().contains_key(bucket) {

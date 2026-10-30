@@ -271,11 +271,24 @@ fn key_at(line: &str, at: usize) -> Option<&str> {
 
 /// The end of the lines the key at `start` spans inside `..end`: up to the
 /// next content line at its depth or shallower, less the blank and comment
-/// lines that lead that next line.
+/// lines that lead that next line. A block list may sit at its key's own
+/// depth (`key:` then `- item`, as the gateway's own YAML writes it); a block
+/// mapping has no key there, so those items are the key's. An item line's
+/// own span never takes the sibling item at its depth.
 fn key_span(lines: &[&str], start: usize, end: usize) -> usize {
     let at = depth(lines[start]);
+    let item = |line: &str| {
+        line[at..]
+            .strip_prefix('-')
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with([' ', '\t']))
+    };
+    let owns_items = !item(lines[start]);
     let next = (start + 1..end)
-        .find(|&i| content(lines[i]) && depth(lines[i]) <= at)
+        .find(|&i| {
+            let shallow = depth(lines[i]) < at;
+            let sibling = depth(lines[i]) == at && !(owns_items && item(lines[i]));
+            content(lines[i]) && (shallow || sibling)
+        })
         .unwrap_or(end);
     let mut stop = next;
     while stop > start + 1 && !content(lines[stop - 1]) {
@@ -485,9 +498,9 @@ pub(super) fn with_backends_edited(
     // replaces a same-named one). A removal among several is what a stale
     // `config` looks like after another writer added a backend, and under
     // `Splice::One` an extra addition is what it looks like after another
-    // writer removed one. Either takes the ordinary path:
-    // refused when comments would be lost, otherwise the full rewrite, last
-    // writer wins (MIK-8042 tracks a base-revision check).
+    // writer removed one. Either takes the ordinary path: refused under
+    // `CommentLoss::Refuse`, otherwise the full rewrite, last writer wins
+    // (a base-revision check for these writes is not built yet).
     if names.len() > 1
         && (scope == super::Splice::One || names.iter().any(|n| !config.backends.contains_key(n)))
     {
@@ -508,11 +521,13 @@ pub(super) fn with_backends_edited(
     matches!((value(&done), value(config)), (Some(a), Some(b)) if a == b).then_some(text)
 }
 
-/// The refusal for a write that would drop the comments in `text`. Any `#`
-/// counts: a false one only refuses a write the splice could not keep. It
-/// names line numbers only: a `#` inside a quoted value (`TOKEN: "#secret"`)
-/// would otherwise put a credential into an API answer.
-pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
+/// The refusal for a write that cannot be made in place in `text`. A file
+/// with comments is told which lines a rewrite would drop; any `#` counts, so
+/// a false one only refuses a write the splice could not keep. It names line
+/// numbers only: a `#` inside a quoted value (`TOKEN: "#secret"`) would
+/// otherwise put a credential into an API answer. A file without comments is
+/// told its layout would change.
+pub(super) fn not_in_place(path: &std::path::Path, text: &str) -> String {
     const SHOWN: usize = 5;
     let comments: Vec<String> = text
         .lines()
@@ -520,6 +535,15 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         .filter(|(_, l)| l.contains('#'))
         .map(|(n, _)| format!("line {}", n + 1))
         .collect();
+    if comments.is_empty() {
+        return format!(
+            "Not saved: the change cannot be made in place in {} (flow style, an anchor or \
+             alias, or the file changed since it was read), and a full rewrite would change \
+             the file's layout. Edit the file by hand, or use the CLI with `--force` to \
+             rewrite the file.",
+            path.display()
+        );
+    }
     let rest = comments.len().saturating_sub(SHOWN);
     let more = if rest == 0 {
         String::new()
@@ -534,6 +558,36 @@ pub(super) fn comment_loss(path: &std::path::Path, text: &str) -> String {
         path.display(),
         comments[..comments.len().min(SHOWN)].join("; ")
     )
+}
+
+/// [`edit_text`]'s refusal when the edit cannot be made as a splice: the file
+/// would have to be re-serialised, which loses its layout (ADR-024).
+#[cfg(feature = "webui")]
+pub(crate) const NOT_IN_PLACE: &str = "the change cannot be made in place";
+/// [`edit_text`]'s refusal when `text` does not parse as a config.
+#[cfg(feature = "webui")]
+const UNREADABLE: &str = "the config does not parse";
+/// [`edit_text`]'s refusal when the edited config does not validate.
+#[cfg(feature = "webui")]
+const INVALID: &str = "the edited config is not valid";
+
+/// `text` with `edit` applied to the one backend it changes, as a splice
+/// that keeps every other byte, or a refusal: never a re-serialisation, so
+/// a comment-free file is refused rather than rewritten (ADR-024). `edit`'s
+/// own error comes back as it is; every other refusal is a fixed string
+/// that quotes nothing from the file.
+#[cfg(feature = "webui")]
+pub(crate) fn edit_text(
+    text: &str,
+    edit: impl FnOnce(&mut Config) -> Result<(), &'static str>,
+) -> Result<String, &'static str> {
+    let before = Config::from_file_text(text).map_err(|_| UNREADABLE)?;
+    let mut after = before.clone();
+    edit(&mut after)?;
+    after
+        .validate_with_env(&after.env_overlay())
+        .map_err(|_| INVALID)?;
+    with_backends_edited(text, &before, &after, super::Splice::One).ok_or(NOT_IN_PLACE)
 }
 
 #[cfg(test)]

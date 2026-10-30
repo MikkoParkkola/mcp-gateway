@@ -84,7 +84,33 @@ pub(super) struct Dispatched {
     pub(super) cost_warnings: Vec<String>,
 }
 
+/// What the relay check reads of `call`'s egress, the backend it was judged
+/// on included: that backend's rules say which keys the send overwrites.
+fn relay_egress<'e>(
+    call: &'e Call<'_, '_>,
+    prompt_cache_key: Option<&'e str>,
+    retry: &'e OutboundRetry,
+) -> relay::Egress<'e> {
+    relay::Egress {
+        arguments: call.arguments,
+        backend: call.backend.as_ref(),
+        inbound_meta: call.args.get("_meta"),
+        prompt_cache_key,
+        retry,
+    }
+}
+
 impl MetaMcp {
+    /// The use counters: the invocation stats and the ranker's usage.
+    fn count_use(&self, server: &str, tool: &str) {
+        if let Some(ref stats) = self.stats {
+            stats.record_invocation(server, tool);
+        }
+        if let Some(ref ranker) = self.ranker {
+            ranker.record_use(server, tool);
+        }
+    }
+
     /// S6, the send admission: the use counters and the invocation log, the
     /// spend admission, the retry's redemption, the relay refusal and the
     /// dispatch chokepoint. Every refusal here is before anything is sent.
@@ -108,12 +134,7 @@ impl MetaMcp {
         } = call;
         #[cfg(feature = "cost-governance")]
         let api_key_name = caller.api_key_name;
-        if let Some(ref stats) = self.stats {
-            stats.record_invocation(server, tool);
-        }
-        if let Some(ref ranker) = self.ranker {
-            ranker.record_use(server, tool);
-        }
+        self.count_use(server, tool);
 
         log_tool_invoked(caller, server, tool, trace_id);
 
@@ -175,12 +196,7 @@ impl MetaMcp {
         // state the backend issued with it.
         witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
-        let egress = relay::Egress {
-            arguments,
-            inbound_meta: args.get("_meta"),
-            prompt_cache_key: prompt_cache_key.as_deref(),
-            retry: &outbound_retry,
-        };
+        let egress = relay_egress(call, prompt_cache_key.as_deref(), &outbound_retry);
         let reservation = idem_reservation.as_mut();
         if let Err(error) =
             self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)
@@ -207,6 +223,7 @@ impl MetaMcp {
                     caller,
                     nonce_settle::PreSendExit::GiveBackUnsent(idem_reservation),
                 );
+                crate::gateway::delivery_facts::refused_while_vouched();
                 return Err(error);
             }
         };

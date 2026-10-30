@@ -16,20 +16,7 @@ use crate::protocol::cacheable::LIST_TTL_MS;
 /// connection carries no state. There is no `Mcp-Session-Id`, because the
 /// revision deleted protocol sessions; and the result names the server, because
 /// there was no handshake in which to say so.
-/// The methods whose results carry `ttlMs` and `cacheScope`.
-///
-/// Five from the `CacheableResult` interface, and `server/discover`, which
-/// requires the fields too. The gateway's own discovery document already
-/// carries them (`discover_document`), and shaping leaves them as written; a
-/// discover relayed to a backend gains them here (MIK-8047).
-pub(super) const CACHEABLE_METHODS: &[&str] = &[
-    "tools/list",
-    "prompts/list",
-    "resources/list",
-    "resources/read",
-    "resources/templates/list",
-    "server/discover",
-];
+pub(super) use crate::protocol::cacheable::CACHEABLE_METHODS;
 
 // Unit-test adapter only: production must shape before security finalization
 // and serialize afterward without mutating the signed response.
@@ -55,6 +42,13 @@ pub(crate) fn shape_modern_response(
     response: &mut crate::protocol::JsonRpcResponse,
     method: &str,
 ) -> GatewayStamps {
+    // Only a final answer is the resource: an interim one (`input_required`)
+    // or an error is not, and nothing may cache it. Read before the result is
+    // shaped, so a supplied `resultType` cannot make an interim answer final.
+    let cacheable_answer = response
+        .result
+        .as_ref()
+        .is_some_and(crate::protocol::cacheable::is_cacheable_answer);
     if let Some(ref mut result) = response.result
         && let Some(object) = result.as_object_mut()
     {
@@ -73,7 +67,7 @@ pub(crate) fn shape_modern_response(
             .entry("resultType")
             .or_insert_with(|| serde_json::Value::String("complete".to_string()));
 
-        let hinted = CACHEABLE_METHODS.contains(&method);
+        let hinted = CACHEABLE_METHODS.contains(&method) && cacheable_answer;
         if hinted {
             // A relayed `resources/read` may carry its backend's own hint. The
             // gateway may shorten it, never lengthen it: raising a backend's

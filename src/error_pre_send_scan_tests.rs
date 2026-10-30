@@ -13,6 +13,7 @@
 //! from constructions by shape. Someone set on evading it can; review is the
 //! control for that.
 
+use crate::test_source_text::{production_text, sanitize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -48,118 +49,6 @@ const PRE_SEND_SITES: &[&str] = &[
     "oauth/login_gate.rs",
 ];
 
-/// `src` with comments, string literals and char literals replaced by spaces,
-/// newlines kept so positions stay meaningful.
-fn sanitize(src: &str) -> String {
-    let b = src.as_bytes();
-    let mut out = b.to_vec();
-    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
-        for c in &mut out[from..to] {
-            if *c != b'\n' {
-                *c = b' ';
-            }
-        }
-    };
-    let mut i = 0;
-    while i < b.len() {
-        let start = i;
-        if b[i..].starts_with(b"//") {
-            while i < b.len() && b[i] != b'\n' {
-                i += 1;
-            }
-        } else if b[i..].starts_with(b"/*") {
-            let mut depth = 0;
-            while i < b.len() {
-                if b[i..].starts_with(b"/*") {
-                    depth += 1;
-                    i += 2;
-                } else if b[i..].starts_with(b"*/") {
-                    depth -= 1;
-                    i += 2;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        } else if b[i] == b'r' && (b.get(i + 1) == Some(&b'"') || b.get(i + 1) == Some(&b'#')) {
-            let hashes = b[i + 1..].iter().take_while(|c| **c == b'#').count();
-            if b.get(i + 1 + hashes) != Some(&b'"') {
-                i += 1;
-                continue;
-            }
-            let close: Vec<u8> = std::iter::once(b'"')
-                .chain(std::iter::repeat_n(b'#', hashes))
-                .collect();
-            i += 2 + hashes;
-            while i < b.len() && !b[i..].starts_with(&close) {
-                i += 1;
-            }
-            i = (i + close.len()).min(b.len());
-        } else if b[i] == b'"' {
-            i += 1;
-            while i < b.len() && b[i] != b'"' {
-                i += if b[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(b.len());
-        } else if b[i] == b'\'' && (b.get(i + 1) == Some(&b'\\') || b.get(i + 2) == Some(&b'\'')) {
-            i += 1;
-            while i < b.len() && b[i] != b'\'' {
-                i += if b[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(b.len());
-        } else {
-            i += 1;
-            continue;
-        }
-        blank(&mut out, start, i.min(b.len()));
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Blank every item a `#[cfg(test)]` attribute guards: up to the first `;`
-/// for a declaration, or through the matching `}` of its body.
-fn strip_test_items(src: &str) -> String {
-    let mut out = src.as_bytes().to_vec();
-    let mut from = 0;
-    while let Some(at) = src[from..].find("#[cfg(test)]").map(|p| p + from) {
-        let rest = &src.as_bytes()[at..];
-        let semi = rest.iter().position(|c| *c == b';');
-        let brace = rest.iter().position(|c| *c == b'{');
-        let end = match (semi, brace) {
-            (Some(s), Some(o)) if s < o => at + s + 1,
-            (_, Some(o)) => {
-                let mut depth = 0usize;
-                let mut j = at + o;
-                loop {
-                    match out.get(j) {
-                        Some(b'{') => depth += 1,
-                        Some(b'}') => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break j + 1;
-                            }
-                        }
-                        None => break j,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-            }
-            (Some(s), None) => at + s + 1,
-            (None, None) => src.len(),
-        };
-        for c in &mut out[at..end] {
-            if *c != b'\n' {
-                *c = b' ';
-            }
-        }
-        from = end;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// How many times `src` constructs `BackendUnavailable`: a call, a function
 /// value or an import. A match pattern is not one: `(_)`/`(..)`, a group
 /// followed by `=>` or `|`, or one preceded by `|`. The enum's own
@@ -171,7 +60,7 @@ fn constructions(src: &str) -> usize {
 /// [`constructions`] for any `NAME`: a variant, or a function whose result
 /// `is_pre_dispatch` trusts.
 fn constructions_of(src: &str, name: &str) -> usize {
-    construction_offsets(&strip_test_items(&sanitize(src)), name).len()
+    construction_offsets(&sanitize(&production_text(src)), name).len()
 }
 
 /// Where `clean` (sanitized, test items stripped) constructs `name`: the byte
@@ -467,7 +356,7 @@ fn construction_sites(name: &str) -> BTreeMap<String, usize> {
     let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
     for file in construction_counts(name).into_keys() {
         let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
-        let clean = strip_test_items(&sanitize(&src));
+        let clean = sanitize(&production_text(&src));
         let module = module_path(&file);
         for at in construction_offsets(&clean, name) {
             let (item, fn_at) = enclosing_item(&clean, at);

@@ -55,3 +55,17 @@ private_file_names=(
   "CLAUDE.md"
   "AGENTS.md"
 )
+
+# A reviewing model, named in any case or spelling (gpt-review, gpt-5.5, GPT5,
+# GPT4o, ChatGPT, GLM-5.3), or the phrase "review model": internal process, never
+# public. Read by the commit-message and pull-request-body checks. Whole words
+# only, so "amused", "glmark" and "gptables" pass; group 2 is the name. A bare
+# "gpt" is refused on purpose, which also refuses "GPT partition table": this
+# repository has no reason to say it, and narrowing to "gpt-<digit>" would miss
+# the common review shorthand ("gpt and muse").
+reviewer_regex='(^|[^[:alnum:]_])((chat)?gpt([0-9][[:alnum:].]*)?|muse|glm|grok|kimi|codex|review models?)([^[:alnum:]_]|$)'
+
+# The authoring attribution footer names the tool that wrote the change, not a
+# reviewer, so a line that is exactly the footer is exempt from reviewer_regex;
+# anything after the link is checked as usual.
+authoring_footer_regex='^🤖 Generated with \[[^]]+\]\([^)[:space:]]+\)[[:space:]]*$'

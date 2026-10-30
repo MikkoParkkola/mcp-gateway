@@ -46,6 +46,7 @@ async fn leaking_endpoint() -> (u16, Arc<AtomicUsize>) {
 /// A public, cacheable capability reading the endpoint, under a Warn rule
 /// that redacts the credential at egress.
 fn gateway(port: u16) -> MetaMcp {
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: {TOOL}\n\
          description: Read one token\n\
@@ -59,15 +60,12 @@ fn gateway(port: u16) -> MetaMcp {
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://localhost:{port}\n\
+         \x20     base_url: {base_url}\n\
          \x20     path: /read\n\
          \x20     method: GET\n"
     ))
     .expect("the capability parses");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("the HTTP client builds");
+    let client = crate::test_fixture_host::fixture_client(std::time::Duration::from_secs(5));
     let executor = Arc::new(CapabilityExecutor::new().with_test_http_client(client));
     let backend = Arc::new(CapabilityBackend::new(CAPS, executor));
     backend
@@ -80,6 +78,9 @@ fn gateway(port: u16) -> MetaMcp {
         action: FirewallAction::Warn,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }];
     let config = FirewallConfig {
         enabled: true,
@@ -110,6 +111,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
         let targets = [ResponsePolicyTarget {
             server: CAPS.to_string(),
             tool: TOOL.to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let response = meta.finalize_content(
             response,
@@ -123,6 +125,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
                     external_tool: "gateway_invoke",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: ChainSource::NotEligible,
@@ -130,7 +133,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
             },
         );
         let mut fields = Map::new();
-        record_fields(snapshot().as_ref(), false, false, &mut fields);
+        record_fields(snapshot().as_ref(), false, &mut fields);
         (serde_json::to_value(&response).expect("serialises"), fields)
     })
     .await

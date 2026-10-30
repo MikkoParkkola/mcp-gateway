@@ -141,13 +141,15 @@ pub(super) async fn readable_or_fail(
 /// undispatched and the same retry may go again once the clock reads. A real
 /// expiry is a readable sample and returns as the response it always was.
 /// `None` once the task is cancelled, or failed because the clock stayed
-/// unreadable for its bound; executor shutdown drops the wait.
+/// unreadable for its bound; executor shutdown drops the wait. Each attempt
+/// runs in a dispatch cell of its own, so a discarded one's refusal is not
+/// the returned response's.
 pub(super) async fn redeeming_dispatch(
     (state, owned, call, retry): (&LiveHost, &OwnedCallerContext, &TaskCall, &RetryFields),
     executor: &TaskExecutor,
     ids: (&str, &str, u64),
     cancel_rx: &mut watch::Receiver<bool>,
-) -> Option<JsonRpcResponse> {
+) -> Option<(JsonRpcResponse, Option<bool>)> {
     let store = &executor.service.store;
     loop {
         // A resume, or a state-only round, runs on the server the task
@@ -167,9 +169,11 @@ pub(super) async fn redeeming_dispatch(
             return None;
         }
         owned.dispatch_log().worker().arm(store);
-        let response = dispatch(state, owned, call, retry, cancel_rx).await?;
+        let (response, refused) =
+            super::dispatched_in_cell(dispatch(state, owned, call, retry, cancel_rx)).await;
+        let response = response?;
         if !owned.dispatch_log().worker().take_redemption_unreadable() {
-            return Some(response);
+            return Some((response, refused));
         }
         // An expired wait fails the task here, once: a caller that read the
         // clock again would start a second full wait (MIK-8202).
@@ -224,9 +228,13 @@ impl Settling<'_> {
         let response = JsonRpcResponse::success(crate::protocol::RequestId::Number(0), result);
         // The slot is the worker's request scope's: handed off when the round
         // parks, given back with the scope otherwise (MIK-8176).
-        let response =
-            super::inspect_and_record(self.state, self.call, (self.principal, self.id), response)
-                .await;
+        let response = super::inspect_and_record(
+            self.state,
+            self.call,
+            (self.principal, self.id),
+            (response, None),
+        )
+        .await;
         Resealed::Sealed(Box::new(response), (at, now))
     }
 }

@@ -308,7 +308,10 @@ impl Backend {
     /// went; a peer that answers a 2026-only method `method not found` is not
     /// modern however its probe went. Either way the stale verdict is dropped
     /// and one fresh probe is run, detached: the request that noticed must not
-    /// pay for it.
+    /// pay for it. A lent-only slot is the exception: it sends only while a
+    /// dispatch lends its credential, so its probe runs before the dispatch
+    /// that noticed returns, and that dispatch waits at most the probe's
+    /// timeout.
     pub(super) async fn reprobe_if_contradicted(
         &self,
         method: &str,
@@ -335,11 +338,9 @@ impl Backend {
         // The slot this transport serves, found first: an answer that arrived over a transport
         // no slot holds any more is evidence about a peer that has been replaced, and must
         // neither drop the current verdict nor start a probe of it.
-        let Some(entry) = self
-            .pool
-            .iter()
-            .find_map(|slot| holds(slot.value(), transport).then(|| Arc::clone(slot.value())))
-        else {
+        let Some((key, entry)) = self.pool.iter().find_map(|slot| {
+            holds(slot.value(), transport).then(|| (slot.key().clone(), Arc::clone(slot.value())))
+        }) else {
             return;
         };
         #[cfg(test)]
@@ -367,13 +368,24 @@ impl Backend {
         let era = Arc::clone(&entry.era);
         let transport = Arc::clone(transport);
         let timeout = self.probe_timeout();
-        tokio::spawn(async move {
+        let reprobe = async move {
             era.reprobe_with(
                 || probe(&transport, timeout),
                 |store| with_serving(&entry, &transport, store),
             )
             .await;
-        });
+        };
+        // A lent-only slot sends only while a dispatch lends its credential,
+        // and the answer that contradicted the era came to the dispatch now
+        // running: its probe runs here, before that dispatch returns and its
+        // loan ends. Detached, it would have no subscriber to send as.
+        let lent_only = matches!(key, super::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly;
+        if lent_only {
+            reprobe.await;
+        } else {
+            tokio::spawn(reprobe);
+        }
     }
 
     /// Probe deadline: never longer than the backend's own request timeout.
@@ -556,4 +568,15 @@ mod tests {
             );
         }
     }
+}
+
+/// How a start resolves its slot's era.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum EraResolution {
+    /// Discard and probe under the slot cache's lock: nothing else serves
+    /// from the slot while it starts.
+    Shared,
+    /// Probe without the lock and install at the publish: the transport being
+    /// replaced still serves from the slot (a build-first restart).
+    Deferred,
 }

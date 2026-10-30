@@ -46,12 +46,12 @@ async fn granted(backends: &[&str]) -> Fixture {
     .await
 }
 
-/// The per-call trace ids in `raw` (`result.trace_id`, `error.data.trace_id`),
+/// The per-call trace ids in `raw` (`result._trace_id`, `error.data.trace_id`),
 /// masked in place, so two calls compare on what they say, byte for byte.
 fn without_trace(raw: &str) -> String {
     let parsed: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
     let ids = [
-        &parsed["result"]["trace_id"],
+        &parsed["result"]["_trace_id"],
         &parsed["error"]["data"]["trace_id"],
     ];
     ids.iter()

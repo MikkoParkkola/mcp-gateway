@@ -76,7 +76,7 @@ impl MetaMcp {
         }
         // Keyed plans are checked step by step below, before the handler's own
         // refusal runs; refuse first so enforce answers with the plan message.
-        if matches!(tool, "gateway_execute" | "gateway_run_playbook") {
+        if crate::gateway::meta_mcp::is_composite_meta_tool(tool) {
             self.refuse_unattested_plan()?;
         }
         match tool {

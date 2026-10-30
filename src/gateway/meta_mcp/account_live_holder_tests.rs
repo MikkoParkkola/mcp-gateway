@@ -17,8 +17,8 @@ use crate::personal_accounts::AccountCustody;
 
 use super::super::account_resolver_fixture::{ALICE_WORK_TOKEN, WORK, account_key, grant};
 use super::super::account_rest_fixture::{
-    cacheable_base_url, cacheable_capability, caching_executor, capture_endpoint,
-    installed_gateway, managed, prepared_caching_context,
+    cacheable_base_url, cacheable_capability, caching_executor, installed_gateway, managed,
+    prepared_caching_context, tls_capture_endpoint,
 };
 
 /// A valid gateway-held `oauth:google` login, seeded as a trap: a refusal that
@@ -117,7 +117,7 @@ async fn a_live_refresh_and_a_warm_cached_credential_cannot_survive_revoke_and_r
 
     const BOUND: Duration = Duration::from_secs(10);
 
-    let (port, captured) = capture_endpoint().await;
+    let (port, captured) = tls_capture_endpoint().await;
     let alice = account_key("alice", WORK);
 
     // G1, already expired: every refresh of it goes to the provider.
@@ -146,7 +146,7 @@ async fn a_live_refresh_and_a_warm_cached_credential_cannot_survive_revoke_and_r
         .expect("custody starts over the seeded store"),
     );
     let installed: Arc<dyn AccountCustody> = Arc::clone(&handle) as Arc<dyn AccountCustody>;
-    let (_meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
+    let (_log, _meta, registry) = installed_gateway(&[(WORK, managed(WORK))], &installed);
     let dir = tempfile::tempdir().expect("tempdir");
     let executor = caching_executor(&registry, Some((LEGACY_TRAP_TOKEN, &dir)));
     let capability = cacheable_capability(&cacheable_base_url(port), "oauth:google", Some(WORK));

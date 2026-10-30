@@ -808,6 +808,9 @@ impl Default for CapabilityExecutor {
 
 #[cfg(test)]
 mod redirect_tests;
+
+#[cfg(test)]
+mod proxy_ssrf_tests;
 #[cfg(test)]
 mod ssrf_denial_tests;
 

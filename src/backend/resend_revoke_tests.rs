@@ -321,7 +321,7 @@ impl crate::transport::Transport for Wire {
 }
 
 /// A backend whose retries back off for 1 ms, so S4 does not wait.
-fn fast_retry_backend(wire: &Arc<Wire>) -> Arc<Backend> {
+fn fast_retry_backend(wire: Arc<dyn crate::transport::Transport>) -> Arc<Backend> {
     let mut failsafe = FailsafeConfig::default();
     failsafe.retry.initial_backoff = Duration::from_millis(1);
     failsafe.retry.max_backoff = Duration::from_millis(1);
@@ -337,7 +337,7 @@ fn fast_retry_backend(wire: &Arc<Wire>) -> Arc<Backend> {
         &failsafe,
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::clone(wire) as Arc<dyn crate::transport::Transport>);
+    backend.set_transport_for_test(wire);
     backend
 }
 
@@ -353,7 +353,7 @@ async fn call_t(backend: &Backend) -> crate::Result<crate::protocol::JsonRpcResp
 #[tokio::test]
 async fn s4_a_revoked_write_is_not_resent_after_a_lost_call() {
     let control = Wire::new(Vec::new());
-    let backend = fast_retry_backend(&control);
+    let backend = fast_retry_backend(Arc::clone(&control) as _);
     seed_resend_only(&backend, &["t"]);
     call_t(&backend).await.expect("the retry succeeds");
     assert_eq!(
@@ -363,7 +363,7 @@ async fn s4_a_revoked_write_is_not_resent_after_a_lost_call() {
     );
 
     let wire = Wire::new(Vec::new());
-    let backend = fast_retry_backend(&wire);
+    let backend = fast_retry_backend(Arc::clone(&wire) as _);
     seed_resend_only(&backend, &["t"]);
     let _ = backend.remember_listed_tools_as(None, false, &[write("t")], Listing::Truncated);
     assert!(call_t(&backend).await.is_err(), "the lost call is reported");
@@ -372,6 +372,66 @@ async fn s4_a_revoked_write_is_not_resent_after_a_lost_call() {
         1,
         "a write the backend now declares unsafe was sent twice"
     );
+}
+
+/// Lists one tool, and fails every `tools/call` with `BackendTimeout`: the
+/// request may have reached the backend and no answer came back.
+struct TimesOut(Value, AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for TimesOut {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            return Ok(crate::protocol::JsonRpcResponse::success(
+                crate::protocol::RequestId::Number(1),
+                json!({ "tools": [self.0.clone()] }),
+            ));
+        }
+        assert_eq!(method, "tools/call");
+        self.1.fetch_add(1, Ordering::SeqCst);
+        Err(crate::Error::BackendTimeout("no answer".into()))
+    }
+
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+
+    fn is_connected(&self) -> bool {
+        true
+    }
+
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// S19: a `tools/call` whose tool did not declare `readOnlyHint` or
+/// `idempotentHint` true is sent once after a timeout, so its error is the
+/// only one and cannot hide an earlier attempt that acted. A retried send's
+/// final error therefore misreads "may have run" as "never sent" only for a
+/// tool whose repeat is harmless by declaration (ADR-012 A1). The declared
+/// tools are the control: they are resent.
+#[tokio::test]
+async fn s19_an_undeclared_or_false_hinted_call_is_sent_once_after_a_timeout() {
+    let attempts = FailsafeConfig::default().retry.max_attempts as usize;
+    for (listed, sends) in [
+        (tool("t", None), 1),
+        (tool("t", Some(json!({"readOnlyHint": false}))), 1),
+        (write("t"), 1),
+        (idempotent("t"), attempts),
+        (read_only("t"), attempts),
+    ] {
+        let wire = Arc::new(TimesOut(listed.clone(), AtomicUsize::new(0)));
+        let backend = fast_retry_backend(Arc::clone(&wire) as _);
+        // A discovery fill: the one place the declared hints grant resend.
+        backend.get_tools_shared().await.expect("the fill");
+        assert!(call_t(&backend).await.is_err(), "{listed}");
+        assert_eq!(wire.1.load(Ordering::SeqCst), sends, "{listed}");
+    }
 }
 
 /// A backend whose catalogue is always stale (TTL zero), so every read

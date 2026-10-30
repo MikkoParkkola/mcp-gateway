@@ -219,3 +219,32 @@ fn a_run_on_the_same_grant_keeps_the_carried_tools_notice() {
     assert_eq!(debt.due, due);
     assert!(debt.unannounced);
 }
+
+/// LEASE-T2b: a tools notice a leased run heard under one lease is not
+/// announced by the run that follows under another; that run's start drops
+/// the debt before its first refill. Its own lease's debt stays.
+#[test]
+fn a_leased_run_drops_tools_debt_heard_under_another_lease() {
+    let owed = |lease: u128| ToolsDebt {
+        due: Some(Instant::now()),
+        retrying: false,
+        unannounced: true,
+        fence: Some(crate::events::observation::run_fence(lease)),
+    };
+    let shared = shared();
+    let mut state = State::new(&shared, PeerEra::Legacy);
+    state.lease = Some(2);
+    *shared.tools.lock() = owed(1);
+    run::forget_lease_debt(&shared, &state);
+    assert!(
+        !shared.tools.lock().unannounced,
+        "the old lease's notice is not this run's to announce"
+    );
+    assert!(!state.take_due_refill(), "and owes no refill");
+    *shared.tools.lock() = owed(2);
+    run::forget_lease_debt(&shared, &state);
+    assert!(
+        shared.tools.lock().unannounced,
+        "its own lease's notice stays"
+    );
+}

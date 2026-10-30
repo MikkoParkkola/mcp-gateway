@@ -58,9 +58,7 @@ impl MetaMcp {
         } else {
             self.admit_target(&call)
         }
-        .map_err(|refusal| {
-            self.profile_refusal_as_undefined((server, tool), session_id, refusal)
-        })?;
+        .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))?;
         // #2445: a withheld tool is refused here, ahead of every replay layer.
         let backend = self
             .scoped(caller.scope().authorizer.backend_grant())
@@ -204,7 +202,7 @@ impl MetaMcp {
         match verdict {
             Ok(_claims) => Ok(()),
             Err(rejection) => match self.attestation_mode {
-                crate::attestation::AttestationMode::Enforce => Err(Error::json_rpc(
+                crate::attestation::AttestationMode::Enforce => Err(Error::gateway_refused(
                     -32002,
                     format!("Attestation rejected at {boundary}: {rejection}"),
                 )),
@@ -229,7 +227,7 @@ impl MetaMcp {
         if self.attestation_validator.is_some()
             && self.attestation_mode == crate::attestation::AttestationMode::Enforce
         {
-            return Err(Error::json_rpc(
+            return Err(Error::gateway_refused(
                 -32002,
                 "Attestation rejected: multi-step plans carry no attestation in 4.0.0; \
                  call each tool with its own token",
@@ -413,19 +411,18 @@ impl MetaMcp {
         // HIGH/CRITICAL finding, returning a security error to the caller.
         let text = crate::security::response_inspect::extract_text_from_result(&result);
         let findings = self
-            .inspect_backend_text((server, tool, trace_id), &text)
+            .inspect_backend_text(
+                (server, tool, trace_id),
+                &text,
+                crate::gateway::delivery_facts::Part::Result,
+            )
             .map_err(crate::gateway::delivery_facts::refused)?;
         if !findings.is_empty() {
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert(
-                    "_security_findings".to_string(),
-                    serde_json::to_value(&findings).unwrap_or_default(),
-                );
-            }
-            super::gateway_writes::note(
+            super::gateway_writes::insert_noted(
                 super::gateway_writes::Layer::Value,
                 &["_security_findings"],
-                &result,
+                &mut result,
+                serde_json::to_value(&findings).unwrap_or_default(),
             );
         }
 
@@ -438,7 +435,13 @@ impl MetaMcp {
         let delivered = self.apply_context_integrity(server, tool, api_key_name, trace_id, result);
         // MIN.2: past every gate, so this dispatch's raw reading counts.
         crate::security::tenant_reads::note_attribution(raw_read);
-        if round && delivered.1 == super::super::response_security::GateEffect::Enforced {
+        if round
+            && matches!(
+                delivered.1,
+                super::super::response_security::GateEffect::Enforced
+                    | super::super::response_security::GateEffect::Withheld
+            )
+        {
             return Err(Error::ResponseFirewallRefused);
         }
         Ok(delivered)
@@ -452,14 +455,29 @@ impl MetaMcp {
         &self,
         (server, tool, trace_id): (&str, &str, &str),
         text: &str,
+        part: crate::gateway::delivery_facts::Part,
     ) -> Result<Vec<crate::security::response_inspect::Finding>> {
-        if text.is_empty() {
+        use crate::security::response_inspect::ResponseInspectionMode;
+        // Off (`enabled: false`): nothing inspected, logged, annotated or
+        // blocked here, whatever `action_mode` says.
+        if text.is_empty() || self.response_inspection == ResponseInspectionMode::Off {
             return Ok(Vec::new());
         }
+        #[cfg(test)]
+        crate::test_classification_count::note("d2_inspection", text);
         let inspection = crate::security::response_inspect::inspect_response(
             text,
-            self.response_inspection_action_mode,
+            self.response_inspection == ResponseInspectionMode::Action,
         );
+        // This delivery's findings, written before the block decision so a
+        // blocked answer keeps the finding that blocked it. The
+        // inspector ran on this answer, and that alone marks it scanned: a
+        // gate that skips the inspector must return before this point.
+        crate::gateway::delivery_facts::scanned();
+        for finding in &inspection.findings {
+            let kind = format!("inspect:{}", finding.category);
+            crate::gateway::delivery_facts::found(kind, finding.severity, part);
+        }
         for finding in &inspection.findings {
             warn!(
                 server,
@@ -526,17 +544,7 @@ impl MetaMcp {
                     ),
                 ));
             }
-            if let Some(obj) = result.as_object_mut() {
-                obj.insert(
-                    "_contract_violation".to_string(),
-                    serde_json::Value::Bool(true),
-                );
-                obj.insert(
-                    "_contract_reason".to_string(),
-                    serde_json::Value::String("no_contract_declared".to_string()),
-                );
-            }
-            super::gateway_writes::note_contract(result);
+            super::gateway_writes::write_contract(result, "no_contract_declared".to_string());
         } else if !text.is_empty() {
             // Build effective contract merging global defaults with per-tool overrides.
             let effective_max_bytes = tool_entry
@@ -590,17 +598,7 @@ impl MetaMcp {
                         ),
                     ));
                 }
-                if let Some(obj) = result.as_object_mut() {
-                    obj.insert(
-                        "_contract_violation".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                    obj.insert(
-                        "_contract_reason".to_string(),
-                        serde_json::Value::String(violation.reason.to_string()),
-                    );
-                }
-                super::gateway_writes::note_contract(result);
+                super::gateway_writes::write_contract(result, violation.reason.to_string());
             }
         }
         Ok(())

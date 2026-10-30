@@ -158,10 +158,10 @@ fn mixed(
              \x20 primary:\n\
              \x20   service: rest\n\
              \x20   config:\n\
-             \x20     base_url: http://localhost:{}\n\
+             \x20     base_url: {}\n\
              \x20     path: /read\n\
              \x20     method: GET\n",
-            endpoint.port
+            crate::test_fixture_host::fixture_url(endpoint.port)
         ))
         .expect("the second capability parses");
         caps.register_capability(other)

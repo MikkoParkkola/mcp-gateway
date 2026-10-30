@@ -383,3 +383,30 @@ async fn resources_read_serves_the_same_backend_on_a_single_user_gateway() {
         "the control must actually reach the backend"
     );
 }
+
+/// The `prompts/get` isolation denial is the gateway refusing the read: its
+/// delivery records refused. Control: on a single-user gateway the same read
+/// is served and records nothing refused.
+#[tokio::test]
+async fn a_prompts_get_isolation_denial_records_refused() {
+    async fn effect(multi_user: bool) -> (JsonRpcResponse, Option<Value>) {
+        crate::gateway::delivery_facts::scope(async move {
+            let (meta, _calls) = meta_with(personal_managed_backend(), multi_user);
+            let response = prompts_get(&meta).await;
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            (response, fields.get("response_effect").cloned())
+        })
+        .await
+    }
+    let (denied, effect_denied) = effect(true).await;
+    assert!(denied.error.is_some(), "premise: refused: {denied:?}");
+    assert_eq!(effect_denied, Some(json!("refused")), "{denied:?}");
+    let (served, effect_served) = effect(false).await;
+    assert!(served.error.is_none(), "premise: served: {served:?}");
+    assert_ne!(effect_served, Some(json!("refused")), "{served:?}");
+}

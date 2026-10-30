@@ -217,30 +217,14 @@ fn write_discovered_to_config_creates_file_when_missing() {
     let written = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
         .expect("write should succeed");
 
-    assert_eq!(written, (output.clone(), 1));
+    assert_eq!(written, (output.clone(), 1, 0));
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(loaded.backends.contains_key("tavily"));
 }
 
-#[test]
-fn b3j_discover_write_refuses_an_unresolved_reference_before_writing() {
-    let dir = tempfile::tempdir().unwrap();
-    let output = dir.path().join("discovered.yaml");
-    let mut server = make_discovered_server("tool");
-    server.env = [(
-        "API_KEY".to_string(),
-        "file:/nonexistent/mcp-gateway-b3/token".to_string(),
-    )]
-    .into_iter()
-    .collect();
-    let refused = write_discovered_to_config(&[server], Some(&output), CommentLoss::Refuse)
-        .expect_err("refused");
-    assert!(
-        refused.to_string().contains("backends.tool.env.API_KEY"),
-        "{refused}"
-    );
-    assert!(!output.exists(), "the file was written anyway");
-}
+// A client value shaped like a gateway reference is the client's literal:
+// it goes to the secret store as bytes (`cli_support` tests, d9c), so the
+// unresolved-reference refusal this file once pinned no longer applies.
 
 #[test]
 fn write_discovered_to_config_preserves_existing_backends() {
@@ -281,9 +265,14 @@ fn write_discovered_to_config_skips_the_capabilities_name() {
         make_discovered_server("tavily"),
     ];
 
-    let (_, written) = write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
-        .expect("a batch holding the capabilities name still writes");
-    assert_eq!(written, 1, "the skipped server was counted as written");
+    let (_, written, skipped) =
+        write_discovered_to_config(&servers, Some(&output), CommentLoss::Refuse)
+            .expect("a batch holding the capabilities name still writes");
+    assert_eq!(
+        (written, skipped),
+        (1, 1),
+        "the skipped server was counted as written"
+    );
 
     let loaded = Config::load(Some(&output)).expect("must reload");
     assert!(

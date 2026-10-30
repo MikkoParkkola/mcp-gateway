@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 
 use super::Backend;
 use super::pool::PooledEntry;
-use super::slot_eviction_tests::{fill_slot, per_user_backend, slot};
+use super::slot_eviction_tests::{fill_slot, per_user_backend, slot, subscriber_credential};
 use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolsListResult};
 use crate::transport::{ResendPermission, Transport};
 use crate::{Error, Result};
@@ -165,7 +165,9 @@ async fn g3_i8_retired_fill_cannot_publish() {
     let fill = tokio::spawn({
         let backend = Arc::clone(&backend);
         async move {
-            let filled = backend.get_tools_for_binding(Some("g3:b1"), &[]).await;
+            let filled = backend
+                .get_tools_for_binding(Some("g3:b1"), &subscriber_credential("g3:b1"))
+                .await;
             // What a fill's caller does next: publish the slot to the index.
             backend.record_caller_slot(ALPHA, "g3:b1");
             filled.is_ok()
@@ -199,7 +201,7 @@ async fn g3_i8_retired_fill_cannot_publish() {
     );
 
     backend
-        .get_tools_for_binding(Some("g3:b1"), &[])
+        .get_tools_for_binding(Some("g3:b1"), &subscriber_credential("g3:b1"))
         .await
         .expect("the replacement fills");
     backend.record_caller_slot(ALPHA, "g3:b1");

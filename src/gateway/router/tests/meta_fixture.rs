@@ -68,7 +68,10 @@ async fn fixture_with(
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(configure(MetaMcp::new(Arc::clone(&backends))));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -87,6 +90,7 @@ async fn fixture_with(
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,

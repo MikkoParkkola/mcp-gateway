@@ -718,6 +718,12 @@ table.t { width: 100%; border-collapse: collapse; }
 @media (prefers-reduced-motion: reduce) { .skel::after { animation: none; } }
 .state { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
 /* A page error over the route's last good data: readable, muted, not operable. */
+/* Stale data (UI1.22): the tab's numbers are muted until updates resume. Screens mark
+   numbers with .num, .figure, td.num, .t .n or [data-num]. */
+[data-stale] :is(.num, .figure, td.num, .t .n, [data-num]) { color: var(--color-text-secondary); }
+/* Read by screen readers, not shown: the live region and the To do badge's words. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .failure { display: grid; gap: var(--space-3); }
 .failure [data-dimmed] { padding: var(--space-3); border: var(--size-rule) dashed var(--color-border-subtle); border-radius: var(--radius-sm);
   color: var(--color-text-secondary); pointer-events: none; }
@@ -777,6 +783,25 @@ a { color: inherit; text-decoration: none; }
 .signout[hidden], .side-signout { display: none; }
 .palette { margin: 120px auto auto; width: min(640px, calc(100% - 24px)); padding: 0; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-raised); color: var(--color-text-primary); box-shadow: var(--shadow-3); }
 .palette::backdrop { background: var(--color-bg-overlay); }
+/* The confirmation (the only other modal): placed by the shell in the visible part of the
+   page, centred and clear of its opener; the body scrolls, the buttons stay in view. */
+dialog.confirm { position: fixed; inset: auto; margin: 0; box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--space-3); padding: var(--space-5) var(--space-5) var(--space-4); border: 0; background: var(--color-bg-surface);
+  color: var(--color-text-primary); box-shadow: var(--shadow-3); overflow: auto; }
+dialog.confirm::backdrop { background: var(--color-bg-overlay); }
+dialog.confirm h2 { margin: 0; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; overflow-wrap: anywhere; }
+.confirm-body { overflow: auto; min-height: 0; display: grid; gap: var(--space-2); overflow-wrap: anywhere; }
+.confirm-body ul { margin: 0; padding-left: var(--space-4); }
+.confirm-typed { display: grid; gap: var(--space-1); margin: 0; }
+.confirm-typed input { min-height: var(--size-row); padding: 0 var(--space-2); border: var(--size-rule) solid var(--color-border-control); border-radius: var(--radius-sm); background: var(--color-bg-sunken); color: inherit; font: inherit; }
+.confirm-progress, .confirm-message p { margin: 0; }
+.confirm-message { display: grid; gap: var(--space-1); }
+dialog.confirm .acts { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+@media (max-width: 640px) { dialog.confirm .acts { flex-direction: column; align-items: stretch; } }
+.done-notice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3);
+  border-left: 5px solid var(--color-status-success-fg); border-top: var(--size-rule) solid var(--color-border-subtle); border-bottom: var(--size-rule) solid var(--color-border-subtle); }
+.done-title { margin: 0; }
+.done-notice .btn { margin-left: auto; }
 .palette input { width: 100%; padding: 14px 16px; border: 0; border-bottom: var(--size-rule) solid var(--color-border-subtle); background: none; color: inherit; font: var(--type-body); outline: none; }
 .palette [role="listbox"] { max-height: 50vh; overflow-y: auto; padding: 6px 0; }
 .palette-group { padding: 8px 16px 4px; font: var(--type-small); color: var(--color-text-secondary); }

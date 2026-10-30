@@ -30,7 +30,13 @@ pub struct Request {
     pub method: String,
     /// The `Mcp-Session-Id` it carried (`session-<subject>` as issued), or `""`.
     pub session: String,
+    /// Whether it carried the [`STATIC_HEADER`]: a backend's static
+    /// credential, which a per-user send must never present.
+    pub static_header: bool,
 }
+
+/// The name of the static credential header a row configures on a backend.
+pub const STATIC_HEADER: &str = "x-api-key";
 
 #[derive(Default)]
 struct Inner {
@@ -214,11 +220,13 @@ fn record(state: &State, subject: &str, method: &str, headers: &HeaderMap) {
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_owned();
+    let static_header = headers.contains_key(STATIC_HEADER);
     state.with(|s| {
         s.seen.push(Request {
             subject: subject.to_owned(),
             method: method.to_owned(),
             session,
+            static_header,
         });
     });
 }

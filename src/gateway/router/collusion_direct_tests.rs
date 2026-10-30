@@ -205,7 +205,7 @@ struct Fixture {
     catalogue_params: Arc<Mutex<Vec<Value>>>,
     /// The receipt window, for [`Fixture::lapse_window`].
     window: Duration,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// What a fixture varies.

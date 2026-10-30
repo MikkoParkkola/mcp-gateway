@@ -92,7 +92,10 @@ impl LiveHost {
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
             "params": {"name": call.tool, "arguments": call.arguments}});
+        // A refusal here is the gateway's, raised into the worker's dispatch
+        // cell so the settlement ties it to the task (no-op outside a cell).
         let refused = |e: crate::Error| {
+            let e = crate::gateway::delivery_facts::refused(e);
             Box::new(JsonRpcResponse::error(
                 Some(RequestId::Number(0)),
                 e.to_rpc_code(),
@@ -124,7 +127,10 @@ impl LiveHost {
             let arguments = request
                 .pointer_mut("/params/arguments")
                 .map_or(serde_json::Value::Null, serde_json::Value::take);
-            Ok((arguments, Judged::default()))
+            // What `sanitize_exempt` recorded while judging, as the exempt
+            // branch returns: a playbook's digest is recorded whether or not
+            // the call is exempt, and the run compares against it.
+            Ok((arguments, crate::gateway::meta_mcp::visible::memo::judged()))
         })
         .await
     }

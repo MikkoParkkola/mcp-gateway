@@ -9,8 +9,9 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use super::{ExportEntry, ExportError, LogExporter};
+use crate::security::transparency_log::pager::open_segment;
 use crate::security::transparency_log::recompute_entry_hash;
-use crate::security::transparency_log::segments::list_segments;
+use crate::security::transparency_log::segments::listing;
 
 /// Internal per-poll scan result.
 pub(super) struct Scan {
@@ -27,24 +28,20 @@ pub(super) struct Scan {
     pub(super) vanished: bool,
 }
 
-/// The log's files oldest first, each with its segment number; the active
-/// file is the newest sealed + 1 (0 for an unrotated log).
+/// The log's files oldest first, each with its segment number, the path it
+/// is shown by, and whether it is the active file; numbered as every reader
+/// numbers them (the active file by its open record).
 fn files(log_path: &Path, from: Option<u64>) -> std::io::Result<Vec<(u64, PathBuf, bool)>> {
-    let sealed = list_segments(log_path)?;
-    let active_seq = match sealed.last() {
-        Some(s) => s.seq + 1,
-        None => crate::security::transparency_log::segments::active_segment_seq(log_path, 0),
-    };
-    let mut out: Vec<(u64, PathBuf, bool)> = sealed
+    let listed = listing(log_path)?;
+    let mut out: Vec<(u64, PathBuf, bool)> = listed
+        .sealed
         .into_iter()
         .filter(|s| from.is_none_or(|f| s.seq >= f))
         .map(|s| (s.seq, s.path, false))
         .collect();
     // An absent active file (a log never written) is not listed, so it is
     // an empty scan rather than a vanish on every poll.
-    if log_path.try_exists()? {
-        out.push((active_seq, log_path.to_path_buf(), true));
-    }
+    out.extend(listed.active.map(|seq| (seq, log_path.to_path_buf(), true)));
     Ok(out)
 }
 
@@ -124,13 +121,11 @@ impl LogExporter {
             .cloned()
             .collect();
         for (seq, path, active) in wanted {
-            let file = match std::fs::File::open(&path) {
-                Ok(f) => f,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    scan.vanished = true;
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
+            // Opened by number: a rotation since the listing finds the
+            // segment under its sealed name, from its first byte.
+            let Some(file) = open_segment(&self.log_path, seq, || {})? else {
+                scan.vanished = true;
+                continue;
             };
             let mut reader = BufReader::new(file);
             let mut buf: Vec<u8> = Vec::new();

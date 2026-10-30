@@ -120,7 +120,9 @@ pub(crate) struct LeaseStore {
     /// Each held key's current generation, readable without awaiting: the
     /// listener map asks under its own lock (E7), and a delivery's last check
     /// before its send (A2) has no await between it and the POST.
-    live: std::sync::Mutex<HashMap<LeaseKey, u128>>,
+    /// With its deadline: past it the generation no longer reads as held,
+    /// before any sweep runs.
+    live: std::sync::Mutex<HashMap<LeaseKey, (u128, u64)>>,
     guard: fn() -> DumpGuard,
 }
 
@@ -163,8 +165,9 @@ impl LeaseStore {
     /// Create or replace the lease for `key` (C1-C3). `authorization` is the
     /// header value the backend expects; the lease lives until the earliest of
     /// its `exp`, `subscription_expires_at` and [`MAX_LEASE_TTL_SECS`], and is
-    /// refused if that leaves less than `min_remaining_secs`. A replace wipes
-    /// the old lease first and returns a fresh generation.
+    /// refused if that leaves less than `min_remaining_secs`. A replace
+    /// retires the old generation first, drains and wipes the old lease, and
+    /// only then installs the new one and returns its generation.
     ///
     /// # Errors
     /// The guard is not applied, the token has no usable `exp`, or it expires
@@ -197,6 +200,12 @@ impl LeaseStore {
         let generation = uuid::Uuid::new_v4().as_u128();
         let mut held = self.held.lock().await;
         if let Some(old) = held.remove(&key) {
+            // Bump first (§3.5): from here a record observed under the old
+            // generation fails delivery's check, so no new handoff begins
+            // for it while the old lease's sends drain. The new lease goes
+            // in only after the drain, so a call dropped meanwhile leaves
+            // none behind.
+            self.set_live(&key, None);
             wipe(old).await;
         }
         let cancel = CancellationToken::new();
@@ -215,7 +224,7 @@ impl LeaseStore {
                 expires_at,
             },
         );
-        self.set_live(&key, Some(generation));
+        self.set_live(&key, Some((generation, expires_at)));
         self.park(&key, None);
         Ok(generation)
     }
@@ -224,8 +233,9 @@ impl LeaseStore {
     pub(crate) async fn wipe(&self, key: &LeaseKey, reason: WipeReason) {
         let mut held = self.held.lock().await;
         if let Some(old) = held.remove(key) {
-            wipe(old).await;
+            // Retired before the drain, as a replace does (§3.5).
             self.park(key, Some(reason));
+            wipe(old).await;
         }
     }
 
@@ -240,8 +250,8 @@ impl LeaseStore {
             .collect();
         for key in expired {
             if let Some(old) = held.remove(&key) {
-                wipe(old).await;
                 self.park(&key, Some(WipeReason::Released));
+                wipe(old).await;
             }
         }
     }
@@ -323,10 +333,10 @@ impl LeaseStore {
     ) {
         let mut held = self.held.lock().await;
         if held.get(key).is_some_and(|h| h.generation == generation) {
+            self.park(key, Some(reason));
             if let Some(old) = held.remove(key) {
                 wipe(old).await;
             }
-            self.park(key, Some(reason));
         }
     }
 
@@ -335,16 +345,23 @@ impl LeaseStore {
         self.held_generation(key).is_some()
     }
 
-    /// The generation `key` holds now, without awaiting.
+    /// The generation `key` holds now, without awaiting. A lease past its
+    /// deadline, or judged on a clock that cannot be read, holds none: its
+    /// token is already zeroized, so delivery and its listener stop at once,
+    /// not at the next expiry sweep.
     pub(crate) fn held_generation(&self, key: &LeaseKey) -> Option<u128> {
-        self.live
+        let (generation, expires_at) = self
+            .live
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(key)
-            .copied()
+            .copied()?;
+        crate::clock::unix_secs()
+            .is_ok_and(|now| now < expires_at)
+            .then_some(generation)
     }
 
-    fn set_live(&self, key: &LeaseKey, generation: Option<u128>) {
+    fn set_live(&self, key: &LeaseKey, generation: Option<(u128, u64)>) {
         let mut live = self
             .live
             .lock()
@@ -408,6 +425,14 @@ async fn wipe(old: Held) {
 /// token (C9).
 fn withdrawn() -> crate::Error {
     crate::Error::Transport("listener credential withdrawn".to_string())
+}
+
+#[cfg(test)]
+impl super::EventsHub {
+    /// How many keys hold a lease in this hub's store (LEASE-T0).
+    pub(crate) async fn held_leases(&self) -> usize {
+        self.leases.held.lock().await.len()
+    }
 }
 
 #[cfg(test)]

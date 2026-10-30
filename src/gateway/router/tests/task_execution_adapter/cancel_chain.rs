@@ -168,7 +168,7 @@ enum Release {
 
 struct Rig {
     state: Arc<AppState>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     parked: Arc<tokio::sync::Notify>,
     delivered: Arc<AtomicBool>,
     seen: Arc<Mutex<Vec<Value>>>,
@@ -181,7 +181,7 @@ struct Rig {
 /// this gateway signs as [`KEY_ID`] and verifies upstream chains against
 /// that same key. Whether a dispatch is chained then rests on the
 /// backend's own `signature_chain` mode alone.
-async fn chained_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn chained_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,

@@ -145,7 +145,7 @@ pub(crate) fn reload_failure(error: &str) -> ReloadFailure {
 /// Long enough to sit out a normal reload — stopping and re-registering
 /// backends — and short enough that a stuck one surfaces as a refusal the
 /// caller can act on rather than a request that never returns.
-const RELOAD_LOCK_WAIT: Duration = Duration::from_secs(5);
+pub(crate) const RELOAD_LOCK_WAIT: Duration = Duration::from_secs(5);
 
 /// Structured reload outcome for callers that need more than a log line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -500,6 +500,7 @@ pub(crate) mod override_audit;
 )]
 pub(crate) mod refusals;
 mod reload_context;
+pub(crate) mod reload_tally;
 mod reload_warm_hook;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
@@ -514,7 +515,10 @@ pub use diff::{ConfigPatch, compute_diff};
 pub use reload_context::ReloadContext;
 pub(crate) use reload_context::SurfacedHook;
 #[cfg(feature = "webui")]
-pub(crate) use reload_context::replace::FileRevision;
+pub(crate) use reload_context::replace::{
+    Expected, FileRevision, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep,
+    replace_detached,
+};
 #[cfg(test)]
 use reload_context::{
     EvaluatedReload, changed_startup_env_keys, load_config_patch, with_pending_restart,
@@ -556,6 +560,10 @@ mod config_error_leak_tests;
 mod empty_backends_reload_tests;
 #[cfg(test)]
 mod reload_pause;
+/// For the admin audit layer's cancel rows, which pause a UI write between
+/// writing the file and publishing its reload.
+#[cfg(all(test, feature = "webui"))]
+pub(crate) use reload_pause::arm as arm_reload_pause;
 #[cfg(test)]
 mod webhook_base_path_reload_tests;
 #[cfg(test)]

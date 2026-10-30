@@ -5,7 +5,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, tempfile::TempDir) {
+async fn test_router_app_state_with_code_mode(
+    enabled: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)).with_code_mode(enabled));
     let streaming_config = StreamingConfig::default();
@@ -26,6 +28,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -257,7 +260,7 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
             .as_str()
             .unwrap_or_else(|| panic!("no tool result in {answer}"));
         let inner: Value = serde_json::from_str(text).expect("the tool result is JSON");
-        inner["recovery"]["suggest"]
+        inner["_recovery"]["suggest"]
             .as_str()
             .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
             .to_owned()

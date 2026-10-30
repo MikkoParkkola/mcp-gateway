@@ -1,0 +1,42 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The Tools screen's layout. Colour, space and type are the shell's design
+   tokens only; components (.tk, table.t, .input, .btn) come from the shell. */
+
+.tools-bar { display: flex; flex-wrap: wrap; gap: var(--space-3); align-items: center; margin-bottom: var(--space-4); }
+.tools-bar #tools-search { flex: 1 1 calc(var(--space-16) * 5); max-width: calc(var(--space-16) * 10); }
+.tools-bar #tools-server { flex: 0 0 auto; width: auto; }
+
+.tools-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-2); }
+.tools-card-head h2 { margin: 0; }
+.tools-meta { margin-left: auto; font: var(--type-small); }
+/* The table scrolls inside the card on a narrow screen; the page never does. */
+.tools-scroll { overflow-x: auto; }
+.tools-table td { vertical-align: middle; padding-top: var(--space-0-5); padding-bottom: var(--space-0-5); height: auto; }
+/* Column widths as frame 48q draws them. */
+.tools-table th:nth-child(1) { width: calc(var(--space-16) * 4); }
+.tools-table th:nth-child(2) { width: calc(var(--space-16) * 2); }
+.tools-none:not([hidden]) { display: grid; justify-items: start; gap: var(--space-2); padding: var(--space-4) 0; }
+
+/* The tool name opens its detail: a real button, the width of its cell. */
+.tool-toggle { background: none; border: 0; padding: 0; width: 100%; min-height: var(--size-row); color: var(--color-text-primary);
+  font: inherit; font-family: var(--font-family-mono); text-align: left; cursor: pointer; }
+/* A finger needs the shell's touch height; this rule's class would otherwise beat the shell's. */
+@media (pointer: coarse) { .tool-toggle { min-height: var(--size-row-touch); } }
+/* The open marker is its own hidden span: generated content would join the button's name. */
+.tool-toggle .mark { color: var(--color-text-secondary); }
+.tool-detail td { background: var(--color-bg-raised); padding: var(--space-2) var(--space-4) var(--space-3) var(--space-10); }
+.tool-detail p { margin: 0 0 var(--space-2); }
+.tool-schema-label { font: var(--type-small); font-family: var(--font-family-mono); color: var(--color-text-secondary); }
+
+/* The schema scrolls inside itself, from the keyboard too; the shell's
+   :focus-visible ring marks it. */
+.tool-schema { margin: 0 0 var(--space-2); max-height: calc(var(--space-16) * 5); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+  font: var(--type-small); font-family: var(--font-family-mono); color: var(--color-text-secondary); }
+
+.tool-page { display: grid; gap: var(--space-3); margin-bottom: var(--space-4); }
+.tool-page h2 { margin: 0; }
+.tool-page-name { font: var(--type-title); font-family: var(--font-family-mono); letter-spacing: 0; overflow-wrap: anywhere; }
+.tool-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--space-2) var(--space-4); margin: 0; }
+.tool-facts dd { margin: 0; }
+.tools-load { margin: 0 0 0 auto; display: inline-flex; align-items: center; gap: var(--space-1); }

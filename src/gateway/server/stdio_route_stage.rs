@@ -199,9 +199,23 @@ fn authorize_targets(
                 .authorize_route_target(scope, server_tool, arguments)
                 .map_err(|_| crate::gateway::meta_mcp::step_not_permitted())
         };
-        routed
-            .err()
-            .map(|error| error_response_preserving_status(id.clone(), &error))
+        routed.err().map(|error| {
+            // The route stage's refusal answers the whole request: a refused
+            // step, the route authorization, or a profile withhold, whatever
+            // the target count. A grant record that cannot be written is not
+            // a policy refusal.
+            if index >= request_targets
+                || matches!(
+                    error,
+                    crate::Error::Forbidden { .. } | crate::Error::ToolNotFound(_)
+                )
+            {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
+            error_response_preserving_status(id.clone(), &error)
+        })
     })
 }
 

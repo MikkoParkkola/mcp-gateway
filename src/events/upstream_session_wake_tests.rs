@@ -197,3 +197,69 @@ async fn t35_filter_churn_neither_cuts_nor_extends_the_backoff() {
         "filter changes did not cut a 1.5 s+ backoff (reconnected at {at} ms)"
     );
 }
+
+/// After a lease move the reconnect waits exactly the floor: never less,
+/// whatever the backoff's jitter, and never the rest of a long backoff.
+#[tokio::test]
+async fn a_lease_move_reconnects_exactly_the_floor_after_it_is_seen() {
+    let floor = BACKOFF_FIRST;
+    let now = tokio::time::Instant::now();
+    // `backoff(0)` at its lowest jitter: under the floor.
+    let jittered = now + floor.mul_f64(0.75);
+    assert_eq!(
+        run::LeaseCut::default().decide(Some(2), Some(1), jittered, now, floor),
+        now + floor,
+        "a jittered short backoff is raised to the floor"
+    );
+    assert_eq!(
+        run::LeaseCut::default().decide(Some(2), Some(1), now + BACKOFF_CAP, now, floor),
+        now + floor,
+        "a long backoff is cut to the floor"
+    );
+}
+
+/// A lease move cuts the backoff once per newly held generation, so a
+/// handshake that keeps failing under it backs off as usual; a lease that is
+/// gone, the run's own lease and a shared run cut nothing.
+#[tokio::test]
+async fn a_lease_move_cuts_the_backoff_once_per_generation() {
+    let floor = BACKOFF_FIRST;
+    let now = tokio::time::Instant::now();
+    let later = now + Duration::from_secs(30);
+    let mut cut = run::LeaseCut::default();
+    assert_eq!(
+        cut.decide(Some(2), Some(1), later, now, floor),
+        now + floor,
+        "a new generation cuts"
+    );
+    assert_eq!(
+        cut.decide(Some(2), Some(1), later, now, floor),
+        later,
+        "not twice for it"
+    );
+    assert_eq!(
+        cut.decide(None, Some(1), later, now, floor),
+        later,
+        "no lease held: no credential"
+    );
+    assert_eq!(
+        cut.decide(Some(1), Some(1), later, now, floor),
+        later,
+        "the run's own lease"
+    );
+    assert_eq!(
+        cut.decide(Some(3), Some(1), later, now, floor),
+        now + floor,
+        "another one cuts again"
+    );
+    assert_eq!(
+        run::LeaseCut::default().decide(Some(0), Some(1), later, now, floor),
+        now + floor,
+        "generations are random: a smaller value is a move too"
+    );
+    assert_eq!(
+        run::LeaseCut::default().decide(Some(2), None, later, now, floor),
+        later,
+        "a shared run is never cut"
+    );
+}

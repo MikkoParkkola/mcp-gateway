@@ -48,6 +48,7 @@ fn delivery_ctx<'a>(
             external_tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         },
         signing: None,
         chain_source: ChainSource::NotEligible,

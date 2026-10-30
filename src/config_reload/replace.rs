@@ -88,7 +88,7 @@ pub(crate) enum Replaced {
 
 /// The new bytes, from the current ones; `Err` refuses the write.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -104,7 +104,7 @@ pub(crate) type Compute = Box<dyn FnOnce(&[u8], &[String]) -> Result<Vec<u8>, St
 /// them only when the old file provably stayed, and otherwise leaves them
 /// listed as unused.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -118,7 +118,7 @@ pub(crate) struct SecretStep {
 
 /// One replacement of gateway.yaml.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -195,8 +195,13 @@ pub(crate) enum ReplaceError {
 /// Write `replace` in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
 /// between its rename and its reload.
+///
+/// Invariant (ADR-024): a save's compute closure produces its bytes through
+/// a refusing in-place editor (the key editor or `edit_text`), never through
+/// a `CommentLoss::Rewrite` render, so a refusal surfaces as
+/// [`ReplaceError::Refused`] and nothing is written.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -219,7 +224,7 @@ pub(crate) async fn replace_detached(
 /// What happens to a replacement's new store entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -240,7 +245,7 @@ pub(crate) enum Settle {
 /// the file. A write task that dies never reaches this: [`Entries`]' drop
 /// settles that case.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -274,7 +279,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
 /// (a panic, a write task that died) it discards them while the old file
 /// stands and abandons them once `write_atomic` may have replaced it.
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -286,7 +291,7 @@ struct Entries {
 }
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -334,7 +339,7 @@ impl Drop for Entries {
 }
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -357,7 +362,7 @@ fn settle_now(pending: PendingSecrets, how: Settle) {
 }
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and discovery adopt"
@@ -376,7 +381,7 @@ async fn create_entries(
 }
 
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"
@@ -621,7 +626,7 @@ impl ReloadContext {
 /// removes the staged name. Never over an existing name (`-2`, `-3` on a
 /// clash).
 #[cfg_attr(
-    not(test),
+    not(any(test, feature = "webui")),
     expect(
         dead_code,
         reason = "first callers: the web UI settings save and the configuration-history restore"

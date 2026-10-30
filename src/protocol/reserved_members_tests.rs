@@ -26,6 +26,7 @@ fn every_member() -> Value {
         },
         "tools": [{"name": "t", "trustCard": {"v": 1}, "annotations": {"readOnlyHint": true}}],
         "recovery": {"hint": "h"}, "predicted_next": [], "trace_id": "t-1",
+        "_recovery": {"hint": "FORGED"}, "_predicted_next": ["FORGED"], "_trace_id": "FORGED",
         "taskId": "x", "requestState": "s", "resultType": "complete",
         "cacheScope": "private", "ttlMs": 5, "structuredContent": {"a": 1},
         "backend_field": true,
@@ -70,10 +71,21 @@ fn a_full_strip_removes_every_gateway_only_member_and_nothing_else() {
 fn ingress_withholds_what_a_chain_digest_covers() {
     let sent = every_member();
     let mut response = JsonRpcResponse::success(RequestId::Number(1), sent.clone());
-    strip_ingress("b", "tools/call", &mut response);
+    strip_ingress(
+        "b",
+        "tools/call",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut response,
+    );
     let delivered = response.result.clone().expect("a result");
     let mut expected = sent.clone();
     strip_with(MEMBERS, &mut expected);
+    // A complete tools/call may carry none of the scoped protocol members:
+    // they go too, and are withheld with the gateway-only ones.
+    let scoped = ["taskId", "requestState", "cacheScope", "ttlMs"];
+    for member in scoped {
+        expected.as_object_mut().expect("an object").remove(member);
+    }
     assert_eq!(delivered, expected);
     let withheld = response
         .ingress_withheld
@@ -90,7 +102,11 @@ fn ingress_withholds_what_a_chain_digest_covers() {
         "_cost_suggestion",
         "_context_integrity",
         "tools",
+        "_recovery",
+        "_predicted_next",
+        "_trace_id",
     ];
+    want.extend(scoped);
     want.sort_unstable();
     assert_eq!(got, want, "_meta and _signature are outside the digest");
     let view = chain_view(&delivered, Some(withheld));
@@ -103,7 +119,12 @@ fn ingress_withholds_what_a_chain_digest_covers() {
 #[test]
 fn an_honest_answer_withholds_nothing() {
     let mut response = JsonRpcResponse::success(RequestId::Number(1), json!({"content": []}));
-    strip_ingress("b", "tools/call", &mut response);
+    strip_ingress(
+        "b",
+        "tools/call",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut response,
+    );
     assert!(response.ingress_withheld.is_none());
     let result = response.result.expect("a result");
     assert!(matches!(
@@ -119,7 +140,12 @@ fn ingress_strips_the_task_slot_and_error_data() {
         RequestId::Number(1),
         json!({"task": {}, "result": {"content": [], "_security_findings": []}}),
     );
-    strip_ingress("b", "tasks/result", &mut task);
+    strip_ingress(
+        "b",
+        "tasks/result",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut task,
+    );
     let withheld = task
         .ingress_withheld
         .as_deref()
@@ -136,7 +162,12 @@ fn ingress_strips_the_task_slot_and_error_data() {
     let mut failed = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "no");
     failed.error.as_mut().expect("an error").data =
         Some(json!({"_context_integrity": {}, "detail": "d"}));
-    strip_ingress("b", "tools/call", &mut failed);
+    strip_ingress(
+        "b",
+        "tools/call",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut failed,
+    );
     assert_eq!(
         failed.error.expect("an error").data,
         Some(json!({"detail": "d"}))
@@ -151,7 +182,12 @@ fn the_strip_logs_member_and_backend_never_the_value() {
         json!({"content": [], "_security_findings": ["planted-secret-text"]}),
     );
     let ((), warnings) = crate::test_log_capture::capture_warnings(|| {
-        strip_ingress("hostile-backend", "tools/call", &mut response);
+        strip_ingress(
+            "hostile-backend",
+            "tools/call",
+            crate::protocol::member_scope::Declared::Nothing,
+            &mut response,
+        );
     });
     assert!(warnings.contains("hostile-backend"), "{warnings}");
     assert!(warnings.contains("_security_findings"), "{warnings}");
@@ -222,6 +258,9 @@ fn the_gateway_only_set_is_pinned() {
         "_meta.provenance",
         "_meta.io.mcp-gateway/executionOutcome",
         "_meta.io.mcp-gateway/reason",
+        "_recovery",
+        "_predicted_next",
+        "_trace_id",
     ];
     assert_eq!(
         gateway_only(),
@@ -238,12 +277,58 @@ fn withheld_members_never_show_in_debug_or_on_the_wire() {
         RequestId::Number(1),
         json!({"content": [], "_security_findings": ["FORGED-withheld"]}),
     );
-    strip_ingress("b", "tools/call", &mut response);
+    strip_ingress(
+        "b",
+        "tools/call",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut response,
+    );
     assert!(response.ingress_withheld.is_some(), "premise: withheld");
     let debug = format!("{response:?}");
     assert!(!debug.contains("FORGED-withheld"), "{debug}");
     let wire = serde_json::to_string(&response).expect("serializes");
     assert!(!wire.contains("FORGED-withheld"), "{wire}");
+}
+
+/// Per member: each renamed member is stripped from a task
+/// envelope's slot and from an error's data, and the plain name a backend may
+/// use for its own data stays beside it.
+#[test]
+fn each_renamed_member_is_stripped_from_the_slot_and_error_data() {
+    for member in ["_recovery", "_predicted_next", "_trace_id"] {
+        let mut slot = serde_json::Map::new();
+        slot.insert("content".into(), json!([]));
+        slot.insert(member.into(), json!("FORGED"));
+        slot.insert("recovery".into(), json!("kept"));
+        let mut task = JsonRpcResponse::success(
+            RequestId::Number(1),
+            json!({"task": {}, "result": Value::Object(slot.clone())}),
+        );
+        strip_ingress(
+            "b",
+            "tasks/result",
+            crate::protocol::member_scope::Declared::Nothing,
+            &mut task,
+        );
+        let delivered = &task.result.as_ref().expect("a result")["result"];
+        assert!(
+            delivered.get(member).is_none(),
+            "{member} in the slot: {delivered}"
+        );
+        assert_eq!(delivered["recovery"], "kept", "{member}: {delivered}");
+
+        let mut failed = JsonRpcResponse::error(Some(RequestId::Number(1)), -32000, "no");
+        failed.error.as_mut().expect("an error").data = Some(Value::Object(slot));
+        strip_ingress(
+            "b",
+            "tools/call",
+            crate::protocol::member_scope::Declared::Nothing,
+            &mut failed,
+        );
+        let data = failed.error.expect("an error").data.expect("data");
+        assert!(data.get(member).is_none(), "{member} in error.data: {data}");
+        assert_eq!(data["recovery"], "kept", "{member}: {data}");
+    }
 }
 
 /// The guard's reading of the table: a row's path and any path inside that

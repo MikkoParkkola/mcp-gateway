@@ -562,7 +562,10 @@ impl MetaMcp {
                 Self::refuse_unbound_account_backend(server, backend)?;
                 CallerCredential::default()
             };
-        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)?;
+        // The OAuth-isolation denial is delivered as this call's answer;
+        // inside a composite step it is raised only while vouched.
+        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
         let (capability_account, account_credential) = self
             .with_connect_offer(resolving.await, verified_identity)

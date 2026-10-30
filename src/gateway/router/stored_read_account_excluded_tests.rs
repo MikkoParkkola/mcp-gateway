@@ -55,7 +55,7 @@ fn auth() -> AuthConfig {
 struct Fx {
     router: axum::Router,
     gateway: DirectAccountGateway,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 async fn fixture() -> Fx {

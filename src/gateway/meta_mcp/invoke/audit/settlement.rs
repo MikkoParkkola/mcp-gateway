@@ -123,8 +123,8 @@ impl MetaMcp {
     }
 
     /// The settlement record of a task the gateway ran itself, written when its
-    /// settlement refused (`refused`) or rewrote the answer, before the
-    /// transition commits. `trace_id` is the worker dispatch's invocation trace,
+    /// settlement refused (`refused`, with the code the task settles with) or
+    /// rewrote the answer, before the transition commits. `trace_id` is the worker dispatch's invocation trace,
     /// so the record joins that dispatch record; `result` is the settled answer
     /// (`None` for a refusal). The facts come from the open cell.
     ///
@@ -135,20 +135,20 @@ impl MetaMcp {
         &self,
         task: SettledTask<'_>,
         (trace_id, principal): (&str, &str),
-        refused: bool,
+        refused: Option<i32>,
         result: Option<&serde_json::Value>,
     ) -> bool {
         if self.transparency_logger.is_none() {
             return true;
         }
-        let outcome = if refused {
-            AuditOutcome::Denied(Error::ResponseFirewallRefused.to_rpc_code())
+        let outcome = if let Some(code) = refused {
+            AuditOutcome::Denied(code)
         } else {
             let answer = result.cloned().unwrap_or(serde_json::Value::Null);
             AuditOutcome::from_result(&Ok(answer)).unwrap_or(AuditOutcome::Ok)
         };
         let mut extra = serde_json::Map::new();
-        decided_fields(refused, &mut extra);
+        decided_fields(refused.is_some(), &mut extra);
         let envelope = AuditEnvelope {
             trace_id: Some(trace_id.to_owned()),
             otel_trace_id: None,
@@ -227,7 +227,6 @@ fn decided_fields(frame_refused: bool, fields: &mut serde_json::Map<String, serd
     crate::gateway::delivery_facts::record_fields(
         crate::gateway::delivery_facts::snapshot().as_ref(),
         frame_refused,
-        false,
         &mut decided,
     );
     if matches!(

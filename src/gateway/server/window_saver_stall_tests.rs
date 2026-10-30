@@ -95,6 +95,18 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
     assert!(rig.seal.load(Ordering::SeqCst));
     assert!(rig.segments().is_empty(), "{:?}", rig.segments());
     drop(open_go);
+    // Releasing the gate lets the open, then the abandoned final write, run
+    // on their detached threads. Wait for the last one before the rig drops
+    // its directory: a write landing mid-removal left the folder behind in
+    // the shared temp directory.
+    assert!(
+        wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly)),
+        "the released writes never landed: {:?}",
+        rig.segments()
+    );
+    let root = rig.dir.path().to_owned();
+    drop(rig);
+    assert!(!root.exists(), "a write outlived the rig's directory");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

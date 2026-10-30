@@ -32,7 +32,7 @@ impl MetaMcp {
         attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Option<JsonRpcResponse> {
+    ) -> Option<StoredAnswer> {
         self.refuse_stored(id, stored, (attestation, session), caller, StoredRead::Read)
     }
 
@@ -48,7 +48,7 @@ impl MetaMcp {
         attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Option<JsonRpcResponse> {
+    ) -> Option<StoredAnswer> {
         self.refuse_stored(
             id,
             stored,
@@ -487,7 +487,57 @@ enum StoredRead {
 /// A stored read's visibility verdict that is answered later: the first cold
 /// view's remaining lease (retry), and the first refusal by the caller's own
 /// per-user catalogue (answered after the account judgement).
-type StoredVisibility = (Option<Option<std::time::Duration>>, Option<Error>);
+type StoredVisibility = (
+    Option<Option<std::time::Duration>>,
+    Option<(Error, StoredEffect)>,
+);
+
+/// Whether a stored delivery's answer is the gateway's policy refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoredEffect {
+    /// Policy refused it: the delivery records `refused`.
+    Refused,
+    /// A miss, a retry or an unavailable account: no effect is recorded.
+    Unrecorded,
+}
+
+impl StoredEffect {
+    /// A withheld target's effect: a refusal only for a policy reason.
+    fn of(judged: visible::Visibility) -> Self {
+        match judged {
+            visible::Visibility::Withheld(reason) if reason.is_policy() => Self::Refused,
+            _ => Self::Unrecorded,
+        }
+    }
+}
+
+/// The answer a stored delivery gets instead of its output.
+pub(crate) struct StoredAnswer {
+    response: JsonRpcResponse,
+    effect: StoredEffect,
+}
+
+impl StoredAnswer {
+    fn new(effect: StoredEffect, response: JsonRpcResponse) -> Self {
+        Self { response, effect }
+    }
+
+    /// The answer to send, raising `refused` first when policy refused it.
+    pub(crate) fn deliver(self) -> JsonRpcResponse {
+        if self.effect == StoredEffect::Refused {
+            crate::gateway::delivery_facts::raise(
+                crate::gateway::delivery_facts::ResponseEffect::Refused,
+            );
+        }
+        self.response
+    }
+
+    /// The answer without its effect, for a test that reads the frame.
+    #[cfg(test)]
+    pub(crate) fn into_response(self) -> JsonRpcResponse {
+        self.response
+    }
+}
 
 /// Why a stored delivery does not go out.
 enum StoredWithheld {

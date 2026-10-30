@@ -59,6 +59,10 @@
 mod allowed_tools_task;
 mod support;
 
+/// A gateway refusal inside a task worker's dispatch is tied to its task.
+#[cfg(feature = "firewall")]
+mod dispatch_refusal_task;
+
 #[cfg(feature = "firewall")]
 mod egress_task;
 /// MIK-7887.RECEIPT.4: the POST route receipts the answer it delivered.

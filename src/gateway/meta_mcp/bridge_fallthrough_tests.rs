@@ -482,7 +482,7 @@ fn assert_answers_native(response: &crate::protocol::JsonRpcResponse) {
     let object = result
         .as_object_mut()
         .unwrap_or_else(|| panic!("a retry to its origin backend answers native: {response:?}"));
-    let trace_id = object.remove("trace_id");
+    let trace_id = object.remove("_trace_id");
     assert!(
         matches!(&trace_id, Some(Value::String(id)) if id.starts_with("gw-")),
         "a retry to its origin backend answers native: {response:?}"
@@ -576,10 +576,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         before,
         "dispatch itself inspects nothing; the delivery pass does"
     );
-    let targets = [crate::security::response_policy::ResponsePolicyTarget {
-        server: "asks".to_owned(),
-        tool: "gateway_list_tools".to_owned(),
-    }];
+    let targets = [asks_target()];
     let delivered = m
         .finalize_response_for_delivery(
             response,
@@ -593,6 +590,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                     external_tool: "gateway_list_tools",
                     subject: None,
                     trace_id: None,
+                    key: crate::security::response_policy::KeyOf::NotKnown,
                 },
                 signing: None,
                 chain_source: ChainSource::NotEligible,
@@ -606,6 +604,16 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
         1,
         "the delivery pass inspects the retry's result exactly once"
     );
+}
+
+/// The routed policy target of a call to `asks` under the discovery name.
+#[cfg(feature = "firewall")]
+fn asks_target() -> crate::security::response_policy::ResponsePolicyTarget {
+    crate::security::response_policy::ResponsePolicyTarget {
+        server: "asks".to_owned(),
+        tool: "gateway_list_tools".to_owned(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
+    }
 }
 
 /// Every round asks `roots/list` (declared) except the last, which asks for
@@ -651,4 +659,62 @@ async fn t4_a_bridged_undeclared_last_round_is_not_kept_by_the_lease() {
         matches!(again, Ok(SyncAdmission::Owned(_))),
         "the refusal was kept by the lease and would be replayed"
     );
+}
+
+/// Site 9: a bridged exchange whose last round asks what the caller never
+/// declared ends with the gateway's refusal, after the backend was called;
+/// the delivery records refused. Inside a composite (the cell already
+/// unvouched) the same refusal marks nothing.
+#[tokio::test]
+async fn an_undeclared_last_round_records_refused_only_while_vouched() {
+    async fn effect(composite: bool) -> serde_json::Map<String, Value> {
+        crate::gateway::delivery_facts::scope(async move {
+            if composite {
+                crate::gateway::delivery_facts::unvouched();
+            }
+            // Every asked round asks for roots; the round handed back after
+            // the last one asks what the caller never declared.
+            let (m, calls) = meta_that_always_asks(|n| {
+                Some(if n < last_round() {
+                    "roots/list"
+                } else {
+                    "elicitation/create"
+                })
+            });
+            let channel = Answering::default();
+            let retry = crate::protocol::mrtr::RetryFields::default();
+            let caller = legacy_caller(&channel, &retry);
+            // The lone `gateway_invoke` path: `invoke_tool` is the composite
+            // step's entry, which unvouches the cell itself.
+            let outcome = m
+                .invoke_tool_with_source(&args(), Some("session-1"), &caller, "site-9".into())
+                .await;
+            let Err(err) = outcome else {
+                panic!("premise: the undeclared last round is refused");
+            };
+            assert!(
+                err.to_string().contains("did not declare"),
+                "premise: {err}"
+            );
+            let last = last_round();
+            assert_eq!(
+                *channel.asked.lock(),
+                last - 1,
+                "premise: every round asked"
+            );
+            assert_eq!(calls.lock().len(), last, "premise: the backend was called");
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields
+        })
+        .await
+    }
+    let lone = effect(false).await;
+    assert_eq!(lone["response_effect"], "refused", "{lone:?}");
+    let composite = effect(true).await;
+    assert!(composite.get("response_effect").is_none(), "{composite:?}");
 }
