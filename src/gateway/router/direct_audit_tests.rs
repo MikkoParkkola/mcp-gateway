@@ -62,7 +62,8 @@ struct Scripted {
     lists: Arc<AtomicUsize>,
     /// MIK-8382: the cell's transport switches, [`Extra::ListFail`] (a
     /// `tools/list` fails, as an unreachable backend's cold list does) and
-    /// [`Extra::Hang`] (every request is counted, then never answered).
+    /// [`Extra::Hang`] (every request is counted, then never answered) and
+    /// [`Extra::HangCall`] (only calls hang).
     extras: &'static [Extra],
     error: Option<i32>,
     /// MIK-7979: the call is counted, then the transport fails with this.
@@ -97,7 +98,7 @@ impl Transport for Scripted {
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
-        if self.extras.contains(&Extra::Hang) {
+        if self.extras.contains(&Extra::Hang) || self.extras.contains(&Extra::HangCall) {
             std::future::pending::<()>().await;
         }
         if let Some(fail) = self.fail {

@@ -182,7 +182,7 @@ async fn an_uncounted_request_records_nothing() {
 #[tokio::test]
 async fn a_dropped_call_records_nothing() {
     let fx = fixture(Setup {
-        extras: &[Extra::Hang],
+        extras: &[Extra::HangCall],
         ..Setup::default()
     })
     .await;

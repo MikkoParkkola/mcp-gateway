@@ -146,7 +146,8 @@ fn server_cap_overflow_and_sweep() {
     assert!(!store.snapshot().server.overflow.latency.is_empty(), "overflow holds it");
     let aged = T0 + 31 * 86_400;
     timed(&store, "fresh", aged, 900, End::Failed);
-    assert_eq!(store.sweeps(), 1);
+    assert!(store.sweeps() > 0, "the full dimension was swept");
+    assert_eq!(store.labels(super::super::Dim::Server), 1, "every aged label freed");
     let view = store.latency_series(Some("fresh"), Window::Day, false, aged + 10, &Utc);
     assert!(!view.folded);
     let [point] = view.points.as_slice() else {
