@@ -2,8 +2,9 @@
 /* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
 /* The shell stylesheet after its frame (src/gateway/ui/shell-src/frame.css,
    inlined in the document): the shared design language's components and the
-   shell's own dialogs and palette, revision 27f0f48. The sign-in's rules are
-   in the frame, which draws it before this file can load. */
+   shell's own dialogs, palette and sign-in, revision 27f0f48. The rule that
+   hides the chrome while signed out is in the frame, with the screen-reader-only
+   rule: the frame draws both before this file can load. */
 /* Bundled fonts and their licences (SIL Open Font License 1.1), verbatim.
    Big Shoulders 700 and 800:
 
@@ -333,6 +334,21 @@ dialog.confirm .acts { display: flex; justify-content: flex-end; flex-wrap: wrap
 .segmented button { padding: 2px 8px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-text-tertiary); font: var(--type-small); font-family: var(--font-family-mono); cursor: pointer; }
 .segmented button[aria-pressed="true"] { background: var(--color-bg-raised); color: var(--color-text-primary); }
 
+/* Sign-in (frame 32): the only thing on the page while signed out. */
+.signin { flex: 1; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.signin[hidden] { display: none; }
+.signin-card { width: min(400px, 100%); display: grid; gap: 16px; padding: 26px; }
+.signin-name { font: var(--type-title); letter-spacing: var(--type-title-tracking); }
+.signin-host { margin-top: -14px; font: var(--type-body); color: var(--color-text-secondary); }
+.signin form { display: grid; gap: 8px; margin-top: 12px; }
+.signin input { min-height: var(--size-touch); font-family: var(--font-family-mono); background: var(--color-bg-surface); border-color: var(--color-border-default); }
+.signin .btn { min-height: 40px; margin-top: 8px; }
+.signin label { font: var(--type-small); color: var(--color-text-secondary); }
+.signin .btn { justify-content: center; }
+.signin-error { color: var(--color-status-danger-fg); font: var(--type-small); }
+.signin-notice { color: var(--color-text-secondary); font: var(--type-small); }
+.signin-note { font: var(--type-small); }
+.signin-note code { font-family: var(--font-family-mono); }
 
 @media (max-width: 640px) {
   .palette { margin-top: 12px; }

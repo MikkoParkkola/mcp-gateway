@@ -190,6 +190,16 @@ async function signedInReady(page) {
 // (a .btn) and the count badge with its words for screen readers.
 const SIGNED_IN = () => [...FRAME, '.top .signout', COUNT_BADGE, `${COUNT_BADGE} + .count-words`];
 
+/** Signed out: the sign-in form is the page. */
+async function signedOutReady(page) {
+  // Signed out, the page content is hidden: wait for it to exist, not to show.
+  await page.waitForSelector('#content [data-rendered]', { state: 'attached' });
+  await expect(page.locator('#signin')).toBeVisible();
+}
+// The chrome the frame hides while signed out; the sign-in's own look waits for the rest.
+const SIGNIN = ['.side', '.main', 'a.skip', 'nav.route-nav a', 'header.top'];
+const signedOut = (page) => page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: false, admin: false } } }));
+
 test.describe('split guard', () => {
   test('Z6 at 1440 px, the rest of the stylesheet changes nothing in the frame', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -202,8 +212,18 @@ test.describe('split guard', () => {
     await splitGuard(page, SIGNED_IN(), signedInReady);
   });
 
+  test('Z6 at 1440 px signed out, the frame already hides the chrome', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signedOut(page);
+    await splitGuard(page, SIGNIN, signedOutReady);
+  });
+
   test.describe('phone', () => {
     test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    test('Z6 at 390 px with a coarse pointer signed out, the frame already hides the chrome', async ({ page }) => {
+      await signedOut(page);
+      await splitGuard(page, SIGNIN, signedOutReady);
+    });
     test('Z6 at 390 px with a coarse pointer, the rest of the stylesheet changes nothing in the frame', async ({ page }) => {
       await page.goto('/ui/classic');
       expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true);
