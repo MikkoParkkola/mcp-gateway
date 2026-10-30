@@ -252,15 +252,10 @@ fn scrub_option(secrets: &[String], value: &mut Option<Value>) -> Scrubbed {
 /// The shared renderer (strings, keys, numbers by value, overlaps merged,
 /// output capped), and whether it changed anything.
 fn scrub_in_place(secrets: &[String], value: &mut Value) -> Scrubbed {
-    // ponytail: a whole-value clone to detect a change; the one-pass matcher
-    // (PR 1, DELTA-2/3) replaces it with match spans and copies only a string
-    // that holds one.
-    let before = value.clone();
-    crate::security::secret_redaction::redact_value(value, secrets);
-    if *value == before {
-        Scrubbed::Clean
-    } else {
+    if crate::security::secret_redaction::redact_value(value, secrets) {
         Scrubbed::Redacted
+    } else {
+        Scrubbed::Clean
     }
 }
 

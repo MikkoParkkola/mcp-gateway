@@ -153,3 +153,104 @@ fn the_last_value_inside_the_bound_still_answers() {
     let (outcome, text) = scrubbed(&needles, "echo fill-token-01023");
     assert_eq!(outcome, Scrubbed::Redacted, "{text}");
 }
+
+/// DELTA-2: overlapping needles leave no fragment of either.
+#[test]
+fn overlapping_needles_leave_nothing() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "abcdef");
+    needles.insert("b", "cdefgh");
+    let (outcome, text) = scrubbed(&needles, "xabcdefghy");
+    assert_eq!(outcome, Scrubbed::Redacted);
+    assert!(
+        !text.contains("ab") && !text.contains("gh") && text.contains('x') && text.contains('y'),
+        "{text}"
+    );
+}
+
+/// DELTA-3 (the gated part of T1.33): a string holding no needle is not
+/// copied; its buffer is the one the answer arrived with.
+#[test]
+fn a_clean_string_is_not_copied() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    let mut message = JsonRpcMessage::Response(JsonRpcResponse::success(
+        RequestId::Number(1),
+        json!({"text": "nothing to see here"}),
+    ));
+    let before = match &message {
+        JsonRpcMessage::Response(r) => r.result.as_ref().unwrap()["text"]
+            .as_str()
+            .unwrap()
+            .as_ptr(),
+        _ => unreachable!(),
+    };
+    assert_eq!(ingress_scrub(&needles, &mut message), Scrubbed::Clean);
+    let JsonRpcMessage::Response(response) = message else {
+        unreachable!()
+    };
+    let after = response.result.as_ref().unwrap()["text"]
+        .as_str()
+        .unwrap()
+        .as_ptr();
+    assert_eq!(before, after, "a clean string was rebuilt");
+}
+
+/// DELTA-2: a 16 MiB string of one matching character stays under the
+/// output cap.
+#[test]
+fn a_long_run_of_a_short_needle_stays_under_the_cap() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "a");
+    let long = "a".repeat(16 * 1024 * 1024);
+    let (outcome, text) = scrubbed(&needles, &long);
+    assert_eq!(outcome, Scrubbed::Redacted);
+    assert!(
+        text.len() < 64,
+        "the output was not collapsed: {} bytes",
+        text.len()
+    );
+}
+
+/// T1.33 (a measurement, not a gate): scrub time against parse time for
+/// 1 MiB and 16 MiB answers with 1, 64 and 1,024 needles, on clean text,
+/// text with one echo, and an array of numbers beside all-digit and
+/// scientific-notation needles. Run with `--ignored --nocapture`; the
+/// lines are reported in the PR.
+#[test]
+#[ignore = "measurement: run by hand and report"]
+fn cost_of_the_scrub_against_the_parse() {
+    for size in [1024 * 1024, 16 * 1024 * 1024] {
+        for count in [1_usize, 64, 1024] {
+            let needles = NeedleSet::with_grace(GRACE);
+            for i in 0..count {
+                needles.insert("b", &format!("needle-{i:05}-secret"));
+            }
+            needles.insert("b", "012345");
+            needles.insert("b", "1.5e10");
+            let clean = "x".repeat(size);
+            let echo = format!("{}needle-00000-secret", "x".repeat(size - 19));
+            let numbers = format!("[{}]", vec!["12345"; size / 6].join(","));
+            for (kind, body) in [
+                ("clean", json!({"text": clean}).to_string()),
+                ("echo", json!({"text": echo}).to_string()),
+                ("numbers", format!("{{\"n\":{numbers}}}")),
+            ] {
+                let started = std::time::Instant::now();
+                let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+                let parse = started.elapsed();
+                let mut message = JsonRpcMessage::Response(JsonRpcResponse::success(
+                    RequestId::Number(1),
+                    parsed,
+                ));
+                let started = std::time::Instant::now();
+                let outcome = ingress_scrub(&needles, &mut message);
+                let scrub = started.elapsed();
+                println!(
+                    "T1.33 size={size} needles={} kind={kind} parse={parse:?} scrub={scrub:?} outcome={outcome:?}",
+                    count + 2
+                );
+            }
+        }
+    }
+}

@@ -7,6 +7,7 @@
 #[cfg(feature = "firewall")]
 use std::sync::LazyLock;
 
+use aho_corasick::AhoCorasick;
 use serde_json::Value;
 
 #[cfg(feature = "firewall")]
@@ -42,36 +43,36 @@ fn needles<'a>(secrets: &'a [String], caller: &'a [String]) -> Vec<&'a str> {
 /// two credentials that overlap leave no fragment of either behind.
 ///
 /// Memory is one flag per byte of `text`, whatever the number of matches (a
-/// one-character needle in a long text matches at every position); each needle
-/// costs one linear pass, however much its matches overlap.
+/// one-character needle in a long text matches at every position); one pass
+/// finds every needle, however many there are and however much their
+/// matches overlap.
 ///
 /// A credential the scanner would find in the ORIGINAL text and that a
 /// literal overlaps is removed with it: removing the literal alone (an
 /// injected value equal to `Bearer`) would leave the rest of that credential
 /// where the scanner no longer recognises it.
-fn scrub(text: &str, needles: &[&str]) -> String {
+///
+/// `None` when nothing matched: a clean text is never copied (MIK-9035).
+fn scrub(text: &str, matcher: &AhoCorasick) -> Option<String> {
     let mut covered: Vec<bool> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for needle in needles {
-        if needle.is_empty() || seen.contains(needle) || !text.contains(needle) {
-            continue;
-        }
-        seen.push(needle);
-        if covered.is_empty() {
-            covered = vec![false; text.len()];
-        }
-        // Matches arrive in order of their end, so each marks only what the
-        // previous one did not and the marking is linear in the text.
-        let mut marked_to = 0;
-        match_starts(text.as_bytes(), needle.as_bytes(), |start| {
-            let end = start + needle.len();
-            covered[start.max(marked_to)..end].fill(true);
-            marked_to = end;
-        });
+    // Matches arrive in order of their end, so a match that starts at or
+    // before the end of the current run extends it, and a run is filled once
+    // it can grow no further: the marking is linear in the text however many
+    // matches overlap.
+    let mut run: Option<(usize, usize)> = None;
+    for found in matcher.find_overlapping_iter(text) {
+        let (start, end) = (found.start(), found.end());
+        run = match run {
+            Some((from, to)) if start <= to => Some((from.min(start), end.max(to))),
+            Some((from, to)) => {
+                fill(&mut covered, text.len(), from, to);
+                Some((start, end))
+            }
+            None => Some((start, end)),
+        };
     }
-    if covered.is_empty() {
-        return text.to_owned();
-    }
+    let (from, to) = run?;
+    fill(&mut covered, text.len(), from, to);
     #[cfg(feature = "firewall")]
     for (start, end) in REDACTOR.credential_spans(text) {
         if covered[start..end].contains(&true) {
@@ -82,11 +83,25 @@ fn scrub(text: &str, needles: &[&str]) -> String {
     // the marker's own text, or form where a marker meets its neighbours.
     for marker in MARKERS {
         let out = render(text, &covered, marker);
-        if !needles.iter().any(|n| !n.is_empty() && out.contains(n)) {
-            return out;
+        if !matcher.is_match(&out) {
+            return Some(out);
         }
     }
-    String::new()
+    Some(String::new())
+}
+
+/// Marks `from..to` covered, allocating the map on the first match.
+fn fill(covered: &mut Vec<bool>, len: usize, from: usize, to: usize) {
+    if covered.is_empty() {
+        *covered = vec![false; len];
+    }
+    covered[from..to].fill(true);
+}
+
+/// One automaton over `needles`, or `None` when it cannot be built (a needle
+/// set past the automaton's size limits): the caller then fails closed.
+fn matcher(needles: &[&str]) -> Option<AhoCorasick> {
+    AhoCorasick::new(needles).ok()
 }
 
 /// Suffixed names tried for a renamed key before its entry is dropped.
@@ -138,36 +153,6 @@ fn render(text: &str, covered: &[bool], marker: &str) -> String {
     out
 }
 
-/// Every start of `needle` in `text`, overlapping ones included, in
-/// O(text + needle) (Knuth-Morris-Pratt). A byte match of a UTF-8 needle in
-/// UTF-8 text starts and ends on character boundaries.
-fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
-    let mut fail = vec![0usize; needle.len()];
-    let mut k = 0;
-    for i in 1..needle.len() {
-        while k > 0 && needle[i] != needle[k] {
-            k = fail[k - 1];
-        }
-        if needle[i] == needle[k] {
-            k += 1;
-        }
-        fail[i] = k;
-    }
-    k = 0;
-    for (i, &byte) in text.iter().enumerate() {
-        while k > 0 && byte != needle[k] {
-            k = fail[k - 1];
-        }
-        if byte == needle[k] {
-            k += 1;
-        }
-        if k == needle.len() {
-            each(i + 1 - k);
-            k = fail[k - 1];
-        }
-    }
-}
-
 /// [`redact`] without the truncation: for a result the caller receives whole.
 /// Removes the literals only; a credential a literal overlaps goes with it
 /// (see [`scrub`]).
@@ -177,7 +162,15 @@ fn match_starts(text: &[u8], needle: &[u8], mut each: impl FnMut(usize)) {
 /// receives: replacing it here would hand the firewall only a marker, so its
 /// rules, its Block and its audit finding would never see the credential.
 pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[String]) -> String {
-    scrub(text, &needles(secrets, caller))
+    let needles = needles(secrets, caller);
+    if needles.is_empty() {
+        return text.to_owned();
+    }
+    match matcher(&needles) {
+        Some(matcher) => scrub(text, &matcher).unwrap_or_else(|| text.to_owned()),
+        // Fail closed: no automaton, no text.
+        None => String::new(),
+    }
 }
 
 /// Redact a successful JSON result in place: every string value and object key,
@@ -188,9 +181,19 @@ pub(crate) fn redact_untruncated(text: &str, secrets: &[String], caller: &[Strin
 /// `secrets` are injected credentials only, never caller values: numbers are
 /// matched by value at any length here, which the caller-value floor
 /// ([`MIN_REDACTED_CALLER_VALUE`]) would forbid (MIK-8065).
-pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
+///
+/// `true` when anything was replaced.
+pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) -> bool {
     let needles = needles(secrets, &[]);
-    if !needles.is_empty() {
+    if needles.is_empty() {
+        return false;
+    }
+    let Some(matcher) = matcher(&needles) else {
+        // Fail closed: no automaton, no value.
+        *value = Value::String(marker_for(&needles).to_owned());
+        return true;
+    };
+    {
         // A secret that reads as a JSON number or as `true`, `false` or
         // `null`: a result scalar equal to it by exact JSON equality is
         // redacted whatever the secret's length, before any by-value
@@ -201,7 +204,7 @@ pub(crate) fn redact_value(value: &mut Value, secrets: &[String]) {
             .filter_map(|n| serde_json::from_str::<Value>(n).ok())
             .filter(|v| !matches!(v, Value::String(_) | Value::Array(_) | Value::Object(_)))
             .collect();
-        scrub_value(value, &needles, &literals);
+        scrub_value(value, &needles, &literals, &matcher)
     }
 }
 
@@ -243,13 +246,25 @@ fn exact_integer(text: &str) -> Option<String> {
     Some(digits)
 }
 
-fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
+/// `true` when anything in `value` was replaced.
+fn scrub_value(
+    value: &mut Value,
+    needles: &[&str],
+    literals: &[Value],
+    matcher: &AhoCorasick,
+) -> bool {
     if literals.contains(value) {
         *value = Value::String(marker_for(needles).to_owned());
-        return;
+        return true;
     }
     match value {
-        Value::String(s) => *s = scrub(s, needles),
+        Value::String(s) => match scrub(s, matcher) {
+            Some(redacted) => {
+                *s = redacted;
+                true
+            }
+            None => false,
+        },
         // A credential that is all digits can come back as a JSON number. It
         // matches a number of the same value only, never one whose digits merely
         // hold it: 912345 is not the secret 1234 (MIK-7954). Every injected needle
@@ -328,27 +343,31 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                 }
                 digits.trim_start_matches('-') == value
             };
-            if needles.iter().copied().any(same_value) {
+            let same = needles.iter().copied().any(same_value);
+            if same {
                 *value = Value::String(marker_for(needles).to_owned());
             }
+            same
         }
-        Value::Array(items) => items
-            .iter_mut()
-            .for_each(|v| scrub_value(v, needles, literals)),
+        Value::Array(items) => items.iter_mut().fold(false, |changed, v| {
+            scrub_value(v, needles, literals, matcher) | changed
+        }),
         Value::Object(map) => {
+            let mut changed = false;
             let old = std::mem::take(map);
             let mut renamed = Vec::new();
             // Keys that survive keep their names whole: a renamed key never
             // takes one of them.
             for (key, mut item) in old {
-                scrub_value(&mut item, needles, literals);
-                let new = scrub(&key, needles);
-                if new == key {
-                    map.insert(key, item);
-                } else {
-                    renamed.push((new, item));
+                changed |= scrub_value(&mut item, needles, literals, matcher);
+                match scrub(&key, matcher) {
+                    None => {
+                        map.insert(key, item);
+                    }
+                    Some(new) => renamed.push((new, item)),
                 }
             }
+            changed |= !renamed.is_empty();
             // Keys that collapse to the same marker all survive, `#2`, `#3`, ...
             let mut next: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
@@ -357,7 +376,7 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
             // suffix) is dropped rather than emitted with one.
             for (base, item) in renamed {
                 let taken = |key: &str, map: &serde_json::Map<String, Value>| {
-                    map.contains_key(key) || needles.iter().any(|n| key.contains(n))
+                    map.contains_key(key) || matcher.is_match(key)
                 };
                 let mut key = base.clone();
                 let mut tries = 0;
@@ -371,8 +390,9 @@ fn scrub_value(value: &mut Value, needles: &[&str], literals: &[Value]) {
                     map.insert(key, item);
                 }
             }
+            changed
         }
-        _ => {}
+        _ => false,
     }
 }
 
