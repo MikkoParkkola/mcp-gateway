@@ -268,12 +268,12 @@ async fn a_cold_slot_list_401_forces_the_refresh() {
 
 /// F13 x A11-c, bridged round: the slot is emptied between the two rounds, so
 /// the continuation's R2 check lists first, and that list gets the 401. The
-/// round forces the one refresh and answers with the reconnect refusal, it
-/// sends no second `tools/call`, and it releases the idempotency key, so the
-/// same key is readmitted rather than served a stored failure. Mutants M31
-/// (drop the bridged park) and M32 (settle the parked key) redden it.
+/// round forces the one refresh and answers with the reconnect refusal and
+/// sends no second `tools/call`. Round one reached the backend and asked, so
+/// the idempotency key is kept as may-have-run, not released (MIK-9095 F9).
+/// It runs in a delivery cell, as every production entry point does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
+async fn a_bridged_cold_list_401_refreshes_and_keeps_the_key() {
     let custody = custody_with_steps(
         &[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, FRESH))],
         ROTATED_TOKEN,
@@ -315,12 +315,12 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         Answer::Status(401),
     ]);
     let alice = identity("alice");
-    let first = Box::pin(execute_bridged_keyed(
+    let first = crate::gateway::delivery_facts::scope(Box::pin(execute_bridged_keyed(
         &meta,
         "mail",
         Some(&alice),
         Some("k-f13"),
-    ))
+    )))
     .await
     .expect_err("a revoked grant on the continuation's list must refuse");
     assert_eq!(
@@ -334,19 +334,11 @@ async fn a_bridged_cold_list_401_refreshes_and_releases_the_key() {
         1,
         "no call after the refused list"
     );
-    // Released, not settled: the retry below fails at credential minting
-    // before any key lookup, so the cache itself is the witness (M32).
-    assert_eq!(keys.len(), 0, "the refused round settled its key");
-
-    let again = Box::pin(execute_bridged_keyed(
-        &meta,
-        "mail",
-        Some(&alice),
-        Some("k-f13"),
-    ))
-    .await;
-    assert!(
-        !format!("{again:?}").contains("outcome is unknown"),
-        "the key was settled, so the retry was served a stored failure: {again:?}"
+    // Kept, not released: round one was sent. The cache is the witness, as a
+    // same-key retry fails at credential minting before any key lookup.
+    assert_eq!(
+        keys.len(),
+        1,
+        "the parked round released a key after round one was sent"
     );
 }

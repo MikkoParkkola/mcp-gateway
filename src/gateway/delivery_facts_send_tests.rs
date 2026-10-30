@@ -8,7 +8,7 @@ use futures::FutureExt;
 
 use super::{
     ResponseEffect, counted_send, raise, refused_before_send, refused_before_send_seen, scope,
-    step, unsent,
+    snapshot, step, unsent,
 };
 use crate::Error;
 
@@ -154,6 +154,29 @@ async fn a_sent_step_does_not_make_a_refused_step_sent() {
             );
         })
         .await;
+    })
+    .await;
+}
+
+/// R18 (F3, at the facts layer): a refusal the send recorded is a fact, not
+/// the delivery's effect. A delivery that recovers from it (a capability's
+/// poll that was refused, then answered) and is never settled as refused
+/// still says delivered: only the settlement that delivers the refusal
+/// raises `Refused`.
+#[tokio::test]
+async fn a_recorded_refusal_alone_leaves_the_delivery_delivered() {
+    scope(async {
+        let _ = refused_before_send(config());
+        assert!(
+            refused_before_send_seen(),
+            "premise: the refusal was recorded"
+        );
+        let _ = counted_send(async { Ok::<(), Error>(()) }).await;
+        let facts = snapshot().expect("inside a cell");
+        assert!(
+            !facts.refused(),
+            "recording a refusal raised the Refused effect"
+        );
     })
     .await;
 }

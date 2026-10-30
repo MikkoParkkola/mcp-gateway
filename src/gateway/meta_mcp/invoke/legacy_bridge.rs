@@ -86,6 +86,10 @@ impl MetaMcp {
             let relay_refused = parking_lot::Mutex::new(None);
             let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
             let held = parking_lot::Mutex::new(idem_reservation.take());
+            // Round one reached the backend and asked. A drop while the client
+            // is asked settles may-have-run: stopping to ask does not prove the
+            // backend has not acted, and no continuation takes this key (F15).
+            super::bridge_settle::arm(&held, true);
             let bridged = Box::pin(run_input_bridge(
                 BridgeDispatcher {
                     meta: self,

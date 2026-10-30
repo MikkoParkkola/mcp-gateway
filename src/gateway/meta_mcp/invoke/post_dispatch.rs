@@ -123,11 +123,11 @@ impl MetaMcp {
         if crate::personal_accounts::refusal::marked(&e).is_some()
             && self.backend_error_screens_clean(server, tool, &e)
         {
-            // Settled like every dispatched failure (ADR-012), unless nothing
-            // was sent: then it is refused before its backend, as below.
-            if unsent {
-                settle_unsent(idem_reservation, execution);
-            } else if let Some(reservation) = idem_reservation.as_mut() {
+            // Settled like every dispatched failure (ADR-012). A marked refusal
+            // comes only from `after_upstream_401`, on an upstream 401 a sent
+            // call answered (http_diagnostics.rs `is_upstream_unauthorized`),
+            // so it is never unsent here, and the key is kept.
+            if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.commit(&withheld_side_effect());
             }
             return self.with_connect_offer(Err(e), verified_identity).await;
