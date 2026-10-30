@@ -144,3 +144,33 @@ async fn a_publish_after_a_revoke_is_not_indexed() {
         "revoke-publish: the revoked grant's binding was indexed"
     );
 }
+
+/// A cold fill that finishes after the grant was revoked is refused and drops
+/// its claim, so once the grant is connected again the next listing fills
+/// under it at once instead of waiting out a retry backoff.
+#[tokio::test(start_paused = true)]
+async fn a_cold_fill_finishing_after_a_revoke_leaves_no_backoff() {
+    let fx = Arc::new(fixture().await);
+    let bound = fill_bound(&fx, BACKEND);
+    fx.gateway.delay_lists_on(BACKEND, bound / 2);
+    let first = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 1, "tools/list", json!({})).await }
+    });
+    tokio::time::sleep(bound / 4).await;
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "premise: the cold fill is running"
+    );
+    fx.gateway.revoke_operator_grant().await;
+    first.await.expect("the first listing");
+    fx.gateway.reconnect_operator_grant_for_test().await;
+    let again = rpc(&fx, 2, "tools/list", json!({})).await;
+    assert!(
+        super::surfaced_on(&again, BACKEND)
+            .iter()
+            .any(|t| !super::is_shared_schema(t)),
+        "a fill refused after a revoke left a backoff standing: {again}"
+    );
+}

@@ -308,8 +308,15 @@ async fn a_busy_custody_listing_withholds_per_user_tools_then_recovers_http() {
         1,
         "a second fill ran while custody was busy"
     );
+    let within = rpc(&fx, 4, "tools/list", json!({})).await;
+    assert!(
+        !surfaced_on(&within, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the retry backoff did not hold after the refused publish: {within}"
+    );
     tokio::time::sleep(crate::gateway::meta_mcp::COLD_RETRY_BACKOFF + bound).await;
-    let third = rpc(&fx, 4, "tools/list", json!({})).await;
+    let third = rpc(&fx, 5, "tools/list", json!({})).await;
     assert!(
         surfaced_on(&third, BACKEND)
             .iter()

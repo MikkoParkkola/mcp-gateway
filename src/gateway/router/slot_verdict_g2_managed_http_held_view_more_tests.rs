@@ -334,6 +334,8 @@ async fn pin8_a_required_backends_bound_read_is_not_no_view() {
 /// of the new binding lands before the re-check judges. The re-check keeps
 /// the concurrently published new slot (it compares what it captured, not
 /// the index now), and the next listing shows the current grant's catalogue.
+/// A name-only listing: a `tools/list` would refill and republish the slot
+/// itself, hiding a forgotten one.
 #[tokio::test]
 async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
     let fx = Arc::new(fixture().await);
@@ -341,7 +343,7 @@ async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
     let (reached, release) = seams::after_custody_read();
     let listing = tokio::spawn({
         let fx = Arc::clone(&fx);
-        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+        async move { list_servers(&fx, 2).await }
     });
     reached.notified().await;
     let new = rotate(&fx, &old).await;
@@ -356,4 +358,26 @@ async fn r8_a_recheck_keeps_a_new_slot_published_while_it_was_reading() {
         "R8: the re-check forgot the new slot published while it was reading"
     );
     current_grant_lists(&fx, 3, "R8").await;
+}
+
+/// A deadline that cuts the account pre-pass short fails closed, even over a
+/// held slot the re-check just confirmed: the listing's account check did not
+/// complete, so the slot reads cold for that request.
+#[tokio::test(start_paused = true)]
+async fn a_cut_prepass_withholds_a_slot_the_recheck_confirmed() {
+    let fx = Arc::new(fixture().await);
+    fill_old(&fx, 1).await;
+    let backend = fx.gateway.backends().get(BACKEND).expect("the backend");
+    // Armed and never released: the pre-pass never runs, its deadline ends the step.
+    let (reached, _held) = backend.before_listing_prepass.arm();
+    let listing = tokio::spawn({
+        let fx = Arc::clone(&fx);
+        async move { rpc(&fx, 2, "tools/list", json!({})).await }
+    });
+    reached.notified().await;
+    let answer = listing.await.expect("the listing");
+    assert!(
+        surfaced_on(&answer, BACKEND).is_empty(),
+        "a cut pre-pass served a held slot unchecked: {answer}"
+    );
 }
