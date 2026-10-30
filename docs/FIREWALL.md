@@ -65,7 +65,7 @@ A rule with `allowed_roots` and `path_args` confines the path arguments of the c
   path_args: ["path"]
 ```
 
-- `allowed_roots`: the folders. Each must be absolute after expansion. A bare `~` or a leading `~/` uses the gateway's home directory; `~user/...` is not expanded and is refused.
+- `allowed_roots`: the folders. Each must be absolute after expansion. A bare `~` or a leading `~/` uses the gateway's home directory, and further separators stay under it (`~//x` is `<home>/x`); `~user/...` and `~\...` are not expanded and are refused.
 - `path_args`: the arguments that hold paths. `name` is a string, `name[]` an array of strings, `a.b` a nested key, and a trailing `?` (`name?`, `name[]?`) marks one a call may omit. A declared argument a call omits without `?` is refused.
 
 A path outside every root is a `path_outside_root` finding, High severity, decided by the folder rule's own action: `block` refuses the call, `warn` lets it through with the finding.

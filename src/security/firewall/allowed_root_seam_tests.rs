@@ -218,14 +218,14 @@ fn r16_a_read_past_the_deadline_times_out() {
     assert_eq!(forced(&fx, &json!({"path": fx.path("safe/f")})), None);
 }
 
-/// R16b: two values share one 2 s budget: at 1.5 s a read, the call times
-/// out once the original instant passes, and every read got that instant.
+/// R16b: two values share one 2 s budget. A first run with the clock still
+/// counts the call's reads; the second steps the clock so the budget runs
+/// out before the last read. The second value is read, the call times out,
+/// and every read got the one original deadline: a deadline renewed per
+/// value would let the call finish.
 #[test]
 fn r16b_values_share_one_deadline() {
-    let clock = Manual::new();
-    let step = Stepping::new(&clock, Duration::from_millis(1500));
-    let (c, s) = (Arc::clone(&clock), Arc::clone(&step));
-    let fx = Fx::with_rules(|safe| {
+    let rule = |safe: String| {
         let args = ["a", "b"];
         vec![super::tree::root_rule(
             "read_file",
@@ -233,12 +233,30 @@ fn r16b_values_share_one_deadline() {
             &args,
             FirewallAction::Block,
         )]
-    });
-    let fx = seamed(fx, |fw| fw.with_clock(c).with_resolver(s));
-    let args = json!({"a": fx.path("safe/f"), "b": fx.path("safe/f")});
-    assert_eq!(forced(&fx, &args), Some(RootReason::Timeout));
-    let ops = step.ops.lock().expect("ops");
-    assert!(ops.len() >= 2, "both values started: {ops:?}");
+    };
+    let run = |step: Duration| {
+        let clock = Manual::new();
+        let stepping = Stepping::new(&clock, step);
+        let (c, s) = (Arc::clone(&clock), Arc::clone(&stepping));
+        let fx = seamed(Fx::with_rules(rule), |fw| fw.with_clock(c).with_resolver(s));
+        let args = json!({"a": fx.path("safe/f"), "b": fx.path("safe/g")});
+        let got = forced(&fx, &args);
+        let ops = stepping.ops.lock().expect("ops").clone();
+        (got, ops)
+    };
+    let names_b = |op: &ResolveOp| {
+        matches!(op, ResolveOp::Metadata(p) | ResolveOp::Canonicalize(p) if p.ends_with("g"))
+    };
+    let (still, ops) = run(Duration::ZERO);
+    assert_eq!(still, None, "with the clock still the call completes");
+    let reads = u32::try_from(ops.len()).expect("few reads");
+    assert!(reads >= 3, "a call this short proves nothing: {ops:?}");
+    let (got, ops) = run(ROOT_CHECK_DEADLINE / (reads - 1));
+    assert!(
+        ops.iter().any(|(op, _)| names_b(op)),
+        "the second value was read: {ops:?}"
+    );
+    assert_eq!(got, Some(RootReason::Timeout));
     assert!(
         ops.iter().all(|(_, d)| *d == ops[0].1),
         "one deadline: {ops:?}"

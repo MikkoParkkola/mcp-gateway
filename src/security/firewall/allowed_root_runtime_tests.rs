@@ -135,7 +135,8 @@ fn r16c_all_slots_held_refuses_at_once() {
 }
 
 /// R16e: on a two-worker runtime, two checks blocked on reads leave a third
-/// task free to run before either read is released.
+/// task free to run before either read is released: when it has run, neither
+/// check has returned, so it did not wait for a worker their timeout freed.
 #[test]
 fn r16e_blocked_checks_do_not_pin_the_workers() {
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -156,4 +157,8 @@ fn r16e_blocked_checks_do_not_pin_the_workers() {
     ran_rx
         .recv_timeout(HANG)
         .expect("a third task ran while both checks waited");
+    assert!(
+        !matches!(rig.rx.try_recv(), Ok(Event::Done(_))),
+        "the third task ran only after a check returned"
+    );
 }
