@@ -8,7 +8,7 @@
 //! it (#2461), so a client polling it would write the same decision on every
 //! poll. Such a re-check writes no record when the last record written for
 //! the same task, caller and target is identical in every recorded field but
-//! its timestamp and trace id, and was written less than [`REPEAT_WINDOW`]
+//! its timestamp and trace id, and was written less than `REPEAT_WINDOW`
 //! ago. A caller is its API key name, grant subject (authority and subject,
 //! never the display label) and proven agent id (MIK-7826). Any change
 //! (a revoked grant, another reason, another grant id) is written at once,
@@ -22,7 +22,6 @@
 //! records before the answer leaves, failing closed under `FailClosed`.
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -36,6 +35,11 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::TransparencyLogger;
 use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
 use crate::{Error, Result};
+
+mod repeat;
+pub(crate) use repeat::DecisionDedupe;
+#[cfg(test)]
+pub(super) use repeat::{REPEAT_WINDOW, RepeatLedger};
 
 /// The record kind a grant decision is written as.
 const DECISION_KIND: &str = "identity_grant_decision";
@@ -58,54 +62,10 @@ tokio::task_local! {
     static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
 }
 
-/// How long an unchanged re-check decision is not written again (MIK-7692).
-pub(super) const REPEAT_WINDOW: Duration = Duration::from_secs(600);
-
-/// Keys the store holds at most; a full store records every decision.
-const REPEAT_CAP: usize = 4096;
-
 /// How long a re-check record waits for the repeat check and its append
 /// together. The append inside is also held to the log's own bound (F20),
 /// whichever is shorter.
 const LEDGER_WAIT: Duration = Duration::from_secs(5);
-
-/// The last written re-check decision per task, caller and target.
-///
-/// One async lock spans the repeat check, the append and the remember, so
-/// the remembered decision is always the last one written: two concurrent
-/// re-checks straddling a grant change cannot leave an older decision
-/// remembered over a newer record. The append it waits on is bounded (F20).
-// ponytail: one lock per gateway serializes re-check records only; per-key
-// locks if polling a finished task ever becomes a throughput concern.
-#[derive(Debug, Default)]
-pub(crate) struct DecisionDedupe(tokio::sync::Mutex<RepeatLedger>);
-
-/// The suppression state [`DecisionDedupe`] guards.
-#[derive(Debug, Default)]
-pub(super) struct RepeatLedger(HashMap<String, (String, Instant)>);
-
-impl RepeatLedger {
-    /// Whether `decision` is what was last written for `key`, inside the window.
-    pub(super) fn is_repeat(&self, key: &str, decision: &str, now: Instant) -> bool {
-        self.0.get(key).is_some_and(|(last, at)| {
-            last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
-        })
-    }
-
-    /// Record that `decision` was written for `key` at `now`.
-    pub(super) fn remember(&mut self, key: String, decision: String, now: Instant) {
-        let map = &mut self.0;
-        if map.len() >= REPEAT_CAP && !map.contains_key(&key) {
-            map.retain(|_, (_, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW);
-            if map.len() >= REPEAT_CAP {
-                // ponytail: a full store of live keys stops suppressing new
-                // ones (fails toward recording); an LRU if that ever matters.
-                return;
-            }
-        }
-        map.insert(key, (decision, now));
-    }
-}
 
 /// Run `check` as a re-check of a finished task's delivery: decisions it
 /// notes may be suppressed as repeats (see the module docs).

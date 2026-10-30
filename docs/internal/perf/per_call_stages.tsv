@@ -32,12 +32,12 @@ src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helpe
 src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	finished-task re-checks only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool_with_source	http_invoke_tiny	on the HTTP gateway_invoke path (invoke_tool delegates to it)
-src/gateway/meta_mcp/grant_audit.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/repeat.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	-	on-path, untimed: the withheld surfaced call's grant-record write; only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	project	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
-src/gateway/meta_mcp/grant_audit.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/repeat.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	select_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
