@@ -130,6 +130,9 @@ fn rule(tool: &str, action: FirewallAction) -> FirewallRule {
         action,
         scan: vec![],
         reason: None,
+        servers: None,
+        keys: None,
+        except: None,
     }
 }
 
@@ -141,6 +144,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_tool: "gateway_invoke",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     }
 }
 
@@ -148,6 +152,7 @@ fn targets() -> [ResponsePolicyTarget; 1] {
     [ResponsePolicyTarget {
         server: "actual-backend".into(),
         tool: "echo".into(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }]
 }
 
@@ -243,10 +248,12 @@ fn firewall_delivery_all_targets_and_correlation_reach_enforcement() {
         ResponsePolicyTarget {
             server: "allow-backend".into(),
             tool: "permitted".into(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "block-backend".into(),
             tool: "restricted".into(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     for targets in [
@@ -307,6 +314,7 @@ fn firewall_delivery_tools_list_success_is_inspected_and_refused_when_blocked() 
         let targets = [ResponsePolicyTarget {
             server: "gateway".into(),
             tool: "tools/list".into(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let original = JsonRpcResponse::success(
             RequestId::String("list-current-id".into()),

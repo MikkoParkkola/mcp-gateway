@@ -57,6 +57,9 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
             action: FirewallAction::Warn,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         }],
         _ => Vec::new(),
     };
