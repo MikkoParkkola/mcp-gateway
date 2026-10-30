@@ -238,10 +238,10 @@ async fn an_mcp_capability_notes_one_send_and_its_cache_hit_none() {
     let run = || executor.execute_with_context(&cap, say.clone(), api_key("credential:1d2c3b4a5f6e"));
     let send = std::time::Duration::from_millis(7);
     seam::inject(send);
-    let (first, sent) = with_dispatch_scope(run()).await;
+    let (first, timed) = with_dispatch_scope(run()).await;
     let (again, cached) = with_dispatch_scope(run()).await;
     seam::clear();
     assert_eq!(first.expect("served"), again.expect("served from cache"));
-    assert_eq!(sent.backend_sample(), Some((send, End::Answered)));
+    assert_eq!(timed.backend_sample(), Some((send, End::Answered)));
     assert_eq!(cached.backend_sample(), None, "a cache hit sends nothing");
 }
