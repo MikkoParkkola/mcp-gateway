@@ -68,8 +68,15 @@ fn backend_with(description: &str) -> Arc<Backend> {
 
 async fn bytes_for(backend: &Backend) -> u64 {
     let arguments = json!({"case_reference": "042"});
-    let (answer, measured) =
-        measure_async(|| backend.undeclared_key_refusal(None, &[], "probe", &arguments)).await;
+    let (answer, measured) = measure_async(|| {
+        backend.undeclared_key_refusal(
+            None,
+            crate::transport::LentCredential::default(),
+            "probe",
+            &arguments,
+        )
+    })
+    .await;
     // Declared keys only: the call must be admitted, or the check never judged.
     assert_eq!(answer.expect("no fetch on a fresh slot"), None);
     measured.bytes

@@ -402,7 +402,9 @@ async fn a_failed_login_fails_its_joiners_and_leaves_the_next_start_fresh() {
 async fn fill(
     backend: &Arc<Backend>,
 ) -> Result<(Arc<Vec<Tool>>, super::super::fill_check::Completeness)> {
-    backend.tools_for_check(None, &[], false).await
+    backend
+        .tools_for_check(None, crate::transport::LentCredential::default(), false)
+        .await
 }
 
 /// MIK-7982 r5 HIGH 2 (`R5H2b`, C3): a fill that captured the pending login's
@@ -665,7 +667,11 @@ async fn an_unrelated_timeout_during_a_login_stays_a_backend_timeout() {
     .await;
     let fill = {
         let backend = Arc::clone(&backend);
-        tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+        tokio::spawn(async move {
+            backend
+                .tools_for_check(None, crate::transport::LentCredential::default(), false)
+                .await
+        })
     };
 
     // Once the fill has sent its second page, the token lapses and another
