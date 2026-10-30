@@ -279,6 +279,12 @@ impl MetaMcp {
         } = sent;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
+        // U12: a web UI call goes out only as the call its gate admitted.
+        #[cfg(feature = "webui")]
+        if let Err(refusal) = crate::gateway::ui_call::admit_send((server, tool)) {
+            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund);
+            return Err(refusal);
+        }
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
         nonce_settle::mark_dispatched(caller, (server, tool));
