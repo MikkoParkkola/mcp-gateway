@@ -308,6 +308,14 @@ impl MetaMcp {
         if let Some(answer) = Self::task_intake_transient(&caller, &id) {
             return answer;
         }
+        // A web UI call never runs in a task worker: the worker is outside
+        // the UI call's scope, so its confirm gate and send record would not
+        // see it. Refused before the task exists.
+        #[cfg(feature = "webui")]
+        if caller.task.is_some() && crate::gateway::ui_call::refuses_task() {
+            invoke::ask_refund(&caller);
+            return error_response_preserving_status(id, &crate::gateway::ui_call::task_refused());
+        }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
             if let Err(error) =
@@ -453,6 +461,8 @@ impl MetaMcp {
             Some(MetaArm::Invoke) => {
                 let trace_id = crate::gateway::trace::generate();
                 let invocation = Arc::<str>::from(trace_id.as_str());
+                #[cfg(feature = "webui")]
+                crate::gateway::ui_call::note_trace(&trace_id);
                 let sourced = self
                     .invoke_tool_sourced(&arguments, session_id, caller, trace_id)
                     .await;

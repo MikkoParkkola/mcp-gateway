@@ -139,6 +139,7 @@ fn reap_drops_expired_entries_only() {
     s.cache.insert(
         "live".to_string(),
         CachedExchange {
+            synthetic_expiry: false,
             access_token: "a".to_string(),
             expires_at: now + 100,
             scopes: vec![],
@@ -147,6 +148,7 @@ fn reap_drops_expired_entries_only() {
     s.cache.insert(
         "dead".to_string(),
         CachedExchange {
+            synthetic_expiry: false,
             access_token: "b".to_string(),
             expires_at: now - 1,
             scopes: vec![],
@@ -228,6 +230,7 @@ fn cached_lookup_misses_across_distinct_endpoint_or_scope() {
     s.cache.insert(
         key_a.clone(),
         CachedExchange {
+            synthetic_expiry: false,
             access_token: "a-token".to_string(),
             expires_at: now + 300,
             scopes: vec!["read".to_string()],

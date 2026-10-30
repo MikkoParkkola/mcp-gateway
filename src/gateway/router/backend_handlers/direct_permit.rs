@@ -121,10 +121,7 @@ pub(super) fn plain_send<'a>(
     admitted: &mut Admitted<'_>,
 ) -> Result<PlainSend<'a>, Rejection> {
     let (method, id, backend) = (envelope.method.as_str(), scope.id, &scope.route.backend);
-    let headers = (
-        propagation.headers.as_slice(),
-        propagation.identity_key.as_deref(),
-    );
+    let headers = (propagation.lent(), propagation.identity_key.as_deref());
     let params = envelope.params.clone();
     if method == "tools/call" {
         return match mint_permit(scope, envelope.params.as_ref()) {

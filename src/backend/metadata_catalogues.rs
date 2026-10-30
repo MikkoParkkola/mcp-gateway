@@ -12,6 +12,7 @@ use crate::protocol::{
     Prompt, PromptsListResult, Resource, ResourceTemplate, ResourcesListResult,
     ResourcesTemplatesListResult,
 };
+use crate::transport::LentCredential;
 
 impl Backend {
     /// The resource catalogue the SHARED slot serves.
@@ -23,7 +24,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the resources request fails.
     pub async fn get_resources_shared(&self) -> Result<Arc<Vec<Resource>>> {
-        self.get_resources_for_binding(None, &[]).await
+        self.get_resources_for_binding_lent(None, LentCredential::default())
+            .await
     }
 
     /// The resource catalogue THIS CALLER's pool slot serves.
@@ -40,6 +42,17 @@ impl Backend {
         &self,
         binding: Option<&str>,
         extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Resource>>> {
+        self.get_resources_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_resources_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_resources_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<Resource>>> {
         self.get_cached_list_for(
             binding,
@@ -81,7 +94,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the templates request fails.
     pub async fn get_resource_templates_shared(&self) -> Result<Arc<Vec<ResourceTemplate>>> {
-        self.get_resource_templates_for_binding(None, &[]).await
+        self.get_resource_templates_for_binding_lent(None, LentCredential::default())
+            .await
     }
 
     /// The resource-template catalogue THIS CALLER's pool slot serves.
@@ -93,6 +107,20 @@ impl Backend {
         &self,
         binding: Option<&str>,
         extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<ResourceTemplate>>> {
+        self.get_resource_templates_for_binding_lent(
+            binding,
+            LentCredential::unchecked(extra_headers),
+        )
+        .await
+    }
+
+    /// [`Self::get_resource_templates_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_resource_templates_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<ResourceTemplate>>> {
         self.get_cached_list_for(
             binding,
@@ -132,7 +160,8 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the prompts request fails.
     pub async fn get_prompts_shared(&self) -> Result<Arc<Vec<Prompt>>> {
-        self.get_prompts_for_binding(None, &[]).await
+        self.get_prompts_for_binding_lent(None, LentCredential::default())
+            .await
     }
 
     /// The prompt catalogue THIS CALLER's pool slot serves.
@@ -144,6 +173,17 @@ impl Backend {
         &self,
         binding: Option<&str>,
         extra_headers: &[(String, String)],
+    ) -> Result<Arc<Vec<Prompt>>> {
+        self.get_prompts_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_prompts_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_prompts_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
     ) -> Result<Arc<Vec<Prompt>>> {
         self.get_cached_list_for(
             binding,

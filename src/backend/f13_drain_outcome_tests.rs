@@ -173,7 +173,12 @@ fn f13_t10_absence_from_a_truncated_list_is_its_own_outcome() {
                         Vec::new()
                     };
                     backend
-                        .undeclared_key_refusal(binding, &headers, "edit", &undeclared())
+                        .undeclared_key_refusal(
+                            binding,
+                            crate::transport::LentCredential::unchecked(&headers),
+                            "edit",
+                            &undeclared(),
+                        )
                         .await
                         .expect("no failsafe refusal")
                 });

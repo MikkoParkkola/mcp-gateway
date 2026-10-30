@@ -203,6 +203,7 @@ fn expected_credentials(record: &GrantRecord) -> ReleasedCredentials {
     ReleasedCredentials {
         access_token: record.access_token.clone(),
         token_type: record.token_type.clone(),
+        expires_at: record.expires_at,
     }
 }
 

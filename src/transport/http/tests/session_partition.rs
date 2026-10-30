@@ -25,19 +25,19 @@ async fn build_headers_selects_session_per_identity_bucket() {
         .insert(String::new(), "sess-default".to_string());
 
     let alice = t
-        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("alice"))
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("alice"), &[])
         .await
         .unwrap();
     let bob = t
-        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("bob"))
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("bob"), &[])
         .await
         .unwrap();
     let anon = t
-        .build_mcp_headers(HeaderMode::Request { method: "m" }, None)
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, None, &[])
         .await
         .unwrap();
     let absent = t
-        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("carol"))
+        .build_mcp_headers(HeaderMode::Request { method: "m" }, Some("carol"), &[])
         .await
         .unwrap();
 

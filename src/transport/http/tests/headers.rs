@@ -22,7 +22,10 @@ async fn build_headers_sse_mode_baseline() {
     // Pretend a session was established — SSE must NOT forward it.
     set_default_session(&t, "should-not-appear");
 
-    let map = t.build_mcp_headers(HeaderMode::Sse, None).await.unwrap();
+    let map = t
+        .build_mcp_headers(HeaderMode::Sse, None, &[])
+        .await
+        .unwrap();
 
     assert!(
         !map.contains_key(header::CONTENT_TYPE),
@@ -68,6 +71,7 @@ async fn build_headers_send_request_with_session_and_trace() {
                 method: "tools/list",
             },
             None,
+            &[],
         )
         .await
         .unwrap()
@@ -101,6 +105,7 @@ async fn build_headers_send_request_no_session() {
                 method: "tools/list",
             },
             None,
+            &[],
         )
         .await
         .unwrap();
@@ -127,7 +132,9 @@ async fn build_headers_notify_includes_custom_but_excludes_trace() {
     set_default_session(&t, "notify-sess");
 
     let map = trace::with_trace_id("gw-trace-xyz".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+            .await
+            .unwrap()
     })
     .await;
 
@@ -152,7 +159,10 @@ async fn build_headers_notify_includes_custom_but_excludes_trace() {
 async fn build_headers_notify_no_session_when_unset() {
     let t = make_transport("http://localhost");
 
-    let map = t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap();
+    let map = t
+        .build_mcp_headers(HeaderMode::Notify, None, &[])
+        .await
+        .unwrap();
 
     assert!(!map.contains_key("mcp-session-id"));
 }
@@ -169,7 +179,9 @@ async fn build_headers_close_includes_session_and_custom_headers() {
     set_default_session(&t, "close-sess");
 
     let map = trace::with_trace_id("gw-close-trace".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Close, None).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Close, None, &[])
+            .await
+            .unwrap()
     })
     .await;
 
@@ -261,7 +273,10 @@ async fn build_headers_uses_overridden_protocol_version() {
     )
     .unwrap();
 
-    let map = t.build_mcp_headers(HeaderMode::Sse, None).await.unwrap();
+    let map = t
+        .build_mcp_headers(HeaderMode::Sse, None, &[])
+        .await
+        .unwrap();
 
     assert_eq!(map["mcp-protocol-version"], "2024-11-05");
 }
@@ -275,7 +290,9 @@ async fn build_headers_trace_flag_gates_trace_header() {
 
     // Notify mode must suppress trace propagation even when ambient trace exists.
     let map_no_trace = trace::with_trace_id("gw-abc".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Notify, None).await.unwrap()
+        t.build_mcp_headers(HeaderMode::Notify, None, &[])
+            .await
+            .unwrap()
     })
     .await;
 
@@ -286,7 +303,7 @@ async fn build_headers_trace_flag_gates_trace_header() {
 
     // Request mode must include trace propagation when ambient trace exists.
     let map_with_trace = trace::with_trace_id("gw-abc".to_string(), async {
-        t.build_mcp_headers(HeaderMode::Request { method: "m" }, None)
+        t.build_mcp_headers(HeaderMode::Request { method: "m" }, None, &[])
             .await
             .unwrap()
     })
@@ -316,7 +333,7 @@ async fn lent_headers_carry_no_gateway_credential() {
         assert!(!lent.contains_key("x-api-key"), "{lent:?}");
         assert!(!lent.contains_key(header::AUTHORIZATION), "{lent:?}");
         assert!(lent.contains_key("mcp-protocol-version"));
-        let own = t.build_mcp_headers(mode, None).await.unwrap();
+        let own = t.build_mcp_headers(mode, None, &[]).await.unwrap();
         assert!(
             own.contains_key("x-api-key"),
             "control: the gateway's own keep them"

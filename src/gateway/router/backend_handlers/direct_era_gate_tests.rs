@@ -108,7 +108,7 @@ async fn dispatch_in_scope_refuses_a_removed_method_to_a_modern_backend() {
         &backend,
         &RequestId::Number(7),
         None,
-        (&[], None),
+        (crate::transport::LentCredential::default(), None),
     )
     .await
     .expect("the gateway answers the refusal itself; the transport call does not error");
@@ -145,7 +145,7 @@ async fn dispatch_in_scope_still_forwards_a_removed_method_to_a_legacy_backend()
         &backend,
         &RequestId::Number(7),
         None,
-        (&[], None),
+        (crate::transport::LentCredential::default(), None),
     )
     .await
     .expect("legacy peer answers");

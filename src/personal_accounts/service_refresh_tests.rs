@@ -76,11 +76,11 @@ fn narrower_scopes_advance_epoch_and_retire_lease_but_broader_scopes_are_refused
         let credentials = refuse_scaffold(service.release(&refreshed), "new lease after narrower")
             .expect("narrower lease releases");
         assert_eq!(
-            credentials,
-            ReleasedCredentials {
-                access_token: "synthetic-alice-access-narrowed-private-material-d41a".into(),
-                token_type: "Bearer".into(),
-            }
+            (credentials.access_token, credentials.token_type),
+            (
+                "synthetic-alice-access-narrowed-private-material-d41a".to_owned(),
+                "Bearer".to_owned()
+            )
         );
         assert_eq!(observer_calls.load(Ordering::SeqCst), 1);
 

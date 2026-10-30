@@ -201,7 +201,7 @@ impl MetaMcp {
                 &backend,
                 allow_empty_cache_fetch,
                 binding.as_deref(),
-                &headers,
+                headers,
             )
             .await;
             // Indexed after every fill attempt, an empty fill included; a slot
@@ -314,7 +314,7 @@ impl MetaMcp {
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             let fetched =
-                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
+                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), headers)
                     .await;
             // Indexed after every fill attempt, an empty fill included; a slot
             // a failed fill left unfilled is never recorded (MIK-8356).
@@ -555,7 +555,7 @@ impl MetaMcp {
         };
 
         let fetched = backend
-            .get_tools_for_binding(binding.as_deref(), &headers)
+            .get_tools_for_binding_lent(binding.as_deref(), headers.clone())
             .await?;
         self.remember_caller_slot(&backend, Self::proof_of(caller), binding.as_deref());
         let tools: Vec<_> = fetched
@@ -637,7 +637,7 @@ impl MetaMcp {
             };
             let backend_killed = self.kill_switch.is_killed(&backend.name);
             let fetched =
-                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), &headers)
+                Self::backend_tools_for_discovery(&backend, false, binding.as_deref(), headers)
                     .await;
             // Indexed after every fill attempt, an empty fill included; a slot
             // a failed fill left unfilled is never recorded (MIK-8356).

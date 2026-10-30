@@ -56,9 +56,73 @@ function send(res, status, headers, body) {
   res.end(body);
 }
 
+// Test-only live stream (tests/shell-stream.spec.mjs). A request to
+// /ui/api/stream carrying the cookie fixture-stream=<channel> is held open and
+// driven through /__stream/<channel>/<verb>: setup (JSON: requireBearer, and
+// next, a list of {status, retryAfter} answers for the coming connects), send
+// (the raw body is written to the open stream), end (the open stream ends) and
+// log (every connect with its headers, and whether it has closed). Channels are
+// per test, since every worker shares this server. The log records whether
+// Authorization and a session cookie were sent, never their values. Without
+// the cookie the stream is held open and never says hello, so the shell stays
+// quiet and no reconnect timer runs in specs that do not drive it.
+const channels = new Map();
+const channel = (name) => {
+  if (!channels.has(name)) channels.set(name, { conns: [], open: null, next: [], requireBearer: null });
+  return channels.get(name);
+};
+
+function readBody(req) {
+  return new Promise((done) => {
+    const parts = [];
+    req.on('data', (c) => parts.push(c));
+    req.on('end', () => done(Buffer.concat(parts).toString('utf8')));
+  });
+}
+
+async function streamControl(req, res, name, verb) {
+  const ch = channel(name);
+  const body = await readBody(req);
+  if (verb === 'setup') Object.assign(ch, JSON.parse(body || '{}'));
+  else if (verb === 'send' && ch.open) ch.open.write(body);
+  else if (verb === 'end' && ch.open) { ch.open.end(); ch.open = null; }
+  else if (verb === 'log') return send(res, 200, { 'content-type': 'application/json' }, JSON.stringify(ch.conns));
+  else if (verb !== 'setup') return send(res, 409, {}, 'no open stream');
+  return send(res, 204, {}, '');
+}
+
+function streamOpen(req, res, name) {
+  const ch = channel(name);
+  const auth = req.headers.authorization ?? null;
+  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: auth !== null, sessionCookie: /(?:^|;\s*)mcp_gateway_session=/.test(req.headers.cookie ?? ''), status: 200, closed: false };
+  ch.conns.push(conn);
+  if (ch.requireBearer && auth !== `Bearer ${ch.requireBearer}`) {
+    conn.status = 401;
+    return send(res, 401, { 'content-type': 'application/json' }, '{}');
+  }
+  const scripted = ch.next.shift();
+  if (scripted) {
+    conn.status = scripted.status;
+    const headers = scripted.retryAfter ? { 'retry-after': String(scripted.retryAfter) } : {};
+    return send(res, scripted.status, headers, '');
+  }
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-fixture-root': HERE });
+  res.flushHeaders();
+  res.on('close', () => { conn.closed = true; if (ch.open === res) ch.open = null; });
+  ch.open = res;
+}
+
 function handle(req, res) {
   const path = new URL(req.url, 'http://fixture').pathname;
   const get = req.method === 'GET' || req.method === 'HEAD';
+  const control = path.match(/^\/__stream\/([\w-]+)\/(setup|send|end|log)$/);
+  if (control) return streamControl(req, res, control[1], control[2]);
+  const held = (req.headers.cookie ?? '').match(/(?:^|;\s*)fixture-stream=([\w-]+)/);
+  if (path === '/ui/api/stream' && get) {
+    if (held) return streamOpen(req, res, held[1]);
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-fixture-root': HERE });
+    return res.flushHeaders(); // held open, never a hello
+  }
   if (path === '/ui' || path === '/ui/classic') {
     // axum's get() route: another method answers 405.
     if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');

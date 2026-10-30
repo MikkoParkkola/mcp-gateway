@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use super::Backend;
-use crate::failsafe::{RetryPolicy, with_retry};
+use crate::failsafe::{RetryPolicy, with_retry_unless};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
@@ -26,36 +26,6 @@ enum Attempts {
 }
 
 impl Backend {
-    /// The loan a dispatch holds on its per-user slot for its whole run, the
-    /// slot's start included (ADR-007 IDP.7): a lent-only slot
-    /// sends only this dispatch's credential. `None` for a Shared slot and
-    /// for a slot that keeps its configured headers. A required binding's
-    /// dispatch that carries no credential is refused before anything is
-    /// built or sent: there is no subscriber to send as.
-    pub(super) fn lend_to_slot(
-        &self,
-        key: &super::pool::PoolKey,
-        entry: &super::pool::PooledEntry,
-        headers: &[(String, String)],
-    ) -> Result<Option<crate::transport::Loan>> {
-        if !matches!(key, super::pool::PoolKey::PerUser { .. })
-            || self.per_user_slot_credential() != crate::transport::SlotCredential::LentOnly
-        {
-            return Ok(None);
-        }
-        if headers.is_empty() {
-            return Err(Error::Forbidden {
-                code: -32001,
-                status: 403,
-                message: format!(
-                    "backend '{}' is reached only with each user's own credential, and this call carried none",
-                    self.name
-                ),
-            });
-        }
-        Ok(Some(entry.lender.lend(headers)))
-    }
-
     /// Send a request to the backend
     ///
     /// # Errors
@@ -71,7 +41,13 @@ impl Backend {
         )
     )]
     pub async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.request_with_headers(method, params, &[], None).await
+        self.request_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::default(),
+            None,
+        )
+        .await
     }
 
     /// This backend's end-user identity-propagation config, if configured
@@ -258,6 +234,24 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        self.request_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::unchecked(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::request_with_headers`] for a credential the mint core produced, which may
+    /// carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn request_with_headers_lent(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: crate::transport::LentCredential,
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
         self.request_attempted(
             method,
             params,
@@ -301,6 +295,24 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        self.request_with_task_capability_lent(
+            method,
+            params,
+            crate::transport::LentCredential::unchecked(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::request_with_task_capability`] for a credential the mint core produced, which may
+    /// carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn request_with_task_capability_lent(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: crate::transport::LentCredential,
+        identity_key: Option<&str>,
+    ) -> Result<JsonRpcResponse> {
         self.request_attempted(
             method,
             params,
@@ -315,7 +327,7 @@ impl Backend {
         &self,
         method: &str,
         params: Option<Value>,
-        extra_headers: &[(String, String)],
+        extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
         attempts: Attempts,
     ) -> Result<JsonRpcResponse> {
@@ -335,13 +347,13 @@ impl Backend {
         // would leave the sibling route forwarding the caller's token.
         let params = substitute_progress_token(params);
 
-        // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both
-        // here because every route's tools/call passes through. Resolved
-        // before the call is admitted, so a value that does not resolve holds
-        // no permit. The caller's own credential is taken first, before the
+        // This backend's `secrets:` rules and the `Mcp-Param-*` mirror, both here because every
+        // route's tools/call passes through. Resolved before the call is admitted, so a value that
+        // does not resolve holds no permit. The caller's own credential is taken first, before the
         // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
-        let (params, extra_headers) = self.outbound(method, params, extra_headers, identity_key)?;
+        let (params, extra_headers) =
+            self.outbound(method, params, &credential.headers, identity_key)?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +
@@ -379,10 +391,14 @@ impl Backend {
         let entry = std::sync::Arc::clone(activity.entry());
         // This dispatch's credential is what a lent-only slot sends as, its
         // start included, for as long as the dispatch runs.
-        let _loan = self.lend_to_slot(&key, &entry, credential)?;
+        let loan = self.lend_to_slot(&key, &entry, &credential)?;
 
-        // Ensure this slot's transport is live.
-        let transport = self.start_judged(&key, &entry, start_time, method).await?;
+        // Ensure this slot's transport is live. The start sends no call's
+        // headers, so a lent-only slot sends it as this dispatch's loan.
+        let transport = {
+            let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
+            self.start_judged(&key, &entry, start_time, method).await?
+        };
 
         // Execute with retry
         let name = self.name.clone();
@@ -425,7 +441,10 @@ impl Backend {
         let mut result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
             send(params, extra_headers).await
         } else {
-            with_retry(&policy, &name, || {
+            // A refused credential repeats its refusal: stop once this
+            // dispatch's own loan was marked.
+            let refused = || loan.as_ref().is_some_and(|held| held.refused().is_some());
+            with_retry_unless(&policy, &name, refused, || {
                 send(params.clone(), extra_headers.clone())
             })
             .await
@@ -471,7 +490,7 @@ impl Backend {
         // `server/discover` did. Correct the verdict: off the request path,
         // except on a lent-only slot, whose probe needs this dispatch's loan.
         if let Ok(response) = &result {
-            self.reprobe_if_contradicted(method, response, &transport)
+            self.reprobe_if_contradicted(method, response, &transport, &credential.headers)
                 .await;
         }
 
@@ -602,7 +621,13 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(method, params, &[], None).await
+        self.notify_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::default(),
+            None,
+        )
+        .await
     }
 
     /// Send a notification carrying the caller's identity key so it is routed
@@ -628,6 +653,24 @@ impl Backend {
     ///
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
+    pub async fn notify_with_headers(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: &[(String, String)],
+        identity_key: Option<&str>,
+    ) -> Result<()> {
+        self.notify_with_headers_lent(
+            method,
+            params,
+            crate::transport::LentCredential::unchecked(extra_headers),
+            identity_key,
+        )
+        .await
+    }
+
+    /// [`Self::notify_with_headers`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
     // `identity_key` is the caller's pool binding, for an A2A caller an
     // unkeyed hash of its principal: never a span field (MIK-8697).
     #[tracing::instrument(
@@ -638,11 +681,11 @@ impl Backend {
             request_id = %uuid::Uuid::new_v4()
         )
     )]
-    pub async fn notify_with_headers(
+    pub(crate) async fn notify_with_headers_lent(
         &self,
         method: &str,
         params: Option<Value>,
-        extra_headers: &[(String, String)],
+        extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<()> {
         let start_time = std::time::Instant::now();
@@ -673,12 +716,15 @@ impl Backend {
         let activity = self.begin_activity(&key)?;
         // As in `request_attempted`: record on the claimed entry (#2261).
         let entry = std::sync::Arc::clone(activity.entry());
-        let _loan = self.lend_to_slot(&key, &entry, extra_headers)?;
+        let loan = self.lend_to_slot(&key, &entry, &extra_headers)?;
 
-        let transport = self.start_recorded(&key, &entry, start_time).await?;
+        let transport = {
+            let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
+            self.start_recorded(&key, &entry, start_time).await?
+        };
 
         let result = transport
-            .notify_with_headers(method, params, extra_headers, identity_key)
+            .notify_with_headers(method, params, &extra_headers.headers, identity_key)
             .await;
         let latency = start_time.elapsed();
 

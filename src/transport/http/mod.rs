@@ -612,12 +612,6 @@ impl HttpTransport {
         self.lent_only.load(Ordering::Relaxed)
     }
 
-    /// The credential of the newest dispatch in flight on this slot, if any
-    /// lends one.
-    fn lent_now(&self) -> Option<Vec<(String, String)>> {
-        self.lender.get().and_then(|lender| lender.now())
-    }
-
     /// The session bucket a send under `identity_key` reads and writes. A
     /// lent-only slot has one: its start runs as its one subscriber, so its
     /// calls ride that start's session. Any other transport keeps the
@@ -679,6 +673,9 @@ pub use redirect_policy::transport_follows_redirect;
 mod requests;
 mod sse_channel;
 mod sse_decoder;
+#[cfg(test)]
+#[path = "sse_lent_reopen_tests.rs"]
+mod sse_lent_reopen_tests;
 mod sse_listen;
 #[cfg(test)]
 #[path = "sse_send_tests.rs"]

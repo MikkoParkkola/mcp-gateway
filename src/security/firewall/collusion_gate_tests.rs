@@ -582,6 +582,44 @@ fn allowed_flow_globs_match() {
     assert_eq!(egress_via(&fw, ("beta", "post")).findings.len(), 1);
 }
 
+/// A bad collusion glob is named by its key path and index, never its text.
+#[test]
+fn a_bad_collusion_glob_names_its_path_not_its_text() {
+    let secret = "zq-private-tool:[";
+    let cases = [
+        (
+            format!("      sources: [\"a:*\", \"{secret}\"]\n"),
+            "collusion.sources[1]",
+        ),
+        (
+            format!("      non_egress: [\"{secret}\"]\n"),
+            "collusion.non_egress[0]",
+        ),
+        (
+            format!(
+                "      allowed_flows:\n        - {{source: \"a:*\", egress: \"b:*\"}}\n        - {{source: \"{secret}\", egress: \"b:*\"}}\n"
+            ),
+            "collusion.allowed_flows[1].source",
+        ),
+        (
+            format!("      allowed_flows:\n        - {{source: \"a:*\", egress: \"{secret}\"}}\n"),
+            "collusion.allowed_flows[0].egress",
+        ),
+    ];
+    for (body, path) in cases {
+        let firewall = format!("    collusion:\n      action: observe\n{body}");
+        let err = load(&firewall).expect_err(path).to_string();
+        assert!(
+            err.contains(&format!("security.firewall.{path} is not a valid glob")),
+            "{path}: {err}"
+        );
+        assert!(
+            !err.contains("zq-private-tool"),
+            "{path}: the error echoes the pattern: {err}"
+        );
+    }
+}
+
 /// `allowed_flows` is checked at load like the other globs, and holds at most
 /// 64 entries (one bit each).
 #[test]

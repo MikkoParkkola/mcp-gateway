@@ -175,7 +175,7 @@ async fn a_required_stateless_backend_is_admitted_and_fetched_on_the_callers_slo
         )
         .await;
     assert!(
-        !headers.is_empty() && binding.is_some(),
+        !headers.headers.is_empty() && binding.is_some(),
         "premise: the caller must resolve a minted credential: \
          headers={headers:?} binding={binding:?}"
     );

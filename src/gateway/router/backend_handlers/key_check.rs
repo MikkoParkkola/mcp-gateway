@@ -17,13 +17,31 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's slot binding and the headers it propagates upstream; a cold
 /// slot is listed with exactly these, so the list is fetched as the caller.
-pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a [(String, String)]);
+pub(super) type CallerSlot<'a> = (Option<&'a str>, &'a crate::transport::LentCredential);
 
 /// The gateway's answer to a name the caller's catalogue lacks, on the
 /// direct route: -32601 under its preserved status (MIK-8356, MIK-8361).
 pub(super) fn absent_response(id: &RequestId, tool: &str) -> BackendRejection {
     let response = error_response_preserving_status(id.clone(), &absent_name(tool));
     build_http_response(&Egressed::gateway_own(response), StatusCode::OK)
+}
+
+/// [`key_refusal`] for a name the caller may not see: answered as a name the
+/// catalogue lacks, under no caller's credential, so nothing is filled.
+pub(super) async fn withheld_refusal(
+    backend: &crate::backend::Backend,
+    failed: &DirectFailure<'_>,
+    params: &Value,
+    id: &RequestId,
+) -> Option<BackendRejection> {
+    let none = crate::transport::LentCredential::default();
+    key_refusal(
+        backend,
+        ((None, &none), failed),
+        params,
+        (id, Lens::Withheld),
+    )
+    .await
 }
 
 /// The rejection for a `tools/call` R2 refuses, or `None` to proceed.
@@ -66,7 +84,9 @@ pub(super) async fn key_refusal(
         if lens == Lens::Withheld {
             return Some(absent());
         }
-        let verdict = backend.catalogue_verdict(identity_key, headers, tool).await;
+        let verdict = backend
+            .catalogue_verdict(identity_key, headers.clone(), tool)
+            .await;
         // The check may have filled the caller's slot: index it, whatever the
         // verdict; an unfilled slot is never recorded (MIK-8356).
         let proof = crate::identity_propagation::CallerProof::new(
@@ -96,12 +116,17 @@ pub(super) async fn key_refusal(
     // A shared catalogue's withheld entry (descriptor, schema) takes the
     // lacked name's path too; a policy-withheld name is judged without the
     // caller's credential, which is not resolved for it.
+    // The gateway's own static headers, for the shared slot's gate: no
+    // caller's credential, so nothing to check.
+    let gate = crate::transport::LentCredential::unchecked(backend.gate_headers());
     let (slot, lens) = match lens {
-        Lens::Withheld => ((None, backend.gate_headers()), Lens::Withheld),
+        Lens::Withheld => ((None, gate), Lens::Withheld),
         Lens::Catalogue => {
             // Under `off` no call lists the catalogue: judged from what is held.
             let verdict = if backend.checks_membership() {
-                backend.catalogue_verdict(identity_key, headers, tool).await
+                backend
+                    .catalogue_verdict(identity_key, headers.clone(), tool)
+                    .await
             } else {
                 Ok(backend.held_verdict(identity_key, tool))
             };
@@ -111,9 +136,9 @@ pub(super) async fn key_refusal(
                     crate::gateway::delivery_facts::raise(
                         crate::gateway::delivery_facts::ResponseEffect::Refused,
                     );
-                    ((identity_key, headers), Lens::Withheld)
+                    ((identity_key, headers.clone()), Lens::Withheld)
                 }
-                _ => ((identity_key, headers), Lens::Catalogue),
+                _ => ((identity_key, headers.clone()), Lens::Catalogue),
             }
         }
     };

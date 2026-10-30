@@ -65,6 +65,7 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_shared_oauth_
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	refuse_unbound_account_backend	1	not-a-decision	a configuration error: an account backend with no strategy
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential_attempted_for	unminted_refusal	1	composite-or-replay	the unminted proof a stored replay is refused with
+src/gateway/meta_mcp/invoke/resolve.rs	resolve	refuse_name_clash	1	not-a-decision	a name that is both a registry backend and the capability backend: a configuration clash (-32001, the BackendNotFound class), not a decision about the caller
 src/gateway/meta_mcp/invoke/r2_check.rs	undeclared_key_refusal_through	catalogue_refusal	1	feeds	builds the key refusal its callers seal
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	relay_refusal	1	recorded	pre-send relay block on the meta route; raised while vouched
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	relay_refusal	1	recorded	pre-send relay block on a bridged round; raised while vouched
@@ -117,11 +118,11 @@ src/gateway/router/backend_handlers.rs	cached_error_response	Error::ResponseFire
 src/gateway/router/backend_handlers.rs	cached_error_response	is_firewall_refusal	1	not-delivered	predicate
 src/gateway/router/backend_handlers.rs	cached_error_response	refusal	1	composite-or-replay	idempotency replay of a cached firewall refusal
 src/gateway/router/backend_handlers.rs	guard_tool_call	blocked_tool_refusal	1	not-delivered	predicate
-src/gateway/router/backend_handlers.rs	guard_tool_call	key_refusal	1	recorded	raised above it in this fn (direct withheld call)
 src/gateway/router/backend_handlers.rs	guard_tool_call	profile_refusal	1	recorded	withheld code, raised in this fn
 src/gateway/router/backend_handlers.rs	guard_tool_call	refusal	1	recorded	kill switch: sealed, recorded at the direct outlet
 src/gateway/router/backend_handlers.rs	guard_tool_call	relay_refusal	1	recorded	403, classed Denied by the direct recorder
 src/gateway/router/backend_handlers.rs	guard_tool_call	request_refusal	1	recorded	request firewall 403, classed Denied by the direct recorder
+src/gateway/router/backend_handlers.rs	guard_tool_call	withheld_refusal	1	recorded	raised above it in this fn (direct withheld call)
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	audit_unavailable_refusal	1	not-a-decision	the audit sink failed
 src/gateway/router/backend_handlers/direct_caller.rs	intake_refusal	intake_refusal	1	not-a-decision	a keyed call with no execution principal
 src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	backend_refusal	1	recorded	403, classed Denied by the direct recorder
@@ -140,6 +141,7 @@ src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	direct_refusa
 src/gateway/router/backend_handlers/direct_preflight.rs	preflight	refusal	1	not-a-decision	chain challenge mint failure or a malformed _meta
 src/gateway/router/backend_handlers/direct_preflight.rs	resolve_headers	unforwarded_refusal	1	not-a-decision	a credential that could not be forwarded
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	catalogue_refusal	1	feeds	builds the key refusal guard_tool_call delivers
+src/gateway/router/backend_handlers/key_check.rs	withheld_refusal	key_refusal	1	feeds	builds the withheld answer guard_tool_call returns, raised there before it
 src/gateway/router/backend_handlers/notification_key.rs	resolve	refuse_audited	4	no-record	the notification key route; notifications carry no delivery record
 src/gateway/router/backend_handlers/relay.rs	catalogue_refusal	relay_refusal	1	feeds	builds the catalogue relay refusal
 src/gateway/router/direct_guards.rs	after_dispatch	refusal	1	recorded	direct outlet: records a sealed refusal; the whole withhold raises in this fn
@@ -191,3 +193,8 @@ src/gateway/ui/events.rs	replay_one	refusal	1	no-record	accounts, SSE, start-up 
 src/gateway/ui/import.rs	fetch_error_message	ssrf_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
 src/gateway/ui/overview.rs	kpi_and_servers	startup_refusal	1	no-record	the Overview's Needs-you list: a start-up denial shown to the admin, no call delivery
 src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
+src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
+src/gateway/ui/tool_call.rs	parse	refusal	4	no-record	admin UI tool route: a body too large, unreadable or invalid, before any dispatch; admin_action record only
+src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs refused, recorded); admin_action records the disposition
+src/gateway/ui_call.rs	refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built

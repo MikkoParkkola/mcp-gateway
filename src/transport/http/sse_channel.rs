@@ -307,11 +307,17 @@ impl super::HttpTransport {
     /// Boxed with an explicit `Send` type: the replacement's handshake sends
     /// requests, which await this again, and an inferred future type could
     /// neither be sized nor shown `Send` through that cycle (E0733).
-    pub(super) fn live_sse_channel(&self) -> BoxFuture<'_, Result<Option<Arc<SseChannel>>>> {
-        Box::pin(self.live_sse_channel_inner())
+    pub(super) fn live_sse_channel<'a>(
+        &'a self,
+        call: &'a [(String, String)],
+    ) -> BoxFuture<'a, Result<Option<Arc<SseChannel>>>> {
+        Box::pin(self.live_sse_channel_inner(call))
     }
 
-    async fn live_sse_channel_inner(&self) -> Result<Option<Arc<SseChannel>>> {
+    async fn live_sse_channel_inner(
+        &self,
+        call: &[(String, String)],
+    ) -> Result<Option<Arc<SseChannel>>> {
         if *self.streamable_http.read() != Some(false) {
             return Ok(None);
         }
@@ -346,8 +352,8 @@ impl super::HttpTransport {
         let replaced = REPLACING
             .scope((), async {
                 self.sessions.write().remove(Self::bucket_key(None));
-                self.connect_sse().await?;
-                self.legacy_handshake().await
+                self.connect_sse(call).await?;
+                self.legacy_handshake(call).await
             })
             .await;
         replaced?;

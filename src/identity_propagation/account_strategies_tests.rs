@@ -104,6 +104,7 @@ fn an_external_credential_with_a_past_expiry_is_closed() {
 
 fn minted(headers: Vec<(&str, &str)>) -> super::super::PropagatedCredential {
     super::super::PropagatedCredential {
+        expiry_synthetic: false,
         headers: headers
             .into_iter()
             .map(|(name, value)| (name.to_owned(), value.to_owned()))

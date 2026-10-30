@@ -31,6 +31,8 @@ pub struct DurableTelemetrySink {
     previous_shadow: BTreeMap<String, u64>,
     previous_agents: BTreeMap<String, u64>,
     parent_sync_pending: bool,
+    #[cfg(test)]
+    created_by: crate::test_late_write::Creator,
 }
 
 /// What one stdio persist adds: this process's stdio counts, its list
@@ -71,6 +73,8 @@ impl DurableTelemetrySink {
             previous_shadow: empty_shadow_counts(),
             previous_agents: BTreeMap::new(),
             parent_sync_pending: false,
+            #[cfg(test)]
+            created_by: crate::test_late_write::Creator::default(),
         })
     }
 
@@ -110,6 +114,9 @@ impl DurableTelemetrySink {
             return Ok(());
         }
 
+        #[cfg(test)]
+        self.created_by
+            .witness("telemetry window", &self.window_path);
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
         let mut window = read_window_v2(&self.window_path)?;
         add_snapshot(&mut window.stdio, &snapshot_delta)?;

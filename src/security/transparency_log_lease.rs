@@ -69,6 +69,8 @@ pub(super) fn acquire_with(
     now: &dyn Fn() -> Instant,
 ) -> io::Result<ExclusiveFileLock> {
     let lock_path = super::segments::sibling(path, "lock");
+    #[cfg(test)]
+    crate::test_late_write::Creator::default().beside_temp_root("audit log", path);
     let start = now();
     let mut warned = false;
     loop {

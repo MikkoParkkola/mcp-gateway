@@ -541,6 +541,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
@@ -632,6 +633,7 @@ fn fixture_auth() -> AuthConfig {
         ],
         ..Default::default()
     };
+    requests::admin_key(&mut auth);
     if WITH_BEARER.with(std::cell::Cell::get) {
         auth.bearer_token = Some(BEARER_SECRET.to_string());
         auth.api_keys.push(key("bearer"));

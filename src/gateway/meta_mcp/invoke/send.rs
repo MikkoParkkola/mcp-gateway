@@ -279,9 +279,16 @@ impl MetaMcp {
         } = sent;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
+        // U12: a web UI call goes out only as the call its gate admitted.
+        #[cfg(feature = "webui")]
+        if let Err(refusal) = crate::gateway::ui_call::admit_send((server, tool)) {
+            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund);
+            return Err(refusal);
+        }
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
         nonce_settle::mark_dispatched(caller, (server, tool));
+        let lent = caller_credential.lent();
         // Boxed: the dispatch future is the largest thing this frame ever
         // holds, and inlining it puts `invoke_tool_traced` over
         // `clippy::large_futures` at every call site.
@@ -303,7 +310,7 @@ impl MetaMcp {
             arm_key,
             caller_identity,
             (caller_proof, credential_owner.as_deref()),
-            &caller_credential.headers,
+            &lent,
             dispatch_binding.as_deref(),
             account_credential,
             caller.cost_key(),

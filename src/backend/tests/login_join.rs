@@ -23,7 +23,11 @@ fn spawn_check(
     backend: &Arc<Backend>,
 ) -> tokio::task::JoinHandle<Result<(Arc<Vec<Tool>>, super::super::fill_check::Completeness)>> {
     let backend = Arc::clone(backend);
-    tokio::spawn(async move { backend.tools_for_check(None, &[], false).await })
+    tokio::spawn(async move {
+        backend
+            .tools_for_check(None, crate::transport::LentCredential::default(), false)
+            .await
+    })
 }
 
 /// `MIK-8046.PROV.2`: the owner's first page went to the transport (its

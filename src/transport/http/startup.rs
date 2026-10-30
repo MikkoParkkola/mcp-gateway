@@ -46,8 +46,18 @@ impl HttpTransport {
     /// Returns an error if OAuth authorization fails, SSE handshake fails,
     /// or protocol version negotiation is unsuccessful.
     pub async fn initialize(&self) -> Result<()> {
-        self.connect().await?;
-        self.handshake().await
+        self.initialize_as(&self.start_call()).await
+    }
+
+    /// [`Self::initialize`] inside a call: `call` is that call's headers, so
+    /// a lent-only slot's handshake sends as the credential the call carries.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::initialize`].
+    pub(crate) async fn initialize_as(&self, call: &[(String, String)]) -> Result<()> {
+        self.connect_as(call).await?;
+        self.handshake(call).await
     }
 
     /// Everything a request needs before one can be sent: the OAuth token and
@@ -64,6 +74,17 @@ impl HttpTransport {
     ///
     /// Returns an error if OAuth authorization or the SSE handshake fails.
     pub(crate) async fn connect(&self) -> Result<()> {
+        self.connect_as(&self.start_call()).await
+    }
+
+    /// [`Self::connect`] inside a call: a legacy SSE connect opens its stream
+    /// as `call`'s credential, so a session-expiry re-handshake on a lent-only
+    /// slot sends as the call that met the expiry.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`].
+    async fn connect_as(&self, call: &[(String, String)]) -> Result<()> {
         // Initialize OAuth client if configured
         if let Some(ref oauth_arc) = self.oauth_client {
             // MIK-4486: Detach the OAuth handshake from the calling request future. The interactive
@@ -158,7 +179,7 @@ impl HttpTransport {
 
         self.switched.store(false, Ordering::Relaxed);
         if *self.streamable_http.read() == Some(false) {
-            let Err(sse_error) = self.connect_sse().await else {
+            let Err(sse_error) = self.connect_sse(call).await else {
                 return Ok(());
             };
             // Configs written before detection existed say `false` for
@@ -187,8 +208,8 @@ impl HttpTransport {
     }
 
     /// SSE mode: GET the SSE endpoint to receive the message endpoint.
-    pub(super) async fn connect_sse(&self) -> Result<()> {
-        let message_endpoint = self.establish_sse_connection().await?;
+    pub(super) async fn connect_sse(&self, call: &[(String, String)]) -> Result<()> {
+        let message_endpoint = self.establish_sse_connection(call).await?;
         let full_message_url = self.resolve_message_url(&message_endpoint)?;
         *self.message_url.write() = Some(full_message_url.clone());
         info!(target: HTTP_TARGET, sse_url = %sanitize_url_for_diagnostics(&self.base_url), message_url = %sanitize_url_for_diagnostics(full_message_url.as_str()), oauth = self.oauth_client.is_some(), "SSE handshake complete");
@@ -202,11 +223,11 @@ impl HttpTransport {
     /// a wrong flag costs one refused request rather than the backend. At most
     /// one switch per start: not after [`Self::connect`] already switched, and
     /// never away from an SSE endpoint that answered.
-    async fn handshake(&self) -> Result<()> {
+    async fn handshake(&self, call: &[(String, String)]) -> Result<()> {
         if *self.streamable_http.read() == Some(false) {
-            return self.legacy_handshake().await;
+            return self.legacy_handshake(call).await;
         }
-        let Err(post_error) = self.legacy_handshake().await else {
+        let Err(post_error) = self.legacy_handshake(call).await else {
             *self.streamable_http.write() = Some(true);
             return Ok(());
         };
@@ -218,14 +239,14 @@ impl HttpTransport {
         };
         info!(target: HTTP_TARGET, url = %sanitize_url_for_diagnostics(&self.base_url), status, "Streamable HTTP POST refused; falling back to the legacy SSE transport");
         // Both answers, so a mistyped URL is not reported as an SSE fault alone.
-        self.connect_sse().await.map_err(|sse_error| {
+        self.connect_sse(call).await.map_err(|sse_error| {
             Error::Transport(format!(
                 "POST initialize returned HTTP {status}, and the legacy SSE fallback failed: {sse_error}"
             ))
         })?;
         *self.streamable_http.write() = Some(false);
         self.switched.store(true, Ordering::Relaxed);
-        self.legacy_handshake().await
+        self.legacy_handshake(call).await
     }
 
     /// The flavour this transport connected with, once known: `Some(true)`
@@ -265,7 +286,7 @@ impl HttpTransport {
                 );
                 Ok(())
             }
-            PeerEra::Legacy => self.handshake().await,
+            PeerEra::Legacy => self.handshake(&self.start_call()).await,
         }
     }
 
@@ -274,7 +295,7 @@ impl HttpTransport {
     /// Unchanged from the body `initialize()` has always run. It assumes
     /// [`Self::connect`] has already resolved the endpoint and the credential.
     #[allow(clippy::too_many_lines)] // MIK-4486 OAuth detach adds ~2 lines
-    pub(super) async fn legacy_handshake(&self) -> Result<()> {
+    pub(super) async fn legacy_handshake(&self, call: &[(String, String)]) -> Result<()> {
         // A handshake names the server afresh: a failed one names nobody.
         #[cfg(any(feature = "webui", test))]
         {
@@ -311,7 +332,7 @@ impl HttpTransport {
         // was there before.
         let previous_version = self.protocol_version.read().clone();
         let negotiated: Result<JsonRpcResponse> = async {
-        let response = match self.send_request(&request).await {
+        let response = match self.send_request_as(&request, call).await {
             Ok(response) => response,
             Err(Error::ProtocolVersionRejected { supported }) => {
                 let Some(negotiated) = negotiate_best_version(&supported) else {
@@ -337,7 +358,7 @@ impl HttpTransport {
                 // Set before the send because the outbound header is built
                 // from it; the block's error exit restores it if this fails.
                 *self.protocol_version.write() = Some(negotiated.to_string());
-                self.send_request(&retry).await?
+                self.send_request_as(&retry, call).await?
             }
             Err(other) => return Err(other),
         };
@@ -389,7 +410,7 @@ impl HttpTransport {
             })),
         };
 
-        let retry_response = self.send_request(&retry_request).await?;
+        let retry_response = self.send_request_as(&retry_request, call).await?;
 
         if let Some(err) = &retry_response.error {
             return Err(Error::Protocol(format!(
@@ -446,7 +467,7 @@ impl HttpTransport {
         // introducing ourselves to. `send_request` refuses the era here for the
         // same reason.
         if let Err(error) = self
-            .send_notification("notifications/initialized", None, &[], None, None)
+            .send_notification("notifications/initialized", None, call, None, None)
             .await
         {
             let url = sanitize_url_for_diagnostics(&self.base_url);
@@ -514,8 +535,11 @@ impl HttpTransport {
     /// which `MIK-7215.STATELESS.3a` prohibits outright. The first connection
     /// is unaffected: the era is unresolved before the first `initialize()`,
     /// `outbound_era()` reads `None`, and the GET stays legacy-shaped.
-    pub(super) async fn establish_sse_connection(&self) -> Result<String> {
-        let mut headers = self.build_mcp_headers(HeaderMode::Sse, None).await?;
+    pub(super) async fn establish_sse_connection(
+        &self,
+        call: &[(String, String)],
+    ) -> Result<String> {
+        let mut headers = self.build_mcp_headers(HeaderMode::Sse, None, call).await?;
         if self.outbound_era() == Some(PeerEra::Modern) {
             headers.insert(
                 "MCP-Protocol-Version",

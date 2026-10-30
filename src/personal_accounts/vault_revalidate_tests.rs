@@ -22,6 +22,7 @@ impl IdentityPropagation for External {
         _backend: &BackendDescriptor,
     ) -> std::result::Result<PropagatedCredential, PropagationError> {
         Ok(PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_owned(), "Bearer external".to_owned())],
             expires_at: i64::MAX,
             subject_key: "alice".to_owned(),

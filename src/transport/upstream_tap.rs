@@ -518,10 +518,11 @@ impl ListenerCredential {
 }
 
 /// The send a [`CredentialSource`] wraps: given the credential's headers, it
-/// sends the request.
+/// sends the request. The headers stay in the zeroizing holder, so they are
+/// wiped when the send drops them.
 pub(crate) type CredentialedSend<'a> = Box<
     dyn FnOnce(
-            Vec<(String, String)>,
+            zeroize::Zeroizing<Vec<(String, String)>>,
         ) -> futures::future::BoxFuture<'a, crate::Result<reqwest::Response>>
         + Send
         + 'a,

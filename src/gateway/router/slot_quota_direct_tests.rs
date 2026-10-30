@@ -153,6 +153,7 @@ impl crate::identity_propagation::IdentityPropagation for Recording {
         let binding = format!("{}@{}", identity.subject, backend.audience);
         self.0.lock().unwrap().insert(binding.clone());
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: binding,

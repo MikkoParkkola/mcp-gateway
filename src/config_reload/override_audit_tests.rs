@@ -401,6 +401,18 @@ fn api4_4_a_stalled_audit_file_does_not_hang_the_start() {
             .expect("the start must not hang on a stuck audit file");
             assert_eq!(started.is_err(), refuses, "{policy:?}: {started:?}");
             drop(release);
+            // The released write still runs on the blocking pool: wait for it,
+            // so it never lands while `dir` is being removed (a late `.hwm`
+            // would keep the folder).
+            let late = Arc::clone(&log);
+            assert!(
+                tokio::task::spawn_blocking(move || {
+                    late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+                })
+                .await
+                .expect("the wait does not panic"),
+                "the released audit write finishes"
+            );
         }
     });
 }

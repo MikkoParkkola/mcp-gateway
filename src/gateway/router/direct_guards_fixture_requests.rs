@@ -150,3 +150,15 @@ pub(crate) async fn send_with_headers(
     let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&body).unwrap())
 }
+
+/// The admin key `k-admin`, added while `WITH_ADMIN` is set (the web UI's
+/// tool route runs only for an admin); off by default, so no other row's key
+/// set changes.
+pub(super) fn admin_key(auth: &mut crate::config::AuthConfig) {
+    if super::WITH_ADMIN.with(std::cell::Cell::get) {
+        auth.api_keys.push(crate::config::ApiKeyConfig {
+            admin: true,
+            ..super::key("k-admin")
+        });
+    }
+}

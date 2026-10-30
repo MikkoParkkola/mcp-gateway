@@ -150,7 +150,7 @@ async fn contradicted_and_probing(
 
     peer.hold.store(true, Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
+        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport, &[])
         .await;
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
@@ -313,7 +313,7 @@ fn a_contradiction_over_a_replaced_transport_leaves_the_current_verdict() {
         assert_eq!(backend.cached_era().await, Some(PeerEra::Modern));
 
         backend
-            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &old)
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &old, &[])
             .await;
 
         assert_eq!(

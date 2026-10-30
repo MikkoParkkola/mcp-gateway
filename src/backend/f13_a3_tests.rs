@@ -487,7 +487,12 @@ async fn h1_a_cooling_stale_slot_answers_withheld_and_missing_alike() {
         let backend = Arc::clone(&backend);
         async move {
             let answered = backend
-                .catalogue_refusal((None, &[]), tool, &json!({}), lens)
+                .catalogue_refusal(
+                    (None, crate::transport::LentCredential::default()),
+                    tool,
+                    &json!({}),
+                    lens,
+                )
                 .await;
             format!("{answered:?}").replace(tool, "<tool>")
         }

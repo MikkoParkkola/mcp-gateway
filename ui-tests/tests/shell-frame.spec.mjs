@@ -614,6 +614,9 @@ test('F20e a setter from the previous render of the same page changes nothing', 
 });
 
 test('F19 the shell reads fixtures only', async ({ page, offsite }) => {
+  // The fixture stream is held open by default and would keep the network busy;
+  // a 404 is retried only at the 30 s ceiling, so the network goes idle.
+  await page.route('**/ui/api/stream', (r) => r.fulfill({ status: 404, body: '' }));
   await page.goto('/ui/overview/status');
   await shellReady(page);
   await page.waitForLoadState('networkidle');

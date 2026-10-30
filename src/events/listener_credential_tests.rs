@@ -44,7 +44,7 @@ impl ListenerMint for Scripted {
             return Err(crate::Error::Config("the grant was revoked".to_owned()));
         }
         Ok(ListenerGrant {
-            headers: vec![("authorization".to_owned(), "Bearer at.u1".to_owned())],
+            headers: vec![("authorization".to_owned(), "Bearer at.u1".to_owned())].into(),
             fence: Some(self.grant.lock().clone()),
         })
     }
@@ -211,19 +211,20 @@ async fn a_refused_mint_on_a_grant_with_no_view_ends_the_run() {
     );
 }
 
-/// A mint that answers with no credential at all, against the
+/// A mint that answers with exactly these headers, whatever they hold: no
+/// header at all, or one with an empty value, both against the
 /// [`ListenerMint`] contract.
-struct MintsNothing;
+struct MintsHeaders(Vec<(String, String)>);
 
 #[async_trait::async_trait]
-impl ListenerMint for MintsNothing {
+impl ListenerMint for MintsHeaders {
     async fn mint(
         &self,
         _backend: &str,
         _identity: &VerifiedIdentity,
     ) -> crate::Result<ListenerGrant> {
         Ok(ListenerGrant {
-            headers: Vec::new(),
+            headers: self.0.clone().into(),
             fence: None,
         })
     }
@@ -243,9 +244,34 @@ impl ListenerMint for MintsNothing {
 /// is held.
 #[tokio::test]
 async fn a_mint_with_no_credential_sends_nothing() {
+    assert_eq!(
+        sends_with(Vec::new()).await,
+        0,
+        "a send ran with no credential"
+    );
+}
+
+/// An empty value among non-empty headers is an empty credential too: an
+/// empty `Authorization` beside a filled `X-Foo` would reach a per-user slot
+/// as the subscriber's credential.
+#[tokio::test]
+async fn a_mint_with_an_empty_header_value_sends_nothing() {
+    let headers = vec![
+        ("authorization".to_owned(), String::new()),
+        ("x-foo".to_owned(), "bar".to_owned()),
+    ];
+    assert_eq!(
+        sends_with(headers).await,
+        0,
+        "a send ran with an empty credential"
+    );
+}
+
+/// How many sends a minted source runs when its mint answers `headers`.
+async fn sends_with(headers: Vec<(String, String)>) -> usize {
     let run = run_on(&Scripted::new());
     let run = Arc::new(RunFence {
-        mint: Arc::new(MintsNothing) as Arc<dyn ListenerMint>,
+        mint: Arc::new(MintsHeaders(headers)) as Arc<dyn ListenerMint>,
         backend: run.backend.clone(),
         identity: run.identity.clone(),
         binding: OnceLock::new(),
@@ -266,10 +292,6 @@ async fn a_mint_with_no_credential_sends_nothing() {
             .boxed()
         }))
         .await;
-    assert_eq!(
-        sent.load(Ordering::SeqCst),
-        0,
-        "a send ran with no credential"
-    );
-    assert!(outcome.is_err());
+    assert!(outcome.is_err(), "a refused mint answers an error");
+    sent.load(Ordering::SeqCst)
 }

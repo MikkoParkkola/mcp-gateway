@@ -75,7 +75,11 @@ async fn reaper_declines_during_the_fetch(prepare: impl FnOnce(&Backend), what: 
     tokio::time::advance(Duration::from_secs(2)).await;
 
     let checking = Arc::clone(&backend);
-    let check = tokio::spawn(async move { checking.catalogue_verdict(None, &[], "search").await });
+    let check = tokio::spawn(async move {
+        checking
+            .catalogue_verdict(None, crate::transport::LentCredential::default(), "search")
+            .await
+    });
     let fetched = tokio::time::timeout(Duration::from_secs(5), started_rx).await;
     assert!(
         matches!(fetched, Ok(Ok(()))),

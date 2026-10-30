@@ -110,7 +110,7 @@ impl Backend {
     /// on any slot is cold (F13 cells for a slot emptied between rounds).
     #[cfg(test)]
     pub(crate) fn empty_tool_catalogues_for_test(&self) {
-        for entry in &self.pool {
+        for entry in self.pool.iter() {
             entry.value().tools_cache.invalidate_if(|_| true);
         }
     }
@@ -214,4 +214,41 @@ fn retire(entry: &PooledEntry) -> bool {
     let _slot = entry.transport.write();
     entry.retired.store(true, Ordering::SeqCst);
     true
+}
+
+/// Take exactly `entry` out of `pool` if it still holds `key`, retiring it.
+/// A slot readmitted under the same key is a different entry and stays.
+/// Returns whether this call removed it. The transport stays on the orphan:
+/// nothing can send on a refused credential, and the last holder reaps it.
+fn evict_entry(
+    pool: &dashmap::DashMap<PoolKey, Arc<PooledEntry>>,
+    key: &PoolKey,
+    entry: &Arc<PooledEntry>,
+) -> bool {
+    pool.remove_if(key, |_, held| Arc::ptr_eq(held, entry) && retire(held))
+        .is_some()
+}
+
+impl Backend {
+    /// Give a lent-only per-user slot the means to evict itself the moment one
+    /// of its loans is refused definitively, whether or not that dispatch is
+    /// still awaited. The hook holds weak references only: strong ones would
+    /// cycle through the entry's own lender.
+    pub(super) fn arm_refusal_eviction(&self, key: &PoolKey, entry: &Arc<PooledEntry>) {
+        if !matches!(key, PoolKey::PerUser { .. })
+            || self.per_user_slot_credential() != crate::transport::SlotCredential::LentOnly
+        {
+            return;
+        }
+        let (pool, held) = (Arc::downgrade(&self.pool), Arc::downgrade(entry));
+        let (key, backend) = (key.clone(), self.name.clone());
+        entry.lender.on_definitive_refusal(Box::new(move || {
+            let (Some(pool), Some(entry)) = (pool.upgrade(), held.upgrade()) else {
+                return;
+            };
+            if evict_entry(&pool, &key, &entry) {
+                tracing::warn!(%backend, "per-user slot evicted: its credential was refused");
+            }
+        }));
+    }
 }

@@ -223,7 +223,12 @@ fn hair_trigger(reset: Duration) -> FailsafeConfig {
 /// R2's check as an anonymous caller on the shared slot.
 async fn check(backend: &Backend, tool: &str, arguments: &Value) -> crate::Result<Option<String>> {
     backend
-        .undeclared_key_refusal(None, &[], tool, arguments)
+        .undeclared_key_refusal(
+            None,
+            crate::transport::LentCredential::default(),
+            tool,
+            arguments,
+        )
         .await
 }
 
@@ -454,7 +459,12 @@ fn f13_t8_shared_slot_with_a_credential_never_fetches() {
         let backend = backend(InputSchemaEnforcement::Closed, &no_breaker(), &lister);
         let headers = [("Authorization".to_owned(), "Bearer caller".to_owned())];
         let out = backend
-            .undeclared_key_refusal(None, &headers, "edit", &undeclared())
+            .undeclared_key_refusal(
+                None,
+                crate::transport::LentCredential::unchecked(&headers),
+                "edit",
+                &undeclared(),
+            )
             .await;
         (out.expect("ok"), lister.lists())
     });

@@ -31,6 +31,9 @@ pub(crate) mod session;
 mod shell;
 mod status;
 pub(crate) mod stream;
+mod tool_call;
+#[cfg(test)]
+pub(crate) use tool_call::DEADLINE_FOR_TEST;
 
 use crate::gateway::routes;
 use std::sync::Arc;
@@ -70,6 +73,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_STATUS, get(status))
         .route(routes::UI_OVERVIEW, get(overview::overview))
         .route(routes::UI_TOOLS, get(tools))
+        .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
         .route(routes::UI_CONFIG, get(config))

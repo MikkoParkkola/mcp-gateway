@@ -100,7 +100,9 @@ impl crate::transport::Transport for Shadowed {
 
 /// A backend named `capabilities` with an `argument` rule for every tool: the
 /// capability of that name sends no trace of the secret, in its target,
-/// headers or body.
+/// headers or body. The name clash is refused before dispatch
+/// (`Error::AmbiguousBackend`), so neither the capability's endpoint nor the
+/// backend's transport is sent anything at all.
 #[tokio::test]
 async fn a_capability_sharing_a_backend_name_gets_none_of_its_secrets() {
     let rule = CredentialRule {
@@ -136,22 +138,21 @@ async fn a_capability_sharing_a_backend_name_gets_none_of_its_secrets() {
             &allow_all_ctx_named(Some("alice"), None),
         )
         .await;
-    assert!(answer.is_ok(), "premise: the call succeeds: {answer:?}");
-    let seen = seen.lock().expect("recorder").clone();
-    assert_eq!(seen.len(), 1, "premise: the capability was called once");
+    assert!(
+        matches!(
+            &answer,
+            Err(crate::Error::AmbiguousBackend { server, rule: None }) if server == "capabilities"
+        ),
+        "the clash is refused before dispatch: {answer:?}"
+    );
+    assert_eq!(
+        seen.lock().expect("recorder").len(),
+        0,
+        "the capability's endpoint was sent nothing"
+    );
     assert_eq!(
         backend_calls.load(Ordering::SeqCst),
         0,
-        "premise: the capability, not the backend, served the call"
-    );
-    assert!(
-        seen[0].contains(r#""q":"x""#),
-        "premise: the caller's own argument reached the endpoint: {}",
-        seen[0]
-    );
-    assert!(
-        !seen[0].contains(SECRET),
-        "the backend's secret reached the capability's endpoint: {}",
-        seen[0]
+        "the backend was sent nothing"
     );
 }

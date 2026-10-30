@@ -41,7 +41,7 @@ async fn m1_a_descriptor_block_in_the_callers_slot_is_recorded_as_descriptor() {
                 (BACKEND, TOOL),
                 &backend,
                 Some(BINDING),
-                &[],
+                crate::transport::LentCredential::default(),
                 MetaMcp::proof_of(&caller),
             )
             .await;

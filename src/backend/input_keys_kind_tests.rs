@@ -37,7 +37,12 @@ async fn each_answer_says_what_kind_it_is() {
         let backend = &backend;
         async move {
             backend
-                .catalogue_refusal((None, &[]), tool, &arguments, Lens::Catalogue)
+                .catalogue_refusal(
+                    (None, crate::transport::LentCredential::default()),
+                    tool,
+                    &arguments,
+                    Lens::Catalogue,
+                )
                 .await
                 .expect("no failsafe refusal")
                 .map(|answer| answer.kind)

@@ -409,3 +409,22 @@ async fn an_unminted_a2a_key_holder_is_not_served_a_7b_replay() {
         "D-a2a e2e: the A2A binding got the stored result past the refusal: {again}"
     );
 }
+
+/// The direct route keeps the credential it resolved in the zeroizing holder
+/// the lender uses: the type it stores is pinned here, so a change that hands
+/// the secret to a plain `Vec` fails to build.
+#[test]
+fn a_direct_route_credential_is_wiped_on_drop() {
+    type Held = zeroize::Zeroizing<Vec<(String, String)>>;
+    type Propagation = super::direct_preflight::Propagation;
+    fn stored(propagation: &Propagation) -> &Held {
+        &propagation.headers
+    }
+    let pinned: for<'a> fn(&'a Propagation) -> &'a Held = stored;
+    let empty: Held = Held::default();
+    assert!(
+        empty.is_empty(),
+        "premise: the holder type is the zeroizing one"
+    );
+    let _ = pinned;
+}

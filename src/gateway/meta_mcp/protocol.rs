@@ -177,7 +177,8 @@ impl MetaMcp {
         let timeout = self.prompts_resources_fetch_timeout;
         let results = join_all(credentialed.iter().map(
             |(backend, (headers, binding))| async move {
-                let fetch = backend.get_prompts_for_binding(binding.as_deref(), headers);
+                let fetch =
+                    backend.get_prompts_for_binding_lent(binding.as_deref(), headers.clone());
                 match tokio::time::timeout(timeout, fetch).await {
                     Ok(Ok(prompts)) => Ok(prompts.as_ref().clone()),
                     Ok(Err(e)) => Err(e),

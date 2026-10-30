@@ -17,6 +17,7 @@ const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
 const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
+const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
@@ -59,6 +60,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             MUTATION,
             "test_reload_endpoint_returns_structured_outcome_for_profile_change",
+        )],
+    ),
+    // The table sends no body, so its admin answer is 400; this test sends a
+    // call and pins the served 200 with the tool's result and its receipt.
+    (
+        "/ui/api/tools/call",
+        Method::POST,
+        &[(
+            UI_TOOL_CALL,
+            "t1_a_declared_read_runs_and_returns_its_receipt",
         )],
     ),
     (

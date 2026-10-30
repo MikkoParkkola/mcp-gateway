@@ -62,7 +62,7 @@ fn recording(
         calls.fetch_add(1, Ordering::SeqCst);
         seen.lock()
             .unwrap()
-            .extend(headers.into_iter().map(|(_, v)| v));
+            .extend(headers.iter().map(|(_, v)| v.clone()));
         Box::pin(async { Ok(ok_response()) })
     })
 }

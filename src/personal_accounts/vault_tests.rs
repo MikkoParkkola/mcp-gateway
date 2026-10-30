@@ -747,6 +747,9 @@ mod propagation;
 #[path = "vault_fence_tests.rs"]
 mod fence;
 
+#[path = "vault_recheck_send_tests.rs"]
+mod recheck_send;
+
 /// A vault listener observes by account and audience, so a lease
 /// rotation keeps its route while the call binding moves.
 #[test]

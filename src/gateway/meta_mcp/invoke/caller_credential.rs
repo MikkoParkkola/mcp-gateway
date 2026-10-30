@@ -18,9 +18,9 @@
 /// impl — header names are shown, values are replaced with `<redacted>`.
 #[derive(Default)]
 pub(super) struct CallerCredential {
-    /// Per-request outbound headers (empty = none). Never logged verbatim —
+    /// Per-request outbound headers (empty = none), wiped on drop. Never logged verbatim —
     /// see the redacting `Debug` impl below.
-    pub(super) headers: Vec<(String, String)>,
+    pub(super) headers: zeroize::Zeroizing<Vec<(String, String)>>,
     /// Collision-safe user+audience cache binding. `Some` → mix into cache keys
     /// so per-user results stay isolated (IDP.8); `None` → shared key is safe.
     pub(super) cache_binding: Option<String>,
@@ -32,12 +32,29 @@ pub(super) struct CallerCredential {
     /// optional backend's failed mint falls back to static credentials
     /// with nothing else set, yet may have reached the issuer (MIK-8379 H1).
     pub(super) attempted: bool,
+    /// When the strategy says the credential stops working; `None` when no
+    /// credential was minted.
+    pub(super) expiry: Option<crate::identity_propagation::send_check::Expiry>,
+    /// The check every send of the headers runs first (built by the mint
+    /// core). `None` for a dispatch with no minted credential.
+    pub(super) check: Option<crate::transport::SendCheck>,
 }
 
-/// Headers, cache binding and, for a managed account, the lease they were
-/// released under (A11-e′).
+impl CallerCredential {
+    /// The headers with the check that guards their every send, as a lent-only
+    /// slot takes them.
+    pub(super) fn lent(&self) -> crate::transport::LentCredential {
+        crate::transport::LentCredential {
+            headers: self.headers.clone(),
+            check: self.check.clone(),
+        }
+    }
+}
+
+/// Headers with their send check, cache binding and, for a managed account,
+/// the lease they were released under (A11-e′).
 pub(crate) type DispatchCredential = (
-    Vec<(String, String)>,
+    crate::transport::LentCredential,
     Option<String>,
     Option<crate::personal_accounts::ManagedLease>,
 );
@@ -51,6 +68,8 @@ impl std::fmt::Debug for CallerCredential {
             .field("cache_binding", &self.cache_binding)
             .field("managed", &self.managed.is_some())
             .field("attempted", &self.attempted)
+            .field("expiry", &self.expiry)
+            .field("checked", &self.check.is_some())
             .finish()
     }
 }

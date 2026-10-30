@@ -123,7 +123,7 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) caller_proof: CallerProof<'a>,
     /// Names an MCP child when nothing else does (MIK-7825).
     pub(super) credential_owner: Option<&'a str>,
-    pub(super) headers: &'a [(String, String)],
+    pub(super) headers: &'a crate::transport::LentCredential,
     pub(super) cache_binding: Option<&'a str>,
     pub(super) account_credential: super::propagation::DispatchAccount,
     pub(super) api_key_name: Option<&'a str>,
@@ -256,7 +256,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.tool,
             self.arguments,
             self.cache_binding,
-            self.headers,
+            self.headers.clone(),
             (self.scope, self.session_id),
         );
         let refusal = match refusal.await {

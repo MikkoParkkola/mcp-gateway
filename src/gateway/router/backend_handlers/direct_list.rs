@@ -42,10 +42,11 @@ pub(super) async fn drain(
     backend: &crate::backend::Backend,
     id: &RequestId,
     params: Option<&Value>,
-    propagated_headers: &[(String, String)],
+    propagated_headers: crate::transport::LentCredential,
     identity_key: Option<&str>,
     backend_name: &str,
 ) -> crate::Result<JsonRpcResponse> {
+    let credential = propagated_headers;
     // Every page read so far. Armed until the listing is remembered, so an
     // early return, `?`, the page cap, a cancellation or an unwind still
     // revokes from what was read (MIK-8399).
@@ -84,7 +85,7 @@ pub(super) async fn drain(
             backend,
             id,
             Some(page_params),
-            (propagated_headers, identity_key),
+            (credential.clone(), identity_key),
         )
         .await?;
         if page.error.is_some() {
@@ -105,7 +106,7 @@ pub(super) async fn drain(
             Some(next) if !next.is_null() => cursor = Some(next.clone()),
             _ => {
                 // MIK-7570.SCHEMA.1: the slot `tools/call` is judged against.
-                let credential = !propagated_headers.is_empty();
+                let credentialed = !credential.headers.is_empty();
                 let listing = if unreadable {
                     crate::backend::Listing::Truncated
                 } else {
@@ -113,7 +114,7 @@ pub(super) async fn drain(
                 };
                 let withheld = backend.remember_listed_tools_as(
                     identity_key,
-                    credential,
+                    credentialed,
                     &read.tools,
                     listing,
                 );
