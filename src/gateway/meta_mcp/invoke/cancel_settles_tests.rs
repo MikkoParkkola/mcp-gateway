@@ -424,3 +424,6 @@ fn a_lost_round_leaves_an_already_settled_key_alone() {
         other => panic!("the stored answer changed: {other:?}"),
     }
 }
+
+#[path = "cancel_settles_relay_tests.rs"]
+mod relay;
