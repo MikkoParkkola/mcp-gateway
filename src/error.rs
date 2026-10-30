@@ -17,24 +17,16 @@ pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have rea
      backend, so it was not re-sent; reconcile at the backend before running it again";
 
 /// Whether a step that failed with `error` is reported as one that may have
-/// run: the error is not raised before the send ([`Error::is_pre_dispatch`]),
-/// is not a gateway refusal (`Forbidden`, whose caller-facing reason stays
-/// neutral, A3, or `GatewayRefused`, raised only at admission checks before
-/// the call), and is not a sealed account offer or a marked account
-/// refusal (their text is the gateway's own: it goes out as written, and a
-/// marked refusal's text is read back). The one rule both loops and an aborted
-/// playbook use.
+/// run: the error is not raised before the send ([`Error::is_pre_dispatch`],
+/// which the gateway's refusals, `Forbidden` and `GatewayRefused`, are), and
+/// is not a sealed account offer or a marked account refusal (their text is
+/// the gateway's own: it goes out as written, and a marked refusal's text is
+/// read back). The one rule both loops and an aborted playbook use.
 ///
-/// A step not reported this way has not been shown never to have run: a
-/// gateway refusal reads `false` from `is_pre_dispatch` (the conservative
-/// answer, until its construction sites are proven pre-send), and the absence of the
-/// note is inconclusive, never "not run".
+/// A step not reported this way has not been shown never to have run: the
+/// absence of the note is inconclusive, never "not run".
 pub(crate) fn reports_may_have_run(error: &Error) -> bool {
     error.outcome_undetermined()
-        && !matches!(
-            error,
-            Error::Forbidden { .. } | Error::GatewayRefused { .. }
-        )
         && crate::personal_accounts::refusal::offer_data(error).is_none()
         && crate::personal_accounts::refusal::marked(error).is_none()
 }
@@ -593,32 +585,64 @@ impl Error {
     /// busy custody, MIK-8428) earns it the same way, decided by its seal and
     /// never its text; `Config` stays out, as it is also raised after a send.
     ///
+    /// The gateway's own refusals (`Forbidden`, `GatewayRefused`) earn their
+    /// place the same way: every site that builds one, or calls a builder that
+    /// does, is a reviewed pre-send site the pre-send scan holds by name.
+    ///
     /// This is also the public check for whether a failed call may have run:
     /// `false` means the request may have reached the backend, so a chain or
     /// playbook step that failed this way was not re-sent, and a caller should
-    /// reconcile with the backend before running it again. A gateway refusal
-    /// (`Forbidden`) reads `false` too, the conservative answer until its
-    /// construction sites are proven pre-send.
+    /// reconcile with the backend before running it again. For a playbook or
+    /// chain, and for a playbook step answered "not permitted", `true`
+    /// describes the refused request only: an earlier step of the same run may
+    /// have run, and the run's key stays held for that.
+    ///
+    /// One match with no catch-all arm: a new variant does not compile until
+    /// its stage is chosen.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
-        crate::personal_accounts::refusal::transient_data(self).is_some()
-            || matches!(
-                self,
-                Self::CircuitOpen { .. }
-                | Self::RateLimited(_)
-                | Self::IdentitySlotsExhausted { .. }
-                | Self::BackendNotFound(_)
-                | Self::AmbiguousBackend { .. }
-                | Self::ToolNotFound(_)
-                | Self::TransportConnect(_)
-                | Self::BackendUnavailable(_)
-                // A login wait: the start never finished, so nothing was sent
-                // and the same-key retry after the login must run (MIK-7982).
-                | Self::AuthorizationIncomplete { .. }
-                | Self::AuthorizationCancelled { .. }
-                | Self::AuthorizationRequired { .. }
-                | Self::AuthorizationPending { .. }
-            )
+        match self {
+            Self::CircuitOpen { .. }
+            | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
+            | Self::BackendNotFound(_)
+            | Self::AmbiguousBackend { .. }
+            | Self::ToolNotFound(_)
+            | Self::TransportConnect(_)
+            | Self::BackendUnavailable(_)
+            | Self::Forbidden { .. }
+            | Self::GatewayRefused { .. }
+            // A login wait: the start never finished, so nothing was sent
+            // and the same-key retry after the login must run (MIK-7982).
+            | Self::AuthorizationIncomplete { .. }
+            | Self::AuthorizationCancelled { .. }
+            | Self::AuthorizationRequired { .. }
+            | Self::AuthorizationPending { .. } => true,
+            // Decided by the gateway's seal, never by the text or the code.
+            Self::JsonRpc { .. } => {
+                crate::personal_accounts::refusal::transient_data(self).is_some()
+            }
+            Self::Config(_)
+            | Self::ResponseFirewallRefused
+            | Self::AuditUnavailable
+            | Self::ConfigValidation(_)
+            | Self::ConfigWatcher(_)
+            | Self::CapabilityHashMismatch { .. }
+            | Self::BackendTimeout(_)
+            | Self::Transport(_)
+            | Self::TransportPermanent(_)
+            | Self::Protocol(_)
+            | Self::ProtocolVersionRejected { .. }
+            | Self::OAuth(_)
+            | Self::Tls(_)
+            | Self::CliCredentialRefused { .. }
+            | Self::JsonRpcRetryable { .. }
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Http(_)
+            | Self::Shutdown
+            | Self::Internal(_) => false,
+        }
     }
 
     /// The request may have left the gateway and no answer came back: the

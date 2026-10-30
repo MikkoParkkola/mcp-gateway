@@ -509,6 +509,93 @@ fn a_construction_after_a_closures_parameters_is_counted() {
     assert_eq!(constructions(src), 1, "{src}");
 }
 
+/// `found` summed over each of `names`: a variant's literal constructions and
+/// the calls of every builder that returns it.
+fn summed_sites(names: &[&str]) -> BTreeMap<String, usize> {
+    let mut found = BTreeMap::new();
+    for name in names {
+        for (item, count) in construction_sites(name) {
+            *found.entry(item).or_default() += count;
+        }
+    }
+    found
+}
+
+fn reviewed(sites: &[(&str, usize)]) -> BTreeMap<String, usize> {
+    sites
+        .iter()
+        .map(|(item, count)| ((*item).to_string(), *count))
+        .collect()
+}
+
+/// The items allowed to build `Error::Forbidden`, or to call a builder that
+/// does, which `is_pre_dispatch` lists: each refuses before anything reaches
+/// the backend. Keyed as above.
+const FORBIDDEN_SITES: &[(&str, usize)] = &[];
+
+#[test]
+fn a_denial_is_built_only_at_reviewed_pre_send_sites() {
+    assert_eq!(
+        summed_sites(&[
+            "Error::Forbidden",
+            "Self::Forbidden",
+            "step_not_permitted",
+            "send_refused",
+            "counted_refusal",
+            "ui_call_refused",
+        ]),
+        reviewed(FORBIDDEN_SITES),
+        "a denial frees an idempotency key, so it may be built only before \
+         anything reaches the backend: review every new or removed site \
+         (left: found, right: reviewed)"
+    );
+}
+
+/// The items allowed to build `Error::GatewayRefused`, or to call its builder,
+/// which `is_pre_dispatch` lists: the admission checks, before any send.
+const GATEWAY_REFUSED_SITES: &[(&str, usize)] = &[];
+
+#[test]
+fn a_gateway_refusal_is_built_only_at_reviewed_pre_send_sites() {
+    assert_eq!(
+        summed_sites(&[
+            "Error::GatewayRefused",
+            "Self::GatewayRefused",
+            "gateway_refused"
+        ]),
+        reviewed(GATEWAY_REFUSED_SITES),
+        "a gateway refusal frees an idempotency key, so it may be built only \
+         before anything reaches the backend: review every new or removed \
+         site (left: found, right: reviewed)"
+    );
+}
+
+/// The transport builds a denial only through the lender's refusal, while
+/// it builds a lent send's headers, before the request leaves; no transport
+/// or agent-to-agent item builds a gateway refusal.
+#[test]
+fn the_transport_denies_only_while_building_headers() {
+    let found = summed_sites(&["Error::Forbidden", "send_refused", "counted_refusal"]);
+    let transport: Vec<&String> = found
+        .keys()
+        .filter(|k| k.starts_with("transport::"))
+        .collect();
+    assert!(
+        transport
+            .iter()
+            .all(|k| k.starts_with("transport::lender::")
+                || k.starts_with("transport::http::requests::")),
+        "a transport denial outside the lender's header step: {transport:?}"
+    );
+    let refused = summed_sites(&["Error::GatewayRefused", "gateway_refused"]);
+    assert!(
+        refused
+            .keys()
+            .all(|k| !k.starts_with("transport::") && !k.starts_with("a2a::")),
+        "a gateway refusal built in the transport: {refused:?}"
+    );
+}
+
 /// A struct variant's patterns are not constructions; a built value is.
 #[test]
 fn the_scan_tells_a_struct_variant_built_from_its_patterns() {

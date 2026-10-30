@@ -142,7 +142,9 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         return Ok(());
     };
     if !call.targets(step) || !call.gated.load(Ordering::SeqCst) {
-        return Err(refused("this send is not the call the web UI checked"));
+        return Err(ui_call_refused(
+            "this send is not the call the web UI checked",
+        ));
     }
     // The send's claim: it loses only to a deadline that cancelled first.
     match call
@@ -150,7 +152,7 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         .compare_exchange(OPEN, SENDING, Ordering::SeqCst, Ordering::SeqCst)
     {
         Ok(_) | Err(SENDING) => Ok(()),
-        Err(_) => Err(refused("the web UI stopped waiting for this call")),
+        Err(_) => Err(ui_call_refused("the web UI stopped waiting for this call")),
     }
 }
 
@@ -192,7 +194,7 @@ pub(crate) fn refuses_task() -> bool {
 
 /// The refusal for [`refuses_task`].
 pub(crate) fn task_refused() -> crate::Error {
-    refused("a web UI call does not run as a task")
+    ui_call_refused("a web UI call does not run as a task")
 }
 
 /// The gate before the send, where the dispatched backend and the caller's
@@ -208,7 +210,9 @@ pub(crate) fn gate(
     };
     // The principal is the one the route checked as an admin.
     if !call.targets(step) || principal != Some(call.principal.as_str()) {
-        return Err(refused("this call is not the one the web UI checked"));
+        return Err(ui_call_refused(
+            "this call is not the one the web UI checked",
+        ));
     }
     confirmed(&call, declared_read_only)?;
     call.gated.store(true, Ordering::SeqCst);
@@ -227,14 +231,14 @@ pub(crate) fn gate_capability(read_only: bool) -> crate::Result<()> {
 fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
     if call.confirm == Confirm::DeclaredReadOnlyOnly && !read_only {
         call.confirm_refused.store(true, Ordering::SeqCst);
-        return Err(refused(
+        return Err(ui_call_refused(
             "this tool is not declared read-only; confirm_write is required",
         ));
     }
     Ok(())
 }
 
-fn refused(message: &str) -> crate::Error {
+fn ui_call_refused(message: &str) -> crate::Error {
     // A gateway refusal of the delivery this call answers: its record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     crate::Error::Forbidden {

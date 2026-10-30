@@ -80,7 +80,9 @@ fn the_never_sent_list_is_the_reviewed_one() {
     // Each reviewed as never sent where it is constructed. AmbiguousBackend:
     // only in meta_mcp/invoke/dispatch.rs (a name that is both a backend and
     // the capability, refused while routing, before any send), from #4414.
-    const REVIEWED: [&str; 12] = [
+    // Forbidden and GatewayRefused: every construction and builder call is a
+    // reviewed pre-send site in error_pre_send_scan_tests.rs.
+    const REVIEWED: [&str; 14] = [
         "AmbiguousBackend",
         "AuthorizationCancelled",
         "AuthorizationIncomplete",
@@ -89,6 +91,8 @@ fn the_never_sent_list_is_the_reviewed_one() {
         "BackendNotFound",
         "BackendUnavailable",
         "CircuitOpen",
+        "Forbidden",
+        "GatewayRefused",
         "IdentitySlotsExhausted",
         "RateLimited",
         "ToolNotFound",
@@ -98,7 +102,10 @@ fn the_never_sent_list_is_the_reviewed_one() {
         .find("pub fn is_pre_dispatch(&self) -> bool {")
         .expect("is_pre_dispatch is in error.rs");
     let end = start + ERROR[start..].find("\n    }\n").expect("the body ends");
-    let body = &ERROR[start..end];
+    let whole = &ERROR[start..end];
+    // The members are the arms before the one `=> true`: every variant is
+    // named somewhere in the match, so only that group is the list.
+    let body = &whole[..whole.find("=> true,").expect("one arm answers true")];
     let mut members: Vec<&str> = body
         .split("Self::")
         .skip(1)
@@ -115,7 +122,8 @@ fn the_never_sent_list_is_the_reviewed_one() {
         "a new is_pre_dispatch member needs a never-sent review naming where it is constructed"
     );
     assert!(
-        body.contains("refusal::transient_data(self).is_some()"),
+        whole.contains("Self::JsonRpc { .. } => {")
+            && whole.contains("refusal::transient_data(self).is_some()"),
         "the sealed transient is no longer the list's only other term"
     );
 }
