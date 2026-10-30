@@ -53,9 +53,19 @@ pub(super) async fn drain_list_pages(
         // (`transport::SIDE_EFFECT_FREE_METHODS`), so a retried fetch
         // cannot duplicate an upstream effect.
         let permission = crate::transport::ResendPermission::Permitted;
-        let response = transport
-            .request_with_headers(family.method, params, headers, identity_key, permission)
-            .await?;
+        // Not every drain runs inside its backend's send (an inline catalogue
+        // fill calls the transport directly), so each page names it here.
+        let response = crate::transport::notify_ingress::in_backend(
+            backend.into(),
+            transport.request_with_headers(
+                family.method,
+                params,
+                headers,
+                identity_key,
+                permission,
+            ),
+        )
+        .await?;
         if let Some(error) = response.error {
             return Err(Error::json_rpc(error.code, error.message));
         }

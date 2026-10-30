@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 use super::*;
+// Each row publishes as a backend's call would, from inside its scope.
+use crate::transport::notify_ingress::test_support::{collect, scope};
 
 fn note(method: &str) -> JsonRpcNotification {
     JsonRpcNotification {

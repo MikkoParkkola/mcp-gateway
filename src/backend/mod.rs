@@ -109,6 +109,10 @@ pub struct Backend {
     /// `name` as the `backend` metric label, shared so that recording a
     /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
     metric_label: telemetry_metrics::SharedString,
+    /// `name` as the sender a notification raised in this backend's calls
+    /// names (`transport::notify_ingress`), built once so a send costs a
+    /// reference count.
+    notify_origin: Arc<str>,
     /// Configuration
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.

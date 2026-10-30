@@ -323,7 +323,25 @@ impl Backend {
         .await
     }
 
+    /// Every send, inside this backend's notification scope: a notification
+    /// raised anywhere in it, a start's handshake included, names this
+    /// backend at the sink's ingress (`transport::notify_ingress`).
     async fn request_attempted(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        extra_headers: crate::transport::LentCredential,
+        identity_key: Option<&str>,
+        attempts: Attempts,
+    ) -> Result<JsonRpcResponse> {
+        crate::transport::notify_ingress::in_backend(
+            std::sync::Arc::clone(&self.notify_origin),
+            self.send_attempted(method, params, extra_headers, identity_key, attempts),
+        )
+        .await
+    }
+
+    async fn send_attempted(
         &self,
         method: &str,
         params: Option<Value>,

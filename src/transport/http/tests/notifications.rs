@@ -32,7 +32,7 @@ async fn sse_decode_captures_the_notification_seen_before_the_response() {
     );
 
     // WHEN: the transport decodes it inside the caller's sink scope
-    let (response, notifications) = crate::transport::notification_sink::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
@@ -74,7 +74,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
     );
 
     // WHEN: the transport decodes it
-    let (_, notifications) = crate::transport::notification_sink::collect(None, async {
+    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(None, async {
         // ADR-014 §4: a relayed `notifications/message` reaches the caller
         // only if the caller declared a level, so the request this row is
         // about declares one. What the row asserts is unchanged.
@@ -101,7 +101,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
 #[tokio::test]
 async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
-    let (response, notifications) = crate::transport::notification_sink::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
@@ -135,7 +135,7 @@ async fn sse_decode_strips_what_a_backend_planted_on_a_progress_frame() {
         assert_progress_stripped, planted_progress,
     };
     let body = sse_with(&planted_progress("t-1"));
-    let (_, notifications) = crate::transport::notification_sink::collect(
+    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
@@ -154,7 +154,7 @@ async fn sse_decode_withholds_a_backend_tasks_notification() {
         "method": "notifications/tasks",
         "params": {"taskId": "FORGED-TASK", "status": "completed"},
     });
-    let (_, notifications) = crate::transport::notification_sink::collect(
+    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(sse_with(&frame))),
     )

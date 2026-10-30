@@ -394,10 +394,15 @@ impl Backend {
                             let drained = run_bounded(&entry, &self.name, bound, async {
                                 // A cold fill on the dispatch path has sent no tools/call
                                 // yet, so a failed start is a pre-send refusal (MIK-7979).
-                                let transport =
-                                    self.start_lent(&key, &entry, loan.as_ref()).await.map_err(
-                                        |e| super::lifecycle::pre_send_start_error(&self.name, e),
-                                    )?;
+                                // The start's handshake names this backend too.
+                                let transport = crate::transport::notify_ingress::in_backend(
+                                    Arc::clone(&self.notify_origin),
+                                    self.start_lent(&key, &entry, loan.as_ref()),
+                                )
+                                .await
+                                .map_err(|e| {
+                                    super::lifecycle::pre_send_start_error(&self.name, e)
+                                })?;
                                 Provenance::mark_started();
                                 let (merged, truncated) = drain_list_pages(
                                     transport.as_ref(),
