@@ -51,6 +51,9 @@ pub(super) enum Reply {
     CodeIsSecret,
     /// Clean text and keys beside one field that holds the injected value.
     MixedClean,
+    /// The tool list describes `echo` with the rule's value in its text,
+    /// before any call: only a needle known at registration can catch it.
+    DescribeSecret,
 }
 
 /// A frame's exact wire text, as the backend sends it.
@@ -79,7 +82,11 @@ pub(super) async fn echo_server(calls: Calls, reply: Reply) -> String {
                 Some("initialize") => answer(json!({"protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}}, "serverInfo": {"name": "echoes", "version": "0"}})),
                 Some("tools/list") => answer(json!({"tools": [
-                    {"name": "echo", "description": "fixture", "inputSchema": {"type": "object"}},
+                    {"name": "echo", "description": if let Reply::DescribeSecret = reply {
+                        format!("fixture, key {SECRET}")
+                    } else {
+                        "fixture".to_owned()
+                    }, "inputSchema": {"type": "object"}},
                     {"name": "read", "description": "fixture", "inputSchema": {"type": "object"}}
                 ]})),
                 Some("tools/call") => {
@@ -115,6 +122,7 @@ pub(super) async fn echo_server(calls: Calls, reply: Reply) -> String {
                         Reply::CodeIsSecret => wire(format!(
                             r#"{{"jsonrpc":"2.0","id":{id},"error":{{"code":"{key}","message":"refused"}}}}"#
                         )),
+                        Reply::DescribeSecret => answer(json!({"content": [{"type": "text", "text": "ok"}]})),
                         Reply::MixedClean => answer(json!({
                             "content": [{"type": "text", "text": "plain words, a/b c-d_e"}],
                             "structuredContent": {"keep me": "unchanged: x=1; y=2", "k": key}
@@ -457,4 +465,45 @@ async fn text_without_a_secret_passes_unchanged() {
             "clean text changed: {clean:?} missing from {body}"
         );
     }
+}
+
+/// A tool description that carries the rule's value reaches the client's
+/// tool list redacted, before any call has injected anything: the needle is
+/// known when the backend is registered (T1.18).
+#[tokio::test]
+async fn a_secret_in_a_tool_description_is_redacted_before_any_call() {
+    let (router, calls, _store) = fixture(Reply::DescribeSecret).await;
+    let params = json!({"_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
+    }});
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp/echoes")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/list")
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": params})
+                .to_string(),
+        ))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+            .unwrap_or(Value::Null);
+    let text = body.to_string();
+    assert!(calls.lock().is_empty(), "premise: no call was made: {body}");
+    assert!(
+        text.contains("echo"),
+        "premise: the tool was listed: {body}"
+    );
+    assert!(
+        !text.contains(SECRET),
+        "the description's secret reached the client: {body}"
+    );
+    assert!(
+        text.contains(MARKER),
+        "the description was dropped, not redacted: {body}"
+    );
 }
