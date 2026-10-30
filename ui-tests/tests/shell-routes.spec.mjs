@@ -196,8 +196,9 @@ test('R10 with idle loading suppressed, opening the palette loads the screens it
   await expect(page.locator('dialog.palette [role="option"]', { hasText: 'All tools' })).toHaveCount(1);
 });
 
-test('R12 the screen preload asks for idle time with a deadline, so a page that never idles still preloads', async ({ page }) => {
-  // Record every idle request's options, then pass it on to the browser.
+test('R12 the screen preload asks for idle time with a two-second deadline, so a page that never idles still preloads', async ({ page }) => {
+  // Record every idle request's options, then pass it on to the browser. This
+  // pins the deadline the shell configures; it does not starve the page.
   await page.addInitScript(() => {
     window.idleOptions = [];
     const ask = window.requestIdleCallback.bind(window);
@@ -213,8 +214,7 @@ test('R12 the screen preload asks for idle time with a deadline, so a page that 
   const asked = await page.evaluate(() => window.idleOptions);
   expect(asked.length, 'the preload asks for idle time').toBeGreaterThan(0);
   for (const options of asked) {
-    expect(typeof options?.timeout, `a deadline on ${JSON.stringify(options)}`).toBe('number');
-    expect(options.timeout).toBeLessThanOrEqual(2000);
+    expect(options?.timeout, `a deadline on ${JSON.stringify(options)}`).toBe(2000);
   }
 });
 

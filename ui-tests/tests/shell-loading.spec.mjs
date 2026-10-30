@@ -59,10 +59,10 @@ test('G1 a slow page shows the loading state after about 300 ms, says so once, a
   await expect(loading(page)).toBeVisible();
   // The shell marks when it starts the loading timer and when it shows the
   // state, as it does each, so a busy runner cannot shorten the measured gap.
-  const gap = await page.evaluate(() => {
-    const at = (name) => performance.getEntriesByName(name, 'mark')[0]?.startTime;
-    return at('ui-loading-shown') - at('ui-loading-armed');
-  });
+  const marks = await page.evaluate(() => ['ui-loading-armed', 'ui-loading-shown']
+    .map((name) => performance.getEntriesByName(name, 'mark').map((m) => m.startTime)));
+  expect(marks.map((m) => m.length), 'one armed and one shown mark').toEqual([1, 1]);
+  const gap = marks[1][0] - marks[0][0];
   expect(gap, 'not before about 300 ms').toBeGreaterThanOrEqual(295);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual(['Loading Policies.']);

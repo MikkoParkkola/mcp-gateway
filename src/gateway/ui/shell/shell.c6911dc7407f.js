@@ -1299,7 +1299,10 @@ function watchLoading(content, body, label, current) {
   let withdraw = null;
   const guard = { epoch: authEpoch, seq: renderSeq };
   // Marks the timer's start and the state's arrival where each happens, so a
-  // test can time the onset by the page's own clock.
+  // test can time the onset by the page's own clock. Only the latest attempt's
+  // pair is kept, so navigations and Retries do not pile marks up.
+  performance.clearMarks('ui-loading-armed');
+  performance.clearMarks('ui-loading-shown');
   performance.mark('ui-loading-armed');
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
