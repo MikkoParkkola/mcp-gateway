@@ -389,13 +389,13 @@ pub(super) async fn decide(
     } = taken;
     if decision == Decision::Cancel {
         drop(grant);
-        ended.notify_one();
+        release(backend, &ended).await;
         return Decided::Done;
     }
     let cancel = tokio_util::sync::CancellationToken::new();
     let by = Instant::now() + SIGN_IN_CONFIRM_WINDOW;
     let saved = client.save_confirmed(grant, held_for, &cancel, by).await;
-    ended.notify_one();
+    release(backend, &ended).await;
     match saved {
         Ok(()) => {
             backend.clear_auth_wait_if(generation);
@@ -405,5 +405,17 @@ pub(super) async fn decide(
             record_outcome(state, &backend.name, "failed", caller.as_ref());
             Decided::SaveFailed(error)
         }
+    }
+}
+
+/// Tell the flow's task a decision ended it, and let it hand the login gate
+/// back before the answer goes out, so the next start does not meet it.
+async fn release(backend: &Backend, ended: &tokio::sync::Notify) {
+    ended.notify_one();
+    for _ in 0..64 {
+        if !backend.login_gate.in_flight() {
+            break;
+        }
+        tokio::task::yield_now().await;
     }
 }
