@@ -143,6 +143,7 @@ impl MetaMcp {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
             let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
+                firewall.startup_policy(),
                 &mut artifact,
                 &self.expand_targets(at.targets),
                 at.correlation,
@@ -202,8 +203,9 @@ impl MetaMcp {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
             // Kept only where the scan may rewrite: a finding let through
             // untouched is not a rewrite.
-            let before = firewall.redacts().then(|| result.clone());
+            let before = firewall.startup_policy().redacts().then(|| result.clone());
             let verdict = firewall.check_response_artifact(
+                firewall.startup_policy(),
                 result,
                 &self.expand_targets(at.targets),
                 at.correlation,
@@ -485,6 +487,7 @@ impl MetaMcp {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
             let mut artifact = fields.clone();
             let verdict = firewall.check_response_artifact(
+                firewall.startup_policy(),
                 &mut artifact,
                 &self.expand_targets(at.targets),
                 at.correlation,

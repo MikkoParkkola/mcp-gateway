@@ -72,8 +72,14 @@ pub(crate) async fn poll_capability(
             tool: &target.capability,
             key: crate::security::response_policy::KeyOf::of_client(client.api_key_identity()),
         };
-        let verdict =
-            fw.check_request_keyed(&session, rule_target, &arguments, &client.name, &identity);
+        let verdict = fw.check_request_keyed(
+            fw.startup_policy(),
+            &session,
+            rule_target,
+            &arguments,
+            &client.name,
+            &identity,
+        );
         if !verdict.allowed {
             return Err(PollRefused::Firewall);
         }

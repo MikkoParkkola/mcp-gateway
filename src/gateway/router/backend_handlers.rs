@@ -182,6 +182,7 @@ async fn guard_tool_call(
             key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
         };
         let verdict = fw.check_request_keyed(
+            fw.startup_policy(),
             &session_id,
             target,
             arguments,

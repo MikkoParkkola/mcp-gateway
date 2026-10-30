@@ -59,6 +59,7 @@ fn answer(fw: &Firewall, targets: &[&str]) -> FirewallAction {
         key: crate::security::response_policy::KeyOf::NotKnown,
     };
     fw.check_response_artifact(
+        fw.startup_policy(),
         &mut value,
         &targets,
         &correlation,
@@ -271,8 +272,15 @@ fn keyed(fw: &Firewall, key: KeyOf<'_>) -> FirewallAction {
         tool: "t",
         key,
     };
-    fw.check_request_keyed("s", target, &injected(), "caller", "caller")
-        .action
+    fw.check_request_keyed(
+        fw.startup_policy(),
+        "s",
+        target,
+        &injected(),
+        "caller",
+        "caller",
+    )
+    .action
 }
 
 /// A4: a rule scoped to key `k1` applies to `k1` only; another key and a
@@ -293,6 +301,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
                               "action": "allow", "keys": ["k1"]}]));
     let rescan = |key| {
         fw.rescan(
+            fw.startup_policy(),
             RuleTarget {
                 server: ServerOf::Backend("a"),
                 tool: "t",
@@ -330,6 +339,7 @@ fn a_keys_scoped_rule_applies_to_its_key_only_answer() {
             origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         fw.check_response_artifact(
+            fw.startup_policy(),
             &mut value,
             &targets,
             &correlation,
@@ -358,7 +368,7 @@ fn resolve(fw: &Firewall, key: KeyOf<'_>, severity: Severity) -> FirewallAction 
         tool: "t",
         key,
     };
-    fw.resolve_action(target, &[finding])
+    fw.resolve_action(fw.startup_policy(), target, &[finding])
 }
 
 /// A10d: a key that is not known resolves over every key a rule names, and

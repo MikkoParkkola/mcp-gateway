@@ -393,6 +393,7 @@ impl super::MetaMcp {
             let mut inspected = challenge.clone();
             let verdict = firewall
                 .check_response_artifact(
+                    firewall.startup_policy(),
                     &mut inspected,
                     targets,
                     correlation,

@@ -88,6 +88,7 @@ fn inspect(
 ) -> crate::security::firewall::FirewallVerdict {
     firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             response,
             &[target("backend-a", "inspect_me")],
             &correlation(),

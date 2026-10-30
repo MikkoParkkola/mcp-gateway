@@ -323,6 +323,7 @@ pub(super) async fn tools_call(
                 lifecycle.renew(control_identity.clone());
             }
             let verdict = fw.check_request_keyed(
+                fw.startup_policy(),
                 session_id,
                 RuleTarget::routed(target.server, target.tool, client.as_ref()),
                 target.arguments,

@@ -57,13 +57,15 @@ pub mod input_scanner;
 pub(crate) mod json_literal;
 mod json_valid;
 pub mod memory_scanner;
+mod policy;
 pub mod principal_window;
 pub mod redactor;
 mod response;
 mod verdict;
+pub(crate) use policy::FirewallPolicy;
 #[cfg(test)]
 use verdict::rule_matches;
-use verdict::{compile_rule, decide_firewall_action, first_matching_rule_action};
+use verdict::{decide_firewall_action, first_matching_rule_action};
 pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
@@ -91,8 +93,10 @@ mod rule_scope_tests;
 /// interior immutability; all mutable state lives in sub-modules behind locks.
 pub struct Firewall {
     config: FirewallConfig,
-    /// Compiled tool-match rules (glob → action).
-    rules: Vec<CompiledRule>,
+    /// The policy compiled from the config this firewall was built with: the
+    /// startup generation's. A check takes the policy of the generation it is
+    /// judged under; this one is for callers that have none yet.
+    startup: Arc<FirewallPolicy>,
     /// Reuse existing response scanner for prompt injection.
     response_scanner: ResponseScanner,
     /// Input pattern scanner for request arguments.
@@ -258,7 +262,7 @@ impl Firewall {
         config: FirewallConfig,
         transition_tracker: Option<Arc<TransitionTracker>>,
     ) -> Self {
-        let rules = config.rules.iter().map(compile_rule).collect();
+        let startup = Arc::new(FirewallPolicy::compile(&config));
         let response_scanner = ResponseScanner::new();
         let input_scanner = input_scanner::InputScanner::new();
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());
@@ -286,7 +290,7 @@ impl Firewall {
 
         Self {
             config,
-            rules,
+            startup,
             response_scanner,
             input_scanner,
             memory_scanner,
@@ -336,12 +340,17 @@ impl Firewall {
     /// stateful guards (anomaly, tenant, budget, learning): those judged the
     /// logical call once, at its route scan, and a second pass would count it
     /// twice. Design note `design-b1-rescan.md` r2.
-    pub(crate) fn rescan(&self, target: RuleTarget<'_>, args: &Value) -> FirewallVerdict {
+    pub(crate) fn rescan(
+        &self,
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        args: &Value,
+    ) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
         }
         let findings = self.content_findings(target.tool, args);
-        let action = self.resolve_action(target, &findings);
+        let action = self.resolve_action(policy, target, &findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -383,13 +392,27 @@ impl Firewall {
             tool,
             key: KeyOf::NotKnown,
         };
-        self.check_request_keyed(session_id, target, args, caller, control_identity)
+        self.check_request_keyed(
+            self.startup_policy(),
+            session_id,
+            target,
+            args,
+            caller,
+            control_identity,
+        )
+    }
+
+    /// The startup generation's policy, for a caller that has no generation
+    /// to judge under.
+    pub(crate) fn startup_policy(&self) -> &FirewallPolicy {
+        &self.startup
     }
 
     /// [`Self::check_request`] with the caller's proven key, for a rule's
     /// `keys` scope; the entry point every gateway route uses (POLICY.2).
     pub(crate) fn check_request_keyed(
         &self,
+        policy: &FirewallPolicy,
         session_id: &str,
         target: RuleTarget<'_>,
         args: &Value,
@@ -430,7 +453,7 @@ impl Firewall {
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            self.resolve_action(target, &findings)
+            self.resolve_action(policy, target, &findings)
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -622,6 +645,7 @@ impl Firewall {
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.
         self.check_response_artifact(
+            self.startup_policy(),
             response,
             &targets,
             &correlation,
@@ -644,13 +668,18 @@ impl Firewall {
     /// an `allow` scoped to one type from allowing another type beside it.
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
-    fn resolve_action(&self, target: RuleTarget<'_>, findings: &[Finding]) -> FirewallAction {
-        verdict::candidate_keys(&self.rules, target)
+    fn resolve_action(
+        &self,
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        findings: &[Finding],
+    ) -> FirewallAction {
+        verdict::candidate_keys(&policy.rules, target)
             .into_iter()
             .flat_map(|key| {
                 findings.iter().map(move |finding| {
                     let rule =
-                        first_matching_rule_action(&self.rules, target, key, finding.scan_type);
+                        first_matching_rule_action(&policy.rules, target, key, finding.scan_type);
                     decide_firewall_action(rule, Some(finding.severity))
                 })
             })

@@ -5,7 +5,9 @@
 
 use serde_json::Value;
 
-use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType};
+use super::{
+    Finding, FindingLocation, Firewall, FirewallAction, FirewallPolicy, FirewallVerdict, ScanType,
+};
 use crate::protocol::continuation::Keyring;
 use crate::security::Severity;
 use crate::security::response_policy::{
@@ -14,11 +16,6 @@ use crate::security::response_policy::{
 };
 
 impl Firewall {
-    /// Whether a response scan may rewrite a credential in place.
-    pub(crate) const fn redacts(&self) -> bool {
-        self.config.credential_redaction
-    }
-
     /// Whether [`Self::check_response_artifact`] scans at all: off, it allows
     /// every artifact unread, which is no scan for a delivery to state.
     pub(crate) const fn scans_responses(&self) -> bool {
@@ -29,6 +26,7 @@ impl Firewall {
     /// Immutable questions may be refused, but are never silently rewritten.
     pub(crate) fn check_response_artifact(
         &self,
+        policy: &FirewallPolicy,
         response: &mut Value,
         targets: &[ResponsePolicyTarget],
         correlation: &ResponseCorrelation<'_>,
@@ -50,13 +48,14 @@ impl Firewall {
         // restored whole before the Block. The routed tools/call pass redacts and never
         // copies (MIK-7917 item 3).
         let original = (mutation != ResponseMutationPolicy::Redact).then(|| response.clone());
-        let findings = self.inspect_response_content(response, correlation);
+        let findings = self.inspect_response_content(policy, response, correlation);
         let mut action = targets
             .iter()
             .fold(FirewallAction::Allow, |combined, target| {
                 strongest_action(
                     combined,
                     self.resolve_action(
+                        policy,
                         RuleTarget {
                             server: if target.origin == TargetOrigin::NoBackend {
                                 ServerOf::NoBackend
@@ -96,6 +95,7 @@ impl Firewall {
     /// Run the existing detectors once; policy target count never multiplies it.
     fn inspect_response_content(
         &self,
+        policy: &FirewallPolicy,
         response: &mut Value,
         correlation: &ResponseCorrelation<'_>,
     ) -> Vec<Finding> {
@@ -108,7 +108,7 @@ impl Firewall {
         // Redact first: an injection finding quotes up to 200 chars of raw
         // text (a value or, since #2114, a key), so it must quote the redacted
         // text or a credential beside the marker reaches the audit log.
-        if self.config.credential_redaction {
+        if policy.credential_redaction {
             #[cfg(test)]
             self.response_observer
                 .redactions
@@ -137,7 +137,7 @@ impl Firewall {
                 scan_type: ScanType::PromptInjection,
                 severity: Severity::Medium,
                 description: matched.pattern_description,
-                matched: if self.config.credential_redaction {
+                matched: if policy.credential_redaction {
                     matched.matched_fragment
                 } else {
                     QUOTE_WITHHELD.to_owned()

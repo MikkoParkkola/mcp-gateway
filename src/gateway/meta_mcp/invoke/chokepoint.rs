@@ -283,6 +283,7 @@ impl MetaMcp {
             key: crate::security::response_policy::KeyOf::NoKey,
         };
         let verdict = firewall.check_request_keyed(
+            firewall.startup_policy(),
             session_id,
             rule_target,
             arguments,
@@ -392,9 +393,9 @@ impl MetaMcp {
                 crate::security::response_policy::KeyOf::Key,
             ),
         };
-        let mut verdict = firewall.rescan(target, outbound.arguments);
+        let mut verdict = firewall.rescan(firewall.startup_policy(), target, outbound.arguments);
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(target, answers);
+            let answered = firewall.rescan(firewall.startup_policy(), target, answers);
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }

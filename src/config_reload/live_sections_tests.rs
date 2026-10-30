@@ -449,3 +449,19 @@ async fn f7_a_malformed_file_leaves_the_running_generation() {
     assert!(live.generation().sanitize_input(), "the flag changed");
     assert_eq!(live.seq(), 0, "a refused reload published");
 }
+
+/// ADR-029 (amended): each generation compiles its own firewall policy from
+/// its own config, so a reload's policy is not the running one's.
+#[cfg(feature = "firewall")]
+#[test]
+fn each_generation_compiles_its_own_firewall_policy() {
+    let running = super::Generation::of(Config::default());
+    let mut config = Config::default();
+    config.security.firewall.credential_redaction = false;
+    let wanted = super::Generation::of(config);
+    assert!(running.firewall_policy().redacts(), "the default redacts");
+    assert!(
+        !wanted.firewall_policy().redacts(),
+        "the reload's own switch"
+    );
+}

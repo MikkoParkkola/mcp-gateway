@@ -562,6 +562,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
     let before = firewall.response_inspection_counts().inspections;
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut artifact,
             &targets,
             &ResponseCorrelation {

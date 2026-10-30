@@ -355,6 +355,7 @@ impl Services {
             key: crate::security::response_policy::KeyOf::NotKnown,
         };
         match firewall.check_response_artifact(
+            firewall.startup_policy(),
             data,
             &targets,
             &correlation,

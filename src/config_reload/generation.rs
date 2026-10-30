@@ -13,6 +13,11 @@ use crate::config::Config;
 #[derive(Debug)]
 pub struct Generation {
     config: Arc<Config>,
+    /// `security.firewall`'s rules and redaction switch, compiled once per
+    /// generation (ADR-029, amended): every check judged under this
+    /// generation reads them, so one request never mixes two rule sets.
+    #[cfg(feature = "firewall")]
+    firewall: Arc<crate::security::firewall::FirewallPolicy>,
 }
 
 impl Generation {
@@ -35,6 +40,10 @@ impl Generation {
     /// and [`super::LiveConfig::set`] while no view can refuse.
     pub(super) fn of(config: Config) -> Self {
         Self {
+            #[cfg(feature = "firewall")]
+            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile(
+                &config.security.firewall,
+            )),
             config: Arc::new(config),
         }
     }
@@ -43,6 +52,20 @@ impl Generation {
     #[must_use]
     pub fn config(&self) -> &Arc<Config> {
         &self.config
+    }
+
+    /// The firewall policy compiled from this generation's config.
+    #[cfg(feature = "firewall")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the firewall checks once they judge under the request's generation"
+        )
+    )]
+    #[must_use]
+    pub(crate) fn firewall_policy(&self) -> &crate::security::firewall::FirewallPolicy {
+        &self.firewall
     }
 
     /// `security.sanitize_input` as published.
