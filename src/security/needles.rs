@@ -342,17 +342,7 @@ pub(crate) fn refused_response(
     let crate::Error::JsonRpc { code, message, .. } = refusal(needles) else {
         unreachable!("the refusal is a JSON-RPC error")
     };
-    JsonRpcResponse {
-        jsonrpc: "2.0".to_owned(),
-        id,
-        result: None,
-        error: Some(crate::protocol::JsonRpcError {
-            code,
-            message,
-            data: None,
-        }),
-        confirmation_refusal: false,
-    }
+    JsonRpcResponse::error(id, code, message)
 }
 
 /// The fixed refusal an answer is replaced with; it names no value.
