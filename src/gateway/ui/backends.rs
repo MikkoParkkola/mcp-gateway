@@ -15,7 +15,7 @@
 use crate::gateway::routes;
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post};
@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::admin_audit::attach_selection;
+use super::guard::Guard;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
@@ -31,8 +32,7 @@ use super::{
         remove_backend as remove_backend_config, resolve_backend,
         update_backend as update_backend_config,
     },
-    errors::{admin_auth_required, config_path_unavailable, flat_error},
-    is_admin,
+    errors::{config_path_unavailable, flat_error},
 };
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
@@ -40,7 +40,6 @@ use crate::config_reload::refusals::RefusalKind;
 use crate::config_reload::{
     ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
 
@@ -149,12 +148,11 @@ pub fn backends_router() -> Router<Arc<AppState>> {
 /// Returns 201 on success, 409 on duplicate, 422 on unresolvable transport.
 async fn add_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Json(req): Json<AddBackendRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     // Sanitize name
@@ -254,12 +252,11 @@ async fn add_backend(
 /// backend does not exist.
 async fn remove_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
@@ -326,12 +323,11 @@ async fn remove_backend(
 /// Returns 200 on success, 404 when not found.
 async fn revive_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     #[allow(
@@ -381,13 +377,12 @@ fn requested_transport(command: Option<String>, url: Option<String>) -> Option<T
 
 async fn update_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
     Json(req): Json<UpdateBackendRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
@@ -548,10 +543,9 @@ fn unwritten(e: MutateError) -> axum::response::Response {
 }
 
 /// `GET /ui/api/registry` — list all built-in registry entries as JSON.
-async fn list_registry(client: Option<Extension<AuthenticatedClient>>) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn list_registry(guard: Guard) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let entries: Vec<RegistryEntryJson> = server_registry::all()
@@ -565,13 +559,9 @@ async fn list_registry(client: Option<Extension<AuthenticatedClient>>) -> impl I
 /// `GET /ui/api/registry/search?q=` — search registry by keyword.
 ///
 /// Matches against name, description, and category (case-insensitive).
-async fn search_registry(
-    client: Option<Extension<AuthenticatedClient>>,
-    Query(params): Query<SearchQuery>,
-) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn search_registry(guard: Guard, Query(params): Query<SearchQuery>) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let q = params.q.as_deref().unwrap_or("").trim().to_string();

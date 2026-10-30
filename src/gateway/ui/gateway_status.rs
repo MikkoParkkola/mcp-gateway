@@ -17,14 +17,13 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::extract::State;
 use axum::response::IntoResponse;
 use serde_json::{Value, json};
 
-use super::errors::auth_required;
+use super::AppState;
 use super::gateway_upgrade::upgrade_block;
-use super::{AppState, AuthenticatedClient, is_admin};
+use super::guard::Guard;
 use crate::cli_support::display_text;
 
 /// Characters kept of an environment name or host name.
@@ -93,11 +92,10 @@ fn tls_block(state: &AppState) -> Value {
 /// The handler.
 pub(super) async fn gateway_status(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let reloads = state
         .meta_mcp

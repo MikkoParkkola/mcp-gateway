@@ -488,6 +488,17 @@ a { color: inherit; text-decoration: none; }
 .top .search { margin-left: auto; width: 300px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: none; color: var(--color-text-tertiary); font: var(--type-body); cursor: pointer; }
 .top .search kbd { font: var(--type-small); font-family: var(--font-family-mono); }
 .top .who { font: var(--type-small); }
+/* The environment chip (frames 40, 37): a mono pill after the brand. It gives way first
+   when the bar is short, so a long name clips with an ellipsis and nothing overflows. */
+/* Its wrapper draws no box: the chip and its tooltip trigger are items of the top bar itself. */
+.envchip { display: contents; }
+.envchip .env { flex: 0 1000 auto; min-width: var(--space-10); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: var(--space-0-5) var(--space-2);
+  border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-full); color: var(--color-text-secondary);
+  font: var(--type-caption); font-family: var(--font-family-mono); }
+.envchip .has-tip { flex: none; }
+/* The brand, the sign-in line and Sign out keep their one line beside a long name; the chip
+   keeps a few letters, so the bar never overlaps. */
+.top .mbrand, .top .who, .top .signout { flex-shrink: 0; }
 /* The live stream: shown once it has said hello; a dot before the word, amber while stopped. */
 .top .stream { font: var(--type-small); color: var(--color-text-secondary); white-space: nowrap; }
 .top .stream[hidden] { display: none; }

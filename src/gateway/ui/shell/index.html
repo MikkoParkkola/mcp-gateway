@@ -503,6 +503,17 @@ a { color: inherit; text-decoration: none; }
 .top .search { margin-left: auto; width: 300px; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: none; color: var(--color-text-tertiary); font: var(--type-body); cursor: pointer; }
 .top .search kbd { font: var(--type-small); font-family: var(--font-family-mono); }
 .top .who { font: var(--type-small); }
+/* The environment chip (frames 40, 37): a mono pill after the brand. It gives way first
+   when the bar is short, so a long name clips with an ellipsis and nothing overflows. */
+/* Its wrapper draws no box: the chip and its tooltip trigger are items of the top bar itself. */
+.envchip { display: contents; }
+.envchip .env { flex: 0 1000 auto; min-width: var(--space-10); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: var(--space-0-5) var(--space-2);
+  border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-full); color: var(--color-text-secondary);
+  font: var(--type-caption); font-family: var(--font-family-mono); }
+.envchip .has-tip { flex: none; }
+/* The brand, the sign-in line and Sign out keep their one line beside a long name; the chip
+   keeps a few letters, so the bar never overlaps. */
+.top .mbrand, .top .who, .top .signout { flex-shrink: 0; }
 /* The live stream: shown once it has said hello; a dot before the word, amber while stopped. */
 .top .stream { font: var(--type-small); color: var(--color-text-secondary); white-space: nowrap; }
 .top .stream[hidden] { display: none; }
@@ -573,11 +584,11 @@ a { color: inherit; text-decoration: none; }
 /* Signed out, the sign-in is the only thing on the page (its own rules are in the rest). */
 body.signed-out > .side, body.signed-out > .main, body.signed-out > .skip { display: none; }
 </style>
-<script type="module" src="/ui/assets/shell.1f60729a82f1.js"></script>
+<script type="module" src="/ui/assets/shell.7cd3d7ed7a24.js"></script>
 <!-- Screens, by page id. The shell loads the current route's screen before it renders it,
      and the rest after the first paint, so a new screen adds nothing to the first paint.
      Each module imports the shell by its hashed name and calls register(). -->
-<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.690d33809192.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
+<script type="application/json" id="screens">{"tools": {"js": "/ui/assets/tools.5605d05a9bb9.js", "css": "/ui/assets/tools.24f226efcd24.css"}}</script>
 </head>
 <body>
 <a class="skip" href="#content">Skip to content</a>
