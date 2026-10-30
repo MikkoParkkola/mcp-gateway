@@ -790,3 +790,7 @@ mod rpc_code_tests;
 #[cfg(test)]
 #[path = "error_non_exhaustive_tests.rs"]
 mod non_exhaustive_tests;
+
+#[cfg(test)]
+#[path = "error_origin_tests.rs"]
+mod origin_tests;
