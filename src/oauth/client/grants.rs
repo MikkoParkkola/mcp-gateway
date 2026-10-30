@@ -491,7 +491,9 @@ impl OAuthClient {
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
-        let token = self.issue_token(cancel, listeners, deadline, None).await?;
+        // Boxed: a login is rare, and the future of its callback server, PKCE
+        // and exchange must not sit inline in every start path that awaits it.
+        let token = Box::pin(self.issue_token(cancel, listeners, deadline, None)).await?;
         // Store and cache the token, under the same cancel and the window.
         self.save_issued_until(&token, cancel, deadline).await?;
         *self.current_token.write() = Some(token.clone());
@@ -513,9 +515,7 @@ impl OAuthClient {
         deadline: tokio::time::Instant,
         ui: super::sign_in::UiSink,
     ) -> Result<super::sign_in::PendingGrant> {
-        let token = self
-            .issue_token(cancel, listeners, Some(deadline), Some(ui))
-            .await?;
+        let token = Box::pin(self.issue_token(cancel, listeners, Some(deadline), Some(ui))).await?;
         Ok(super::sign_in::PendingGrant::from_token(token))
     }
 
