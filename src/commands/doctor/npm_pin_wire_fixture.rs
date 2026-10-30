@@ -28,6 +28,10 @@ pub(super) const STALL_OUTLASTS_BUDGET: Duration = Duration::from_secs(120);
 /// bound but the budget, so a check that returns at all was ended by it. This
 /// guard only turns a check that ignores the budget into a failure instead of
 /// a hung job, so it sits far past the budget, where no slow host reaches.
+/// The rows prove that some bound under this guard ended the check; that the
+/// bound is [`BUDGET`] at 4 s is pinned separately, by
+/// `the_bounds_nest_budget_hang_guard_stall` and
+/// `the_check_is_bounded_by_the_budget_constant`.
 pub(super) const HANG_GUARD: Duration = Duration::from_secs(60);
 
 /// The check under [`HANG_GUARD`], and how long it took.
@@ -60,7 +64,7 @@ pub(super) fn assert_budget_ended(took: Duration) {
     eprintln!("the check took {took:?}");
     assert!(
         took >= BUDGET.saturating_sub(Duration::from_millis(200)),
-        "the budget ran out: {took:?}"
+        "the check ended before its budget: {took:?}"
     );
 }
 

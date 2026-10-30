@@ -372,6 +372,25 @@ fn no_proxy_travels_with_the_proxy() {
     );
 }
 
+/// The rows prove a bound under the hang guard ended the check; this pins
+/// that the bound is the budget constant itself.
+#[test]
+fn the_check_is_bounded_by_the_budget_constant() {
+    let source = include_str!("npm_pin.rs");
+    assert_eq!(
+        source
+            .matches("tokio::time::timeout(BUDGET, async {")
+            .count(),
+        1,
+        "the lookups run under the budget constant"
+    );
+    assert_eq!(
+        source.matches("tokio::time::timeout(").count(),
+        1,
+        "no other timeout wraps the lookups"
+    );
+}
+
 #[test]
 fn a_skip_route_builds_no_client() {
     let cfg = ClientCfg {

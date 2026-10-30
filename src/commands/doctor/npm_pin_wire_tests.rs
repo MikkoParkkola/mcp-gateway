@@ -429,6 +429,16 @@ async fn a_second_wave_warning_is_not_held_behind_a_stalled_request() {
         .iter()
         .map(|(n, b)| (n.as_str(), b.clone()))
         .collect();
+    // Lookups start in package-name order, four at a time: the four
+    // scoped names fill the first wave, so airtable and tavily start together.
+    let order: Vec<&str> = first_wave
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(["airtable-mcp-server", "tavily-mcp"])
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(order, sorted, "the waves are as described");
     let (rows, took) = check_within_guard(&config_of(&named), &fake.cfg_outlasting_budget()).await;
     assert_budget_ended(took);
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
