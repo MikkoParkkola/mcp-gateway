@@ -19,6 +19,7 @@ fn decides(error: &Error) -> bool {
         | Error::ConfigWatcher(_)
         | Error::CapabilityHashMismatch { .. }
         | Error::BackendNotFound(_)
+        | Error::AmbiguousBackend { .. }
         | Error::BackendUnavailable(_)
         | Error::CircuitOpen { .. }
         | Error::RateLimited(_)
@@ -68,6 +69,10 @@ fn every_variant() -> Vec<Error> {
             file: s(),
         },
         Error::BackendNotFound(s()),
+        Error::AmbiguousBackend {
+            server: s(),
+            rule: None,
+        },
         Error::BackendUnavailable(s()),
         Error::CircuitOpen {
             backend: s(),
