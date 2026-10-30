@@ -279,7 +279,7 @@ async fn a_bridged_round_cancelled_mid_dispatch_is_not_executed_again() {
 /// T3: cancelled while the client is being asked. Round one reached the
 /// backend and asked, and stopping to ask does not prove it has not acted; a
 /// legacy client has no continuation to take the key, so it is kept as
-/// may-have-run (MIK-9095 F15): the retry is served the uncertainty notice
+/// may-have-run: the retry is served the uncertainty notice
 /// and is not run again.
 #[tokio::test]
 async fn a_call_cancelled_while_asking_the_client_keeps_its_key() {

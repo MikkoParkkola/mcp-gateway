@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! R22 (MIK-9095 DELTA-3): the resend after an expired session follows a
+//! R22: the resend after an expired session follows a
 //! request that reached the server, so a never-sent error from the resend
 //! must not tell the caller nothing ran.
 

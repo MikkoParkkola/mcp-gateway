@@ -42,7 +42,7 @@ pub(in crate::gateway::meta_mcp) fn classify_bridged_dispatch_error(
     let message = error.to_string();
     // `unsent`, not `is_pre_dispatch`: once an earlier round of this delivery
     // reached the backend, a later round's pre-send refusal no longer proves
-    // the exchange ran nothing (MIK-9095 F2).
+    // the exchange ran nothing.
     if crate::gateway::delivery_facts::unsent(error) {
         crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
     } else {

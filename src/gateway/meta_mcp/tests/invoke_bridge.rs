@@ -533,7 +533,7 @@ async fn a_budget_refused_bridged_round_keeps_the_idempotency_key() {
         1,
         "the refused round must not have reached the backend: {calls:#?}"
     );
-    // MIK-9095 F12: round one reached the backend before the budget refused
+    // Round one reached the backend before the budget refused
     // round two, and a backend that stopped to ask may already have acted,
     // so the key is kept as may-have-run.
     assert!(
@@ -545,7 +545,7 @@ async fn a_budget_refused_bridged_round_keeps_the_idempotency_key() {
 /// With no send of the delivery counted (here, outside any delivery cell),
 /// every established pre-dispatch failure releases the bridged round's
 /// idempotency key, and a failure that may have executed still settles it.
-/// Once a send is counted, none releases it (MIK-9095 F2; presend rows).
+/// Once a send is counted, none releases it.
 ///
 /// The bridged path used to report *all* dispatch errors as `BackendFailed`,
 /// the one bridge error the settlement arm treats as a dispatch whose outcome
@@ -584,7 +584,7 @@ fn every_pre_dispatch_failure_releases_the_bridged_idempotency_key() {
     ));
 }
 
-/// R9a (MIK-9095 DELTA-1): inside a delivery, the classifier reads what was
+/// R9a: inside a delivery, the classifier reads what was
 /// sent. With no counted send, a refusal the send recorded is `NotAdmitted`;
 /// once an earlier round's send is counted, the same refusal may have run.
 #[tokio::test]
@@ -698,7 +698,7 @@ impl crate::gateway::input_bridge::ClientChannel for TrippingChannel {
     }
 }
 
-/// R14 (MIK-9095 D6): round one reached the backend and asked; round two
+/// R14: round one reached the backend and asked; round two
 /// meets an open circuit, a pre-dispatch error. The exchange may have acted
 /// on round one, so the key is kept, not released.
 #[tokio::test(flavor = "current_thread")]

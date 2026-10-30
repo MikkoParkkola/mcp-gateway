@@ -165,7 +165,7 @@ impl Transport for HttpTransport {
                 "Backend session expired; re-initializing and retrying once"
             );
             // The first request reached the server, so a never-sent error from
-            // the resend no longer proves nothing ran (MIK-9095 DELTA-3).
+            // the resend no longer proves nothing ran.
             return self
                 .send_request_with_headers(&request, extra_headers, identity_key, era)
                 .await

@@ -136,7 +136,7 @@ impl MetaMcp {
             if let Some(refused) = relay_refused.into_inner() {
                 // Round one reached the backend before this refusal, and a
                 // backend that answered may have acted: the key is kept as
-                // may-have-run (MIK-9095 F12). Only an exchange that sent
+                // may-have-run. Only an exchange that sent
                 // nothing is refused before its backend.
                 settle_bridged(idem_reservation, caller.execution, true);
                 return Err(refused);
@@ -243,7 +243,7 @@ impl MetaMcp {
                 // A11-c: a round's 401 on a managed account answers with the
                 // reconnect refusal or the rejection, not the generic refusal.
                 // Settled like any round that reached the backend; only an
-                // exchange that sent nothing is released (MIK-9095 F9).
+                // exchange that sent nothing is released.
                 Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
                     let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
@@ -268,7 +268,7 @@ impl MetaMcp {
                 Err(error) => {
                     // Every bridged round keeps its key: round one reached the
                     // backend, and a backend that stopped to ask may already
-                    // have acted (MIK-9095 F12). A drop at the deadline or the
+                    // have acted. A drop at the deadline or the
                     // request budget, a refusal, a malformed interim: each
                     // settles may-have-run. Only an exchange whose delivery
                     // sent nothing (`NotAdmitted` with no counted send) is

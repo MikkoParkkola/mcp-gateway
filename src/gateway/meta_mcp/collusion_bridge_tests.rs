@@ -190,7 +190,7 @@ fn code_of(result: &crate::Result<Value>) -> Option<i32> {
 /// M3: a bridged retry round whose answers carry what `alice` was delivered
 /// is refused before it reaches the backend. Round one already reached it,
 /// and a backend that stopped to ask may have acted, so the key is kept as
-/// may-have-run (MIK-9095 F12): the same-key retry is not run again. Each
+/// may-have-run: the same-key retry is not run again. Each
 /// call runs in a delivery cell, as every production entry point does.
 #[tokio::test]
 async fn meta_retry_round_relay_refused() {

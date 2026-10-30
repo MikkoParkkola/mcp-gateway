@@ -270,7 +270,7 @@ async fn a_cold_slot_list_401_forces_the_refresh() {
 /// the continuation's R2 check lists first, and that list gets the 401. The
 /// round forces the one refresh and answers with the reconnect refusal and
 /// sends no second `tools/call`. Round one reached the backend and asked, so
-/// the idempotency key is kept as may-have-run, not released (MIK-9095 F9).
+/// the idempotency key is kept as may-have-run, not released.
 /// It runs in a delivery cell, as every production entry point does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_bridged_cold_list_401_refreshes_and_keeps_the_key() {
