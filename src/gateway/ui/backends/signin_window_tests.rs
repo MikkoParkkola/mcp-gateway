@@ -228,32 +228,47 @@ async fn a_late_callback_after_cancel_is_ignored() {
     );
 }
 
-// R19: a cancel that lands while the exchange is in flight wins: whatever the
-// exchange returns afterwards is dropped, never saved, held, or attached to a
-// later attempt, and the gate is free for a new start.
+// R19: a cancel that lands after the exchange has returned but before the
+// flow task stores the grant wins. Until that task ends it keeps the login
+// gate, so no other attempt can have a flow yet (a start is refused); when it
+// resumes, the re-check under the flow lock finds its attempt gone and drops
+// the grant. Nothing is saved, nothing is held, and the gate is then free. The
+// `attempt_id` filter in `hold` (mutant M23 drops it) is what keeps the grant
+// off any flow that is not this attempt's.
 #[tokio::test]
 async fn a_cancel_during_the_exchange_discards_the_token() {
-    let flow = flow_under(windows(60, 30)).await;
-    flow.approve_in_background();
-    flow.until_phase("awaiting_confirm").await;
+    let gw = Gw::new().await;
+    let owner = gw.session();
+    let (reached, release) = gw.backend.sign_in.hold_pause.arm();
+    let (url, attempt) = Gw::link(&gw.start(&owner).await);
+    let _ = gw.approve(&url).await;
+    crate::test_pause::within("the flow task reaches its hold", reached.notified()).await;
 
-    let cancel = flow.gw.confirm(&flow.owner, &flow.attempt, "cancel").await;
+    let cancel = gw.confirm(&owner, &attempt, "cancel").await;
     assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
-    let again = flow.gw.start(&flow.owner).await;
+    let blocked = gw.start(&owner).await;
+    assert_eq!(
+        blocked.status,
+        StatusCode::CONFLICT,
+        "the old task still holds the gate: {}",
+        blocked.body
+    );
+    release.notify_one();
+    let began = std::time::Instant::now();
+    let mut again = gw.start(&owner).await;
+    while again.status != StatusCode::OK && began.elapsed() < HANG_BOUND {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        again = gw.start(&owner).await;
+    }
+
     assert_eq!(
         again.status,
         StatusCode::OK,
         "the gate is free: {}",
         again.body
     );
-    flow.release.notify_one();
-    for _ in 0..2000 {
-        tokio::task::yield_now().await;
-    }
-
-    assert!(flow.gw.saved().is_none(), "the late exchange saved nothing");
-    let held = flow
-        .gw
+    assert!(gw.saved().is_none(), "the old exchange saved nothing");
+    let held = gw
         .backend
         .with_flow(|slot| slot.as_ref().map(|f| f.grant.is_some()));
     assert_eq!(

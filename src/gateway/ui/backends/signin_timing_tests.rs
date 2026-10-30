@@ -114,9 +114,11 @@ async fn expiry_alone_discards_the_grant_and_releases_the_gate() {
     let owner = gw.session();
     let _ = approved_then_paused(&gw, &owner).await;
 
-    // A second past the window: timers round their deadline up to a
-    // millisecond, so the exact boundary can leave the expiry one tick short.
-    pass(SIGN_IN_CONFIRM_WINDOW + Duration::from_secs(1)).await;
+    // Tokio's timer rounds a deadline up to the end of its millisecond tick
+    // (tokio 1.54.1, runtime/time/source.rs `deadline_to_tick`: "Round up to
+    // the end of a ms"). An advance of exactly the window can therefore stop
+    // one tick short of the expiry; the extra millisecond covers that rounding.
+    pass(SIGN_IN_CONFIRM_WINDOW + Duration::from_millis(1)).await;
 
     assert!(
         gw.row().await["sign_in_flow"].is_null(),

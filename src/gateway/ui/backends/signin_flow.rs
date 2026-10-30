@@ -251,12 +251,13 @@ impl Run {
 
     /// Keep the grant until a decision takes it or the window ends.
     async fn hold(&self, lead: Lead, grant: crate::oauth::client::sign_in::PendingGrant) {
-        // Re-checked under the flow lock after the exchange: a cancel that won
-        // while the code was being redeemed took the flow out (and cancelled
-        // the login, `grants.rs` `issue_token`'s biased cancel arm, so the
-        // exchange normally never returns), and a later attempt's flow has
-        // another id. Either way the grant is dropped and wiped here, never
-        // stored on a flow that is not this attempt's.
+        #[cfg(test)]
+        self.backend.sign_in.hold_pause.pause().await;
+        // Re-checked under the flow lock after the exchange. This covers an
+        // exchange that already returned before a cancel took effect: the
+        // cancel took the flow out, and a later start may have put another
+        // attempt's flow in its place. The grant is then dropped and wiped
+        // here, never stored on a flow that is not this attempt's.
         let until = self.backend.with_flow(|slot| {
             let flow = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id)?;
             flow.grant = Some(grant);

@@ -25,6 +25,10 @@ pub(crate) struct SignInState {
     /// Where a test holds the sign-in flow's expiry task.
     #[cfg(all(test, feature = "webui"))]
     pub(crate) expiry_pause: crate::test_pause::Slot,
+    /// Where a test holds the flow task after the exchange has returned, just
+    /// before it stores the grant.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) hold_pause: crate::test_pause::Slot,
 }
 
 impl SignInState {
@@ -46,6 +50,8 @@ impl SignInState {
             installed_client: parking_lot::Mutex::new(None),
             #[cfg(all(test, feature = "webui"))]
             expiry_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            hold_pause: crate::test_pause::Slot::default(),
         }
     }
 }
