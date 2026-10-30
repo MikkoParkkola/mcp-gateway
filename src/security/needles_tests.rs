@@ -239,7 +239,9 @@ fn cost_of_the_scrub_against_the_parse() {
     for size in [1024 * 1024, 16 * 1024 * 1024] {
         for count in [1_usize, 64, 1024] {
             let needles = NeedleSet::with_grace(GRACE);
-            for i in 0..count {
+            // `count` values in all: the two number needles are among them,
+            // so 1,024 stays within the bound and measures redaction.
+            for i in 0..count.saturating_sub(2) {
                 needles.insert("b", &format!("needle-{i:05}-secret"));
             }
             needles.insert("b", "012345");
@@ -262,9 +264,14 @@ fn cost_of_the_scrub_against_the_parse() {
                 let started = std::time::Instant::now();
                 let outcome = ingress_scrub(&needles, &mut message);
                 let scrub = started.elapsed();
+                assert_ne!(
+                    outcome,
+                    Scrubbed::Refuse,
+                    "the set overflowed: not a redaction cost"
+                );
                 println!(
                     "T1.33 size={size} needles={} kind={kind} parse={parse:?} scrub={scrub:?} outcome={outcome:?}",
-                    count + 2
+                    count
                 );
             }
         }
@@ -339,4 +346,21 @@ fn a_supported_version_holding_a_value_is_refused() {
         matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
         "{text}"
     );
+}
+
+/// kimi A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
+/// matched as well as the form spelling.
+#[test]
+fn every_listed_percent_spelling_is_redacted() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "tok en/\u{fc}?=1");
+    for echo in [
+        "k=tok%20en%2F%C3%BC%3F%3D1",
+        "k=tok%20en%2f%c3%bc%3f%3d1",
+        "k=tok+en%2f%c3%bc%3f%3d1",
+    ] {
+        let (outcome, text) = scrubbed(&needles, echo);
+        assert_eq!(outcome, Scrubbed::Redacted, "{echo}");
+        assert!(!text.contains("tok"), "{echo} -> {text}");
+    }
 }

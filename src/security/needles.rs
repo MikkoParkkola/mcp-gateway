@@ -57,9 +57,9 @@ pub(crate) fn redaction_grace(config: &crate::config::Config) -> Duration {
 /// (NTP, a resumed laptop, a manual set) must not retire live values.
 struct Held {
     value: String,
-    /// The value percent-encoded, when that differs: the form a backend
-    /// quoting it inside a URL sends back.
-    encoded: Option<String>,
+    /// The value's percent-encoded spellings that differ from it (see
+    /// [`percent_forms`]): what a backend quoting it inside a URL sends back.
+    encoded: Vec<String>,
     last_sent: tokio::time::Instant,
 }
 
@@ -131,10 +131,9 @@ impl NeedleSet {
         }
         // Room again after retirement: answers flow once more.
         self.overflowed.store(false, Ordering::SeqCst);
-        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
         values.push(Held {
             value: value.to_owned(),
-            encoded: (encoded != value).then_some(encoded),
+            encoded: percent_forms(value),
             last_sent: now,
         });
     }
@@ -167,10 +166,58 @@ impl NeedleSet {
             .read()
             .iter()
             .filter(|held| !self.retired(held, now))
-            .flat_map(|held| std::iter::once(&held.value).chain(held.encoded.as_ref()))
+            .flat_map(|held| std::iter::once(&held.value).chain(&held.encoded))
             .cloned()
             .collect()
     }
+}
+
+/// The percent-encoded spellings of `value` a backend may echo, each only
+/// when it differs from `value`: form encoding (space as `+`) and RFC 3986
+/// encoding (space as `%20`, every byte but `A-Za-z0-9-._~` escaped), each
+/// with uppercase and with lowercase hex. Mixed-case hex within one value,
+/// double encoding and base64 are not matched (register row 318).
+fn percent_forms(value: &str) -> Vec<String> {
+    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+    let form: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+    let mut rfc = String::with_capacity(value.len());
+    for &byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
+            rfc.push(char::from(byte));
+        } else {
+            rfc.push('%');
+            rfc.push(char::from(HEX_UPPER[usize::from(byte >> 4)]));
+            rfc.push(char::from(HEX_UPPER[usize::from(byte & 0x0f)]));
+        }
+    }
+    let mut forms: Vec<String> = Vec::new();
+    for upper in [form, rfc] {
+        let lower = lower_hex(&upper);
+        for form in [upper, lower] {
+            if form != value && !forms.contains(&form) {
+                forms.push(form);
+            }
+        }
+    }
+    forms
+}
+
+/// `encoded` with the two hex digits after each `%` lowercased.
+fn lower_hex(encoded: &str) -> String {
+    let mut out = String::with_capacity(encoded.len());
+    let mut after_percent = 0;
+    for c in encoded.chars() {
+        if c == '%' {
+            after_percent = 2;
+            out.push(c);
+        } else if after_percent > 0 {
+            after_percent -= 1;
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// What [`ingress_scrub`] did to a frame.
