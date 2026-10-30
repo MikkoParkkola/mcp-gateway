@@ -226,6 +226,9 @@ pub struct BackendRegistry {
     /// backend with a rule then refuses its call rather than resolve against
     /// the process environment.
     secret_resolver: Option<Arc<crate::secrets::SecretResolver>>,
+    /// Each backend name's injected values, kept across the instances a
+    /// reload builds, so a retired value is still removed (MIK-9035).
+    needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
 }
 
 impl BackendRegistry {
@@ -243,6 +246,7 @@ impl BackendRegistry {
             destination: std::sync::OnceLock::new(),
             started: tokio::sync::broadcast::channel(STARTED_FEED).0,
             secret_resolver: None,
+            needles: DashMap::new(),
         }
     }
 
@@ -342,6 +346,8 @@ impl BackendRegistry {
         if let Some(resolver) = &self.secret_resolver {
             backend.stamp_secret_resolver(Arc::clone(resolver));
         }
+        let needles = Arc::clone(&*self.needles.entry(backend.name.clone()).or_default());
+        backend.stamp_needles(needles);
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -355,6 +361,8 @@ impl BackendRegistry {
         self.membership
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
+        // Outside the lock: a keychain value may take its time to resolve.
+        inserted.seed_needles();
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {

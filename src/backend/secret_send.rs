@@ -71,6 +71,33 @@ impl Backend {
         let _ = self.secret_resolver.set(resolver);
     }
 
+    /// Stamped by the registry with its name's shared set; the first stamp
+    /// wins.
+    pub(crate) fn stamp_needles(&self, needles: Arc<crate::security::needles::NeedleSet>) {
+        let _ = self.needles.set(needles);
+    }
+
+    /// This backend's injected values, once its registry stamped them.
+    pub(crate) fn needles(&self) -> Option<&Arc<crate::security::needles::NeedleSet>> {
+        self.needles.get()
+    }
+
+    /// Adds every value this backend's rules resolve to now, so a value is
+    /// removed from what the backend sends before any call injects it (a
+    /// tool description, an initialize answer). A rule that does not resolve
+    /// yet adds nothing; its value joins when a send resolves it.
+    pub(crate) fn seed_needles(&self) {
+        let (Some(resolver), Some(needles)) = (self.secret_resolver.get(), self.needles.get())
+        else {
+            return;
+        };
+        for rule in &self.config.secrets {
+            if let Ok(value) = resolver.resolve(&rule.value) {
+                needles.insert(&self.name, &value);
+            }
+        }
+    }
+
     /// The rules of this backend that apply to `tool`.
     fn secret_rules_for<'a>(&'a self, tool: &str) -> Vec<&'a CredentialRule> {
         self.config
@@ -157,6 +184,25 @@ impl Backend {
             return unchanged(params);
         };
         let injection = inject_rules(&self.config.secrets, resolver, &self.name, &tool, owned)?;
+        // Every value this send carries joins the backend's set before the
+        // send leaves, so its echo is removed from whatever comes back.
+        if let Some(needles) = self.needles.get() {
+            for rule in &rules {
+                let sent = match rule.inject_as {
+                    InjectTarget::Argument => injection
+                        .arguments
+                        .get(&rule.inject_key)
+                        .and_then(Value::as_str),
+                    InjectTarget::Header => {
+                        injection.headers.get(&rule.inject_key).map(String::as_str)
+                    }
+                    InjectTarget::Query => None,
+                };
+                if let Some(value) = sent {
+                    needles.insert(&self.name, value);
+                }
+            }
+        }
         let owned_headers = rules
             .iter()
             .filter(|rule| matches!(rule.inject_as, InjectTarget::Header))

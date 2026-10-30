@@ -290,6 +290,9 @@ pub struct HttpTransport {
     /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
+    /// The values the backend's rules injected; every answer this transport
+    /// reads is scrubbed of them (MIK-9035). Attached before the first send.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 
     /// Request ID counter
     request_id: AtomicU64,
@@ -512,6 +515,7 @@ impl HttpTransport {
             lent_only: AtomicBool::new(false),
             lender: std::sync::OnceLock::new(),
             body_budget: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
             reinit_needed: AtomicBool::new(false),
@@ -572,6 +576,12 @@ impl HttpTransport {
     /// did.
     pub(crate) fn attach_era(&self, era: Arc<crate::protocol::era::EraCache>) {
         let _ = self.era.set(era);
+    }
+
+    /// The backend's injected values, attached before the first send, as
+    /// [`Self::attach_era`] is: the first attach wins.
+    pub(crate) fn attach_needles(&self, needles: Arc<crate::security::needles::NeedleSet>) {
+        let _ = self.needles.set(needles);
     }
 
     /// The peer's era, as far as it is known right now.

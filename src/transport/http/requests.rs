@@ -422,6 +422,26 @@ impl HttpTransport {
         identity_key: Option<&str>,
         waiting: Option<super::sse_channel::Waiting>,
     ) -> Result<JsonRpcResponse> {
+        let answer = self
+            .read_answer_unscrubbed(request, response, message_url, identity_key, waiting)
+            .await;
+        match self.needles.get() {
+            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+            None => answer,
+        }
+    }
+
+    /// [`Self::read_answer`] before the backend's injected values are removed:
+    /// every JSON, SSE and refusal body is parsed here, and only the wrapper
+    /// hands the result on.
+    async fn read_answer_unscrubbed(
+        &self,
+        request: &JsonRpcRequest,
+        response: reqwest::Response,
+        message_url: &str,
+        identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
+    ) -> Result<JsonRpcResponse> {
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the

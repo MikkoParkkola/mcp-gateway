@@ -127,6 +127,7 @@ impl Backend {
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -450,6 +451,9 @@ impl Backend {
             built_under,
         )?;
         transport.mark_single_tenant();
+        if let Some(needles) = self.needles() {
+            transport.attach_needles(Arc::clone(needles));
+        }
         // The same pairing check a slot's start runs: refused when the
         // policy changed since it was read, and recorded when none is pinned.
         self.begin_connecting(built_under)?;
@@ -594,6 +598,11 @@ impl Backend {
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
                 transport.attach_era(Arc::clone(&entry.era));
+                // The backend's injected values: every answer this transport
+                // reads, the startup exchange included, is scrubbed of them.
+                if let Some(needles) = self.needles() {
+                    transport.attach_needles(Arc::clone(needles));
+                }
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;

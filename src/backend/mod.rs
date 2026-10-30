@@ -295,6 +295,9 @@ pub struct Backend {
     /// Unstamped, a call a rule applies to is refused: it never resolves
     /// against the process environment in place of the gateway's own.
     secret_resolver: std::sync::OnceLock<Arc<crate::secrets::SecretResolver>>,
+    /// The values this backend's rules resolved to, shared with every
+    /// instance of its name; stamped by its registry (MIK-9035).
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
