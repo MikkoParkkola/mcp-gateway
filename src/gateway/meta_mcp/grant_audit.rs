@@ -8,7 +8,7 @@
 //! it (#2461), so a client polling it would write the same decision on every
 //! poll. Such a re-check writes no record when the last record written for
 //! the same task, caller and target is identical in every recorded field but
-//! its timestamp and trace id, and was written less than [`REPEAT_WINDOW`]
+//! its timestamp and trace id, and was written less than `REPEAT_WINDOW`
 //! ago. A caller is its API key name, grant subject (authority and subject,
 //! never the display label) and proven agent id (MIK-7826). Any change
 //! (a revoked grant, another reason, another grant id) is written at once,
@@ -22,7 +22,6 @@
 //! records before the answer leaves, failing closed under `FailClosed`.
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
-use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -36,6 +35,11 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::TransparencyLogger;
 use crate::security::audit::{AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho};
 use crate::{Error, Result};
+
+mod repeat;
+pub(crate) use repeat::DecisionDedupe;
+#[cfg(test)]
+pub(super) use repeat::{REPEAT_WINDOW, RepeatLedger};
 
 /// The record kind a grant decision is written as.
 const DECISION_KIND: &str = "identity_grant_decision";
@@ -58,54 +62,10 @@ tokio::task_local! {
     static REPEAT_SCOPE: (Arc<DecisionDedupe>, String);
 }
 
-/// How long an unchanged re-check decision is not written again (MIK-7692).
-pub(super) const REPEAT_WINDOW: Duration = Duration::from_secs(600);
-
-/// Keys the store holds at most; a full store records every decision.
-const REPEAT_CAP: usize = 4096;
-
 /// How long a re-check record waits for the repeat check and its append
 /// together. The append inside is also held to the log's own bound (F20),
 /// whichever is shorter.
 const LEDGER_WAIT: Duration = Duration::from_secs(5);
-
-/// The last written re-check decision per task, caller and target.
-///
-/// One async lock spans the repeat check, the append and the remember, so
-/// the remembered decision is always the last one written: two concurrent
-/// re-checks straddling a grant change cannot leave an older decision
-/// remembered over a newer record. The append it waits on is bounded (F20).
-// ponytail: one lock per gateway serializes re-check records only; per-key
-// locks if polling a finished task ever becomes a throughput concern.
-#[derive(Debug, Default)]
-pub(crate) struct DecisionDedupe(tokio::sync::Mutex<RepeatLedger>);
-
-/// The suppression state [`DecisionDedupe`] guards.
-#[derive(Debug, Default)]
-pub(super) struct RepeatLedger(HashMap<String, (String, Instant)>);
-
-impl RepeatLedger {
-    /// Whether `decision` is what was last written for `key`, inside the window.
-    pub(super) fn is_repeat(&self, key: &str, decision: &str, now: Instant) -> bool {
-        self.0.get(key).is_some_and(|(last, at)| {
-            last == decision && now.saturating_duration_since(*at) < REPEAT_WINDOW
-        })
-    }
-
-    /// Record that `decision` was written for `key` at `now`.
-    pub(super) fn remember(&mut self, key: String, decision: String, now: Instant) {
-        let map = &mut self.0;
-        if map.len() >= REPEAT_CAP && !map.contains_key(&key) {
-            map.retain(|_, (_, at)| now.saturating_duration_since(*at) < REPEAT_WINDOW);
-            if map.len() >= REPEAT_CAP {
-                // ponytail: a full store of live keys stops suppressing new
-                // ones (fails toward recording); an LRU if that ever matters.
-                return;
-            }
-        }
-        map.insert(key, (decision, now));
-    }
-}
 
 /// Run `check` as a re-check of a finished task's delivery: decisions it
 /// notes may be suppressed as repeats (see the module docs).
@@ -675,19 +635,29 @@ impl super::MetaMcp {
         let logger = self.transparency_logger.as_ref();
         // Erased: the dispatch futures recurse (a chain step is an
         // invocation), and a concrete type here overflows auto-trait checks.
-        let future: Pin<
-            Box<dyn Future<Output = Result<super::invoke::SourcedOutcome>> + Send + '_>,
-        > = Box::pin(self.invoke_tool_sourced(args, session_id, caller, trace_id));
-        let outcome = slot_result(logger, future).await;
+        let future: Pin<Box<dyn Future<Output = super::invoke::Invoked> + Send + '_>> =
+            Box::pin(self.invoke_tool_sourced(args, session_id, caller, trace_id));
+        // As `slot_result`, keeping the invocation's own pre-send verdict
+        // through a failed slot write, which replaces only the answer.
+        let (invoked, written, _) = with_grant_slot(logger, future).await;
+        super::dispatch_log::note_round(invoked.pre_send);
+        let refused = invoked.pre_send == super::dispatch_log::PreSend::Refused;
+        let outcome = written.and(invoked.outcome);
         // #2450: every step that got past the authorization chokepoint is a
         // target of the task's result, whatever it then did: an error, or an
         // audit failure after the call, does not un-dispatch it. Only an
-        // authorization refusal proves nothing was sent.
+        // authorization refusal proves nothing was attempted. A target is a
+        // call planned or attempted, which a stored read re-checks access
+        // against, so a step refused before its backend stays one.
         if !matches!(outcome, Err(Error::Forbidden { .. })) {
             super::dispatch_log::note_completed(args);
             // `MIK-8408` H2: the same call, with the plan step label it
-            // ran under, for the replay entry's `calls`.
-            super::invoke::relay::note_replay_call(args);
+            // ran under, for the replay entry's `calls`: the record a stored
+            // read takes "this backend ran it" from, so a step refused before
+            // its backend is never one.
+            if !refused {
+                super::invoke::relay::note_replay_call(args);
+            }
         }
         outcome
     }
