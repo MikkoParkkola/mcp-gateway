@@ -125,6 +125,9 @@ impl Backend {
             events_resolutions: std::sync::atomic::AtomicUsize::new(0),
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
+            sign_in_status: Arc::new(crate::oauth::client::sign_in::SignInStatus::new(
+                crate::oauth::client::sign_in::SignIn::NotOAuth,
+            )),
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),

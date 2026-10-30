@@ -148,3 +148,22 @@ impl Backend {
         false
     }
 }
+
+#[cfg(test)]
+impl Backend {
+    /// Test-only: the OAuth client the sign-in flow uses, in place of the one
+    /// a start would build. Skeleton: it installs nothing.
+    #[expect(clippy::unused_self, reason = "skeleton: the flow reads it once built")]
+    pub(crate) fn install_oauth_client_for_test(&self, _client: OAuthClient) {}
+}
+
+impl Backend {
+    /// Record that this backend's slot now waits on a sign-in, bumping the
+    /// wait's generation. Skeleton: it records nothing.
+    #[expect(
+        clippy::unused_self,
+        reason = "skeleton: the generation lands with the flow"
+    )]
+    #[allow(dead_code, reason = "skeleton: the first callers land with the flow")]
+    pub(crate) fn note_auth_wait(&self) {}
+}

@@ -9,10 +9,13 @@
 // The readers land with the backends read; until then only tests call them.
 #![allow(dead_code, reason = "skeleton: the first callers land with the read")]
 
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use zeroize::Zeroizing;
+
+use super::OAuthClient;
 
 /// How long a callback's grant waits for the operator's confirmation, from the
 /// callback. The pending grant lives in memory for at most this long.
@@ -58,6 +61,13 @@ impl SignInStatus {
         }
     }
 
+    /// Replace the value. Skeleton: it stores nothing.
+    #[expect(
+        clippy::unused_self,
+        reason = "skeleton: the cell is written once the client publishes"
+    )]
+    pub(crate) fn set(&self, _next: SignIn) {}
+
     /// The current value: one snapshot, so a variant and its `expires_at`
     /// cannot disagree.
     pub(crate) fn snapshot(&self) -> SignIn {
@@ -80,4 +90,18 @@ pub(crate) struct PendingGrant {
     pub(crate) expires_in: Option<u64>,
     /// The scope the provider granted.
     pub(crate) scope: Option<String>,
+}
+
+impl OAuthClient {
+    /// This client publishing its backend's sign-in to `status`.
+    pub(crate) fn with_sign_in_status(mut self, status: Arc<SignInStatus>) -> Self {
+        self.sign_in_status = Some(status);
+        self
+    }
+
+    /// Evaluate the token state and write it to the status cell: one token
+    /// file load and one legacy-file check, done here and never on a read.
+    /// Skeleton: it publishes nothing.
+    #[expect(clippy::unused_self, reason = "skeleton: nothing is published yet")]
+    pub(crate) fn publish_sign_in(&self) {}
 }

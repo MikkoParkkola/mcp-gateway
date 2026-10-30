@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use super::*;
 
-const RESOURCE: &str = "https://backend.example.com/mcp";
-const BACKEND: &str = "cov3-backend";
+pub(crate) const RESOURCE: &str = "https://backend.example.com/mcp";
+pub(crate) const BACKEND: &str = "cov3-backend";
 const CLIENT_ID: &str = "cov3-client";
 /// The code the person at the browser approves: distinctive, so a log search
 /// for it cannot match anything else.
@@ -24,7 +24,7 @@ type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
 
 /// A token endpoint on loopback. `Some(token)` answers with that access token;
 /// `None` refuses every request with `invalid_grant`.
-pub(super) async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
+pub(crate) async fn token_endpoint(answer: Option<&'static str>) -> (String, Forms) {
     token_endpoint_issuing(answer, Some("r-next")).await
 }
 
@@ -71,7 +71,7 @@ async fn token_endpoint_issuing(
 
 /// A client whose authorization server is `issuer`, with a configured client
 /// id (no registration) and a loopback callback on a port the OS picks.
-pub(super) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
+pub(crate) fn client(dir: &std::path::Path, issuer: Option<&str>) -> OAuthClient {
     let storage = Arc::new(TokenStorage::new(dir.to_path_buf()).unwrap());
     let mut client = OAuthClient::new(
         Client::builder().no_proxy().build().unwrap(),
@@ -134,7 +134,7 @@ enum Browser {
 /// Run the flow while playing the person at the browser: read the URL it
 /// hands over, then call its callback with `code`, the URL's own state and
 /// `iss`. Returns the flow's outcome and the authorization URL's query.
-pub(super) async fn approve(
+pub(crate) async fn approve(
     client: &mut OAuthClient,
     iss: &str,
 ) -> (Result<String>, HashMap<String, String>) {

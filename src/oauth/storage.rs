@@ -248,6 +248,14 @@ impl TokenStorage {
         Ok(Self { base_dir })
     }
 
+    /// Test-only: how many token loads and existence checks this storage has
+    /// served, as `(loads, exists)`. Skeleton: always `(0, 0)`.
+    #[cfg(test)]
+    #[expect(clippy::unused_self, reason = "skeleton: counting lands with the read")]
+    pub(crate) fn io_counts_for_test(&self) -> (usize, usize) {
+        (0, 0)
+    }
+
     /// Create token storage in the default location (~/.mcp-gateway/oauth)
     ///
     /// # Errors

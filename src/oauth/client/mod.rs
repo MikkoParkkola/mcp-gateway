@@ -60,6 +60,11 @@ pub struct OAuthClient {
     /// Token storage
     storage: Arc<TokenStorage>,
 
+    /// Where this client publishes its backend's sign-in status, if it has
+    /// one.
+    #[allow(dead_code, reason = "skeleton: the client publishes once built")]
+    sign_in_status: Option<Arc<sign_in::SignInStatus>>,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -225,6 +230,7 @@ impl OAuthClient {
             callback_path: cfg.callback_path,
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
             destination: crate::security::ssrf::DestinationPolicy::Configured,
+            sign_in_status: None,
         }
     }
 
@@ -452,7 +458,7 @@ fn generate_client_id() -> String {
 }
 
 #[cfg(test)]
-mod authorize_tests;
+pub(crate) mod authorize_tests;
 mod browser;
 #[cfg(test)]
 mod deadline_tests;
