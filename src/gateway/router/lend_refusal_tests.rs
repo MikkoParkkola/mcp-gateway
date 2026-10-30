@@ -20,19 +20,24 @@ use crate::key_server::oidc::VerifiedIdentity;
 const BACKEND: &str = "lent";
 const TOOL: &str = "lookup";
 
-/// A mint that succeeds with no header at all.
-struct EmptyMint;
+/// A mint that succeeds with `headers`, valid until `expires_at` (unix
+/// seconds): none and never expiring for a call carrying no credential, one
+/// long expired for a send its recheck refuses.
+struct FixedMint {
+    headers: Vec<(String, String)>,
+    expires_at: i64,
+}
 
 #[async_trait::async_trait]
-impl IdentityPropagation for EmptyMint {
+impl IdentityPropagation for FixedMint {
     async fn propagate(
         &self,
         identity: &VerifiedIdentity,
         backend: &BackendDescriptor,
     ) -> Result<PropagatedCredential, PropagationError> {
         Ok(PropagatedCredential {
-            headers: vec![],
-            expires_at: i64::MAX,
+            headers: self.headers.clone(),
+            expires_at: self.expires_at,
             expiry_synthetic: false,
             cache_binding: format!("{}@{}", identity.subject, backend.audience),
             subject_key: identity.subject.clone(),
@@ -73,8 +78,11 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
 }
 
 /// The router over one required per-user backend at `url`, minted by
-/// [`EmptyMint`], and its transparency log's directory.
-async fn gateway(url: String) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
+/// `mint`, and its transparency log's directory.
+async fn gateway(
+    url: String,
+    mint: FixedMint,
+) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
         BackendConfig {
@@ -99,7 +107,7 @@ async fn gateway(url: String) -> (axum::Router, (tempfile::TempDir, super::tests
     let registry = Arc::new(crate::backend::BackendRegistry::new());
     assert!(registry.register(backend), "the backend registers");
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
-    meta.set_identity_propagation(Arc::new(EmptyMint));
+    meta.set_identity_propagation(Arc::new(mint));
     let log_dir = tempfile::tempdir().expect("a log directory");
     let log = Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
@@ -163,7 +171,11 @@ async fn call(router: &axum::Router) -> (axum::http::StatusCode, Value) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_lent_only_call_carrying_no_credential_records_refused() {
     let (url, calls) = peer().await;
-    let (router, dirs) = gateway(url).await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, dirs) = gateway(url, mint).await;
     let (status, answer) = call(&router).await;
     // Premise: refused by the lender, for this reason, and never sent. A
     // refusal for any other reason means no route reaches the lender.
@@ -176,6 +188,40 @@ async fn a_lent_only_call_carrying_no_credential_records_refused() {
         answer["error"]["code"], -32001,
         "the code is unchanged: {answer}"
     );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let raw = std::fs::read_to_string(dirs.0.path().join("audit.jsonl")).unwrap_or_default();
+    let delivered: Vec<Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect();
+    let [one] = delivered.as_slice() else {
+        panic!("premise: one delivery record: {delivered:?}");
+    };
+    assert_eq!(one["response_effect"], "refused", "{one}");
+}
+
+/// A send whose credential fails its per-send recheck (published as expired
+/// long ago) is refused by the lender with `Forbidden`, and `/mcp/{name}`
+/// answers it 403 with -32001, not 500, recording it refused.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_send_its_recheck_refuses_answers_403_and_records_refused() {
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![("Authorization".to_string(), "Bearer lapsed".to_string())],
+        expires_at: 1,
+    };
+    let (router, dirs) = gateway(url, mint).await;
+    let (status, answer) = call(&router).await;
+    // Premise: refused by the per-send recheck, for this reason, and never
+    // sent. A refusal for any other reason (the mint refusing the expired
+    // credential first) does not reach the lender.
+    assert!(
+        answer.to_string().contains("per-user send refused"),
+        "premise: the recheck's refusal: {status} {answer}"
+    );
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["error"]["code"], -32001, "{answer}");
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let raw = std::fs::read_to_string(dirs.0.path().join("audit.jsonl")).unwrap_or_default();
     let delivered: Vec<Value> = raw
