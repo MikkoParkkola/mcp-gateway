@@ -82,7 +82,16 @@ pub(super) fn open_browser(url: &str) -> bool {
 /// a launcher that started can still be blocked, and stdout is the stdio
 /// transport's JSON-RPC stream.
 pub(super) fn announce_on_stderr(url: &str) {
-    eprintln!("\nIf no browser opened, authorize this client by visiting:\n{url}\n");
+    announce_to(&mut std::io::stderr(), url);
+}
+
+/// Write the prompt to `out`. A failed write is not an error the login can act
+/// on, so it is ignored, as `eprintln!` ignores it.
+pub(super) fn announce_to(out: &mut impl std::io::Write, url: &str) {
+    let _ = writeln!(
+        out,
+        "\nIf no browser opened, authorize this client by visiting:\n{url}\n"
+    );
 }
 
 #[cfg(test)]

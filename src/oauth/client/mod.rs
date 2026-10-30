@@ -487,10 +487,7 @@ impl OAuthClient {
         self.open_browser = Box::new(move |url: &str| open(url));
         self
     }
-}
 
-#[cfg(all(test, feature = "webui"))]
-impl OAuthClient {
     /// This client with `record` standing in for the terminal announcement.
     pub(crate) fn with_announce(
         mut self,
@@ -499,7 +496,10 @@ impl OAuthClient {
         self.announce = Box::new(move |url: &str| record(url));
         self
     }
+}
 
+#[cfg(all(test, feature = "webui"))]
+impl OAuthClient {
     /// The token this client holds in memory.
     pub(crate) fn cached_token_for_test(&self) -> Option<TokenInfo> {
         self.current_token.read().clone()

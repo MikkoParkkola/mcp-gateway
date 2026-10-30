@@ -286,6 +286,27 @@ async fn the_authorization_code_never_reaches_the_log() {
     }
 }
 
+// P2: a launcher that fails (or one an endpoint-security tool stops) leaves the
+// prompt printed all the same, once. P1 (the launcher succeeds, once) is
+// `a_cli_flow_announces_the_link_once`; P3 (a UI flow prints none) is
+// `a_ui_flow_never_announces_the_link_at_the_terminal`.
+#[tokio::test]
+async fn a_failed_launcher_still_announces_the_link_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(Some("access-a")).await;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
+    let mut client = client(dir.path(), Some(&issuer)).with_announce(Arc::new(move |url: &str| {
+        recorder.lock().unwrap().push(url.to_owned());
+    }));
+
+    let (outcome, query) =
+        approve_via(&mut client, &issuer, Entry::Authorize, Browser::Fails).await;
+
+    outcome.expect("the flow completes by hand");
+    assert_eq!(*seen.lock().unwrap(), vec![query["__url"].clone()]);
+}
+
 #[tokio::test]
 async fn authorize_refuses_a_code_from_another_issuer_without_redeeming_it() {
     let dir = tempfile::tempdir().unwrap();
