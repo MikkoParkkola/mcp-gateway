@@ -394,16 +394,17 @@ async fn handle_callback(
     // Check for errors
     if let Some(ref error) = params.error {
         let description = params.error_description.as_deref().unwrap_or_default();
+        // A provider can echo a state, a code or a URL in its error text, so
+        // only an RFC 6749 error code from the list reaches the log and the
+        // error the login ends with; the page the person sees keeps the text.
+        let code = provider_error_code(error);
         // #143 — structured telemetry: provider error event.
         warn!(
             event = "oauth.callback.provider_error",
-            error = %error,
-            description = %description,
+            error = %code,
             "OAuth provider returned an error"
         );
-        let result = Err(Error::OAuth(format!(
-            "OAuth error: {error} - {description}"
-        )));
+        let result = Err(Error::OAuth(format!("OAuth error: {code}")));
         if let Some(tx) = state.tx.take() {
             let _ = tx.send(result);
         }
@@ -468,6 +469,27 @@ fn escape_html(input: &str) -> String {
         }
     }
     escaped
+}
+
+/// The RFC 6749 error codes a provider may answer an authorization request
+/// with.
+const PROVIDER_ERROR_CODES: [&str; 7] = [
+    "invalid_request",
+    "unauthorized_client",
+    "access_denied",
+    "unsupported_response_type",
+    "invalid_scope",
+    "server_error",
+    "temporarily_unavailable",
+];
+
+/// `raw` if it is one of [`PROVIDER_ERROR_CODES`], else `other`.
+fn provider_error_code(raw: &str) -> &'static str {
+    PROVIDER_ERROR_CODES
+        .iter()
+        .find(|code| **code == raw)
+        .copied()
+        .unwrap_or("other")
 }
 
 #[cfg(test)]

@@ -623,7 +623,12 @@ impl OAuthClient {
             let _ = link.send(auth_url_str);
         } else {
             // Open browser
-            info!(url = %auth_url_str, "Opening browser for authorization");
+            // The link carries the state and the PKCE challenge: the log keeps the
+            // endpoint and path only.
+            info!(
+                url = %crate::security::sanitize::redact_url_keep_path(&auth_url_str),
+                "Opening browser for authorization"
+            );
 
             if !(self.open_browser)(&auth_url_str) {
                 warn!("Failed to open browser automatically");
