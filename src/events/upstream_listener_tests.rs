@@ -72,7 +72,8 @@ async fn a_good_snapshot_decides_authorization() {
     );
 }
 
-/// The last key to leave stops the task and forgets the backend.
+/// ISO-T6 (stop on the last subscriber): the last key to leave stops the task
+/// and forgets the backend.
 #[tokio::test]
 async fn the_last_interest_ends_the_listener() {
     let hub = listeners();
