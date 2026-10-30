@@ -60,7 +60,9 @@ function sheet(href) {
         link.remove();
         fail(new Error(`stylesheet ${href} did not load`));
       });
-      document.head.append(link);
+      // After the shell's own stylesheet, at the end of the body, so a screen's
+      // rules still win ties with it, as they did when it was in the head.
+      document.body.append(link);
     });
     load.catch(() => sheets.delete(href));
     sheets.set(href, load);

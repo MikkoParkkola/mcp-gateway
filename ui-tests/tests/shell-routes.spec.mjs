@@ -94,7 +94,7 @@ test('R4b retrying a screen whose module failed keeps one copy of its loaded sty
   fail = false;
   await error.getByRole('button', { name: 'Retry' }).click();
   await expect(toolRows(page)).toHaveCount(1);
-  await expect(page.locator(`head link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
+  await expect(page.locator(`link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
 });
 
 test('R5 the screen manifest names only files in the asset table, and the head loads no screen', () => {
@@ -127,7 +127,7 @@ test('R6 a stylesheet that fails while its module loads shows Retry, and Retry l
   fail = false;
   await error.getByRole('button', { name: 'Retry' }).click();
   await expect(toolRows(page)).toHaveCount(1);
-  await expect(page.locator(`head link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
+  await expect(page.locator(`link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
 });
 
 test('R7 a screen is not drawn while its stylesheet is held, even after its module registered', async ({ page }) => {
@@ -165,7 +165,7 @@ test('R8 a manifest entry outside /ui/assets/ is refused as a load error and nev
   await page.goto('/ui/tools/status');
   await expect(page.locator('#content [data-state="error"]')).toBeVisible();
   expect(asked).not.toContain(js);
-  await expect(page.locator('head link[href*="x.css"]')).toHaveCount(0);
+  await expect(page.locator('link[href*="x.css"]')).toHaveCount(0);
   await expect(toolRows(page)).toHaveCount(0);
 });
 
