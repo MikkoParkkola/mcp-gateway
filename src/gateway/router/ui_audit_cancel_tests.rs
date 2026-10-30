@@ -354,6 +354,18 @@ async fn a_request_cancelled_during_admission_writes_and_records_nothing() {
     request.abort();
     let _ = request.await;
     drop(stall);
+    // The released write still runs on the blocking pool: wait for it, so it
+    // never lands while the fixture's folder is being removed (a late `.hwm`
+    // would keep the folder).
+    let late = Arc::clone(&fx.log);
+    assert!(
+        tokio::task::spawn_blocking(move || {
+            late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic"),
+        "the released audit write finishes"
+    );
 
     let deadline = tokio::time::Instant::now() + GUARD;
     while metrics.num_alive_tasks() > baseline {

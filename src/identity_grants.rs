@@ -364,9 +364,41 @@ impl IdentityGrant {
         scope: &GrantScope,
         now: DateTime<Utc>,
     ) -> bool {
+        self.agent.matches(agent_id) && self.covers_fields(identity, capability, tool, scope, now)
+    }
+
+    /// Whether this row would have allowed a call a grant-decision note
+    /// refused for a missing grant, read from the note's fields: the agent is
+    /// its `source:id` spelling, as the note writes it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn covers_noted(
+        &self,
+        subject: &GrantSubject,
+        agent: &str,
+        capability: &str,
+        tool: Option<&str>,
+        scope: &GrantScope,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.agent.matches_qualified(agent)
+            && self.covers_fields(subject, capability, tool, scope, now)
+    }
+
+    /// Every check of [`Self::covers`] but the agent's, so dispatch and a
+    /// note's re-check can never disagree on them. A row's owner must be
+    /// absent or the caller: `evaluate` reaches a row only once the
+    /// capability's owner is the caller, so this is its owner rule.
+    fn covers_fields(
+        &self,
+        identity: &GrantSubject,
+        capability: &str,
+        tool: Option<&str>,
+        scope: &GrantScope,
+        now: DateTime<Utc>,
+    ) -> bool {
         self.is_active_at(now)
             && &self.subject == identity
-            && self.agent.matches(agent_id)
+            && self.owner.as_ref().is_none_or(|owner| owner == identity)
             && self.capability == capability
             && self
                 .tool
