@@ -229,7 +229,9 @@ async fn api_key_without_backends_is_forbidden_on_tools_call() {
 const UNREGISTERED: &str = "gamma";
 
 /// The fixture under an mTLS policy that denies every tool on `beta` for the
-/// `agent` certificate, so `beta` is hidden from that caller.
+/// `agent` certificate, so `beta` is hidden from that caller. It denies the
+/// unregistered name by the same rule: the policy treats both names alike, so
+/// only registration could tell them apart.
 async fn with_mtls_denying_beta() -> axum::Router {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let Fixture {
@@ -246,7 +248,7 @@ async fn with_mtls_denying_beta() -> axum::Router {
             tools: vec!["*".to_string()],
         },
         deny: ToolScopeConfig {
-            backends: vec!["beta".to_string()],
+            backends: vec!["beta".to_string(), UNREGISTERED.to_string()],
             tools: Vec::new(),
         },
     };
@@ -291,7 +293,15 @@ async fn post_as_agent_cert(router: &axum::Router, uri: &str, params: Value) -> 
 /// The hidden backend's answer and the unregistered one's, the latter with
 /// its name read as `beta`: a caller must not tell them apart.
 fn assert_alike(route: &str, hidden: (u16, String), unregistered: (u16, String)) {
-    let unregistered = (unregistered.0, unregistered.1.replace(UNREGISTERED, "beta"));
+    // A trace id is minted per call, so it differs between any two calls.
+    let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
+    let hidden = (hidden.0, trace.replace_all(&hidden.1, "gw-ID").into_owned());
+    let unregistered = (
+        unregistered.0,
+        trace
+            .replace_all(&unregistered.1, "gw-ID")
+            .replace(UNREGISTERED, "beta"),
+    );
     assert_eq!(
         hidden, unregistered,
         "{route}: a hidden backend answers unlike an unregistered one"
