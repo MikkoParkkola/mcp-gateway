@@ -210,11 +210,7 @@ async fn the_read_does_no_storage_io() {
     for _ in 0..5 {
         let _ = (backend.sign_in(), backend.needs_sign_in());
     }
-    assert_eq!(
-        io_counts(&storage),
-        after_resolution,
-        "a read costs no I/O"
-    );
+    assert_eq!(io_counts(&storage), after_resolution, "a read costs no I/O");
     assert_eq!(
         hits.load(Ordering::SeqCst),
         0,
