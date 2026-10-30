@@ -31,7 +31,7 @@ pub(super) const ROWS: &[Row] = &[
         Method::POST,
         "/ui/api/backends/docs/signin",
         Payload::Json("{}"),
-        [401, 0, 403, 0],
+        [401, 403, 403, 403],
     ),
     // signin.rs (confirm_sign_in; same session rule as the start)
     row(
@@ -39,6 +39,6 @@ pub(super) const ROWS: &[Row] = &[
         Method::POST,
         "/ui/api/backends/docs/signin/confirm",
         Payload::Json(r#"{"attempt_id":"a","decision":"cancel"}"#),
-        [401, 0, 403, 0],
+        [401, 403, 403, 403],
     ),
 ];
