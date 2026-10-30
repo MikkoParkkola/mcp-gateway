@@ -183,7 +183,7 @@ src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	JsonRpcResponse::e
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response	4
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response_with_data	1
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_response	1
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	error_response_preserving_status	1
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	error_response_preserving_status	1
 src/gateway/router/handlers/events.rs	answer	JsonRpcResponse::error	1
 src/gateway/router/handlers/events.rs	answer	JsonRpcResponse::error_with_data	1
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	JsonRpcResponse::error	2

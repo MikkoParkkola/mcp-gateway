@@ -231,7 +231,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	intake_refus
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	refusal	1	no-record	session admission
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	Refused::of	1	recorded	Refused::answer raises; answer_malformed is a client-protocol rejection
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	degraded_session_tool_refusal	1	not-a-decision	a session tool with no session at the capacity cap
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	request_refusal	1	recorded	route-stage request firewall, raised in this fn
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	scan_targets	request_refusal	1	recorded	route-stage request firewall, raised in this fn
 src/gateway/router/handlers/owner.rs	request_session_owner	hardened_identity_refusal	1	no-record	session owner authentication, before a call exists
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	dead_attach_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
