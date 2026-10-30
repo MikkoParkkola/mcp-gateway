@@ -11,7 +11,8 @@
 //! A row counts its refusal exits and its refusal marks apart, so a removed
 //! mark is never offset by an added exit. A refusal exit is a nonce refund
 //! asked (`ask_refund`, `ask_if_transient`), a pre-dispatch error test
-//! (`is_pre_dispatch`), or an idempotency reservation released by hand
+//! (`is_pre_dispatch`, or `delivery_facts::unsent`, which also reads a refusal
+//! the backend's own send recorded), or an idempotency reservation released by hand
 //! (`.release()` on a receiver named for a reservation). A refusal mark is a
 //! `note_pre_send` or `note_round` call whose argument names `Refused`: so
 //! every hand-marked plain-error exit is a row, and removing its mark fails
@@ -74,7 +75,7 @@ fn is_reservation(expr: &syn::Expr) -> bool {
 impl Body {
     fn call(&mut self, name: &str) {
         match name {
-            "ask_refund" | "ask_if_transient" | "is_pre_dispatch" => self.exits += 1,
+            "ask_refund" | "ask_if_transient" | "is_pre_dispatch" | "unsent" => self.exits += 1,
             "settle_pre_send" => self.settles = true,
             _ => {}
         }
