@@ -67,6 +67,15 @@ test.describe('compression', () => {
     }
   });
 
+  test('Z1 the gzipped shell document fits the first round trip: under 14,000 bytes', async () => {
+    // A new connection's first flight is 10 segments of 1,460 bytes (14,600); the
+    // document arrives in it with room for the headers, so first paint waits on one
+    // round trip for it. A later frame edit that outgrows it fails here.
+    const r = await raw('/ui/overview/status', { 'accept-encoding': 'gzip' });
+    expect(r.headers['content-encoding']).toBe('gzip');
+    expect(r.body.length).toBeLessThan(14_000);
+  });
+
   test('Z2 a /ui/api JSON answer is gzip when asked', async () => {
     const asked = await raw('/ui/api/status', { 'accept-encoding': 'gzip' });
     expect(asked.status).toBe(200);
