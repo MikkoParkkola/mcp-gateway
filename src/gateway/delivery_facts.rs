@@ -400,3 +400,7 @@ mod composite_tests;
 #[cfg(test)]
 #[path = "delivery_facts_send_tests.rs"]
 mod send_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_calls_tests.rs"]
+mod calls_tests;
