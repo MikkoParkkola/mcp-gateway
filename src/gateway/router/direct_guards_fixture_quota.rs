@@ -119,6 +119,10 @@ pub(crate) enum Backends {
     Scripted,
     /// A real HTTP MCP server at this URL: the transport parses the
     /// server's bytes, as the echo-redaction rows need (MIK-9035).
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "built only by the firewall-gated echo rows")
+    )]
     HttpServer(String),
 }
 
@@ -131,6 +135,7 @@ pub(super) fn backends() -> Backends {
 /// server at `url`. Only a real server: an echo row must run over a
 /// transport that parses and scrubs the backend's bytes, never a scripted
 /// double that claims to redact (MIK-9035).
+#[cfg(feature = "firewall")]
 pub(crate) async fn fixture_with_secrets_over_http(
     rules: Vec<crate::secret_injection::CredentialRule>,
     url: String,
