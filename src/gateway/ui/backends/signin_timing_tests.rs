@@ -114,7 +114,9 @@ async fn expiry_alone_discards_the_grant_and_releases_the_gate() {
     let owner = gw.session();
     let _ = approved_then_paused(&gw, &owner).await;
 
-    pass(SIGN_IN_CONFIRM_WINDOW).await;
+    // A second past the window: timers round their deadline up to a
+    // millisecond, so the exact boundary can leave the expiry one tick short.
+    pass(SIGN_IN_CONFIRM_WINDOW + Duration::from_secs(1)).await;
 
     assert!(
         gw.row().await["sign_in_flow"].is_null(),
