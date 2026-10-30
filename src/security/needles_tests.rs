@@ -229,7 +229,7 @@ fn a_long_run_of_a_short_needle_stays_under_the_cap() {
 }
 
 /// T1.33 (a measurement, not a gate): scrub time against parse time for
-/// 1 MiB and 16 MiB answers with 1, 64 and 1,024 needles, on clean text,
+/// 1 MiB and 16 MiB answers with 3, 64 and 1,024 needles, on clean text,
 /// text with one echo, and an array of numbers beside all-digit and
 /// scientific-notation needles. Run with `--ignored --nocapture`; the
 /// lines are reported in the PR.
@@ -237,7 +237,8 @@ fn a_long_run_of_a_short_needle_stays_under_the_cap() {
 #[ignore = "measurement: run by hand and report"]
 fn cost_of_the_scrub_against_the_parse() {
     for size in [1024 * 1024, 16 * 1024 * 1024] {
-        for count in [1_usize, 64, 1024] {
+        // 3: the smallest set holding the echoed value and both numbers.
+        for count in [3_usize, 64, 1024] {
             let needles = NeedleSet::with_grace(GRACE);
             // `count` values in all: the two number needles are among them,
             // so 1,024 stays within the bound and measures redaction.
@@ -386,5 +387,26 @@ async fn the_cached_matcher_follows_inserts_and_retirement() {
         outcome,
         Scrubbed::Clean,
         "a retired value is still matched: {text}"
+    );
+}
+
+/// A value sent again after it retired is matched again, though the build
+/// cached while it was retired lacked it (review round 2).
+#[tokio::test(start_paused = true)]
+async fn a_value_renewed_after_it_retired_is_matched_again() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-renewed-value");
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert_eq!(
+        scrubbed(&needles, "echo token-renewed-value").0,
+        Scrubbed::Clean,
+        "premise: the value retired and the empty build is cached"
+    );
+    needles.insert("b", "token-renewed-value");
+    let (outcome, text) = scrubbed(&needles, "echo token-renewed-value");
+    assert_eq!(
+        outcome,
+        Scrubbed::Redacted,
+        "a renewed value is not matched: {text}"
     );
 }

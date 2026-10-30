@@ -267,9 +267,8 @@ impl<'ast> Visit<'ast> for Body {
     fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
         if is_parse(&call.receiver) {
             let safe = match call.method.to_string().as_str() {
-                "map_err" => safe_closure(call.args.first()),
-                "ok" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_or_default"
-                | "unwrap_or_else" => true,
+                "map_err" | "unwrap_or_else" => safe_closure(call.args.first()),
+                "ok" | "is_ok" | "is_err" | "unwrap_or" | "unwrap_or_default" => true,
                 _ => false,
             };
             self.safe_errors += usize::from(safe);
@@ -738,14 +737,20 @@ fn every_parse_error_is_named_safely() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-/// The error check's own proof: a raw `{e}` in a `map_err` and a bare `?`
-/// both count as raw; the helper, `|_|`, `.ok()` and an unbound `Err(_)`
+/// The error check's own proof: a raw `{e}` in a `map_err` or an
+/// `unwrap_or_else`, and a bare `?`, count as raw; the helper, `|_|`, `.ok()` and an unbound `Err(_)`
 /// do not.
 #[test]
 fn a_raw_parse_error_is_caught() {
-    let raw: [syn::Block; 2] = [
+    let raw: [syn::Block; 3] = [
         syn::parse_quote!({
             serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("bad: {e}")))
+        }),
+        syn::parse_quote!({
+            serde_json::from_str(text).unwrap_or_else(|e| {
+                tracing::warn!("bad frame: {e}");
+                Value::Null
+            })
         }),
         syn::parse_quote!({
             let v: Value = serde_json::from_str(text)?;
@@ -781,5 +786,5 @@ fn a_raw_parse_error_is_caught() {
         sites.function("src/transport/fake.rs", &format!("safe{n}"), block);
     }
     let flagged: Vec<&str> = sites.raw_errors.keys().map(|(_, f)| f.as_str()).collect();
-    assert_eq!(flagged, ["raw0", "raw1"]);
+    assert_eq!(flagged, ["raw0", "raw1", "raw2"]);
 }

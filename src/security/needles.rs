@@ -129,7 +129,13 @@ impl NeedleSet {
         let now = tokio::time::Instant::now();
         let mut values = self.values.write();
         if let Some(held) = values.iter_mut().find(|held| held.value == value) {
+            // A value renewed after it retired is back in the set: a build
+            // made while it was retired lacks it, so the cache is stale.
+            let returning = self.retired(held, now);
             held.last_sent = now;
+            if returning {
+                self.version.fetch_add(1, Ordering::SeqCst);
+            }
             return;
         }
         let before = values.len();
