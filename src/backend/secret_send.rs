@@ -77,6 +77,14 @@ impl Backend {
         let _ = self.needles.set(needles);
     }
 
+    /// Gives `transport` this backend's injected values, so every answer it
+    /// reads, the startup exchange included, is scrubbed of them.
+    pub(crate) fn attach_needles_to(&self, transport: &crate::transport::HttpTransport) {
+        if let Some(needles) = self.needles.get() {
+            transport.attach_needles(Arc::clone(needles));
+        }
+    }
+
     /// This backend's injected values, once its registry stamped them.
     pub(crate) fn needles(&self) -> Option<&Arc<crate::security::needles::NeedleSet>> {
         self.needles.get()

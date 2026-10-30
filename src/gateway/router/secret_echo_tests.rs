@@ -287,7 +287,9 @@ async fn a_secret_after_an_escape_is_redacted_and_the_escape_kept() {
         "the secret reached the client: {body}"
     );
     assert!(
-        text.contains("line\\n"),
+        // `\n` as the backend wrote it, or once more escaped where the
+        // meta route carries the answer as JSON text.
+        text.contains("line\\n") || text.contains("line\\\\n"),
         "the escape before it was lost: {body}"
     );
     assert!(text.contains(MARKER), "not redacted: {body}");

@@ -146,13 +146,20 @@ impl NeedleSet {
 }
 
 /// What [`ingress_scrub`] did to a frame.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Scrubbed {
     /// Nothing matched.
     Clean,
     /// At least one value was replaced.
     Redacted,
     /// A notification whose method holds a value: the caller drops it.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "first callers: the transport notification parse sites"
+        )
+    )]
     Withhold,
     /// The set overflowed, or an `error.code` equals a value: the caller
     /// answers with the fixed refusal instead.
@@ -162,6 +169,13 @@ pub(crate) enum Scrubbed {
 /// Removes every value in `needles` from `message`, in place: a result, an
 /// error's message and data, a notification's params, and a request's params.
 /// The envelope's `id` is never touched, so a response still routes.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "first callers: the transport notification parse sites"
+    )
+)]
 pub(crate) fn ingress_scrub(needles: &NeedleSet, message: &mut JsonRpcMessage) -> Scrubbed {
     if needles.overflowed() {
         return Scrubbed::Refuse;
