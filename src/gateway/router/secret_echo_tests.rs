@@ -301,7 +301,8 @@ async fn a_refusal_quoting_the_secret_reaches_the_client_redacted() {
 /// client sends it.
 async fn post_direct(router: &axum::Router) -> Value {
     let params = json!({"name": "echo", "arguments": {"q": "hi"}, "_meta": {
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28"
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
     }});
     let request = axum::http::Request::builder()
         .method("POST")
@@ -424,7 +425,9 @@ async fn a_numeric_secret_echoed_as_a_number_is_redacted() {
 }
 
 /// An answer whose `error.code` is the secret string fails a typed parse;
-/// the error the client gets carries no part of the body (T1.20).
+/// the error the client gets carries no part of the body (T1.20). A control:
+/// green on the line (the parse error does not quote the body today); a
+/// mutant whose parse-failure diagnostic quotes the body turns it red.
 #[tokio::test]
 async fn a_secret_error_code_never_reaches_the_client_through_a_parse_error() {
     let body = meta_answer(Reply::CodeIsSecret).await;
