@@ -22,7 +22,10 @@ use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 
-const KEY: &str = "cap-edit-admin";
+/// The admin key's secret, and its configured name: distinct, so a record
+/// naming the caller cannot pass by carrying the bearer string.
+const KEY: &str = "cap-edit-secret-4b1f";
+const KEY_NAME: &str = "cap-edit-admin";
 /// Each wait's bound: long enough for a loaded host, short enough to fail by name.
 const GUARD: Duration = Duration::from_secs(30);
 /// Strings in the file's content; no audit record may carry either.
@@ -54,7 +57,7 @@ fn admin_auth() -> AuthConfig {
             key: None,
             key_sha256: Some(crate::config::api_key_digest_spec(KEY.as_bytes())),
             expires_at: None,
-            name: KEY.to_string(),
+            name: KEY_NAME.to_string(),
             rate_limit: 0,
             backends: vec!["*".to_string()],
             allowed_tools: None,
@@ -166,8 +169,13 @@ impl Fixture {
 }
 /// The fields every `capability_editor` record carries, as the AC names them:
 /// who acted, which capability, the kind of change, the hash before and after.
-fn assert_record(record: &Value, action: &str, before: &str, after: Option<&str>) {
-    assert_eq!(record["who"]["account"], KEY, "who: {record}");
+fn assert_record(record: &Value, action: &str, before: &str, after: Option<&str>, pin: &str) {
+    assert_eq!(record["who"]["account"], KEY_NAME, "who: {record}");
+    assert!(
+        !record.to_string().contains(KEY),
+        "the record carries the bearer secret: {record}"
+    );
+    assert_eq!(record["pin"], pin, "pin change: {record}");
     assert_eq!(record["action"], action, "kind of change: {record}");
     assert_eq!(record["capability"], "kept", "which capability: {record}");
     assert_eq!(record["sha256_before"], before, "hash before: {record}");
@@ -196,8 +204,13 @@ async fn caped11_a_save_records_the_change_never_the_content() {
     let written = std::fs::read(&fx.file).expect("the saved file");
     let edits = fx.edits();
     assert_eq!(edits.len(), 1, "one record per save: {edits:#?}");
-    assert_record(&edits[0], "save", &base, Some(&sha256_hex(&written)));
-    assert_eq!(edits[0]["pin"], "none", "{}", edits[0]);
+    assert_record(
+        &edits[0],
+        "save",
+        &base,
+        Some(&sha256_hex(&written)),
+        "none",
+    );
     fx.assert_no_content();
 }
 
@@ -219,8 +232,13 @@ async fn caped11_a_pinned_save_records_the_pin_change() {
     let written = std::fs::read(&fx.file).expect("the saved file");
     let edits = fx.edits();
     assert_eq!(edits.len(), 1, "{edits:#?}");
-    assert_record(&edits[0], "save", &base, Some(&sha256_hex(&written)));
-    assert_eq!(edits[0]["pin"], "updated", "{}", edits[0]);
+    assert_record(
+        &edits[0],
+        "save",
+        &base,
+        Some(&sha256_hex(&written)),
+        "updated",
+    );
     fx.assert_no_content();
 }
 
@@ -238,12 +256,7 @@ async fn caped11_a_delete_records_the_change_never_the_content() {
     assert!(!fx.file.exists(), "the file is deleted");
     let edits = fx.edits();
     assert_eq!(edits.len(), 1, "{edits:#?}");
-    assert_record(&edits[0], "delete", &base, None);
-    assert_eq!(
-        edits[0]["pin"], "none",
-        "a delete rewrites no pin: {}",
-        edits[0]
-    );
+    assert_record(&edits[0], "delete", &base, None, "none");
     fx.assert_no_content();
 }
 
