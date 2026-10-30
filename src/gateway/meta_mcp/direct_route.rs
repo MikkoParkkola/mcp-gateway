@@ -234,7 +234,7 @@ impl MetaMcp {
             == Some(binding);
         if !unchanged
             && let Some(gate) = self.gate_inputs(backend, caller)
-            && gate.judge(backend, binding).await == super::publish_gate::Publish::Refuse
+            && gate.judge(backend, binding).await != super::publish_gate::Publish::Allow
         {
             return;
         }

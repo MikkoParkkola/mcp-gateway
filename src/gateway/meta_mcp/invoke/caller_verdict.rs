@@ -603,15 +603,21 @@ impl ColdAttempt {
     }
 
     /// Whether the publish gate lets `binding` be indexed now: a fresh
-    /// custody read must still give it. No gate inputs, nothing to read.
+    /// custody read must still give it. No gate inputs, nothing to read. A
+    /// result the grant has moved past also drops the claim's lease, so the
+    /// next reader fills under the current grant instead of waiting out a
+    /// backoff.
     async fn gate_allows(&self, binding: &str) -> bool {
-        match &self.gate {
-            Some(gate) => {
-                gate.judge(&self.backend, binding).await
-                    == crate::gateway::meta_mcp::publish_gate::Publish::Allow
-            }
-            None => true,
+        use crate::gateway::meta_mcp::publish_gate::Publish;
+        let Some(gate) = &self.gate else {
+            return true;
+        };
+        let judged = gate.judge(&self.backend, binding).await;
+        if judged == Publish::Superseded {
+            self.backend
+                .release_cold_attempt(&self.principal_id, self.generation);
         }
+        judged == Publish::Allow
     }
 }
 

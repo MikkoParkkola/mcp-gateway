@@ -23,8 +23,12 @@ use crate::personal_accounts::{VaultStrategy, ViewBinding};
 pub(crate) enum Publish {
     /// The binding is the grant's current one: index it.
     Allow,
-    /// Superseded, revoked or unreadable: leave the index alone.
-    Refuse,
+    /// The grant has moved past `binding` (rotated or revoked): leave the
+    /// index alone.
+    Superseded,
+    /// The grant could not be read (busy or unavailable custody): fail
+    /// closed, leave the index alone.
+    Unread,
 }
 
 /// What the gate needs to read a caller's grant, owned so a spawned fill can
@@ -37,24 +41,25 @@ pub(crate) struct GateInputs {
 impl GateInputs {
     /// Judge `binding`, about to be published on `backend`, against a fresh
     /// classified read. The read is recorded as this request's account read
-    /// when a request memo is open. `Bound(other)` also forgets an entry that
-    /// already holds `binding`; any failed read refuses.
+    /// when a request memo is open. `Bound(other)` and a revoked grant also
+    /// forget an entry that already holds `binding`; a failed read only
+    /// refuses.
     pub(crate) async fn judge(&self, backend: &Backend, binding: &str) -> Publish {
         let principal = self.principal.as_principal();
         let read = self.vault.view_binding_classified(principal).await;
         record_read(backend, &read);
         match read {
             ViewBinding::Bound(current) if current == binding => Publish::Allow,
-            ViewBinding::Bound(_) => {
+            ViewBinding::Bound(_) | ViewBinding::NoView(_) => {
                 let id = principal.stable_actor_id();
                 if let Some(held) = backend.caller_slot_held(&id)
                     && held.binding() == binding
                 {
                     backend.forget_caller_held(&id, &held);
                 }
-                Publish::Refuse
+                Publish::Superseded
             }
-            _ => Publish::Refuse,
+            _ => Publish::Unread,
         }
     }
 }
