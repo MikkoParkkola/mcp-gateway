@@ -556,10 +556,10 @@ pub(super) async fn forward_notification(
     };
     match route
         .backend
-        .notify_with_headers(
+        .notify_with_headers_lent(
             &envelope.method,
             envelope.params,
-            &headers,
+            headers,
             binding.as_deref(),
         )
         .await
