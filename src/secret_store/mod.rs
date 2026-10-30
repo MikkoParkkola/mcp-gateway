@@ -122,6 +122,11 @@ fn now_ms() -> u64 {
     crate::clock::unix_millis().unwrap_or(0)
 }
 
+/// The longest reference text any store returns: `file:` and a path (a
+/// Windows long path runs to 32,767 characters), or `keychain:` and a
+/// name. The byte writer bounds a filled file by it before any entry exists.
+pub(crate) const MAX_REFERENCE_LEN: usize = 32 * 1024;
+
 const SWITCH: &str = "set `secrets.store: files`, or unlock or install the keychain";
 
 /// The store a save writes to, and why it was chosen.
