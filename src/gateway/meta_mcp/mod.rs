@@ -185,6 +185,9 @@ pub struct MetaMcp {
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     /// The web UI's windowed call counters; set by the HTTP server.
     pub(super) counters: std::sync::OnceLock<Arc<crate::counters::CounterStore>>,
+    /// The web UI's open decisions; set by the HTTP server.
+    #[cfg(feature = "webui")]
+    pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
