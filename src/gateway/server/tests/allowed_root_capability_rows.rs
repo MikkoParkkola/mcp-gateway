@@ -106,3 +106,30 @@ async fn r43_a_name_both_routes_answer_is_ambiguous() {
     );
     assert!(!ran.exists(), "R43: the capability ran");
 }
+
+/// R43b (design d2): under the same clash the direct route `/mcp/fs` is
+/// judged as the config backend it sends to: an inside call reaches only
+/// that backend, and an outside call is refused before either runs.
+#[tokio::test]
+async fn r43b_the_direct_route_under_a_clash_judges_the_config_backend() {
+    let routes = Routes::new().await;
+    let ran = routes.dir.path().join("ran.log");
+    routes.meta.set_capabilities(capabilities("fs", &ran));
+    let before = routes.received();
+
+    let inside = json!({"name": "read_file", "arguments": {"path": routes.path("safe/f")}});
+    let answer = routes.post("/mcp/fs", "tools/call", inside).await;
+    assert!(answer.get("error").is_none(), "R43b inside: {answer}");
+    let after_inside = routes.received();
+    assert_ne!(after_inside, before, "R43b: the config backend got no call");
+
+    let outside = json!({"name": "read_file", "arguments": {"path": routes.path("outside/f")}});
+    let answer = routes.post("/mcp/fs", "tools/call", outside).await;
+    assert!(answer.get("error").is_some(), "R43b outside: {answer}");
+    assert_eq!(
+        routes.received(),
+        after_inside,
+        "R43b: the outside call reached the config backend"
+    );
+    assert!(!ran.exists(), "R43b: the capability ran");
+}
