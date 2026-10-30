@@ -312,3 +312,38 @@ async fn a_legacy_listener_scrubs_its_notices_and_answers() {
         "the notice carried the value: {text}"
     );
 }
+
+/// Lead ruling G9 (HTTP): the watch filter compares the scrubbed note. A
+/// watcher of the redacted URI gets the update; one guessing the raw URI does
+/// not.
+#[tokio::test]
+async fn the_watch_filter_compares_the_redacted_uri() {
+    const NEEDLE: &str = "watch-secret-3a6c";
+    let echo_uri = format!("file:///echo?k={NEEDLE}");
+    for (watched, expects) in [
+        (Watched::by(|uri| uri == "file:///echo?k=[redacted]"), true),
+        (Watched::by(|uri| uri.contains(NEEDLE)), false),
+    ] {
+        let (url, _log) = peer().await;
+        let (transport, session) = session(&url, None);
+        let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+        needles.insert("b", NEEDLE);
+        transport.attach_needles(Arc::new(needles));
+        let mut stream = Arc::clone(&session)
+            .unsolicited(watched)
+            .await
+            .map_err(|_| "refused")
+            .expect("handshake");
+        let _ = Arc::clone(&session)
+            .legacy_interest(LegacyPin::default(), &echo_uri, true)
+            .await;
+        // The notice precedes the refusal on one ordered stream, so it was
+        // routed or dropped before the refusal answered.
+        let note = stream.rx.try_recv();
+        assert_eq!(
+            note.is_ok(),
+            expects,
+            "watcher expecting {expects}: {note:?}"
+        );
+    }
+}

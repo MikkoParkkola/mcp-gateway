@@ -26,7 +26,8 @@ const ROOTS: [&str; 1] = ["src/lib.rs"];
 const SCOPES: [&str; 3] = ["src/transport/", "src/a2a/", "src/backend/"];
 
 /// The calls that remove a backend's injected values.
-const SCRUB_CALLS: [&str; 7] = [
+const SCRUB_CALLS: [&str; 8] = [
+    "scrub_note",
     "ingress_scrub",
     "scrub_frame",
     "withheld",

@@ -229,9 +229,11 @@ impl HttpTransport {
                         return;
                     };
                     for event in events {
+                        // Scrubbed first: the watch filter compares the
+                        // URI a client knows (lead ruling G9).
                         if let Some(note) = unsolicited_frame(&event.data)
+                            .and_then(|note| scrubbed(needles.as_deref(), note))
                             && watched.admits(&note)
-                            && let Some(note) = scrubbed(needles.as_deref(), note)
                             && tx.send(note).await.is_err()
                         {
                             return;
@@ -367,23 +369,9 @@ async fn next_events(
 /// from the frame as sent, so its listen tag routed it first (DELTA-5).
 pub(super) fn scrubbed(
     needles: Option<&crate::security::needles::NeedleSet>,
-    mut note: UpstreamNote,
+    note: UpstreamNote,
 ) -> Option<UpstreamNote> {
-    use crate::security::needles::{Scrubbed, scrub_text};
-    let Some(needles) = needles else {
-        return Some(note);
-    };
-    let uris: Vec<&mut String> = match &mut note {
-        UpstreamNote::Notice { uri, .. } => uri.iter_mut().collect(),
-        UpstreamNote::Ack { uris, .. } => uris.iter_mut().collect(),
-        UpstreamNote::End | UpstreamNote::Unsupported => Vec::new(),
-    };
-    for uri in uris {
-        if scrub_text(needles, uri) == Scrubbed::Refuse {
-            return None;
-        }
-    }
-    Some(note)
+    crate::transport::upstream_tap::scrub_note(needles, note)
 }
 
 /// One legacy stream payload as a note: only the three notifications.

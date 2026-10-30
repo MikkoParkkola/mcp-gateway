@@ -352,3 +352,33 @@ async fn a_subscription_tag_equal_to_a_secret_still_routes() {
         "the acknowledgement did not reach its listen"
     );
 }
+
+/// Lead ruling G9 (stdio): the watch filter compares the scrubbed note, the
+/// URI a client knows. A watcher of the redacted URI gets the update; one
+/// guessing the raw URI does not.
+#[tokio::test]
+async fn the_watch_filter_compares_the_redacted_uri() {
+    use crate::transport::upstream_tap::{UpstreamNote, Watched};
+    let line = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": format!("file:///x?k={NEEDLE}")}})
+    .to_string();
+    let redacted = with_needle();
+    let mut rx = redacted
+        .taps
+        .unsolicited(Watched::by(|uri| uri == "file:///x?k=[redacted]"));
+    redacted.handle_response(&line).expect("a notification");
+    let Ok(UpstreamNote::Notice { uri: Some(uri), .. }) = rx.try_recv() else {
+        panic!("the watcher of the redacted URI got nothing");
+    };
+    assert_eq!(uri, "file:///x?k=[redacted]");
+    let raw = with_needle();
+    let mut rx = raw
+        .taps
+        .unsolicited(Watched::by(|uri| uri.contains(NEEDLE)));
+    raw.handle_response(&line).expect("a notification");
+    assert!(
+        rx.try_recv().is_err(),
+        "a watcher guessing the raw URI got it"
+    );
+}

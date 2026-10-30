@@ -120,3 +120,34 @@ fn a_close_reason_is_logged_by_length() {
     assert!(text.contains("close frame"), "premise: the record: {text}");
     assert!(!text.contains(NEEDLE), "the log names the reason: {text}");
 }
+
+/// Lead ruling G9 (WebSocket): the watch filter compares the scrubbed note.
+/// A watcher of the redacted URI gets the update; one guessing the raw URI
+/// does not.
+#[test]
+fn the_watch_filter_compares_the_redacted_uri() {
+    use crate::transport::upstream_tap::Watched;
+    let frame = json!({"jsonrpc": "2.0", "method": "notifications/resources/updated",
+        "params": {"uri": format!("file:///x?k={NEEDLE}")}})
+    .to_string();
+    let redacted = with_needle();
+    let mut rx = redacted
+        .inner
+        .taps
+        .unsolicited(Watched::by(|uri| uri == "file:///x?k=[redacted]"));
+    WebSocketTransport::dispatch_inbound(&redacted.inner, &frame).unwrap();
+    let Ok(UpstreamNote::Notice { uri: Some(uri), .. }) = rx.try_recv() else {
+        panic!("the watcher of the redacted URI got nothing");
+    };
+    assert_eq!(uri, "file:///x?k=[redacted]");
+    let raw = with_needle();
+    let mut rx = raw
+        .inner
+        .taps
+        .unsolicited(Watched::by(|uri| uri.contains(NEEDLE)));
+    WebSocketTransport::dispatch_inbound(&raw.inner, &frame).unwrap();
+    assert!(
+        rx.try_recv().is_err(),
+        "a watcher guessing the raw URI got it"
+    );
+}

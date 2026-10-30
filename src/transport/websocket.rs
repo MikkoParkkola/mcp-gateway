@@ -464,6 +464,17 @@ impl WebSocketTransport {
             }
             _ => None,
         };
+        // A listen's own answer is classified as sent (lead ruling G9): an
+        // acknowledgement's URIs are the listen's requested ones. A listen is
+        // never a pending request (I5 design §4).
+        if let McpFrame::Response(response) = &frame
+            && let Some(ref id) = response.id
+            && inner
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
+        {
+            return Ok(());
+        }
         if let Some(needles) = inner.needles.get()
             && !scrub_frame(needles, &mut frame)
         {
@@ -472,13 +483,7 @@ impl WebSocketTransport {
 
         match frame {
             McpFrame::Response(response) => {
-                if let Some(ref id) = response.id
-                    && inner
-                        .taps
-                        .response_to(id, response.result.as_ref(), response.error.as_ref())
-                {
-                    // A listen is never a pending request (I5 design §4).
-                } else if let Some(ref id) = response.id {
+                if let Some(ref id) = response.id {
                     let key = id.to_string();
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
@@ -499,10 +504,11 @@ impl WebSocketTransport {
             }
             McpFrame::Notification { method, params } => {
                 let keys = keys.as_ref().or(params.as_ref());
-                if inner
-                    .taps
-                    .notification_keyed(&method, params.as_ref(), keys)
-                {
+                if inner.taps.notification_keyed(
+                    &method,
+                    keys,
+                    inner.needles.get().map(AsRef::as_ref),
+                ) {
                     return Ok(());
                 }
                 let token = progress_key(&method, keys);

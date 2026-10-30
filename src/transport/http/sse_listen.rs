@@ -214,14 +214,15 @@ impl SseListenSession {
             _ => {}
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
-        // Watched on the note as sent, then scrubbed (DELTA-5, MIK-9035).
+        // Scrubbed, then watched: the filter compares the URI a client knows
+        // (MIK-9035, lead ruling G9).
         let needles = t.needles.get().cloned();
         let sink = Sink {
             tx,
             map: Box::new(move |data| {
                 unsolicited_frame(data)
-                    .filter(|note| watched.admits(note))
                     .and_then(|note| super::listen::scrubbed(needles.as_deref(), note))
+                    .filter(|note| watched.admits(note))
             }),
         };
         let channel = SseChannel::open(

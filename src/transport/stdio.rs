@@ -213,10 +213,11 @@ impl StdioTransport {
         // The listener's taps first: a frame tagged with a live listen, or
         // one of the three resource/prompt notifications while a legacy tap
         // is open. Never progress, so the route below is unchanged.
-        if self
-            .taps
-            .notification_keyed(&notification.method, notification.params.as_ref(), keys)
-        {
+        if self.taps.notification_keyed(
+            &notification.method,
+            keys,
+            self.needles.get().map(AsRef::as_ref),
+        ) {
             return;
         }
         // Note the asymmetry with the outgoing side: a request carries the
@@ -276,6 +277,17 @@ impl StdioTransport {
             }
             _ => None,
         };
+        // A listen's own answer is classified as sent (lead ruling G9): an
+        // acknowledgement's URIs are the listen's requested ones, and an end
+        // carries none. A listen is never a pending request (design §4).
+        if let JsonRpcMessage::Response(response) = &message
+            && let Some(ref id) = response.id
+            && self
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
+        {
+            return Ok(());
+        }
         if let Some(needles) = self.needles.get() {
             use crate::security::needles::{Scrubbed, ingress_scrub, refused_response};
             match ingress_scrub(needles, &mut message) {
@@ -308,14 +320,6 @@ impl StdioTransport {
             }
         };
 
-        if let Some(ref id) = response.id
-            && self
-                .taps
-                .response_to(id, response.result.as_ref(), response.error.as_ref())
-        {
-            // A listen is never a pending request (design §4).
-            return Ok(());
-        }
         if let Some(ref id) = response.id {
             let key = id.to_string();
             let pending_count = self.pending.len();
