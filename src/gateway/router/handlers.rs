@@ -50,7 +50,7 @@ pub(super) use metrics_scrape::metrics_handler;
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
-pub(super) use meta_handler::meta_mcp_handler;
+pub(in crate::gateway) use meta_handler::meta_mcp_handler;
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use request_facts::TASKS_EXTENSION;
@@ -401,6 +401,11 @@ async fn meta_mcp_dispatch(
                         external_tool,
                         subject: grant_subject.as_ref(),
                         trace_id: None,
+                        key: crate::security::response_policy::KeyOf::of_client(
+                            client.as_ref().and_then(
+                                crate::gateway::auth::AuthenticatedClient::api_key_identity,
+                            ),
+                        ),
                     };
                     let credential =
                         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
@@ -602,6 +607,11 @@ async fn meta_mcp_dispatch(
             external_tool,
             subject: grant_subject.as_ref(),
             trace_id: invocation_trace.as_deref(),
+            key: crate::security::response_policy::KeyOf::of_client(
+                client
+                    .as_ref()
+                    .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+            ),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,

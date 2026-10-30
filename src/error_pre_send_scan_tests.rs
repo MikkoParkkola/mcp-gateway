@@ -13,6 +13,7 @@
 //! from constructions by shape. Someone set on evading it can; review is the
 //! control for that.
 
+use crate::test_source_text::{production_text, sanitize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -48,118 +49,6 @@ const PRE_SEND_SITES: &[&str] = &[
     "oauth/login_gate.rs",
 ];
 
-/// `src` with comments, string literals and char literals replaced by spaces,
-/// newlines kept so positions stay meaningful.
-fn sanitize(src: &str) -> String {
-    let b = src.as_bytes();
-    let mut out = b.to_vec();
-    let blank = |out: &mut Vec<u8>, from: usize, to: usize| {
-        for c in &mut out[from..to] {
-            if *c != b'\n' {
-                *c = b' ';
-            }
-        }
-    };
-    let mut i = 0;
-    while i < b.len() {
-        let start = i;
-        if b[i..].starts_with(b"//") {
-            while i < b.len() && b[i] != b'\n' {
-                i += 1;
-            }
-        } else if b[i..].starts_with(b"/*") {
-            let mut depth = 0;
-            while i < b.len() {
-                if b[i..].starts_with(b"/*") {
-                    depth += 1;
-                    i += 2;
-                } else if b[i..].starts_with(b"*/") {
-                    depth -= 1;
-                    i += 2;
-                    if depth == 0 {
-                        break;
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-        } else if b[i] == b'r' && (b.get(i + 1) == Some(&b'"') || b.get(i + 1) == Some(&b'#')) {
-            let hashes = b[i + 1..].iter().take_while(|c| **c == b'#').count();
-            if b.get(i + 1 + hashes) != Some(&b'"') {
-                i += 1;
-                continue;
-            }
-            let close: Vec<u8> = std::iter::once(b'"')
-                .chain(std::iter::repeat_n(b'#', hashes))
-                .collect();
-            i += 2 + hashes;
-            while i < b.len() && !b[i..].starts_with(&close) {
-                i += 1;
-            }
-            i = (i + close.len()).min(b.len());
-        } else if b[i] == b'"' {
-            i += 1;
-            while i < b.len() && b[i] != b'"' {
-                i += if b[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(b.len());
-        } else if b[i] == b'\'' && (b.get(i + 1) == Some(&b'\\') || b.get(i + 2) == Some(&b'\'')) {
-            i += 1;
-            while i < b.len() && b[i] != b'\'' {
-                i += if b[i] == b'\\' { 2 } else { 1 };
-            }
-            i = (i + 1).min(b.len());
-        } else {
-            i += 1;
-            continue;
-        }
-        blank(&mut out, start, i.min(b.len()));
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// Blank every item a `#[cfg(test)]` attribute guards: up to the first `;`
-/// for a declaration, or through the matching `}` of its body.
-fn strip_test_items(src: &str) -> String {
-    let mut out = src.as_bytes().to_vec();
-    let mut from = 0;
-    while let Some(at) = src[from..].find("#[cfg(test)]").map(|p| p + from) {
-        let rest = &src.as_bytes()[at..];
-        let semi = rest.iter().position(|c| *c == b';');
-        let brace = rest.iter().position(|c| *c == b'{');
-        let end = match (semi, brace) {
-            (Some(s), Some(o)) if s < o => at + s + 1,
-            (_, Some(o)) => {
-                let mut depth = 0usize;
-                let mut j = at + o;
-                loop {
-                    match out.get(j) {
-                        Some(b'{') => depth += 1,
-                        Some(b'}') => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break j + 1;
-                            }
-                        }
-                        None => break j,
-                        _ => {}
-                    }
-                    j += 1;
-                }
-            }
-            (Some(s), None) => at + s + 1,
-            (None, None) => src.len(),
-        };
-        for c in &mut out[at..end] {
-            if *c != b'\n' {
-                *c = b' ';
-            }
-        }
-        from = end;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 /// How many times `src` constructs `BackendUnavailable`: a call, a function
 /// value or an import. A match pattern is not one: `(_)`/`(..)`, a group
 /// followed by `=>` or `|`, or one preceded by `|`. The enum's own
@@ -171,7 +60,7 @@ fn constructions(src: &str) -> usize {
 /// [`constructions`] for any `NAME`: a variant, or a function whose result
 /// `is_pre_dispatch` trusts.
 fn constructions_of(src: &str, name: &str) -> usize {
-    construction_offsets(&strip_test_items(&sanitize(src)), name).len()
+    construction_offsets(&sanitize(&production_text(src)), name).len()
 }
 
 /// Where `clean` (sanitized, test items stripped) constructs `name`: the byte
@@ -195,6 +84,36 @@ fn construction_offsets(clean: &str, name: &str) -> Vec<usize> {
             .rposition(|c| !c.is_ascii_whitespace());
         let after_alt = before.is_some_and(|p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|'));
         let open = next_non_ws(end).map(|p| end + p);
+        // A struct variant: `{ .. }`, an arm, an alternative or a `let`
+        // destructure is a pattern; anything else builds the value.
+        if let Some(brace) = open.filter(|p| b[*p] == b'{') {
+            let mut depth = 0usize;
+            let mut close = brace;
+            for (j, c) in b.iter().enumerate().skip(brace) {
+                match c {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = j;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let inner = clean[brace + 1..close].trim();
+            let rest = clean[close + 1..].trim_start();
+            let pattern = inner.ends_with("..")
+                || rest.starts_with("=>")
+                || (rest.starts_with('=') && !rest.starts_with("=="))
+                || (rest.starts_with('|') && !rest.starts_with("||"))
+                || after_alt;
+            if !pattern {
+                found.push(at);
+            }
+            continue;
+        }
         let Some(open) = open.filter(|p| b[*p] == b'(') else {
             found.push(at);
             continue;
@@ -467,7 +386,7 @@ fn construction_sites(name: &str) -> BTreeMap<String, usize> {
     let mut owners: BTreeMap<String, (String, Option<usize>)> = BTreeMap::new();
     for file in construction_counts(name).into_keys() {
         let src = std::fs::read_to_string(root.join(&file)).expect("readable source");
-        let clean = strip_test_items(&sanitize(&src));
+        let clean = sanitize(&production_text(&src));
         let module = module_path(&file);
         for at in construction_offsets(&clean, name) {
             let (item, fn_at) = enclosing_item(&clean, at);
@@ -545,6 +464,53 @@ fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
          before anything reaches the backend: review every new or removed call \
          site (left: found, right: reviewed)"
     );
+}
+
+/// The items allowed to build `Error::AmbiguousBackend`, which
+/// `is_pre_dispatch` lists: the name clash is refused at resolve, before any
+/// credential, replay, idempotency key, cache or send. Keyed as above.
+const CLASH_SITES: &[(&str, usize)] = &[
+    // `ambiguous_backend`, called only by `MetaMcp::refuse_name_clash`, the
+    // first step of `resolve`.
+    ("gateway::meta_mcp::invoke::dispatch::ambiguous_backend", 1),
+];
+
+#[test]
+fn the_clash_refusal_is_built_only_at_reviewed_pre_send_sites() {
+    let allowed: BTreeMap<String, usize> = CLASH_SITES
+        .iter()
+        .map(|(item, count)| ((*item).to_string(), *count))
+        .collect();
+    assert_eq!(
+        construction_sites("Error::AmbiguousBackend"),
+        allowed,
+        "the clash refusal frees an idempotency key, so it may be built only \
+         before anything reaches the backend: review every new or removed call \
+         site (left: found, right: reviewed)"
+    );
+}
+
+/// A struct variant's patterns are not constructions; a built value is.
+#[test]
+fn the_scan_tells_a_struct_variant_built_from_its_patterns() {
+    let name = "Error::AmbiguousBackend";
+    let count = |src: &str| construction_offsets(src, name).len();
+    assert_eq!(count("Error::AmbiguousBackend { .. } => 1,"), 0);
+    assert_eq!(
+        count("matches!(e, Error::AmbiguousBackend { server, .. })"),
+        0
+    );
+    assert_eq!(
+        count("let Error::AmbiguousBackend { server, rule } = e else {};"),
+        0
+    );
+    assert_eq!(count("| Error::AmbiguousBackend { .. }"), 0);
+    assert_eq!(count("OfflineMigrationError::AmbiguousBackend { n: 1 }"), 0);
+    assert_eq!(
+        count("Error::AmbiguousBackend { server: s, rule: None }"),
+        1
+    );
+    assert_eq!(count("crate::Error::AmbiguousBackend { server, rule }"), 1);
 }
 
 /// The item key is the enclosing method or function, whatever file holds it.

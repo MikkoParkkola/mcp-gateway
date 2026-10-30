@@ -111,7 +111,11 @@ fn token_with(capabilities: &[&str]) -> String {
 async fn router_with(
     mode: Option<AttestationMode>,
     passthrough: bool,
-) -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    Arc<RecordingTransport>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (state, store) = test_router_app_state().await;
     router_on(state, store, mode, passthrough)
 }
@@ -119,10 +123,14 @@ async fn router_with(
 /// [`router_with`] on a caller-supplied state, e.g. one with auth on.
 fn router_on(
     mut state: Arc<AppState>,
-    store: tempfile::TempDir,
+    store: crate::gateway::router::tests::FixtureDir,
     mode: Option<AttestationMode>,
     passthrough: bool,
-) -> (axum::Router, Arc<RecordingTransport>, tempfile::TempDir) {
+) -> (
+    axum::Router,
+    Arc<RecordingTransport>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig {

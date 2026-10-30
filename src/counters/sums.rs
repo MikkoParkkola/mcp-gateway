@@ -28,6 +28,28 @@ pub(crate) struct WindowSums {
     pub counts: Vec<CallWindows>,
 }
 
+/// One caller x server pair's calls and blocks in the last 24 hours.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PairRow {
+    pub caller: String,
+    pub server: String,
+    pub calls: u64,
+    pub blocks: u64,
+}
+
+/// What [`CounterStore::top_pairs`] read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct TopPairs {
+    /// The top pairs by calls, ties by caller then server.
+    pub rows: Vec<PairRow>,
+    /// Pairs with activity in the window that are not in `rows`.
+    pub more_count: usize,
+    /// Their calls.
+    pub more_calls: u64,
+    /// Calls in the window that the pair dimension's overflow holds.
+    pub overflow_calls: u64,
+}
+
 impl CounterStore {
     /// The store's lock, taken by a reader. Counted in tests, per store.
     pub(super) fn read_lock(&self) -> parking_lot::MutexGuard<'_, Inner> {
@@ -36,10 +58,65 @@ impl CounterStore {
         self.inner.lock()
     }
 
+    /// How many label windows a batch read walked.
+    #[cfg(test)]
+    pub(crate) fn window_walks_for_test(&self) -> usize {
+        self.window_walks.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// How many times a reader took this store's lock.
     #[cfg(test)]
     pub(crate) fn reads_for_test(&self) -> usize {
         self.reads.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The top `n` caller x server pairs by calls in the 24-hour window ending
+    /// at `now` (the same buckets as [`Self::window_sums`]), under one lock.
+    /// Only pairs with calls or blocks in the window rank or count toward
+    /// `more`. The pair overflow is a series of its own, so its calls in the
+    /// window are exact.
+    pub(crate) fn top_pairs<Tz: TimeZone>(&self, now: u64, zone: &Tz, n: usize) -> TopPairs {
+        let inner = self.read_lock();
+        let keys: Vec<u64> = window_slots(Window::Day, now, inner.since, zone)
+            .iter()
+            .map(|slot| slot.key)
+            .collect();
+        let sum = |series: &Series, metric: Metric| -> u64 {
+            keys.iter()
+                .filter_map(|&b| series.half.get(b))
+                .map(|counts| counts[metric.index()])
+                .sum()
+        };
+        // Rank on borrowed labels; only the rows kept are cloned.
+        let mut ranked: Vec<(&(String, String), u64, u64)> = inner
+            .caller_server
+            .labels
+            .iter()
+            .map(|(pair, series)| {
+                (
+                    pair,
+                    sum(series, Metric::Calls),
+                    sum(series, Metric::Blocks),
+                )
+            })
+            .filter(|&(_, calls, blocks)| calls > 0 || blocks > 0)
+            .collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+        let rest = ranked.split_off(ranked.len().min(n));
+        TopPairs {
+            more_count: rest.len(),
+            more_calls: rest.iter().map(|row| row.1).sum(),
+            overflow_calls: sum(&inner.caller_server.overflow, Metric::Calls),
+            rows: ranked
+                .into_iter()
+                .map(|((caller, server), calls, blocks)| PairRow {
+                    caller: caller.clone(),
+                    server: server.clone(),
+                    calls,
+                    blocks,
+                })
+                .collect(),
+        }
     }
 
     /// Calls in the 24-hour window ending at unix second `now` (the 48
@@ -69,26 +146,32 @@ impl CounterStore {
             .into_iter()
             .filter(|b| (b + 1) * HALF > since)
             .collect();
+        // Labels the store does not hold are read from their dimension's
+        // overflow alone, so one walk answers all of them.
+        let mut unheld: Vec<(&Series, CallWindows)> = Vec::new();
         let counts = labels
             .iter()
             .map(|&label| {
                 let Some(read) = Read::of(&inner, label) else {
                     return (None, None);
                 };
-                let current_known = read.holds_all(&current, now_bucket);
-                let prev_known = mapped && read.holds_all(&previous, now_bucket);
-                (
-                    if current_known {
-                        read.sum(&current)
-                    } else {
-                        None
-                    },
-                    if prev_known {
-                        read.sum(&previous)
-                    } else {
-                        None
-                    },
-                )
+                let walk = || {
+                    #[cfg(test)]
+                    self.window_walks
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    read.windows(&current, mapped.then_some(previous.as_slice()), now_bucket)
+                };
+                if read.series.is_some() {
+                    return walk();
+                }
+                if let Some((_, known)) =
+                    unheld.iter().find(|(o, _)| std::ptr::eq(*o, read.overflow))
+                {
+                    return *known;
+                }
+                let answer = walk();
+                unheld.push((read.overflow, answer));
+                answer
             })
             .collect();
         WindowSums { since, counts }
@@ -123,6 +206,18 @@ impl<'a> Read<'a> {
                 held_after: None,
             }),
         }
+    }
+
+    /// The label's calls over the current buckets and over the previous
+    /// date's (`None` when they could not be mapped), each `None` where it
+    /// could be low.
+    fn windows(&self, current: &[u64], previous: Option<&[u64]>, now_bucket: u64) -> CallWindows {
+        let day = |buckets: &[u64]| {
+            self.holds_all(buckets, now_bucket)
+                .then(|| self.sum(buckets))
+                .flatten()
+        };
+        (day(current), previous.and_then(day))
     }
 
     /// Whether the label held bucket `b`, after its admission bucket.

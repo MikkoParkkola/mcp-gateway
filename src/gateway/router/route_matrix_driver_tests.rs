@@ -17,10 +17,21 @@ use crate::gateway::meta_mcp::MetaMcp;
 /// MIK-8747: keyed calls across eras on one key.
 #[path = "route_matrix_driver_era_tests.rs"]
 pub(crate) mod era;
+#[path = "route_matrix_driver_resend_tests.rs"]
+mod resend;
 #[path = "route_matrix_driver_response_tests.rs"]
 pub(crate) mod response;
 #[path = "route_matrix_driver_step_tests.rs"]
 mod step;
+#[path = "route_matrix_driver_task_tests.rs"]
+mod task_submit;
+#[cfg(feature = "cost-governance")]
+pub(crate) use resend::direct_spend_then_resend;
+pub(crate) use resend::{invoke_relay_then_resend, surfaced_admission_then_resend};
+pub(crate) use task_submit::{
+    Surfacing, task_submit_authorized_before_x14, task_submit_read_as, task_submit_surfaced,
+    task_submit_ungranted,
+};
 #[path = "route_matrix_driver_trace_tests.rs"]
 mod trace;
 pub(crate) use super::direct_audit_tests::anon_intake::{NO_PRINCIPAL, keyed_no_principal_on};
@@ -410,68 +421,6 @@ async fn signed_invoke_on(
     .1
 }
 
-/// What [`invoke_relay_then_resend`] saw.
-pub(crate) struct RelayResend {
-    /// The relay refusal.
-    pub(crate) relayed: Value,
-    /// The clean re-send under the refused nonce.
-    pub(crate) resent: Value,
-    /// A third send under that nonce.
-    pub(crate) third: Value,
-    /// Tool-list fills admitted on the target across the relayed call.
-    pub(crate) fills: u64,
-    /// Backend `tools/call` sends made by the clean re-send.
-    pub(crate) resent_calls: usize,
-}
-
-/// R1, MIK-8150 NONCE.3: on the signed, relayed fixture whose backend answers
-/// `text`, `k-std` reads it from `alpha` (the receipt, and the warm schema),
-/// then `k-budget` relays it to `server` under nonce `b1` and is refused,
-/// then re-sends a clean call under `b1`, then sends once more under it.
-pub(crate) async fn invoke_relay_then_resend(text: &'static str, server: &str) -> RelayResend {
-    let fx = super::direct_guards_fixture::fixture_signed_relayed(Answer::Text(text)).await;
-    let read = signed_invoke(&fx, "k-std", "a1", serde_json::json!({})).await;
-    assert!(read.get("error").is_none(), "premise: the read ran: {read}");
-    let target = fx.state.backends.get(server).expect("fixture backend");
-    let before = target.list_fills();
-    let who = ("k-budget", server);
-    let relayed = signed_invoke_on(&fx, who, "b1", serde_json::json!({ "cmd": text })).await;
-    let fills = target.list_fills() - before;
-    let sent = fx.calls.load(std::sync::atomic::Ordering::SeqCst);
-    let resent = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
-    let resent_calls = fx.calls.load(std::sync::atomic::Ordering::SeqCst) - sent;
-    let third = signed_invoke_on(&fx, who, "b1", serde_json::json!({})).await;
-    RelayResend {
-        relayed,
-        resent,
-        third,
-        fills,
-        resent_calls,
-    }
-}
-
-/// R3, R20: on the signed fixture with a spend budget, `k-budget` runs once
-/// under `n1`, is refused by the budget under `n2`, re-sends under `n2`, then
-/// re-sends under `n1`. Returns (the spend refusal, the `n2` re-send, the `n1`
-/// re-send, the backend's `tools/call` count).
-#[cfg(feature = "cost-governance")]
-pub(crate) async fn direct_spend_then_resend() -> (Value, Value, Value, usize) {
-    use super::direct_continuation_tests::{budget, signed_call};
-    let fx =
-        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, budget).await;
-    let who = ("k-budget", "alpha");
-    let (_, first) = signed_call(&fx, who, "n1", serde_json::json!({})).await;
-    assert!(
-        first.get("error").is_none(),
-        "premise: the first call ran: {first}"
-    );
-    let (_, refused) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
-    let (_, again) = signed_call(&fx, who, "n2", serde_json::json!({})).await;
-    // Control: the first call's nonce was admitted, so its re-send is a replay.
-    let (_, replay) = signed_call(&fx, who, "n1", serde_json::json!({})).await;
-    (refused, again, replay, fx.calls.load(Ordering::SeqCst))
-}
-
 /// A backend listing `read` as `destructiveHint: true` and counting its sends.
 pub(super) struct Destructive {
     pub(super) calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
@@ -513,99 +462,12 @@ impl crate::transport::Transport for Destructive {
     }
 }
 
-/// R4a: a modern task-augmented `tools/call read` by its surfaced name on
-/// `/mcp`, declaring form elicitation, where `read` is listed
-/// `destructiveHint: true`, so X14 has a destructive call to decide. `k-std`
-/// carries no verified identity, so X14 binds it by its key (MIK-8137).
-///
-/// The whole round on one gateway: `k-std`'s call; its challenge, answered
-/// `accept` and presented by another key (`k-budget`); then by `k-std`. With
-/// the backend calls counted after each.
-pub(crate) async fn task_submit_surfaced() -> TaskConfirmRound {
-    let (fx, calls, params) = task_submit_fixture(Surfacing::On).await;
-    let send = |key: &'static str, params: serde_json::Value| {
-        super::direct_guards_fixture::send_with_headers(
-            &fx,
-            "/mcp",
-            key,
-            "tools/call",
-            params,
-            None,
-            &TASK_SUBMIT_HEADERS,
-        )
-    };
-    let (_, challenge) = send("k-std", params.clone()).await;
-    let mut accepted = params;
-    if let (Some(state), Some((issued, _))) = (
-        challenge.pointer("/result/requestState").cloned(),
-        challenge
-            .pointer("/result/inputRequests")
-            .and_then(serde_json::Value::as_object)
-            .and_then(|requests| requests.iter().next()),
-    ) {
-        accepted["requestState"] = state;
-        accepted["inputResponses"] = serde_json::json!({ issued.clone(): {"action": "accept"} });
-    }
-    let (_, other_key) = send("k-budget", accepted.clone()).await;
-    let after_other_key = calls.load(Ordering::SeqCst);
-    let (_, same_key) = send("k-std", accepted).await;
-    TaskConfirmRound {
-        challenge,
-        other_key,
-        after_other_key,
-        same_key,
-    }
-}
-
-/// [`task_submit_surfaced`]'s answers.
-pub(crate) struct TaskConfirmRound {
-    /// `k-std`'s first call: X14's question.
-    pub challenge: serde_json::Value,
-    /// The accepted answer presented by another key.
-    pub other_key: serde_json::Value,
-    /// Backend calls once that presentation was answered.
-    pub after_other_key: usize,
-    /// The accepted answer presented by `k-std`.
-    pub same_key: serde_json::Value,
-}
-
-/// Whether the fixture surfaces `read` (P3, MIK-8326).
-#[derive(Clone, Copy)]
-pub(crate) enum Surfacing {
-    /// `read` is surfaced on `/mcp`.
-    On,
-    /// Nothing is surfaced, so the name `read` matches no tool.
-    Off,
-}
-
 /// The modern era's header mirrors for a `tools/call read`.
 pub(super) const TASK_SUBMIT_HEADERS: [(&str, &str); 3] = [
     ("mcp-protocol-version", "2026-07-28"),
     ("mcp-method", "tools/call"),
     ("mcp-name", "read"),
 ];
-
-/// The R4a fixture, surfacing `read` per `surfacing_mode`, with its backend
-/// call counter and the task-augmented call's params.
-async fn task_submit_fixture(
-    surfacing_mode: Surfacing,
-) -> (
-    super::direct_guards_fixture::Fx,
-    std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    serde_json::Value,
-) {
-    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let transport = std::sync::Arc::new(Destructive {
-        calls: std::sync::Arc::clone(&calls),
-    });
-    let fx = match surfacing_mode {
-        Surfacing::On => super::direct_guards_fixture::fixture_built_on(transport, surfacing).await,
-        Surfacing::Off => {
-            super::direct_guards_fixture::fixture_built_on(transport, |meta| meta).await
-        }
-    };
-    (fx, calls, task_submit_params())
-}
 
 /// The R4a task-augmented call's params.
 fn task_submit_params() -> serde_json::Value {
@@ -622,50 +484,6 @@ fn task_submit_params() -> serde_json::Value {
             crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "x14-submit"
         }
     })
-}
-
-/// One R4a call sent with the API key `key`, on a fixture that surfaces
-/// `read` per `surfacing_mode`. Returns the HTTP status with the answer.
-/// `k-deny` is the fixture's key denied `read` (P3, MIK-8326).
-pub(crate) async fn task_submit_read_as(
-    key: &str,
-    surfacing_mode: Surfacing,
-) -> (axum::http::StatusCode, Sent) {
-    let (fx, calls, params) = task_submit_fixture(surfacing_mode).await;
-    let (status, body) = super::direct_guards_fixture::send_with_headers(
-        &fx,
-        "/mcp",
-        key,
-        "tools/call",
-        params,
-        None,
-        &TASK_SUBMIT_HEADERS,
-    )
-    .await;
-    let sent = Sent {
-        body,
-        backend_calls: calls.load(Ordering::SeqCst),
-        seen: Vec::new(),
-    };
-    (status, sent)
-}
-
-/// R4a `Authorize` (MIK-8315): a modern task-augmented `gateway_invoke` of a
-/// personal capability the caller holds no grant for, on `/mcp`. Panics
-/// unless the submit answers the sync call's status, code and message,
-/// writes the sync call's audit records, creates no task and reaches nothing.
-pub(crate) async fn task_submit_ungranted() {
-    super::tests::task_execution_adapter::submit_authz::matrix_ungranted_invoke_submit().await;
-}
-
-/// R4a `Authorize` before `TaskConfirm` (MIK-8331): a task call by a surfaced
-/// name from a caller without the grant, and from a non-admin for an admin
-/// capability, answers as the sync call with no X14 challenge, and X14 does
-/// not classify the surfaced capability for an admitted scope. Panics
-/// otherwise.
-pub(crate) async fn task_submit_authorized_before_x14() {
-    super::tests::task_execution_adapter::x14_authorize_order::matrix_authorize_precedes_x14()
-        .await;
 }
 
 /// A backend whose `tools/call` signals `entered`, then waits for `gate`
@@ -749,54 +567,4 @@ pub(crate) async fn concurrent_same_key() -> (Value, usize) {
         .expect("the first call finished once released")
         .expect("the first call did not panic");
     (second, calls.load(Ordering::SeqCst))
-}
-
-/// R2, MIK-8150 NONCE.4: on the hardened, signed fixture surfacing
-/// `alpha/read`, a keyed surfaced-name call runs under `s1`; the key reused for
-/// other arguments is refused by execution admission (409) under `s2`; the
-/// honest call is re-sent under `s2` with its own key; then a third call under
-/// `s2`. Returns (the admission refusal, the re-send, the third send, the
-/// backend's `tools/call` count).
-pub(crate) async fn surfaced_admission_then_resend() -> (Value, Value, Value, usize) {
-    use crate::gateway::meta_mcp::signing::NONCE_META;
-    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
-    let fx =
-        super::direct_guards_fixture::fixture_hardened_signed_built(Answer::Ok, true, surfacing)
-            .await;
-    let call = |key: &'static str, nonce: &'static str, args: Value| {
-        let fx = &fx;
-        async move {
-            let params = serde_json::json!({ "name": "read", "arguments": args, "_meta": {
-                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-                "io.modelcontextprotocol/clientCapabilities": {},
-                NONCE_META: nonce,
-                IDEMPOTENCY_KEY_META: key,
-            }});
-            let headers = [
-                ("mcp-protocol-version", "2026-07-28"),
-                ("mcp-method", "tools/call"),
-                ("mcp-name", "read"),
-            ];
-            super::direct_guards_fixture::send_with_headers(
-                fx,
-                "/mcp",
-                "k-std",
-                "tools/call",
-                params,
-                None,
-                &headers,
-            )
-            .await
-            .1
-        }
-    };
-    let first = call("s-k1", "s1", serde_json::json!({})).await;
-    assert!(
-        first.get("error").is_none(),
-        "premise: the first call ran: {first}"
-    );
-    let refused = call("s-k1", "s2", serde_json::json!({ "cmd": "other" })).await;
-    let resent = call("s-k2", "s2", serde_json::json!({ "cmd": "other" })).await;
-    let third = call("s-k3", "s2", serde_json::json!({ "cmd": "other" })).await;
-    (refused, resent, third, fx.calls.load(Ordering::SeqCst))
 }

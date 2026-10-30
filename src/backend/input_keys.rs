@@ -481,7 +481,7 @@ impl Backend {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
             };
-            self.commit_verdicts(source, listing, verdicts);
+            self.commit_verdicts(source, listing, verdicts).emit();
             return withheld;
         }
         // Evicted since the fetch and refused a new slot: store nothing (#2300).
@@ -495,8 +495,9 @@ impl Backend {
             PoolKey::PerUser { binding } => binding.clone(),
             PoolKey::Shared => String::new(),
         };
+        let mut logs = None;
         entry.tools_cache.replace(parsed, || {
-            self.commit_verdicts(&source, listing, verdicts);
+            logs = Some(self.commit_verdicts(&source, listing, verdicts));
             // Display only, so replaced outright: it labels this list.
             *entry.hint_declared.write() = hint_declared;
             entry
@@ -517,6 +518,10 @@ impl Backend {
                 .write()
                 .retain(|tool| read_only.contains(tool));
         });
+        // After the cache's write guard is released.
+        if let Some(logs) = logs {
+            logs.emit();
+        }
         withheld
     }
 }

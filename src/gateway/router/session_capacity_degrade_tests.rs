@@ -20,7 +20,7 @@ use crate::config::StreamingConfig;
 /// The provisional POST cap.
 const POST_CAP: usize = crate::gateway::streaming::MAX_PROVISIONAL_SESSIONS;
 
-async fn gateway() -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     test_router_app_state_with_streaming(StreamingConfig {
         enabled: true,
         ..StreamingConfig::default()

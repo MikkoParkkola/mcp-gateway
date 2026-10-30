@@ -43,6 +43,7 @@ owned_routes! {
     DASHBOARD_LOGOUT = "/dashboard/logout",
     UI_STATUS = "/ui/api/status",
     UI_TOOLS = "/ui/api/tools",
+    UI_TOOLS_CALL = "/ui/api/tools/call",
     UI_CONFIG = "/ui/api/config",
     UI_RELOAD = "/ui/api/reload",
     UI_DASHBOARD_LINK = "/ui/api/dashboard-link",
@@ -98,4 +99,8 @@ owned_routes! {
     ACCOUNTS_COMPLETE_SCRIPT = "/accounts/v1/assets/complete.js",
     UI_OVERVIEW = "/ui/api/overview",
     UI_REFUSALS = "/ui/api/refusals",
+    /// The Gateway page's facts: process, reloads, TLS, upgrade, clients.
+    UI_GATEWAY = "/ui/api/gateway",
+    /// The UI's live event feed (server-sent events).
+    UI_STREAM = "/ui/api/stream",
 }

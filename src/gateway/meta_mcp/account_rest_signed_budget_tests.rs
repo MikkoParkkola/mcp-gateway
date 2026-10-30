@@ -67,7 +67,7 @@ fn signed_and_budgeted(mut meta: MetaMcp) -> MetaMcp {
 async fn a_spend_refusal_after_a_capability_account_refresh_keeps_the_nonce() {
     let custody = custody_with(&[(account_key("alice", WORK), grant(ALICE_WORK_TOKEN, 0))]);
     let installed = custody.installed();
-    let (meta, registry) =
+    let (_log, meta, registry) =
         installed_gateway_built(&[(WORK, managed(WORK))], &installed, signed_and_budgeted);
     let backend = backend_with(
         &registry,

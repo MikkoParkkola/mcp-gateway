@@ -149,6 +149,11 @@ async fn the_owner_leases_their_own_row() {
         f.hub.leases.state(&lease_key(&f, "p")).await,
         LeaseState::Active { .. }
     ));
+    assert_eq!(
+        f.hub.held_leases().await,
+        1,
+        "the count LEASE-T0 reads sees it"
+    );
 }
 
 /// LEASE-T9 / E3: a handle on backend `other` is refused on `/mcp/pt`.
@@ -709,18 +714,10 @@ async fn parked_listener(f: &Fixture) -> ListenersAndBackend {
                 ineligible: Arc::new(std::collections::BTreeSet::new),
             }),
         }));
-    let source = f
-        .hub
-        .source(crate::events::types::SourceKind::BackendNotification)
-        .expect("registered");
-    let key = lease_key(f, "p");
-    let name = "backend.pt.tools_changed";
-    let lifecycle =
-        crate::events::backend_source::backend_key(Some(&key.obs), name, &json!({})).expect("key");
-    source
-        .on_first_subscriber(&lifecycle, "p", name, &json!({}))
-        .await
-        .expect("parked");
+    // Started as the hub starts a stored row, so the hub records the key and
+    // a revocation's stop reaches it; registering the source spawns the
+    // same replay, and the hub starts each key once.
+    f.hub.replay_starts().await;
     (listeners, backend)
 }
 

@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::security::ResponseScanner;
+use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::transition::TransitionTracker;
 
 pub mod anomaly;
@@ -51,7 +52,7 @@ pub(crate) use collusion_gate::{
     DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,
 };
 mod config;
-pub use config::{FirewallAction, FirewallConfig, FirewallRule, ScanType};
+pub use config::{FirewallAction, FirewallConfig, FirewallRule, RuleException, ScanType};
 pub mod input_scanner;
 pub(crate) mod json_literal;
 mod json_valid;
@@ -79,6 +80,8 @@ pub(crate) mod response_tests;
 mod rule_glob_tests;
 #[cfg(test)]
 mod rule_scan_tests;
+#[cfg(test)]
+mod rule_scope_tests;
 
 // ─── Runtime types ───────────────────────────────────────────────────────────
 
@@ -125,6 +128,10 @@ struct CompiledRule {
     pattern: Option<glob::Pattern>,
     action: FirewallAction,
     scans: Vec<ScanType>,
+    /// `servers`, compiled; a glob that did not parse matches nothing.
+    servers: Option<Vec<Option<glob::Pattern>>>,
+    keys: Option<Vec<String>>,
+    except: Vec<verdict::CompiledException>,
     #[allow(dead_code)]
     reason: Option<String>,
 }
@@ -329,12 +336,12 @@ impl Firewall {
     /// stateful guards (anomaly, tenant, budget, learning): those judged the
     /// logical call once, at its route scan, and a second pass would count it
     /// twice. Design note `design-b1-rescan.md` r2.
-    pub(crate) fn rescan(&self, tool: &str, args: &Value) -> FirewallVerdict {
+    pub(crate) fn rescan(&self, target: RuleTarget<'_>, args: &Value) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
         }
-        let findings = self.content_findings(tool, args);
-        let action = self.resolve_action(tool, &findings);
+        let findings = self.content_findings(target.tool, args);
+        let action = self.resolve_action(target, &findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -371,9 +378,28 @@ impl Firewall {
         caller: &str,
         control_identity: &str,
     ) -> FirewallVerdict {
+        let target = RuleTarget {
+            server: ServerOf::Backend(server),
+            tool,
+            key: KeyOf::NotKnown,
+        };
+        self.check_request_keyed(session_id, target, args, caller, control_identity)
+    }
+
+    /// [`Self::check_request`] with the caller's proven key, for a rule's
+    /// `keys` scope; the entry point every gateway route uses (POLICY.2).
+    pub(crate) fn check_request_keyed(
+        &self,
+        session_id: &str,
+        target: RuleTarget<'_>,
+        args: &Value,
+        caller: &str,
+        control_identity: &str,
+    ) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
         }
+        let (server, tool) = (target.server.label(), target.tool);
 
         // 1. Content scan (input patterns, memory poisoning), shared with the
         //    dispatch chokepoint's `rescan`.
@@ -404,7 +430,7 @@ impl Firewall {
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            self.resolve_action(tool, &findings)
+            self.resolve_action(target, &findings)
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -426,6 +452,7 @@ impl Firewall {
                 external_tool: tool,
                 subject: None,
                 trace_id: None,
+                key: target.key,
             };
             let tenants = self.tenant_guard.request_tenants(args);
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
@@ -581,6 +608,7 @@ impl Firewall {
         let targets = [ResponsePolicyTarget {
             server: server.into(),
             tool: tool.into(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = ResponseCorrelation {
             session_id,
@@ -589,6 +617,7 @@ impl Firewall {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.
@@ -609,20 +638,23 @@ impl Firewall {
 
     /// Resolve each finding on its own, then take the most restrictive result.
     ///
-    /// A finding is decided by the first rule whose glob covers `tool` and
+    /// A finding is decided by the first rule that applies to `target` and
     /// whose `scan` list holds the finding's type, or else by its severity:
     /// High→Block, Medium→Warn, Low→Allow. Deciding per finding is what keeps
     /// an `allow` scoped to one type from allowing another type beside it.
-    fn resolve_action(&self, tool: &str, findings: &[Finding]) -> FirewallAction {
-        findings
-            .iter()
-            .fold(FirewallAction::Allow, |combined, finding| {
-                let rule = first_matching_rule_action(&self.rules, tool, finding.scan_type);
-                response::strongest_action(
-                    combined,
-                    decide_firewall_action(rule, Some(finding.severity)),
-                )
+    /// A key that is not known is resolved under every key a rule names, and
+    /// none, and the strongest outcome stands.
+    fn resolve_action(&self, target: RuleTarget<'_>, findings: &[Finding]) -> FirewallAction {
+        verdict::candidate_keys(&self.rules, target)
+            .into_iter()
+            .flat_map(|key| {
+                findings.iter().map(move |finding| {
+                    let rule =
+                        first_matching_rule_action(&self.rules, target, key, finding.scan_type);
+                    decide_firewall_action(rule, Some(finding.severity))
+                })
             })
+            .fold(FirewallAction::Allow, response::strongest_action)
     }
 
     /// Clean up per-session state in the anomaly detector.

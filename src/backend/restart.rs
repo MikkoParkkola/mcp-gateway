@@ -114,7 +114,7 @@ impl Backend {
                 self.start_entry_as(
                     &PoolKey::Shared,
                     &entry,
-                    super::lifecycle::EraResolution::Deferred,
+                    super::era::EraResolution::Deferred,
                 ),
             )
             .await

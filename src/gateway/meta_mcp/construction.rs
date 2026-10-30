@@ -66,7 +66,6 @@ impl MetaMcp {
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
-            secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
             tool_registry: None,
             #[cfg(feature = "cost-governance")]
@@ -110,7 +109,17 @@ impl MetaMcp {
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             firewall: None,
             inflight_calls: Arc::default(),
+            #[cfg(feature = "webui")]
+            ui_calls: Arc::new(tokio::sync::Semaphore::new(
+                crate::gateway::ui_call::MAX_UI_CALLS,
+            )),
         }
+    }
+
+    /// The permits web UI tool calls run under (U12).
+    #[cfg(feature = "webui")]
+    pub(crate) fn ui_call_permits(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.ui_calls
     }
 
     /// The registry a client's explicit cancel is looked up in.

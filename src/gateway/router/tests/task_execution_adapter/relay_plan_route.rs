@@ -34,7 +34,9 @@ fn text(text: &str) -> Value {
 /// The router redacts credentials in what it delivers; the Meta-MCP runs the
 /// `block` relay detector over every `mock` tool and redacts nothing, so the
 /// answer changes only in the router's response pass.
-async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn plan_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     plan_state_with(mock, &two_principal_auth()).await
 }
 
@@ -42,7 +44,7 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
 async fn plan_state_with(
     mock: &Arc<MockBackend>,
     auth: &AuthConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let router = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -56,6 +58,9 @@ async fn plan_state_with(
                     action: FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

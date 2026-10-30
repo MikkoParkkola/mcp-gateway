@@ -167,12 +167,26 @@ struct Shared {
     #[cfg(test)]
     seams: input::TestSeams,
     temp: AtomicU64,
+    /// Test-only: a share of the temporary directory this store lives in, so it
+    /// is removed only after the store's last handle and the test's own drop. Every blocking
+    /// write holds an `Arc<Shared>`, so no write can land while it is being
+    /// removed; a worker's late write landing mid-removal left the folder behind.
+    /// Declared last, so the lease above is closed first.
+    #[cfg(test)]
+    test_dir: std::sync::OnceLock<Arc<tempfile::TempDir>>,
 }
 
 #[derive(Clone)]
 pub(crate) struct TaskStore(Arc<Shared>);
 
 impl TaskStore {
+    /// Test-only: hold a share of the temporary directory this store lives in
+    /// until the last handle to the store drops (see `Shared::test_dir`).
+    #[cfg(test)]
+    pub(crate) fn keep_test_dir(&self, dir: Arc<tempfile::TempDir>) {
+        let _ = self.0.test_dir.set(dir);
+    }
+
     pub(super) async fn open(path: &Path, limits: StoreLimits) -> Result<Self, StoreError> {
         let dir = path.to_owned();
         let opened = dir.clone();
@@ -204,6 +218,8 @@ impl TaskStore {
             #[cfg(test)]
             seams: input::TestSeams::default(),
             temp: AtomicU64::new(0),
+            #[cfg(test)]
+            test_dir: std::sync::OnceLock::new(),
         })))
     }
 
@@ -691,6 +707,10 @@ impl Shared {
     }
 
     fn commit(&self, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        #[cfg(test)]
+        self.seams
+            .created_by
+            .witness("task record", &self.dir.join(LEASE));
         let hook = self.hook();
         match write_record(&self.dir, name, bytes, hook.as_ref(), &self.temp) {
             Ok(()) => Ok(()),

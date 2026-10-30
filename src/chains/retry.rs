@@ -114,13 +114,13 @@ impl Default for ChainRetryPolicy {
 ///
 /// # Errors
 ///
-/// Returns the last error if all attempts are exhausted or the error is
-/// non-retryable.
+/// Returns the last error and the attempts made if all attempts are
+/// exhausted or the error is not one a re-send is safe for.
 pub async fn retry_step<F, Fut, T>(
     policy: &ChainRetryPolicy,
     step_name: &str,
     mut f: F,
-) -> Result<(T, u32)>
+) -> std::result::Result<(T, u32), (Error, u32)>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T>>,
@@ -131,7 +131,9 @@ where
         attempt += 1;
         match f().await {
             Ok(value) => return Ok((value, attempt)),
-            Err(e) if attempt >= policy.max_attempts || !is_retryable(&e) => return Err(e),
+            Err(e) if attempt >= policy.max_attempts || !is_retryable(&e) => {
+                return Err((e, attempt));
+            }
             Err(e) => {
                 let bound = policy.backoff_for(attempt - 1);
                 // Full jitter, which this module has always documented and did
@@ -155,38 +157,27 @@ where
     }
 }
 
-/// Classify whether an error warrants a retry attempt.
+/// Whether a failed step is re-sent.
 ///
-/// Transient network and I/O errors are retryable; protocol/config errors
-/// signal a permanent failure that retrying will not fix.
+/// Only an error raised before the request was sent is, so a re-send cannot
+/// repeat an effect: `TransportConnect` (the connection was never
+/// made) and `BackendUnavailable` (refused before the send: a start, a closed
+/// concurrency limit, a cold tools/list timeout; MIK-7979). Both are on
+/// [`Error::is_pre_dispatch`], which is checked as well, so the list can
+/// never re-send what that allowlist does not vouch for.
+///
+/// Everything that can follow a send is final: a lost round (`Transport`,
+/// `BackendTimeout`), an HTTP error, an I/O error, and a backend's error
+/// answer at any status. `JsonRpcRetryable` is the peer's error under 408,
+/// 429 or a 5xx, and no status proves the peer did not act (the gateway itself
+/// answers 503 for a call that ran and whose audit write failed). Pre-send
+/// errors a chain never retried (a missing tool, an authorization wait, an
+/// open breaker, a rate limit) stay unretried.
 fn is_retryable(error: &Error) -> bool {
-    // A typed credential refusal (401, 403) repeats with the same credential,
-    // exactly as in the backend retry policy (A11-g).
-    if let Error::Http(e) = error
-        && e.status()
-            .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal)
-    {
-        return false;
-    }
-    // `TransportPermanent` is deliberately absent: it is the transport saying
-    // the configuration cannot work, and a retry loop is the wrong answer to
-    // that. Plain `Transport` stays retryable, because it means "failed, cause
-    // unknown". `TransportConnect` is a narrowing of `Transport`, not a new
-    // class -- it must stay retryable or splitting the variant would silently
-    // stop retrying the one failure that is provably safe to retry.
-    // `BackendUnavailable` is a pre-send refusal of a backend that may recover
-    // (a start, a closed concurrency limit, a cold tools/list timeout), and is
-    // retried after the step's own delay (MIK-7979).
     matches!(
         error,
-        Error::Transport(_)
-            | Error::JsonRpcRetryable { .. }
-            | Error::TransportConnect(_)
-            | Error::BackendTimeout(_)
-            | Error::BackendUnavailable(_)
-            | Error::Http(_)
-            | Error::Io(_)
-    )
+        Error::TransportConnect(_) | Error::BackendUnavailable(_)
+    ) && error.is_pre_dispatch()
 }
 
 // ============================================================================
@@ -215,7 +206,12 @@ mod tests {
         assert!(!is_retryable(&Error::TransportPermanent(
             "bad command".to_string()
         )));
-        assert!(is_retryable(&Error::Transport(
+        // A plain `Transport` failure may follow a send, so it is final too
+        // a connection never made is retried.
+        assert!(!is_retryable(&Error::Transport(
+            "connection reset".to_string()
+        )));
+        assert!(is_retryable(&Error::TransportConnect(
             "connection refused".to_string()
         )));
     }
@@ -258,7 +254,7 @@ mod tests {
 
         let _ = retry_step::<_, _, ()>(policy, "gap", move || {
             recorder.lock().unwrap().push(start.elapsed());
-            std::future::ready(Err(Error::Transport("not ready".to_string())))
+            std::future::ready(Err(Error::TransportConnect("not ready".to_string())))
         })
         .await;
 
@@ -342,7 +338,7 @@ mod tests {
             let count = cc.fetch_add(1, Ordering::SeqCst);
             async move {
                 if count < 2 {
-                    Err(Error::Transport("transient".into()))
+                    Err(Error::TransportConnect("transient".into()))
                 } else {
                     Ok(99u32)
                 }
@@ -364,7 +360,7 @@ mod tests {
 
         let result = retry_step::<_, _, ()>(&policy, "failing", || {
             cc.fetch_add(1, Ordering::SeqCst);
-            async { Err(Error::Transport("always fails".into())) }
+            async { Err(Error::TransportConnect("always fails".into())) }
         })
         .await;
 
@@ -390,8 +386,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
-    /// A11-g: a typed credential refusal is never retried by a chain step,
-    /// while a typed 429 still is.
+    /// A typed HTTP status error, as reqwest raises it.
     fn typed_status(status: u16) -> Error {
         let response = axum::http::Response::builder()
             .status(status)
@@ -404,19 +399,32 @@ mod tests {
         )
     }
 
+    /// No HTTP status is re-sent: a 401 or 403 repeats with the same
+    /// credential (A11-g), and a 429 or 5xx can follow a send.
     #[test]
-    fn a_typed_credential_refusal_is_not_retried_but_429_is() {
-        assert!(!is_retryable(&typed_status(401)));
-        assert!(!is_retryable(&typed_status(403)));
-        assert!(is_retryable(&typed_status(429)));
+    fn no_typed_http_status_is_retried() {
+        for status in [401, 403, 408, 429, 500, 503] {
+            assert!(!is_retryable(&typed_status(status)), "{status}");
+        }
     }
 
+    /// Only an error raised before the send is re-sent.
     #[test]
     fn is_retryable_classifies_correctly() {
-        // GIVEN various error types
-        assert!(is_retryable(&Error::Transport("x".into())));
-        assert!(is_retryable(&Error::BackendTimeout("x".into())));
-        assert!(is_retryable(&Error::Io(std::io::Error::other("x"))));
+        assert!(is_retryable(&Error::TransportConnect("x".into())));
+        assert!(is_retryable(&Error::BackendUnavailable("x".into())));
+        assert!(!is_retryable(&Error::Transport("x".into())));
+        assert!(!is_retryable(&Error::BackendTimeout("x".into())));
+        assert!(!is_retryable(&Error::Io(std::io::Error::other("x"))));
+        for status in [408, 429, 500, 502, 503, 504] {
+            let answer = Error::JsonRpcRetryable {
+                code: -32000,
+                message: "x".into(),
+                status,
+                data: None,
+            };
+            assert!(!is_retryable(&answer), "JsonRpcRetryable {status}");
+        }
         assert!(!is_retryable(&Error::Config("x".into())));
         assert!(!is_retryable(&Error::Protocol("x".into())));
         assert!(!is_retryable(&Error::BackendNotFound("x".into())));

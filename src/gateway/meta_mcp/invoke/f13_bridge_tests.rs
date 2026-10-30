@@ -390,6 +390,9 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
                     action: FirewallAction::Block,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },

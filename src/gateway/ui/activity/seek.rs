@@ -7,12 +7,12 @@
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
-use crate::security::transparency_log::pager::ASSEMBLY_WINDOW;
-use crate::security::transparency_log::segments::{active_segment_seq, list_segments, sealed_path};
+use crate::security::transparency_log::pager::{ASSEMBLY_WINDOW, open_segment};
+use crate::security::transparency_log::segments::listing;
 
 /// How much one forward read takes while looking for a line's end.
 const CHUNK: u64 = 64 * 1024;
@@ -115,39 +115,19 @@ fn counter_of(bytes: &[u8]) -> Option<u64> {
         .as_u64()
 }
 
-/// The log's files, oldest first: `(segment, path)`.
-fn files(log: &Path) -> io::Result<Vec<(u64, PathBuf)>> {
-    let sealed = list_segments(log)?;
-    let active = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
-    let mut files: Vec<(u64, PathBuf)> = sealed
-        .iter()
-        .map(|s| (s.seq, sealed_path(log, s.seq)))
-        .collect();
-    files.push((active, log.to_path_buf()));
-    Ok(files)
-}
-
-/// Open one of the log's files. The active file can be missing for an instant
-/// while rotation renames it to its sealed name and creates the next one; its
-/// bytes are then under the sealed name. `None` for a file no longer kept.
-fn open_kept(log: &Path, segment: u64, path: &Path) -> io::Result<Option<File>> {
-    match File::open(path) {
-        Ok(f) => Ok(Some(f)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            match File::open(sealed_path(log, segment)) {
-                Ok(f) => Ok(Some(f)),
-                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(e),
-            }
-        }
-        Err(e) => Err(e),
-    }
+/// The log's segments, oldest first, the active file's included when it
+/// exists.
+fn segments(log: &Path) -> io::Result<Vec<u64>> {
+    let files = listing(log)?;
+    let mut segments: Vec<u64> = files.sealed.iter().map(|s| s.seq).collect();
+    segments.extend(files.active);
+    Ok(segments)
 }
 
 /// The counter of the oldest record the kept log holds.
 pub(super) fn oldest_counter(log: &Path, reads: &mut Reads) -> io::Result<Option<u64>> {
-    for (segment, path) in files(log)? {
-        let Some(mut file) = open_kept(log, segment, &path)? else {
+    for segment in segments(log)? {
+        let Some(mut file) = open_segment(log, segment, || {})? else {
             continue;
         };
         let len = file.metadata()?.len();
@@ -161,8 +141,8 @@ pub(super) fn oldest_counter(log: &Path, reads: &mut Reads) -> io::Result<Option
 /// The record numbered `counter` in `log`, if the kept log holds it.
 pub(super) fn seek(log: &Path, counter: u64, reads: &mut Reads) -> io::Result<Option<Found>> {
     let mut chosen = None;
-    for (segment, path) in files(log)? {
-        let Some(mut file) = open_kept(log, segment, &path)? else {
+    for segment in segments(log)? {
+        let Some(mut file) = open_segment(log, segment, || {})? else {
             continue;
         };
         match line_at(&mut file, 0, reads)?.and_then(|(l, _)| counter_of(&l)) {

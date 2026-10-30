@@ -269,7 +269,8 @@ impl super::Backend {
     pub(crate) fn block_tool_for_test(&self, name: &str) {
         let mut verdicts = super::descriptor_gate::Verdicts::default();
         verdicts.add_unparseable([(name.to_string(), "digest".to_string())]);
-        self.commit_verdicts("", super::Listing::Complete, verdicts);
+        self.commit_verdicts("", super::Listing::Complete, verdicts)
+            .emit();
     }
 
     /// Store `tools` into the shared slot, as a fill does.
@@ -302,7 +303,8 @@ impl super::Backend {
         let entry = self.shared_entry();
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.hint_declared.write() = prepared.hint_declared;
-        self.commit_verdicts("", super::Listing::Complete, prepared.verdicts);
+        self.commit_verdicts("", super::Listing::Complete, prepared.verdicts)
+            .emit();
         entry.tools_cache.replace(tools, || ());
     }
 
@@ -396,7 +398,9 @@ mod tests {
         backend.attach_nudges(&feed);
         let mut verdicts = Verdicts::default();
         verdicts.add_unparseable([("x".to_string(), "digest".to_string())]);
-        backend.commit_verdicts("", Listing::Complete, verdicts);
+        backend
+            .commit_verdicts("", Listing::Complete, verdicts)
+            .emit();
         assert_eq!(
             nudges.try_recv().ok(),
             Some(ToolsNudge::Backend {

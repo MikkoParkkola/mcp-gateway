@@ -98,7 +98,7 @@ async fn upstream() -> (String, Arc<Upstream>) {
 struct Gateway {
     router: axum::Router,
     upstream: Arc<Upstream>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 async fn gateway() -> Gateway {

@@ -74,7 +74,7 @@ async fn peer() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
 
 /// The router over one required per-user backend at `url`, minted by
 /// [`EmptyMint`], and its transparency log's directory.
-async fn gateway(url: String) -> (axum::Router, (tempfile::TempDir, tempfile::TempDir)) {
+async fn gateway(url: String) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
         BackendConfig {

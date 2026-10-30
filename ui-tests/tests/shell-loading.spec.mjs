@@ -47,7 +47,7 @@ async function shellCall(page, name, ...args) {
 function heldProbe() {
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
-  return { release, answer: async (r) => { await gate; return r.fulfill({ json: { value: 1 } }); } };
+  return { release, gate, answer: async (r) => { await gate; return r.fulfill({ json: { value: 1 } }); } };
 }
 
 test('G1 a slow page shows the loading state after about 300 ms, says so once, and drops it with the data', async ({ page }) => {
@@ -194,23 +194,31 @@ test('W3 a dropped stream reads Updates stopped, and no state word is spelled ou
 });
 
 test('G1b a render that settles while the loading message waits its turn is never said', async ({ page }) => {
+  // The page's clock is paused from before it loads and moved only by runFor, so no
+  // step depends on how long the host takes between two of them.
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000); // far ahead of any stall since install
   await recordAnnouncements(page);
   const probe = heldProbe();
   await page.route(PROBE, probe.answer);
   await withFixturePages(page, { probes: true });
   await page.goto('/ui/policies/status');
-  // Something said at once, with a long pause after it, keeps the loading message
-  // queued however late this host runs it.
+  // Something said at once, with a long pause after it, keeps the loading message queued.
   const url = await shellModuleUrl(page);
   await page.evaluate(async (u) => {
     const m = await import(u);
     m.announcerTiming.dwellMs = 5000;
     m.announce('Earlier news.');
   }, url);
+  await page.clock.runFor(1); // the earlier news is written
+  await page.clock.runFor(300); // the onset: the loading state shows, its message queues
   await expect(loading(page)).toBeVisible();
   probe.release();
   await expect(page.locator('#content')).toContainText('value 1');
+  await page.clock.runFor(400); // the minimum: the loading state goes
+  await expect(loading(page)).toHaveCount(0);
   await page.evaluate(async (u) => { (await import(u)).announcerTiming.dwellMs = 500; }, url);
+  await page.clock.runFor(5000);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.startsWith('Loading'))).toEqual([]);
 });
@@ -271,4 +279,162 @@ test('G7 an error just after the loading state appears waits out its minimum, th
   expect(times.error - times.loading, 'the error waited out the loading state\'s minimum').toBeGreaterThanOrEqual(395);
   await shellCall(page, 'announcerIdle');
   expect((await page.evaluate(() => window.__writes)).filter((t) => t.includes('The gateway answered with an error'))).toHaveLength(1);
+});
+
+const content = (page) => page.locator('#content');
+
+/** A paused clock, so busy is read between the render's start and the 300 ms onset. */
+async function pausedClock(page) {
+  await page.clock.install({ time: 0 });
+  await page.clock.pauseAt(60_000); // far ahead of any stall since install
+}
+
+test('G8 a first render is aria-busy from its start, before the onset, and not after it settles', async ({ page }) => {
+  await pausedClock(page);
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true');
+  await expect(loading(page)).toHaveCount(0); // before the onset
+  await page.clock.runFor(300);
+  await expect(loading(page)).toBeVisible();
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true');
+  probe.release();
+  await expect(content(page)).toContainText('value 1');
+  await expect(content(page), 'busy stays while the loading state still covers the data').toHaveAttribute('aria-busy', 'true');
+  await page.clock.runFor(400);
+  await expect(loading(page)).toHaveCount(0);
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+});
+
+test('G8c busy clears after a first-load error, after an empty completion and after leaving mid-load', async ({ page }) => {
+  await pausedClock(page);
+  const answers = [{ status: 500, json: {} }, { json: { value: 'empty' } }];
+  const probe = heldProbe();
+  await page.route(PROBE, async (r) => {
+    const next = answers.shift();
+    if (!next) return probe.answer(r);
+    return r.fulfill(next);
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(page.locator('#content [data-state="error"]')).toBeVisible();
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await page.evaluate(async (u) => (await import(u)).render(), await shellModuleUrl(page));
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(page.locator('#content .body[data-rendered]')).toBeAttached();
+  await page.evaluate(async (u) => (await import(u)).render(), await shellModuleUrl(page));
+  await expect(content(page)).toHaveAttribute('aria-busy', 'true'); // third read is held
+  await page.evaluate(() => { history.pushState(null, '', '/ui/servers/status'); dispatchEvent(new PopStateEvent('popstate')); });
+  await expect(content(page)).toContainText('servers - status');
+  await expect(content(page)).not.toHaveAttribute('aria-busy', /.*/);
+  probe.release();
+});
+
+const retryButton = (page) => page.locator('#content [data-state="error"]').getByRole('button', { name: /Retry/ });
+
+test('G5b a Retry that is rejected again shows the error again, with aria-busy cleared', async ({ page }) => {
+  let calls = 0;
+  const second = heldProbe();
+  await page.route(PROBE, async (r) => {
+    calls += 1;
+    if (calls === 1) return r.fulfill({ status: 500, json: {} });
+    await second.gate;
+    return r.fulfill({ status: 500, json: {} });
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await retryButton(page).click();
+  await expect.poll(() => calls, 'the Retry sent its own request').toBe(2);
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  second.release();
+  await expect(page.locator('#content [data-state="error"]')).toBeVisible();
+  await expect(retryButton(page)).toBeEnabled();
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(loading(page)).toHaveCount(0);
+  expect(calls).toBe(2);
+});
+
+test('G5c leaving during a Retry leaves no loading state or aria-busy on the new page', async ({ page }) => {
+  await pausedClock(page);
+  let calls = 0;
+  let served = false;
+  const probe = heldProbe();
+  await page.route(PROBE, async (r) => {
+    calls += 1;
+    if (calls === 1) return r.fulfill({ status: 500, json: {} });
+    await probe.answer(r); // the abandoned Retry's read, held until released
+    served = true;
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await retryButton(page).click();
+  await page.clock.runFor(300);
+  await expect(loading(page)).toBeVisible();
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  await page.evaluate(() => {
+    history.pushState(null, '', '/ui/servers/status');
+    dispatchEvent(new PopStateEvent('popstate'));
+  });
+  await expect(page.locator('#content')).toContainText('servers - status');
+  probe.release();
+  await expect.poll(() => served, 'the abandoned Retry completed').toBe(true);
+  await page.evaluate(() => Promise.resolve()); // its handlers have run
+  await page.clock.runFor(400); // and its loading cleanup
+  await expect(loading(page)).toHaveCount(0);
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  await expect(page.locator('#content')).toContainText('servers - status');
+  await expect(page.locator('#content')).not.toContainText('value 1');
+});
+
+/**
+ * Walk the loading thresholds on a paused clock, after `start` began an attempt whose
+ * answer is held: no loading state at 299 ms, one at 300 ms; with the answer already
+ * settled, still there 399 ms later, gone at 400 ms.
+ */
+async function walkThresholds(page, probe) {
+  await page.clock.runFor(299);
+  await expect(loading(page), 'not before the onset').toHaveCount(0);
+  await page.clock.runFor(1);
+  await expect(loading(page), 'at the onset').toBeVisible();
+  probe.release();
+  await expect(page.locator('#content')).toContainText('value 1');
+  await page.evaluate(() => Promise.resolve()); // the settled attempt has run its handlers
+  await page.clock.runFor(399);
+  await expect(loading(page), 'just before the minimum').toBeVisible();
+  await page.clock.runFor(1);
+  await expect(loading(page), 'at the minimum').toHaveCount(0);
+}
+
+test('G5d a slow Retry shows loading after the same onset as a first render, and keeps it the same minimum', async ({ page }) => {
+  await pausedClock(page);
+  let calls = 0;
+  const held = [heldProbe(), heldProbe()];
+  await page.route(PROBE, (r) => {
+    calls += 1;
+    if (calls === 1) return held[0].answer(r); // a first render
+    if (calls === 2) return r.fulfill({ status: 500, json: {} }); // the next page's first read fails
+    return held[1].answer(r); // its Retry
+  });
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await walkThresholds(page, held[0]);
+  await page.goto('/ui/policies/status');
+  await retryButton(page).click();
+  await walkThresholds(page, held[1]);
+});
+
+test('G8b a sign-out during a slow first load leaves no aria-busy behind', async ({ page }) => {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
+  await page.route('**/dashboard/logout', (r) => r.fulfill({ status: 204 }));
+  const probe = heldProbe();
+  await page.route(PROBE, probe.answer);
+  await withFixturePages(page, { probes: true });
+  await page.goto('/ui/policies/status');
+  await expect(page.locator('#content')).toHaveAttribute('aria-busy', 'true');
+  await page.getByRole('button', { name: 'Sign out' }).click();
+  await expect(page.locator('#signin')).toBeVisible();
+  await expect(page.locator('#content')).not.toHaveAttribute('aria-busy', /.*/);
+  probe.release();
 });

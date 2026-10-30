@@ -15,6 +15,52 @@ pub(crate) const CLEARTEXT_REFUSAL: &str = "would send credentials in cleartext 
      credentials are readable and replayable in transit.";
 
 impl Config {
+    /// A firewall rule's `keys` and an exception's `key` name configured API
+    /// keys, and need API-key authentication to match anything: a rule that
+    /// silently matched no caller could leave a `block` unapplied. Checked
+    /// while the firewall is on, like the rest of its rules.
+    #[cfg(feature = "firewall")]
+    fn validate_firewall_rule_keys(&self) -> Result<()> {
+        let firewall = &self.security.firewall;
+        if !firewall.enabled {
+            return Ok(());
+        }
+        let keyed = self.auth.enabled && !self.auth.api_keys.is_empty();
+        let known = |name: &str| self.auth.api_keys.iter().any(|key| key.name == name);
+        for (i, rule) in firewall.rules.iter().enumerate() {
+            let path = format!("security.firewall.rules[{i}]");
+            let names = rule
+                .keys
+                .iter()
+                .flatten()
+                .enumerate()
+                .map(|(j, k)| (format!("{path}.keys[{j}]"), k));
+            let excepted = rule
+                .except
+                .iter()
+                .flatten()
+                .enumerate()
+                .filter_map(|(j, e)| {
+                    e.key
+                        .as_ref()
+                        .map(|k| (format!("{path}.except[{j}].key"), k))
+                });
+            for (at, name) in names.chain(excepted) {
+                if !keyed {
+                    return Err(Error::ConfigValidation(format!(
+                        "{at} needs API-key authentication (auth.enabled with auth.api_keys)"
+                    )));
+                }
+                if !known(name) {
+                    return Err(Error::ConfigValidation(format!(
+                        "{at} names no configured API key"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Validate the configuration for common misconfigurations.
     ///
     /// Checks performed:
@@ -100,6 +146,8 @@ impl Config {
         flagged_tools::validate_flagged_tool_pins(&self.backends)?;
         self.validate_agent_key_material(overlay)?;
         self.auth.validate_api_key_names()?;
+        #[cfg(feature = "firewall")]
+        self.validate_firewall_rule_keys()?;
         self.auth.validate_distinct_principals(overlay)?;
         self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;
@@ -133,6 +181,8 @@ impl Config {
         // authenticated". Compiling here means an unresolved or contradictory
         // reference is a load refusal rather than a dispatch-time discovery.
         account_bindings::validate(self)?;
+        // Each backend's `secrets:` rules, on the config it runs with.
+        super::secret_rules::validate(self)?;
         match crate::personal_accounts::config::resolve(self.accounts.as_ref(), overlay) {
             Ok(_) | Err(crate::personal_accounts::config::AccountsConfigError::NotEnabled) => {}
             Err(error) => return Err(Error::ConfigValidation(error.to_string())),

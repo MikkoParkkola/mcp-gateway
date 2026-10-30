@@ -54,7 +54,8 @@ impl ToolInvoker for Recording {
             "inner" => json!({"output": {"token": self.envelope}}),
             // Fails its first dispatch with an ordinary (retryable) error.
             "flaky" if self.dispatched("flaky") == 1 => {
-                return Err(crate::Error::Internal("flaky".into()));
+                // Refused before the send: the one failure a step re-sends.
+                return Err(crate::Error::TransportConnect("flaky".into()));
             }
             _ => json!({"ok": true}),
         })

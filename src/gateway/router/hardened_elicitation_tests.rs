@@ -28,7 +28,9 @@ const OPERATOR: &str = "hardened-elicitation-operator-0123456789";
 const OTHER: &str = "hardened-elicitation-other-caller-01234567";
 const MODERN: &str = "2026-07-28";
 
-async fn gateway(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway(
+    posture: SecurityPosture,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         api_keys: vec![

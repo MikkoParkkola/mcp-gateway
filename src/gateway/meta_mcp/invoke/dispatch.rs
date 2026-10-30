@@ -244,13 +244,15 @@ impl MetaMcp {
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
-        let injection = self.secret_injector.inject(server, tool, arguments)?;
-        let arguments = injection.arguments;
-
         // The grant was decided at the authorization chokepoint, above the
         // caches. The definition is resolved again here only for the response
         // transform below, in one lookup so a reload cannot split it (#2236).
-        if let Some(cap) = self.get_capabilities()
+        // Only a call judged on no registry backend takes the capability
+        // route: one judged on a backend is never sent to a same-named
+        // capability (resolve refuses that clash; this holds if a backend is
+        // registered between resolve and here).
+        if captured.is_none()
+            && let Some(cap) = self.get_capabilities()
             && server == cap.name
             && let Some(cap_def) = cap.get(tool)
         {
@@ -502,4 +504,37 @@ impl MetaMcp {
     // ========================================================================
     // Operator control meta-tools
     // ========================================================================
+}
+
+impl MetaMcp {
+    /// A name that is both a registry backend and the attached capability
+    /// backend is refused, at resolve, before any credential, replay, key or
+    /// cache: the checks judge the backend, and the capability would answer.
+    /// Unscoped and name-only, so no caller's view can hide either route.
+    pub(super) fn refuse_name_clash(&self, server: &str) -> Result<()> {
+        if let Some(cap) = self.get_capabilities()
+            && cap.name == server
+            && self
+                .scoped(crate::gateway::authz::BackendGrant::Unscoped)
+                .scoped_get(server)
+                .is_some()
+        {
+            return Err(ambiguous_backend(server, None));
+        }
+        Ok(())
+    }
+}
+
+/// The refusal of a name that is both a registry backend and the capability
+/// backend (see [`Error::AmbiguousBackend`]). `rule` names the policy rule
+/// covering the call, when one does.
+pub(super) fn ambiguous_backend(server: &str, rule: Option<&str>) -> Error {
+    tracing::warn!(
+        server,
+        "refused: the name is both a configured backend and the capability backend"
+    );
+    Error::AmbiguousBackend {
+        server: server.to_owned(),
+        rule: rule.map(str::to_owned),
+    }
 }

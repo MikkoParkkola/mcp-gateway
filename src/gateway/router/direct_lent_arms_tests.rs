@@ -81,7 +81,7 @@ enum Guarded {
 async fn gateway(
     url: String,
     guarded: Guarded,
-) -> (axum::Router, (tempfile::TempDir, tempfile::TempDir)) {
+) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
     let key = Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("a key"));
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,

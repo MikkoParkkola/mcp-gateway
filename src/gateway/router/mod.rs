@@ -41,6 +41,9 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+// The web UI's Try-a-tool route runs this one MCP path in process (U12).
+#[cfg(feature = "webui")]
+pub(in crate::gateway) use handlers::meta_mcp_handler;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
@@ -53,6 +56,8 @@ mod meta_refusal_audit;
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+mod process_facts;
+pub use process_facts::{ProcessFacts, ProcessStart};
 mod view_judge;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
@@ -156,6 +161,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "webui"))]
+mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
@@ -179,6 +186,8 @@ mod meta_fingerprint_tests;
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
+mod overview_sources_tests;
+#[cfg(all(test, feature = "webui"))]
 mod overview_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]
@@ -186,9 +195,17 @@ mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod rule_keys_route_tests;
+/// Secret injection applies on the direct route as through gateway_invoke.
+#[cfg(test)]
+mod secret_injection_direct_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+/// U3: the UI live stream.
+#[cfg(all(test, feature = "webui"))]
+mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
@@ -337,6 +354,12 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_cell_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_gates_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 
@@ -440,6 +463,9 @@ pub struct AppState {
     /// without lifecycle wiring — tests and any embedder that does not run
     /// the reaper — in which case tracking and sweeping are both no-ops.
     pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
+    /// When this process started and what it recorded while starting. Set
+    /// where server start builds the state; the web UI's uptime counts from it.
+    pub process: Arc<ProcessFacts>,
 }
 
 /// Create the router.
@@ -490,10 +516,11 @@ async fn readyz(
     }
 }
 
-/// The `AuthState` needed by [`auth_middleware`], split out of
-/// [`create_router_with`] purely to keep that function under the line
-/// budget — logic and ordering are unchanged.
-fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+/// The one `AuthState` builder: ingress ([`auth_middleware`], wired in
+/// [`create_router_with`]) and the UI stream's per-second credential
+/// re-check both judge with it, so a stream can never decide differently
+/// from the request that opened it.
+pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
         auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),

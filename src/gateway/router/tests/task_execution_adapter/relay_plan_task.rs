@@ -31,7 +31,9 @@ fn text(text: &str) -> Value {
 
 /// The Meta-MCP firewall both redacts credentials in what a task settles and
 /// runs the `block` relay detector over every `mock` tool.
-async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn plan_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -45,6 +47,9 @@ async fn plan_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDi
                     action: FirewallAction::Allow,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 collusion: CollusionConfig {
                     action: CollusionAction::Block,

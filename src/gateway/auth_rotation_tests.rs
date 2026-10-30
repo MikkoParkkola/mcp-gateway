@@ -255,15 +255,9 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
 
 // ROT.5 (b): no code derives a configured key's principal by slicing a digest
 // outside the one function in auth.rs. Whitespace is removed first, so a slice
-// split across lines is still seen; inline test modules are left out.
+// split across lines is still seen; each cfg(test) item is left out.
 #[test]
 fn no_digest_prefix_slice_outside_auth_rs() {
-    // A 6-byte prefix of anything named for a digest, or 12 hex characters of
-    // an encoded hash: the two shapes a digest-derived principal takes.
-    let shapes = regex::Regex::new(
-        r"(?i)digest\w*\)?\[0?\.\.6\]|(sha256_hex|encode)\(.{0,80}?\)\[0?\.\.12\]",
-    )
-    .expect("pattern compiles");
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut offenders = Vec::new();
     let mut stack = vec![root.clone()];
@@ -283,9 +277,7 @@ fn no_digest_prefix_slice_outside_auth_rs() {
                 continue;
             }
             let text = std::fs::read_to_string(&path).expect("source is readable");
-            let production = text.split("#[cfg(test)]\nmod ").next().unwrap_or_default();
-            let compact: String = production.split_whitespace().collect();
-            if shapes.is_match(&compact) {
+            if derives_digest_principal(&text) {
                 offenders.push(format!("src/{name}"));
             }
         }
@@ -296,7 +288,31 @@ fn no_digest_prefix_slice_outside_auth_rs() {
     );
     // Control: the scan sees the one derivation it exempts.
     let own = std::fs::read_to_string(root.join("gateway/auth.rs")).expect("auth.rs is readable");
-    assert!(shapes.is_match(&own.split_whitespace().collect::<String>()));
+    assert!(DIGEST_SHAPES.is_match(&own.split_whitespace().collect::<String>()));
+}
+
+/// A 6-byte prefix of anything named for a digest, or 12 hex characters of an
+/// encoded hash: the two shapes a digest-derived principal takes.
+static DIGEST_SHAPES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i)digest\w*\)?\[0?\.\.6\]|(sha256_hex|encode)\(.{0,80}?\)\[0?\.\.12\]")
+        .expect("pattern compiles")
+});
+
+/// Whether a source file's production code derives a principal from a digest
+/// prefix. Each `#[cfg(test)]` item is left out by its own extent, and
+/// whitespace is removed, so a slice split across lines is still seen.
+fn derives_digest_principal(text: &str) -> bool {
+    let compact: String = crate::test_source_text::production_text(text)
+        .split_whitespace()
+        .collect();
+    DIGEST_SHAPES.is_match(&compact)
+}
+
+/// A digest slice after an early test module is production code and counts.
+#[test]
+fn a_digest_slice_after_an_early_test_module_counts() {
+    let source = "#[cfg(test)]\nmod early {\n    fn t() {}\n}\n\nfn principal(digest: &[u8]) -> &[u8] {\n    &digest[..6]\n}\n";
+    assert!(derives_digest_principal(source));
 }
 
 // ROT.7: two keys cannot share a principal through an explicit one.

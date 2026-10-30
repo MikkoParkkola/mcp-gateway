@@ -53,6 +53,22 @@ impl HeldCredential {
     }
 }
 
+impl HeldCredential {
+    /// A digest of only the credential that decides the request: the bearer
+    /// when an `Authorization` header is present, else the session. A cookie
+    /// the middleware ignores beside a bearer never changes it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn deciding_digest(&self) -> String {
+        let deciding = if self.authorization_present {
+            self.bearer.as_ref()
+        } else {
+            self.session.as_ref()
+        };
+        let part = deciding.map_or_else(|| "-".to_string(), |v| format!("{}:{v}", v.len()));
+        crate::hashing::sha256_hex(part.as_bytes())
+    }
+}
+
 /// The session cookie and bearer credential `headers` present, held for later
 /// re-validation; `None` when they present neither. Any `Authorization`
 /// header is held, even an unsupported scheme such as Basic or Digest with

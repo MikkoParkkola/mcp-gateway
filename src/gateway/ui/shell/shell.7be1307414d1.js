@@ -3,8 +3,10 @@
 //
 // The web UI shell: sidebar, page title, tabs in the address, page states
 // and the authenticated API client. Screens register a page; the shell owns
-// the URL. Page modules run before DOMContentLoaded and call register(), so
-// the first render already knows them. All text goes in with textContent.
+// the URL. The document lists the screens in a manifest; the shell loads the
+// screen of the current route before rendering it and the rest after the first
+// paint. A screen calls register() whenever it runs, before boot or after.
+// All text goes in with textContent.
 
 /** The sidebar, in order. The To do page id is composed so it reads as a name. */
 export const NAV = [
@@ -32,6 +34,80 @@ export function register(id, spec) {
   if (!PAGE_IDS.has(id)) throw new Error(`register: no sidebar page ${id}`);
   pages.set(id, spec);
 }
+
+/** The screen manifest of the document: page id → {js, css}. The shell never names a screen file itself. */
+function screens() {
+  try {
+    return JSON.parse(document.getElementById('screens')?.textContent || '{}');
+  } catch {
+    return {};
+  }
+}
+
+/** One load per screen; a failed one is forgotten so Retry tries again. */
+const loads = new Map();
+
+/** One load per stylesheet; the next attempt of its screen reuses a loaded one. */
+const sheets = new Map();
+
+/** Add a stylesheet and settle when it has loaded; a failed one is taken out again. */
+function sheet(href) {
+  if (!sheets.has(href)) {
+    const load = new Promise((ok, fail) => {
+      const link = el('link', { rel: 'stylesheet', href });
+      link.addEventListener('load', ok);
+      link.addEventListener('error', () => {
+        link.remove();
+        fail(new Error(`stylesheet ${href} did not load`));
+      });
+      document.head.append(link);
+    });
+    load.catch(() => sheets.delete(href));
+    sheets.set(href, load);
+  }
+  return sheets.get(href);
+}
+
+/** A manifest path the shell will fetch: one file name under /ui/assets/, nothing else. */
+const ASSET_PATH = /^\/ui\/assets\/[A-Za-z0-9._-]+$/;
+
+/** Pages whose stylesheet and module have both loaded. */
+const ready = new Set();
+/** Pages the shell has itself tried to load. */
+const tried = new Set();
+
+/**
+ * Whether page id must load its screen before it is drawn: it has a
+ * manifest entry and is not ready. A page registered without the shell
+ * ever loading it, such as a test fixture page, is drawn as it is.
+ */
+function needsLoad(id) {
+  if (!screens()[id] || ready.has(id)) return false;
+  return tried.has(id) || !pages.has(id);
+}
+
+/**
+ * Load the screen of page id, its stylesheet and module; the module registers
+ * itself. The page is ready once both have loaded. A failed load is
+ * forgotten, so the next attempt fetches again only the part that failed:
+ * a loaded stylesheet and an evaluated module are kept.
+ */
+function loadScreen(id) {
+  if (!needsLoad(id)) return Promise.resolve();
+  if (!loads.has(id)) {
+    tried.add(id);
+    const entry = screens()[id];
+    const load = ASSET_PATH.test(entry?.js) && ASSET_PATH.test(entry?.css)
+      ? Promise.all([sheet(entry.css), import(entry.js)]).then(() => { ready.add(id); })
+      : Promise.reject(new Error(`screen ${id}: the manifest entry is not an asset path`));
+    load.catch(() => loads.delete(id));
+    loads.set(id, load);
+  }
+  return loads.get(id);
+}
+
+/** Every screen in the manifest; failures stay with their own route. */
+const loadAllScreens = () => Promise.allSettled(Object.keys(screens()).map(loadScreen));
 
 /**
  * The palette's entries, navigation only: every sidebar page, each visible
@@ -84,7 +160,7 @@ export const GLOSSARY = {
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
   },
-  stream: { stopped: 'Updates stopped', resumed: 'Updates resumed' },
+  stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
 
 const unlistedStates = new Set();
@@ -189,6 +265,11 @@ export function staleTitle(since) {
   return since instanceof Date && !Number.isNaN(since.getTime())
     ? `${GLOSSARY.stream.stopped} at ${stamp(since)} · reconnecting`
     : `${GLOSSARY.stream.stopped} · reconnecting`;
+}
+
+/** The stale title when the stream never opened: no time, since there never was one. */
+export function unavailableTitle() {
+  return `${GLOSSARY.stream.unavailable} · reconnecting`;
 }
 
 const STATE_COPY = {
@@ -386,7 +467,8 @@ export function openPalette() {
   let options = [];
   let active = 0;
   let chosen = false;
-  const draw = () => {
+  const draw = (keep = false) => {
+    const was = keep ? options[active]?.dataset.path : null;
     const q = input.value.trim().toLowerCase();
     const found = entries().filter((e) => !q || e.label.toLowerCase().includes(q) || crumb(e.path).toLowerCase().includes(q));
     list.replaceChildren();
@@ -406,7 +488,9 @@ export function openPalette() {
       list.append(box);
     }
     if (!options.length) list.append(el('p', { class: 'muted palette-empty' }, 'No page, action or setting matches.'));
-    active = Math.min(active, Math.max(options.length - 1, 0));
+    // A redraw keeps the place of the user on the entry, not on its position.
+    const kept = was ? options.findIndex((o) => o.dataset.path === was) : -1;
+    active = kept >= 0 ? kept : Math.min(active, Math.max(options.length - 1, 0));
     mark();
   };
   const mark = () => {
@@ -453,6 +537,11 @@ export function openPalette() {
   });
   paletteEl.addEventListener('click', (ev) => { if (ev.target === paletteEl) close(); });
   draw();
+  // Screens not loaded yet declare their entries when they register: list them as they arrive.
+  const dialog = paletteEl;
+  for (const id of Object.keys(screens()).filter(needsLoad)) {
+    loadScreen(id).then(() => { if (paletteEl === dialog) draw(true); }, () => {});
+  }
   search?.setAttribute('aria-expanded', 'true');
   paletteEl.showModal();
   // A modal makes the rest of the page inert, the live region with it: it rides along.
@@ -947,16 +1036,29 @@ const runTab = (spec, route, into) => {
   // Taken when the context is made: a screen holding on to it after the user moved
   // on, or after another identity signed in, announces nothing.
   const guard = { epoch: authEpoch, seq: renderSeq };
+  const show = screenBanner(into, route.page, guard);
+  // The live stream marks this page stale on a drop, through the same banner.
+  livePage = { into, show };
+  // Any banner call of the screen makes the slot its own: the stream no longer clears it.
+  const screenShow = (...args) => {
+    if (stream.banner?.into === into) stream.banner = null;
+    return show(...args);
+  };
+  // A page drawn while the stream is down gets the stale state once its tab has drawn.
+  const markStale = (drawn) => {
+    if (guardHolds(guard)) markPageStale({ into, show });
+    return drawn;
+  };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
-    show: screenBanner(into, route.page, guard),
+    show: screenShow,
     // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
     // later: Retry reuses the render, so a failed attempt is told apart by its container.
     header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
     confirm: confirmAction,
-  }));
+  })).then(markStale);
 };
 
 /**
@@ -995,7 +1097,7 @@ function screenBanner(into, page, guard) {
       return;
     }
     // The same banner again is no transition: leave it, say nothing.
-    if (kind && old?.dataset.state === kind && !opts.title) return;
+    if (kind && old?.dataset.state === kind && (!opts.title || old.querySelector('h2')?.textContent === opts.title)) return;
     old?.remove();
     // While stale, the tab's numbers are dimmed (CSS, [data-stale]).
     into.toggleAttribute('data-stale', kind === 'stale');
@@ -1004,7 +1106,7 @@ function screenBanner(into, page, guard) {
       if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
       return;
     }
-    const built = kind === 'stale' ? { ...opts, title: staleTitle(opts.since) } : opts;
+    const built = kind === 'stale' ? { ...opts, title: opts.title ?? staleTitle(opts.since) } : opts;
     const node = bannerState(kind, built);
     node.dataset.banner = '';
     into.prepend(node);
@@ -1031,9 +1133,17 @@ function setHeader({ title, subtitle } = {}) {
 
 /** Render the current address. */
 export function render() {
-  const seq = ++renderSeq;
+  draw(++renderSeq);
+}
+
+/**
+ * Draw render `seq`. A page whose screen is not loaded yet loads it first,
+ * under the loading state, then draws again into the same body with the same
+ * loading state (`held`), so a slow load and slow data say "Loading" once.
+ */
+function draw(seq, held = null) {
   // A Retry left running by the last page has nothing to show here.
-  document.getElementById('content').removeAttribute('aria-busy');
+  if (!held) document.getElementById('content').removeAttribute('aria-busy');
   const route = parse(location.pathname);
   const label = NAV.find(([id]) => id === route.page)?.[1];
   drawNav(route.page);
@@ -1047,15 +1157,42 @@ export function render() {
     setContent(content, mark(state('empty', { title: 'No such page', body: 'Pick a page from the list.' })));
     return;
   }
+  if (!held && needsLoad(route.page)) {
+    setHeader({ title: label, subtitle: null });
+    // Not marked: shellReady and the screens wait for the render of the screen itself.
+    const body = el('div', { class: 'body' });
+    setContent(content, body);
+    content.setAttribute('aria-busy', 'true');
+    const epoch = authEpoch;
+    const current = () => seq === renderSeq && epoch === authEpoch;
+    const loading = watchLoading(content, body, label, current);
+    loadScreen(route.page).then(
+      () => { if (current()) draw(seq, { body, loading }); else loading.release(); },
+      (err) => loading.after(() => {
+        if (!current()) return;
+        showBanner(content, failure(err, routeKey(route), () => render()));
+        content.removeAttribute('aria-busy');
+      }),
+    );
+    return;
+  }
   const spec = pages.get(route.page);
   const ownHeader = { title: spec?.title ?? label, subtitle: spec?.subtitle ?? null };
   setHeader(ownHeader);
   const tabs = visibleTabs(route.page);
   if (tabs.length === 0) {
+    if (held) {
+      held.loading.release();
+      content.removeAttribute('aria-busy');
+    }
     setContent(content, mark(state('not-built')));
     return;
   }
   if (!tabs.some(([t]) => t === route.tab)) {
+    if (held) {
+      held.loading.release();
+      content.removeAttribute('aria-busy');
+    }
     go(pathFor({ ...route, tab: tabs[0][0] }), { replace: true });
     return;
   }
@@ -1063,8 +1200,10 @@ export function render() {
     const href = pathFor({ ...route, tab: t });
     tabsNav.append(el('a', { href, 'aria-current': t === route.tab ? 'page' : null }, tabLabel));
   }
-  const body = el('div', { class: 'body' });
-  setContent(content, mark(body));
+  const body = held?.body ?? el('div', { class: 'body' });
+  // A held body is in place already, under its loading state.
+  if (held) mark(body);
+  else setContent(content, mark(body));
   // Every effect of this render is dropped once the user navigates or signs in as someone else.
   const epoch = authEpoch;
   const current = () => seq === renderSeq && epoch === authEpoch;
@@ -1116,14 +1255,21 @@ export function render() {
       }));
   };
 
-  const loading = watchLoading(content, body, label, current);
+  const loading = held?.loading ?? watchLoading(content, body, label, current);
+  // Busy from the first render's start until it settles (data, error or empty), as a Retry is.
+  content.setAttribute('aria-busy', 'true');
   runTab(spec, route, body)
     .then(() => {
       // The data is already in the body, under the loading state: let it go after its minimum.
-      loading.release();
+      // Busy ends when the loading state does, never while it still covers the arrived content.
+      loading.release(() => { if (current()) content.removeAttribute('aria-busy'); });
       if (current()) saveSnapshot(key, body);
     })
-    .catch((err) => loading.after(() => { if (current()) settle(err); }));
+    .catch((err) => loading.after(() => {
+      if (!current()) return;
+      settle(err);
+      content.removeAttribute('aria-busy');
+    }));
 }
 
 /** How long a page may wait for its data before the shell says it is loading (UI1.17). */
@@ -1137,7 +1283,7 @@ const LOADING_MIN_MS = 400;
  * - after(swap) waits out the rest of LOADING_MIN_MS if the state is up, takes
  *   it away, then runs `swap` (an error, a 403, a Retry's result), so a state
  *   shown at 300 ms is never replaced 10 ms later;
- * - release() is for data already drawn under it: it goes after its minimum.
+ * - release(done) is for data already drawn under it: it goes after its minimum, then `done` runs.
  * Either withdraws a loading message not yet said.
  */
 function watchLoading(content, body, label, current) {
@@ -1169,12 +1315,15 @@ function watchLoading(content, body, label, current) {
       if (wait > 0) setTimeout(finish, wait);
       else finish();
     },
-    release() {
+    release(done) {
       stop();
       const wait = left();
-      if (!node) return;
-      if (wait > 0) setTimeout(() => node.remove(), wait);
-      else node.remove();
+      const finish = () => {
+        node?.remove();
+        done?.();
+      };
+      if (wait > 0) setTimeout(finish, wait);
+      else finish();
     },
   };
 }
@@ -1252,6 +1401,186 @@ export async function refreshCounts() {
   COUNT_SEEN.value = next;
 }
 
+// ---------------------------------------------------------------- live stream
+
+/** Reconnect waits: one second at first, doubling to thirty at most. */
+const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
+/** A frame, finished or not, over this many UTF-8 bytes ends the stream as a drop. */
+const STREAM_FRAME_MAX = 64 * 1024;
+/** Whether text is over the frame cap in UTF-8 bytes; it encodes only when the length cannot tell. */
+const overFrameMax = (text) => text.length > STREAM_FRAME_MAX
+  || (text.length * 3 > STREAM_FRAME_MAX && new TextEncoder().encode(text).length > STREAM_FRAME_MAX);
+
+/**
+ * The one live stream of this document, GET /ui/api/stream, read through
+ * fetch: an EventSource cannot send the bearer that api() sends for a key
+ * held in memory. `gen` changes on every open and close, so a read or timer
+ * left from an earlier one does nothing. `phase` is idle before any answer,
+ * open from a hello, dropped after an open stream ends (with `since`, when),
+ * and unavailable when the first connect failed, until the next hello.
+ */
+const STREAM_FRESH = { lastId: null, hintMs: 0, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null, banner: null };
+const stream = { gen: 0, abort: null, timer: null, ...STREAM_FRESH };
+/** The page shown now and its banner, for the stale state on a drop. */
+let livePage = null;
+
+/** Open the stream for this identity, closing any earlier one first. */
+function openStream() {
+  closeStream();
+  connect(stream.gen);
+}
+
+/** Stop the connection and its timer; what it knew (last id, phase, banner) stays. */
+function suspendStream() {
+  stream.gen++;
+  stream.abort?.abort();
+  clearTimeout(stream.timer);
+  Object.assign(stream, { abort: null, timer: null });
+}
+
+/** Reconnect after a restore from the back/forward cache, resuming from the last id. */
+function resumeStream() {
+  suspendStream();
+  connect(stream.gen);
+}
+
+/** Close the stream on purpose: no stale state and no reconnect follow. */
+function closeStream() {
+  suspendStream();
+  Object.assign(stream, STREAM_FRESH);
+  drawStream();
+}
+
+/** Mark a page stale for the stream, only while no banner holds the slot; the top bar carries a drop either way. */
+function markPageStale(page) {
+  const down = streamStale();
+  if (!down || !page?.into.isConnected) return;
+  const current = () => page.into.querySelector(':scope > .state[data-banner]');
+  if (current()) return; // a banner of the screen, or one the stream set already
+  page.show('stale', down);
+  const node = current();
+  if (node?.dataset.state === 'stale') stream.banner = { node, show: page.show, into: page.into };
+}
+
+/** Take away the stale banner the stream set, and only while it is still the one showing. */
+function clearPageStale() {
+  const mine = stream.banner;
+  stream.banner = null;
+  if (mine?.node.isConnected && mine.into.querySelector(':scope > .state[data-banner]') === mine.node) mine.show(null);
+}
+
+/** The stale banner options while the stream is down, else null. */
+function streamStale() {
+  if (stream.phase === 'dropped') return { since: stream.since };
+  if (stream.phase === 'unavailable') return { title: unavailableTitle() };
+  return null;
+}
+
+/** The top bar indicator: hidden, open (the live word) or down (the stale title). */
+function drawStream() {
+  const node = document.querySelector('.top .stream');
+  const down = streamStale();
+  const kind = stream.phase === 'open' ? 'open' : down ? 'down' : null;
+  node.hidden = !kind;
+  if (kind) node.dataset.stream = kind;
+  else delete node.dataset.stream;
+  node.textContent = kind === 'open' ? GLOSSARY.stream.live : down ? (down.title ?? staleTitle(down.since)) : '';
+}
+
+async function connect(gen) {
+  const headers = new Headers();
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  if (stream.lastId) headers.set('Last-Event-ID', stream.lastId);
+  const abort = new AbortController();
+  stream.abort = abort;
+  const epoch = authEpoch;
+  let floorMs = 0;
+  try {
+    const reply = await fetch('/ui/api/stream', { credentials: 'same-origin', cache: 'no-store', headers, signal: abort.signal });
+    if (gen !== stream.gen) return;
+    // As api(): a 401 shows sign-in, unless a newer sign-in has happened since.
+    if (reply.status === 401) {
+      if (epoch === authEpoch) showSignIn();
+      return;
+    }
+    // A 404 is a gateway without the stream, or one not yet upgraded: ask again rarely.
+    if (reply.status === 404) floorMs = STREAM_WAIT_MS.most;
+    if (reply.status === 503) floorMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
+    if (reply.ok && reply.body) await readStream(reply.body, gen);
+  } catch {
+    // No answer, or the read broke off; a close on purpose has moved `gen` on.
+  }
+  if (gen !== stream.gen) return;
+  // A drop of an open stream has a time; a first connect that failed has none.
+  if (stream.phase === 'open' || stream.phase === 'idle') {
+    Object.assign(stream, stream.phase === 'open' ? { phase: 'dropped', since: new Date() } : { phase: 'unavailable' });
+    drawStream();
+    markPageStale(livePage);
+  }
+  // The wait is the largest of the backoff, the hello retry hint and a Retry-After or 404 floor.
+  const wait = Math.max(stream.wait, stream.hintMs, floorMs);
+  stream.wait = Math.min(stream.wait * 2, STREAM_WAIT_MS.most);
+  stream.timer = setTimeout(() => { if (gen === stream.gen) connect(gen); }, wait);
+}
+
+/** Read SSE frames (blank-line separated) until the body ends. */
+async function readStream(body, gen) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done || gen !== stream.gen) return;
+    buffer += value;
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop();
+    // Each finished frame is measured before it is parsed, and so is the unfinished rest.
+    for (const [i, block] of [...blocks, buffer].entries()) {
+      if (overFrameMax(block)) {
+        stream.abort?.abort(); // ends the connection; the caller treats it as a drop
+        return;
+      }
+      if (i < blocks.length) streamFrame(parseFrame(block));
+    }
+  }
+}
+
+/** One frame: its event (message when unnamed), id and joined data lines. Comments drop out. */
+function parseFrame(block) {
+  const frame = { event: 'message', id: null, retry: null, data: [] };
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(':')) continue;
+    const at = line.indexOf(':');
+    const field = at < 0 ? line : line.slice(0, at);
+    const value = at < 0 ? '' : line.slice(at + 1).replace(/^ /, '');
+    if (field === 'event') frame.event = value;
+    else if (field === 'id') frame.id = value;
+    else if (field === 'data') frame.data.push(value);
+    else if (field === 'retry' && /^\d+$/.test(value)) frame.retry = Number(value);
+  }
+  return { ...frame, data: frame.data.join('\n') };
+}
+
+function streamFrame(frame) {
+  if (frame.id) stream.lastId = frame.id;
+  if (frame.retry !== null) stream.hintMs = frame.retry; // the gateway jitters it on purpose
+  if (frame.event === 'hello') {
+    Object.assign(stream, { phase: 'open', since: null, wait: STREAM_WAIT_MS.first });
+    drawStream();
+    clearPageStale(); // only the banner the stream set; a screen keeps its own
+  }
+  // Hello on every connect, the status the page shows and an applied reload, for
+  // screens to follow. The To do count is not in a status frame, so refreshCounts()
+  // is not run here.
+  if (frame.event !== 'hello' && frame.event !== 'status' && frame.event !== 'reload') return;
+  let detail;
+  try {
+    detail = JSON.parse(frame.data);
+  } catch {
+    return;
+  }
+  dispatchEvent(new CustomEvent(`gateway-${frame.event}`, { detail }));
+}
+
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   const epoch = authEpoch;
@@ -1317,6 +1646,8 @@ function markKey(refused) {
 async function signOut() {
   bearer = null;
   const epoch = ++authEpoch;
+  // The identity changed with no re-render: a load still running can no longer clear this itself.
+  document.getElementById('content').removeAttribute('aria-busy');
   showWho(null);
   // Its own status line, apart from the key check's error: a key typed while
   // the logout is pending must not hide this, nor this overwrite its answer.
@@ -1353,6 +1684,7 @@ async function signOut() {
  * storage, a cookie or the URL), so a reload asks for it again.
  */
 function showSignIn() {
+  closeStream();
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
   paletteEl?.close(); // a modal palette would keep the key field inert
@@ -1446,6 +1778,7 @@ async function signIn(ev) {
   document.body.classList.remove('signed-out');
   showWho(auth);
   render();
+  openStream(); // a new identity: its own stream, with its own credentials
   refreshCounts();
   document.getElementById('content').focus({ preventScroll: true });
 }
@@ -1513,11 +1846,32 @@ function boot() {
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
   for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
+  // Leaving keeps the last id and any stale state, so a restore resumes and its hello clears it.
+  addEventListener('pagehide', suspendStream);
+  addEventListener('pageshow', (ev) => {
+    if (ev.persisted && !document.body.classList.contains('signed-out')) resumeStream();
+  });
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
   });
   render();
+  openStream();
+  // The other screens load once the first paint is out, when the browser is idle,
+  // so the palette lists their actions and settings and a later visit is instant.
+  // Without paint timing they load after this first render instead; either way
+  // the rest of boot runs.
+  const preload = () => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  try {
+    if (!PerformanceObserver.supportedEntryTypes?.includes('paint')) throw new Error('no paint timing');
+    new PerformanceObserver((list, observer) => {
+      if (!list.getEntriesByName('first-contentful-paint').length) return;
+      observer.disconnect();
+      preload();
+    }).observe({ type: 'paint', buffered: true });
+  } catch {
+    preload();
+  }
   refreshCounts();
   loadWho().then(() => {
     // Only a browser still signed out is told; one with a session has nothing to fix.

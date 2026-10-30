@@ -286,7 +286,12 @@ async fn an_empty_slot_appends_nothing_before_the_spawn() {
 /// The input-round route with a transparency log under `policy`.
 async fn logged_round(
     policy: AuditFailurePolicy,
-) -> (Arc<AppState>, tempfile::TempDir, tempfile::TempDir, String) {
+) -> (
+    Arc<AppState>,
+    tempfile::TempDir,
+    crate::gateway::router::tests::FixtureDir,
+    String,
+) {
     use super::input_round::{STATE_1, ask, done, parked};
     let dir = tempfile::tempdir().expect("a private log directory");
     let sink = crate::gateway::meta_mcp::grant_audit_fixture::logger(&dir, policy);

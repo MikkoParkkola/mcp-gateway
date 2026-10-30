@@ -19,7 +19,9 @@ enum Proof {
     },
 }
 
-async fn public_mcp_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn public_mcp_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut auth = two_principal_auth();
     auth.public_paths.push("/mcp".to_string());
     let (state, store) = fixture_state(&auth).await;

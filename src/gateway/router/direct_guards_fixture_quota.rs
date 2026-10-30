@@ -9,20 +9,31 @@ use std::sync::Arc;
 
 use super::{Answer, Fx, MetaMcp, fixture};
 use crate::config::{BackendConfig, FailsafeConfig};
+use crate::security::transparency_log::temp::TempLog;
 
-/// A transparency log on a leaked temp file, alive for the test process.
-pub(super) fn leaked_transparency_log() -> Arc<crate::security::TransparencyLogger> {
+/// A transparency log in `log`'s temp dir. The builder stores `log` on the
+/// returned [`Fx`], so the log and its sidecars go when the fixture drops.
+pub(super) fn transparency_log_in(log: &TempLog) -> Arc<crate::security::TransparencyLogger> {
     use crate::security::transparency_log::TransparencyLogConfig;
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
     let config = Arc::new(TransparencyLogConfig {
         enabled: true,
-        path,
+        path: log.path().to_string_lossy().to_string(),
         key_id: "test".to_string(),
         ..TransparencyLogConfig::default()
     });
     Arc::new(crate::security::TransparencyLogger::open(config).expect("logger opens"))
+}
+
+/// A required propagation refuses to mint without a durable audit sink, so a
+/// propagating fixture's route gets a log; the caller keeps it on the [`Fx`].
+pub(super) fn propagating_route_log(
+    state: &mut crate::gateway::router::AppState,
+) -> Option<TempLog> {
+    let log = super::PROPAGATING
+        .with(std::cell::Cell::get)
+        .then(TempLog::new)?;
+    state.transparency_log = Some(transparency_log_in(&log));
+    Some(log)
 }
 
 /// The fixture's backends with the per-backend rate limiter off: no row here
@@ -38,12 +49,18 @@ pub(super) fn fixture_failsafe() -> FailsafeConfig {
 /// audiences; `arm` installs the strategy (MIK-8293 S3c).
 pub(crate) async fn fixture_propagating(answer: Answer, arm: impl FnOnce(&mut MetaMcp)) -> Fx {
     super::PROPAGATING.with(|p| p.set(true));
+    let log = TempLog::new();
+    let logger = transparency_log_in(&log);
     let fx = fixture(answer, |meta| {
         // The meta layer checks for its own audit sink before a required mint.
-        meta.enable_transparency_log(leaked_transparency_log());
+        meta.enable_transparency_log(logger);
         arm(meta);
     })
     .await;
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     fx
 }
@@ -71,14 +88,61 @@ pub(crate) async fn fixture_propagating_budgeted(
     arm: impl FnOnce(&mut MetaMcp),
 ) -> Fx {
     super::PROPAGATING.with(|p| p.set(true));
+    let log = TempLog::new();
+    let logger = transparency_log_in(&log);
     let fx = super::fixture_firewalled_budget_built(Answer::Ok, (audit, calls), |mut meta| {
-        meta.enable_transparency_log(leaked_transparency_log());
+        meta.enable_transparency_log(logger);
         arm(&mut meta);
         meta
     })
     .await;
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     fx
+}
+
+thread_local! {
+    /// The `secrets:` rules every fixture backend carries; empty for none.
+    static SECRETS: std::cell::RefCell<Vec<crate::secret_injection::CredentialRule>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// [`super::fixture`] whose two backends each carry `rules`, answering over
+/// `transport` when one is given, and writing its firewall audit rows to
+/// `audit` when one is given.
+pub(crate) async fn fixture_with_secrets(
+    rules: Vec<crate::secret_injection::CredentialRule>,
+    transport: Option<Arc<dyn crate::transport::Transport>>,
+    audit: Option<std::path::PathBuf>,
+) -> Fx {
+    SECRETS.with(|s| *s.borrow_mut() = rules);
+    let fixture = Box::pin(async move {
+        #[cfg(feature = "firewall")]
+        if let Some(audit) = audit {
+            return super::fixture_firewalled_audited(Answer::Ok, audit).await;
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = audit;
+        super::fixture_built(Answer::Ok, |meta| meta).await
+    });
+    let fx = match transport {
+        Some(transport) => super::with_transport(transport, fixture).await,
+        None => fixture.await,
+    };
+    SECRETS.with(|s| s.borrow_mut().clear());
+    fx
+}
+
+#[cfg(feature = "firewall")]
+impl Fx {
+    /// The directory the fixture's gateway writes its stores under.
+    pub(crate) fn store_path(&self) -> &std::path::Path {
+        let Self { _store: store, .. } = self;
+        store.path()
+    }
 }
 
 /// One fixture backend's config: pass-through or not, and, for a propagating
@@ -86,6 +150,7 @@ pub(crate) async fn fixture_propagating_budgeted(
 pub(super) fn fixture_backend_config(name: &str, passthrough: bool) -> BackendConfig {
     BackendConfig {
         passthrough,
+        secrets: SECRETS.with(|s| s.borrow().clone()),
         // A propagating backend validates an HTTP base URL before it
         // reaches the scripted transport.
         transport: if super::PROPAGATING.with(std::cell::Cell::get) {
@@ -165,13 +230,19 @@ pub(crate) async fn fixture_propagating_signed(
     let strategy = Arc::clone(&minting);
     super::HARDENED.with(|h| h.set(true));
     super::PROPAGATING.with(|p| p.set(true));
+    let log = TempLog::new();
+    let logger = transparency_log_in(&log);
     let fx = super::fixture_inner(answer, firewalled, |meta| {
         let mut meta = build(super::signing(meta, true));
-        meta.enable_transparency_log(leaked_transparency_log());
+        meta.enable_transparency_log(logger);
         meta.set_identity_propagation(strategy);
         meta
     })
     .await;
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::PROPAGATING.with(|p| p.set(false));
     super::HARDENED.with(|h| h.set(false));
     (fx, minting)
@@ -255,13 +326,19 @@ pub(crate) async fn fixture_optional_failing_mint(
     super::HARDENED.with(|h| h.set(true));
     super::PROPAGATING.with(|p| p.set(true));
     super::OPTIONAL.with(|o| o.set(true));
+    let log = TempLog::new();
+    let logger = transparency_log_in(&log);
     let fx = super::fixture_inner(answer, false, |meta| {
         let mut meta = build(super::signing(meta, true));
-        meta.enable_transparency_log(leaked_transparency_log());
+        meta.enable_transparency_log(logger);
         meta.set_identity_propagation(strategy);
         meta
     })
     .await;
+    let fx = Fx {
+        _audit: Some(log),
+        ..fx
+    };
     super::OPTIONAL.with(|o| o.set(false));
     super::PROPAGATING.with(|p| p.set(false));
     super::HARDENED.with(|h| h.set(false));

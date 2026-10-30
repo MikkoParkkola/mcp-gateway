@@ -84,6 +84,22 @@ pub(super) struct Dispatched {
     pub(super) cost_warnings: Vec<String>,
 }
 
+/// What the relay check reads of `call`'s egress, the backend it was judged
+/// on included: that backend's rules say which keys the send overwrites.
+fn relay_egress<'e>(
+    call: &'e Call<'_, '_>,
+    prompt_cache_key: Option<&'e str>,
+    retry: &'e OutboundRetry,
+) -> relay::Egress<'e> {
+    relay::Egress {
+        arguments: call.arguments,
+        backend: call.backend.as_ref(),
+        inbound_meta: call.args.get("_meta"),
+        prompt_cache_key,
+        retry,
+    }
+}
+
 impl MetaMcp {
     /// The use counters: the invocation stats and the ranker's usage.
     fn count_use(&self, server: &str, tool: &str) {
@@ -180,12 +196,7 @@ impl MetaMcp {
         // state the backend issued with it.
         witness.carry(rw::retry_effect(caller.retry.request_state.is_some()));
 
-        let egress = relay::Egress {
-            arguments,
-            inbound_meta: args.get("_meta"),
-            prompt_cache_key: prompt_cache_key.as_deref(),
-            retry: &outbound_retry,
-        };
+        let egress = relay_egress(call, prompt_cache_key.as_deref(), &outbound_retry);
         let reservation = idem_reservation.as_mut();
         if let Err(error) =
             self.refuse_relay(caller, session_id, (server, tool), &egress, reservation)
@@ -268,6 +279,12 @@ impl MetaMcp {
         } = sent;
         let caller_identity = caller.grant_subject.as_ref();
         let verified_identity = caller.verified_identity;
+        // U12: a web UI call goes out only as the call its gate admitted.
+        #[cfg(feature = "webui")]
+        if let Err(refusal) = crate::gateway::ui_call::admit_send((server, tool)) {
+            nonce_settle::settle_pre_send(caller, nonce_settle::PreSendExit::AskRefund);
+            return Err(refusal);
+        }
         // Dispatch: the witness goes with the send (the nonce stays spent).
         witness.spend();
         nonce_settle::mark_dispatched(caller, (server, tool));

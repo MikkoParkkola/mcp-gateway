@@ -130,6 +130,8 @@ async fn the_cache_asks_the_callers_own_slot() {
     use crate::backend::{Backend, BackendRegistry, PoolKey};
     use crate::config::{BackendConfig, FailsafeConfig, InputSchemaEnforcement};
 
+    // The audit log, first so it drops after the gateway that writes to it.
+    let audit = crate::security::transparency_log::temp::TempLog::new();
     let calls = Arc::new(AtomicUsize::new(0));
     let backend = Arc::new(Backend::new(
         "ledger",
@@ -171,7 +173,6 @@ async fn the_cache_asks_the_callers_own_slot() {
         Duration::from_secs(300),
     );
     meta.set_identity_propagation(Arc::new(Mint) as _);
-    let audit = tempfile::NamedTempFile::new().expect("tempfile");
     let logger = crate::security::TransparencyLogger::open(Arc::new(
         crate::security::TransparencyLogConfig {
             enabled: true,

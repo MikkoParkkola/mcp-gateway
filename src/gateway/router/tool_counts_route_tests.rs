@@ -25,7 +25,11 @@ async fn state(
     servers: &[&str],
     per_server: usize,
     counted: bool,
-) -> (Arc<AppState>, Option<Arc<CounterStore>>, tempfile::TempDir) {
+) -> (
+    Arc<AppState>,
+    Option<Arc<CounterStore>>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     let (state, dir) = test_router_app_state_with_auth_and_config(
         &scoped_auth_config(admin),
         crate::config::Config::default(),

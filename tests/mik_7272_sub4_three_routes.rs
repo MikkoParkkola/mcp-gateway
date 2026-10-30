@@ -194,6 +194,7 @@ async fn state_with_idempotency() -> (Arc<AppState>, tempfile::TempDir) {
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         env: None,
         meta_mcp,

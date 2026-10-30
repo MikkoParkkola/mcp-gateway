@@ -5,7 +5,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, tempfile::TempDir) {
+async fn test_router_app_state_with_code_mode(
+    enabled: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)).with_code_mode(enabled));
     let streaming_config = StreamingConfig::default();
@@ -26,6 +28,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,

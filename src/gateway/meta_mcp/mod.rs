@@ -280,7 +280,6 @@ pub struct MetaMcp {
     /// capability carrying a `projection` spec changes no response contract
     /// until an operator opts in. `experimental` drives the A/B split.
     pub(super) projection_mode: crate::projection::ProjectionMode,
-    pub(super) secret_injector: crate::secret_injection::SecretInjector,
     /// Cost tracker — per-session and per-API-key spend accounting.
     pub(super) cost_tracker: Arc<CostTracker>,
     /// Engram-inspired O(1) tool registry with prefetching (optional).
@@ -480,6 +479,10 @@ pub struct MetaMcp {
     /// Calls a client may cancel explicitly by its own request id (MIK-7642
     /// PR.C). Held here because both HTTP routes dispatch through this handler.
     pub(super) inflight_calls: Arc<crate::gateway::router::inflight_calls::InFlightCalls>,
+    /// Web UI tool calls running at once (U12): a call that answered at its
+    /// deadline keeps its permit until it ends.
+    #[cfg(feature = "webui")]
+    pub(super) ui_calls: Arc<tokio::sync::Semaphore>,
 }
 
 /// The session a request belongs to, if it has one.

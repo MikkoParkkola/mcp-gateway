@@ -36,6 +36,16 @@ pub(super) fn is_poll(request: &Request<Body>) -> bool {
                 .is_some_and(|q| q.split('&').any(|p| p == "poll=1")))
 }
 
+/// The live UI stream, matched on the route the router chose, not the raw
+/// path. A stream is the server pushing, never operator activity: opening it or
+/// reconnecting must not keep an idle session alive (ADR-020).
+pub(super) fn is_ui_stream(request: &Request<Body>) -> bool {
+    request
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .is_some_and(|p| p.as_str() == crate::gateway::routes::UI_STREAM)
+}
+
 /// The identity a validated dashboard session carries.
 pub(super) fn dashboard_client() -> AuthenticatedClient {
     AuthenticatedClient {

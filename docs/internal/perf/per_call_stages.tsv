@@ -174,7 +174,9 @@ src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	-	on-path, u
 src/gateway/meta_mcp/invoke/continuation.rs	withhold_unsealed_state	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	accounted_dispatch	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/dispatch.rs	admit_spend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	-	on-path, untimed: refusals only, when a name is both a registry backend and the capability backend; the timed backend has no such clash
 src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	http_invoke_tiny	on the HTTP gateway_invoke path (resolve's name-clash check)
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	account_dispatch	http_invoke_tiny	S3 accounting at every accounted dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	http_invoke_tiny	S1 policy after the credential step, before every dispatch
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_backend_wide	http_invoke_tiny	S1 kill-switch check, before every dispatch
@@ -198,6 +200,7 @@ src/gateway/meta_mcp/invoke/egress.rs	bind	http_invoke_tiny	bound to the authent
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses	-	on-path, untimed: error frames and non-tools/call answers; a tools/call result met these checks at dispatch
 src/gateway/meta_mcp/invoke/egress.rs	content_refuses_value	-	on-path, untimed: undeclared-key refusals only; the timed arguments are declared
 src/gateway/meta_mcp/invoke/egress.rs	decoded_text	-	on-path, untimed: the egress content check's text walk, on error frames and non-tools/call answers only
+src/gateway/meta_mcp/invoke/egress.rs	expand_targets	http_invoke_tiny	inside firewall_result on the HTTP gateway_invoke path (firewall builds): copies the answer's targets; only a backend-less target expands
 src/gateway/meta_mcp/invoke/egress.rs	firewall_outcome	-	on-path, untimed: only frames a configured firewall instance judges; the harness routes configure none for this scan
 src/gateway/meta_mcp/invoke/egress.rs	firewall_result	http_invoke_tiny	on the HTTP gateway_invoke path (the egress scan of every result)
 src/gateway/meta_mcp/invoke/egress.rs	for_method	http_invoke_tiny	on the HTTP gateway_invoke path (ContentChecks::for_method, per answer)
@@ -485,6 +488,7 @@ src/gateway/meta_mcp/invoke/relay_seams_record.rs	walk	-	gateway_execute and pla
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	http_invoke_tiny	on the HTTP gateway_invoke path (S3, MIK-8488)
 src/gateway/meta_mcp/invoke/send.rs	admit_send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	count_use	http_invoke_tiny	inside admit_send on the HTTP gateway_invoke path: the invocation stats and ranker counters
+src/gateway/meta_mcp/invoke/send.rs	relay_egress	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/send.rs	send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	is_gateway_notice	-	on-path, untimed: idempotent replays serving a stored notice only
 src/gateway/meta_mcp/invoke/side_effect_markers.rs	settle_lost_round	-	on-path, untimed: lost dispatch rounds (a send with no answer) only; the timed rows are answered
@@ -522,6 +526,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	answer_intake	-	on-path, unti
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	http_invoke_tiny	the HTTP request prelude: opens or resumes the session the request runs under (MIK-8504)
+src/gateway/router/handlers/dispatch_intake_session.rs	record_client_name	-	on-path, untimed: runs on an HTTP `initialize` only (one JSON pointer read and one short sanitize under a read lock); the timed rows carry no initialize
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	capture	http_invoke_tiny	the HTTP request prelude
 src/gateway/router/handlers/dispatch_intake_view_facts.rs	view_subject	http_invoke_tiny	on the HTTP gateway_invoke path (the successful tools/call arm); also tools/list and subscriptions/listen
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	http_invoke_tiny	the HTTP tools/call arm

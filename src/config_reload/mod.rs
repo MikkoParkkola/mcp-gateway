@@ -500,6 +500,7 @@ pub(crate) mod override_audit;
 )]
 pub(crate) mod refusals;
 mod reload_context;
+pub(crate) mod reload_tally;
 mod reload_warm_hook;
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
@@ -600,6 +601,8 @@ mod pattern_grammar_reload_tests;
 mod principal_collision_tests;
 #[cfg(test)]
 mod reload_load_tests;
+#[cfg(test)]
+mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod tests;
