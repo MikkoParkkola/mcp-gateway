@@ -387,7 +387,12 @@ async fn meta_mcp_dispatch(
                 Some(Ok(response)) => {
                     let subject = intake.view_subject();
                     let (response, pending) = state
-                        .after_call((session_id, &subject), invoke_scope.caller, params, response)
+                        .after_call(
+                            (session_id, &subject),
+                            invoke_scope.caller,
+                            params,
+                            response,
+                        )
                         .await;
                     pending_view = pending;
                     response
