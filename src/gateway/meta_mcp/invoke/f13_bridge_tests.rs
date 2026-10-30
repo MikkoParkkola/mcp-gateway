@@ -4,6 +4,7 @@
 //! caller it carries, with that caller's headers and binding
 //! (`BridgeDispatcher.headers` / `.cache_binding`).
 
+use crate::transport::LentCredential;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -143,7 +144,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &headers,
+        headers: &LentCredential::unchecked(&headers),
         cache_binding: Some("beta@edits"),
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -218,7 +219,7 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -278,7 +279,7 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -340,7 +341,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -419,7 +420,7 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -497,7 +498,7 @@ async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
             caller_identity: None,
             caller_proof: CallerProof::Anonymous,
             credential_owner: None,
-            headers: &[],
+            headers: &LentCredential::default(),
             cache_binding: None,
             account_credential: super::propagation::DispatchAccount::default(),
             api_key_name: None,
@@ -576,7 +577,7 @@ async fn a_killed_bridged_round_records_refused_only_while_vouched() {
                 caller_identity: None,
                 caller_proof: CallerProof::Anonymous,
                 credential_owner: None,
-                headers: &[],
+                headers: &crate::transport::LentCredential::default(),
                 cache_binding: None,
                 account_credential: super::propagation::DispatchAccount::default(),
                 api_key_name: None,

@@ -83,11 +83,8 @@ fn refresh_presence_case(
         let credentials = refuse_scaffold(service.release(&lease), "presence-matrix release")
             .expect("positive release after presence-matrix refresh");
         assert_eq!(
-            credentials,
-            ReleasedCredentials {
-                access_token: ROTATED_ACCESS.into(),
-                token_type: token_type.into(),
-            }
+            (credentials.access_token, credentials.token_type),
+            (ROTATED_ACCESS.to_owned(), token_type.to_owned())
         );
         assert_eq!(observer_calls.load(Ordering::SeqCst), 1);
 

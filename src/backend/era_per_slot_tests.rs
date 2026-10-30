@@ -221,7 +221,7 @@ async fn a_reprobe_on_one_slot_leaves_the_other_slots_verdict() {
     backend.resolve_era_for_entry_test(&peer, &per_user).await;
 
     backend
-        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer)
+        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer, &[])
         .await;
     // The re-probe holds the slot's era lock while it runs: this read waits for it.
     let _ = tokio::time::timeout(Duration::from_secs(20), per_user.era.cached()).await;
@@ -359,7 +359,7 @@ async fn a_per_user_reprobe_does_not_resolve_a_cold_shared_slot() {
     // slot's era lock) before anything is read.
     held.hold.store(true, std::sync::atomic::Ordering::SeqCst);
     backend
-        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer)
+        .reprobe_if_code_contradicts("server/discover", METHOD_NOT_FOUND, &peer, &[])
         .await;
     tokio::time::timeout(Duration::from_secs(20), &mut handles.started)
         .await
