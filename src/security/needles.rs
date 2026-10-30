@@ -440,6 +440,13 @@ fn scrub_response(secrets: &Compiled, response: &mut JsonRpcResponse) -> Scrubbe
         && let (Some(Value::Object(sent)), Some(Value::Object(scrubbed))) =
             (signed, response.result.as_ref())
     {
+        // A top-level key whose own name held a value was renamed: no view of
+        // the result is both scrubbed and what the backend signed, so the
+        // answer is refused rather than verified over a view carrying the
+        // renamed key (lead ruling, G8).
+        if scrubbed.keys().any(|key| !sent.contains_key(key)) {
+            return Scrubbed::Refuse;
+        }
         let kept: serde_json::Map<String, Value> = sent
             .into_iter()
             .filter(|(key, value)| {

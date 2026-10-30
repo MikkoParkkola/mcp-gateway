@@ -264,3 +264,43 @@ fn a_tampered_signed_echo_is_refused() {
     let (outcome, _) = receive(&meta, &mut result, withheld);
     assert!(outcome.is_err(), "a tampered answer verified");
 }
+
+/// G8 (lead ruling): a signed answer whose top-level key name holds an
+/// injected value is refused with the fixed refusal; no view of it, scrubbed
+/// or as-sent, is served or verified.
+#[test]
+fn a_signed_answer_with_a_value_in_a_key_name_is_refused() {
+    let hop = Hop {
+        prefix: &[],
+        up: Upstream::None,
+        input: None,
+    };
+    let mut result = json!({
+        "content": [{"type": "text", "text": "fine"}],
+        NEEDLE: "a key named by the secret",
+    });
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    attach_link(
+        &signer(),
+        &mut result,
+        &hop,
+        LinkSource::Live,
+        Some(NONCE),
+        now,
+        8,
+    )
+    .expect("the link attaches");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("upstream", NEEDLE);
+    let answer = crate::security::needles::scrub_answer(
+        &needles,
+        Ok(JsonRpcResponse::success(RequestId::Number(1), result)),
+    );
+    let text = format!("{answer:?}");
+    assert!(
+        matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
+        "not the fixed refusal: {text}"
+    );
+    assert!(!text.contains(NEEDLE), "{text}");
+}
