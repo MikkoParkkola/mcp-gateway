@@ -6,13 +6,16 @@
 
 use std::cell::RefCell;
 
+#[cfg(feature = "firewall")]
 use serde_json::Value;
 
 use super::super::gateway_writes;
 use super::{
-    MetaMcp, PLAN_STEP, RELAY_DELIVERS, RELAY_RECEIPTS, RELAY_STAGED, Receipt, RelayKey, Staging,
-    receipt_with, replay, seams,
+    MetaMcp, PLAN_STEP, RELAY_DELIVERS, RELAY_RECEIPTS, RELAY_STAGED, Receipt, Staging, replay,
+    seams,
 };
+#[cfg(feature = "firewall")]
+use super::{RelayKey, receipt_with};
 
 /// Run one plan step's dispatch: the receipts it stages are a plan's, under
 /// `label`, the step as the plan's answer names it. A plan run
