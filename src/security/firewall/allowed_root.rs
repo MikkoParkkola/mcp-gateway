@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use super::{Finding, FirewallAction};
-use crate::security::response_policy::RuleTarget;
 
 /// The production resolution budget for one call: every value, root and
 /// directory read in it shares this deadline.

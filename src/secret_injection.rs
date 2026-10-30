@@ -239,7 +239,6 @@ impl SecretInjector {
     ///
     /// Returns an error if a credential value cannot be resolved (e.g., missing
     /// keychain entry or undefined environment variable referenced without default).
-
     pub fn inject(
         &self,
         backend: &str,

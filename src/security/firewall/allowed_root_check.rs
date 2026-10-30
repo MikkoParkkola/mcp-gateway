@@ -150,12 +150,11 @@ fn classify(
         });
     }
     let live;
-    let instance = match sending {
-        Some(instance) => instance,
-        None => {
-            live = backends.get(server).ok_or(RootReason::UnknownBackend)?;
-            &*live
-        }
+    let instance = if let Some(instance) = sending {
+        instance
+    } else {
+        live = backends.get(server).ok_or(RootReason::UnknownBackend)?;
+        &*live
     };
     if !instance.is_local_process() {
         return Err(RootReason::RemoteBackend);
