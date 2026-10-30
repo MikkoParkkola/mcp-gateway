@@ -119,7 +119,8 @@ impl Sketch {
         self.p95_bin().map(bin_ms)
     }
 
-    /// The bins, ascending, for the encoder and the tests.
+    /// The bins, ascending.
+    #[cfg(test)]
     pub(crate) fn bins(&self) -> &[(u8, u32)] {
         &self.0
     }
@@ -171,7 +172,7 @@ impl Live {
         }
     }
 
-    fn close(&self) -> Closed {
+    pub(super) fn close(&self) -> Closed {
         Closed {
             bucket: self.bucket,
             p95_ms: self.sketch.p95_ms().unwrap_or(0),
@@ -273,6 +274,7 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         self.closed[at].note_late(end);
     }
 
+    #[cfg(test)]
     /// Every slot the window holds at `now`, oldest first, a live one shown
     /// as it would close now. Call [`Self::finalize`] first.
     pub(crate) fn slots(&self) -> Vec<Closed> {
@@ -282,6 +284,7 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         slots
     }
 
+    #[cfg(test)]
     /// The merged histogram of the live slots, and their outcome counts.
     pub(crate) fn live_merged(&self) -> (Sketch, u32, u32) {
         let mut sketch = Sketch::default();

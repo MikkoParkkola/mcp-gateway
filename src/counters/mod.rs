@@ -22,6 +22,9 @@ use crate::security::audit::{AuditOutcome, CredentialKind};
 
 use crate::local_day as day;
 mod latency;
+// The latency readers serve the web UI, as `view` does.
+#[cfg(any(test, feature = "webui"))]
+mod latency_view;
 pub(crate) mod persist;
 mod ring;
 mod snapshot;
@@ -32,6 +35,8 @@ mod sums;
 mod view;
 
 pub(crate) use latency::End;
+#[cfg(feature = "webui")]
+pub(crate) use latency_view::ServerLatency;
 pub(crate) use ring::Series;
 // Named only by the web UI's routes; the module's own tests use it in place.
 #[cfg(feature = "webui")]

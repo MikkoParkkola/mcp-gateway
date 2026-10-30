@@ -54,24 +54,12 @@ pub(super) fn parse(params: &SeriesParams) -> Result<Query<'_>, String> {
         "cache_hits" => Metric::CacheHits,
         other => {
             return Err(format!(
-                "metric {other:?}: must be one of calls, blocks, errors, firewall, cache_hits"
+                "metric {other:?}: must be one of calls, blocks, errors, firewall, cache_hits, \
+                 latency_p95"
             ));
         }
     };
-    let window = match params.window.as_deref().unwrap_or("24h") {
-        "24h" => Window::Day,
-        "48h" => Window::TwoDays,
-        "30d" => Window::Month,
-        other => return Err(format!("window {other:?}: must be one of 24h, 48h, 30d")),
-    };
-    let compare = match params.compare.as_deref() {
-        None => false,
-        Some("prev") => true,
-        Some(other) => return Err(format!("compare {other:?}: must be prev")),
-    };
-    if compare && window != Window::Day {
-        return Err("compare=prev is supported for window=24h only".to_owned());
-    }
+    let (window, compare) = window_of(params)?;
     let filter = match (
         params.server.as_deref(),
         params.tool.as_deref(),
@@ -98,6 +86,36 @@ pub(super) fn parse(params: &SeriesParams) -> Result<Query<'_>, String> {
         filter,
         compare,
     })
+}
+
+/// The window and previous-period choice `params` name, or why they are
+/// refused; shared by the counter and the latency reads.
+fn window_of(params: &SeriesParams) -> Result<(Window, bool), String> {
+    let window = match params.window.as_deref().unwrap_or("24h") {
+        "24h" => Window::Day,
+        "48h" => Window::TwoDays,
+        "30d" => Window::Month,
+        other => return Err(format!("window {other:?}: must be one of 24h, 48h, 30d")),
+    };
+    let compare = match params.compare.as_deref() {
+        None => false,
+        Some("prev") => true,
+        Some(other) => return Err(format!("compare {other:?}: must be prev")),
+    };
+    if compare && window != Window::Day {
+        return Err("compare=prev is supported for window=24h only".to_owned());
+    }
+    Ok((window, compare))
+}
+
+/// The latency read `params` name: all servers, or one `server`; every other
+/// filter is refused, never answered with a broader aggregate.
+fn latency_of(params: &SeriesParams) -> Result<(Option<&str>, Window, bool), String> {
+    if params.tool.is_some() || params.caller.is_some() || params.overflow.is_some() {
+        return Err("metric latency_p95 reads all servers, or one with server=".to_owned());
+    }
+    let (window, compare) = window_of(params)?;
+    Ok((params.server.as_deref(), window, compare))
 }
 
 /// The refusal for a caller who may not read history, if any.
@@ -135,6 +153,9 @@ async fn series(
     if let Some(refusal) = refused(client.as_ref().map(|Extension(c)| c)) {
         return refusal;
     }
+    if params.metric.as_deref() == Some("latency_p95") {
+        return latency(&state, &params);
+    }
     let query = match parse(&params) {
         Ok(query) => query,
         Err(why) => return (StatusCode::BAD_REQUEST, Json(json!({"error": why}))).into_response(),
@@ -152,6 +173,40 @@ async fn series(
     };
     Json(json!({
         "metric": params.metric.as_deref().unwrap_or("calls"),
+        "window": params.window.as_deref().unwrap_or("24h"),
+        "bucket_secs": bucket_secs,
+        "day_basis": day_basis,
+        "zone": zone(),
+        "since": view.since,
+        "folded": view.folded,
+        "points": view.points,
+        "previous": view.previous,
+        "previous_complete": view.previous_complete,
+    }))
+    .into_response()
+}
+
+/// `metric=latency_p95`: per-slot p95 of the backend send time, on the
+/// counter read's shape. Each point also carries its calls, failures,
+/// timeouts and late samples.
+fn latency(state: &AppState, params: &SeriesParams) -> Response {
+    let (server, window, compare) = match latency_of(params) {
+        Ok(read) => read,
+        Err(why) => return (StatusCode::BAD_REQUEST, Json(json!({"error": why}))).into_response(),
+    };
+    let Some(store) = state.meta_mcp.counters() else {
+        return unavailable("call counters are not running");
+    };
+    let Ok(now) = crate::clock::unix_secs() else {
+        return unavailable("the system clock reads before 1970");
+    };
+    let view = store.latency_series(server, window, compare, now, &crate::local_day::host_zone());
+    let (bucket_secs, day_basis) = match window {
+        Window::Day | Window::TwoDays => (Some(crate::counters::HALF), None),
+        Window::Month => (None, Some("local")),
+    };
+    Json(json!({
+        "metric": "latency_p95",
         "window": params.window.as_deref().unwrap_or("24h"),
         "bucket_secs": bucket_secs,
         "day_basis": day_basis,

@@ -53,7 +53,7 @@ const MARKER_ROWS: usize = 50;
 /// Seconds in the 24-hour window the counter fields cover.
 const DAY_SECS: u64 = 86_400;
 /// Every counter field, as `degraded` names it when the clock cannot be read.
-const COUNTER_FIELDS: [&str; 7] = [
+const COUNTER_FIELDS: [&str; 8] = [
     "kpi.calls_24h",
     "kpi.blocks_24h",
     "kpi.errors_24h",
@@ -61,6 +61,7 @@ const COUNTER_FIELDS: [&str; 7] = [
     "edges",
     "markers",
     "checklist.tool_tried",
+    "latency",
 ];
 /// Admin actions shown.
 const ACTION_ROWS: usize = 5;
@@ -361,6 +362,7 @@ impl Source {
             }),
         );
         body.insert("markers".into(), marker_rows(store, *now));
+        body.insert("latency".into(), latency(store, *now));
     }
 
     /// Whether any call was counted in the last 30 local days.
@@ -380,6 +382,22 @@ impl Source {
             view.points.iter().any(|p| p.v > 0).into(),
         );
     }
+}
+
+/// The last hour's backend latency per server (the current and the previous
+/// half-hour slot), slowest first, and the slowest server with enough calls
+/// to name; found before the rows are capped.
+fn latency(store: &CounterStore, now: u64) -> Value {
+    let hour = store.latency_hour(now);
+    let row = |s: &crate::counters::ServerLatency| json!({ "name": clip(&s.name), "p95_ms": s.p95_ms, "calls": s.calls });
+    let rows: Vec<Value> = hour.servers.iter().take(SERVER_ROWS).map(row).collect();
+    json!({
+        "from": hour.from,
+        "to": hour.to,
+        "servers": rows,
+        "more": { "count": hour.servers.len().saturating_sub(SERVER_ROWS) },
+        "slowest": hour.slowest.as_ref().map(row),
+    })
 }
 
 /// The newest [`MARKER_ROWS`] markers of the last 24 hours, newest first.
