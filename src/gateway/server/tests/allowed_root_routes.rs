@@ -62,7 +62,7 @@ pub(super) struct Routes {
     pub(super) meta: Arc<MetaMcp>,
     pub(super) state: Arc<AppState>,
     log: PathBuf,
-    _store: tempfile::TempDir,
+    _store: std::sync::Arc<tempfile::TempDir>,
 }
 
 impl Routes {

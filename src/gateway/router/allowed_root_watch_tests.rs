@@ -74,7 +74,7 @@ struct Watch {
     state: Arc<AppState>,
     seen: Arc<Recorder>,
     dir: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: std::sync::Arc<tempfile::TempDir>,
 }
 
 async fn watch() -> Watch {
