@@ -334,6 +334,13 @@ pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
     suggested
 }
 
+/// Whether `value` names the Windows device namespace: `\\.\`, `//./` or any
+/// mix of the two separators, which Windows reads alike.
+fn device_namespace(value: &str) -> bool {
+    let sep = |c: &u8| *c == b'/' || *c == b'\\';
+    matches!(value.as_bytes(), [a, b, b'.', c, ..] if sep(a) && sep(b) && sep(c))
+}
+
 /// The string-only half of the check: is `value` a normalised absolute native
 /// path the gateway can judge exactly as the backend receives it? `None` when
 /// it is; otherwise the refusal reason.
@@ -345,7 +352,7 @@ pub(crate) fn suggest_path_args(input_schema: &Value) -> Vec<String> {
 /// the gateway did not check (W18). A file really named with `~1` is refused
 /// there, a stated limit.
 pub(crate) fn precheck(value: &str) -> Option<RootReason> {
-    if cfg!(windows) && value.starts_with(r"\\.\") {
+    if cfg!(windows) && device_namespace(value) {
         return Some(RootReason::DevicePath);
     }
     if !std::path::Path::new(value).is_absolute() {

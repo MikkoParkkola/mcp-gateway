@@ -103,6 +103,12 @@ const SHAPES: &[Shape] = &[
         windows: Some(RootReason::DevicePath),
     },
     Shape {
+        row: "W13b",
+        value: "//./C:/outside",
+        unix: NN,
+        windows: Some(RootReason::DevicePath),
+    },
+    Shape {
         row: "W14",
         value: r"\\?\UNC\server\share\x",
         unix: NA,
