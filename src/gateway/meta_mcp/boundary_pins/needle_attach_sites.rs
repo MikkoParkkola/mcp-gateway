@@ -6,6 +6,12 @@
 //! (`attach_needles`, `attach_needles_to`) or pass it (`self.needles`).
 //! A new construction site without either fails here at review; the send
 //! path refuses one at runtime.
+//!
+//! The registry seeds the set before it publishes the backend (lead ruling
+//! G7): in `BackendRegistry::register`, a statement that is itself the
+//! `seed_needles` call (outside any branch) comes before the first
+//! statement that inserts into `self.backends`. Statement order in one
+//! body, not flow analysis.
 
 use syn::visit::Visit;
 
@@ -75,12 +81,47 @@ struct Sites {
     /// `file: function` of each constructing function, and whether it hands
     /// the set on.
     found: Vec<(String, bool)>,
+    /// For each `register` body in the registry: whether it seeds first.
+    seeded_first: Vec<bool>,
+}
+
+/// Whether an expression inserts into `self.backends`: the publication.
+#[derive(Default)]
+struct Publishes(bool);
+
+impl<'ast> Visit<'ast> for Publishes {
+    fn visit_expr_method_call(&mut self, call: &'ast syn::ExprMethodCall) {
+        if call.method == "insert"
+            && let syn::Expr::Field(field) = call.receiver.as_ref()
+            && matches!(&field.member, syn::Member::Named(name) if name == "backends")
+        {
+            self.0 = true;
+        }
+        syn::visit::visit_expr_method_call(self, call);
+    }
+}
+
+/// Whether an unbranched `seed_needles` statement precedes the first
+/// statement that publishes.
+fn seeds_before_publish(block: &syn::Block) -> bool {
+    let seed = block.stmts.iter().position(|stmt| {
+        matches!(stmt, syn::Stmt::Expr(syn::Expr::MethodCall(call), _) if call.method == "seed_needles")
+    });
+    let publish = block.stmts.iter().position(|stmt| {
+        let mut found = Publishes::default();
+        found.visit_stmt(stmt);
+        found.0
+    });
+    matches!((seed, publish), (Some(seed), Some(publish)) if seed < publish)
 }
 
 impl Sites {
     fn function(&mut self, file: &str, func: &str, block: &syn::Block) {
         if !file.starts_with("src/backend/") {
             return;
+        }
+        if file == "src/backend/registry.rs" && func == "register" {
+            self.seeded_first.push(seeds_before_publish(block));
         }
         let mut body = Body::default();
         body.visit_block(block);
@@ -153,4 +194,44 @@ fn a_construction_without_an_attach_is_caught() {
             ("src/backend/fake.rs: attached".to_owned(), true),
         ]
     );
+}
+
+/// The registry seeds a backend's value set before publishing it (G7).
+#[test]
+fn the_registry_seeds_before_it_publishes() {
+    let mut sites = Sites::default();
+    walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
+    assert_eq!(
+        sites.seeded_first,
+        vec![true],
+        "BackendRegistry::register must seed its value set, unbranched, \
+         before it inserts the backend into self.backends"
+    );
+}
+
+/// The order pin's own proof: a publish before the seed, and a seed only
+/// in a branch, both fail; the shipped order passes.
+#[test]
+fn a_publish_before_the_seed_is_caught() {
+    let late: syn::Block = syn::parse_quote!({
+        self.backends.insert(name.clone(), backend);
+        inserted.seed_needles();
+    });
+    let branched: syn::Block = syn::parse_quote!({
+        if ready {
+            backend.seed_needles();
+        }
+        self.backends.insert(name.clone(), backend);
+    });
+    let first: syn::Block = syn::parse_quote!({
+        backend.seed_needles();
+        let stopping = self.stopping.write();
+        self.backends.insert(name.clone(), backend);
+    });
+    assert!(!seeds_before_publish(&late), "a late seed passed");
+    assert!(
+        !seeds_before_publish(&branched),
+        "a branch-only seed passed"
+    );
+    assert!(seeds_before_publish(&first), "the shipped order failed");
 }
