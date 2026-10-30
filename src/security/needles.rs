@@ -225,6 +225,25 @@ pub(crate) fn scrub_response_with(needles: &NeedleSet, response: &mut JsonRpcRes
     scrub_response(&secrets, response)
 }
 
+/// Redacts one piece of backend text a transport hands on outside a frame
+/// (a change-notice URI).
+pub(crate) fn scrub_text(needles: &NeedleSet, text: &mut String) -> Scrubbed {
+    if needles.overflowed() {
+        return Scrubbed::Refuse;
+    }
+    let secrets = needles.snapshot();
+    if secrets.is_empty() {
+        return Scrubbed::Clean;
+    }
+    let mut value = Value::String(std::mem::take(text));
+    let outcome = scrub_in_place(&secrets, &mut value);
+    *text = match value {
+        Value::String(redacted) => redacted,
+        other => other.to_string(),
+    };
+    outcome
+}
+
 /// Redacts a peer refusal's message and data (`Error::JsonRpc`,
 /// `Error::JsonRpcRetryable`); other errors carry no backend text.
 pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scrubbed {
