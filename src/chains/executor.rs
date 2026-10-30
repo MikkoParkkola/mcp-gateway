@@ -215,27 +215,27 @@ impl ChainExecutor {
                         duration_ms,
                     });
                 }
-                Err(e) if step.optional => {
-                    let err_msg = e.to_string();
+                Err((e, attempts)) if step.optional => {
+                    let err_msg = step_error_text(&e);
                     obs.step_skipped(&step.name, &err_msg);
                     step_results.push(ChainStepResult {
                         name: step.name.clone(),
                         state: StepState::Skipped,
                         output: None,
                         error: Some(err_msg),
-                        attempts: self.retry_policy.max_attempts,
+                        attempts,
                         duration_ms,
                     });
                 }
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    obs.step_failed(&step.name, self.retry_policy.max_attempts, &err_msg);
+                Err((e, attempts)) => {
+                    let err_msg = step_error_text(&e);
+                    obs.step_failed(&step.name, attempts, &err_msg);
                     step_results.push(ChainStepResult {
                         name: step.name.clone(),
                         state: StepState::Failed,
                         output: None,
                         error: Some(err_msg.clone()),
-                        attempts: self.retry_policy.max_attempts,
+                        attempts,
                         duration_ms,
                     });
 
@@ -316,6 +316,16 @@ impl ChainExecutor {
 // ============================================================================
 // Tests
 // ============================================================================
+
+/// A failed step's error text; a step that may have run says so, since a
+/// chain caller holds only this text, not the typed error.
+fn step_error_text(error: &crate::Error) -> String {
+    crate::error::step_failure_text(error, error.to_string())
+}
+
+#[cfg(test)]
+#[path = "step_retry_tests.rs"]
+mod step_retry_tests;
 
 #[cfg(test)]
 mod tests {

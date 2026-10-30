@@ -41,6 +41,9 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+// The web UI's Try-a-tool route runs this one MCP path in process (U12).
+#[cfg(feature = "webui")]
+pub(in crate::gateway) use handlers::meta_mcp_handler;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
@@ -120,6 +123,8 @@ mod direct_guards_fixture_a2a;
 #[cfg(test)]
 mod direct_guards_tests;
 #[cfg(test)]
+mod direct_lent_arms_tests;
+#[cfg(test)]
 mod direct_list_scope_tests;
 #[cfg(test)]
 mod direct_log_escape_tests;
@@ -190,6 +195,8 @@ mod protocol_member_scope_tests;
 /// A backend's gateway-only members never reach the client.
 #[cfg(test)]
 mod reserved_member_ingress_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod rule_keys_route_tests;
 /// Secret injection applies on the direct route as through gateway_invoke.
 #[cfg(test)]
 mod secret_injection_direct_tests;
@@ -344,6 +351,12 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_cell_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_gates_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 

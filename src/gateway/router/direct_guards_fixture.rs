@@ -376,7 +376,7 @@ pub(crate) use egress::fixture_hardened_signed_built_on;
 use egress::{CountingBackend, backend_transport};
 #[cfg(feature = "firewall")]
 pub(crate) use egress::{
-    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_on,
+    fixture_audited_built_on, fixture_audited_on, fixture_firewalled_keyed, fixture_firewalled_on,
     fixture_hardened_signed_firewalled, fixture_inspecting_on, fixture_inspection_off_on,
     fixture_observing_on, meta_firewall,
 };
@@ -541,6 +541,7 @@ pub(crate) async fn fixture_firewalled_anomaly(answer: Answer) -> Fx {
 thread_local! {
     static HARDENED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WITH_BEARER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    pub(crate) static WITH_ADMIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MODERN_OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static KEY_SERVER: std::cell::RefCell<Option<Arc<crate::key_server::KeyServer>>> =
         const { std::cell::RefCell::new(None) };
@@ -632,6 +633,7 @@ fn fixture_auth() -> AuthConfig {
         ],
         ..Default::default()
     };
+    requests::admin_key(&mut auth);
     if WITH_BEARER.with(std::cell::Cell::get) {
         auth.bearer_token = Some(BEARER_SECRET.to_string());
         auth.api_keys.push(key("bearer"));
@@ -672,6 +674,9 @@ async fn fixture_state() -> (
 
 /// The rebuilt Meta-MCP keeps the state's admission store: sync calls and
 /// tasks share one, as `server/task_runtime.rs` wires it.
+// One literal per fixture switch, as the cells read it: splitting would hide
+// which knob a cell turns.
+#[allow(clippy::too_many_lines)]
 async fn fixture_inner(
     answer: Answer,
     #[cfg_attr(not(feature = "firewall"), allow(unused_variables))] firewalled: bool,
@@ -708,17 +713,7 @@ async fn fixture_inner(
         use crate::security::firewall::{Firewall, FirewallConfig};
         let rules = FIREWALL_RULE
             .with(std::cell::Cell::get)
-            // `send_message` is the A2A backend's one tool (MIK-8139).
-            .map_or_else(Vec::new, |action| {
-                ["read", "send_message"]
-                    .map(|tool| crate::security::firewall::FirewallRule {
-                        tool_match: tool.to_string(),
-                        action,
-                        reason: None,
-                        scan: Vec::new(),
-                    })
-                    .to_vec()
-            });
+            .map_or_else(Vec::new, egress::firewall_rules);
         let anomaly = ANOMALY.with(std::cell::Cell::get);
         let tracker = anomaly.then(|| {
             let tracker = Arc::new(crate::transition::TransitionTracker::new());

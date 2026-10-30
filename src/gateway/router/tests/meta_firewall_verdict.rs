@@ -132,6 +132,9 @@ async fn firewall_app_state(
         action,
         reason: Some("meta response verdict regression".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await
 }
@@ -435,12 +438,18 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             action: FirewallAction::Allow,
             reason: Some("permissive first target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: Some("credential-refusing later target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -519,12 +528,18 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             action: FirewallAction::Allow,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -533,10 +548,12 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "alpha_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "zeta_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     let mut artifact = json!({
@@ -554,6 +571,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
                 external_tool: "gateway_execute",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,
@@ -604,6 +622,9 @@ async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -663,6 +684,9 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         action: FirewallAction::Block,
         reason: Some("split-wiring refusal".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -691,6 +715,9 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 

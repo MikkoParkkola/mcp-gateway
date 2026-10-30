@@ -318,7 +318,8 @@ impl LeaseStore {
         let Some(value) = guard.as_ref() else {
             return Err(withdrawn());
         };
-        let headers = vec![("Authorization".to_string(), value.to_string())];
+        let headers =
+            zeroize::Zeroizing::new(vec![("Authorization".to_string(), value.to_string())]);
         cancel
             .run_until_cancelled(send(headers))
             .await

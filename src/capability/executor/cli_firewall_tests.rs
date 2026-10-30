@@ -86,6 +86,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
             &[ResponsePolicyTarget {
                 server: "cap".into(),
                 tool: "tool".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             &ResponseCorrelation {
                 session_id: "s",
@@ -94,6 +95,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
                 external_tool: "tool",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,

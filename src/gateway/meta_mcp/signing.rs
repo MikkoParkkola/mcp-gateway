@@ -417,6 +417,13 @@ impl super::MetaMcp {
         self.message_signer.is_some()
     }
 
+    /// Whether every call must carry a signing nonce. The web UI mints none
+    /// on a caller's behalf, so its tool route refuses up front (U12).
+    #[cfg(feature = "webui")]
+    pub(crate) fn requires_call_nonce(&self) -> bool {
+        self.nonce_store.is_some() && self.require_nonce
+    }
+
     pub(crate) fn signing_scope(&self) -> SigningScope {
         self.signing_scope
     }
