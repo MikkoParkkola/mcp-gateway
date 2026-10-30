@@ -229,6 +229,8 @@ pub struct BackendRegistry {
     /// Each backend name's injected values, kept across the instances a
     /// reload builds, so a retired value is still removed (MIK-9035).
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
+    /// How long a value stays redacted after its last send.
+    redaction_grace: std::time::Duration,
 }
 
 impl BackendRegistry {
@@ -247,6 +249,7 @@ impl BackendRegistry {
             started: tokio::sync::broadcast::channel(STARTED_FEED).0,
             secret_resolver: None,
             needles: DashMap::new(),
+            redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
         }
     }
 
@@ -258,6 +261,14 @@ impl BackendRegistry {
             secret_resolver: Some(resolver),
             ..Self::new()
         }
+    }
+
+    /// This registry's backends keep an injected value redacted for `grace`
+    /// after its last send (MIK-9035).
+    #[must_use]
+    pub(crate) fn with_redaction_grace(mut self, grace: std::time::Duration) -> Self {
+        self.redaction_grace = grace;
+        self
     }
 
     /// Hear the name of each backend whose shared start succeeds from now on.
@@ -346,7 +357,12 @@ impl BackendRegistry {
         if let Some(resolver) = &self.secret_resolver {
             backend.stamp_secret_resolver(Arc::clone(resolver));
         }
-        let needles = Arc::clone(&*self.needles.entry(backend.name.clone()).or_default());
+        let grace = self.redaction_grace;
+        let needles = Arc::clone(
+            &*self.needles.entry(backend.name.clone()).or_insert_with(|| {
+                Arc::new(crate::security::needles::NeedleSet::with_grace(grace))
+            }),
+        );
         backend.stamp_needles(needles);
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);

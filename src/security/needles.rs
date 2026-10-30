@@ -4,30 +4,72 @@
 //! removes them from what that backend sends back (MIK-9035).
 //!
 //! One set per backend name, shared by every instance a reload builds under
-//! that name, so a value a rotation retired is still removed from a late
-//! answer. Values are only ever added; at [`MAX_NEEDLES`] the set fails closed
-//! instead of dropping one.
+//! that name, so a value a rotation replaced is still removed from a late
+//! answer. A value is retired only once its grace has passed since it was
+//! last sent ([`redaction_grace`]); a rotated env-file value is normally an
+//! expired short-lived token by then. Past [`MAX_NEEDLES`] live values the
+//! set fails closed rather than drop one inside its grace.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use parking_lot::RwLock;
 use serde_json::Value;
 
 use crate::protocol::{JsonRpcMessage, JsonRpcResponse};
 
-/// The most distinct values one backend name may hold. Past it every frame
-/// from that backend is refused rather than a value dropped.
+/// The most values one backend name may hold inside their grace. Past it
+/// every frame from that backend is refused rather than a value dropped.
 pub(crate) const MAX_NEEDLES: usize = 1024;
 
 /// What the refusal says when the set is full.
 pub(crate) const OVERFLOW_REFUSAL: &str =
     "the backend's answer was withheld: too many distinct injected secrets to redact";
 
+/// The shortest grace a value keeps after its last send.
+const MIN_GRACE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How long a value stays redacted after its last send: the longest of 24 h,
+/// any backend's call timeout, the response caches' lifetimes, the
+/// idempotency cache's and a task's default lifetime, so an echo that a
+/// call, a cache or a task can still deliver is still removed.
+pub(crate) fn redaction_grace(config: &crate::config::Config) -> Duration {
+    let longest_call = config
+        .backends
+        .values()
+        .map(|backend| backend.timeout)
+        .max()
+        .unwrap_or_default();
+    [
+        MIN_GRACE,
+        longest_call,
+        config.cache.default_ttl,
+        config.meta_mcp.cache_ttl,
+        crate::idempotency::COMPLETED_TTL,
+        Duration::from_millis(config.tasks.default_ttl_ms),
+    ]
+    .into_iter()
+    .max()
+    .unwrap_or(MIN_GRACE)
+}
+
+/// One value and when it was last sent (unix seconds, from the crate clock).
+struct Held {
+    value: String,
+    last_sent: u64,
+}
+
 /// One backend name's injected values. Never printed: `Debug` names the count.
-#[derive(Default)]
 pub(crate) struct NeedleSet {
-    values: RwLock<Vec<String>>,
+    values: RwLock<Vec<Held>>,
+    grace: Duration,
     overflowed: AtomicBool,
+}
+
+impl Default for NeedleSet {
+    fn default() -> Self {
+        Self::with_grace(MIN_GRACE)
+    }
 }
 
 impl std::fmt::Debug for NeedleSet {
@@ -36,31 +78,57 @@ impl std::fmt::Debug for NeedleSet {
     }
 }
 
+/// Now, in unix seconds; a clock before the epoch reads 0 (nothing retires).
+fn now_secs() -> u64 {
+    crate::clock::unix_secs().unwrap_or(0)
+}
+
 impl NeedleSet {
-    /// Adds `value` (empty ones are never injected, so never added). Past the
-    /// bound the set is marked overflowed and keeps every value it has.
+    /// An empty set whose values retire `grace` after their last send.
+    pub(crate) fn with_grace(grace: Duration) -> Self {
+        Self {
+            values: RwLock::new(Vec::new()),
+            grace,
+            overflowed: AtomicBool::new(false),
+        }
+    }
+
+    fn retired(&self, held: &Held, now: u64) -> bool {
+        now.saturating_sub(held.last_sent) > self.grace.as_secs()
+    }
+
+    /// Adds `value`, or renews its last send (empty values are never
+    /// injected, so never added). Retired values are dropped first; past the
+    /// bound the set fails closed and keeps every value inside its grace.
     pub(crate) fn insert(&self, backend: &str, value: &str) {
         if value.is_empty() {
             return;
         }
-        if self.values.read().iter().any(|held| held == value) {
-            return;
-        }
+        let now = now_secs();
         let mut values = self.values.write();
-        if values.iter().any(|held| held == value) {
+        if let Some(held) = values.iter_mut().find(|held| held.value == value) {
+            held.last_sent = now;
             return;
         }
+        values.retain(|held| !self.retired(held, now));
         if values.len() >= MAX_NEEDLES {
             if !self.overflowed.swap(true, Ordering::SeqCst) {
                 tracing::warn!(
                     backend,
                     bound = MAX_NEEDLES,
-                    "too many distinct injected secrets to redact; this backend's answers are withheld"
+                    grace_secs = self.grace.as_secs(),
+                    "secret values rotating faster than the redaction grace allows; this \
+                     backend's answers are withheld"
                 );
             }
             return;
         }
-        values.push(value.to_owned());
+        // Room again after retirement: answers flow once more.
+        self.overflowed.store(false, Ordering::SeqCst);
+        values.push(Held {
+            value: value.to_owned(),
+            last_sent: now,
+        });
     }
 
     /// Whether the set refused a value: every frame is then withheld.
@@ -68,9 +136,16 @@ impl NeedleSet {
         self.overflowed.load(Ordering::SeqCst)
     }
 
-    /// The values held now.
+    /// The values still inside their grace. A retired value is not removed
+    /// from an answer: the documented residual (UPGRADING).
     fn snapshot(&self) -> Vec<String> {
-        self.values.read().clone()
+        let now = now_secs();
+        self.values
+            .read()
+            .iter()
+            .filter(|held| !self.retired(held, now))
+            .map(|held| held.value.clone())
+            .collect()
     }
 }
 
@@ -233,3 +308,7 @@ fn refusal(needles: &NeedleSet) -> crate::Error {
         data: None,
     }
 }
+
+#[cfg(test)]
+#[path = "needles_tests.rs"]
+mod tests;

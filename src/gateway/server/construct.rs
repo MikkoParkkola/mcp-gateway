@@ -91,9 +91,17 @@ impl Gateway {
         // The one resolver every backend's `secrets:` values go through, over
         // the same env this config was validated against; each backend
         // registered, at boot or on reload, is stamped with it.
-        let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
-            crate::secrets::SecretResolver::new().with_env(Arc::clone(&env)),
-        )));
+        let grace = crate::security::needles::redaction_grace(&config);
+        tracing::info!(
+            grace_secs = grace.as_secs(),
+            "an injected secret stays redacted from backend answers for this long after its last send"
+        );
+        let backends = Arc::new(
+            BackendRegistry::with_secret_resolver(Arc::new(
+                crate::secrets::SecretResolver::new().with_env(Arc::clone(&env)),
+            ))
+            .with_redaction_grace(grace),
+        );
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
