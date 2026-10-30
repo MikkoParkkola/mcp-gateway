@@ -18,7 +18,6 @@ use crate::oauth::TokenInfo;
 
 /// How long a callback's grant waits for the operator's confirmation, from the
 /// callback. The pending grant lives in memory for at most this long.
-#[allow(dead_code, reason = "the confirm step of the flow reads it")]
 pub(crate) const SIGN_IN_CONFIRM_WINDOW: Duration = Duration::from_secs(60);
 
 /// A backend's sign-in, as an operator acts on it. Secret-free.
@@ -110,9 +109,9 @@ impl SignInStatus {
 ///
 /// Not `Clone` and not `Debug`: it exists once, its secrets are wiped on drop,
 /// and it becomes a `TokenInfo` only inside the confirm path's save.
-#[allow(
-    dead_code,
-    reason = "the flow holds a grant between callback and confirm"
+#[cfg_attr(
+    not(feature = "webui"),
+    allow(dead_code, reason = "only the web UI flow holds a grant")
 )]
 pub(crate) struct PendingGrant {
     /// The access token.
@@ -125,6 +124,85 @@ pub(crate) struct PendingGrant {
     pub(crate) expires_in: Option<u64>,
     /// The scope the provider granted.
     pub(crate) scope: Option<String>,
+}
+
+#[cfg(feature = "webui")]
+impl PendingGrant {
+    /// Hold what a code redemption issued. The secrets move into wiped
+    /// buffers; no copy is left behind.
+    pub(crate) fn from_token(token: TokenInfo) -> Self {
+        Self {
+            access_token: Zeroizing::new(token.access_token),
+            refresh_token: token.refresh_token.map(Zeroizing::new),
+            token_type: Some(token.token_type),
+            expires_in: token.lifetime_secs,
+            scope: token.scope,
+        }
+    }
+
+    /// The token to save, its lifetime shortened by the time it was `held_for`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clock cannot be read.
+    pub(crate) fn into_token(mut self, held_for: Duration) -> crate::Result<TokenInfo> {
+        let now = super::issuance_clock()?;
+        let remaining = self
+            .expires_in
+            .map(|secs| secs.saturating_sub(held_for.as_secs()));
+        Ok(TokenInfo::from_response_at(
+            std::mem::take(&mut *self.access_token),
+            self.token_type.take(),
+            self.refresh_token
+                .as_mut()
+                .map(|r| std::mem::take(&mut **r)),
+            remaining,
+            self.scope.take(),
+            now,
+        ))
+    }
+}
+
+/// What a UI-started login hands the OAuth client: the channels its route and
+/// engine wait on.
+#[cfg(feature = "webui")]
+pub(crate) struct UiSink {
+    /// The authorization link goes here, once, and nowhere else.
+    pub(crate) link: tokio::sync::oneshot::Sender<String>,
+    /// Told when the callback has landed and its code is being redeemed.
+    pub(crate) callback: tokio::sync::oneshot::Sender<()>,
+}
+
+/// The sink a login may carry: only the web UI starts one that has it.
+#[cfg(feature = "webui")]
+pub(super) type Hook = UiSink;
+/// The sink a login may carry: none, without the web UI.
+#[cfg(not(feature = "webui"))]
+pub(super) type Hook = std::convert::Infallible;
+
+/// The two channels of a sink, if the login has one.
+#[cfg(feature = "webui")]
+pub(super) fn split_hook(
+    ui: Option<Hook>,
+) -> (
+    Option<tokio::sync::oneshot::Sender<String>>,
+    Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    ui.map_or((None, None), |sink| (Some(sink.link), Some(sink.callback)))
+}
+
+/// The two channels of a sink, if the login has one.
+#[cfg(not(feature = "webui"))]
+pub(super) fn split_hook(
+    ui: Option<Hook>,
+) -> (
+    Option<tokio::sync::oneshot::Sender<String>>,
+    Option<tokio::sync::oneshot::Sender<()>>,
+) {
+    match ui {
+        Some(never) => match never {},
+        None => (None, None),
+    }
 }
 
 impl OAuthClient {

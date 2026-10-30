@@ -491,7 +491,72 @@ impl OAuthClient {
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
     ) -> Result<String> {
+        let token = self.issue_token(cancel, listeners, deadline, None).await?;
+        // Store and cache the token, under the same cancel and the window.
+        self.save_issued_until(&token, cancel, deadline).await?;
+        *self.current_token.write() = Some(token.clone());
+
+        Ok(token.access_token)
+    }
+
+    /// A person's sign-in started from the web UI: the link goes to `ui`
+    /// instead of a browser or the terminal, and the token the code buys is
+    /// held, unsaved, until the person confirms. `deadline` bounds everything
+    /// up to the callback; the code's redemption gets
+    /// [`SIGN_IN_CONFIRM_WINDOW`](super::sign_in::SIGN_IN_CONFIRM_WINDOW)
+    /// from the callback.
+    #[cfg(feature = "webui")]
+    pub(crate) async fn authorize_for_ui(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: tokio::time::Instant,
+        ui: super::sign_in::UiSink,
+    ) -> Result<super::sign_in::PendingGrant> {
+        let token = self
+            .issue_token(cancel, listeners, Some(deadline), Some(ui))
+            .await?;
+        Ok(super::sign_in::PendingGrant::from_token(token))
+    }
+
+    /// Save the grant a person just confirmed, cache it and publish the
+    /// sign-in status. The grant becomes a `TokenInfo` only here, its lifetime
+    /// shortened by the time it was `held_for`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the clock cannot be read, a lock is busy past
+    /// `deadline`, or the write fails; nothing is cached then.
+    #[cfg(feature = "webui")]
+    pub(crate) async fn save_confirmed(
+        &self,
+        grant: super::sign_in::PendingGrant,
+        held_for: std::time::Duration,
+        cancel: &tokio_util::sync::CancellationToken,
+        deadline: tokio::time::Instant,
+    ) -> Result<()> {
+        let token = grant.into_token(held_for)?;
+        self.save_issued_until(&token, cancel, Some(deadline))
+            .await?;
+        *self.current_token.write() = Some(token);
+        self.publish_sign_in();
+        Ok(())
+    }
+
+    /// Everything of a login up to and including the redemption of its code:
+    /// the callback server, PKCE, the link, the callback and the exchange. It
+    /// saves nothing; the caller decides what to do with the token.
+    async fn issue_token(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        listeners: Option<tokio_util::sync::DropGuard>,
+        deadline: Option<tokio::time::Instant>,
+        ui: Option<super::sign_in::Hook>,
+    ) -> Result<TokenInfo> {
         let auth_meta = self.auth_meta()?;
+        // A UI sign-in's link goes to its route; nothing else sees it.
+        let held_for_ui = ui.is_some();
+        let (link_tx, callback_tx) = super::sign_in::split_hook(ui);
 
         // Generate PKCE parameters
         let (code_verifier, code_challenge) = generate_pkce();
@@ -550,17 +615,23 @@ impl OAuthClient {
             &code_challenge,
         )?;
 
-        // Open browser
         let auth_url_str = auth_url.to_string();
-        info!(url = %auth_url_str, "Opening browser for authorization");
+        if let Some(link) = link_tx {
+            // The route that started this login gets the link, once; no
+            // browser opens, nothing is logged and nothing is announced.
+            let _ = link.send(auth_url_str);
+        } else {
+            // Open browser
+            info!(url = %auth_url_str, "Opening browser for authorization");
 
-        if !(self.open_browser)(&auth_url_str) {
-            warn!("Failed to open browser automatically");
+            if !(self.open_browser)(&auth_url_str) {
+                warn!("Failed to open browser automatically");
+            }
+            // Always, on stderr (MIK-8197): a launcher that started can still
+            // be blocked (an endpoint-security tool may stop it), and stdout
+            // is the stdio transport's JSON-RPC stream.
+            (self.announce)(&auth_url_str);
         }
-        // Always, on stderr (MIK-8197): a launcher that started can still be
-        // blocked (an endpoint-security tool may stop it), and stdout is the
-        // stdio transport's JSON-RPC stream.
-        (self.announce)(&auth_url_str);
 
         // Wait for callback
         let (actual_callback_url, callback_result) = callback_server
@@ -593,6 +664,17 @@ impl OAuthClient {
             Error::OAuth(mismatch)
         })?;
 
+        // A UI sign-in's route learns the callback landed, and the person's
+        // confirm window starts: the redemption of the code is held to it.
+        if let Some(callback) = callback_tx {
+            let _ = callback.send(());
+        }
+        let exchange_by = if held_for_ui {
+            Some(tokio::time::Instant::now() + super::sign_in::SIGN_IN_CONFIRM_WINDOW)
+        } else {
+            deadline
+        };
+
         // Exchange code for token. Cancel first (MIK-8339): a restart or stop
         // ends a login stalled here. The exchange itself is bounded by the
         // OAuth client's own request timeout (destination.rs), and by a
@@ -600,15 +682,10 @@ impl OAuthClient {
         let token = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
-            () = crate::oauth::login_gate::past(deadline) => return Err(self.incomplete()),
+            () = crate::oauth::login_gate::past(exchange_by) => return Err(self.incomplete()),
             token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier) => token?,
         };
-
-        // Store and cache the token, under the same cancel and the window.
-        self.save_issued_until(&token, cancel, deadline).await?;
-        *self.current_token.write() = Some(token.clone());
-
-        Ok(token.access_token)
+        Ok(token)
     }
 }
 
