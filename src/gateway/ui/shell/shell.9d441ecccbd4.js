@@ -1276,7 +1276,12 @@ function draw(seq, held = null) {
 const LOADING_MS = 300;
 /** Once shown, the loading state stays this long, so it never flickers. */
 const LOADING_MIN_MS = 400;
-/** The latest the other screens start to preload after first paint, idle or not. */
+/**
+ * The latest the other screens start to preload after first paint, idle or not.
+ * Two seconds: long enough that the preload stays out of the way of the first
+ * page's own reads and rendering, short enough that a busy device still has the
+ * other screens (and the palette's entries) well before a user moves on.
+ */
 const PRELOAD_DEADLINE_MS = 2000;
 
 /**
