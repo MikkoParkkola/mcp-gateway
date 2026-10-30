@@ -119,21 +119,27 @@ impl McpFrame {
 
         // All remaining frames must be JSON-RPC 2.0.
         let version = v.get("jsonrpc").and_then(Value::as_str).unwrap_or("");
+        // No error below quotes the frame: it is backend text, and can hold
+        // an injected value (MIK-9035).
         if version != "2.0" {
-            return Err(Error::Protocol(format!(
-                "Unexpected WebSocket frame: jsonrpc='{version}'"
-            )));
+            return Err(Error::Protocol(
+                "Unexpected WebSocket frame: jsonrpc is not \"2.0\"".to_string(),
+            ));
         }
+        let malformed =
+            |kind: &str| Error::Protocol(format!("WebSocket {kind} frame is malformed"));
 
         let has_id = v.get("id").is_some();
         let has_method = v.get("method").is_some();
         let has_result_or_error = v.get("result").is_some() || v.get("error").is_some();
 
         if has_id && has_method {
-            let req: JsonRpcRequest = serde_json::from_value(v)?;
+            let req: JsonRpcRequest =
+                serde_json::from_value(v).map_err(|_| malformed("request"))?;
             Ok(McpFrame::Request(req))
         } else if has_id && has_result_or_error {
-            let res: JsonRpcResponse = serde_json::from_value(v)?;
+            let res: JsonRpcResponse =
+                serde_json::from_value(v).map_err(|_| malformed("response"))?;
             Ok(McpFrame::Response(res))
         } else if !has_id && has_method {
             let method = v["method"]
@@ -144,7 +150,8 @@ impl McpFrame {
             Ok(McpFrame::Notification { method, params })
         } else {
             Err(Error::Protocol(format!(
-                "Cannot classify WebSocket frame: {v}"
+                "Cannot classify WebSocket frame ({} bytes)",
+                text.len()
             )))
         }
     }
@@ -476,7 +483,11 @@ impl WebSocketTransport {
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
                     } else {
-                        warn!(id = %key, "Received WebSocket response for unknown request");
+                        // The id is backend text: its length only (MIK-9035).
+                        warn!(
+                            id_len = key.len(),
+                            "Received WebSocket response for unknown request"
+                        );
                     }
                 }
             }
@@ -529,6 +540,16 @@ impl WebSocketTransport {
             messages_sent: s.messages_sent,
         }
     }
+}
+
+/// Logs a close frame by its code and the length of its reason: the reason
+/// is backend text (MIK-9035).
+fn log_close(frame: Option<&tokio_tungstenite::tungstenite::protocol::CloseFrame>) {
+    debug!(
+        code = ?frame.map(|f| f.code),
+        reason_len = frame.map_or(0, |f| f.reason.len()),
+        "WebSocket close frame received"
+    );
 }
 
 /// Removes the injected values from `frame`; `false` when it is withheld. A
@@ -589,7 +610,12 @@ async fn run_io_loop(
                         inner.session.lock().await.messages_received += 1;
                         let text_str: &str = &text;
                         if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
-                            error!(error = %e, "Failed to dispatch inbound WebSocket frame");
+                            // `from_text` errors quote no frame text (MIK-9035).
+                            error!(
+                                error = %e,
+                                len = text_str.len(),
+                                "Failed to dispatch inbound WebSocket frame"
+                            );
                         }
                     }
                     Some(Ok(Message::Ping(data))) => {
@@ -600,7 +626,7 @@ async fn run_io_loop(
                         debug!("Received transport-level WebSocket pong");
                     }
                     Some(Ok(Message::Close(frame))) => {
-                        debug!(frame = ?frame, "WebSocket close frame received");
+                        log_close(frame.as_ref());
                         inner.connected.store(false, Ordering::Relaxed);
                         break;
                     }

@@ -74,3 +74,50 @@ async fn a_subscription_tag_equal_to_a_secret_still_routes() {
         "the acknowledgement did not reach its listen"
     );
 }
+
+/// T1.21: an answer for no pending request is logged by the length of its
+/// id, never the id.
+#[test]
+fn an_unmatched_id_is_logged_without_its_value() {
+    let t = with_needle();
+    let frame = json!({"jsonrpc": "2.0", "id": NEEDLE, "result": {}}).to_string();
+    let logged = crate::test_log_capture::records(|| {
+        WebSocketTransport::dispatch_inbound(&t.inner, &frame).unwrap();
+    });
+    let text = serde_json::to_string(&logged).unwrap();
+    assert!(
+        text.contains("response for"),
+        "premise: the warning: {text}"
+    );
+    assert!(!text.contains(NEEDLE), "the log names the id: {text}");
+}
+
+/// T1.21: a frame this transport does not read is refused with an error
+/// that quotes none of it (the read loop logs that error).
+#[test]
+fn a_refused_frame_quotes_none_of_itself() {
+    for frame in [
+        json!({"jsonrpc": NEEDLE, "id": 1, "result": {}}),
+        json!({"jsonrpc": "2.0", "mystery": NEEDLE}),
+        json!({"jsonrpc": "2.0", "id": 1, "result": {}, "error": NEEDLE}),
+        json!({"jsonrpc": "2.0", "id": 1, "method": "m", "params": NEEDLE}),
+    ] {
+        let error = super::McpFrame::from_text(&frame.to_string()).unwrap_err();
+        assert!(!error.to_string().contains(NEEDLE), "{frame}: {error}");
+    }
+}
+
+/// T1.21: a close frame is logged by its code and the length of its reason.
+#[test]
+fn a_close_reason_is_logged_by_length() {
+    use tokio_tungstenite::tungstenite::protocol::CloseFrame;
+    use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
+    let frame = CloseFrame {
+        code: CloseCode::Normal,
+        reason: NEEDLE.into(),
+    };
+    let logged = crate::test_log_capture::records(|| super::log_close(Some(&frame)));
+    let text = serde_json::to_string(&logged).unwrap();
+    assert!(text.contains("close frame"), "premise: the record: {text}");
+    assert!(!text.contains(NEEDLE), "the log names the reason: {text}");
+}

@@ -347,3 +347,27 @@ cat > seen"#,
     assert!(!recorded.contains("notifications/cancelled"), "{recorded}");
     let _ = t.close().await;
 }
+
+/// MIK-9035 T1.21: a line the transport cannot parse is logged by its
+/// length only; the line is backend text and can hold an injected value.
+#[test]
+fn an_unparsable_line_is_logged_by_length_only() {
+    const NEEDLE: &str = "stdio-line-secret-61c0";
+    let logged = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (_workspace, t) = started(&format!("printf '{{oops {NEEDLE}\\n'")).await;
+                stdout_closed(&t).await;
+                let _ = t.close().await;
+            });
+    });
+    let text = serde_json::to_string(&logged).expect("records serialise");
+    assert!(
+        text.contains("Failed to handle a line"),
+        "premise: the line was refused: {text}"
+    );
+    assert!(!text.contains(NEEDLE), "the log quotes the line: {text}");
+}
