@@ -111,9 +111,10 @@ test('R5 the screen manifest names only files in the asset table, and the head l
       expect(table.has(path.slice('/ui/assets/'.length)), `${path} is in ASSETS`).toBe(true);
     }
   }
-  // Outside the manifest, the document names the shell's own files only.
+  // Outside the manifest, the document names the shell's own files only: its
+  // script, the rest of its stylesheet, and the fonts the inlined frame declares.
   const outside = doc.replace(block[0], '');
-  for (const m of outside.matchAll(/\/ui\/assets\/([^"'\s)]+)/g)) expect(m[1]).toMatch(/^shell\./);
+  for (const m of outside.matchAll(/\/ui\/assets\/([^"'\s)]+)/g)) expect(m[1]).toMatch(/^(shell\.|[\w-]+\.[0-9a-f]{12}\.woff2$)/);
 });
 
 test('R6 a stylesheet that fails while its module loads shows Retry, and Retry links it once', async ({ page }) => {

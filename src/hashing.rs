@@ -49,9 +49,7 @@ pub(crate) fn sha256_hex_chunks<'a>(chunks: impl IntoIterator<Item = &'a [u8]>) 
 #[cfg(feature = "webui")]
 pub(crate) fn sha256_base64(bytes: &[u8]) -> String {
     use base64::{Engine as _, engine::general_purpose::STANDARD};
-    // red stub: the real digest lands with the shell's hashed policy.
-    let _ = bytes;
-    STANDARD.encode(b"")
+    STANDARD.encode(Sha256::digest(bytes))
 }
 
 /// `sha256:` followed by [`sha256_hex`] of `bytes`, the tagged form stored in

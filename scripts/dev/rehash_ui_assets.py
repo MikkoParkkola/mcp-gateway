@@ -13,6 +13,11 @@ them, so its own hash covers theirs. In general every asset is hashed after
 the assets it references (a module after the shell it imports); a reference
 cycle is refused, and a name left not matching its bytes fails the run.
 
+The shell's frame stylesheet, src/gateway/ui/shell-src/frame.css, is not an
+asset: once its references are rewritten (and its line ends made LF), it is
+copied byte for byte into index.html's <style id="frame">, whose text the
+gateway's CSP allows by its hash. A document without that element is refused.
+
     python3 -I scripts/dev/rehash_ui_assets.py
 """
 
@@ -24,6 +29,8 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SHELL = ROOT / "src/gateway/ui/shell"
 SHELL_RS = ROOT / "src/gateway/ui/shell.rs"
+FRAME = ROOT / "src/gateway/ui/shell-src/frame.css"
+FRAME_STYLE = re.compile(r'(<style id="frame">)(.*?)(</style>)', re.S)
 HASHED = re.compile(r"^(?P<stem>.+?)(?:\.[0-9a-f]{12})?\.(?P<ext>css|js|json|woff2|svg|png)$")
 TABLE = re.compile(r"pub\(super\) const ASSETS: &\[\(&str, &\[u8\]\)\] = &\[.*?\];", re.S)
 
@@ -73,7 +80,7 @@ def in_dependency_order(found):
 def rewrite_refs(stem: str, ext: str, new: str) -> None:
     """Point every reference to this asset, hashed or not, at `<new>`."""
     pattern = ref_pattern(stem, ext)
-    for text in [SHELL / "index.html", *SHELL.rglob("*.css"), *SHELL.rglob("*.js")]:
+    for text in [SHELL / "index.html", FRAME, *SHELL.rglob("*.css"), *SHELL.rglob("*.js")]:
         body = text.read_text()
         updated = pattern.sub(f"/ui/assets/{new}", body)
         if updated != body:
@@ -91,7 +98,22 @@ def stale_names():
     return out
 
 
+def inline_frame() -> None:
+    """Copy frame.css, LF line ends, into the document's frame element."""
+    frame = FRAME.read_bytes().replace(b"\r\n", b"\n").decode()
+    FRAME.write_bytes(frame.encode())
+    document = SHELL / "index.html"
+    body = document.read_text()
+    updated = FRAME_STYLE.sub(lambda m: m[1] + frame + m[3], body, count=1)
+    if updated != body:
+        document.write_text(updated)
+
+
 def main() -> int:
+    # Refused before anything moves: the frame has nowhere to go.
+    if len(FRAME_STYLE.findall((SHELL / "index.html").read_text())) != 1:
+        print('rehash_ui_assets: index.html needs exactly one <style id="frame"></style>', file=sys.stderr)
+        return 1
     for path in in_dependency_order(assets()):
         m = HASHED.match(path.name)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()[:12]
@@ -99,6 +121,7 @@ def main() -> int:
         if name != path.name:
             path.rename(path.with_name(name))
         rewrite_refs(m["stem"], m["ext"], name)
+    inline_frame()
     # The order above makes this hold; checking it keeps a future mistake loud.
     stale = stale_names()
     if stale:

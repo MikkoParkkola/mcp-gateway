@@ -37,12 +37,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.7be1307414d1.js",
-        include_bytes!("shell/shell.7be1307414d1.js"),
+        "shell.9a1145e288ad.css",
+        include_bytes!("shell/shell.9a1145e288ad.css"),
     ),
     (
-        "shell.9555a8d2a896.css",
-        include_bytes!("shell/shell.9555a8d2a896.css"),
+        "shell.ae2d6f9af7ac.js",
+        include_bytes!("shell/shell.ae2d6f9af7ac.js"),
     ),
     (
         "tips.7c43dc6560cf.json",
@@ -53,8 +53,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.4636ac6c5b97.js",
-        include_bytes!("shell/tools.4636ac6c5b97.js"),
+        "tools.ff2bb0ce777a.js",
+        include_bytes!("shell/tools.ff2bb0ce777a.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
@@ -66,20 +66,38 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
     ),
 ];
 
-/// The shell's policy: everything from this origin, nothing inline, no
-/// framing. Fonts come from `font-src 'self'`, so they are self-hosted.
-pub(super) const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-     img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
-     form-action 'self'; frame-ancestors 'none'";
-
 /// The frame stylesheet the document inlines (`<style id="frame">`).
 #[cfg(test)]
 const FRAME_CSS: &str = include_str!("shell-src/frame.css");
 
-/// The policy the document is served with. red stub: the hashed frame lands
-/// with the inlined frame.
+/// The shell's policy with `{frame}` for the inlined frame's hash source:
+/// everything from this origin, nothing else inline, no framing. Fonts come
+/// from `font-src 'self'`, so they are self-hosted. The fixture server
+/// (ui-tests/server.mjs) builds its policy from the same file.
+const CSP_BASE: &str = include_str!("csp-base.txt");
+
+/// The policy the document is served with: the base, allowing exactly the
+/// document's inlined frame by its SHA-256, and no `'unsafe-inline'`.
 pub(super) fn csp() -> &'static str {
-    CSP
+    static CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let source = format!(
+            "'sha256-{}'",
+            crate::hashing::sha256_base64(inlined_frame().as_bytes())
+        );
+        CSP_BASE.trim_end().replace("{frame}", &source)
+    });
+    &CSP
+}
+
+/// The text between the document's `<style id="frame">` and its `</style>`,
+/// exactly as served; empty when there is none (a shell test refuses that).
+fn inlined_frame() -> &'static str {
+    let open = r#"<style id="frame">"#;
+    DOCUMENT
+        .find(open)
+        .map(|i| &DOCUMENT[i + open.len()..])
+        .and_then(|rest| rest.find("</style>").map(|end| &rest[..end]))
+        .unwrap_or_default()
 }
 
 /// `GET /ui/{*path}`: the shell document, except under `api` and `assets`,
@@ -92,7 +110,7 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
     (
         [
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-            (header::CONTENT_SECURITY_POLICY, CSP),
+            (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],

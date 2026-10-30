@@ -7,26 +7,35 @@
 //   /ui, /ui/classic       a stand-in for the classic page (fixtures/classic.html)
 //   /ui/assets/{file}      an asset from shell.rs's ASSETS table, by exact name
 //   /ui/api/{path}         fixtures/api/{path}.json for GET, else 404
-//   /ui/{*path}            the shell document, with the CSP read from shell.rs
+//   /ui/{*path}            the shell document, with the gateway's CSP
 //
-// The asset table and the CSP are parsed from shell.rs rather than copied, so
-// the tests cannot drift from what the gateway serves. Node stdlib only.
+// The asset table is parsed from shell.rs rather than copied, and the CSP is
+// built as shell.rs builds it: src/gateway/ui/csp-base.txt with the SHA-256 of
+// the document's inlined frame. Answers are gzip by the gateway's one rule,
+// src/gateway/ui/compression.json (tower-http's default predicate), so the
+// tests cannot drift from what the gateway serves. Node stdlib only.
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SHELL_DIR = join(HERE, '..', 'src', 'gateway', 'ui', 'shell');
-const SHELL_RS = readFileSync(join(HERE, '..', 'src', 'gateway', 'ui', 'shell.rs'), 'utf8');
+const UI_DIR = join(HERE, '..', 'src', 'gateway', 'ui');
+const SHELL_DIR = join(UI_DIR, 'shell');
+const SHELL_RS = readFileSync(join(UI_DIR, 'shell.rs'), 'utf8');
 const FIXTURES = join(HERE, 'fixtures');
+const CONTRACT = JSON.parse(readFileSync(join(UI_DIR, 'compression.json'), 'utf8'));
 
-/** The CSP constant, with Rust's `\` line continuations folded. */
-function parseCsp(src) {
-  const m = src.match(/const CSP: &str = "((?:[^"\\]|\\.)*)"/s);
-  if (!m) throw new Error('shell.rs: CSP constant not found');
-  return m[1].replace(/\\\n\s*/g, '');
+/** The policy shell.rs builds: the base with the inlined frame's hash source. */
+function buildCsp() {
+  const doc = readFileSync(join(SHELL_DIR, 'index.html'), 'utf8');
+  const m = doc.match(/<style id="frame">([\s\S]*?)<\/style>/);
+  if (!m) throw new Error('index.html: no <style id="frame">');
+  const digest = createHash('sha256').update(m[1], 'utf8').digest('base64');
+  return readFileSync(join(UI_DIR, 'csp-base.txt'), 'utf8').trim().replace('{frame}', `'sha256-${digest}'`);
 }
 
 /** Asset name to file, from the ASSETS table. */
@@ -39,9 +48,17 @@ function parseAssets(src) {
   return table;
 }
 
-const CSP = parseCsp(SHELL_RS);
+const CSP = buildCsp();
 const ASSETS = parseAssets(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
+
+/** Whether the contract compresses this answer for this request. */
+function gzips(req, type, len) {
+  // ponytail: a plain token match ignores q=0; no test client sends it.
+  if (!/\bgzip\b/i.test(req.headers['accept-encoding'] ?? '')) return false;
+  const never = CONTRACT.never_prefixes.some((p) => type.startsWith(p)) && !CONTRACT.except_types.some((e) => type.startsWith(e));
+  return len >= CONTRACT.min_bytes && !never;
+}
 
 /** The shell document, plus the fixture pages when the test asked for them. */
 function shellDocument(req) {
@@ -52,8 +69,15 @@ function shellDocument(req) {
 
 function send(res, status, headers, body) {
   // Names the worktree this server reads, so a run can prove it reached its own.
-  res.writeHead(status, { ...headers, 'x-fixture-root': HERE });
-  res.end(body);
+  const out = { ...headers, 'x-fixture-root': HERE };
+  let bytes = Buffer.from(body ?? '');
+  if (gzips(res.req, headers['content-type'] ?? '', bytes.length)) {
+    bytes = gzipSync(bytes);
+    out['content-encoding'] = 'gzip';
+    out.vary = 'accept-encoding';
+  }
+  res.writeHead(status, out);
+  res.end(bytes);
 }
 
 // Test-only live stream (tests/shell-stream.spec.mjs). A request to
@@ -117,6 +141,12 @@ function handle(req, res) {
   const get = req.method === 'GET' || req.method === 'HEAD';
   const control = path.match(/^\/__stream\/([\w-]+)\/(setup|send|end|log)$/);
   if (control) return streamControl(req, res, control[1], control[2]);
+  // Test-only: a body of `len` bytes of this type, so a row can run the
+  // contract's boundary cases through the server's compression.
+  if (path === '/__compression' && get) {
+    const q = new URL(req.url, 'http://fixture').searchParams;
+    return send(res, 200, { 'content-type': q.get('type') ?? '' }, 'a'.repeat(Number(q.get('len') ?? 0)));
+  }
   const held = (req.headers.cookie ?? '').match(/(?:^|;\s*)fixture-stream=([\w-]+)/);
   if (path === '/ui/api/stream' && get) {
     if (held) return streamOpen(req, res, held[1]);

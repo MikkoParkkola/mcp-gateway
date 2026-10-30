@@ -290,8 +290,11 @@ test.describe('a screen read is not a boot read', () => {
     await page.goto('/ui/overview/status');
     await shellReady(page);
     await preloaded;
+    // Preloading loads the module only: its data is read when it renders.
+    const tools = async () => (await apiPaths(page)).filter((p) => p.startsWith('/ui/api/tools'));
+    expect(await tools()).toEqual([]);
     await page.locator('nav.route-nav a[href="/ui/tools"]').click();
     await expect(toolRows(page)).toHaveCount(1);
-    expect((await apiPaths(page)).some((p) => p.startsWith('/ui/api/tools'))).toBe(true);
+    expect(await tools()).toHaveLength(1);
   });
 });

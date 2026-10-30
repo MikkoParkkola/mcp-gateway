@@ -265,14 +265,6 @@ fn t8a_the_count_reader_finds_a_planted_number() {
     assert_eq!(load_counts("load the tools"), Vec::<u64>::new());
 }
 
-/// The text between the document's `<style id="frame">` and its `</style>`.
-fn inlined_frame() -> &'static str {
-    let open = r#"<style id="frame">"#;
-    let start = DOCUMENT.find(open).map(|i| i + open.len());
-    let text = start.and_then(|s| DOCUMENT[s..].find("</style>").map(|e| &DOCUMENT[s..s + e]));
-    text.unwrap_or_default()
-}
-
 #[test]
 fn t9_the_document_inlines_the_frame_css_byte_for_byte() {
     assert_eq!(

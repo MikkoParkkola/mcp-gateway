@@ -203,12 +203,12 @@ mod secret_injection_direct_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
-/// U3: the UI live stream.
-#[cfg(all(test, feature = "webui"))]
-mod ui_stream_tests;
 /// The web UI compressed by the router's one rule.
 #[cfg(all(test, feature = "webui"))]
 mod ui_compression_tests;
+/// U3: the UI live stream.
+#[cfg(all(test, feature = "webui"))]
+mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
@@ -738,10 +738,11 @@ pub(crate) fn create_router_with_accounts(
         app = app.merge(metrics_route(&startup_config));
     }
 
-    // Merge web UI HTML route (unauthenticated — static HTML, no data)
+    // Merge web UI HTML route (unauthenticated — static HTML, no data). Outside
+    // the TraceLayer as before, but compressed by the same one rule as the rest.
     #[cfg(feature = "webui")]
     {
-        app = app.merge(super::ui::html_router());
+        app = app.merge(super::ui::html_router().layer(compression()));
     }
 
     if let Some(extra) = extra {
