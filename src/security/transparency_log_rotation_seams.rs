@@ -103,6 +103,8 @@ impl Drop for StallRelease {
 #[cfg(test)]
 #[derive(Default)]
 pub(crate) struct TestHooks {
+    /// The test that opened this logger, named on a late write.
+    pub(crate) created_by: crate::test_late_write::Creator,
     pub(crate) fault: std::sync::Mutex<Option<WriteFault>>,
     pub(crate) fault_fired: std::sync::atomic::AtomicUsize,
     pub(crate) clock_offset: std::sync::atomic::AtomicI64,

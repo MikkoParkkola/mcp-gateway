@@ -132,20 +132,19 @@ impl CollusionConfig {
                 &format!("holds at most {MAX_ALLOWED_FLOWS} entries"),
             );
         }
-        for flow in &self.allowed_flows {
-            for pattern in [&flow.source, &flow.egress] {
-                if let Err(e) = glob::Pattern::new(pattern) {
-                    return field(
-                        "allowed_flows",
-                        &format!("has an invalid pattern {pattern:?}: {e}"),
-                    );
+        // A bad glob is named by its key path and index, never its text: a
+        // pattern can hold a tool name the operator would not have logged.
+        for (i, flow) in self.allowed_flows.iter().enumerate() {
+            for (side, pattern) in [("source", &flow.source), ("egress", &flow.egress)] {
+                if glob::Pattern::new(pattern).is_err() {
+                    return field(&format!("allowed_flows[{i}].{side}"), "is not a valid glob");
                 }
             }
         }
         for (name, patterns) in [("sources", &self.sources), ("non_egress", &self.non_egress)] {
-            for pattern in patterns {
-                if let Err(e) = glob::Pattern::new(pattern) {
-                    return field(name, &format!("has an invalid pattern {pattern:?}: {e}"));
+            for (i, pattern) in patterns.iter().enumerate() {
+                if glob::Pattern::new(pattern).is_err() {
+                    return field(&format!("{name}[{i}]"), "is not a valid glob");
                 }
             }
         }

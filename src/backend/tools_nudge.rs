@@ -126,7 +126,7 @@ impl super::Backend {
         // on its shard and then sees it; a slot whose shard the walk already
         // passed checks after the feed was set. Observing twice is harmless:
         // the first observer stays.
-        for slot in &self.pool {
+        for slot in self.pool.iter() {
             self.observe_slot(slot.key(), slot.value());
         }
     }

@@ -129,6 +129,7 @@ impl crate::identity_propagation::IdentityPropagation for CountingMint {
     > {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: format!("{}@{}", identity.subject, backend.audience),
