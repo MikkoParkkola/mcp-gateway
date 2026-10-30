@@ -403,20 +403,6 @@ impl Gw {
     }
 }
 
-/// Everything the stream sends within `span` of the real clock.
-pub(super) async fn stream_text(stream: &mut axum::body::BodyDataStream, span: Duration) -> String {
-    use futures::StreamExt;
-    let mut text = String::new();
-    let end = std::time::Instant::now() + span;
-    while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
-        match tokio::time::timeout(left, stream.next()).await {
-            Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
-            _ => break,
-        }
-    }
-    text
-}
-
 /// The port of a redirect URI.
 fn link_port(redirect_uri: &str) -> u16 {
     url::Url::parse(redirect_uri)

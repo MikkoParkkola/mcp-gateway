@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 
-use super::fixture::{Gw, Reply, Who, stream_text, stream_until};
+use super::fixture::{Gw, Reply, Who, stream_until};
 use crate::oauth::client::sign_in::SignIn;
 
 fn assert_refusal(reply: &Reply, status: StatusCode, code: &str) {
@@ -125,7 +125,21 @@ async fn start_returns_the_link_once_with_no_store() {
     let url = body["authorization_url"].as_str().unwrap_or("-");
     let read = gw.row().await.to_string();
     assert!(!read.contains(url), "{read}");
-    frames.push_str(&stream_text(&mut stream, Duration::from_millis(300)).await);
+    // The absence window ends on an event, not a timer: the watcher publishes
+    // the status every tick (`stream/watcher.rs`), and the started flow's
+    // `awaiting_callback` phase is the frame most likely to carry the link.
+    frames.push_str(
+        &stream_until(
+            &mut stream,
+            "awaiting_callback",
+            crate::test_wait::HANG_BOUND,
+        )
+        .await,
+    );
+    assert!(
+        frames.contains("awaiting_callback"),
+        "the stream never showed the started flow: no awaiting_callback status frame: {frames}"
+    );
     assert!(
         !frames.contains(url),
         "the link reached the stream: {frames}"
