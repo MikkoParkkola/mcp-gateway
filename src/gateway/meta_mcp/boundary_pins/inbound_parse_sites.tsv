@@ -14,8 +14,8 @@ src/transport/http/mod.rs	peer_refusal	from_str	1	scrubbed-by	by src/transport/h
 src/transport/http/requests.rs	body_or_stream	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
 src/transport/http/requests.rs	json_body	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
 src/transport/http/requests.rs	json_body	json	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
-src/transport/http/sse_channel.rs	route	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: a response goes to its waiting request, which read_answer returns; a note goes through the sink map, which scrubs (sse_listen.rs)
-src/transport/http/sse_channel.rs	route	from_value	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: the response handed to its waiting request
+src/transport/http/sse_channel.rs	route	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; a response goes to its waiting request, which read_answer returns; a note goes through the sink map, which scrubs (sse_listen.rs)
+src/transport/http/sse_channel.rs	route	from_value	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; the response handed to its waiting request
 src/transport/http/sse_decoder.rs	drain_events	from_str	1	scrubbed	notifications pass withheld before they are published; the response is scrubbed by read_answer
 src/transport/http/sse_listen.rs	request_unscrubbed	from_slice	1	scrubbed-by	by src/transport/http/sse_listen.rs::request: the session's only entry to it
 src/transport/notification_sink.rs	passes_level_filter	from_value	1	not-backend-data	reads a logging level, never forwarded content

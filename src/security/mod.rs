@@ -24,9 +24,9 @@ pub(crate) mod dump_guard;
 pub mod firewall;
 pub mod http_diagnostics;
 pub mod message_signing;
+pub(crate) mod needles;
 pub mod policy;
 pub(crate) mod posture;
-pub(crate) mod needles;
 pub(crate) mod secret_redaction;
 #[cfg(all(test, feature = "firewall"))]
 mod tenant_read_corpus_tests;
