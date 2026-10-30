@@ -280,6 +280,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_STATUS,
         routes::UI_OVERVIEW,
         routes::UI_TOOLS,
+        routes::UI_TOOLS_CALL,
         routes::UI_REFUSALS,
         routes::UI_GATEWAY,
         routes::UI_CONFIG,

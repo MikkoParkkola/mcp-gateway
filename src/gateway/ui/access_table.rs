@@ -217,6 +217,13 @@ pub(super) static ROWS: &[Row] = &[
         true,
     ),
     row(
+        routes::UI_TOOLS_CALL,
+        Post,
+        Admin(AdminRequired),
+        &[],
+        false,
+    ),
+    row(
         routes::UI_REFUSALS,
         Get,
         Admin(Forbidden),
