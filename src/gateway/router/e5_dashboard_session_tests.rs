@@ -287,6 +287,18 @@ async fn logout_is_not_held_by_a_stalled_audit_write() {
     let out = send(&state, logout(Some(&h))).await;
     let answered_by_the_bound = log.stall_answers_for_test();
     release.release();
+    // The released write still runs on the blocking pool: wait for it, so it
+    // never lands while `_log_dir` is being removed (a late `.hwm` would keep
+    // the folder).
+    let late = Arc::clone(&log);
+    assert!(
+        tokio::task::spawn_blocking(move || {
+            late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic"),
+        "the released audit write finishes"
+    );
     assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
     assert_eq!(
         answered_by_the_bound, 1,

@@ -65,7 +65,7 @@ async fn a_call_on_this_route_sends_the_backend_a_minted_token() {
         &backend,
         &RequestId::Number(1),
         Some(json!({ "name": "t", "_meta": { "progressToken": 7 } })),
-        (&[], None),
+        (crate::transport::LentCredential::default(), None),
     )
     .await
     .expect("the recording transport answers");
