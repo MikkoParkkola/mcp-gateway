@@ -760,6 +760,8 @@ pub(crate) fn error_response_preserving_status(
             crate::Error::AuditUnavailable => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
             })),
+            // Gateway-authored, so its fixed fields go out whole.
+            crate::Error::AmbiguousBackend { .. } => error.ambiguous_backend_data(),
             // A gateway-authored refusal may carry a recovery payload the
             // client needs: MRTR.9 names the capability an input request would
             // have required and MRTR.9a the mode, which is the difference

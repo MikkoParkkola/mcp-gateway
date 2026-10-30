@@ -12,6 +12,7 @@ use serde_json::Value;
 use tracing::{debug, info};
 use url::Url;
 
+use super::super::lender::counted_refusal;
 use super::super::sanitize_url_for_diagnostics;
 use super::cancel_guard::CancelOnDrop;
 use super::extra_headers::merge_extra_headers;
@@ -25,6 +26,7 @@ use crate::oauth::OAuthClient;
 use crate::oauth::login_gate::{self, Provenance};
 use crate::protocol::era::PeerEra;
 use crate::protocol::meta::MODERN_VERSIONS;
+use crate::protocol::param_headers::is_param_header;
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId,
     is_version_mismatch_error, parse_supported_versions_from_error,
@@ -45,8 +47,9 @@ impl HttpTransport {
         &self,
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
+        call: &[(String, String)],
     ) -> Result<header::HeaderMap> {
-        self.build_headers(mode, identity_key, CredentialOrigin::Gateway)
+        self.build_headers(mode, identity_key, CredentialOrigin::Gateway, call)
             .await
     }
 
@@ -60,7 +63,7 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
     ) -> Result<header::HeaderMap> {
-        self.build_headers(mode, identity_key, CredentialOrigin::Lent)
+        self.build_headers(mode, identity_key, CredentialOrigin::Lent, &[])
             .await
     }
 
@@ -69,20 +72,16 @@ impl HttpTransport {
         mode: HeaderMode<'_>,
         identity_key: Option<&str>,
         origin: CredentialOrigin,
+        call: &[(String, String)],
     ) -> Result<header::HeaderMap> {
         // A lent-only per-user slot sends nothing of the gateway's: no static
-        // header and no gateway token, only what the dispatch in flight lends,
-        // merged last. With nothing lent there is no subscriber to send as,
-        // so nothing is sent. A send whose credential a source lends (an
+        // header and no gateway token, only the loan the call's own headers
+        // select, merged last. A call whose credential is not lent, or whose
+        // loan's check refuses, is not sent. A send whose credential a source lends (an
         // event listener's stream) already carries nothing of the gateway's,
         // and its source is its lender.
         let lent = if self.is_lent_only() && origin == CredentialOrigin::Gateway {
-            let lent = self.lent_now().filter(|headers| !headers.is_empty());
-            Some(lent.ok_or_else(|| {
-                Error::Transport(
-                    "per-user send refused: no calling subscriber's credential is lent".to_string(),
-                )
-            })?)
+            Some(self.lent_for(call).await?)
         } else {
             None
         };
@@ -205,6 +204,50 @@ impl HttpTransport {
         Ok(headers)
     }
 
+    /// Merge a call's own headers into `headers`. On a lent-only slot the
+    /// credential part is already the loan's, merged by the builder, so only
+    /// the gateway-owned `Mcp-Param-*` mirrors are taken from the call: never
+    /// the caller's copy of the credential.
+    fn merge_call_headers(&self, headers: &mut header::HeaderMap, call: &[(String, String)]) {
+        if self.is_lent_only() {
+            let mirrors: Vec<_> = call
+                .iter()
+                .filter(|(name, _)| is_param_header(name))
+                .cloned()
+                .collect();
+            merge_extra_headers(headers, &mirrors);
+        } else {
+            merge_extra_headers(headers, call);
+        }
+    }
+
+    /// The headers a lent-only slot's send carries, from the slot's lender
+    /// ([`Lender::lent_for`](crate::transport::Lender::lent_for)).
+    ///
+    /// # Errors
+    ///
+    /// A refusal when the slot has no lender or the lender refuses the call.
+    pub(super) async fn lent_for(
+        &self,
+        call: &[(String, String)],
+    ) -> Result<Vec<(String, String)>> {
+        let Some(lender) = self.lender.get() else {
+            return Err(counted_refusal("no_lender", "this slot has no lender"));
+        };
+        lender.lent_for(call).await
+    }
+
+    /// The call this transport's slot start sends with: resolved at each send
+    /// to the oldest dispatch still waiting on the start
+    /// ([`Lender::start_call`](crate::transport::Lender::start_call)), empty on
+    /// a slot that lends nothing. Only the start's own sends pass it.
+    pub(crate) fn start_call(&self) -> Vec<(String, String)> {
+        self.lender
+            .get()
+            .map(|lender| lender.start_call())
+            .unwrap_or_default()
+    }
+
     /// Get OAuth access token if OAuth is configured
     pub(super) async fn get_oauth_token(&self) -> Result<Option<String>> {
         if let Some(ref oauth_mutex) = self.oauth_client {
@@ -266,12 +309,17 @@ impl HttpTransport {
         }
     }
 
-    /// Send a raw request to the message endpoint
-    pub(super) async fn send_request(&self, request: &JsonRpcRequest) -> Result<JsonRpcResponse> {
+    /// Send a raw request to the message endpoint inside a call: `call` is that call's headers, so
+    /// a lent-only slot picks the loan the call carries.
+    pub(super) async fn send_request_as(
+        &self,
+        request: &JsonRpcRequest,
+        call: &[(String, String)],
+    ) -> Result<JsonRpcResponse> {
         // `None`, not `self.outbound_era()`: this is the handshake, and a
         // modern-shaped `initialize` is a message the peer we are still
         // introducing ourselves to may be unable to parse.
-        self.send_request_with_headers(request, &[], None, None)
+        self.send_request_with_headers(request, call, None, None)
             .await
     }
 
@@ -294,7 +342,7 @@ impl HttpTransport {
     ) -> Result<JsonRpcResponse> {
         // SSE mode: the request takes its place on the live stream before its
         // POST, and is sent to that stream's own endpoint (design B16, B18).
-        let mut channel = self.live_sse_channel().await?;
+        let mut channel = self.live_sse_channel(extra_headers).await?;
         let mut waiting = channel
             .as_ref()
             .map(|c| c.register(&request.id))
@@ -306,7 +354,7 @@ impl HttpTransport {
         if channel.as_ref().is_some_and(|c| c.is_closed()) {
             // Closed between the check and the registration: replace it, once.
             drop(waiting);
-            channel = self.live_sse_channel().await?;
+            channel = self.live_sse_channel(extra_headers).await?;
             waiting = channel
                 .as_ref()
                 .map(|c| c.register(&request.id))
@@ -322,9 +370,10 @@ impl HttpTransport {
                     method: &request.method,
                 },
                 identity_key,
+                extra_headers,
             )
             .await?;
-        merge_extra_headers(&mut headers, extra_headers);
+        self.merge_call_headers(&mut headers, extra_headers);
         // AFTER every merge this path runs. Placed inside `build_mcp_headers`
         // it would be overridden by the loop just above.
         if era == Some(PeerEra::Modern) {
@@ -467,8 +516,10 @@ impl HttpTransport {
                 self.sessions
                     .write()
                     .insert(bucket.to_string(), id.to_string());
-                // Maintainability guard (MIK-6735 fix 2): under a per-user pool slot this instance
-                // serves exactly one caller identity for life, so `sessions` is provably <=1 entry
+                // Maintainability guard (MIK-6735 fix 2): a lent-only per-user pool slot (the
+                // single-tenant hint) serves exactly one caller identity for life, so `sessions`
+                // is provably <=1 entry. An optional binding's per-user slot also holds its
+                // start's gateway session, so it is not hinted and may hold two
                 // — do NOT "simplify" this map to a single `Option<String>` on the strength of
                 // that; it stays multi-entry and load-bearing for the Shared slot (Stateless-mode
                 // backends and the no-identity path), which is Arc-shared across every caller and
@@ -679,10 +730,10 @@ impl HttpTransport {
         };
 
         let mut headers = self
-            .build_mcp_headers(HeaderMode::Notify, identity_key)
+            .build_mcp_headers(HeaderMode::Notify, identity_key, extra_headers)
             .await?;
         // The caller's credential, as on a request (#2292).
-        merge_extra_headers(&mut headers, extra_headers);
+        self.merge_call_headers(&mut headers, extra_headers);
         if era == Some(PeerEra::Modern) {
             finalise_modern_headers(&mut headers, method, notification.params.as_ref())?;
         }

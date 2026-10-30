@@ -45,6 +45,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     > {
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -576,9 +577,14 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
     let (backend, wire) = expiring_backend(Duration::from_millis(30));
     let headers = [("Authorization".to_string(), "Bearer alpha".to_string())];
 
-    let first = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
-        .await
-        .expect("first read fills the slot");
+    let first = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        Some("alpha"),
+        crate::transport::LentCredential::unchecked(&headers),
+    )
+    .await
+    .expect("first read fills the slot");
     assert_eq!(
         first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::FIRST],
@@ -586,11 +592,17 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
          below is measuring a cold fill rather than a stale one"
     );
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
 
-    let second = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
-        .await
-        .expect("second read");
+    let second = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        Some("alpha"),
+        crate::transport::LentCredential::unchecked(&headers),
+    )
+    .await
+    .expect("second read");
     assert_eq!(
         second.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::SECOND],
@@ -629,9 +641,14 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
     // row reads, with no sleep to line up against the cache's clock.
     let (backend, wire) = expiring_backend(Duration::ZERO);
 
-    let first = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
-        .await
-        .expect("first read fills the shared slot");
+    let first = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        None,
+        crate::transport::LentCredential::default(),
+    )
+    .await
+    .expect("first read fills the shared slot");
     assert_eq!(
         first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::FIRST],
@@ -644,7 +661,12 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
          fetched inline: its snapshot is served while a background task \
          refreshes behind it, and making it synchronous would put a network \
          round trip on the busiest path in the gateway)",
-        MetaMcp::backend_tools_for_discovery(&backend, true, None, &[]),
+        MetaMcp::backend_tools_for_discovery(
+            &backend,
+            true,
+            None,
+            crate::transport::LentCredential::default(),
+        ),
     )
     .await
     .expect("second read");
@@ -718,8 +740,15 @@ async fn a_shared_slot_withholding_every_tool_still_refreshes_past_its_ttl() {
     );
     assert_eq!(wire.fetches.load(std::sync::atomic::Ordering::SeqCst), 1);
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
-    let served = MetaMcp::backend_tools_for_discovery(&backend, false, None, &[]).await;
+    let served = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        false,
+        None,
+        crate::transport::LentCredential::default(),
+    )
+    .await;
     assert!(served.is_none(), "nothing servable: {served:?}");
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

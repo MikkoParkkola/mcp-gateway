@@ -11,12 +11,15 @@
 
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use serde_json::{Value, json};
+use std::sync::Arc;
+
 use url::Url;
 
 use super::types::{
     AgentCard, DEFAULT_CARD_PATH, Message, PROTOCOL_VERSION, SendMessageResponse, Task,
 };
 use crate::security::{diagnostic_url, safe_request_error, safe_reqwest_message};
+use crate::transport::Lender;
 use crate::{Error, Result};
 
 /// The A2A 1.0 version header. `.json()` sets `Content-Type` itself.
@@ -57,6 +60,9 @@ pub(crate) struct A2aClient {
     origin: Url,
     card_url: String,
     headers: Vec<(String, String)>,
+    /// Set on a lent-only per-user slot: every send carries only the loan its
+    /// call selects from this lender, never a configured header.
+    lender: Option<Arc<Lender>>,
 }
 
 impl A2aClient {
@@ -64,8 +70,43 @@ impl A2aClient {
     pub(crate) fn new(
         a2a_url: &str,
         card_path: Option<&str>,
+        headers: Vec<(String, String)>,
+        http: reqwest::Client,
+    ) -> Result<Self> {
+        Self::build(a2a_url, card_path, headers, http, None)
+    }
+
+    /// A client for a lent-only per-user slot: no configured header and no
+    /// `a2a_url` userinfo header, only what `lender` lends each call.
+    pub(crate) fn new_lent_only(
+        a2a_url: &str,
+        card_path: Option<&str>,
+        http: reqwest::Client,
+        lender: Arc<Lender>,
+    ) -> Result<Self> {
+        Self::build(a2a_url, card_path, Vec::new(), http, Some(lender))
+    }
+
+    /// Whether every send must carry a dispatch's lent credential.
+    pub(crate) fn is_lent_only(&self) -> bool {
+        self.lender.is_some()
+    }
+
+    /// The headers the slot start's own sends carry: the starting dispatch's
+    /// loan on a lent-only slot, none otherwise.
+    pub(crate) fn start_call(&self) -> Vec<(String, String)> {
+        self.lender
+            .as_ref()
+            .map(|lender| lender.start_call())
+            .unwrap_or_default()
+    }
+
+    fn build(
+        a2a_url: &str,
+        card_path: Option<&str>,
         mut headers: Vec<(String, String)>,
         http: reqwest::Client,
+        lender: Option<Arc<Lender>>,
     ) -> Result<Self> {
         let mut origin = Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
@@ -91,7 +132,7 @@ impl A2aClient {
             let explicit = headers
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
-            if let Some(basic) = basic.filter(|_| !explicit) {
+            if let Some(basic) = basic.filter(|_| !explicit && lender.is_none()) {
                 headers.push(("Authorization".to_owned(), basic));
             }
         }
@@ -107,6 +148,7 @@ impl A2aClient {
             origin,
             card_url,
             headers,
+            lender,
         })
     }
 
@@ -116,8 +158,10 @@ impl A2aClient {
     }
 
     /// Fetch the Agent Card (also the liveness probe).
-    pub(crate) async fn fetch_card(&self) -> Result<AgentCard> {
-        let request = self.with_headers(self.http.get(&self.card_url), &[]);
+    pub(crate) async fn fetch_card(&self, extra_headers: &[(String, String)]) -> Result<AgentCard> {
+        let request = self
+            .with_headers(self.http.get(&self.card_url), extra_headers)
+            .await?;
         let response = request.send().await.map_err(|e| {
             safe_request_error(
                 &format!("A2A Agent Card fetch from {} failed", self.target()),
@@ -251,7 +295,9 @@ impl A2aClient {
             "method": method,
             "params": params,
         });
-        let request = self.with_headers(self.http.post(&endpoint.url).json(&body), extra_headers);
+        let request = self
+            .with_headers(self.http.post(&endpoint.url).json(&body), extra_headers)
+            .await?;
         let response = request.send().await.map_err(|e| {
             safe_request_error(
                 &format!("A2A {method} to {} failed", diagnostic_url(&endpoint.url)),
@@ -268,34 +314,51 @@ impl A2aClient {
         read_capped_json(response, &format!("A2A {method} reply")).await
     }
 
-    /// Configured headers, then this request's own, then the protocol version.
-    /// A per-request header replaces a configured one of the same name: a
-    /// propagated identity must not travel beside the static credential.
-    fn with_headers(
+    /// The request's headers: on a lent-only slot the one loan the call's own
+    /// headers select, checked first, and never a configured header;
+    /// otherwise configured headers, then this request's own. Then the
+    /// protocol version.
+    ///
+    /// # Errors
+    ///
+    /// On a lent-only slot, the lender's refusal.
+    async fn with_headers(
         &self,
-        mut request: reqwest::RequestBuilder,
+        request: reqwest::RequestBuilder,
         extra_headers: &[(String, String)],
-    ) -> reqwest::RequestBuilder {
-        let overridden = |name: &str| {
-            extra_headers
-                .iter()
-                .any(|(extra, _)| extra.eq_ignore_ascii_case(name))
+    ) -> Result<reqwest::RequestBuilder> {
+        let request = match &self.lender {
+            Some(lender) => {
+                let lent = lender.lent_for(extra_headers).await?;
+                Self::merge(request, &[], &lent)
+            }
+            None => Self::merge(request, &self.headers, extra_headers),
         };
-        // The protocol version is the bridge's to state: a configured or
-        // per-request `A2A-Version` would put a second, conflicting one on
-        // the wire.
+        Ok(request.header(VERSION_HEADER, PROTOCOL_VERSION))
+    }
+
+    /// `configured` headers, then `own`. A header in `own` replaces a
+    /// configured one of the same name: a propagated identity must not travel
+    /// beside the static credential. The protocol version is the bridge's to
+    /// state: a configured or per-request `A2A-Version` would put a second,
+    /// conflicting one on the wire.
+    fn merge(
+        mut request: reqwest::RequestBuilder,
+        configured: &[(String, String)],
+        own: &[(String, String)],
+    ) -> reqwest::RequestBuilder {
+        let overridden = |name: &str| own.iter().any(|(o, _)| o.eq_ignore_ascii_case(name));
         let version = |name: &str| name.eq_ignore_ascii_case(VERSION_HEADER);
-        for (name, value) in self
-            .headers
+        for (name, value) in configured
             .iter()
             .filter(|(name, _)| !overridden(name) && !version(name))
         {
             request = request.header(name.as_str(), value.as_str());
         }
-        for (name, value) in extra_headers.iter().filter(|(name, _)| !version(name)) {
+        for (name, value) in own.iter().filter(|(name, _)| !version(name)) {
             request = request.header(name.as_str(), value.as_str());
         }
-        request.header(VERSION_HEADER, PROTOCOL_VERSION)
+        request
     }
 }
 
