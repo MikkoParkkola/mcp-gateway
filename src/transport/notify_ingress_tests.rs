@@ -83,6 +83,24 @@ fn a_backend_task_notification_is_dropped() {
     }
 }
 
+/// The strip asks nothing of the sender: a gateway line and a notification
+/// with no sender lose a planted member as a backend's does.
+#[test]
+fn a_gateway_or_missing_sender_is_still_stripped() {
+    for origin in [Origin::Gateway, Origin::Missing] {
+        let mut n = note(
+            "notifications/progress",
+            json!({"progressToken": "p", "_security_findings": ["FORGED-1"]}),
+        );
+        let _ = ingress_notification(&origin, &mut n);
+        assert_eq!(
+            n.params,
+            Some(json!({"progressToken": "p"})),
+            "{origin:?} skipped the strip"
+        );
+    }
+}
+
 /// A notification with no sender is withheld with exactly one warn naming
 /// the method.
 #[test]
