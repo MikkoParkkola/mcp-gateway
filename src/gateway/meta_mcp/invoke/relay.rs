@@ -809,3 +809,7 @@ pub(crate) use delivered::{AnswerShape, GatewayStamps};
 #[cfg(all(test, feature = "firewall"))]
 #[path = "relay_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_refusal_tests.rs"]
+mod refusal_tests;

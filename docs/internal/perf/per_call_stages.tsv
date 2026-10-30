@@ -32,12 +32,12 @@ src/gateway/meta_mcp/grant_audit.rs	grant_bookkeeping_for_test	-	test-only helpe
 src/gateway/meta_mcp/grant_audit.rs	in_repeat_scope	-	finished-task re-checks only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool_with_source	http_invoke_tiny	on the HTTP gateway_invoke path (invoke_tool delegates to it)
-src/gateway/meta_mcp/grant_audit.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/repeat.rs	is_repeat	-	finished-task re-check dedupe only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	note_answer_id	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	note_withheld_best_effort	-	on-path, untimed: the withheld surfaced call's grant-record write; only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	project	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
-src/gateway/meta_mcp/grant_audit.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
+src/gateway/meta_mcp/grant_audit/repeat.rs	remember	-	finished-task re-check dedupe only, off the timed dispatch path
 src/gateway/meta_mcp/grant_audit.rs	select_records	-	on-path, untimed: grant-audit write path; runs only with a transparency logger and an identity-grant decision, which the harness does not configure
 src/gateway/meta_mcp/grant_audit.rs	slot_http	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/grant_audit.rs	slot_result	http_invoke_tiny	on the HTTP gateway_invoke path
@@ -87,6 +87,7 @@ src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_i
 src/gateway/meta_mcp/invoke/audit.rs	note_cached	-	on-path, untimed: cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/audit.rs	note_cached_failure	-	on-path, untimed: idempotent replays of a stored failure only
 src/gateway/meta_mcp/invoke/audit.rs	note_dispatch_failure	-	on-path, untimed: dispatch failures only; the timed rows succeed
+src/gateway/meta_mcp/invoke/audit.rs	note_pre_send	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	note_process	-	on-path, untimed: only when a call starts a child process; the timed backend is in-process
 src/gateway/meta_mcp/invoke/audit.rs	note_refusal	-	upstream task recovery (tasks/get) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	note_uninspected	-	on-path, untimed: raw-receipt chain refusals only; the timed backend is not chained
@@ -94,6 +95,8 @@ src/gateway/meta_mcp/invoke/audit.rs	note_upstream_task	-	on-path, untimed: upst
 src/gateway/meta_mcp/invoke/audit.rs	noted_classes	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	noted_response	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	outcome	-	on-path, untimed: invocation and settlement records, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	pre_send	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit.rs	pre_send_now	http_invoke_tiny	on the HTTP gateway_invoke path: read before a delivered answer's relay receipt is staged
 src/gateway/meta_mcp/invoke/audit/settlement.rs	record_task_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	request_tenants	-	on-path, untimed: tenant attribution under a firewall tenant guard (arg_keys); the harness configures none
 src/gateway/meta_mcp/invoke/audit.rs	responded	http_invoke_tiny	on the HTTP gateway_invoke path

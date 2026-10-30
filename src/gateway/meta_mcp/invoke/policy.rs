@@ -280,7 +280,8 @@ impl MetaMcp {
         session_id: Option<&str>,
         caller: &crate::gateway::meta_mcp::MetaMcpCallerContext<'_>,
         trace_id: String,
-    ) -> Result<super::SourcedOutcome> {
+    ) -> super::Invoked {
+        use crate::gateway::meta_mcp::dispatch_log::PreSend;
         // D1-f: a degraded audit log refuses before dispatch, after one probe.
         if let Some(log) = &self.transparency_logger
             && let Err(refused) = log.admit().await
@@ -293,7 +294,11 @@ impl MetaMcp {
                 &crate::security::audit::AuditWho::from_caller(caller),
                 crate::counters::Outcome::AdmissionRefused,
             );
-            return Err(refused);
+            // Before the notes scope opens: refused before its backend.
+            return super::Invoked {
+                outcome: Err(refused),
+                pre_send: PreSend::Refused,
+            };
         }
         let trace_id_clone = trace_id.clone();
         // An in-process call has no request memo of its own: one per call, so
@@ -310,12 +315,16 @@ impl MetaMcp {
                 audit::with_dispatch_scope(traced),
             )
             .await;
+            let pre_send = notes.pre_send();
             // The lift's already-shaped answer skips the live path below:
             // `audit_replay` recorded it, exactly once, and the stored frame
             // is delivered as is, never re-wrapped (D8).
             let result = match result {
                 Ok(super::TracedOutcome::Stored(response)) => {
-                    return Ok(super::SourcedOutcome::Stored(response));
+                    return super::Invoked {
+                        outcome: Ok(super::SourcedOutcome::Stored(response)),
+                        pre_send,
+                    };
                 }
                 Ok(super::TracedOutcome::Live(guarded)) => Ok(guarded),
                 Err(error) => Err(error),
@@ -335,7 +344,11 @@ impl MetaMcp {
             if audited.is_ok() {
                 self.note_delivered_reading(args, reading, responded);
             }
-            audited.map(|value| super::SourcedOutcome::Live((value, source, upstream)))
+            super::Invoked {
+                outcome: audited
+                    .map(|value| super::SourcedOutcome::Live((value, source, upstream))),
+                pre_send,
+            }
         });
         crate::gateway::meta_mcp::visible::memo::with_visibility_memo(traced).await
     }

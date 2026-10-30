@@ -142,6 +142,8 @@ impl MetaMcp {
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
         if e.is_pre_dispatch() {
+            // The backend never saw it: refused before its backend.
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
             if let Some(mut reservation) = idem_reservation.take() {
                 reservation.release();
             }
@@ -532,7 +534,12 @@ impl MetaMcp {
             return Err(unbindable_continuation(server, tool));
         }
         result = gated;
-        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        // A dispatch error the backend never saw, answered as a tool result,
+        // is the gateway's text: no receipt names the backend for it.
+        if super::audit::pre_send_now() != crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
+        {
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        }
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::super::response_security::chain_after_gates(
             effect,

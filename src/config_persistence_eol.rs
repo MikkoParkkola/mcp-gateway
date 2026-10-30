@@ -62,7 +62,7 @@ pub(super) fn render(original: &str, out: &[Line]) -> String {
 
 /// A line split into its text and its ending (`\r\n`, `\n`, or none). A lone
 /// `\r` is text, as the YAML splice sees it.
-fn split_ending(line: &str) -> (&str, &str) {
+pub(super) fn split_ending(line: &str) -> (&str, &str) {
     if let Some(text) = line.strip_suffix("\r\n") {
         (text, "\r\n")
     } else if let Some(text) = line.strip_suffix('\n') {

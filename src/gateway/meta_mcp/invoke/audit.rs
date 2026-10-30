@@ -63,6 +63,8 @@ pub(crate) struct DispatchNotes {
     /// MIN.2: a backend answered this call (its raw response reached the
     /// response gates); a gateway refusal returned as a result did not.
     responded: bool,
+    /// Whether this call's last step was a refusal before its backend.
+    pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
     /// MIN.1 gap 1: the gateway task whose raw upstream handle this dispatch
     /// captured. The submission record carries it as the join key to the
     /// task's settlement record.
@@ -120,6 +122,20 @@ tokio::task_local! {
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
+}
+
+/// Note what this call's last pre-send step decided: a refusal before its
+/// backend, or a send or served answer that clears an earlier refusal.
+pub(super) fn note_pre_send(pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend) {
+    note(|notes| notes.pre_send = pre_send);
+}
+
+/// Whether this call has so far been refused before its backend; `Clear`
+/// outside a call's scope.
+pub(super) fn pre_send_now() -> crate::gateway::meta_mcp::dispatch_log::PreSend {
+    NOTES
+        .try_with(|notes| notes.borrow().pre_send)
+        .unwrap_or_default()
 }
 
 /// Note that the backend dispatch failed with `error`, though the caller will
@@ -240,6 +256,11 @@ impl DispatchNotes {
     /// MIN.2: whether a backend answered this call.
     pub(crate) const fn responded(&self) -> bool {
         self.responded
+    }
+
+    /// Whether this call was refused before its backend.
+    pub(crate) const fn pre_send(&self) -> crate::gateway::meta_mcp::dispatch_log::PreSend {
+        self.pre_send
     }
 
     /// The outcome of a call whose result read as `outcome`: a backend failure

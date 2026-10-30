@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::config_persistence::journal;
-use crate::config_persistence::lock::{Locked, NotLocked, lock_config};
+use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
 use crate::config_reload::{ConfigWriteError, ReloadOutcome};
 use crate::secret_store::{
@@ -30,6 +30,7 @@ use crate::secret_store::{
 };
 
 use super::ReloadContext;
+use crate::config_persistence::keyedit::Template;
 
 /// The SHA-256 of a file's bytes, lowercase hex: the revision a diff or a
 /// history view was made from. Not `config_revision`, which also covers the
@@ -94,9 +95,9 @@ pub(crate) enum Replaced {
         reason = "first callers: the web UI settings save and the configuration-history restore"
     )
 )]
-/// The second argument is the reference texts of the [`SecretStep`]'s new
-/// entries, in its order; empty without one.
-pub(crate) type Compute = Box<dyn FnOnce(&[u8], &[String]) -> Result<Vec<u8>, String> + Send>;
+/// It runs before any store entry exists: a secret field is a slot in the
+/// template, which the writer fills with its entry's reference afterwards.
+pub(crate) type Compute = Box<dyn FnOnce(&[u8]) -> Result<Template, String> + Send>;
 
 /// Secrets a replacement saves with the file: created in the store under the
 /// config hold, after the revision check and before `compute`, which writes
@@ -212,7 +213,24 @@ pub(crate) async fn replace_detached(
     replace: Replace,
     wait: Duration,
 ) -> Result<ReplaceOutcome, ReplaceError> {
-    tokio::spawn(async move { ctx.replace_locked(replace, wait).await })
+    audit::replace_audited(ctx, replace, Audit::Off, wait).await
+}
+
+/// The writer's task: [`replace_detached`] and [`replace_audited`](audit::replace_audited) share it.
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "first callers: the web UI settings save and the configuration-history restore"
+    )
+)]
+async fn spawn_locked(
+    ctx: Arc<ReloadContext>,
+    replace: Replace,
+    audit: Audit,
+    wait: Duration,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    tokio::spawn(async move { ctx.replace_locked(replace, audit, wait).await })
         .await
         .unwrap_or_else(|e| {
             Err(ReplaceError::Failed(format!(
@@ -220,6 +238,16 @@ pub(crate) async fn replace_detached(
             )))
         })
 }
+
+#[path = "replace_audit.rs"]
+mod audit;
+pub(crate) use audit::{Audit, Intent, IntentSink};
+#[cfg(test)]
+pub(crate) use audit::{IntentId, IntentKind, replace_audited};
+
+#[path = "replace_slots.rs"]
+mod slots;
+use slots::{fill_secrets, fits_when_filled, same_fields};
 
 /// What happens to a replacement's new store entries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -391,6 +419,7 @@ impl ReloadContext {
     async fn replace_locked(
         &self,
         replace: Replace,
+        mut audit: Audit,
         wait: Duration,
     ) -> Result<ReplaceOutcome, ReplaceError> {
         let deadline = Instant::now() + wait;
@@ -402,17 +431,26 @@ impl ReloadContext {
         })?;
         // The target is resolved once, by the lock: the owed reload, the
         // trust check, the read and the commit are all about that one file.
-        let locked = lock_config(&self.config_path, deadline)
-            .await
-            .map_err(|e| {
+        // An audited write recovers nothing before its recovery intent, so
+        // its lock leaves a pending journal where it is, and a refused lock
+        // restores nothing.
+        let audited = matches!(audit, Audit::Required { .. });
+        let locked = if audited {
+            lock_config_deferred(&self.config_path, deadline).await
+        } else {
+            lock_config(&self.config_path, deadline).await
+        }
+        .map_err(|e| {
+            if !audited {
                 self.note_refused_lock();
-                match e {
-                    NotLocked::Busy => ReplaceError::Busy,
-                    NotLocked::Failed(message) => ReplaceError::Failed(message),
-                }
-            })?;
+            }
+            match e {
+                NotLocked::Busy => ReplaceError::Busy,
+                NotLocked::Failed(message) => ReplaceError::Failed(message),
+            }
+        })?;
         let target = locked.target.clone();
-        self.pay_owed_reload(locked.recovered, &target).await;
+        let (locked, recovery_intent_id) = self.recover_before_write(&mut audit, locked).await?;
 
         if target != self.trusted_config {
             return Err(ReplaceError::Unsupported(format!(
@@ -431,30 +469,47 @@ impl ReloadContext {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
+        // The operation's own intent, before any entry or byte changes.
+        if let Audit::Required { sink, kind } = &mut audit {
+            let intent = Intent {
+                kind: *kind,
+                base: FileRevision::of(&current),
+                outside_change: false,
+                recovery_intent_id,
+            };
+            sink.append(&intent).map_err(|e| {
+                ReplaceError::Refused(format!(
+                    "the audit log refused this change's record; nothing was written: {e}"
+                ))
+            })?;
+        }
         let mut entries = Entries {
             pending: None,
             renamed: false,
         };
-        let refs = match replace.secrets {
-            // An empty step saves nothing: no entry for the bytes to name.
-            Some(step) if !step.values.is_empty() => {
-                let pending = create_entries(step, deadline).await?;
-                let refs = pending.refs().to_vec();
-                entries.pending = Some(pending);
-                refs
-            }
-            _ => Vec::new(),
+        // The new bytes are computed, and their slots checked against the
+        // secrets, before any entry exists: a refusal creates nothing.
+        let template = (replace.compute)(&current).map_err(ReplaceError::Refused)?;
+        let step = replace.secrets.filter(|step| !step.values.is_empty());
+        same_fields(&template, step.as_ref())?;
+        fits_when_filled(&template)?;
+        let result = match step {
+            None => Ok(template.bytes().to_vec()),
+            Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
         };
-        let result = self
-            .write_computed(
-                &locked,
-                &target,
-                &current,
-                (replace.compute, replace.replaced),
-                &refs,
-                &mut entries,
-            )
-            .await;
+        let result = match result {
+            Ok(new) => {
+                self.write_computed(
+                    &locked,
+                    &target,
+                    &current,
+                    (new, replace.replaced),
+                    &mut entries,
+                )
+                .await
+            }
+            Err(refused) => Err(refused),
+        };
         // The config locks go before any store call: a discard's keychain
         // deletes must not hold up the next writer. A death in between is
         // the `Entries` guard's.
@@ -472,11 +527,9 @@ impl ReloadContext {
         locked: &Locked,
         target: &std::path::Path,
         current: &[u8],
-        (compute, replaced): (Compute, Replaced),
-        refs: &[String],
+        (new, replaced): (Vec<u8>, Replaced),
         entries: &mut Entries,
     ) -> Result<ReplaceOutcome, ReplaceError> {
-        let new = compute(current, refs).map_err(ReplaceError::Refused)?;
         if std::str::from_utf8(&new).is_err() {
             return Err(ReplaceError::Refused(
                 "the new gateway.yaml is not UTF-8 text".to_string(),
@@ -490,8 +543,8 @@ impl ReloadContext {
             .map_err(ReplaceError::Unsupported)?;
         if new == current {
             if entries.pending.is_some() {
-                // The compute dropped the references: nothing would name the
-                // entries just created.
+                // Unreachable after the slot check (a filled slot changes the
+                // bytes); refused rather than leave entries nothing names.
                 return Err(ReplaceError::Refused(
                     "the new config does not name the saved secrets".to_string(),
                 ));
