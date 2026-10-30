@@ -22,6 +22,7 @@ use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;
 use crate::discovery::{DiscoverySource, ServerMetadata};
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::test_helpers::write_owner_only;
 
 const CANARY: &str = "zq-adopt-route-canary";
@@ -153,7 +154,11 @@ impl Route {
         let response = adopt_discovery(
             axum::extract::State(Arc::clone(&self.state)),
             Extension(Arc::clone(&self.cache)),
-            Some(Extension(client(admin))),
+            Guard::for_route(
+                crate::gateway::routes::UI_DISCOVERY_ADOPT,
+                &axum::http::Method::POST,
+                Some(client(admin)),
+            ),
             Ok(Json(body)),
         )
         .await;

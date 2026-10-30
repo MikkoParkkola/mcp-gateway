@@ -13,8 +13,9 @@
 //! A tools/call naming one target sets `lone_target` where the target is
 //! parsed; an answer re-worded as an absent name then raises `Refused` through
 //! `withheld`, which does so only for such a call while the cell is still
-//! vouched, so a composite step answered absent never marks a plan that still
-//! delivers.
+//! vouched. A composite step's own cell names one target too; its refusal
+//! marks the composite only when the composite ends on that step, so a plan
+//! that still delivers is never marked.
 //!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
@@ -133,12 +134,28 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
         .await
 }
 
+/// Run an internal send whose error the caller never receives (a probe that
+/// drops it) in a cell of its own, discarded: a refusal it meets, such as a
+/// refused redirect hop, is not this call's answer. Every such send site is
+/// listed in `boundary_pins/discarded_sends.rs`.
+pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
+    // Boxed: the cell would otherwise sit inline in every dispatch future
+    // that awaits a probe.
+    Box::pin(scope(future)).await
+}
+
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
 /// on the composite's cell whether this step ended in a gateway refusal.
-/// Only the latest step's note is kept: a later step replaces it.
+/// Only the latest step's note is kept: a later step replaces it. A step
+/// names one target, so a step answered absent for a policy reason is
+/// refused ([`withheld`]).
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
+    let cell = DeliveryFacts {
+        lone_target: true,
+        ..DeliveryFacts::default()
+    };
     let (output, refused) = FACTS
-        .scope(RefCell::new(DeliveryFacts::default()), async {
+        .scope(RefCell::new(cell), async {
             let output = future.await;
             let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
             (output, refused)
@@ -154,6 +171,13 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     output
 }
 
+/// The composite's next step was refused before it could run (a playbook's
+/// refusal of a step's arguments, a resumed chain's pending step): the
+/// composite now ends on that refusal unless it carries on past it.
+pub(crate) fn refused_before_step() {
+    with(|facts| facts.last_step = LastStep::Refused);
+}
+
 /// The composite carried on past its latest step's failure (a playbook's
 /// `continue`, or its `retry` once attempts run out): that step's refusal is
 /// no longer what the composite can end on.
@@ -161,12 +185,39 @@ pub(crate) fn step_absorbed() {
     with(|facts| facts.last_step = LastStep::Settled);
 }
 
-/// The composite ends with `error` (`None`: it succeeded). It records
-/// `refused` when it ends with an error while its latest step's refusal still
-/// stands: the step it ends on was refused.
-pub(crate) fn composite_ended(error: Option<&crate::Error>) {
+/// How a composite ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CompositeEnd {
+    Succeeded,
+    /// In an error, or a tool error result.
+    Failed,
+}
+
+impl CompositeEnd {
+    /// `Failed` for an error or a tool error result (`isError: true`).
+    pub(crate) fn of(result: &crate::Result<Value>) -> Self {
+        match result {
+            Ok(answer) if !crate::protocol::cacheable::is_error(answer) => Self::Succeeded,
+            _ => Self::Failed,
+        }
+    }
+
+    /// `Failed` for an error: a composite whose output is not a tool result.
+    #[cfg(test)]
+    pub(crate) fn of_outcome<T>(result: &crate::Result<T>) -> Self {
+        if result.is_err() {
+            Self::Failed
+        } else {
+            Self::Succeeded
+        }
+    }
+}
+
+/// The composite ends as `end`. It records `refused` when it fails while its
+/// latest step's refusal still stands: the step it ends on was refused.
+pub(crate) fn composite_ended(end: CompositeEnd) {
     with(|facts| {
-        if error.is_some() && facts.last_step == LastStep::Refused {
+        if end == CompositeEnd::Failed && facts.last_step == LastStep::Refused {
             facts.effect = facts.effect.max(ResponseEffect::Refused);
         }
     });
@@ -201,10 +252,16 @@ pub(crate) fn refused<E>(error: E) -> E {
 }
 
 /// Where an error becomes the delivered frame: a refusal a gateway decision
-/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`; any other error
-/// raises nothing.
+/// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`, and so does an
+/// authorization refusal ([`crate::Error::Forbidden`]), a decision about the
+/// caller wherever it was built, whatever its code. Every `Forbidden` site is
+/// classified in `boundary_pins/delivery_refusals.tsv`. Any other error raises
+/// nothing.
 pub(crate) fn outlet(error: &crate::Error) {
-    if matches!(error, crate::Error::GatewayRefused { .. }) {
+    if matches!(
+        error,
+        crate::Error::GatewayRefused { .. } | crate::Error::Forbidden { .. }
+    ) {
         raise(ResponseEffect::Refused);
     }
 }
