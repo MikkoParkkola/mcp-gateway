@@ -224,3 +224,151 @@ async fn api_key_without_backends_is_forbidden_on_tools_call() {
     assert_eq!(status, axum::http::StatusCode::OK, "{body}");
     assert!(body.get("error").is_none(), "a \"*\" key is served: {body}");
 }
+
+/// A backend name the fixture never registers, beside the hidden `beta`.
+const UNREGISTERED: &str = "gamma";
+
+/// The fixture under an mTLS policy that denies every tool on `beta` for the
+/// `agent` certificate, so `beta` is hidden from that caller.
+async fn with_mtls_denying_beta() -> axum::Router {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    let Fixture {
+        router, mut state, ..
+    } = fixture(Auth::Off).await;
+    drop(router);
+    let rule = PolicyRuleConfig {
+        match_criteria: CertMatchConfig {
+            cn: Some("agent".to_string()),
+            ..Default::default()
+        },
+        allow: ToolScopeConfig {
+            backends: vec!["*".to_string()],
+            tools: vec!["*".to_string()],
+        },
+        deny: ToolScopeConfig {
+            backends: vec!["beta".to_string()],
+            tools: Vec::new(),
+        },
+    };
+    Arc::get_mut(&mut state)
+        .expect("router dropped")
+        .mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![rule],
+        ..Default::default()
+    }));
+    super::create_router(state)
+}
+
+/// `tools/call` of `params` on `uri`, presenting the `agent` certificate.
+async fn post_as_agent_cert(router: &axum::Router, uri: &str, params: Value) -> (u16, String) {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params })
+                .to_string(),
+        ))
+        .expect("request");
+    request.extensions_mut().insert(crate::mtls::CertIdentity {
+        common_name: Some("agent".to_string()),
+        display_name: "agent".to_string(),
+        ..Default::default()
+    });
+    let response = router
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router answers");
+    let status = response.status().as_u16();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// The hidden backend's answer and the unregistered one's, the latter with
+/// its name read as `beta`: a caller must not tell them apart.
+fn assert_alike(route: &str, hidden: (u16, String), unregistered: (u16, String)) {
+    let unregistered = (unregistered.0, unregistered.1.replace(UNREGISTERED, "beta"));
+    assert_eq!(
+        hidden, unregistered,
+        "{route}: a hidden backend answers unlike an unregistered one"
+    );
+}
+
+/// Under an mTLS policy hiding `beta`, `gateway_invoke` of its tool answers as
+/// for a backend that is not registered.
+#[tokio::test]
+async fn mtls_hidden_backend_invokes_like_an_unregistered_one() {
+    let router = with_mtls_denying_beta().await;
+    let invoke = |server: &str| {
+        json!({ "name": "gateway_invoke",
+                "arguments": { "server": server, "tool": "beta_tool", "arguments": {} } })
+    };
+    let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta")).await;
+    let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED)).await;
+    assert_alike("mtls gateway_invoke", hidden, unregistered);
+}
+
+/// The direct route answers the same two names alike under that policy.
+#[tokio::test]
+async fn mtls_hidden_backend_direct_route_answers_like_an_unregistered_one() {
+    let router = with_mtls_denying_beta().await;
+    let call = json!({ "name": "beta_tool", "arguments": {} });
+    let hidden = post_as_agent_cert(&router, "/mcp/beta", call.clone()).await;
+    let unregistered = post_as_agent_cert(&router, &format!("/mcp/{UNREGISTERED}"), call).await;
+    assert_alike("mtls direct route", hidden, unregistered);
+}
+
+/// An agent scoped to `alpha` is not told `beta` exists: `gateway_invoke` of
+/// its tool answers as for a backend that is not registered.
+#[tokio::test]
+async fn agent_hidden_backend_invokes_like_an_unregistered_one() {
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let token = super::direct_route::agent_token(&registry);
+    let f = with_agent_auth(registry).await;
+    let invoke = |server: &str| {
+        json!({ "name": "gateway_invoke",
+                "arguments": { "server": server, "tool": "beta_tool", "arguments": {} } })
+    };
+    let ask = |params: Value| post(&f.router, "/mcp", Some(&token), "tools/call", params);
+    let (hs, hb) = ask(invoke("beta")).await;
+    let (us, ub) = ask(invoke(UNREGISTERED)).await;
+    assert_alike(
+        "agent gateway_invoke",
+        (hs.as_u16(), hb.to_string()),
+        (us.as_u16(), ub.to_string()),
+    );
+}
+
+/// The direct route answers the same two names alike for that agent.
+#[tokio::test]
+async fn agent_hidden_backend_direct_route_answers_like_an_unregistered_one() {
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let token = super::direct_route::agent_token(&registry);
+    let f = with_agent_auth(registry).await;
+    let call = json!({ "name": "beta_tool", "arguments": {} });
+    let (hs, hb) = post(
+        &f.router,
+        "/mcp/beta",
+        Some(&token),
+        "tools/call",
+        call.clone(),
+    )
+    .await;
+    let (us, ub) = post(
+        &f.router,
+        &format!("/mcp/{UNREGISTERED}"),
+        Some(&token),
+        "tools/call",
+        call,
+    )
+    .await;
+    assert_alike(
+        "agent direct route",
+        (hs.as_u16(), hb.to_string()),
+        (us.as_u16(), ub.to_string()),
+    );
+}
