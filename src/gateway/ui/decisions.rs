@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -22,13 +22,11 @@ use rand::RngExt as _;
 use serde_json::{Map, Value, json};
 
 use super::activity::replay;
-use super::errors::admin_auth_required;
-use super::is_admin;
+use super::guard::Guard;
 use crate::capability::CapabilityBackend;
 use crate::decisions::{
     CapabilityChange, Fold, GRANT_DECISION_KIND, Health, LogPos, Shared, Source, denial_from_record,
 };
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
@@ -45,13 +43,9 @@ pub(super) fn decisions_router() -> Router<Arc<AppState>> {
     Router::new().route(routes::UI_DECISIONS, get(list_decisions))
 }
 
-async fn list_decisions(
-    State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn list_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let Some(decisions) = state.meta_mcp.decisions() else {
         return unavailable(&[]);
