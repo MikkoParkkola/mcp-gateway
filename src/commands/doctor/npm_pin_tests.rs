@@ -378,6 +378,7 @@ fn a_skip_route_builds_no_client() {
         base: Url::parse(REGISTRY_BASE).expect("parses"),
         roots: rustls::RootCertStore::empty(),
         proxy: ProxyEnv::from_pairs(&[("HTTPS_PROXY", "socks5://s.example:1080")]),
+        bounds_override: None,
     };
     assert!(client(&cfg).is_none());
 }

@@ -15,6 +15,11 @@ use url::Url;
 
 use super::super::super::{ClientCfg, ProxyEnv};
 
+/// A request bound far past the budget and the rows' hang guard: with it, a
+/// stalled lookup outlives every bound but the budget, so only the budget
+/// can end the check.
+pub(super) const STALL_OUTLASTS_BUDGET: Duration = Duration::from_secs(120);
+
 /// How the fake answers one path.
 #[derive(Clone)]
 pub(super) enum Reply {
@@ -159,7 +164,22 @@ impl Fake {
             base: self.base(),
             roots: self.roots.clone(),
             proxy: ProxyEnv::from_pairs(proxy),
+            bounds_override: None,
         }
+    }
+
+    /// [`Fake::cfg`] with both request bounds at [`STALL_OUTLASTS_BUDGET`], for
+    /// the rows that prove the budget ends the check.
+    pub(super) fn cfg_outlasting_budget(&self) -> ClientCfg {
+        ClientCfg {
+            bounds_override: Some(STALL_OUTLASTS_BUDGET),
+            ..self.cfg(&[])
+        }
+    }
+
+    /// Requests the fake is still holding open.
+    pub(super) fn in_flight(&self) -> usize {
+        self.active.load(Ordering::SeqCst)
     }
 
     pub(super) fn requests(&self) -> Vec<Seen> {
