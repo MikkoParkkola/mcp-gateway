@@ -412,7 +412,14 @@ pub(super) fn record_read(backend: &Backend, read: &ViewBinding) {
         ViewBinding::Bound(binding) => {
             super::visible::memo::record_account_binding(&backend.name, &account, binding);
         }
-        _ => super::visible::memo::record_account_unchecked(&backend.name, &account),
+        failed => {
+            debug!(
+                backend = %backend.name,
+                error = ?failed.failure(),
+                "account read did not bind; held views read cold for this request"
+            );
+            super::visible::memo::record_account_unchecked(&backend.name, &account);
+        }
     }
 }
 

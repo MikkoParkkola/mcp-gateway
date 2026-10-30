@@ -228,13 +228,13 @@ impl MetaMcp {
             // view read gave (no second vault read). A mismatch (a rotated
             // grant) forgets the entry, but only while it is still the one
             // seen here, so a lease claimed meanwhile survives.
-            let held_stale = self
+            let held_current = self
                 .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
-                .is_some_and(|account| {
+                .is_none_or(|account| {
                     visible::memo::held_view_current(server, &account, held.binding())
-                        == visible::memo::HeldView::Stale
+                        != visible::memo::HeldView::Stale
                 });
-            if !held_stale {
+            if held_current {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
                 // the same rule the live fill uses. Treat the view as cold:
                 // forget, claim the lease and refresh through `resolve_cold_view`
@@ -477,7 +477,7 @@ impl MetaMcp {
 /// another reader may try (MIK-8392 B'): the idle reaper's own sweep, so a
 /// cold state outlasts eviction by at most one sweep, and an outage costs at
 /// most one resolution per caller per backend per minute.
-const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Which stored delivery is judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

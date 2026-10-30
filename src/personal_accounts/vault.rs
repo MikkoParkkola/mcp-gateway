@@ -149,6 +149,16 @@ pub(crate) enum ViewBinding {
     Unavailable(PropagationError),
 }
 
+impl ViewBinding {
+    /// Why the read did not bind, for a diagnostic; `None` for `Bound`.
+    pub(crate) fn failure(&self) -> Option<&PropagationError> {
+        match self {
+            Self::Bound(_) => None,
+            Self::NoView(error) | Self::Transient(error) | Self::Unavailable(error) => Some(error),
+        }
+    }
+}
+
 /// A mint refusal with a busy custody kept typed (MIK-8428): decided from
 /// [`CustodyError::Busy`] itself at the custody boundary, never from text.
 /// Every other refusal keeps its [`PropagationError`] unchanged.
@@ -408,6 +418,7 @@ impl VaultStrategy {
     /// refuses before minting: no account key, no usable grant, or a grant
     /// fenced by a changed descriptor. A credential that fails header
     /// validation at mint is not predicted here.
+    #[cfg(test)]
     pub(crate) async fn view_binding(&self, principal: Principal<'_>) -> Option<String> {
         self.view_binding_checked(principal).await.ok()
     }
@@ -418,6 +429,7 @@ impl VaultStrategy {
     /// apart from a busy custody, a shutdown or a store failure. A caller
     /// that judges liveness must not read the second kind as "no view".
     /// Mint-free, like `view_binding`: no refresh, no provider call.
+    #[cfg(test)]
     pub(crate) async fn view_binding_checked(
         &self,
         principal: Principal<'_>,

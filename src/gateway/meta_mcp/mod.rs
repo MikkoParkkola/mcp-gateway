@@ -127,6 +127,9 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+/// The cold claim's retry backoff, for the rows that wait it out.
+#[cfg(test)]
+pub(crate) use task_replay::COLD_RETRY_BACKOFF;
 pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
