@@ -53,6 +53,7 @@ src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	c
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
+src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	config reload: a key edit that would flip the running multi-user status is refused before it applies
 src/config_reload/grant_reload.rs	reload_identity_grants	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
