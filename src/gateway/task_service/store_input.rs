@@ -67,6 +67,8 @@ impl RoundClosed {
 #[cfg(test)]
 #[derive(Default)]
 pub(super) struct TestSeams {
+    /// The test that opened this store, named on a late write.
+    pub(super) created_by: crate::test_late_write::Creator,
     hook: std::sync::Mutex<Option<super::CommitHook>>,
     clock: std::sync::Mutex<Option<DateTime<Utc>>>,
     clock_after_resume: std::sync::Mutex<Option<DateTime<Utc>>>,

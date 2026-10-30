@@ -226,7 +226,12 @@ pub(super) struct Propagation {
     /// A11-e': the managed lease the headers were released under, for the 401
     /// site.
     pub(super) managed: Option<crate::personal_accounts::ManagedLease>,
-    pub(super) headers: Vec<(String, String)>,
+    /// Wiped on drop: the caller's credential never leaves a zeroizing
+    /// holder on this route.
+    pub(super) headers: zeroize::Zeroizing<Vec<(String, String)>>,
+    /// The check every send of `headers` runs first (the mint core's, or a
+    /// forwarded credential's own); `None` when no credential was resolved.
+    pub(super) check: Option<crate::transport::SendCheck>,
     /// The backend's admitted list fills when propagation began, so nonce
     /// admission can tell whether anything before it filled a tool list
     /// (MIK-8379).
@@ -241,14 +246,25 @@ pub(super) struct Propagation {
     pub(super) unproven: Option<crate::Error>,
 }
 
+impl Propagation {
+    /// The resolved headers with the check that guards their every send.
+    pub(super) fn lent(&self) -> crate::transport::LentCredential {
+        crate::transport::LentCredential {
+            headers: self.headers.clone(),
+            check: self.check.clone(),
+        }
+    }
+}
+
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
 /// The headers to forward, or the refusal text.
-type Headers = Result<Vec<(String, String)>, String>;
+type Headers = Result<zeroize::Zeroizing<Vec<(String, String)>>, String>;
 
 /// What resolving the headers produced, before the audit decides whether the
 /// call may proceed.
 struct Resolution {
     result: Headers,
+    check: Option<crate::transport::SendCheck>,
     identity_key: Option<String>,
     managed: Option<crate::personal_accounts::ManagedLease>,
     typed: Option<crate::Error>,
@@ -268,7 +284,8 @@ async fn resolve_headers(
     idp_cfg: Option<&IdpConfig>,
 ) -> Resolution {
     let mut resolution = Resolution {
-        result: Ok(Vec::new()),
+        result: Ok(zeroize::Zeroizing::default()),
+        check: None,
         identity_key: None,
         managed: None,
         typed: None,
@@ -298,7 +315,9 @@ async fn resolve_headers(
                     caller.slot.as_deref(),
                     binding,
                 );
-                Ok(headers)
+                let lent = crate::identity_propagation::send_check::dispatch_scoped(headers);
+                resolution.check = lent.check;
+                Ok(lent.headers)
             }
             Err(e) => Err(e),
         };
@@ -315,7 +334,8 @@ async fn resolve_headers(
             resolution.managed = held;
             resolution.attempted = attempted;
             resolution.unproven = unproven;
-            Ok(headers)
+            resolution.check = headers.check;
+            Ok(headers.headers)
         }
         Err(e) => {
             let text = crate::personal_accounts::refusal::refusal_text(&e);
@@ -364,7 +384,7 @@ async fn audit_mint(
     (caller, route): (&Caller, &Route<'_>),
     id: &RequestId,
     (idp_cfg, result, typed): (Option<&IdpConfig>, Headers, Option<crate::Error>),
-) -> Result<Vec<(String, String)>, Rejection> {
+) -> Result<zeroize::Zeroizing<Vec<(String, String)>>, Rejection> {
     // The principal resolved for (passthrough: the verified identity).
     let subject = state
         .meta_mcp
@@ -448,7 +468,8 @@ pub(super) async fn propagate_identity(
     let mut propagation = Propagation {
         identity_key: None,
         managed: None,
-        headers: Vec::new(),
+        headers: zeroize::Zeroizing::default(),
+        check: None,
         fills_before: route.backend.list_fills(),
         attempted: false,
         unproven: None,
@@ -459,6 +480,7 @@ pub(super) async fn propagate_identity(
     let idp_cfg = route.backend.identity_propagation_config();
     let Resolution {
         result,
+        check,
         identity_key,
         managed,
         typed,
@@ -476,6 +498,7 @@ pub(super) async fn propagate_identity(
         propagation.identity_key = a2a_round_binding(caller);
     }
     propagation.managed = managed;
+    propagation.check = check;
     propagation.headers =
         audit_mint(state, name, (caller, route), id, (idp_cfg, result, typed)).await?;
 
