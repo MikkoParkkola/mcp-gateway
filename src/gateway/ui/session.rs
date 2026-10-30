@@ -18,12 +18,13 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
+use super::guard::Guard;
 use crate::gateway::auth::{
-    AuthenticatedClient, Now, SessionLimits, cookies_are_secure, dashboard_session_who,
-    session_cookie, session_cookie_value,
+    Now, SessionLimits, cookies_are_secure, dashboard_session_who, session_cookie,
+    session_cookie_value,
 };
 use crate::gateway::router::AppState;
-use crate::security::audit::{AuditEnvelope, CredentialKind};
+use crate::security::audit::AuditEnvelope;
 
 /// Path of the logout route.
 pub const LOGOUT_PATH: &str = routes::DASHBOARD_LOGOUT;
@@ -127,12 +128,13 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> Response {
-    let Some(Extension(client)) = client.filter(|Extension(c)| {
-        c.admin
-            && (c.credential_kind == CredentialKind::StaticBearer || c.api_key_identity().is_some())
-    }) else {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
+    }
+    // Admitted: an admin holding the static bearer or an API key.
+    let Some(client) = guard.client else {
         return admin_auth_required().into_response();
     };
     // A session opened by this link ends no later than the key that minted
@@ -360,7 +362,11 @@ mod mik_8659_dashboard_tests {
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
-            Some(axum::extract::Extension(unauthenticated)),
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(unauthenticated),
+            ),
         )
         .await;
         assert_eq!(
@@ -410,10 +416,24 @@ mod mik_8659_dashboard_tests {
         unbindable.quota_principal = None;
         let store_dir = tempfile::tempdir().expect("task store dir");
         let state = t1f_app_state(&auth_config, store_dir.path()).await;
+        // Premise: the access table admits this client, so a 403 below is
+        // the mint's own refusal, not the guard's.
+        assert!(
+            super::super::guard::decide(
+                super::super::access_table::Need::AdminKeyLink,
+                Some(&unbindable)
+            )
+            .is_ok(),
+            "premise: the guard admits an admin API key"
+        );
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
             axum::extract::Extension(state.live_config.generation()),
-            Some(axum::extract::Extension(unbindable)),
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(unbindable),
+            ),
         )
         .await;
         assert_eq!(
