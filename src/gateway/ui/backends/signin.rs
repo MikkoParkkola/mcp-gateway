@@ -58,3 +58,10 @@ fn is_gateway_host_authority(_authority: &str) -> bool {
 #[cfg(test)]
 #[path = "signin_gate_tests.rs"]
 mod gate_tests;
+
+#[cfg(test)]
+#[path = "signin_fixture.rs"]
+mod fixture;
+#[cfg(test)]
+#[path = "signin_tests.rs"]
+mod tests;
