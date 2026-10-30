@@ -153,3 +153,94 @@ async fn nested_and_sibling_calls_name_their_own_backend() {
     .await;
     in_backend("sibling".into(), async { assert_eq!(name(), "sibling") }).await;
 }
+
+/// Every way into the sink outside the sink module, by file and count. A
+/// transport's is a backend's notification and runs inside that backend's
+/// scope (`Backend::send_in_scope`, the catalogue fill and drain); the
+/// gateway's own is `emit_log`, whose lines carry only gateway config, the
+/// caller's request and gateway ids, never backend text. A new site fails
+/// here until it is classified: inside a backend's scope, or a gateway line
+/// with no backend text in it.
+const SINK_ENTRIES: &[(&str, &str, usize)] = &[
+    // Backend: an SSE frame read on the caller's task.
+    (
+        "src/transport/http/sse_decoder.rs",
+        "notification_sink::publish",
+        1,
+    ),
+    // Backend: captured on the caller's task, delivered by the reader.
+    ("src/transport/stdio.rs", "DeliveryHandle::capture(", 1),
+    (
+        "src/transport/websocket_progress.rs",
+        "DeliveryHandle::capture(",
+        1,
+    ),
+    // Gateway: a refusal and "tool invoked", both before the backend call.
+    (
+        "src/gateway/meta_mcp/invoke/pre_dispatch.rs",
+        "emit_log(",
+        2,
+    ),
+];
+
+const NEEDLES: &[&str] = &[
+    "notification_sink::publish",
+    "publish_as(",
+    "DeliveryHandle::capture(",
+    "emit_log(",
+];
+
+#[test]
+fn every_way_into_the_sink_is_classified() {
+    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).expect("a source dir") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    walk(&root.join("src"), &mut files);
+    let mut found = std::collections::BTreeMap::new();
+    for path in files {
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        // The sink and the ingress define these; tests and test fixtures
+        // publish as a backend's call would.
+        if name.contains("test")
+            || name.contains("fixture")
+            || rel.ends_with("transport/notification_sink.rs")
+            || rel.ends_with("transport/notify_ingress.rs")
+        {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).expect("a readable source file");
+        for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+            for needle in NEEDLES {
+                let n = line.matches(needle).count();
+                if n > 0 {
+                    *found.entry((rel.clone(), *needle)).or_insert(0usize) += n;
+                }
+            }
+        }
+    }
+    let want: std::collections::BTreeMap<(String, &str), usize> = SINK_ENTRIES
+        .iter()
+        .map(|(file, needle, n)| (((*file).to_owned(), *needle), *n))
+        .collect();
+    assert_eq!(
+        found, want,
+        "a way into the sink changed; classify it above"
+    );
+}
