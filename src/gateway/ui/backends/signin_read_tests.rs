@@ -69,3 +69,58 @@ async fn the_read_names_each_variant_in_snake_case() {
         assert_eq!(row["sign_in"]["status"], word, "{row}");
     }
 }
+
+/// A plan the runtime policy denies: it asks to mount the host root.
+fn denied_plan() -> crate::runtime::RuntimePlan {
+    use crate::runtime::{
+        RuntimeAvailability, RuntimeIntent, RuntimeMount, RuntimeMountMode, RuntimePlanner,
+    };
+    let mut intent = RuntimeIntent::named("denied");
+    intent.image = Some("ghcr.io/example/filesystem:1".to_owned());
+    intent.requested_mounts = vec![RuntimeMount {
+        source: "/".to_owned(),
+        target: "/host".to_owned(),
+        mode: RuntimeMountMode::ReadOnly,
+    }];
+    let plan = RuntimePlanner::new(RuntimeAvailability::with_docker()).plan(&intent);
+    assert!(plan.is_denied(), "the fixture plan is denied");
+    plan
+}
+
+/// S5, `Refused`: a runtime-refused backend that also needs a sign-in keeps
+/// `state: "refused"` and still reports `needs_sign_in: true`. The precedence
+/// of `Refused` over `NeedsSignIn` is pinned on `decide` by
+/// `api4_1_precedence_worst_first` and `api4_1_refused_names_the_denial_reasons`
+/// in `src/backend/server_state_tests.rs`; this row pins it on the read.
+#[tokio::test]
+async fn a_refused_backend_keeps_its_state_and_still_needs_sign_in() {
+    let gw = Gw::new().await;
+    let config = crate::config::BackendConfig {
+        oauth: Some(crate::config::OAuthConfig {
+            enabled: true,
+            scopes: Vec::new(),
+            client_id: None,
+            client_secret: None,
+            callback_host: None,
+            callback_port: None,
+            callback_path: None,
+            token_refresh_buffer_secs: None,
+            shared_account: false,
+        }),
+        ..crate::config::BackendConfig::default()
+    };
+    let refused = crate::backend::Backend::new_with_runtime_plan(
+        "refused-one",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+        Some(denied_plan()),
+    );
+    refused.sign_in_status.set(SignIn::NeverSignedIn);
+    gw.add_backend(refused);
+
+    let row = gw.row_named("refused-one").await;
+
+    assert_eq!(row["state"], "refused", "{row}");
+    assert_eq!(row["needs_sign_in"], true, "{row}");
+}

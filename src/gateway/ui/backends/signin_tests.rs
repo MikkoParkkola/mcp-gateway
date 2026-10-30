@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use axum::http::StatusCode;
 
-use super::fixture::{Gw, Reply, Who};
+use super::fixture::{Gw, Reply, Who, stream_text};
 use crate::oauth::client::sign_in::SignIn;
 
 fn assert_refusal(reply: &Reply, status: StatusCode, code: &str) {
@@ -57,7 +57,9 @@ async fn a_bearer_only_admin_cannot_start_or_confirm() {
             .backdate(handle, Duration::from_secs(9 * 3600));
     }
     let forged = Who::Dashboard("never-issued-handle".to_owned());
-    for who in [Who::BearerOnly, expired, forged] {
+    let revoked = gw.session();
+    gw.revoke(&revoked);
+    for who in [Who::BearerOnly, expired, forged, revoked] {
         let start = gw.start(&who).await;
         assert_refusal(&start, StatusCode::FORBIDDEN, "dashboard_session_required");
         let confirm = gw.confirm(&who, "any-attempt", "confirm").await;
@@ -94,11 +96,13 @@ async fn a_form_post_is_refused() {
     );
 }
 
-// R4: the stream's frames are covered by the secrecy rows' sinks.
+// R4
 #[tokio::test]
 async fn start_returns_the_link_once_with_no_store() {
     let gw = Gw::new().await;
-    let reply = gw.start(&gw.session()).await;
+    let who = gw.session();
+    let mut stream = gw.open_stream(&who).await;
+    let reply = gw.start(&who).await;
 
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
     let body = reply.json();
@@ -110,10 +114,14 @@ async fn start_returns_the_link_once_with_no_store() {
         .get("cache-control")
         .and_then(|v| v.to_str().ok());
     assert_eq!(cache, Some("no-store"));
+    let url = body["authorization_url"].as_str().unwrap_or("-");
     let read = gw.row().await.to_string();
+    assert!(!read.contains(url), "{read}");
+    let frames = stream_text(&mut stream, std::time::Duration::from_millis(300)).await;
+    assert!(!frames.is_empty(), "the stream emitted frames");
     assert!(
-        !read.contains(body["authorization_url"].as_str().unwrap_or("-")),
-        "{read}"
+        !frames.contains(url),
+        "the link reached the stream: {frames}"
     );
 }
 
@@ -159,6 +167,10 @@ async fn nothing_is_saved_before_confirm() {
     let _ = approved(&gw, &gw.session()).await;
 
     assert!(gw.saved().is_none(), "no token on disk before confirm");
+    assert!(
+        gw.backend.installed_client_token_for_test().is_none(),
+        "no token in the client's memory before confirm"
+    );
     assert_eq!(gw.row().await["sign_in_flow"]["phase"], "awaiting_confirm");
     assert!(
         !matches!(gw.backend.sign_in(), SignIn::SignedIn { .. }),

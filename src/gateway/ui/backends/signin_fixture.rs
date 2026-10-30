@@ -18,7 +18,7 @@ use crate::config::{ApiKeyConfig, AuthConfig, BackendConfig, FailsafeConfig, OAu
 use crate::gateway::auth::{Now, SESSION_COOKIE, SessionLimits};
 use crate::gateway::router::{AppState, create_router, tests::FixtureDir};
 use crate::oauth::TokenInfo;
-use crate::oauth::client::authorize_tests::{BACKEND, RESOURCE, client, token_endpoint};
+use crate::oauth::client::authorize_tests::{BACKEND, RESOURCE, client_on, token_endpoint};
 
 pub(super) const ADMIN_KEY: &str = "signin-admin-key";
 const STANDARD_KEY: &str = "signin-standard-key";
@@ -54,6 +54,8 @@ pub(super) struct Gw {
     pub issuer: String,
     pub store: tempfile::TempDir,
     pub forms: Forms,
+    /// Every link the client announced at the terminal.
+    pub announced: Arc<std::sync::Mutex<Vec<String>>>,
     /// The audit log the gateway appends admin actions to.
     pub log: Arc<crate::security::TransparencyLogger>,
     _fixture: FixtureDir,
@@ -99,6 +101,11 @@ impl Gw {
 
     /// As [`Gw::new`], over the token endpoint at `issuer`.
     pub(super) async fn over(issuer: String, forms: Forms) -> Self {
+        Self::over_on(issuer, forms, "127.0.0.1").await
+    }
+
+    /// As [`Gw::over`], with the callback server on `callback_host`.
+    pub(super) async fn over_on(issuer: String, forms: Forms, callback_host: &str) -> Self {
         let auth = AuthConfig {
             enabled: true,
             api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -135,8 +142,13 @@ impl Gw {
             &FailsafeConfig::default(),
             Duration::from_secs(60),
         ));
-        let oauth = client(store.path(), Some(&issuer))
-            .with_sign_in_status(Arc::clone(&backend.sign_in_status));
+        let announced = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&announced);
+        let oauth = client_on(store.path(), Some(&issuer), callback_host)
+            .with_sign_in_status(Arc::clone(&backend.sign_in_status))
+            .with_announce(Arc::new(move |url: &str| {
+                recorder.lock().unwrap().push(url.to_owned());
+            }));
         backend.install_oauth_client_for_test(oauth);
         assert!(
             state.backends.register(Arc::clone(&backend)),
@@ -148,6 +160,7 @@ impl Gw {
             issuer,
             store,
             forms,
+            announced,
             log,
             _fixture: fixture,
         }
@@ -287,6 +300,11 @@ impl Gw {
 
     /// The backend's row in `GET /ui/api/status`.
     pub(super) async fn row(&self) -> Value {
+        self.row_named(BACKEND).await
+    }
+
+    /// The row of `name` in `GET /ui/api/status`.
+    pub(super) async fn row_named(&self, name: &str) -> Value {
         let reply = self
             .send(
                 &Who::BearerOnly,
@@ -301,7 +319,7 @@ impl Gw {
             .cloned()
             .unwrap_or_default();
         rows.into_iter()
-            .find(|row| row["name"] == BACKEND)
+            .find(|row| row["name"] == name)
             .unwrap_or(Value::Null)
     }
 
@@ -322,4 +340,58 @@ impl Gw {
             .filter(|entry| entry["event"] == "admin_action")
             .collect()
     }
+
+    /// Revoke a dashboard session through the store's own path.
+    pub(super) fn revoke(&self, who: &Who) {
+        let Who::Dashboard(handle) = who else { return };
+        let config = self.state.live_config.get();
+        let limits = SessionLimits::from(&config.auth.dashboard_session);
+        assert!(
+            self.state
+                .dashboard_bootstrap
+                .revoke(handle, Now::read(), &limits)
+        );
+    }
+
+    /// Register one more backend.
+    pub(super) fn add_backend(&self, backend: Backend) {
+        assert!(
+            self.state.backends.register(Arc::new(backend)),
+            "registration"
+        );
+    }
+
+    /// Open the UI event stream as `who`.
+    pub(super) async fn open_stream(&self, who: &Who) -> axum::body::BodyDataStream {
+        let mut builder = Request::builder()
+            .uri(format!("http://{AUTHORITY}/ui/api/stream"))
+            .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                [127, 0, 0, 1],
+                52_346,
+            ))));
+        if let Who::Dashboard(handle) = who {
+            builder = builder.header(header::COOKIE, format!("{SESSION_COOKIE}={handle}"));
+        }
+        let request = builder.body(Body::empty()).expect("request builds");
+        let response = create_router(Arc::clone(&self.state))
+            .oneshot(request)
+            .await
+            .expect("infallible");
+        assert_eq!(response.status(), StatusCode::OK, "the stream opens");
+        response.into_body().into_data_stream()
+    }
+}
+
+/// Everything the stream sends within `span` of the real clock.
+pub(super) async fn stream_text(stream: &mut axum::body::BodyDataStream, span: Duration) -> String {
+    use futures::StreamExt;
+    let mut text = String::new();
+    let end = std::time::Instant::now() + span;
+    while let Some(left) = end.checked_duration_since(std::time::Instant::now()) {
+        match tokio::time::timeout(left, stream.next()).await {
+            Ok(Some(Ok(chunk))) => text.push_str(&String::from_utf8_lossy(&chunk)),
+            _ => break,
+        }
+    }
+    text
 }

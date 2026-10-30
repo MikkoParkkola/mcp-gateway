@@ -147,6 +147,10 @@ async fn a_failed_save_after_conversion_leaves_no_plain_copy() {
         reply.body
     );
     assert!(gw.saved().is_none());
+    assert!(
+        gw.backend.installed_client_token_for_test().is_none(),
+        "the client holds no copy"
+    );
     assert!(!matches!(
         gw.backend.sign_in(),
         crate::oauth::client::sign_in::SignIn::SignedIn { .. }
@@ -210,13 +214,19 @@ async fn a_failed_exchange_writes_a_flow_end_record() {
     assert_flow_end(&records, before, "failed");
 }
 
-// G3: the request's authority never reaches the redirect URI. The configured
-// callback host is 127.0.0.1, so a start addressed as `localhost` or `[::1]`
-// must still redirect to 127.0.0.1, in the link and in the exchange.
+// G3: the request's authority never reaches the redirect URI, in either
+// direction: the link and the exchange carry the configured callback host only.
 #[tokio::test]
 async fn the_request_authority_never_reaches_the_redirect_uri() {
-    for authority in ["localhost:39400", "[::1]:39400"] {
-        let gw = Gw::new().await;
+    let cases = [
+        ("localhost:39400", "127.0.0.1"),
+        ("[::1]:39400", "127.0.0.1"),
+        ("127.0.0.1:39400", "localhost"),
+        ("[::1]:39400", "localhost"),
+    ];
+    for (authority, configured) in cases {
+        let (issuer, forms) = token_endpoint(Some(TOKEN)).await;
+        let gw = Gw::over_on(issuer, Arc::clone(&forms), configured).await;
         let who = gw.session();
         let path = "/ui/api/backends/cov3-backend/signin";
         let reply = gw
@@ -228,22 +238,17 @@ async fn the_request_authority_never_reaches_the_redirect_uri() {
         let redirect = link
             .query_pairs()
             .find(|(k, _)| k == "redirect_uri")
-            .map(|(_, v)| v.into_owned());
-        let redirect = redirect.expect("a redirect_uri");
-        assert!(
-            redirect.starts_with("http://127.0.0.1:"),
-            "{authority}: {redirect}"
-        );
-        assert!(
-            !url.contains("localhost") && !url.contains("%5B"),
-            "{authority}: {url}"
-        );
+            .map(|(_, v)| v.into_owned())
+            .expect("a redirect_uri");
+        let host = url::Url::parse(&redirect)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_owned));
+        assert_eq!(host.as_deref(), Some(configured), "{authority}: {redirect}");
 
         let _ = gw.approve(&url).await;
         let confirm = gw.confirm(&who, &attempt, "confirm").await;
         assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
-        let sent = gw
-            .forms
+        let sent = forms
             .lock()
             .unwrap()
             .first()
@@ -251,7 +256,41 @@ async fn the_request_authority_never_reaches_the_redirect_uri() {
         assert_eq!(
             sent.as_deref(),
             Some(redirect.as_str()),
-            "{authority}: the exchange's redirect_uri"
+            "{authority}: exchange"
         );
     }
+}
+
+// L2: a UI-started flow shows its link to no terminal; the link goes only to
+// the route's answer.
+#[tokio::test]
+async fn a_ui_flow_never_announces_the_link_at_the_terminal() {
+    let gw = Gw::new().await;
+    let who = gw.session();
+    let (url, attempt) = Gw::link(&gw.start(&who).await);
+    assert!(!url.is_empty(), "the flow started");
+    let _ = gw.approve(&url).await;
+    let _ = gw.confirm(&who, &attempt, "confirm").await;
+
+    let announced = gw.announced.lock().unwrap().clone();
+    assert!(announced.is_empty(), "{announced:?}");
+}
+
+// L2, other side: a CLI or startup flow announces its link once. Green on the
+// base; it must stay green.
+#[tokio::test]
+async fn a_cli_flow_announces_the_link_once() {
+    use crate::oauth::client::authorize_tests::{approve, client};
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(Some(TOKEN)).await;
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let recorder = Arc::clone(&seen);
+    let mut cli = client(dir.path(), Some(&issuer)).with_announce(Arc::new(move |url: &str| {
+        recorder.lock().unwrap().push(url.to_owned());
+    }));
+
+    let (outcome, query) = approve(&mut cli, &issuer).await;
+
+    outcome.expect("the flow completes");
+    assert_eq!(*seen.lock().unwrap(), vec![query["__url"].clone()]);
 }

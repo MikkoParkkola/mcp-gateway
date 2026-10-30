@@ -71,7 +71,7 @@ async fn start_to_callback_ends_at_300s() {
     assert_eq!(gw.start(&owner).await.status, StatusCode::OK);
     tokio::time::pause();
 
-    pass(START_WINDOW - Duration::from_secs(1)).await;
+    pass(START_WINDOW.saturating_sub(Duration::from_secs(1))).await;
     assert_eq!(gw.row().await["sign_in_flow"]["phase"], "awaiting_callback");
     pass(Duration::from_secs(2)).await;
 
@@ -178,7 +178,7 @@ async fn retry_after_follows_the_confirm_window() {
 async fn a_cli_held_gate_reports_its_own_deadline() {
     use crate::oauth::client::authorize_tests::client;
     let gw = Gw::new().await;
-    let mut cli = client(gw.store.path(), Some(&gw.issuer))
+    let cli = client(gw.store.path(), Some(&gw.issuer))
         .with_login_gate(Arc::clone(&gw.backend.login_gate))
         .with_open_browser(Arc::new(|_: &str| true));
     tokio::spawn(async move { cli.authorize().await });
@@ -269,7 +269,7 @@ async fn confirm_cancel_and_expiry_race_on_one_attempt() {
     flow.release.notify_one();
     flow.gw.approve(&flow.url).await;
     tokio::time::pause();
-    pass(SIGN_IN_CONFIRM_WINDOW - Duration::from_millis(1)).await;
+    pass(SIGN_IN_CONFIRM_WINDOW.saturating_sub(Duration::from_millis(1))).await;
 
     let (confirm, cancel, ()) = tokio::join!(
         flow.gw.confirm(&flow.owner, &flow.attempt, "confirm"),
@@ -355,4 +355,23 @@ async fn the_flow_phase_moves_at_the_callback() {
         -240,
         "callback + 60 s against start + 300 s"
     );
+}
+
+// T2a: the expiry task is held at its pause point, so cleanup has not run when
+// the late confirm arrives; the window check itself must refuse it.
+#[tokio::test]
+async fn a_late_confirm_is_refused_before_the_expiry_task_runs() {
+    let gw = Gw::new().await;
+    let owner = gw.session();
+    let (reached, release) = gw.backend.sign_in_expiry_pause.arm();
+    let attempt = approved_then_paused(&gw, &owner).await;
+
+    pass(SIGN_IN_CONFIRM_WINDOW + Duration::from_secs(1)).await;
+    crate::test_pause::within("the expiry task reaches its pause", reached.notified()).await;
+    let reply = gw.confirm(&owner, &attempt, "confirm").await;
+    release.notify_one();
+
+    assert_eq!(reply.status, StatusCode::NOT_FOUND, "{}", reply.body);
+    assert_eq!(reply.json()["error"], "no_sign_in");
+    assert!(gw.saved().is_none(), "the late confirm saved nothing");
 }

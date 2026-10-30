@@ -72,18 +72,26 @@ async fn published(held: Option<TokenInfo>, legacy: bool, resolved: bool) -> Sig
     }
     if legacy {
         let record = r#"{"access_token":"legacy","token_type":"Bearer","expires_at":4102444800}"#;
-        crate::gateway::test_helpers::write_owner_only(
-            &dir.path().join(legacy_file_name()),
-            record,
-        )
-        .expect("legacy file");
+        crate::gateway::test_helpers::write_owner_only(dir.path().join(legacy_file_name()), record)
+            .expect("legacy file");
     }
     client.publish_sign_in();
     cell.snapshot()
 }
 
 fn oauth_backend(name: &str) -> Backend {
+    oauth_backend_at(name, None)
+}
+
+/// An OAuth backend whose transport points at `url`, if given.
+fn oauth_backend_at(name: &str, url: Option<&str>) -> Backend {
+    let transport = url.map(|http_url| crate::config::TransportConfig::Http {
+        http_url: http_url.to_owned(),
+        streamable_http: Some(true),
+        protocol_version: None,
+    });
     let config = BackendConfig {
+        transport: transport.unwrap_or_default(),
         oauth: Some(OAuthConfig {
             enabled: true,
             scopes: Vec::new(),
@@ -161,13 +169,28 @@ async fn a_token_with_auth_wait_reads_expired() {
     assert!(backend.needs_sign_in());
 }
 
+/// A server that only counts the connections it is offered: the network
+/// double for a read that must reach nothing.
+async fn counting_server() -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&hits);
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }
+    });
+    (base, hits)
+}
+
 // S3: the issuer resolution does the one load and one legacy check; reads
 // afterwards do none, and reach no network.
 #[tokio::test]
 async fn the_read_does_no_storage_io() {
     let dir = tempfile::tempdir().unwrap();
-    let (issuer, forms) = token_endpoint(None).await;
-    let backend = oauth_backend("quiet");
+    let (issuer, hits) = counting_server().await;
+    let backend = oauth_backend_at("quiet", Some(&issuer));
     let client =
         client(dir.path(), Some(&issuer)).with_sign_in_status(Arc::clone(&backend.sign_in_status));
     let storage = Arc::clone(&client.storage);
@@ -188,7 +211,11 @@ async fn the_read_does_no_storage_io() {
         after_resolution,
         "a read costs no I/O"
     );
-    assert!(forms.lock().unwrap().is_empty(), "a read reaches no server");
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        0,
+        "neither discovery nor the transport was reached"
+    );
 }
 
 // S4
@@ -297,8 +324,8 @@ async fn the_status_follows_refresh_delete_and_expiry() {
 trait AmbiguousIfClone<A> {
     fn probe() {}
 }
-impl<T: ?Sized> AmbiguousIfClone<()> for T {}
-impl<T: ?Sized + Clone> AmbiguousIfClone<u8> for T {}
+impl<T> AmbiguousIfClone<()> for T {}
+impl<T: Clone> AmbiguousIfClone<u8> for T {}
 
 const _: fn() = || {
     let _ = <super::sign_in::PendingGrant as AmbiguousIfClone<_>>::probe;
@@ -314,7 +341,7 @@ fn the_pending_grant_cannot_be_cloned() {
 fn the_pending_grant_secrets_are_zeroizing() {
     use zeroize::Zeroizing;
     fn wiped(_: &Zeroizing<String>) {}
-    fn wiped_opt(_: &Option<Zeroizing<String>>) {}
+    fn wiped_opt(_: Option<&Zeroizing<String>>) {}
     let grant = super::sign_in::PendingGrant {
         access_token: Zeroizing::new("a".into()),
         refresh_token: Some(Zeroizing::new("r".into())),
@@ -323,5 +350,5 @@ fn the_pending_grant_secrets_are_zeroizing() {
         scope: None,
     };
     wiped(&grant.access_token);
-    wiped_opt(&grant.refresh_token);
+    wiped_opt(grant.refresh_token.as_ref());
 }
