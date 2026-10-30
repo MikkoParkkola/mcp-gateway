@@ -274,7 +274,7 @@ impl LiveConfig {
     /// a config no view can refuse; a reload prepares a [`Generation`] first
     /// and calls [`Self::publish`].
     pub fn set(&self, config: Config) {
-        self.publish(Arc::new(Generation::of(config)));
+        self.publish(Arc::new(Generation::after(config, &self.generation())));
     }
 
     /// Publish a prepared generation in one swap.

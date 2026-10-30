@@ -465,3 +465,43 @@ fn each_generation_compiles_its_own_firewall_policy() {
         "the reload's own switch"
     );
 }
+
+/// ADR-029 (amended): a reload whose detector settings differ from the running
+/// detector keeps the previous generation's collusion view, never the
+/// startup's, so a pending parameter edit cannot drop a live `block`.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
+    use crate::security::firewall::CollusionAction;
+    let startup = super::Generation::of(Config::default());
+    assert_eq!(startup.collusion_view().action(), CollusionAction::Off);
+    let mut block = Config::default();
+    block.security.firewall.collusion.action = CollusionAction::Block;
+    let live = super::Generation::after(block, &startup);
+    assert_eq!(
+        live.collusion_view().action(),
+        CollusionAction::Block,
+        "premise: the running detector runs it, so it applies"
+    );
+    let mut held = Config::default();
+    held.security.firewall.collusion.action = CollusionAction::Observe;
+    held.security.firewall.collusion.window_secs += 1;
+    let next = super::Generation::after(held, &live);
+    assert_eq!(
+        next.collusion_view().action(),
+        CollusionAction::Block,
+        "a held edit keeps the previous view"
+    );
+}
+
+/// Until the relay gate judges with the generation's view (ADR-029's PR2), a
+/// collusion edit reports a restart: the line never claims a live change the
+/// gate does not apply.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_collusion_edit_reports_a_restart_until_the_relay_gate_reads_it_live() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    wanted.security.firewall.collusion.action = crate::security::firewall::CollusionAction::Block;
+    assert!(pending(&running, wanted).contains(&"security"));
+}

@@ -690,7 +690,7 @@ impl ReloadContext {
         self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
+        let generation = Arc::new(super::Generation::prepare(new_config, &self.live_config.generation()).map_err(|reason| {
             format!(
                 "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
                  configuration was published."

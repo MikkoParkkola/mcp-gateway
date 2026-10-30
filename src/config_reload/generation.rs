@@ -18,6 +18,16 @@ pub struct Generation {
     /// generation reads them, so one request never mixes two rule sets.
     #[cfg(feature = "firewall")]
     firewall: Arc<crate::security::firewall::FirewallPolicy>,
+    /// The relay detector this gateway runs, fixed at startup and carried
+    /// forward by every generation.
+    #[cfg(feature = "firewall")]
+    detector: crate::security::firewall::DetectorParams,
+    /// The collusion fields in effect under this generation (ADR-029, amended,
+    /// item 2): this config's when the detector runs it
+    /// ([`crate::security::firewall::DetectorParams::runs`]), else the
+    /// previous generation's, never the startup's.
+    #[cfg(feature = "firewall")]
+    collusion: Arc<crate::security::firewall::CollusionView>,
 }
 
 impl Generation {
@@ -28,21 +38,46 @@ impl Generation {
     ///
     /// A view that cannot be built from `config` (none in this slice; the
     /// key table and budgets join it later).
-    pub fn prepare(config: Config) -> Result<Self, String> {
+    pub fn prepare(config: Config, previous: &Self) -> Result<Self, String> {
         #[cfg(test)]
         if let Some(reason) = refuse_hook::take() {
             return Err(reason);
         }
-        Ok(Self::of(config))
+        Ok(Self::after(config, previous))
     }
 
-    /// The generation for a config that needs no checking: the startup seed,
-    /// and [`super::LiveConfig::set`] while no view can refuse.
+    /// The startup seed: its config builds the running detector.
     pub(super) fn of(config: Config) -> Self {
         Self {
             #[cfg(feature = "firewall")]
             firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile(
                 &config.security.firewall,
+            )),
+            #[cfg(feature = "firewall")]
+            detector: crate::security::firewall::DetectorParams::of(&config.security.firewall),
+            #[cfg(feature = "firewall")]
+            collusion: Arc::new(crate::security::firewall::CollusionView::compile(
+                &config.security.firewall.collusion,
+            )),
+            config: Arc::new(config),
+        }
+    }
+
+    /// The generation that follows `previous` for a config that needs no
+    /// checking ([`super::LiveConfig::set`] while no view can refuse, and
+    /// [`Self::prepare`] once it has).
+    #[cfg_attr(not(feature = "firewall"), expect(unused_variables))]
+    pub(super) fn after(config: Config, previous: &Self) -> Self {
+        Self {
+            #[cfg(feature = "firewall")]
+            firewall: Arc::new(crate::security::firewall::FirewallPolicy::compile(
+                &config.security.firewall,
+            )),
+            #[cfg(feature = "firewall")]
+            detector: previous.detector,
+            #[cfg(feature = "firewall")]
+            collusion: Arc::new(crate::security::firewall::CollusionView::compile(
+                &config.security.firewall.collusion,
             )),
             config: Arc::new(config),
         }
@@ -66,6 +101,20 @@ impl Generation {
     #[must_use]
     pub(crate) fn firewall_policy(&self) -> &crate::security::firewall::FirewallPolicy {
         &self.firewall
+    }
+
+    /// The collusion fields in effect under this generation.
+    #[cfg(feature = "firewall")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the relay gate once it judges under the witness's generation"
+        )
+    )]
+    #[must_use]
+    pub(crate) fn collusion_view(&self) -> &crate::security::firewall::CollusionView {
+        &self.collusion
     }
 
     /// `security.sanitize_input` as published.

@@ -62,7 +62,7 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 mod verdict;
-pub(crate) use policy::FirewallPolicy;
+pub(crate) use policy::{CollusionView, DetectorParams, FirewallPolicy};
 #[cfg(test)]
 use verdict::rule_matches;
 use verdict::{decide_firewall_action, first_matching_rule_action};
