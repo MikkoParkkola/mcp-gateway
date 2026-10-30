@@ -104,11 +104,11 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         ),
         (
             "    collusion:\n      action: observe\n      sources: [\"a:[\"]\n",
-            "collusion.sources[0]",
+            "collusion.sources[0] is not a valid glob",
         ),
         (
             "    collusion:\n      action: observe\n      non_egress: [\"a:[\"]\n",
-            "collusion.non_egress[0]",
+            "collusion.non_egress[0] is not a valid glob",
         ),
     ];
     for (firewall, field) in cases {
