@@ -31,30 +31,41 @@ pub(crate) const SLOWEST_FLOOR: u64 = 21;
 /// before, which the Overview's last-hour window merges.
 pub(crate) const LIVE_HALF: u64 = 2;
 
-/// The bin edges in ms: `EDGES[i] = 1.25^i`, the lower edge of bin `i + 1`.
-static EDGES: LazyLock<[f64; 63]> = LazyLock::new(|| {
+/// The bin edges in nanoseconds: `EDGES_NS[i] = 1.25^i ms`, the lower edge
+/// of bin `i + 1`. Compared with whole nanoseconds, which an `f64` holds
+/// exactly below 2^53 (about 104 days), so a send on an edge never rounds
+/// across it.
+static EDGES_NS: LazyLock<[f64; 63]> = LazyLock::new(|| {
     let mut edges = [0.0; 63];
     for (i, edge) in edges.iter_mut().enumerate() {
-        *edge = RATIO.powi(i32::try_from(i).unwrap_or(i32::MAX));
+        *edge = RATIO.powi(i32::try_from(i).unwrap_or(i32::MAX)) * 1_000_000.0;
     }
     edges
 });
 
 /// The bin a send of `elapsed` falls in.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "exact below 2^53 ns; any longer send is in the top bin either way"
+)]
 pub(crate) fn bin_of(elapsed: Duration) -> u8 {
-    let ms = elapsed.as_secs_f64() * 1_000.0;
-    // Edges at or below `ms`: 0 under 1 ms, 63 at the top edge and above.
-    u8::try_from(EDGES.partition_point(|edge| *edge <= ms)).unwrap_or(BINS - 1)
+    let ns = elapsed.as_nanos() as f64;
+    // Edges at or below `ns`: 0 under 1 ms, 63 at the top edge and above.
+    u8::try_from(EDGES_NS.partition_point(|edge| *edge <= ns)).unwrap_or(BINS - 1)
 }
 
 /// The value a bin reports, in ms: the geometric midpoint of an interior
 /// bin (within a factor of √1.25 of any sample in it), the edge of the two
 /// open bins.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // ≤ 1.25^62 ms
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "at most 1.25^62 ms, about 1.6 million"
+)]
 pub(crate) fn bin_ms(bin: u8) -> u64 {
     match bin {
         0 => 1,
-        b if b >= BINS - 1 => EDGES[62].ceil() as u64,
+        b if b >= BINS - 1 => (EDGES_NS[62] / 1_000_000.0).ceil() as u64,
         b => RATIO.powf(f64::from(b) - 0.5).round() as u64,
     }
 }
@@ -62,10 +73,11 @@ pub(crate) fn bin_ms(bin: u8) -> u64 {
 /// The p95's 0-based rank among `n` samples: the failsafe tracker's rule
 /// (`failsafe::health::percentile_index`), so a series p95 and the live p95
 /// mean the same thing.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    reason = "a sample count; the rank is clamped to n - 1"
 )]
 fn p95_rank(n: u64) -> u64 {
     ((n as f64 * 0.95).floor() as u64).min(n.saturating_sub(1))

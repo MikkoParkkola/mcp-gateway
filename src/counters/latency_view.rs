@@ -25,7 +25,10 @@ pub(crate) struct LatPoint {
     pub late: u32,
 }
 
-#[allow(clippy::trivially_copy_pass_by_ref)] // serde's skip predicate takes a reference
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip predicate takes a reference"
+)]
 const fn is_zero(v: &u32) -> bool {
     *v == 0
 }
