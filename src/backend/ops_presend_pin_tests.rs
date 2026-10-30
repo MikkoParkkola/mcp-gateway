@@ -25,21 +25,24 @@ fn pre_send_region() -> &'static str {
 #[test]
 fn every_pre_send_exit_of_request_attempted_is_marked() {
     let region = pre_send_region();
-    let unmarked: Vec<&str> = region
+    // Comments dropped. Each `?` exit in the region closes a call (`)?`), and
+    // each must be one `presend(..)` wraps: a new exit without the mark makes
+    // the counts differ. (`{e:?}` in a format string is `:?`, not `)?`.)
+    let code: String = region
         .lines()
-        .map(str::trim)
-        .filter(|line| !line.starts_with("//"))
-        .filter(|line| line.contains("?;") || line.ends_with('?'))
-        .filter(|line| !line.contains("presend("))
-        .collect();
-    assert!(
-        unmarked.is_empty(),
-        "pre-send exits without the mark: {unmarked:?}"
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let exits = code.matches(")?").count();
+    let marked_exits = code.matches("presend(").count();
+    assert_eq!(
+        exits, marked_exits,
+        "a pre-send `?` exit without the mark:\n{code}"
     );
-    let marked = region.matches("presend(").count();
-    assert!(
-        marked >= 8,
-        "premise: the eight reviewed pre-send steps are marked ({marked})"
+    // The seven reviewed `?` steps; the withheld call's return is the eighth.
+    assert_eq!(
+        marked_exits, 7,
+        "premise: the seven reviewed pre-send steps are marked"
     );
     assert!(
         region.contains("return Err(refused_before_send(refusal));"),
@@ -74,7 +77,11 @@ fn every_transport_call_is_a_counted_send() {
 /// is the never-sent list. Pinned to the reviewed members.
 #[test]
 fn the_never_sent_list_is_the_reviewed_one() {
-    const REVIEWED: [&str; 11] = [
+    // Each reviewed as never sent where it is constructed. AmbiguousBackend:
+    // only in meta_mcp/invoke/dispatch.rs (a name that is both a backend and
+    // the capability, refused while routing, before any send), from #4414.
+    const REVIEWED: [&str; 12] = [
+        "AmbiguousBackend",
         "AuthorizationCancelled",
         "AuthorizationIncomplete",
         "AuthorizationPending",
