@@ -236,18 +236,18 @@ async fn caped11_a_delete_records_the_change_never_the_content() {
     fx.assert_no_content();
 }
 
-/// CAPED.11: when the audit log refuses the record (fail-closed), the save's
-/// answer is withheld: a 503 that names no saved result.
+/// CAPED.11: when the audit log refuses the editor's record (fail-closed),
+/// the handler withholds the save's answer itself. Only the editor's append
+/// fails: the log's one-shot fault, scoped to this log instance, takes the
+/// next append, which is the handler's; the UI-write layer's own `admin_ui`
+/// record after it is written. With every append failing, that layer's 503
+/// would hide whether the handler withholds at all.
 #[tokio::test]
 async fn caped11_a_refused_record_withholds_the_answer() {
     let before = capability(CANARY_BEFORE);
     let after = capability(CANARY_AFTER);
     let fx = fixture(&before, AuditFailurePolicy::FailClosed).await;
-    // Fail the next append without priming it: the log is still healthy when
-    // the request is admitted, so the save commits and only its record is
-    // refused. A primed, degraded log would refuse the request before the
-    // handler, which says nothing about the record.
-    fx.log.set_append_failure_for_test(true);
+    fx.log.fail_next_append_for_test();
     let base = sha256_hex(before.as_bytes());
     let (status, body) = fx
         .send(request("PUT", "/ui/api/capabilities/kept", &base, &after))
@@ -255,8 +255,24 @@ async fn caped11_a_refused_record_withholds_the_answer() {
     assert_eq!(
         std::fs::read_to_string(&fx.file).expect("the file"),
         after,
-        "the handler ran and the save committed before the record was refused"
+        "the handler ran and the save committed before its record was refused"
     );
+    // 1. The editor's record was refused.
+    assert!(
+        fx.edits().is_empty(),
+        "the editor's record was written: {}",
+        fx.raw()
+    );
+    // 2. The layer's record was written, with the withheld status.
+    let layer: Vec<Value> = fx
+        .raw()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|e| e["event"] == "admin_action" && e["surface"] == "admin_ui")
+        .collect();
+    assert_eq!(layer.len(), 1, "one layer record: {}", fx.raw());
+    assert_eq!(layer[0]["http_status"], 503, "{}", layer[0]);
+    // 3. The answer is withheld: a 503 that names no saved result.
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     let answer: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     for key in ["status", "name", "sha256"] {
@@ -266,5 +282,4 @@ async fn caped11_a_refused_record_withholds_the_answer() {
         );
     }
     assert!(!body.contains(CANARY_AFTER), "{body}");
-    assert!(fx.edits().is_empty(), "no record was written: {}", fx.raw());
 }
