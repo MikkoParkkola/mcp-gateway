@@ -69,6 +69,12 @@ fn lat4_fixed_clock_two_buckets() {
 
 /// Row 4: on interior bins the reported p95 is within √1.25 of the exact one.
 #[test]
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a test generator's uniform floats and small counts"
+)]
 fn interior_p95_within_root_ratio() {
     let bound = RATIO.sqrt();
     // A fixed LCG: deterministic, no new dependency.
@@ -102,6 +108,11 @@ fn interior_p95_within_root_ratio() {
 
 /// Row 5: the open bins report their edges.
 #[test]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "1.25^62 ms fits a u64"
+)]
 fn open_bins_report_their_edge() {
     assert_eq!(bin_ms(0), 1);
     assert_eq!(bin_ms(BINS - 1), RATIO.powi(62).ceil() as u64);

@@ -11,7 +11,7 @@ use crate::counters::{Call, CounterStore, End, Label, Tally};
 
 const T0: u64 = 1_800 * 1_000_000;
 
-fn call<'a>(server: &'a str) -> Call<'a> {
+fn call(server: &str) -> Call<'_> {
     Call {
         caller: "key:a",
         server: Label::Known(server),

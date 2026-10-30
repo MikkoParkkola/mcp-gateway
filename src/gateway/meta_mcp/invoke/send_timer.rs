@@ -107,3 +107,46 @@ pub(crate) mod seam {
         INJECTED.with(|i| i.set(None));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{SendTimer, seam};
+    use crate::counters::End;
+    use crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope;
+
+    /// Test plan row 28: a finished timer notes once; its drop notes nothing
+    /// more. A timer dropped unfinished notes Cancelled.
+    #[tokio::test]
+    async fn timer_notes_at_most_once() {
+        seam::inject(Duration::from_millis(7));
+        let ((), notes) = with_dispatch_scope(async {
+            SendTimer::start_if(true).finish(End::Answered);
+        })
+        .await;
+        assert_eq!(
+            notes.backend_sample(),
+            Some((Duration::from_millis(7), End::Answered))
+        );
+        let ((), notes) = with_dispatch_scope(async {
+            drop(SendTimer::start());
+        })
+        .await;
+        assert_eq!(
+            notes.backend_sample(),
+            Some((Duration::from_millis(7), End::Cancelled))
+        );
+        let ((), notes) = with_dispatch_scope(async {
+            SendTimer::start_if(false).finish(End::Answered);
+            SendTimer::start().discard();
+        })
+        .await;
+        seam::clear();
+        assert_eq!(
+            notes.backend_sample(),
+            None,
+            "inert and discarded timers note nothing"
+        );
+    }
+}

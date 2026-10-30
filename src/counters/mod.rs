@@ -446,6 +446,7 @@ impl CounterStore {
     }
 
     /// Count `call`, finished at unix second `at`, on `zone`'s days.
+    #[cfg(test)]
     pub(crate) fn record<Tz: TimeZone>(&self, call: &Call<'_>, at: u64, zone: &Tz) {
         self.record_timed(call, at, zone, None);
     }

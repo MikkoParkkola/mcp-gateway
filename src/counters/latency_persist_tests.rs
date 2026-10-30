@@ -11,7 +11,7 @@ use crate::counters::{Call, CounterStore, End, Label, Tally};
 
 const T0: u64 = 1_800 * 1_000_000;
 
-fn call<'a>(server: &'a str) -> Call<'a> {
+fn call(server: &str) -> Call<'_> {
     Call {
         caller: "key:a",
         server: Label::Known(server),
@@ -83,17 +83,17 @@ fn pre_latency_file_loads_empty() {
 /// `deny_unknown_fields`).
 #[test]
 fn latency_file_keeps_format_one() {
-    let store = CounterStore::new(T0);
-    timed(&store, "alpha", T0 + 10, 100);
-    let bytes = store.encode("v1", T0 + 20);
-    assert_eq!(json(&bytes)["version"], 1);
-    assert!(json(&bytes).get("latency").is_some());
     #[derive(serde::Deserialize)]
     #[allow(dead_code)] // only parsed: the reader of a binary without the field
     struct Fieldless {
         version: u32,
         since: u64,
     }
+    let store = CounterStore::new(T0);
+    timed(&store, "alpha", T0 + 10, 100);
+    let bytes = store.encode("v1", T0 + 20);
+    assert_eq!(json(&bytes)["version"], 1);
+    assert!(json(&bytes).get("latency").is_some());
     let old: Fieldless = serde_json::from_slice(&bytes).expect("an older reader parses it");
     assert_eq!(old.version, 1);
 }
