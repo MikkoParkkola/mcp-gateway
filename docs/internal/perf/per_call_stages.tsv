@@ -242,8 +242,6 @@ src/gateway/meta_mcp/invoke/gate.rs	capability_rule_refusal	-	on-path, untimed: 
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
 src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	-	on-path, untimed: signing-enabled gateway_invoke and task replay only; the harness configures neither
 src/gateway/meta_mcp/invoke/gate.rs	count_meta_denial	http_invoke_tiny	on the HTTP gateway_invoke path (counted before the transparency-log check)
-src/gateway/meta_mcp/invoke/gate.rs	fill_marks	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill marks)
-src/gateway/meta_mcp/invoke/gate.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)
 src/gateway/meta_mcp/invoke/gate.rs	gate_answer	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
 src/gateway/meta_mcp/invoke/gate.rs	gate_lens	http_invoke_tiny	inside named_gate_answer on the HTTP gateway_invoke path; the timed tool is not withheld, so it returns the catalogue lens
 src/gateway/meta_mcp/invoke/gate.rs	gated	http_invoke_tiny	on the HTTP gateway_invoke path (the MIK-8361 gate)
@@ -259,6 +257,8 @@ src/gateway/meta_mcp/invoke/gate.rs	withheld_gate	http_invoke_tiny	on the HTTP g
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	-	on-path, untimed: signing-enabled gateway_invoke only; the harness does not configure signing
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	-	on-path, untimed: a withheld name only (session profile, invocation policy); the timed rows withhold nothing
 src/gateway/meta_mcp/invoke/gate.rs	withheld_for	-	on-path, untimed: a withheld name only; the timed rows withhold nothing
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill marks)
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	http_invoke_tiny	on the HTTP gateway_invoke path (the gate's fill check)
 src/gateway/meta_mcp/invoke/gateway_writes.rs	built_task_envelope	-	on-path, untimed: task-envelope answers under relay detection only; the timed rows carry no task member
 src/gateway/meta_mcp/invoke/gateway_writes.rs	claims	-	on-path, untimed: only when a stored task is delivered (tasks/get, a repeat, a notification); a plain timed invoke stores nothing
 src/gateway/meta_mcp/invoke/gateway_writes.rs	decode_entry	-	on-path, untimed: only when a stored write record is read back (task rows, admission entries); a plain timed invoke keeps its record in memory
