@@ -141,7 +141,6 @@ pub(crate) enum RootReason {
     WrongType,
     RemoteBackend,
     UnknownBackend,
-    AmbiguousBackend,
     CapabilityNotCheckable,
     InjectedPathArgument,
     DanglingLink,

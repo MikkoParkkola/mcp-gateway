@@ -184,9 +184,11 @@ fn r23g_capability_calls_are_not_checkable() {
 }
 
 /// R23f: a capability backend attached at runtime under a config backend's
-/// name is `ambiguous_backend`; control: before it is attached, allowed.
+/// name leaves the check judging the config backend (design d2): an inside
+/// call stays allowed and an outside call is still outside. The clash itself
+/// is refused at resolve, `ambiguous_backend` (R43).
 #[test]
-fn r23f_runtime_name_clash_is_ambiguous() {
+fn r23f_runtime_name_clash_judges_the_config_backend() {
     let fx = fixture();
     let inside = fx.path("safe/f");
     assert_eq!(
@@ -195,7 +197,10 @@ fn r23f_runtime_name_clash_is_ambiguous() {
     );
     *fx.slot.write() = Some(capabilities("fs"));
     let got = call(&fx.fw, "fs", &inside, fx.sender().as_deref());
-    assert_eq!(got, refused(RootReason::AmbiguousBackend));
+    assert_eq!(got, Seen::Allowed);
+    let outside = fx.path("outside/f");
+    let got = call(&fx.fw, "fs", &outside, fx.sender().as_deref());
+    assert_eq!(got, Seen::Outside(FirewallAction::Block));
 }
 
 /// R42: the check classifies the instance that sends, never a fresh lookup.

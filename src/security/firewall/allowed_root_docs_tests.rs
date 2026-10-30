@@ -82,7 +82,7 @@ fn d2_fragments_exist_with_their_front_matter() {
 }
 
 /// Every refusal reason, as the audit row and the wire spell it.
-const REASONS: [RootReason; 17] = [
+const REASONS: [RootReason; 16] = [
     RootReason::NotAbsolute,
     RootReason::NotNormalised,
     RootReason::DevicePath,
@@ -90,7 +90,6 @@ const REASONS: [RootReason; 17] = [
     RootReason::WrongType,
     RootReason::RemoteBackend,
     RootReason::UnknownBackend,
-    RootReason::AmbiguousBackend,
     RootReason::CapabilityNotCheckable,
     RootReason::InjectedPathArgument,
     RootReason::DanglingLink,

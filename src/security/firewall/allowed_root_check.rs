@@ -124,10 +124,12 @@ fn covering<'a>(firewall: &'a super::super::Firewall, target: RuleTarget<'a>) ->
         .collect()
 }
 
-/// Where the call is sent, read live: a capability backend of that name
-/// cannot be checked (and is ambiguous beside a config backend of the same
-/// name); a config backend must be a local process. The sending instance,
-/// when the caller holds it, is classified, never a fresh lookup.
+/// Where the call is sent, read live: a capability backend alone under that
+/// name cannot be checked; a config backend must be a local process. The
+/// sending instance, when the caller holds it, is classified, never a fresh
+/// lookup. A name that is both is judged as the config backend: resolve
+/// refuses the clash on every route that could reach the capability, so
+/// this check never builds a second `ambiguous_backend` (design d2).
 fn classify(
     firewall: &super::super::Firewall,
     server: &str,
@@ -142,12 +144,8 @@ fn classify(
         .capabilities
         .as_ref()
         .is_some_and(|slot| slot.read().as_ref().is_some_and(|caps| caps.name == server));
-    if capability {
-        return Err(if backends.get(server).is_some() {
-            RootReason::AmbiguousBackend
-        } else {
-            RootReason::CapabilityNotCheckable
-        });
+    if capability && backends.get(server).is_none() {
+        return Err(RootReason::CapabilityNotCheckable);
     }
     let live;
     let instance = if let Some(instance) = sending {

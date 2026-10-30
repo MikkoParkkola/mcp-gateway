@@ -89,7 +89,6 @@ Each value must be an absolute native path with no `.` or `..` segment. The gate
 | `wrong_type` | A declared argument is not a string, or not an array of strings. |
 | `remote_backend` | The backend is reached over HTTP, WebSocket or A2A: its filesystem is not the gateway's. |
 | `unknown_backend` | The backend is not registered. |
-| `ambiguous_backend` | The name is both a configured backend and the capability backend. |
 | `capability_not_checkable` | A capability call: its argument template rewrites the path after any check. Confine CLI capabilities with `capabilities.files`. |
 | `injected_path_argument` | A secret rule matching the tool owns a declared path argument, or its top-level key. |
 | `dangling_link` | A link on the path points at nothing. |
