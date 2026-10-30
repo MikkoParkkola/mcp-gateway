@@ -154,6 +154,22 @@ fn the_last_value_inside_the_bound_still_answers() {
     assert_eq!(outcome, Scrubbed::Redacted, "{text}");
 }
 
+/// T1.42: a value echoed percent-encoded, inside a URI or in plain text, is
+/// redacted like the value itself.
+#[test]
+fn a_percent_encoded_echo_is_redacted() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "tok en/\u{fc}?=1");
+    for echo in [
+        "see https://x.invalid/cb?k=tok+en%2F%C3%BC%3F%3D1&n=2",
+        "the key was tok+en%2F%C3%BC%3F%3D1",
+    ] {
+        let (outcome, text) = scrubbed(&needles, echo);
+        assert_eq!(outcome, Scrubbed::Redacted, "{echo}");
+        assert!(!text.contains("tok+en"), "{text}");
+    }
+}
+
 /// DELTA-2: overlapping needles leave no fragment of either.
 #[test]
 fn overlapping_needles_leave_nothing() {

@@ -57,6 +57,9 @@ pub(crate) fn redaction_grace(config: &crate::config::Config) -> Duration {
 /// (NTP, a resumed laptop, a manual set) must not retire live values.
 struct Held {
     value: String,
+    /// The value percent-encoded, when that differs: the form a backend
+    /// quoting it inside a URL sends back.
+    encoded: Option<String>,
     last_sent: tokio::time::Instant,
 }
 
@@ -128,8 +131,10 @@ impl NeedleSet {
         }
         // Room again after retirement: answers flow once more.
         self.overflowed.store(false, Ordering::SeqCst);
+        let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
         values.push(Held {
             value: value.to_owned(),
+            encoded: (encoded != value).then_some(encoded),
             last_sent: now,
         });
     }
@@ -162,7 +167,8 @@ impl NeedleSet {
             .read()
             .iter()
             .filter(|held| !self.retired(held, now))
-            .map(|held| held.value.clone())
+            .flat_map(|held| std::iter::once(&held.value).chain(held.encoded.as_ref()))
+            .cloned()
             .collect()
     }
 }
