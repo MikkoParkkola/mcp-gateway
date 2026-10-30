@@ -86,6 +86,7 @@ pub(super) const S3_RESOLVE_ALLOW: &[&str] = &[
     "self.scoped",                    // invoke.rs:218
     "self.admit_after_credential",    // invoke.rs:242
     "self.lift_deferred",             // invoke.rs:245
+    "self.refuse_name_clash",         // resolve.rs: a backend and the capability share the name
     "nonce_settle::ask_if_transient", // invoke.rs:232
     "rw::dispatch_effect",            // invoke.rs:238
     "TracedOutcome::Live",            // invoke.rs:227 the Break exit; listed from the live body
