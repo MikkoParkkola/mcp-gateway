@@ -55,10 +55,11 @@ fn send(
     backend: &Backend,
     params: Value,
     headers: Vec<(String, String)>,
-) -> crate::Result<super::Outbound> {
-    Ok(backend
+) -> crate::Result<(Option<Value>, Vec<(String, String)>)> {
+    let (params, headers, _) = backend
         .prepare_secrets("tools/call", Some(params))?
-        .apply(headers))
+        .apply(headers);
+    Ok((params, headers))
 }
 
 #[test]

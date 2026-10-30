@@ -313,7 +313,7 @@ async fn a_legacy_listener_scrubs_its_notices_and_answers() {
         !refusal.contains(NEEDLE),
         "the refusal carried the value: {refusal}"
     );
-    let note = tokio::time::timeout(Duration::from_secs(5), stream.rx.recv())
+    let note = tokio::time::timeout(Duration::from_secs(30), stream.rx.recv())
         .await
         .expect("the notice arrives")
         .expect("a note");

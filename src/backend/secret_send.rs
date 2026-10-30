@@ -26,8 +26,9 @@ use crate::secret_injection::{
 use crate::secrets::SecretResolver;
 use crate::{Error, Result};
 
-/// What a call is sent with: its params, and its per-call headers.
-pub(super) type Outbound = (Option<Value>, Vec<(String, String)>);
+/// What a call is sent with: its params, its per-call headers, and whether a
+/// rule injected a value (the send then needs a transport that redacts).
+pub(super) type Outbound = (Option<Value>, Vec<(String, String)>, bool);
 
 /// A call's params with the keys its rules own dropped, and the resolved
 /// values held back until the mirror has read the params.
@@ -43,11 +44,6 @@ pub(super) struct Prepared {
 }
 
 impl Prepared {
-    /// Whether the call carries a value a rule injected.
-    pub(super) fn injects(&self) -> bool {
-        self.injected.is_some()
-    }
-
     /// The params and headers to send: the resolved values added, each
     /// header replacing any of the same name, compared case-insensitively.
     pub(super) fn apply(self, mut headers: Vec<(String, String)>) -> Outbound {
@@ -58,14 +54,14 @@ impl Prepared {
                 .any(|owned| held.eq_ignore_ascii_case(owned))
         });
         let Some((arguments, injected)) = self.injected else {
-            return (self.params, headers);
+            return (self.params, headers, false);
         };
         let mut params = self.params;
         if let Some(Value::Object(map)) = params.as_mut() {
             map.insert("arguments".to_owned(), arguments);
         }
         headers.extend(injected);
-        (params, headers)
+        (params, headers, true)
     }
 }
 
@@ -88,6 +84,31 @@ impl Backend {
         if let Some(needles) = self.needles.get() {
             transport.attach_needles(Arc::clone(needles));
         }
+    }
+
+    /// No injected value goes to a transport that cannot scrub its echo
+    /// (DELTA-10): a construction site that skipped the attach refuses here
+    /// rather than sending.
+    pub(super) fn refuse_unredacted(
+        &self,
+        injects: bool,
+        transport: &dyn crate::transport::Transport,
+    ) -> Result<()> {
+        if injects && !transport.redacts_injected_values() {
+            tracing::error!(
+                backend = %self.name,
+                "a call carrying an injected secret was refused: its transport holds no \
+                 redaction set"
+            );
+            return Err(Error::JsonRpc {
+                code: -32603,
+                message: "the gateway refused to send an injected credential over a transport \
+                          that cannot redact it"
+                    .to_owned(),
+                data: None,
+            });
+        }
+        Ok(())
     }
 
     /// Adds every value this backend's rules resolve to now, so a value is

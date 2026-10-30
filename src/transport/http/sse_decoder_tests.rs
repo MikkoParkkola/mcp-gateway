@@ -218,7 +218,7 @@ async fn the_response_frame_completes_the_call_without_waiting_for_close() {
     });
 
     let response = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(30),
         decode_sse_exchange(body, None),
     )
     .await

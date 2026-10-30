@@ -480,9 +480,7 @@ impl HttpTransport {
         }
     }
 
-    /// [`Self::read_answer`] before the backend's injected values are removed:
-    /// every JSON, SSE and refusal body is parsed here, and only the wrapper
-    /// hands the result on.
+    /// [`Self::read_answer`] before the scrub: every body is parsed here.
     async fn read_answer_unscrubbed(
         &self,
         request: &JsonRpcRequest,
@@ -597,21 +595,11 @@ impl HttpTransport {
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
+            use super::sse_decoder::decode_sse_exchange;
+            let needles = self.needles.get().map(AsRef::as_ref);
             match self.body_budget.get() {
-                Some(budget) => {
-                    super::sse_decoder::decode_sse_exchange(
-                        budget.metered(stream),
-                        self.needles.get().map(AsRef::as_ref),
-                    )
-                    .await
-                }
-                None => {
-                    super::sse_decoder::decode_sse_exchange(
-                        stream,
-                        self.needles.get().map(AsRef::as_ref),
-                    )
-                    .await
-                }
+                Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,
+                None => decode_sse_exchange(stream, needles).await,
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await

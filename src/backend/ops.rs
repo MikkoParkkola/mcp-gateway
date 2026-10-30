@@ -149,58 +149,6 @@ impl Backend {
         headers
     }
 
-    /// The params and headers a call is sent with: this backend's `secrets:`
-    /// rules applied, and the arguments its tool's schema declares mirrored.
-    ///
-    /// The keys the rules own are dropped before the mirror reads the
-    /// arguments, and the values are added after it, so neither a caller's
-    /// value for such a key nor the secret is mirrored into a header.
-    /// Synchronous, so nothing it builds is held in the send's future.
-    ///
-    /// SEP-2243 (MIK-7214.HEADER.5): the mirror sits here, not in each
-    /// dispatcher, because every tools/call — the MCP provider, meta-MCP
-    /// invoke, the router's direct backend route — funnels through
-    /// [`Self::request_attempted`], so a per-caller mirror would leave the
-    /// siblings unmirrored.
-    fn outbound(
-        &self,
-        method: &str,
-        params: Option<Value>,
-        extra_headers: &[(String, String)],
-        identity_key: Option<&str>,
-    ) -> Result<(super::secret_send::Outbound, bool)> {
-        let secrets = self.prepare_secrets(method, params)?;
-        let injects = secrets.injects();
-        let headers =
-            self.param_header_set(method, secrets.params.as_ref(), extra_headers, identity_key);
-        Ok((secrets.apply(headers), injects))
-    }
-
-    /// No injected value goes to a transport that cannot scrub its echo
-    /// (DELTA-10): a construction site that skipped the attach
-    /// refuses here rather than sending.
-    fn refuse_unredacted(
-        &self,
-        injects: bool,
-        transport: &dyn crate::transport::Transport,
-    ) -> Result<()> {
-        if injects && !transport.redacts_injected_values() {
-            tracing::error!(
-                backend = %self.name,
-                "a call carrying an injected secret was refused: its transport holds no \
-                 redaction set"
-            );
-            return Err(Error::JsonRpc {
-                code: -32603,
-                message: "the gateway refused to send an injected credential over a transport \
-                          that cannot redact it"
-                    .to_owned(),
-                data: None,
-            });
-        }
-        Ok(())
-    }
-
     /// This request's resend decision: the permission the transport carries,
     /// and the retry policy this layer may resend under.
     ///
@@ -378,7 +326,7 @@ impl Backend {
         // does not resolve holds no permit. The caller's own credential is taken first, before the
         // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
-        let ((params, extra_headers), injects) =
+        let (params, extra_headers, injects) =
             self.outbound(method, params, &credential.headers, identity_key)?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
@@ -824,6 +772,9 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
     }
     Some(params)
 }
+
+#[path = "ops_secret_outbound.rs"]
+mod secret_outbound;
 
 #[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
