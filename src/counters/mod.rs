@@ -35,8 +35,16 @@ mod sums;
 mod view;
 
 pub(crate) use latency::End;
+#[cfg(test)]
+pub(crate) use latency_view::LatPoint;
 #[cfg(feature = "webui")]
 pub(crate) use latency_view::ServerLatency;
+
+/// The value a series reports for a send of `elapsed`: its bin's midpoint.
+#[cfg(test)]
+pub(crate) fn latency_bin_ms(elapsed: std::time::Duration) -> u64 {
+    latency::bin_ms(latency::bin_of(elapsed))
+}
 pub(crate) use ring::Series;
 // Named only by the web UI's routes; the module's own tests use it in place.
 #[cfg(feature = "webui")]

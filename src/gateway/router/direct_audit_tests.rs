@@ -34,6 +34,7 @@ mod delivery;
 mod delivery_who;
 mod empty_grant;
 mod late_refusals;
+mod latency;
 mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;

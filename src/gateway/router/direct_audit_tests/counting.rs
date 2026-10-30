@@ -8,7 +8,7 @@ use super::*;
 use crate::counters::{CounterStore, Dim, Filter, Metric, Query, Window};
 
 /// A store attached to `fx`'s meta layer, as the gateway attaches its own.
-fn attach(fx: &Fixture) -> Arc<CounterStore> {
+pub(super) fn attach(fx: &Fixture) -> Arc<CounterStore> {
     let store = Arc::new(CounterStore::new(
         crate::clock::unix_secs().expect("a readable clock"),
     ));
@@ -36,7 +36,7 @@ fn totals(store: &CounterStore) -> [u64; 5] {
     Metric::ALL.map(|metric| count(store, metric, Filter::All))
 }
 
-fn meta_invoke(server: &str, tool: &str, args: &Value) -> String {
+pub(super) fn meta_invoke(server: &str, tool: &str, args: &Value) -> String {
     json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
            "params": {"name": "gateway_invoke",
                       "arguments": {"server": server, "tool": tool, "arguments": args}}})
@@ -45,7 +45,7 @@ fn meta_invoke(server: &str, tool: &str, args: &Value) -> String {
 
 /// A keyed modern `gateway_invoke` of `alpha`/`t` as key `k`: re-issued, the
 /// admission lease replays it.
-async fn keyed_meta_invoke(fx: &Fixture, id: u32) -> StatusCode {
+pub(super) async fn keyed_meta_invoke(fx: &Fixture, id: u32) -> StatusCode {
     let body = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
         "params": {"name": "gateway_invoke",
                    "arguments": {"server": "alpha", "tool": "t", "arguments": {"q": 1}},
