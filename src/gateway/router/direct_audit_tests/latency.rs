@@ -31,8 +31,8 @@ fn one_slot(store: &CounterStore, server: Option<&str>) -> ((u32, u32, u32), Opt
     ((point.calls, point.failed, point.timed_out), point.v)
 }
 
-fn sent_bin_ms() -> Option<u64> {
-    Some(crate::counters::latency_bin_ms(SEND))
+fn sent_bin_ms() -> u64 {
+    crate::counters::latency_bin_ms(SEND)
 }
 
 /// Row 19: a meta call records one sample, on its server and on global,
@@ -55,8 +55,11 @@ async fn meta_call_records_one_sample() {
     .await;
     seam::clear();
     assert_eq!(status, StatusCode::OK, "{answer}");
-    assert_eq!(one_slot(&store, Some("alpha")), ((1, 0, 0), sent_bin_ms()));
-    assert_eq!(one_slot(&store, None), ((1, 0, 0), sent_bin_ms()));
+    assert_eq!(
+        one_slot(&store, Some("alpha")),
+        ((1, 0, 0), Some(sent_bin_ms()))
+    );
+    assert_eq!(one_slot(&store, None), ((1, 0, 0), Some(sent_bin_ms())));
 }
 
 /// Row 20: a direct call records one sample.
@@ -68,7 +71,10 @@ async fn direct_call_records_one_sample() {
     let (status, body) = post(&fx, "alpha", &tools_call("t"), &Caller::Anonymous).await;
     seam::clear();
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(one_slot(&store, Some("alpha")), ((1, 0, 0), sent_bin_ms()));
+    assert_eq!(
+        one_slot(&store, Some("alpha")),
+        ((1, 0, 0), Some(sent_bin_ms()))
+    );
 }
 
 /// Row 23: a call the gateway refused before any send is counted and never
