@@ -42,6 +42,59 @@ pub(super) async fn mint_held(
     }
 }
 
+/// When a minted credential stops working. A non-positive `expires_at` is a
+/// strategy that published none; a synthetic one is the issuer's silence.
+pub(super) fn expiry_of(
+    cred: &crate::identity_propagation::PropagatedCredential,
+) -> crate::identity_propagation::send_check::Expiry {
+    use crate::identity_propagation::send_check::Expiry;
+    match (cred.expires_at, cred.expiry_synthetic) {
+        (at, _) if at <= 0 => Expiry::Unpublished,
+        (at, true) => Expiry::AtSynthetic(at),
+        (at, false) => Expiry::At(at),
+    }
+}
+
+/// The check every send of a minted credential runs first. A managed one is
+/// the custody recheck of its lease against the vault installed NOW (read at
+/// each send, so a replaced or removed install refuses); any other is its
+/// expiry. The registry is held, never the gateway, so the check outlives
+/// nothing it should not.
+pub(super) fn send_check_for(
+    accounts: &Arc<crate::identity_propagation::AccountStrategyRegistry>,
+    (descriptor_id, managed): (
+        Option<&str>,
+        Option<&crate::personal_accounts::ManagedLease>,
+    ),
+    (expiry, headers): (
+        crate::identity_propagation::send_check::Expiry,
+        &[(String, String)],
+    ),
+) -> crate::transport::SendCheck {
+    use crate::transport::Refusal;
+    let Some(lease) = managed else {
+        return crate::identity_propagation::send_check::expiry_check(
+            expiry,
+            headers,
+            crate::identity_propagation::send_check::unix_now,
+        );
+    };
+    let (lease, accounts, id) = (
+        lease.clone(),
+        Arc::clone(accounts),
+        descriptor_id.map(str::to_owned),
+    );
+    Arc::new(move || {
+        let (lease, accounts, id) = (lease.clone(), Arc::clone(&accounts), id.clone());
+        Box::pin(async move {
+            let Some(vault) = accounts.managed_vault(id.as_deref()) else {
+                return Err(Refusal::Definitive);
+            };
+            lease.recheck_send(&vault).await
+        })
+    })
+}
+
 /// What `server` mints against: the backend id, and the audience and token
 /// exchange its identity-propagation config names.
 pub(super) fn descriptor_for(
