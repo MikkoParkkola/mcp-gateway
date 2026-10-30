@@ -593,3 +593,55 @@ async fn a_stdio_backend_echo_is_redacted() {
         "the stdio echo was dropped, not redacted: {body}"
     );
 }
+
+/// A WebSocket backend that echoes the injected secret: the transport scrubs
+/// each frame it reads, and the client's answer holds the marker, not the
+/// secret (T1.10).
+#[tokio::test]
+async fn a_websocket_backend_echo_is_redacted() {
+    use crate::transport::websocket_test_server::{Behaviour, WsPeer};
+    let peer = WsPeer::start(Behaviour::Normal).await;
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(json!({
+        "name": "echo-key", "value": SECRET, "inject_key": "api_key"
+    }))
+    .expect("rule parses");
+    let backend = Arc::new(Backend::new(
+        "echoes",
+        BackendConfig {
+            enabled: true,
+            transport: TransportConfig::WebSocket {
+                ws_url: peer.url.clone(),
+                protocol_version: None,
+            },
+            secrets: vec![rule],
+            timeout: Duration::from_secs(10),
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(30),
+    ));
+    let (state, _store) = test_router_app_state_with_backend(backend).await;
+    let router = create_router(state);
+    let body = post(
+        &router,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "echoes", "tool": "echo", "arguments": {"q": "hi"}}
+        }}),
+    )
+    .await;
+    let text = body.to_string();
+    assert_eq!(
+        peer.seen.calls.lock().len(),
+        1,
+        "premise: the peer was called: {body}"
+    );
+    assert!(
+        !text.contains(SECRET),
+        "the WebSocket echo reached the client: {body}"
+    );
+    assert!(
+        text.contains(MARKER),
+        "the WebSocket echo was dropped, not redacted: {body}"
+    );
+}
