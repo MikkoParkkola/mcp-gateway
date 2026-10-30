@@ -4,6 +4,7 @@
 //! that file from growing.
 
 use std::sync::Arc;
+#[cfg(any(test, feature = "webui"))]
 use std::sync::atomic::Ordering;
 
 use tracing::info;
