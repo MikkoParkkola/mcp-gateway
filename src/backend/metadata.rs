@@ -394,15 +394,10 @@ impl Backend {
                             let drained = run_bounded(&entry, &self.name, bound, async {
                                 // A cold fill on the dispatch path has sent no tools/call
                                 // yet, so a failed start is a pre-send refusal (MIK-7979).
-                                // The start's handshake names this backend too.
-                                let transport = crate::transport::notify_ingress::in_backend(
-                                    Arc::clone(&self.notify_origin),
-                                    self.start_lent(&key, &entry, loan.as_ref()),
-                                )
-                                .await
-                                .map_err(|e| {
-                                    super::lifecycle::pre_send_start_error(&self.name, e)
-                                })?;
+                                let transport =
+                                    self.start_lent(&key, &entry, loan.as_ref()).await.map_err(
+                                        |e| super::lifecycle::pre_send_start_error(&self.name, e),
+                                    )?;
                                 Provenance::mark_started();
                                 let (merged, truncated) = drain_list_pages(
                                     transport.as_ref(),
@@ -499,7 +494,13 @@ impl Backend {
         loan: Option<&crate::transport::Loan>,
     ) -> Result<Arc<dyn crate::transport::Transport>> {
         let _starting = loan.map(|held| entry.lender.starting(held.id()));
-        self.ensure_entry_started(key).await
+        // A fill's start is not inside a send: its handshake names this
+        // backend here.
+        crate::transport::notify_ingress::in_backend(
+            Arc::clone(&self.notify_origin),
+            self.ensure_entry_started(key),
+        )
+        .await
     }
 
     /// Startup warm-up's fill: recorded on the breaker, never admitted or
