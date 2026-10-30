@@ -229,3 +229,6 @@ mod direct_route;
 
 #[path = "upstream_401_offer_tests.rs"]
 mod offer_route;
+
+#[path = "upstream_401_parked_settle_tests.rs"]
+mod parked_settle;

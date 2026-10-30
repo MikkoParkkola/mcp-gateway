@@ -313,3 +313,7 @@ fn settle_bridged(
         reservation.commit(&uncertain_side_effect());
     }
 }
+
+#[cfg(test)]
+#[path = "legacy_bridge_settle_tests.rs"]
+mod settle_tests;
