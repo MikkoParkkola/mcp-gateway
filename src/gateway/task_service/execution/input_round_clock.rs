@@ -169,6 +169,8 @@ pub(super) async fn redeeming_dispatch(
             return None;
         }
         owned.dispatch_log().worker().arm(store);
+        // Each attempt, a discarded one included, starts its round unrefused.
+        owned.dispatch_log().reset_round();
         let (response, refused) =
             super::dispatched_in_cell(dispatch(state, owned, call, retry, cancel_rx)).await;
         let response = response?;

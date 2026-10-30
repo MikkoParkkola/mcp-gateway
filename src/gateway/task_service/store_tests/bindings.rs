@@ -54,6 +54,7 @@ async fn rb_restart_bindings_survive_a_reopen_of_the_store() {
                 Provenance {
                     targets: None,
                     bindings: bound(),
+                    ..Provenance::default()
                 },
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
@@ -98,6 +99,7 @@ async fn rb_legacy_a_pre_binding_row_reads_unrecorded_and_stays_held() {
                 Provenance {
                     targets: None,
                     bindings: bound(),
+                    ..Provenance::default()
                 },
                 crate::gateway::gateway_writes::WriteRecord::default(),
             ),
