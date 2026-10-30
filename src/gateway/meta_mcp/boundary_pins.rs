@@ -16,6 +16,7 @@ mod invoke_stages_r6;
 mod invoke_stages_rules;
 mod invoke_stages_tests;
 mod keyed_request;
+mod needle_attach_sites;
 mod packaged;
 mod scan;
 mod scan_tests;
