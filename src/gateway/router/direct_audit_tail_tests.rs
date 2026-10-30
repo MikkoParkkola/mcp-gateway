@@ -76,6 +76,18 @@ async fn direct_append_on_a_stalled_disk_is_bounded() {
     assert_eq!(body["error"]["code"], -32005, "{body}");
     assert!(fx.log.is_stalled());
     release.release();
+    // The released write still runs on the blocking pool: wait for it, so it
+    // never lands while the fixture's folders are being removed (a late
+    // `.hwm` would keep the folder).
+    let late = Arc::clone(&fx.log);
+    assert!(
+        tokio::task::spawn_blocking(move || {
+            late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic"),
+        "the released audit write finishes"
+    );
 }
 
 /// #2283. Under `FailClosed`, a refusal that answers `id: null` still owes the
