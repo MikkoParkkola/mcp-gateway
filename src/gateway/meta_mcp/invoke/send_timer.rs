@@ -24,14 +24,16 @@ pub(crate) struct SendTimer {
 impl SendTimer {
     /// Start timing a send that is about to go out.
     pub(crate) fn start() -> Self {
-        Self {
-            started: Some(Instant::now()),
-        }
+        Self::start_if(true)
     }
 
     /// Start timing when `on` (a `tools/call` send); otherwise an inert
     /// timer that notes nothing.
     pub(crate) fn start_if(on: bool) -> Self {
+        #[cfg(test)]
+        if on {
+            seam::note_start();
+        }
         Self {
             started: on.then(Instant::now),
         }
@@ -92,6 +94,17 @@ pub(crate) mod seam {
 
     thread_local! {
         static INJECTED: Cell<Option<Duration>> = const { Cell::new(None) };
+        static STARTS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn note_start() {
+        STARTS.with(|s| s.set(s.get() + 1));
+    }
+
+    /// Timers started on this thread so far: a row reads it before and
+    /// after, so it can tell a wait that started no timer.
+    pub(crate) fn starts() -> u64 {
+        STARTS.with(Cell::get)
     }
 
     pub(super) fn injected() -> Option<Duration> {

@@ -114,3 +114,43 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
         "three refused redirects marked the capability unhealthy"
     );
 }
+
+/// Latency row 23c(b): a public hop answered 302 to a denied address. A
+/// server did answer, so the refused redirect notes one send, Failed.
+#[tokio::test]
+async fn a_refused_redirect_hop_notes_a_failed_send() {
+    use crate::counters::End;
+    use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
+    let app = axum::Router::new().route(
+        "/",
+        axum::routing::get(|| async {
+            (
+                axum::http::StatusCode::FOUND,
+                [(axum::http::header::LOCATION, "http://10.255.255.1/")],
+            )
+        }),
+    );
+    let listener = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        tokio::net::TcpListener::bind("127.0.0.1:0"),
+    )
+    .await
+    .expect("bounded")
+    .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let client = super::client::build(None);
+    let health = crate::failsafe::HealthTracker::new("test");
+    let url = format!("http://127.0.0.1:{port}/");
+    let send = std::time::Duration::from_millis(7);
+    seam::inject(send);
+    let (outcome, notes) = with_dispatch_scope(tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        super::send_with_retry(client.get(&url), "test", true, &health),
+    ))
+    .await;
+    seam::clear();
+    let err = outcome.expect("bounded").expect_err("a blocked redirect fails");
+    assert!(crate::security::ssrf::is_ssrf_refusal(&err), "{err}");
+    assert_eq!(notes.backend_sample(), Some((send, End::Failed)));
+}

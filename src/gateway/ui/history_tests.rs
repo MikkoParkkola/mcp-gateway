@@ -4,7 +4,7 @@
 //! unsupported combination is refused with what is allowed, never answered
 //! with a default or a broader aggregate.
 
-use super::{SeriesParams, parse};
+use super::{SeriesParams, latency_of, parse};
 use crate::counters::{Dim, Filter, Metric, Window};
 
 fn params(pairs: &[(&str, &str)]) -> SeriesParams {
@@ -83,4 +83,24 @@ fn t38_a_bad_metric_or_window_names_the_allowed_values() {
         (query.metric, query.window),
         (Metric::Blocks, Window::Month)
     );
+}
+
+/// Latency row 33: `metric=latency_p95` reads all servers or one; a tool,
+/// caller, caller-server pair or overflow filter is refused.
+#[test]
+fn latency_refuses_every_other_filter() {
+    let refused: [&[(&str, &str)]; 4] = [
+        &[("server", "s"), ("tool", "t")],
+        &[("caller", "key:a")],
+        &[("caller", "key:a"), ("server", "s")],
+        &[("overflow", "server")],
+    ];
+    for pairs in refused {
+        let mut all = vec![("metric", "latency_p95")];
+        all.extend_from_slice(pairs);
+        let refusal = latency_of(&params(&all)).expect_err("refused");
+        assert!(refusal.contains("server="), "{pairs:?}: {refusal}");
+    }
+    let p = params(&[("metric", "latency_p95"), ("server", "s"), ("window", "48h")]);
+    assert_eq!(latency_of(&p), Ok((Some("s"), Window::TwoDays, false)));
 }

@@ -415,3 +415,46 @@ async fn an_idempotency_hit_states_no_effect() {
     assert_eq!(first["response_effect"], "delivered", "{first:?}");
     assert!(hit.is_empty(), "{hit:?}");
 }
+
+/// Latency row 22: a response-cache hit is counted as a call but sends
+/// nothing, so it records no latency sample.
+#[tokio::test]
+async fn a_response_cache_hit_records_no_latency() {
+    use crate::counters::{CounterStore, Filter, Metric, Query, Window};
+    use crate::gateway::send_timer_seam as seam;
+    let registry = Arc::new(BackendRegistry::new());
+    let (docs, calls) = counting_backend("docs", "BODY");
+    let _ = registry.register(docs);
+    let meta = MetaMcp::with_features(
+        registry,
+        Some(Arc::new(crate::cache::ResponseCache::new())),
+        None,
+        None,
+        Duration::from_secs(300),
+    );
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    let store = Arc::new(CounterStore::new(now));
+    meta.set_counters(Arc::clone(&store));
+    seam::inject(Duration::from_millis(7));
+    for _ in 0..2 {
+        meta.invoke_tool(
+            &json!({"server": "docs", "tool": "search", "arguments": {}}),
+            Some("session-1"),
+            &allow_all_ctx(),
+        )
+        .await
+        .expect("answered");
+    }
+    seam::clear();
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1, "the second was a hit");
+    let counted: u64 = store
+        .series(&Query::new(Metric::Calls, Window::Day, Filter::All), now, &chrono::Local)
+        .points
+        .iter()
+        .map(|p| p.v)
+        .sum();
+    assert_eq!(counted, 2, "both calls counted");
+    let latency = store.latency_series(Some("docs"), Window::Day, false, now, &chrono::Local);
+    let samples: u32 = latency.points.iter().map(|p| p.calls).sum();
+    assert_eq!(samples, 1, "{:?}", latency.points);
+}

@@ -130,3 +130,27 @@ fn overview_hour_reads_the_clock_not_stale_slots() {
     assert!(hour.servers.is_empty(), "{:?}", hour.servers);
     assert_eq!(hour.slowest, None);
 }
+
+/// Row 12: the server past the cap records into the overflow's latency; once
+/// the held labels age out a sweep frees a slot, and the new label's latency
+/// starts empty (only its own sample).
+#[test]
+fn server_cap_overflow_and_sweep() {
+    let cap = super::super::MAX_LABELS;
+    let store = CounterStore::new(T0);
+    for i in 0..cap {
+        timed(&store, &format!("srv-{i}"), T0 + 10, 100, End::Answered);
+    }
+    timed(&store, "late", T0 + 10, 100, End::Answered);
+    assert!(store.latency_series(Some("late"), Window::Day, false, T0 + 20, &Utc).folded);
+    assert!(!store.snapshot().server.overflow.latency.is_empty(), "overflow holds it");
+    let aged = T0 + 31 * 86_400;
+    timed(&store, "fresh", aged, 900, End::Failed);
+    assert_eq!(store.sweeps(), 1);
+    let view = store.latency_series(Some("fresh"), Window::Day, false, aged + 10, &Utc);
+    assert!(!view.folded);
+    let [point] = view.points.as_slice() else {
+        panic!("one slot for the new label: {:?}", view.points);
+    };
+    assert_eq!((point.calls, point.failed), (1, 1));
+}

@@ -450,3 +450,66 @@ async fn a_cli_run_past_its_timeout_notes_timed_out() {
         Some(End::TimedOut)
     );
 }
+
+/// Test plan row 23b: a CLI call waiting for its capability's process slot
+/// starts no timer; the run it then makes notes one sample.
+#[tokio::test]
+async fn a_cli_call_waiting_for_its_slot_is_not_timed() {
+    use std::sync::Arc;
+
+    use crate::counters::End;
+    use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
+    let cap = capability("echo", "--json", "", 30);
+    let executor = CapabilityExecutor::new();
+    let slots = Arc::new(tokio::sync::Semaphore::new(0));
+    executor
+        .process_slots
+        .insert(cap.name.clone(), Arc::clone(&slots));
+    let send = std::time::Duration::from_millis(7);
+    seam::inject(send);
+    let before = seam::starts();
+    let context = CapabilityExecutionContext::default();
+    let params = json!({});
+    let mut scoped = Box::pin(with_dispatch_scope(executor.execute_cli(
+        &cap,
+        config(&cap),
+        &params,
+        &context,
+    )));
+    assert!(futures::poll!(&mut scoped).is_pending(), "no slot is free");
+    assert_eq!(seam::starts(), before, "the wait for a slot is not timed");
+    slots.add_permits(1);
+    let (result, notes) = scoped.await;
+    seam::clear();
+    result.expect("the run answers");
+    assert_eq!(seam::starts(), before + 1);
+    assert_eq!(notes.backend_sample(), Some((send, End::Answered)));
+}
+
+/// Test plan row 23c (CLI): a program that cannot be started sent nothing,
+/// so the run notes no sample.
+#[tokio::test]
+async fn a_cli_spawn_failure_notes_no_sample() {
+    use crate::gateway::with_dispatch_scope;
+    let dir = tempfile::tempdir().unwrap();
+    let program = dir.path().join("not-a-program.txt");
+    std::fs::write(&program, "plain text, not executable").unwrap();
+    let invocation = super::CliInvocation {
+        command: program.display().to_string(),
+        args: Vec::new(),
+        stdin: None,
+    };
+    let workdir = super::Workdir::create().expect("a workdir");
+    let run = super::run(
+        &program,
+        &invocation,
+        &workdir,
+        Vec::new(),
+        std::time::Duration::from_secs(5),
+        1024,
+    );
+    let (result, notes) = with_dispatch_scope(run).await;
+    let refusal = result.expect_err("cannot start").to_string();
+    assert!(refusal.contains("could not start"), "{refusal}");
+    assert_eq!(notes.backend_sample(), None);
+}
