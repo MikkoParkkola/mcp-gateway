@@ -149,6 +149,24 @@ mod tests {
             "inert and discarded timers note nothing"
         );
     }
+
+    /// Test plan row 26: a call's rounds (a bridged retry) add up into one
+    /// sample; the last round's end is the call's.
+    #[tokio::test]
+    async fn a_calls_rounds_sum_into_one_sample() {
+        let ((), notes) = with_dispatch_scope(async {
+            seam::inject(Duration::from_millis(30));
+            SendTimer::start().finish(End::TimedOut);
+            seam::inject(Duration::from_millis(12));
+            SendTimer::start().finish(End::Answered);
+        })
+        .await;
+        seam::clear();
+        assert_eq!(
+            notes.backend_sample(),
+            Some((Duration::from_millis(42), End::Answered))
+        );
+    }
 }
 
 /// Test plan row 30: every leaf backend send sits in a timed scope, and no

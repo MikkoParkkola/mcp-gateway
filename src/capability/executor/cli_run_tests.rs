@@ -411,3 +411,42 @@ async fn a_cmd_shim_receives_hostile_values_literally_or_refuses_them() {
         }
     }
 }
+
+/// Test plan rows 21 and 25 (CLI): a run notes one send time, its end from
+/// the run: Answered when the child ran (whatever its status), TimedOut past
+/// the capability's timeout.
+#[tokio::test]
+async fn a_cli_run_notes_its_send_time() {
+    use crate::counters::End;
+    use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
+    let send = std::time::Duration::from_millis(7);
+    let echo = capability("echo", "--json", "", 30);
+    let failing = capability("fail", "\"3\"", "", 30);
+    seam::inject(send);
+    let (_, ran) = with_dispatch_scope(call(&echo, json!({}))).await;
+    let (_, failed) = with_dispatch_scope(call(&failing, json!({}))).await;
+    seam::clear();
+    assert_eq!(ran.backend_sample(), Some((send, End::Answered)));
+    assert_eq!(
+        failed.backend_sample(),
+        Some((send, End::Answered)),
+        "the child ran"
+    );
+}
+
+#[tokio::test]
+async fn a_cli_run_past_its_timeout_notes_timed_out() {
+    use crate::counters::End;
+    use crate::gateway::{send_timer_seam as seam, with_dispatch_scope};
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("grandchild.pid");
+    let cap = capability("grandchild", &format!("'{}'", pidfile.display()), "", 1);
+    seam::inject(std::time::Duration::from_millis(7));
+    let (result, notes) = with_dispatch_scope(call(&cap, json!({}))).await;
+    seam::clear();
+    assert!(result.is_err());
+    assert_eq!(
+        notes.backend_sample().map(|(_, end)| end),
+        Some(End::TimedOut)
+    );
+}

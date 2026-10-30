@@ -91,3 +91,17 @@ async fn capability_connect_error_still_retried() {
         "an ordinary failure keeps the retry"
     );
 }
+
+/// Test plan row 23c(a): a destination the SSRF policy refuses on the first
+/// hop was never sent to, so the call notes no send time.
+#[tokio::test]
+async fn a_first_hop_ssrf_denial_notes_no_send_time() {
+    let (client, _) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let (result, notes) = crate::gateway::with_dispatch_scope(async {
+        send_with_retry(client.get("http://private.test/"), "test", true, &health).await
+    })
+    .await;
+    assert!(result.is_err());
+    assert_eq!(notes.backend_sample(), None);
+}

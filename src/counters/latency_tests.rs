@@ -228,3 +228,28 @@ fn day_sketch_closes_at_the_next_day() {
     assert!(series.day.live.is_empty());
     assert_eq!(series.day.slots()[0].p95_ms, bin_ms(bin_of(ms(50.0))));
 }
+
+/// Row 12b: a series busy in every slot keeps 96 half-hours and 30 days; the
+/// next slot evicts the oldest.
+#[test]
+fn retention_holds_96_half_hours_and_30_days() {
+    let t0 = 1_800 * 1_000_000;
+    let mut series = LatencySeries::default();
+    for slot in 0..97u64 {
+        series.add(t0 + slot * 1_800, None, ms(5.0), End::Answered);
+    }
+    let held = series.half.slots();
+    assert_eq!(held.len(), 96);
+    assert_eq!(held[0].bucket, t0 / 1_800 + 1, "the first slot was evicted");
+    for day in 0..31u64 {
+        series.add(
+            t0 + 97 * 1_800 + day * 86_400,
+            Some(700_100 + day),
+            ms(5.0),
+            End::Answered,
+        );
+    }
+    let days = series.day.slots();
+    assert_eq!(days.len(), 30);
+    assert_eq!(days[0].bucket, 700_101);
+}
