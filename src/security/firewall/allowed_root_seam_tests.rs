@@ -302,3 +302,57 @@ fn r44_reads_are_cached_within_a_call() {
     listed.dedup();
     assert_eq!(listed.len(), total, "no directory listed twice: {ops:?}");
 }
+
+/// A case-folding volume for one name: every read of `A b` opens `a b`, as
+/// a case-insensitive volume does; listings show the names as stored.
+struct CaseFold;
+
+impl Resolve for CaseFold {
+    fn resolve(&self, op: &ResolveOp, _deadline: Instant) -> std::io::Result<Resolved> {
+        let fold = |p: &std::path::Path| -> std::path::PathBuf {
+            p.components()
+                .map(|c| {
+                    if c.as_os_str() == "A b" {
+                        std::ffi::OsStr::new("a b")
+                    } else {
+                        c.as_os_str()
+                    }
+                })
+                .collect()
+        };
+        real(&match op {
+            ResolveOp::Metadata(p) => ResolveOp::Metadata(fold(p)),
+            ResolveOp::Canonicalize(p) => ResolveOp::Canonicalize(fold(p)),
+            ResolveOp::ReadDir(p) => ResolveOp::ReadDir(fold(p)),
+        })
+    }
+}
+
+/// R33m: on a case-folding volume `A b` opens the root `a b`, while the
+/// backend's match key picks the one entry spelt `A\u{a0}b`. A sole
+/// equivalent entry that is not the entry the name opens is refused;
+/// control: without that entry, allowed.
+#[test]
+fn r33m_a_folded_name_beside_its_one_equivalent_is_refused() {
+    let rule = |safe: String| {
+        let root = format!("{safe}/a b");
+        std::fs::create_dir_all(&root).expect("mkdir");
+        vec![super::tree::root_rule(
+            "read_file",
+            &[root],
+            &["path"],
+            FirewallAction::Block,
+        )]
+    };
+    let fx = seamed(Fx::with_rules(rule), |fw| {
+        fw.with_resolver(Arc::new(CaseFold))
+    });
+    let args = json!({"path": fx.path("safe/A b/new")});
+    assert_eq!(forced(&fx, &args), None, "R33m control");
+    std::fs::create_dir_all(fx.dir.path().join("safe/A\u{a0}b")).expect("mkdir");
+    assert_eq!(
+        forced(&fx, &args),
+        Some(RootReason::EquivalentSpelling),
+        "R33m"
+    );
+}

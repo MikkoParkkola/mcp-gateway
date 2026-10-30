@@ -80,6 +80,7 @@ impl<'a> Walk<'a> {
                 .into_iter()
                 .collect::<std::io::Result<Vec<_>>>()
                 .map_err(|_| RootReason::Unresolvable),
+            Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(RootReason::Timeout),
             _ => Err(RootReason::Unresolvable),
         };
         self.listings.insert(dir.to_path_buf(), got.clone());
@@ -88,7 +89,9 @@ impl<'a> Walk<'a> {
 
     /// The equivalent-spelling rule for `name` in `dir`: refused when more
     /// than one entry shares its key, or when `name` is missing and any
-    /// entry does.
+    /// entry does, or when the one entry sharing it is spelt differently and
+    /// is not the entry `name` opens (a case-folding volume opens `A b` as
+    /// `a b`, while the backend's match key picks `A\u{a0}b`).
     fn spelling(
         &mut self,
         dir: &Path,
@@ -96,17 +99,28 @@ impl<'a> Walk<'a> {
         exists: bool,
     ) -> Result<(), RootReason> {
         let wanted = key(name);
-        let sharing = self
+        let shared: Vec<OsString> = self
             .listing(dir)?
-            .iter()
+            .into_iter()
             .filter(|entry| match (&wanted, key(entry)) {
                 (Some(w), Some(k)) => *w == k,
                 // A name that is not UTF-8 has no key: bytes only.
                 _ => entry.as_os_str() == name,
             })
-            .count();
+            .collect();
+        let sharing = shared.len();
         if sharing > 1 || (!exists && sharing > 0) {
             return Err(RootReason::EquivalentSpelling);
+        }
+        // The one sharing entry, spelt differently: the name must open that
+        // same entry, or the backend's match would pick another file.
+        if let [entry] = shared.as_slice()
+            && entry.as_os_str() != name
+        {
+            let opened = self.canonicalize(&dir.join(name))?;
+            if opened.is_err() || opened != self.canonicalize(&dir.join(entry))? {
+                return Err(RootReason::EquivalentSpelling);
+            }
         }
         Ok(())
     }
@@ -174,7 +188,7 @@ fn key(name: &std::ffi::OsStr) -> Option<String> {
 pub(super) struct Real;
 
 impl Resolve for Real {
-    fn resolve(&self, op: &ResolveOp, _deadline: Instant) -> std::io::Result<Resolved> {
+    fn resolve(&self, op: &ResolveOp, deadline: Instant) -> std::io::Result<Resolved> {
         match op {
             ResolveOp::Metadata(p) => {
                 let t = std::fs::symlink_metadata(p)?.file_type();
@@ -187,14 +201,20 @@ impl Resolve for Real {
                 }))
             }
             ResolveOp::Canonicalize(p) => std::fs::canonicalize(p).map(Resolved::Path),
-            ResolveOp::ReadDir(p) => Ok(Resolved::Entries(
+            ResolveOp::ReadDir(p) => {
                 // One past the cap is enough to refuse: never read a huge
-                // folder to the end.
-                std::fs::read_dir(p)?
-                    .take(DIRECTORY_ENTRY_CAP + 1)
-                    .map(|e| e.map(|e| e.file_name()))
-                    .collect(),
-            )),
+                // folder to the end. The deadline is checked before each
+                // entry, so a slow listing frees its resolver slot once the
+                // call has timed out.
+                let mut entries = Vec::new();
+                for entry in std::fs::read_dir(p)?.take(DIRECTORY_ENTRY_CAP + 1) {
+                    if Instant::now() >= deadline {
+                        return Err(std::io::ErrorKind::TimedOut.into());
+                    }
+                    entries.push(entry.map(|e| e.file_name()));
+                }
+                Ok(Resolved::Entries(entries))
+            }
         }
     }
 }

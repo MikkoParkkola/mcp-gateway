@@ -479,3 +479,39 @@ fn r33_r33b_broken_links_are_refused() {
     });
     assert_eq!(looped, refused(RootReason::Unresolvable));
 }
+
+/// R33n: an outside value ahead of a dangling link does not stop the check:
+/// the link is still refused, under `warn` as under `block`.
+#[cfg(unix)]
+#[test]
+fn r33n_a_dangling_link_after_an_outside_value_is_refused() {
+    let got = both_warn(&["paths[]"], |fx| {
+        let link = fx.dir.path().join("safe/dangle");
+        if std::fs::symlink_metadata(&link).is_err() {
+            std::os::unix::fs::symlink(fx.dir.path().join("outside/new.txt"), &link).expect("link");
+        }
+        json!({"paths": [fx.path("outside/f"), fx.path("safe/dangle")]})
+    });
+    assert_eq!(got, refused(RootReason::DanglingLink));
+}
+
+/// R16i: a listing whose deadline has passed stops before its next entry,
+/// timed out, so a slow folder frees its resolver slot once the call has
+/// given up; control: a deadline ahead reads the folder.
+#[test]
+fn r16i_a_listing_past_its_deadline_stops() {
+    use super::super::resolve::Real;
+    let fx = Fx::new(&["path"], FirewallAction::Block);
+    std::fs::write(fx.dir.path().join("safe/f"), "x").expect("write");
+    let op = ResolveOp::ReadDir(fx.dir.path().join("safe"));
+    let passed = Real.resolve(&op, std::time::Instant::now());
+    assert_eq!(
+        passed.err().map(|e| e.kind()),
+        Some(std::io::ErrorKind::TimedOut)
+    );
+    let ahead = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    assert!(matches!(
+        Real.resolve(&op, ahead),
+        Ok(Resolved::Entries(entries)) if !entries.is_empty()
+    ));
+}

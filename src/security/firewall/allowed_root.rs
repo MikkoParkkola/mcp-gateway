@@ -226,12 +226,14 @@ fn judge_items(
             let root = root.as_ref().ok_or(at(RootReason::RootUnresolvable))?;
             roots.push(walk.root(root).map_err(at)?);
         }
+        // Every value is resolved, even after one is outside: under `warn`
+        // an outside value does not block, and a later value's forced
+        // refusal (a dangling link, say) still must.
         let mut all = true;
         for value in &item.values {
             let resolved = walk.resolve(std::path::Path::new(value)).map_err(at)?;
             if !roots.iter().any(|root| resolved.starts_with(root)) {
                 all = false;
-                break;
             }
         }
         inside.push(all);
@@ -394,16 +396,15 @@ pub(crate) fn compile_path_arg(entry: &str) -> Result<PathArg, String> {
 }
 
 /// `root` after `~` expansion: a bare `~` or a leading `~/` uses the
-/// gateway's home directory. `None` for `~user/...`, for any `~` root when
-/// the home directory is unknown, and for a root that is not absolute.
+/// gateway's home directory, with every further leading separator trimmed
+/// (`home_dir::tilde_rest`), so `~//` is the home directory, never `/`.
+/// `None` for `~user/...`, for any `~` root when the home directory is
+/// unknown, and for a root that is not absolute.
 pub(crate) fn expand_root(root: &str) -> Option<std::path::PathBuf> {
-    let expanded = match root.strip_prefix('~') {
-        Some("") => crate::home_dir::home_dir()?,
-        Some(rest) if rest.starts_with(['/', '\\']) => {
-            crate::home_dir::home_dir()?.join(&rest[1..])
-        }
-        Some(_) => return None,
-        None => std::path::PathBuf::from(root),
+    let expanded = if root.starts_with('~') {
+        crate::home_dir::home_dir()?.join(crate::home_dir::tilde_rest(root)?)
+    } else {
+        std::path::PathBuf::from(root)
     };
     expanded.is_absolute().then_some(expanded)
 }

@@ -328,6 +328,18 @@ fn l3_relative_and_tilde_user_roots_are_refused() {
     );
 }
 
+/// L3c: extra separators after `~/` stay under the home directory: `~//` is
+/// the home directory and `~//x` is `<home>/x`, never `/` or `/x`.
+#[test]
+fn l3c_extra_separators_after_tilde_stay_home() {
+    let home = crate::home_dir::home_dir().expect("a home directory under test");
+    assert_eq!(expand_root("~"), Some(home.clone()));
+    assert_eq!(expand_root("~/"), Some(home.clone()));
+    assert_eq!(expand_root("~//"), Some(home.clone()));
+    assert_eq!(expand_root("~///x"), Some(home.join("x")));
+    assert_eq!(expand_root("~/x"), Some(home.join("x")));
+}
+
 /// L4: entries outside the `path_args` grammar are refused, naming the entry.
 #[test]
 fn l4_bad_path_arg_entries_are_refused() {
