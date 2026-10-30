@@ -29,6 +29,7 @@ impl crate::identity_propagation::IdentityPropagation for Mint {
         crate::identity_propagation::PropagationError,
     > {
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{}", identity.subject),

@@ -12,6 +12,7 @@ use super::fill_check::{
 };
 use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
+use crate::transport::LentCredential;
 use crate::trust::closed_keys::count;
 
 /// How the check reads the caller's catalogue (MIK-8361).
@@ -202,7 +203,7 @@ impl Backend {
     pub(crate) fn undeclared_key_refusal<'a>(
         &'a self,
         identity_key: Option<&'a str>,
-        headers: &'a [(String, String)],
+        headers: LentCredential,
         tool: &'a str,
         arguments: &'a Value,
     ) -> std::pin::Pin<Box<dyn Future<Output = crate::Result<Option<String>>> + Send + 'a>> {
@@ -226,7 +227,7 @@ impl Backend {
     /// `RateLimited`, and under `closed` the fill's transport error.
     pub(crate) fn catalogue_refusal<'a>(
         &'a self,
-        (identity_key, headers): (Option<&'a str>, &'a [(String, String)]),
+        (identity_key, headers): (Option<&'a str>, LentCredential),
         tool: &'a str,
         arguments: &'a Value,
         lens: Lens,
@@ -285,7 +286,7 @@ impl Backend {
 
     async fn undeclared_key_refusal_inner(
         &self,
-        (identity_key, headers): (Option<&str>, &[(String, String)]),
+        (identity_key, headers): (Option<&str>, LentCredential),
         tool: &str,
         arguments: &Value,
         lens: Lens,
@@ -319,7 +320,7 @@ impl Backend {
         {
             return held(cached);
         }
-        if !self.fetch_carries_caller_identity(identity_key) && !headers.is_empty() {
+        if !self.fetch_carries_caller_identity(identity_key) && !headers.headers.is_empty() {
             if let Some(cached) = &cached {
                 return held(cached);
             }
@@ -568,7 +569,12 @@ mod tests {
         assert!(backend.is_blocked_tool("evil_read"), "premise: withheld");
         assert!(
             backend
-                .undeclared_key_refusal(None, &[], "evil_read", &json!({"q": "x"}))
+                .undeclared_key_refusal(
+                    None,
+                    crate::transport::LentCredential::default(),
+                    "evil_read",
+                    &json!({"q": "x"})
+                )
                 .await
                 .expect("no failsafe refusal")
                 .is_some(),
@@ -594,7 +600,12 @@ mod tests {
         ];
         backend.remember_listed_tools(None, false, &listed);
         let refusal = backend
-            .undeclared_key_refusal(None, &[], "edit", &json!({"b": 1}))
+            .undeclared_key_refusal(
+                None,
+                crate::transport::LentCredential::default(),
+                "edit",
+                &json!({"b": 1}),
+            )
             .await;
         assert!(
             refusal.expect("no failsafe refusal").is_some(),
@@ -605,7 +616,12 @@ mod tests {
     /// The check on `edit` with one argument `key`, on a warm shared slot.
     async fn judged(backend: &Backend, key: &str) -> Option<String> {
         backend
-            .undeclared_key_refusal(None, &[], "edit", &json!({key: 1}))
+            .undeclared_key_refusal(
+                None,
+                crate::transport::LentCredential::default(),
+                "edit",
+                &json!({key: 1}),
+            )
             .await
             .expect("no failsafe refusal")
     }
