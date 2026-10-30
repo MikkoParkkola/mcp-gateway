@@ -55,7 +55,7 @@ impl MetaMcp {
         tool: &str,
         arguments: &Value,
         identity_key: Option<&str>,
-        headers: &[(String, String)],
+        headers: crate::transport::LentCredential,
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
     ) -> Result<Option<KeyRefusal>> {
         self.undeclared_key_refusal_through(
@@ -77,7 +77,7 @@ impl MetaMcp {
         (server, backend): (&str, Option<&std::sync::Arc<crate::backend::Backend>>),
         tool: &str,
         arguments: &Value,
-        (identity_key, headers): (Option<&str>, &[(String, String)]),
+        (identity_key, headers): (Option<&str>, crate::transport::LentCredential),
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
         lens: crate::backend::Lens,
     ) -> Result<Option<KeyRefusal>> {

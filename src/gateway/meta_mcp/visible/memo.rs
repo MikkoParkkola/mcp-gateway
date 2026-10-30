@@ -19,7 +19,10 @@ use super::{Visibility, Withholding};
 #[derive(Default)]
 struct VisibilityMemo {
     visibility: Keyed<TargetKey, Visibility>,
-    carried_credential: Keyed<TargetKey, Carried>,
+    /// Boxed: a [`Carried`] is hundreds of bytes, and the map's smallest
+    /// table of them inline crosses the per-call allocation budget
+    /// (`http_nonce_alloc` ALLOC.2).
+    carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
     denial_code: Keyed<TargetKey, i32>,
     judged: parking_lot::Mutex<Judged>,
@@ -472,7 +475,7 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     in_memo(|memo| {
         memo.carried_credential
-            .set(target_key(server, tool), carried);
+            .set(target_key(server, tool), Box::new(carried));
     });
 }
 
@@ -486,7 +489,9 @@ pub(crate) fn with_carried<R>(
 ) -> Option<R> {
     in_memo(|memo| {
         memo.carried_credential
-            .with(&target(server, tool) as &(dyn Pair + '_), read)
+            .with(&target(server, tool) as &(dyn Pair + '_), |carried| {
+                read(carried)
+            })
     })
     .flatten()
 }
@@ -497,6 +502,7 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     in_memo(|memo| {
         memo.carried_credential
             .take(&target(server, tool) as &(dyn Pair + '_))
+            .map(|carried| *carried)
     })
     .flatten()
 }
@@ -617,6 +623,19 @@ pub(crate) fn account_binding(server: &str, account: &DescriptorId) -> Option<St
             .get(&slot(server, account) as &(dyn Pair + '_))
     })
     .flatten()
+}
+
+/// Whether `held`, a caller's held slot binding on `server`, is still the
+/// binding the pre-pass's read of `account` gave. A rotated grant's slot is
+/// not current. With no account, or no read of it in this request, there is
+/// nothing to judge it by and the held slot stands. The one rule for the
+/// listings and the stored reads, so the two cannot drift.
+pub(crate) fn held_binding_current(
+    server: &str,
+    account: Option<&DescriptorId>,
+    held: &str,
+) -> bool {
+    account.is_none_or(|account| held_view_current(server, account, held) != HeldView::Stale)
 }
 
 /// Keep the live call's refusal for `(server, account)` in the open request;

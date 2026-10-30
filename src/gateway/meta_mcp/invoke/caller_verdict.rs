@@ -95,7 +95,7 @@ impl MetaMcp {
             .ok()?;
         Some(ColdFill {
             binding: resolved.binding?,
-            headers: resolved.caller_credential.headers,
+            headers: resolved.caller_credential.lent(),
             attempt,
         })
     }
@@ -443,7 +443,7 @@ impl MetaMcp {
                 (server, tool),
                 &backend,
                 resolved.binding.as_deref(),
-                &resolved.caller_credential.headers,
+                resolved.caller_credential.lent(),
                 proof,
             )
             .await;
@@ -489,7 +489,7 @@ impl MetaMcp {
         (server, tool): (&str, &str),
         backend: &Backend,
         binding: Option<&str>,
-        headers: &[(String, String)],
+        headers: crate::transport::LentCredential,
         proof: CallerProof<'_>,
     ) -> crate::Result<SlotJudgement> {
         let verdict = backend.catalogue_verdict(binding, headers, tool).await;
@@ -634,7 +634,7 @@ impl Drop for ColdAttempt {
 pub(in crate::gateway::meta_mcp) struct ColdFill {
     attempt: ColdAttempt,
     binding: String,
-    headers: Vec<(String, String)>,
+    headers: crate::transport::LentCredential,
 }
 
 impl ColdFill {
@@ -661,9 +661,8 @@ impl ColdFill {
             backend.tools_fill_bound(),
         );
         let filled = backend
-            .tools_for_check(Some(&binding), &headers, false)
+            .tools_for_check(Some(&binding), headers, false)
             .await;
-        drop(headers);
         if filled.is_ok() && attempt.gate_allows(&binding).await {
             backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
         }

@@ -87,13 +87,10 @@ impl MetaMcp {
     /// judge it by, and the held slot stands, as a stored read's revalidation
     /// keeps it.
     fn held_binding_current(backend: &Backend, binding: &str) -> bool {
-        use super::visible::memo::{DescriptorId, HeldView, held_view_current};
-        backend
+        let account = backend
             .account_descriptor_id()
-            .map(|account| DescriptorId(account.to_owned()))
-            .is_none_or(|account| {
-                held_view_current(&backend.name, &account, binding) != HeldView::Stale
-            })
+            .map(|account| super::visible::memo::DescriptorId(account.to_owned()));
+        super::visible::memo::held_binding_current(&backend.name, account.as_ref(), binding)
     }
 
     /// Whether `caller` has no principal on `backend`, a `required` per-user
