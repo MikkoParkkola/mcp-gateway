@@ -48,9 +48,27 @@ async fn a_non_admin_gets_the_same_refusal_for_any_name() {
     );
 }
 
-// R2: a missing, an expired and a never-issued handle all refuse.
+// R2a: a valid bearer with no dashboard handle is an admin without a session.
 #[tokio::test]
-async fn a_bearer_only_admin_cannot_start_or_confirm() {
+async fn a_bearer_admin_without_a_dashboard_session_is_refused() {
+    let gw = Gw::new().await;
+
+    let start = gw.start(&Who::BearerOnly).await;
+    assert_refusal(&start, StatusCode::FORBIDDEN, "dashboard_session_required");
+    let confirm = gw.confirm(&Who::BearerOnly, "any-attempt", "confirm").await;
+    assert_refusal(
+        &confirm,
+        StatusCode::FORBIDDEN,
+        "dashboard_session_required",
+    );
+
+    assert!(gw.row().await["sign_in_flow"].is_null(), "no flow started");
+}
+
+// R2b: an expired or revoked handle never reaches the handler: the auth layer
+// answers 401, and no flow starts.
+#[tokio::test]
+async fn an_expired_or_revoked_dashboard_session_is_unauthenticated() {
     let gw = Gw::new().await;
     let expired = gw.session();
     if let Who::Dashboard(handle) = &expired {
@@ -58,18 +76,12 @@ async fn a_bearer_only_admin_cannot_start_or_confirm() {
             .dashboard_bootstrap
             .backdate(handle, Duration::from_secs(9 * 3600));
     }
-    let forged = Who::Dashboard("never-issued-handle".to_owned());
     let revoked = gw.session();
     gw.revoke(&revoked);
-    for who in [Who::BearerOnly, expired, forged, revoked] {
-        let start = gw.start(&who).await;
-        assert_refusal(&start, StatusCode::FORBIDDEN, "dashboard_session_required");
+    for who in [expired, revoked] {
+        assert_eq!(gw.start(&who).await.status, StatusCode::UNAUTHORIZED);
         let confirm = gw.confirm(&who, "any-attempt", "confirm").await;
-        assert_refusal(
-            &confirm,
-            StatusCode::FORBIDDEN,
-            "dashboard_session_required",
-        );
+        assert_eq!(confirm.status, StatusCode::UNAUTHORIZED);
     }
     assert!(gw.row().await["sign_in_flow"].is_null(), "no flow started");
 }

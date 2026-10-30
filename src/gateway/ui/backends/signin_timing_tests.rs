@@ -183,7 +183,7 @@ async fn a_cli_held_gate_reports_its_own_deadline() {
     let cli = client(gw.store.path(), Some(&gw.issuer))
         .with_login_gate(Arc::clone(&gw.backend.login_gate))
         .with_open_browser(Arc::new(|_: &str| true));
-    tokio::spawn(async move { cli.authorize().await });
+    tokio::spawn(async move { cli.authorize_shared(true, None).await });
     for _ in 0..200 {
         tokio::task::yield_now().await;
     }
