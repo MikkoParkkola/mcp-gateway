@@ -384,7 +384,10 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
             if calls && !line.trim_start().starts_with("//") && !line.contains("fn reader_lock") {
                 takers.push(format!(
                     "{}:{}",
-                    file.strip_prefix(&src).unwrap_or(file).display(),
+                    file.strip_prefix(&src)
+                        .unwrap_or(file)
+                        .to_string_lossy()
+                        .replace('\\', "/"),
                     n + 1
                 ));
             }
