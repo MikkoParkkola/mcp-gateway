@@ -206,13 +206,16 @@ impl StdioTransport {
     // ponytail: token-less methods (`notifications/message`) stay unattributable
     // over stdio; a per-request stream is what would carry them, and stdio has
     // none. Named as a design event in the SUB.2b note rather than papered over.
-    fn capture_notification(&self, notification: JsonRpcNotification) {
+    /// `keys` holds the params as the peer sent them when the delivered copy
+    /// was scrubbed; routing reads them, never the copy (DELTA-5).
+    fn capture_notification(&self, notification: JsonRpcNotification, keys: Option<&Value>) {
+        let keys = keys.or(notification.params.as_ref());
         // The listener's taps first: a frame tagged with a live listen, or
         // one of the three resource/prompt notifications while a legacy tap
         // is open. Never progress, so the route below is unchanged.
         if self
             .taps
-            .notification(&notification.method, notification.params.as_ref())
+            .notification_keyed(&notification.method, notification.params.as_ref(), keys)
         {
             return;
         }
@@ -227,10 +230,7 @@ impl StdioTransport {
         // severity out.
         let token = (notification.method == "notifications/progress")
             .then(|| {
-                notification
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("progressToken"))
+                keys.and_then(|p| p.get("progressToken"))
                     .and_then(progress_token_string)
             })
             .flatten();
@@ -268,6 +268,14 @@ impl StdioTransport {
         let line_len = line.len();
         debug!(line_len, "Parsing response");
         let mut message = JsonRpcMessage::from_line(line)?;
+        // Routing keys (a progress token, a subscription tag) are read from
+        // the line as sent; only the delivered copy is scrubbed (DELTA-5).
+        let keys = match &message {
+            JsonRpcMessage::Notification(notification) if self.needles.get().is_some() => {
+                notification.params.clone()
+            }
+            _ => None,
+        };
         if let Some(needles) = self.needles.get() {
             use crate::security::needles::{Scrubbed, ingress_scrub, refused_response};
             match ingress_scrub(needles, &mut message) {
@@ -288,7 +296,7 @@ impl StdioTransport {
         let response = match message {
             JsonRpcMessage::Response(response) => response,
             JsonRpcMessage::Notification(notification) => {
-                self.capture_notification(notification);
+                self.capture_notification(notification, keys.as_ref());
                 return Ok(());
             }
             JsonRpcMessage::Request(_) => {

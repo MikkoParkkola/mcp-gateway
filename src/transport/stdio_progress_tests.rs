@@ -290,3 +290,65 @@ async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
         "and it must not register itself on the way through"
     );
 }
+
+const NEEDLE: &str = "control-id-secret-5b1e";
+
+/// A transport whose needle set holds [`NEEDLE`].
+fn with_needle() -> std::sync::Arc<StdioTransport> {
+    let transport = make_transport("cat");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    transport.attach_needles(std::sync::Arc::new(needles));
+    transport
+}
+
+/// MIK-9035 DELTA-5 (T1.23): a progress token equal to an injected value
+/// routes by the token the backend sent; the caller's copy is scrubbed.
+#[tokio::test]
+async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
+    let transport = with_needle();
+    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
+        let _ = transport.register_progress_token(NEEDLE);
+        transport
+            .handle_response(&progress_line(NEEDLE, 1))
+            .expect("a notification must not fail the read loop");
+    });
+    call.await;
+    let got = rx
+        .try_recv()
+        .expect("the frame routes by the token the backend sent");
+    let text = serde_json::to_string(&got.params).unwrap();
+    assert!(
+        !text.contains(NEEDLE),
+        "the caller's copy holds the secret: {text}"
+    );
+}
+
+/// MIK-9035 DELTA-5 (T1.23): a subscription tag equal to an injected value
+/// still finds its listen.
+#[tokio::test]
+async fn a_subscription_tag_equal_to_a_secret_still_routes() {
+    use crate::transport::upstream_tap::{KindSet, Requested, UpstreamNote};
+    let transport = with_needle();
+    let requested = Requested {
+        kinds: KindSet {
+            resources_changed: true,
+            ..KindSet::default()
+        },
+        uris: Vec::new(),
+    };
+    let mut rx = transport.taps.listen(&serde_json::json!(NEEDLE), requested);
+    let frame = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/subscriptions/acknowledged",
+        "params": {"notifications": {"resourcesListChanged": true},
+                   "_meta": {"io.modelcontextprotocol/subscriptionId": NEEDLE}}})
+    .to_string();
+    transport
+        .handle_response(&frame)
+        .expect("a notification must not fail the read loop");
+    assert!(
+        matches!(rx.try_recv(), Ok(UpstreamNote::Ack { .. })),
+        "the acknowledgement did not reach its listen"
+    );
+}

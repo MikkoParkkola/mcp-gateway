@@ -85,6 +85,13 @@ pub(crate) fn listen_filter(kinds: KindSet, uris: &[String]) -> Value {
     })
 }
 
+/// The `_meta[SUBSCRIPTION_ID]` tag `params` carries, if any.
+fn subscription_tag(params: Option<&Value>) -> Option<&Value> {
+    params
+        .and_then(|p| p.get("_meta"))
+        .and_then(|m| m.get(SUBSCRIPTION_ID))
+}
+
 /// Whether `params` carries `_meta[SUBSCRIPTION_ID] == listen_id`.
 fn tagged(params: Option<&Value>, listen_id: &Value) -> bool {
     params
@@ -331,13 +338,26 @@ impl Taps {
 
     /// Offer a peer notification. `true` when a tap consumed it (routed or
     /// dropped on its behalf); `false` leaves it to the existing routes.
+    #[cfg(test)]
     pub(crate) fn notification(&self, method: &str, params: Option<&Value>) -> bool {
-        let tag = params
-            .and_then(|p| p.get("_meta"))
-            .and_then(|m| m.get(SUBSCRIPTION_ID));
-        if let Some(tag) = tag {
+        self.notification_keyed(method, params, params)
+    }
+
+    /// Offer a peer notification. `true` when a tap consumed it (routed or
+    /// dropped on its behalf); `false` leaves it to the existing routes. The
+    /// listen is found by the tag in `keys`, the params as the peer sent
+    /// them, while `params`, the scrubbed copy, is what is delivered
+    /// (MIK-9035 DELTA-5).
+    pub(crate) fn notification_keyed(
+        &self,
+        method: &str,
+        params: Option<&Value>,
+        keys: Option<&Value>,
+    ) -> bool {
+        if let Some(key) = subscription_tag(keys) {
+            let tag = subscription_tag(params).unwrap_or(&Value::Null);
             let mut listens = self.listens.lock();
-            if let Some(listen) = listens.get_mut(&tag.to_string()) {
+            if let Some(listen) = listens.get_mut(&key.to_string()) {
                 let first = std::mem::replace(&mut listen.first, false);
                 // The last slot stays free for the listen's terminal answer, so
                 // a full tap still reports `Unsupported` rather than `Closed`.

@@ -449,6 +449,14 @@ impl WebSocketTransport {
     fn dispatch_inbound(inner: &Arc<Inner>, text: &str) -> Result<()> {
         debug!(len = text.len(), "Dispatching inbound WebSocket frame");
         let mut frame = McpFrame::from_text(text)?;
+        // Routing keys (a progress token, a subscription tag) are read from
+        // the frame as sent; only the delivered copy is scrubbed (DELTA-5).
+        let keys = match &frame {
+            McpFrame::Notification { params, .. } if inner.needles.get().is_some() => {
+                params.clone()
+            }
+            _ => None,
+        };
         if let Some(needles) = inner.needles.get()
             && !scrub_frame(needles, &mut frame)
         {
@@ -479,9 +487,14 @@ impl WebSocketTransport {
                 debug!("Received application-level pong");
             }
             McpFrame::Notification { method, params } => {
-                if inner.taps.notification(&method, params.as_ref()) {
+                let keys = keys.as_ref().or(params.as_ref());
+                if inner
+                    .taps
+                    .notification_keyed(&method, params.as_ref(), keys)
+                {
                     return Ok(());
                 }
+                let token = progress_key(&method, keys);
                 route_progress(
                     inner,
                     JsonRpcNotification {
@@ -489,6 +502,7 @@ impl WebSocketTransport {
                         method,
                         params,
                     },
+                    token,
                 );
             }
             // Not relayed mid-call; the 2026 input bridge (`gateway::input_bridge`) is the path.
@@ -754,7 +768,7 @@ mod cancel;
 mod listen;
 #[path = "websocket_progress.rs"]
 mod progress;
-use progress::{ProgressRegistration, route_progress};
+use progress::{ProgressRegistration, progress_key, route_progress};
 
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
@@ -774,3 +788,7 @@ mod backend_tests;
 #[cfg(test)]
 #[path = "websocket_negotiation_tests.rs"]
 mod negotiation_tests;
+
+#[cfg(test)]
+#[path = "websocket_scrub_tests.rs"]
+mod scrub_tests;
