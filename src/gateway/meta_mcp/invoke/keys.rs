@@ -165,7 +165,10 @@ impl MetaMcp {
             );
             return Ok(std::ops::ControlFlow::Break(TracedOutcome::Live(stored)));
         }
-        super::stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
+        // FIX 1b: at most once. Refused before its backend.
+        super::stored_proof::refuse_unproven(unproven, server).inspect_err(|_| {
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
+        })?;
         Ok(std::ops::ControlFlow::Continue(Keyed { caller_principal }))
     }
 
