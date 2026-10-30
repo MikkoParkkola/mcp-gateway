@@ -68,7 +68,11 @@ fn now() -> u64 {
 /// admin key 200, on both routes.
 #[tokio::test]
 async fn t41_both_routes_are_admin_only() {
-    for uri in ["/ui/api/metrics/series?metric=calls", "/ui/api/markers"] {
+    for uri in [
+        "/ui/api/metrics/series?metric=calls",
+        "/ui/api/metrics/series?metric=latency_p95",
+        "/ui/api/markers",
+    ] {
         let (user, _, _dir) = state(false).await;
         assert_eq!(
             get(&user, uri, None).await.0,
