@@ -330,6 +330,21 @@ impl BackendRegistry {
     /// gateway serves, and tests.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
+        // The value set is stamped and seeded before the backend is
+        // published, so nothing it answers once visible (a tool description
+        // to a concurrent discovery) can carry a value unscrubbed (MIK-9035).
+        // Outside any lock: a keychain value may take its time to resolve.
+        if let Some(resolver) = &self.secret_resolver {
+            backend.stamp_secret_resolver(Arc::clone(resolver));
+        }
+        let grace = self.redaction_grace;
+        let needles = Arc::clone(
+            &*self.needles.entry(backend.name.clone()).or_insert_with(|| {
+                Arc::new(crate::security::needles::NeedleSet::with_grace(grace))
+            }),
+        );
+        backend.stamp_needles(needles);
+        backend.seed_needles();
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
@@ -354,16 +369,6 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
-        if let Some(resolver) = &self.secret_resolver {
-            backend.stamp_secret_resolver(Arc::clone(resolver));
-        }
-        let grace = self.redaction_grace;
-        let needles = Arc::clone(
-            &*self.needles.entry(backend.name.clone()).or_insert_with(|| {
-                Arc::new(crate::security::needles::NeedleSet::with_grace(grace))
-            }),
-        );
-        backend.stamp_needles(needles);
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {
@@ -377,8 +382,6 @@ impl BackendRegistry {
         self.membership
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
-        // Outside the lock: a keychain value may take its time to resolve.
-        inserted.seed_needles();
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {
