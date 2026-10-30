@@ -298,6 +298,11 @@ pub(super) struct ClientCfg {
     pub(super) base: Url,
     pub(super) roots: rustls::RootCertStore,
     pub(super) proxy: ProxyEnv,
+    /// A test-only replacement for both request bounds ([`CONNECT_TIMEOUT`]
+    /// and [`REQUEST_TIMEOUT`]); `None` in production. Tests that prove the
+    /// [`BUDGET`] set it past the budget, so nothing else can end a stalled
+    /// lookup.
+    pub(super) bounds_override: Option<Duration>,
 }
 
 impl ClientCfg {
@@ -311,6 +316,7 @@ impl ClientCfg {
             base: Url::parse(REGISTRY_BASE).expect("REGISTRY_BASE is a valid URL literal"),
             roots,
             proxy: ProxyEnv::from_process(),
+            bounds_override: None,
         }
     }
 }
@@ -343,8 +349,8 @@ pub(super) fn client(cfg: &ClientCfg) -> Option<reqwest::Client> {
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
-        .connect_timeout(CONNECT_TIMEOUT)
-        .timeout(REQUEST_TIMEOUT)
+        .connect_timeout(cfg.bounds_override.unwrap_or(CONNECT_TIMEOUT))
+        .timeout(cfg.bounds_override.unwrap_or(REQUEST_TIMEOUT))
         .user_agent(USER_AGENT)
         .http1_only();
     if let Route::Proxy { url, no_proxy } = route {

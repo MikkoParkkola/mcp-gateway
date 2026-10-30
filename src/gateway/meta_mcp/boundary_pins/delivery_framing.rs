@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Where an error becomes a delivered frame, or a gateway refusal is built,
-//! in `src/gateway` production code. A gateway refusal records `refused` only
+//! in `src/gateway` production code (refusals anywhere in `src/`). A gateway refusal records `refused` only
 //! where it is delivered (sealed errors at the outlets, the rest per site),
 //! so a new framing site or a new refusal must be looked at, not slipped in.
 //!
@@ -58,6 +58,11 @@ const CLASSES: [&str; 6] = [
     // by the composite's or the replay's own record rules.
     "composite-or-replay",
 ];
+
+/// Known gaps, each fixed by a follow-up that deletes its slug here when it
+/// flips the last `pending:<slug>` row: a row left pending then fails, and
+/// so does a slug with no rows.
+const PENDING: [&str; 1] = ["capability-refusals"];
 
 #[derive(Default)]
 struct Found {
@@ -126,7 +131,12 @@ fn callee(expr: &syn::Expr) -> Option<(Option<String>, String)> {
 
 impl Sink for Found {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
-        if !at.file.starts_with("src/gateway/") {
+        // A refusal built anywhere in the crate can reach a delivered answer
+        // (the playbook engine, the firewall, the transports), so every
+        // refusal in `src/` is classified. Only `src/gateway` frames answers,
+        // so the builder inventory stays there.
+        let framing = at.file.starts_with("src/gateway/");
+        if !at.file.starts_with("src/") {
             return;
         }
         let func = at.func.clone().unwrap_or_else(|| "<module>".to_string());
@@ -135,6 +145,11 @@ impl Sink for Found {
                 .entry(format!("{}\t{func}\t{needle}", at.file))
                 .or_default() += 1;
         };
+        let note_builder = |table: &mut std::collections::BTreeMap<String, usize>, needle: &str| {
+            if framing {
+                note(table, needle);
+            }
+        };
         if let syn::Expr::Struct(literal) = expr
             && literal
                 .path
@@ -142,7 +157,7 @@ impl Sink for Found {
                 .last()
                 .is_some_and(|s| s.ident == "JsonRpc")
         {
-            note(&mut self.builders, "Error::JsonRpc{}");
+            note_builder(&mut self.builders, "Error::JsonRpc{}");
         }
         // The gateway's own refusal variants, built without a `*refusal`
         // function (a firewall or authorization refusal at a chokepoint).
@@ -179,10 +194,12 @@ impl Sink for Found {
                 Some("JsonRpcResponse"),
                 "error" | "error_with_data" | "of_error" | "of_error_text",
             ) => {
-                note(&mut self.builders, &format!("JsonRpcResponse::{name}"));
+                note_builder(&mut self.builders, &format!("JsonRpcResponse::{name}"));
             }
-            (Some("Error"), "json_rpc") => note(&mut self.builders, "Error::json_rpc"),
-            (_, builder) if BUILDERS.contains(&builder) => note(&mut self.builders, builder),
+            (Some("Error"), "json_rpc") => note_builder(&mut self.builders, "Error::json_rpc"),
+            (_, builder) if BUILDERS.contains(&builder) => {
+                note_builder(&mut self.builders, builder);
+            }
             (Some("Refused"), "of") => note(&mut self.refusals, "Refused::of"),
             (_, refusal) if is_refusal_name(refusal) => note(&mut self.refusals, refusal),
             _ => {}
@@ -243,6 +260,19 @@ fn every_refusal_site_is_classified() {
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
     {
         let class = row.split('\t').nth(4).unwrap_or("");
-        assert!(CLASSES.contains(&class), "unclassified refusal site: {row}");
+        let pending = class
+            .strip_prefix("pending:")
+            .is_some_and(|slug| PENDING.contains(&slug));
+        assert!(
+            CLASSES.contains(&class) || pending,
+            "unclassified refusal site: {row}"
+        );
+    }
+    // A slug whose last row was flipped must go too, or it re-admits rows.
+    for slug in PENDING {
+        assert!(
+            text.contains(&format!("\tpending:{slug}\t")),
+            "pending:{slug} has no rows left; delete it from PENDING"
+        );
     }
 }

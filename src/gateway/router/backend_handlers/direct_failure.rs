@@ -100,6 +100,16 @@ impl DirectFailure<'_> {
                 .direct_refusal(Some(self.id), text, Some(error), self.identity)
                 .await;
         }
-        build_http_response(&Egressed::of(response), StatusCode::INTERNAL_SERVER_ERROR)
+        // An authorization refusal raised at the send (a lent-only slot the
+        // call brought no credential for) is the gateway's decision: answered
+        // with its own status, as on the meta route, so the direct recorder
+        // classes it denied and records it refused.
+        let status = match &error {
+            crate::Error::Forbidden { status, .. } => {
+                StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        build_http_response(&Egressed::of(response), status)
     }
 }
