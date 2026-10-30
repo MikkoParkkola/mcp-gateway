@@ -127,7 +127,7 @@ fn sse_with(frame: &serde_json::Value) -> String {
     )
 }
 
-/// MIK-9039 NOTIFY.4, HTTP in-call: a backend's progress frame reaches the
+/// HTTP in-call: a backend's progress frame reaches the
 /// caller without the gateway-only and scoped members it planted.
 #[tokio::test]
 async fn sse_decode_strips_what_a_backend_planted_on_a_progress_frame() {
@@ -145,7 +145,7 @@ async fn sse_decode_strips_what_a_backend_planted_on_a_progress_frame() {
     assert_progress_stripped("http in-call", "t-1", params);
 }
 
-/// MIK-9039 NOTIFY.4: a backend's `notifications/tasks` is the gateway's own
+/// A backend's `notifications/tasks` is the gateway's own
 /// to raise; one a backend sends during a call never reaches the caller.
 #[tokio::test]
 async fn sse_decode_withholds_a_backend_tasks_notification() {

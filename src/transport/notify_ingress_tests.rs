@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-use std::sync::{Arc, Mutex};
-
 use serde_json::{Value, json};
 
 use super::*;
+use crate::test_log_capture::capture_warnings as warns;
 
 fn note(method: &str, params: Value) -> JsonRpcNotification {
     JsonRpcNotification {
@@ -16,31 +15,6 @@ fn note(method: &str, params: Value) -> JsonRpcNotification {
 
 fn backend() -> Origin {
     Origin::Backend("b1".into())
-}
-
-/// Run `f` and return what it logged at warn and above.
-fn warns<T>(f: impl FnOnce() -> T) -> (T, String) {
-    #[derive(Clone, Default)]
-    struct Buf(Arc<Mutex<Vec<u8>>>);
-    impl std::io::Write for Buf {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0.lock().unwrap().extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let buf = Buf::default();
-    let writer = buf.clone();
-    let subscriber = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::WARN)
-        .with_ansi(false)
-        .with_writer(move || writer.clone())
-        .finish();
-    let out = tracing::subscriber::with_default(subscriber, f);
-    let text = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
-    (out, text)
 }
 
 /// The scoped members a backend may not put on a protocol notification.

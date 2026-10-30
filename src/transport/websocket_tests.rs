@@ -568,7 +568,7 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
     );
 }
 
-/// MIK-9039 NOTIFY.4, WebSocket in-call: the I/O loop's delivery strips what
+/// WebSocket in-call: the I/O loop's delivery strips what
 /// the backend planted.
 #[tokio::test]
 async fn ws_delivery_strips_what_a_backend_planted_on_a_progress_frame() {

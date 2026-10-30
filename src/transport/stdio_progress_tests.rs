@@ -194,7 +194,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     assert_eq!(drained[0].method, "notifications/progress");
 }
 
-/// MIK-9039 NOTIFY.4, stdio in-call: the reader task's delivery strips what
+/// stdio in-call: the reader task's delivery strips what
 /// the backend planted, as the batched path does.
 #[tokio::test]
 async fn stdio_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
