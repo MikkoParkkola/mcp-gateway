@@ -433,7 +433,7 @@ async fn a_notification_echoing_a_secret_is_scrubbed_before_it_is_published() {
     );
 }
 
-/// gpt G4 (DELTA-4): a frame that fails typed parsing is reported by its
+/// Review G4 (DELTA-4): a frame that fails typed parsing is reported by its
 /// category and position; serde's text, which quotes (and escapes) what it
 /// read, never reaches the error.
 #[tokio::test]

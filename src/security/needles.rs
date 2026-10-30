@@ -126,8 +126,10 @@ impl NeedleSet {
         if value.is_empty() {
             return;
         }
-        let now = tokio::time::Instant::now();
         let mut values = self.values.write();
+        // Read under the lock: a clock read before it could judge a value
+        // live that a scrub, run while this waited, cached as retired.
+        let now = tokio::time::Instant::now();
         if let Some(held) = values.iter_mut().find(|held| held.value == value) {
             // A value renewed after it retired is back in the set: a build
             // made while it was retired lacks it, so the cache is stale.

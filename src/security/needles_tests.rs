@@ -270,6 +270,12 @@ fn cost_of_the_scrub_against_the_parse() {
                     Scrubbed::Refuse,
                     "the set overflowed: not a redaction cost"
                 );
+                // Each fixture measures what its label says.
+                match kind {
+                    "clean" => assert_eq!(outcome, Scrubbed::Clean, "{kind}"),
+                    "echo" => assert_eq!(outcome, Scrubbed::Redacted, "{kind}"),
+                    _ => {}
+                }
                 println!(
                     "T1.33 size={size} needles={count} kind={kind} parse={parse:?} scrub={scrub:?} outcome={outcome:?}"
                 );
@@ -278,7 +284,7 @@ fn cost_of_the_scrub_against_the_parse() {
     }
 }
 
-/// gpt G2: an `error.code` equal to a value by number, not only by text, is
+/// Review G2: an `error.code` equal to a value by number, not only by text, is
 /// refused on a response and on a retryable error, and the refusal keeps the
 /// error retryable.
 #[test]
@@ -313,7 +319,7 @@ fn an_error_code_equal_to_a_value_by_number_is_refused() {
     assert!(!message.contains("739154"), "{message}");
 }
 
-/// gpt G3: the envelope's `jsonrpc` is normalised, so a value placed there
+/// Review G3: the envelope's `jsonrpc` is normalised, so a value placed there
 /// never passes.
 #[test]
 fn a_value_in_the_jsonrpc_field_is_normalised_away() {
@@ -329,7 +335,7 @@ fn a_value_in_the_jsonrpc_field_is_normalised_away() {
     assert_eq!(response.jsonrpc, "2.0");
 }
 
-/// gpt G5: a supported-version list holding a value is refused, never shown.
+/// Review G5: a supported-version list holding a value is refused, never shown.
 #[test]
 fn a_supported_version_holding_a_value_is_refused() {
     let needles = NeedleSet::with_grace(GRACE);
@@ -348,7 +354,7 @@ fn a_supported_version_holding_a_value_is_refused() {
     );
 }
 
-/// kimi A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
+/// Review A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
 /// matched as well as the form spelling.
 #[test]
 fn every_listed_percent_spelling_is_redacted() {
@@ -408,5 +414,70 @@ async fn a_value_renewed_after_it_retired_is_matched_again() {
         outcome,
         Scrubbed::Redacted,
         "a renewed value is not matched: {text}"
+    );
+}
+
+/// Renewing a live value keeps the cached matcher: no rebuild per send.
+#[tokio::test(start_paused = true)]
+async fn renewing_a_live_value_keeps_the_cached_matcher() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-live-value");
+    let before = needles.snapshot();
+    needles.insert("b", "token-live-value");
+    assert!(
+        std::sync::Arc::ptr_eq(&before, &needles.snapshot()),
+        "a live renewal rebuilt the matcher"
+    );
+}
+
+/// Whether, in `block`, the `values.write()` lock is taken before `now` is
+/// read.
+fn clock_read_under_the_lock(block: &syn::Block) -> bool {
+    let at = |want: &dyn Fn(&syn::Local) -> bool| {
+        block
+            .stmts
+            .iter()
+            .position(|stmt| matches!(stmt, syn::Stmt::Local(local) if want(local)))
+    };
+    let lock = at(&|local| {
+        local.init.as_ref().is_some_and(|init| {
+            matches!(init.expr.as_ref(), syn::Expr::MethodCall(call) if call.method == "write")
+        })
+    });
+    let clock = at(&|local| matches!(&local.pat, syn::Pat::Ident(p) if p.ident == "now"));
+    matches!((lock, clock), (Some(lock), Some(clock)) if lock < clock)
+}
+
+/// Round 3: `insert` reads the clock under the values lock. Read before it, a
+/// renewal could judge live a value that a scrub, run while it waited,
+/// cached as retired, and skip the rebuild. Statement order in one body; a
+/// planted wrong order fails.
+#[test]
+fn the_renewal_clock_is_read_under_the_lock() {
+    let file: syn::File = syn::parse_str(include_str!("needles.rs")).expect("needles.rs parses");
+    let insert = file
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(block) => Some(block),
+            _ => None,
+        })
+        .flat_map(|block| &block.items)
+        .find_map(|item| match item {
+            syn::ImplItem::Fn(f) if f.sig.ident == "insert" => Some(&f.block),
+            _ => None,
+        })
+        .expect("NeedleSet::insert");
+    assert!(
+        clock_read_under_the_lock(insert),
+        "insert reads the clock before it takes the values lock"
+    );
+    let planted: syn::Block = syn::parse_quote!({
+        let now = tokio::time::Instant::now();
+        let mut values = self.values.write();
+    });
+    assert!(
+        !clock_read_under_the_lock(&planted),
+        "a clock read before the lock passed"
     );
 }
