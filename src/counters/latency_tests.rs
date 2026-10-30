@@ -18,14 +18,23 @@ fn exact_p95(samples: &mut [f64]) -> f64 {
 
 /// Row 1: each edge starts its bin; just below it is the bin before.
 #[test]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "edges up to 1.25^62 ms are under u64 nanoseconds"
+)]
 fn bins_have_their_stated_edges() {
     assert_eq!(bin_of(ms(0.0)), 0);
     assert_eq!(bin_of(ms(0.999)), 0);
     assert_eq!(bin_of(ms(1.0)), 1);
+    // A send time is whole nanoseconds: the first one at or above an edge
+    // starts the next bin, the last one below it stays in this bin.
     for i in 1..62u8 {
-        let edge = RATIO.powi(i32::from(i));
-        assert_eq!(bin_of(ms(edge)), i + 1, "edge {i}");
-        assert_eq!(bin_of(ms(edge * 0.999_9)), i, "below edge {i}");
+        let edge_ns = RATIO.powi(i32::from(i)) * 1_000_000.0;
+        let at = Duration::from_nanos(edge_ns.ceil() as u64);
+        let below = Duration::from_nanos(edge_ns.ceil() as u64 - 1);
+        assert_eq!(bin_of(at), i + 1, "edge {i}");
+        assert_eq!(bin_of(below), i, "below edge {i}");
     }
     assert_eq!(bin_of(ms(RATIO.powi(62))), BINS - 1);
     assert_eq!(bin_of(Duration::from_secs(86_400)), BINS - 1);
