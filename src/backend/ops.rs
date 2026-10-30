@@ -13,7 +13,7 @@ use crate::failsafe::{RetryPolicy, with_retry_unless};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
-use crate::{Error, Result};
+use crate::{Error, Result, gateway::meta_mcp::invoke::send_timer::SendTimer};
 
 /// Which transport entry point one outbound request takes, and how many times.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -411,7 +411,7 @@ impl Backend {
             let method = method.to_string();
             let identity_key = identity_key.clone();
             async move {
-                match attempts {
+                SendTimer::start_if(method == "tools/call").finish_with(match attempts {
                     Attempts::WithRetry => {
                         transport
                             .request_with_headers(
@@ -433,7 +433,7 @@ impl Backend {
                             )
                             .await
                     }
-                }
+                })
             }
         };
         // A call sent at most once (as `with_retry` sends under a disabled

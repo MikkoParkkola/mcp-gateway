@@ -268,6 +268,9 @@ pub(crate) async fn run(
         ))
     })?;
     let mut guard = TreeGuard(Some(child));
+    // The send is timed from a started child; a spawn failure
+    // above sent nothing.
+    let timer = crate::gateway::meta_mcp::invoke::send_timer::SendTimer::start();
 
     if let Some(bytes) = invocation.stdin.clone()
         && let Some(mut stdin) = guard.child().stdin().take()
@@ -329,7 +332,7 @@ pub(crate) async fn run(
         duration: started.elapsed(),
         bytes,
     });
-    result
+    timer.finish_with(result)
 }
 
 /// How a started child ended, as the invocation record states it

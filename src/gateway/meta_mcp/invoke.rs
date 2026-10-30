@@ -40,7 +40,8 @@ mod side_effect_markers;
 mod undeclared_gate;
 // D1: the invocation record, written around `invoke_tool_traced`.
 pub(crate) mod audit;
-mod chokepoint; // MIK-8137 b1: the dispatch chokepoint every send passes
+mod chokepoint;
+pub(crate) mod send_timer; // times each backend send // MIK-8137 b1: the dispatch chokepoint every send passes
 // MIK-8351: the direct route's tools/call send passes it too.
 #[cfg(feature = "firewall")]
 pub(crate) use chokepoint::ScanTarget;

@@ -259,6 +259,7 @@ impl MetaMcp {
                 args.get("tool").and_then(Value::as_str),
                 &crate::security::audit::AuditWho::from_caller(caller),
                 crate::counters::Outcome::AdmissionRefused,
+                None,
             );
             return Err(refused);
         }
@@ -330,6 +331,7 @@ impl MetaMcp {
                 Some(tool),
                 &crate::security::audit::AuditWho::from_caller(caller),
                 crate::counters::Outcome::AdmissionRefused,
+                None,
             );
             return refused;
         }

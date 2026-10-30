@@ -542,6 +542,7 @@ async fn t11_a_tool_in_a_per_user_catalogue_keeps_its_label() {
         Some("x"),
         &crate::security::audit::AuditWho::gateway(),
         crate::counters::Outcome::AdmissionRefused,
+        None,
     );
     assert_eq!(store.labels(Dim::Tool), 1, "the catalogued tool is a label");
     assert_eq!(count(&store, Metric::Calls, Filter::Overflow(Dim::Tool)), 0);

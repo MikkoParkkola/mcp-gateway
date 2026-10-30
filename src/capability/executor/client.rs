@@ -7,6 +7,8 @@ use std::time::Duration;
 
 use reqwest::Client;
 
+use crate::counters::End;
+use crate::gateway::meta_mcp::invoke::send_timer::SendTimer;
 use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::{Error, Result};
 
@@ -157,6 +159,8 @@ pub(super) async fn send_with_retry(
     health: &crate::failsafe::HealthTracker,
 ) -> Result<reqwest::Response> {
     let started = std::time::Instant::now();
+    // This call's backend send time, retries and backoff included.
+    let timer = SendTimer::start();
     let mut backoff_ms: u64 = 100;
     for attempt in 1..=MAX_SEND_ATTEMPTS {
         let Some(attempt_req) = request.try_clone() else {
@@ -164,24 +168,30 @@ pub(super) async fn send_with_retry(
             return match request.send().await {
                 Ok(resp) => {
                     health.record_success(started.elapsed());
+                    timer.finish(End::Answered);
                     Ok(resp)
                 }
-                Err(e) => Err(
-                    crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
-                        health.record_failure();
-                        Error::Transport(format!("{label} failed: {}", redact_url(e)))
-                    }),
-                ),
+                Err(e) => {
+                    end_send(timer, &e);
+                    Err(
+                        crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
+                            health.record_failure();
+                            Error::Transport(format!("{label} failed: {}", redact_url(e)))
+                        }),
+                    )
+                }
             };
         };
         match attempt_req.send().await {
             Ok(resp) => {
                 health.record_success(started.elapsed());
+                timer.finish(End::Answered);
                 return Ok(resp);
             }
             Err(e) => {
                 // A refused destination is refused again: one attempt, no health mark.
                 if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+                    end_send(timer, &e);
                     return Err(refused);
                 }
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
@@ -199,10 +209,25 @@ pub(super) async fn send_with_retry(
                     continue;
                 }
                 health.record_failure();
+                end_send(timer, &e);
                 return Err(Error::Transport(format!("{label} failed: {e}")));
             }
         }
     }
     // The final attempt always returns above; the loop cannot fall through.
     unreachable!("send_with_retry exhausted attempts without returning")
+}
+
+/// How a failed send ended. A destination the SSRF policy refused
+/// on the first hop was never sent to: nothing is noted. A refused redirect
+/// hop means a server answered first, so the send failed; a timeout is
+/// reqwest's own flag, read before the error is wrapped as `Transport`.
+fn end_send(timer: SendTimer, e: &reqwest::Error) {
+    if crate::security::http_diagnostics::ssrf_refusal(e).is_some() && !e.is_redirect() {
+        timer.discard();
+    } else if e.is_timeout() {
+        timer.finish(End::TimedOut);
+    } else {
+        timer.finish(End::Failed);
+    }
 }

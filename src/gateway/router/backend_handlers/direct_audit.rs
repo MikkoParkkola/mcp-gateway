@@ -359,6 +359,7 @@ pub(super) async fn record(
         call.tool.as_deref(),
         &call.who,
         notes.counted(outcome, firewall),
+        notes.backend_sample(),
     );
     let Some(log) = state.transparency_log.as_ref() else {
         return answer;

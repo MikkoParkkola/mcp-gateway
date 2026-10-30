@@ -93,6 +93,10 @@ pub(crate) struct Series {
     /// its old buckets as it takes new ones.
     #[serde(default)]
     pub(crate) admitted: u64,
+    /// Backend latency: kept on server, overflow and global
+    /// series only, and saved apart from the counts (`snapshot::File`).
+    #[serde(skip)]
+    pub(crate) latency: super::latency::LatencySeries,
 }
 
 impl Series {
@@ -113,12 +117,14 @@ impl Series {
         }
     }
 
-    /// Whether nothing is left once both rings are aged to `at` and `day`.
+    /// Whether nothing is left once both rings, and the latency, are aged
+    /// to `at` and `day`.
     pub(crate) fn aged(&mut self, at: u64, day: Option<u64>) -> bool {
         self.half.expire(at / HALF);
         if let Some(day) = day {
             self.day.expire(day);
         }
-        self.half.is_empty() && self.day.is_empty()
+        self.latency.finalize(at, day);
+        self.half.is_empty() && self.day.is_empty() && self.latency.is_empty()
     }
 }

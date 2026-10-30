@@ -270,6 +270,8 @@ impl<'a> Refused<'a> {
                 firewall: self.firewall,
                 cache_hit: false,
             },
+            // A router refusal: no send began.
+            None,
         );
         let log = state.transparency_log.as_ref()?;
         let otel_trace_id = self

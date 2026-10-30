@@ -75,6 +75,29 @@ pub(crate) struct DispatchNotes {
     /// [`MAX_PROCESS_NOTES`], and how many there were.
     process: Vec<ProcessNote>,
     process_total: usize,
+    /// This call's backend send time, summed over its rounds, and
+    /// how its last round ended. `None`: no send began.
+    backend: Option<(std::time::Duration, crate::counters::End)>,
+}
+
+/// A backend send of this call took `elapsed` and ended `end`. A
+/// bridged retry's rounds add up; the last round's end is the call's.
+pub(crate) fn note_backend(elapsed: std::time::Duration, end: crate::counters::End) {
+    note(|notes| {
+        let total = notes
+            .backend
+            .map_or(elapsed, |(sum, _)| sum.saturating_add(elapsed));
+        notes.backend = Some((total, end));
+    });
+}
+
+impl DispatchNotes {
+    /// The latency sample this call's count carries, if a send began.
+    pub(crate) const fn backend_sample(
+        &self,
+    ) -> Option<(std::time::Duration, crate::counters::End)> {
+        self.backend
+    }
 }
 
 /// Most process notes one record carries (a playbook may run many).
