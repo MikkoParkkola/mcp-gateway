@@ -8,7 +8,7 @@ use futures::FutureExt;
 
 use super::{
     ResponseEffect, counted_send, raise, refused_before_send, refused_before_send_seen, scope,
-    unsent,
+    step, unsent,
 };
 use crate::Error;
 
@@ -106,6 +106,54 @@ async fn an_answered_send_stays_counted() {
         let _ = counted_send(async { Ok::<(), Error>(()) }).await;
         assert!(!unsent(&refused_before_send(config())));
         assert!(!unsent(&connect()));
+    })
+    .await;
+}
+
+/// R8 (unit): a composite's step refused in its send does not make the next
+/// step, which was sent and lost, read as unsent: each step has its own cell.
+#[tokio::test]
+async fn a_refused_step_does_not_make_a_sent_step_unsent() {
+    scope(async {
+        step(async {
+            assert!(
+                unsent(&refused_before_send(config())),
+                "premise: step one is unsent"
+            );
+        })
+        .await;
+        step(async {
+            let returned = counted_send(async { Err::<(), _>(lost()) }).await;
+            assert!(
+                !unsent(&returned.expect_err("the send failed")),
+                "step one's refusal leaked into step two"
+            );
+        })
+        .await;
+    })
+    .await;
+}
+
+/// R21 (unit): a step that was sent does not make the next step, refused in
+/// its send, read as possibly sent: the send count does not cross steps.
+#[tokio::test]
+async fn a_sent_step_does_not_make_a_refused_step_sent() {
+    scope(async {
+        step(async {
+            let _ = counted_send(async { Ok::<(), Error>(()) }).await;
+            assert!(
+                !unsent(&refused_before_send(config())),
+                "premise: step one sent"
+            );
+        })
+        .await;
+        step(async {
+            assert!(
+                unsent(&refused_before_send(config())),
+                "step one's send leaked into step two"
+            );
+        })
+        .await;
     })
     .await;
 }
