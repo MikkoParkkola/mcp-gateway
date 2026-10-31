@@ -233,3 +233,57 @@ impl Transport for Script {
         Ok(())
     }
 }
+
+/// The two-step playbook `pb` on `alpha`, run as a task; `change` lands on
+/// `alpha` once step 1 has been answered. Returns the answer, the sends, and
+/// the settled status.
+async fn between_steps(change: Change, key: &str) -> (String, usize, Value) {
+    let script = Script::new();
+    let definition = playbook_definition(["alpha", "alpha"]);
+    let fx = Box::pin(super::super::direct_guards_fixture::fixture_built_on(
+        Arc::clone(&script) as Arc<dyn Transport>,
+        move |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    ))
+    .await;
+    let fx = with_rule(fx, &[]);
+    warm(&fx, &["alpha"]);
+    let state = Arc::clone(&fx.state);
+    script.after_call(0, move || apply(&state, "alpha", change));
+    let args = json!({"name": "pb", "arguments": {"x": "v"}});
+    let id = submit(&fx, "gateway_run_playbook", args, key).await;
+    let body = settled(&fx, &id, &["working"]).await;
+    let sent = script.calls.load(Ordering::SeqCst);
+    (answer(&body, &id), sent, body)
+}
+
+/// Between two composite steps a backend that turns hidden answers the next
+/// step as one removed, and step 2 sends nothing. With no change, step 2 runs.
+#[tokio::test]
+async fn a_backend_hidden_between_two_steps_answers_as_one_removed() {
+    let (control, control_sent, control_body) =
+        Box::pin(between_steps(Change::None, "hr1-c")).await;
+    assert_eq!(
+        control_sent, 2,
+        "control: step 2 did not run: {control_body}"
+    );
+    assert_eq!(
+        control_body.pointer("/result/status"),
+        Some(&json!("completed")),
+        "control: {control_body}"
+    );
+    let (hidden, hidden_sent, _) = Box::pin(between_steps(Change::Hide, "hr1-h")).await;
+    let (removed, removed_sent, removed_body) =
+        Box::pin(between_steps(Change::Remove, "hr1-r")).await;
+    assert_eq!(removed_sent, 1, "premise: step 2 reached a removed backend");
+    assert_ne!(
+        removed, control,
+        "premise: removal changed nothing: {removed_body}"
+    );
+    assert_eq!(hidden_sent, 1, "hidden: step 2 was sent");
+    assert_eq!(hidden, removed, "hidden and removed answer alike");
+}
