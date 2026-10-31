@@ -188,3 +188,42 @@ fn server_cap_overflow_and_sweep() {
     };
     assert_eq!((point.calls, point.failed), (1, 1));
 }
+
+/// Review F6: a server admitted 12 hours ago, whose previous day had latency
+/// in the server overflow, draws no previous point from before it was
+/// admitted and says the period is incomplete, as U1's counts do.
+#[test]
+fn previous_period_omits_what_the_overflow_may_hold() {
+    let now = T0 + 3 * 86_400;
+    let store = CounterStore::new(T0);
+    let stray = Call {
+        caller: "key:a",
+        server: Label::Untrusted,
+        tool: Label::Known("t"),
+        tally: Tally::default(),
+    };
+    let sample = Some((Duration::from_millis(50), End::Answered));
+    store.record_timed(&stray, now - 36 * 3_600, &Utc, sample);
+    let admitted = now - 12 * 3_600;
+    timed(&store, "alpha", admitted, 100, End::Answered);
+    let view = store.latency_series(Some("alpha"), Window::Day, true, now, &Utc);
+    assert!(!view.folded, "the server's own points are exact");
+    assert!(!view.previous_complete, "the overflow may hold its previous calls");
+    let start = admitted - admitted % HALF;
+    assert!(
+        view.previous.expect("asked for").iter().all(|p| p.t >= start),
+        "no previous point from before it was admitted"
+    );
+}
+
+/// Review F8: after the clock stepped back, a live slot ahead of the hour is
+/// not merged into it.
+#[test]
+fn overview_hour_ignores_slots_ahead_of_the_clock() {
+    let store = CounterStore::new(T0);
+    for _ in 0..30 {
+        timed(&store, "ahead", T0 + 5 * HALF + 10, 5_000, End::Answered);
+    }
+    let hour = store.latency_hour(T0 + 10);
+    assert!(hour.servers.is_empty(), "{:?}", hour.servers);
+}
