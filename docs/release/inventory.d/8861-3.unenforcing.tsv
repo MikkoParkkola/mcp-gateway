@@ -1,0 +1,1 @@
+src/gateway/router/mod.rs	record_key	1	Returns the process's record key, resolved once at startup and the same in every generation; decides nothing

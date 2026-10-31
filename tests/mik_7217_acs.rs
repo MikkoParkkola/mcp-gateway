@@ -377,7 +377,6 @@ mod http {
             streaming_config: config.streaming.clone(),
             // Authentication disabled: this criterion is about discovery needing
             // no credential exchange beyond the transport's own.
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY)),
             key_server: None,
             tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -392,8 +391,9 @@ mod http {
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(
+            live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
                 crate::flags_off::flags_off(&Config::default()),
+                Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY)),
             )),
             export_status: None,
             transparency_log: None,
