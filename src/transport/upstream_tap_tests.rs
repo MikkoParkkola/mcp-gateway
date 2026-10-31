@@ -360,3 +360,51 @@ fn unwatched_legacy_updates_never_displace_a_wanted_one() {
         "the stale updates were not queued"
     );
 }
+
+/// F1 control row: the listen path forwards no backend member. A frame
+/// planted with gateway-only and scoped members, and extra `_meta`, projects
+/// to exactly the note its clean twin does: the notice kind and the one
+/// `resources/updated` URI, or the acknowledgement the gateway rebuilds from
+/// what was asked. If the projection ever forwarded more, the notification
+/// ingress would need a second call site here.
+#[test]
+fn a_planted_listen_frame_projects_to_its_clean_twin() {
+    let id = json!(7);
+    let r = requested();
+    let planted = |clean: Value| {
+        let mut p = tag(&id, clean);
+        p["_meta"]["io.mcp-gateway/executionOutcome"] = json!("FORGED-9");
+        p["_security_findings"] = json!(["FORGED-1"]);
+        p["taskId"] = json!("FORGED-TASK");
+        p["backend_field"] = json!("KEPT-BY-BACKEND");
+        p
+    };
+    for (method, clean) in [
+        (UPDATED, json!({"uri": "file:///a"})),
+        (TOOLS_CHANGED, json!({})),
+        (
+            ACKNOWLEDGED,
+            json!({"notifications": {"resourcesListChanged": true}}),
+        ),
+    ] {
+        let first = method == ACKNOWLEDGED;
+        let want = project_listen(method, Some(&tag(&id, clean.clone())), &id, &r, first);
+        let got = project_listen(method, Some(&planted(clean)), &id, &r, first);
+        assert_eq!(got, want, "{method}: a planted member changed the note");
+        assert!(
+            !format!("{got:?}").contains("FORGED") && !format!("{got:?}").contains("KEPT-BY"),
+            "{method}: a backend member reached the note: {got:?}"
+        );
+    }
+    // A method outside the projection is dropped whole, members and all.
+    assert_eq!(
+        project_listen(
+            "notifications/acme/status",
+            Some(&planted(json!({}))),
+            &id,
+            &r,
+            false
+        ),
+        Err(Dropped::Other)
+    );
+}
