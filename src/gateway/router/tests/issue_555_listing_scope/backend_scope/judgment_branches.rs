@@ -92,15 +92,15 @@ async fn a_grant_refusal_is_the_grants_answer_not_a_hiding() {
     assert!(hides_beta("*"), "control: a grant on beta");
 }
 
-/// Profiles `open` (admits all) and `narrow` (leaves `alpha` out), the
-/// default being `default`.
+/// Profiles `open` (admits all) and `narrow` (leaves `alpha` and the
+/// unregistered twin out), the default being `default`.
 fn session_profiles(default: &str) -> ProfileRegistry {
     let profiles = HashMap::from([
         ("open".to_string(), RoutingProfileConfig::default()),
         (
             "narrow".to_string(),
             RoutingProfileConfig {
-                deny_backends: Some(vec!["alpha".to_string()]),
+                deny_backends: Some(vec!["alpha".to_string(), UNREGISTERED.to_string()]),
                 ..Default::default()
             },
         ),
@@ -109,8 +109,12 @@ fn session_profiles(default: &str) -> ProfileRegistry {
 }
 
 /// The per-backend route, the default profile `default`, a session `u1`
-/// owns running `session_profile`: the router and the session's id.
-async fn direct_under_session(default: &str, session_profile: &str) -> (axum::Router, String) {
+/// owns running `session_profile`, `alpha` swapped for a recorder: the
+/// router, the session's id and the recorder.
+async fn direct_under_session(
+    default: &str,
+    session_profile: &str,
+) -> (axum::Router, String, Arc<super::super::Upstream>) {
     let registry = session_profiles(default);
     let (router, state) = with_mtls_tuned(
         Auth::Keys,
@@ -142,7 +146,13 @@ async fn direct_under_session(default: &str, session_profile: &str) -> (axum::Ro
         .meta_mcp
         .session_profiles()
         .set_profile(&session, session_profile);
-    (router, session)
+    let upstream = Arc::new(super::super::Upstream {
+        tools: vec!["alpha_read"],
+        calls: parking_lot::Mutex::new(Vec::new()),
+    });
+    backend(&state, "alpha")
+        .set_transport_for_test(Arc::clone(&upstream) as Arc<dyn crate::transport::Transport>);
+    (router, session, upstream)
 }
 
 /// A per-backend call judges hiding under the caller's own session profile,
@@ -152,16 +162,24 @@ async fn direct_under_session(default: &str, session_profile: &str) -> (axum::Ro
 #[tokio::test]
 async fn a_direct_call_hides_by_its_session_profile() {
     let call = json!({ "name": "alpha_read", "arguments": {} });
-    let (router, session) = direct_under_session("narrow", "open").await;
+    let (router, session, upstream) = direct_under_session("narrow", "open").await;
     let headers = [("mcp-session-id", session.as_str())];
     let (status, body) =
         post_cert_headers(&router, "/mcp/alpha", Some("u1"), call.clone(), &headers).await;
+    let answer: Value = serde_json::from_str(&body).expect("json");
     assert!(
-        status == 200 && !body.contains("Backend not found"),
+        status == 200
+            && answer.pointer("/result/content/0/text") == Some(&json!("ok"))
+            && answer.pointer("/result/isError") != Some(&json!(true)),
         "a backend the session admits was refused: {status} {body}"
     );
+    assert_eq!(
+        upstream.calls.lock().clone(),
+        vec!["alpha_read".to_string()],
+        "the admitted call did not reach the backend"
+    );
 
-    let (router, session) = direct_under_session("open", "narrow").await;
+    let (router, session, _) = direct_under_session("open", "narrow").await;
     let headers = [("mcp-session-id", session.as_str())];
     let hidden = post_cert_headers(&router, "/mcp/alpha", Some("u1"), call.clone(), &headers).await;
     let unregistered = post_cert_headers(
@@ -207,14 +225,14 @@ async fn caps_with_callback() -> (Arc<crate::capability::CapabilityBackend>, tem
     (backend, dir)
 }
 
-/// A provider the default profile leaves out, for a certificate whose rule
-/// admits everything: hidden, with nothing refusing it before the route
-/// stage. `tool` on it must answer as on an unregistered name.
+/// A provider the default profile leaves out, with the unregistered twin, for
+/// a certificate whose rule admits everything: hidden. `tool` on it must
+/// answer as on the unregistered name the same profile leaves out.
 async fn assert_profile_hidden_provider_alike(tool: &str) {
     let profiles = HashMap::from([(
         "nocaps".to_string(),
         RoutingProfileConfig {
-            deny_backends: Some(vec!["caps".to_string()]),
+            deny_backends: Some(vec!["caps".to_string(), UNREGISTERED.to_string()]),
             ..Default::default()
         },
     )]);
@@ -251,14 +269,15 @@ async fn a_profile_hidden_providers_admin_capability_answers_as_an_unregistered_
 }
 
 /// A profile's backend deny refuses every tool by name, so it hides a warm
-/// and a cold backend alike: the call answers as an unregistered name, not with the
-/// profile's refusal.
+/// and a cold backend alike, and the call answers as an unregistered name
+/// the same profile leaves out: the profile judges a name by name, never
+/// skipped for a hidden one.
 #[tokio::test]
 async fn a_cold_backend_the_profile_leaves_out_answers_as_an_unregistered_name() {
     let profiles = HashMap::from([(
         "nobeta".to_string(),
         RoutingProfileConfig {
-            deny_backends: Some(vec!["beta".to_string()]),
+            deny_backends: Some(vec!["beta".to_string(), UNREGISTERED.to_string()]),
             ..Default::default()
         },
     )]);
@@ -283,6 +302,41 @@ async fn a_cold_backend_the_profile_leaves_out_answers_as_an_unregistered_name()
             post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
         assert_alike(stage, "beta", &hidden, &unregistered);
     }
+}
+
+/// A profile that admits only `alpha` refuses every other name by name,
+/// registered or not: `beta`, hidden by the certificate's rule, meets the
+/// profile's refusal exactly as the unregistered name does, never a pass to
+/// the dispatch's miss that the unregistered name does not get.
+#[tokio::test]
+async fn an_allow_list_profile_refuses_a_hidden_name_as_an_unregistered_one() {
+    let profiles = HashMap::from([(
+        "onlyalpha".to_string(),
+        RoutingProfileConfig {
+            allow_backends: Some(vec!["alpha".to_string()]),
+            ..Default::default()
+        },
+    )]);
+    let (router, state) = with_mtls_tuned(
+        Auth::Off,
+        move |meta| {
+            meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "onlyalpha"))
+        },
+        (&["*"], &["*"]),
+        (&["beta", UNREGISTERED], &[]),
+    )
+    .await;
+    assert!(
+        judgment(&state, None, Some(&agent_cert())).hides("beta"),
+        "premise: the certificate's rule hides beta"
+    );
+    let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
+    let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
+    assert!(
+        unregistered.1.contains("routing profile") || unregistered.1.contains("does not list"),
+        "premise: the profile refuses the unregistered name: {unregistered:?}"
+    );
+    assert_alike("allow-list profile", "beta", &hidden, &unregistered);
 }
 
 /// Profiles with the default `nobeta`, which leaves `beta` out, and `open`.
@@ -371,7 +425,8 @@ async fn a_backend_the_profile_admits_answers_as_without_a_profile() {
     }
 }
 
-/// `beta` and the provider `caps` under a default profile leaving both out,
+/// `beta`, the provider `caps` and the unregistered twin under a default
+/// profile leaving all three out,
 /// for a certificate whose rule admits everything; `beta`'s upstream swapped
 /// for one that records each call, and `caps` counting its executions: the
 /// router, the state, the recorder and the provider.
@@ -384,7 +439,11 @@ async fn hidden_recorded() -> (
     let profiles = HashMap::from([(
         "neither".to_string(),
         RoutingProfileConfig {
-            deny_backends: Some(vec!["beta".to_string(), "caps".to_string()]),
+            deny_backends: Some(vec![
+                "beta".to_string(),
+                "caps".to_string(),
+                UNREGISTERED.to_string(),
+            ]),
             ..Default::default()
         },
     )]);
@@ -407,7 +466,7 @@ async fn hidden_recorded() -> (
 }
 
 /// A backend or provider the profile hides is refused at the profile stage
-/// with the unregistered name's answer, never let through: on `/mcp` (the
+/// as the unregistered name the profile also leaves out, never let through: on `/mcp` (the
 /// invoke policy and the named-target admission) and on the per-backend route
 /// (its profile refusal and the same admission), warm and cold, nothing is
 /// sent to `beta` and no capability runs.

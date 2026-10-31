@@ -42,19 +42,16 @@ impl MetaMcp {
     }
 
     /// The session profile's check of `(server, tool)` for this request's
-    /// caller. A name hidden from the caller is absent to it: as for an
-    /// unregistered name, the profile has nothing to refuse (its refusal would
-    /// name the backend), and the call meets the dispatch's miss, which routes
-    /// by the caller's view (`super::hiding`). A caller hiding does not apply
-    /// to keeps the profile's refusal.
+    /// caller. The profile judges a name by name alone, registered or not,
+    /// so a name hidden from the caller meets exactly what an unregistered
+    /// name does here: the profile's refusal when the profile leaves it out,
+    /// else the dispatch's miss, which routes by the caller's view
+    /// (`super::hiding`). Never skipped for a hidden name.
     pub(in crate::gateway) fn caller_profile_check(
         &self,
         session_id: Option<&str>,
         (server, tool): (&str, &str),
     ) -> crate::Result<()> {
-        if super::hiding::hidden(server) {
-            return Ok(());
-        }
         self.active_profile(session_id)
             .check(server, tool)
             .map_err(crate::Error::Protocol)
