@@ -566,7 +566,7 @@ pub(super) async fn forward_notification(
     };
     match route
         .backend
-        .notify_with_headers_lent(
+        .notify_in_scope(
             &envelope.method,
             envelope.params,
             headers,

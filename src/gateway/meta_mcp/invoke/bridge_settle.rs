@@ -40,10 +40,13 @@ pub(in crate::gateway::meta_mcp) fn classify_bridged_dispatch_error(
     error: &crate::Error,
 ) -> crate::gateway::input_bridge::BridgeError {
     let message = error.to_string();
-    if error.is_pre_dispatch() {
+    // `unsent`, not `is_pre_dispatch`: once an earlier round of this delivery
+    // reached the backend, a later round's pre-send refusal no longer proves
+    // the exchange ran nothing.
+    if crate::gateway::delivery_facts::unsent(error) {
         crate::gateway::input_bridge::BridgeError::NotAdmitted { message }
     } else {
-        // Always `MayHaveActed`: `is_pre_dispatch()` already diverted every
+        // Always `MayHaveActed`: `unsent` already diverted every
         // provably-unexecuted case to `NotAdmitted` above, so anything
         // reaching here may have run.
         crate::gateway::input_bridge::BridgeError::BackendFailed {
