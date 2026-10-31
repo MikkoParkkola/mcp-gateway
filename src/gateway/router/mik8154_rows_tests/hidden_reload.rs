@@ -394,3 +394,87 @@ async fn a_surfaced_task_hidden_before_its_run_answers_as_a_missing_name() {
     assert_eq!(hidden_sent, 0, "hidden: the run was sent");
     assert_eq!(hidden, missing, "hidden and missing answer alike");
 }
+
+/// Playbook `pb3`: a read on each of `alpha-pt`, `beta-pt`, `alpha-pt`,
+/// carrying on past a failed step.
+fn continuing_playbook() -> crate::playbook::PlaybookDefinition {
+    let steps: Vec<Value> = ["alpha-pt", "beta-pt", "alpha-pt"]
+        .iter()
+        .enumerate()
+        .map(|(n, server)| {
+            json!({"name": format!("s{n}"), "tool": "read", "server": server,
+                   "arguments": {"cmd": "$inputs.x"}})
+        })
+        .collect();
+    serde_json::from_value(json!({
+        "playbook": "1.0", "name": "pb", "description": "three reads",
+        "on_error": "continue", "steps": steps
+    }))
+    .expect("the playbook deserialises")
+}
+
+/// The three-step playbook over passthrough backends, sanitizing on, so
+/// intake judges an exemption. `change` lands on `beta-pt` after step 1.
+/// Returns the answer, the sends, and what the run judged at each send.
+async fn judged_run(change: Change, key: &str) -> (String, usize, Vec<(Option<String>, bool)>) {
+    let script = Script::new();
+    let definition = continuing_playbook();
+    let fx = Box::pin(sanitizing(
+        true,
+        super::super::direct_guards_fixture::fixture_built_on(
+            Arc::clone(&script) as Arc<dyn Transport>,
+            move |meta| {
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        ),
+    ))
+    .await;
+    let beta = Arc::new(crate::backend::Backend::new(
+        "beta-pt",
+        crate::config::BackendConfig {
+            passthrough: true,
+            ..Default::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    beta.set_transport_for_test(Arc::clone(&script) as Arc<dyn Transport>);
+    assert!(fx.state.backends.register(beta), "beta-pt registered");
+    let fx = with_rule(fx, &[]);
+    warm(&fx, &["alpha-pt", "beta-pt"]);
+    let state = Arc::clone(&fx.state);
+    script.after_call(0, move || apply(&state, "beta-pt", change));
+    let args = json!({"name": "pb", "arguments": {"x": "v"}});
+    let id = submit(&fx, "gateway_run_playbook", args, key).await;
+    let body = settled(&fx, &id, &["working"]).await;
+    let sent = script.calls.load(Ordering::SeqCst);
+    let judged = script.judged.lock().expect("judged").clone();
+    (answer(&body, &id), sent, judged)
+}
+
+/// A step hidden mid-run answers as a removed one, and the run-wide judgement
+/// intake made is the same at the step after it as at the step before it.
+#[tokio::test]
+async fn hiding_a_step_leaves_the_runs_judged_record_unchanged() {
+    let (control, control_sent, seen) = Box::pin(judged_run(Change::None, "hr4-c")).await;
+    assert_eq!(control_sent, 3, "control: not every step ran");
+    assert!(!seen[0].1, "premise: intake judged nothing: {seen:?}");
+    assert_eq!(
+        seen[0], seen[2],
+        "control: the judged record moved: {seen:?}"
+    );
+    let (hidden, hidden_sent, hidden_seen) = Box::pin(judged_run(Change::Hide, "hr4-h")).await;
+    let (removed, removed_sent, _) = Box::pin(judged_run(Change::Remove, "hr4-r")).await;
+    assert_eq!(removed_sent, 2, "premise: the removed step was sent");
+    assert_ne!(removed, control, "premise: removal changed nothing");
+    assert_eq!(hidden_sent, 2, "hidden: the hidden step was sent");
+    assert_eq!(hidden, removed, "hidden and removed answer alike");
+    assert_eq!(
+        hidden_seen.first(),
+        hidden_seen.last(),
+        "hiding moved the judged record: {hidden_seen:?}"
+    );
+}
