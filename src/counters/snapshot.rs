@@ -94,17 +94,28 @@ struct Head {
     version: u32,
 }
 
+/// `series` without its latency, which the file keeps apart
+/// ([`latency_file`]): the counts only, so a save copies no histogram twice.
+fn counts_of(series: &Series) -> Series {
+    Series {
+        half: series.half.clone(),
+        day: series.day.clone(),
+        admitted: series.admitted,
+        latency: super::latency::LatencySeries::default(),
+    }
+}
+
 fn dim_file<K: Hash + Eq + Clone + Ord>(dim: &Dimension<K>) -> DimFile<K> {
     let mut labels: Vec<(K, Series)> = dim
         .labels
         .iter()
-        .map(|(k, s)| (k.clone(), s.clone()))
+        .map(|(k, s)| (k.clone(), counts_of(s)))
         .collect();
     // Stable bytes for the same store: sorted, not hash order.
     labels.sort_by(|a, b| a.0.cmp(&b.0));
     DimFile {
         labels,
-        overflow: dim.overflow.clone(),
+        overflow: counts_of(&dim.overflow),
     }
 }
 
@@ -115,7 +126,7 @@ pub(super) fn encode(inner: &Inner, binary_version: &str, saved_at: u64) -> Vec<
         binary_version: binary_version.to_owned(),
         saved_at,
         since: inner.since,
-        global: inner.global.clone(),
+        global: counts_of(&inner.global),
         server: dim_file(&inner.server),
         tool: dim_file(&inner.tool),
         caller: dim_file(&inner.caller),

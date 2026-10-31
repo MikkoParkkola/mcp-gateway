@@ -9,7 +9,7 @@ use serde::Serialize;
 
 use super::latency::{Closed, LatRing, SLOWEST_FLOOR, Sketch};
 use super::view::{Window, window_slots};
-use super::{CounterStore, HALF, normalize};
+use super::{CounterStore, HALF, Series};
 
 /// One slot of a latency read. `v` is the p95 in ms over the samples the
 /// slot held when it closed; absent when every sample arrived late.
@@ -64,6 +64,15 @@ pub(crate) struct HourLatency {
 
 impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
     /// Slot `bucket` as a closed slot: a live one as it would close now.
+    /// The slots held from `first` on, closed and live.
+    fn slots_from(&self, first: u64) -> impl Iterator<Item = u64> + '_ {
+        self.closed
+            .iter()
+            .map(|c| c.bucket)
+            .chain(self.live.iter().map(|l| l.bucket))
+            .filter(move |&b| b >= first)
+    }
+
     fn get(&self, bucket: u64) -> Option<Closed> {
         if let Ok(i) = self.closed.binary_search_by_key(&bucket, |c| c.bucket) {
             return Some(self.closed[i]);
@@ -74,11 +83,12 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
             .map(super::latency::Live::close)
     }
 
-    /// The live slots from `first` on, merged: the clock decides, so a slot
-    /// an idle series never finalized does not count.
-    fn merged_from(&self, first: u64) -> Sketch {
+    /// The live slots from `first` through `last`, merged: the clock decides,
+    /// so a slot an idle series never finalized does not count, nor one a
+    /// clock that stepped back left ahead of the window.
+    fn merged_from(&self, first: u64, last: u64) -> Sketch {
         let mut sketch = Sketch::default();
-        for live in self.live.iter().filter(|l| l.bucket >= first) {
+        for live in self.live.iter().filter(|l| (first..=last).contains(&l.bucket)) {
             sketch.merge(&live.sketch);
         }
         sketch
@@ -109,13 +119,21 @@ impl CounterStore {
         zone: &Tz,
     ) -> LatencyView {
         let inner = self.read_lock();
-        let since = inner.since;
-        let series = match server {
-            None => &inner.global,
-            Some(name) => match inner.server.labels.get(&normalize(name)) {
-                Some(series) => series,
-                // Not held: its calls may be in the overflow, so no points.
-                None => {
+        let mut since = inner.since;
+        let mut slots = window_slots(window, now, since, zone);
+        let held = |series: &Series, slot: &super::view::Slot| match window {
+            Window::Day | Window::TwoDays => series.latency.half.get(slot.key),
+            Window::Month => series.latency.day.get(slot.key),
+        };
+        // Where the previous period may start drawing, as U1's counts do.
+        let mut previous_since = since;
+        let empty = Series::default();
+        let filter = server.map_or(super::view::Filter::All, super::view::Filter::Server);
+        let series = match inner.find(filter) {
+            // A server not held, with latency in the overflow in this window
+            // (or a full dimension), may be among it: read folded, as counts.
+            Err((overflow, full)) => {
+                if full || slots.iter().any(|slot| held(overflow, slot).is_some()) {
                     return LatencyView {
                         points: Vec::new(),
                         previous: None,
@@ -124,21 +142,39 @@ impl CounterStore {
                         since,
                     };
                 }
-            },
+                &empty
+            }
+            Ok((series, overflow)) => {
+                // Overflow latency from before the server took its slot may
+                // be its own: it is covered from the slot it was admitted in.
+                let first = slots
+                    .iter()
+                    .rposition(|slot| slot.t <= series.admitted)
+                    .unwrap_or(0);
+                if let Some(overflow) = overflow {
+                    let admitted = series.admitted - series.admitted % HALF;
+                    if overflow
+                        .latency
+                        .half
+                        .slots_from((now / HALF + 1).saturating_sub(super::HALF_BUCKETS as u64))
+                        .any(|bucket| bucket * HALF < admitted)
+                    {
+                        previous_since = previous_since.max(admitted);
+                    }
+                    if slots[..first].iter().any(|slot| held(overflow, slot).is_some()) {
+                        since = since.max(slots[first].t);
+                        slots.drain(..first);
+                    }
+                }
+                series
+            }
         };
         let read = |slots: &[super::view::Slot]| -> Vec<LatPoint> {
             slots
                 .iter()
-                .filter_map(|slot| {
-                    let found = match window {
-                        Window::Day | Window::TwoDays => series.latency.half.get(slot.key),
-                        Window::Month => series.latency.day.get(slot.key),
-                    };
-                    found.map(|c| point(slot.t, c))
-                })
+                .filter_map(|slot| held(series, slot).map(|c| point(slot.t, c)))
                 .collect()
         };
-        let slots = window_slots(window, now, since, zone);
         let mut view = LatencyView {
             points: read(&slots),
             previous: None,
@@ -147,16 +183,26 @@ impl CounterStore {
             since,
         };
         if compare && window == Window::Day {
-            // The 24 hours before: 48 half-hour slots, read from the same ring.
-            let now_bucket = now / HALF;
-            let first = (now_bucket + 1).saturating_sub(96);
-            let prev: Vec<super::view::Slot> = (first..first + 48)
-                .map(|b| super::view::Slot {
-                    t: b * HALF,
-                    key: b,
+            // The same local wall-clock times on the previous local date, as
+            // U1's counts map them: a repeated hour gives both slots, a
+            // skipped one none.
+            let (buckets, mapped) = super::view::previous_buckets(slots.iter().map(|s| s.t), zone);
+            let held_from = (now / HALF + 1).saturating_sub(super::HALF_BUCKETS as u64);
+            let since = since.max(previous_since);
+            let mut complete = mapped;
+            let prev: Vec<super::view::Slot> = buckets
+                .into_iter()
+                .filter(|&bucket| {
+                    let kept = bucket >= held_from && (bucket + 1) * HALF > since;
+                    complete &= kept;
+                    kept
+                })
+                .map(|bucket| super::view::Slot {
+                    t: bucket * HALF,
+                    key: bucket,
                 })
                 .collect();
-            view.previous_complete = first * HALF >= since;
+            view.previous_complete = complete;
             view.previous = Some(read(&prev));
         }
         view
@@ -173,7 +219,7 @@ impl CounterStore {
             .labels
             .iter()
             .filter_map(|(name, series)| {
-                let merged = series.latency.half.merged_from(first);
+                let merged = series.latency.half.merged_from(first, now_bucket);
                 Some(ServerLatency {
                     name: name.clone(),
                     p95_ms: merged.p95_ms()?,

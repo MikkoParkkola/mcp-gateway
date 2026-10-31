@@ -20,6 +20,10 @@ fn call(server: &str) -> Call<'_> {
     }
 }
 
+fn timed_in<Tz: chrono::TimeZone>(store: &CounterStore, server: &str, at: u64, ms: u64, zone: &Tz) {
+    store.record_timed(&call(server), at, zone, Some((Duration::from_millis(ms), End::Answered)));
+}
+
 fn timed(store: &CounterStore, server: &str, at: u64, ms: u64, end: End) {
     store.record_timed(
         &call(server),
@@ -79,12 +83,41 @@ fn series_latency_compare_prev() {
     assert_eq!(previous[0].t, T0);
 }
 
-/// Row 34: a server the store does not hold reads folded, no points.
+/// Row 34: a server not held while its dimension is full reads folded (its
+/// calls may be in the overflow); with room left, and no overflow latency in
+/// the window, it reads empty and not folded, as U1's counts do.
 #[test]
 fn series_latency_folded() {
     let store = CounterStore::new(T0);
     let view = store.latency_series(Some("ghost"), Window::Day, false, T0 + 10, &Utc);
-    assert!(view.folded && view.points.is_empty());
+    assert!(!view.folded && view.points.is_empty(), "room left: not folded");
+    for i in 0..super::super::MAX_LABELS {
+        timed(&store, &format!("srv-{i}"), T0 + 10, 100, End::Answered);
+    }
+    let view = store.latency_series(Some("ghost"), Window::Day, false, T0 + 20, &Utc);
+    assert!(view.folded && view.points.is_empty(), "full: folded");
+}
+
+/// Review F5: compare=prev maps each slot to the same local wall-clock time
+/// on the previous local date (U1's rule), so across a DST change it reads
+/// the previous day's slot, not the one 24 hours back.
+#[test]
+fn series_latency_compare_prev_follows_local_wall_time() {
+    use chrono_tz::Europe::Amsterdam;
+    // Amsterdam falls back on 2026-10-25 at 03:00: 12:00 local on the 25th is
+    // 11:00 UTC, and 12:00 local on the 24th (summer time) is 10:00 UTC, 25
+    // hours earlier. 24 hours back is 13:00 local on the 24th.
+    let noon_25 = 1_792_926_000; // 2026-10-25T11:00:00Z
+    let noon_24 = noon_25 - 25 * 3_600; // 2026-10-24T10:00:00Z, 12:00 CEST
+    let one_pm_24 = noon_25 - 24 * 3_600; // 2026-10-24T11:00:00Z, 13:00 CEST
+    let store = CounterStore::new(noon_24 - 3_600);
+    timed_in(&store, "alpha", noon_24 + 10, 100, &Amsterdam);
+    timed_in(&store, "alpha", one_pm_24 + 10, 900, &Amsterdam);
+    // Read with now in the noon slot only, so today's window ends there.
+    let view = store.latency_series(Some("alpha"), Window::Day, true, noon_25 + 20, &Amsterdam);
+    let previous = view.previous.expect("asked for");
+    let last = previous.last().expect("the previous period's newest slot");
+    assert_eq!(last.t, noon_24, "noon maps to the previous date's noon: {previous:?}");
 }
 
 /// Row 36: the Overview hour, slowest first, bounded by the two slots.

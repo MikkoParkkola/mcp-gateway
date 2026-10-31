@@ -553,7 +553,15 @@ impl CounterStore {
     /// serialized after it is released.
     #[cfg(test)]
     pub(crate) fn encode(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
-        snapshot::encode(&self.snapshot(), binary_version, saved_at)
+        let mut inner = self.snapshot();
+        // Half-hour slots the clock has left are saved closed, not as live
+        // histograms (the live store closes them on its next record).
+        inner.global.latency.finalize(saved_at, None);
+        inner.server.overflow.latency.finalize(saved_at, None);
+        for series in inner.server.labels.values_mut() {
+            series.latency.finalize(saved_at, None);
+        }
+        snapshot::encode(&inner, binary_version, saved_at)
     }
 
     /// Restore from `bytes` at `now`, re-applying every bound. Returns the

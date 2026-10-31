@@ -193,3 +193,18 @@ fn size_realistic_full_cap() {
     });
     assert!(bytes <= 3_000_000, "{bytes} bytes");
 }
+
+/// Review F9: a save after the clock has left a slot stores it closed (its
+/// p95 and counts), not as a live histogram, though the idle store never
+/// recorded again to close it.
+#[test]
+fn save_stores_idle_slots_closed() {
+    let store = CounterStore::new(T0);
+    timed(&store, "alpha", T0 + 10, 100);
+    let now = T0 + 3 * HALF;
+    let file = json(&store.encode("v1", now));
+    let half = &file["latency"]["server"][0][1]["half"];
+    assert_eq!(half["live"], serde_json::json!([]), "{half}");
+    assert_eq!(half["closed"][0][0], T0 / HALF, "{half}");
+    assert_eq!(half["closed"][0][2], 1, "one call: {half}");
+}
