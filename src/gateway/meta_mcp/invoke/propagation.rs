@@ -10,6 +10,7 @@ use crate::events::FenceRead;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
 use crate::personal_accounts::identity::Principal;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
 
 impl MetaMcp {
@@ -333,6 +334,9 @@ impl MetaMcp {
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = async |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required || vault {
+                // The caller's identity standing (MIK-8914.API2A.13): no kind
+                // names it yet.
+                super::audit::note_refused_by(DecisionKind::Unrecorded, None);
                 // Refused either way; the helper logs a failed audit write.
                 Self::audit_refused_credential(audit_logger, &subject_id, server, audience, &msg)
                     .await;

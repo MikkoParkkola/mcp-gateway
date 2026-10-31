@@ -163,7 +163,13 @@ impl MetaMcp {
         call: &BackendCall<'_>,
     ) -> Result<()> {
         let (server, tool) = (call.server, call.tool);
-        self.caller_profile_check(call.session_id, (server, tool))?;
+        self.caller_profile_check(call.session_id, (server, tool))
+            .inspect_err(|_| {
+                super::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::RoutingProfile,
+                    None,
+                );
+            })?;
         self.admit_backend_wide(server)
     }
 
@@ -215,6 +221,10 @@ impl MetaMcp {
     /// missing name alike, before any fill.
     pub(crate) fn admit_backend_wide(&self, server: &str) -> Result<()> {
         if self.kill_switch.is_killed(server) {
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::KillSwitch,
+                None,
+            );
             return Err(Error::gateway_refused(
                 -32000,
                 format!("Server '{server}' is currently disabled by operator kill switch"),
@@ -237,6 +247,10 @@ impl MetaMcp {
             .kill_switch
             .is_capability_disabled_with_cooldown(server, tool, cooldown)
         {
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::CapabilityDisabled,
+                None,
+            );
             return Err(Error::gateway_refused(
                 -32000,
                 format!(

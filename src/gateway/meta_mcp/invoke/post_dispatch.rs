@@ -111,9 +111,12 @@ impl MetaMcp {
         // returned as the refusal it is) or tells the caller whether a
         // retry can help (the recovery hint below).
         let e = match managed {
-            Some(managed) if is_upstream_unauthorized(&e) => managed.after_upstream_401(e).await,
+            Some(managed) if is_upstream_unauthorized(&e) => {
+                super::audit::after_upstream_401(managed, e).await
+            }
             _ => e,
         };
+        super::audit::note_send_refusal(&e);
         // Sent nothing (no counted send, and a pre-dispatch error or a refusal
         // the backend's own send recorded): the one rule for releasing a key.
         let unsent = crate::gateway::delivery_facts::unsent(&e);

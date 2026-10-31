@@ -16,6 +16,19 @@ use crate::identity_grants::GrantSubject;
 
 use super::BudgetOutcome;
 
+/// Whether enforcement withheld the backend's answer, from what
+/// [`MetaMcp::context_integrity_delivered_result`] says it did: `None` is a
+/// whole withhold and `Refused` a malformed round, both withheld; every other
+/// effect delivered the answer. Exhaustive, so a new effect must be placed.
+fn withheld_by(effect: Option<ResponseEffect>) -> bool {
+    match effect {
+        None | Some(ResponseEffect::Refused) => true,
+        Some(ResponseEffect::Delivered | ResponseEffect::Annotated | ResponseEffect::Rewritten) => {
+            false
+        }
+    }
+}
+
 impl MetaMcp {
     /// Record an outcome against both backend and per-capability error budgets.
     pub(super) fn record_error_budget(&self, server: &str, tool: &str, outcome: BudgetOutcome) {
@@ -190,16 +203,32 @@ impl MetaMcp {
         trace_id: &str,
         result: Value,
     ) -> (Value, super::super::response_security::GateEffect) {
+        let (value, effect, _) =
+            self.context_integrity_outcome(server, tool, api_key_name, trace_id, result);
+        (value, effect)
+    }
+
+    /// [`Self::apply_context_integrity`], plus whether enforcement withheld the
+    /// result outright. Only the caller that delivers the result notes that as
+    /// a refusal; a classification of a copy notes nothing.
+    pub(super) fn context_integrity_outcome(
+        &self,
+        server: &str,
+        tool: &str,
+        api_key_name: Option<&str>,
+        trace_id: &str,
+        result: Value,
+    ) -> (Value, super::super::response_security::GateEffect, bool) {
         use super::super::response_security::GateEffect;
         let input = self.context_integrity_input((server, tool), api_key_name, trace_id, &result);
         let evaluation = audit::noted_classes(self.context_integrity_kernel.read().evaluate(input));
         if evaluation.classification.findings.is_empty()
             && evaluation.policy.would_decision == ContextIntegrityDecisionKind::Allow
         {
-            return (result, GateEffect::PassedThrough);
+            return (result, GateEffect::PassedThrough, false);
         }
 
-        let (delivered, effect) = if evaluation.policy.enforcement_applied {
+        let (delivered, effect, withheld) = if evaluation.policy.enforcement_applied {
             // A rebuilt round is raised here; a malformed round and a whole
             // withhold are both Withheld, raised once where they are delivered.
             let (delivered, rebuilt) =
@@ -211,13 +240,14 @@ impl MetaMcp {
                 }
                 _ => GateEffect::Withheld,
             };
-            (delivered, effect)
+            (delivered, effect, withheld_by(rebuilt))
         } else {
-            (result, GateEffect::PassedThrough)
+            (result, GateEffect::PassedThrough, false)
         };
         (
             Self::attach_context_integrity_metadata(delivered, &evaluation),
             effect,
+            withheld,
         )
     }
 
@@ -339,5 +369,35 @@ impl MetaMcp {
                 "_context_integrity": metadata
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod withheld_by_tests {
+    use super::{ResponseEffect, withheld_by};
+
+    #[test]
+    fn a_whole_withhold_is_withheld() {
+        assert!(withheld_by(None));
+    }
+
+    #[test]
+    fn a_refused_round_is_withheld() {
+        assert!(withheld_by(Some(ResponseEffect::Refused)));
+    }
+
+    #[test]
+    fn a_rewritten_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Rewritten)));
+    }
+
+    #[test]
+    fn an_annotated_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Annotated)));
+    }
+
+    #[test]
+    fn an_untouched_answer_is_delivered() {
+        assert!(!withheld_by(Some(ResponseEffect::Delivered)));
     }
 }

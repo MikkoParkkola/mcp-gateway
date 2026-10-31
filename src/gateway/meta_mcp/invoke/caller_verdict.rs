@@ -458,7 +458,7 @@ impl MetaMcp {
                     Some(managed)
                         if crate::security::http_diagnostics::is_upstream_unauthorized(&error) =>
                     {
-                        managed.after_upstream_401(error).await
+                        super::audit::after_upstream_401(managed, error).await
                     }
                     _ => error,
                 };

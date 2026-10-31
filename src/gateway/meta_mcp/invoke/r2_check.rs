@@ -187,7 +187,7 @@ impl MetaMcp {
     ) -> std::result::Result<(Value, Error), Error> {
         let error = match managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
+                super::audit::after_upstream_401(managed, error).await
             }
             _ => error,
         };
