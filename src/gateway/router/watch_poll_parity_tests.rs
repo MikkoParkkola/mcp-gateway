@@ -283,7 +283,9 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
             .set_capabilities(served(endpoint.port, read_only));
         let client = fx
             .state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key(
                 "k-budget",
                 crate::gateway::auth::principal_of("k-budget").storage_form(),

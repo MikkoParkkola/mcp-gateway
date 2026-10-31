@@ -73,6 +73,16 @@ impl DirectAccountGateway {
         self.dispatches.name_list_tool_on(backend, name);
     }
 
+    /// Shut custody down: every later read answers a non-busy error, which
+    /// the vault classifies as unavailable.
+    pub(crate) async fn shut_custody_for_test(&self) {
+        self.custody
+            .handle
+            .shutdown()
+            .await
+            .expect("custody shuts down");
+    }
+
     /// Answer the next requests, `tools/list` included, with these HTTP
     /// statuses: a cold slot's first list gets a 401, for one.
     pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {

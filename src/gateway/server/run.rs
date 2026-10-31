@@ -202,10 +202,16 @@ impl Gateway {
         // mapping through it, so a reload takes effect without restart —
         // MIK-6702). Created unconditionally; without a config path it simply
         // never changes.
+        // Its generations carry the key table: the startup one is the auth
+        // resolved above, so the startup keys authenticate from the first
+        // request, and every reload rebuilds the key list over it.
         let live_config = Arc::new(
-            LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
-                .with_startup_revision(&record_key, self.env.take_startup_inputs()),
+            LiveConfig::from_prepared(crate::config_reload::Generation::prepare_startup(
+                self.config.clone(),
+                Arc::clone(&auth_config),
+            ))
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_startup_revision(&record_key, self.env.take_startup_inputs()),
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));
 
@@ -338,7 +344,6 @@ impl Gateway {
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
                 crate::gateway::auth::AuthState {
-                    auth_config: Arc::clone(&auth_config),
                     key_server: key_server.clone(),
                     dashboard_bootstrap: Arc::clone(&dashboard_bootstrap),
                     // Only the session cookie reads this; re-validation sets none.
@@ -446,7 +451,6 @@ impl Gateway {
             multiplexer: Arc::clone(&multiplexer),
             proxy_manager,
             streaming_config: self.config.streaming.clone(),
-            auth_config,
             key_server,
             tool_policy,
             mtls_policy,

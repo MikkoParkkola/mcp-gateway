@@ -94,7 +94,7 @@ test('R4b retrying a screen whose module failed keeps one copy of its loaded sty
   fail = false;
   await error.getByRole('button', { name: 'Retry' }).click();
   await expect(toolRows(page)).toHaveCount(1);
-  await expect(page.locator(`head link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
+  await expect(page.locator(`link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
 });
 
 test('R5 the screen manifest names only files in the asset table, and the head loads no screen', () => {
@@ -111,9 +111,10 @@ test('R5 the screen manifest names only files in the asset table, and the head l
       expect(table.has(path.slice('/ui/assets/'.length)), `${path} is in ASSETS`).toBe(true);
     }
   }
-  // Outside the manifest, the document names the shell's own files only.
+  // Outside the manifest, the document names the shell's own files only: its
+  // script, the rest of its stylesheet, and the fonts the inlined frame declares.
   const outside = doc.replace(block[0], '');
-  for (const m of outside.matchAll(/\/ui\/assets\/([^"'\s)]+)/g)) expect(m[1]).toMatch(/^shell\./);
+  for (const m of outside.matchAll(/\/ui\/assets\/([^"'\s)]+)/g)) expect(m[1]).toMatch(/^(shell\.|[\w-]+\.[0-9a-f]{12}\.woff2$)/);
 });
 
 test('R6 a stylesheet that fails while its module loads shows Retry, and Retry links it once', async ({ page }) => {
@@ -126,7 +127,7 @@ test('R6 a stylesheet that fails while its module loads shows Retry, and Retry l
   fail = false;
   await error.getByRole('button', { name: 'Retry' }).click();
   await expect(toolRows(page)).toHaveCount(1);
-  await expect(page.locator(`head link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
+  await expect(page.locator(`link[rel="stylesheet"][href="${asset('tools', 'css')}"]`)).toHaveCount(1);
 });
 
 test('R7 a screen is not drawn while its stylesheet is held, even after its module registered', async ({ page }) => {
@@ -164,7 +165,7 @@ test('R8 a manifest entry outside /ui/assets/ is refused as a load error and nev
   await page.goto('/ui/tools/status');
   await expect(page.locator('#content [data-state="error"]')).toBeVisible();
   expect(asked).not.toContain(js);
-  await expect(page.locator('head link[href*="x.css"]')).toHaveCount(0);
+  await expect(page.locator('link[href*="x.css"]')).toHaveCount(0);
   await expect(toolRows(page)).toHaveCount(0);
 });
 
@@ -194,6 +195,28 @@ test('R10 with idle loading suppressed, opening the palette loads the screens it
   await shellReady(page);
   await page.keyboard.press('Control+KeyK');
   await expect(page.locator('dialog.palette [role="option"]', { hasText: 'All tools' })).toHaveCount(1);
+});
+
+test('R12 the screen preload asks for idle time with a two-second deadline, so a page that never idles still preloads', async ({ page }) => {
+  // Record every idle request's options, then pass it on to the browser. This
+  // pins the deadline the shell configures; it does not starve the page.
+  await page.addInitScript(() => {
+    window.idleOptions = [];
+    const ask = window.requestIdleCallback.bind(window);
+    window.requestIdleCallback = (fn, options) => {
+      window.idleOptions.push(options ?? null);
+      return ask(fn, options);
+    };
+  });
+  const preload = page.waitForRequest((r) => r.url().endsWith(asset('tools', 'js')));
+  await page.goto('/ui/overview/status');
+  await shellReady(page);
+  await preload;
+  const asked = await page.evaluate(() => window.idleOptions);
+  expect(asked.length, 'the preload asks for idle time').toBeGreaterThan(0);
+  for (const options of asked) {
+    expect(options?.timeout, `a deadline on ${JSON.stringify(options)}`).toBe(2000);
+  }
 });
 
 for (const [name, init] of [

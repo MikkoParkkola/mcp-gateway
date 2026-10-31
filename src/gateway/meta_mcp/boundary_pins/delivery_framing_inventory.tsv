@@ -247,3 +247,4 @@ src/gateway/task_service/execution.rs	into_response	JsonRpcResponse::error	5
 src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	JsonRpcResponse::error	1
 src/gateway/task_service/execution/worker_inspect.rs	inspect_settled_pinned	delivery_refusal_error	1
 src/gateway/task_service/host.rs	readmit	JsonRpcResponse::error	1
+src/gateway/task_service/host.rs	rejudge	JsonRpcResponse::error	1

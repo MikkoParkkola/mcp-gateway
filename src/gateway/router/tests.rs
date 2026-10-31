@@ -136,19 +136,18 @@ async fn test_task_runtime(
 /// notifications to a listener set no client is on. Re-validates against the
 /// fixture's own credentials and agent registry, so it agrees with the
 /// request middleware.
+/// It judges with the fixture's own `live_config`, so a reload reaches its
+/// listeners as it reaches requests.
 fn test_subscriptions(
-    auth_config: &Arc<ResolvedAuthConfig>,
+    live_config: &Arc<crate::config_reload::LiveConfig>,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     agent_auth: &AgentAuthState,
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     let authorizer = crate::gateway::auth::AuthState {
-        auth_config: Arc::clone(auth_config),
         key_server,
         dashboard_bootstrap: Arc::default(),
         tls_enabled: false,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(live_config),
         agent_auth: agent_auth.clone(),
     };
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
@@ -189,7 +188,11 @@ async fn test_router_app_state_with(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(config),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -204,7 +207,6 @@ async fn test_router_app_state_with(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -219,9 +221,7 @@ async fn test_router_app_state_with(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(config),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -255,7 +255,11 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
     let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -270,7 +274,6 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -285,9 +288,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, Fixt
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -407,7 +408,11 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(config.clone()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let store_dir =
         Arc::new(tempfile::tempdir().expect("a private configured task-store directory"));
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
@@ -442,7 +447,6 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -457,9 +461,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(config),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

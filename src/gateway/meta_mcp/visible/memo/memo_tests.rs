@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The memo's semantics: the first judgement wins within a scope, a nested
-//! scope reuses the outer memo, and outside any scope every read judges
-//! fresh.
+//! Memo semantics: the first judgement wins within a scope, a nested scope
+//! reuses the outer memo, and outside any scope every read judges fresh.
 
 use super::{VISIBILITY_MEMO, Visibility, VisibilityMemo, Withholding, with_visibility_memo};
 

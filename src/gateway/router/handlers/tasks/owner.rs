@@ -105,11 +105,15 @@ pub(super) fn route_task_owner(
         // credential (a public path) owns as its `client_id`, the same owner
         // it has with auth off (MIK-8055). With neither, the owner is empty
         // and refused upstream rather than pooled here.
-        None if !state.auth_config.enabled || owner_key.is_empty() => match agent {
-            Some(agent) => agent_task_owner(&agent.client_id),
-            None if !state.auth_config.enabled => AUTH_DISABLED_TASK_OWNER.to_owned(),
-            None => String::new(),
-        },
+        None if !state.live_config.generation().auth().enabled || owner_key.is_empty() => {
+            match agent {
+                Some(agent) => agent_task_owner(&agent.client_id),
+                None if !state.live_config.generation().auth().enabled => {
+                    AUTH_DISABLED_TASK_OWNER.to_owned()
+                }
+                None => String::new(),
+            }
+        }
         None => owner_key.to_owned(),
     }
 }
@@ -138,7 +142,8 @@ pub(in crate::gateway::router) fn route_owners(
     // the request's agent, the events owner never does (MIK-8055 K6).
     let route = |via_agent: Option<&OAuthAgentIdentity>| match (via_agent, &proven) {
         (None, Some(subject))
-            if !state.auth_config.enabled && caller.verified_identity.is_none() =>
+            if !state.live_config.generation().auth().enabled
+                && caller.verified_identity.is_none() =>
         {
             subject.clone()
         }

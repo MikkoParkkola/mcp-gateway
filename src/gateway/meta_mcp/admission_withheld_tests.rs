@@ -392,6 +392,26 @@ async fn a_replay_past_revocation_of_a_sent_step_keeps_its_refusal() {
     assert_sub4_refusal(answer, "sent step");
 }
 
+/// The replay refused by today's policy is the gateway refusing the call:
+/// its delivery records refused, as the live call's refusal would.
+#[tokio::test]
+async fn a_replay_past_revocation_records_refused() {
+    use crate::gateway::delivery_facts;
+    let mut fields = serde_json::Map::new();
+    let answer = delivery_facts::scope(async {
+        let answer = Box::pin(replay_after_revoking(None, "write")).await;
+        delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
+        answer
+    })
+    .await;
+    assert_sub4_refusal(answer, "premise");
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&json!("refused")),
+        "{fields:?}"
+    );
+}
+
 /// Denies each of `0`, with `DenyOne`'s refusal.
 struct DenyEach(&'static [&'static str]);
 

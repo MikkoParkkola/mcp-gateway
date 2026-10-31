@@ -596,13 +596,44 @@ pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crat
 }
 
 /// Record that this request's account check of `(server, account)` did not
-/// complete, unless it did: an empty binding, which no held slot's binding
-/// equals, so a held view of that account reads as cold in this request.
+/// settle on a binding, overwriting any earlier read: an empty binding, which
+/// no held slot's binding equals, so a held view of that account reads as
+/// cold for the rest of this request. The one invalidation helper: a deadline
+/// cut, a failed pre-pass read, a failed re-check read and a failed publish
+/// read all write it.
 pub(crate) fn record_account_unchecked(server: &str, account: &DescriptorId) {
     in_memo(|memo| {
         memo.account_binding
-            .first(account_slot(server, account), String::new());
+            .set(account_slot(server, account), String::new());
     });
+}
+
+/// How a caller's held binding compares with this request's account read.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HeldView {
+    /// The request's read gave exactly the held binding.
+    Current,
+    /// The request's read gave another binding, or none (the unchecked marker).
+    Stale,
+    /// The request read no binding for the account: nothing to judge by.
+    Unread,
+}
+
+/// The one rule for "is `held`, a caller's held binding on `server`, still the
+/// binding this request's account read gave". Listings, the stored-read claim
+/// and the re-check all decide through it.
+pub(crate) fn held_view_current(server: &str, account: &DescriptorId, held: &str) -> HeldView {
+    judge_held(account_binding(server, account).as_deref(), held)
+}
+
+/// [`held_view_current`] over a binding already in hand, for a reader that
+/// holds its own read rather than the request memo's.
+pub(crate) fn judge_held(read: Option<&str>, held: &str) -> HeldView {
+    match read {
+        Some(read) if read == held => HeldView::Current,
+        Some(_) => HeldView::Stale,
+        None => HeldView::Unread,
+    }
 }
 
 /// Keep the binding the pre-pass's view read gave `(server, account)`.
@@ -632,9 +663,7 @@ pub(crate) fn held_binding_current(
     account: Option<&DescriptorId>,
     held: &str,
 ) -> bool {
-    account
-        .and_then(|account| account_binding(server, account))
-        .is_none_or(|current| current == held)
+    account.is_none_or(|account| held_view_current(server, account, held) != HeldView::Stale)
 }
 
 /// Keep the live call's refusal for `(server, account)` in the open request;

@@ -113,6 +113,15 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
 ///
 /// Names only. The values are secrets and a reload report is not a place to
 /// print one.
+/// A refused preparation's answer: the reason, and that the reload changed
+/// nothing.
+fn nothing_published(reason: &str) -> String {
+    format!(
+        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+         configuration was published."
+    )
+}
+
 pub(super) fn changed_startup_env_keys(env: &LiveEnv, evaluated: &EvaluatedReload) -> Vec<String> {
     let startup = env.startup();
     let keys: std::collections::BTreeSet<String> = evaluated
@@ -634,8 +643,7 @@ impl ReloadContext {
     /// applies: message signing, the signature chain or the record key.
     fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
         let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
-        let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
-            (self.env.startup(), &evaluated.overlay);
+        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
         let signing = (running.message_signing)
             .restart_changed_field(&proposed.security.message_signing, env, overlay)
             .map_err(|error| error.to_string())?;
@@ -646,15 +654,14 @@ impl ReloadContext {
         // for the process's lifetime, so a changed reference waits for a restart.
         let record_key = (running.record_principal_key != proposed.security.record_principal_key)
             .then(|| "record_principal_key".to_owned());
-        if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
+        let field = (signing.map(|f| format!("message_signing.{f}")))
             .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
-            .or(record_key)
-        {
-            return Err(format!(
+            .or(record_key);
+        field.map_or(Ok(()), |field| {
+            Err(format!(
                 "config reload refused: security.{field} requires restart"
-            ));
-        }
-        Ok(())
+            ))
+        })
     }
 
     async fn reload_transaction(
@@ -703,12 +710,8 @@ impl ReloadContext {
         self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
-            format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            )
-        })?);
+        let prepared = self.live_config.prepare(new_config, &overlay);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(

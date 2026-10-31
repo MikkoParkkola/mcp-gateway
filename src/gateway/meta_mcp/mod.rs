@@ -93,6 +93,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
@@ -126,6 +127,9 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+/// The cold claim's retry backoff, for the rows that wait it out.
+#[cfg(test)]
+pub(crate) use task_replay::COLD_RETRY_BACKOFF;
 pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;

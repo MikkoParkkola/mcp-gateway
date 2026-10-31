@@ -13,7 +13,7 @@
 // on hover and focus again. Building and filling markup is not controller work
 // and goes on after that.
 
-const COPY_URL = '/ui/assets/tips.7c43dc6560cf.json';
+const COPY_URL = '/ui/assets/tips.2b1d0c91519f.json';
 
 // The stylesheet comes with the module, not with the document: only pages that draw a
 // tooltip need it, and a render-blocking link would hold up every page's first paint.
@@ -25,7 +25,8 @@ const cssReady = new Promise((resolve, reject) => {
   css.dataset.tooltipCss = '';
   css.onload = () => resolve();
   css.onerror = () => reject(new Error('stylesheet not loaded'));
-  document.head.append(css);
+  // After the shell's own stylesheet (linked at the end of the body), so its rules win ties.
+  document.body.append(css);
 });
 // Handled here; load() reports a failure when a tooltip asks for it.
 cssReady.catch(() => {});
