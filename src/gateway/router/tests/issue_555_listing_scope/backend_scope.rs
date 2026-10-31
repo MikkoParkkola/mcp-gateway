@@ -247,11 +247,20 @@ async fn with_mtls_state(
     allow: (&[&str], &[&str]),
     deny: (&[&str], &[&str]),
 ) -> (axum::Router, Arc<crate::gateway::router::AppState>) {
+    with_mtls_on(Auth::Off, allow, deny).await
+}
+
+/// [`with_mtls_state`] behind `auth`.
+async fn with_mtls_on(
+    auth: Auth,
+    allow: (&[&str], &[&str]),
+    deny: (&[&str], &[&str]),
+) -> (axum::Router, Arc<crate::gateway::router::AppState>) {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let owned = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
     let Fixture {
         router, mut state, ..
-    } = fixture(Auth::Off).await;
+    } = fixture(auth).await;
     drop(router);
     let rule = PolicyRuleConfig {
         match_criteria: CertMatchConfig {
@@ -279,10 +288,24 @@ async fn with_mtls_state(
 
 /// `tools/call` of `params` on `uri`, presenting the `agent` certificate.
 async fn post_as_agent_cert(router: &axum::Router, uri: &str, params: Value) -> (u16, String) {
-    let mut request = axum::http::Request::builder()
+    post_cert_key(router, uri, None, params).await
+}
+
+/// [`post_as_agent_cert`], with the bearer `key` when given.
+async fn post_cert_key(
+    router: &axum::Router,
+    uri: &str,
+    key: Option<&str>,
+    params: Value,
+) -> (u16, String) {
+    let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
-        .header("content-type", "application/json")
+        .header("content-type", "application/json");
+    if let Some(key) = key {
+        builder = builder.header("authorization", format!("Bearer {key}"));
+    }
+    let mut request = builder
         .body(axum::body::Body::from(
             json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": params })
                 .to_string(),
@@ -532,4 +555,36 @@ async fn listed_and_not_hidden_agree_for_every_caller() {
             "agent scoped to alpha: {server} (listed {listed:?})"
         );
     }
+}
+
+/// A scoped key's equivalence holds for a hidden backend: under an mTLS rule
+/// hiding `beta`, a key scoped to `beta` and to the unregistered `gamma`
+/// cannot tell them apart, on either route.
+#[tokio::test]
+async fn a_scoped_keys_hidden_backend_answers_as_its_unregistered_name() {
+    let (router, _) =
+        with_mtls_on(Auth::Keys, (&["*"], &["*"]), (&["beta", UNREGISTERED], &[])).await;
+    let key = Some("gamma-key");
+    let hidden = post_cert_key(&router, "/mcp", key, invoke("beta", "beta_tool")).await;
+    let unregistered = post_cert_key(&router, "/mcp", key, invoke(UNREGISTERED, "beta_tool")).await;
+    assert_alike("scoped key gateway_invoke", "beta", &hidden, &unregistered);
+    let call = json!({ "name": "beta_tool", "arguments": {} });
+    let hidden = post_cert_key(&router, "/mcp/beta", key, call.clone()).await;
+    let unregistered = post_cert_key(&router, &format!("/mcp/{UNREGISTERED}"), key, call).await;
+    assert_alike("scoped key direct route", "beta", &hidden, &unregistered);
+}
+
+/// A chain step naming a hidden backend answers as one naming an
+/// unregistered backend: `gateway_execute` shares the invoke chokepoint.
+#[tokio::test]
+async fn an_execute_step_on_a_hidden_backend_answers_as_an_unregistered_one() {
+    let router = with_mtls_denying_beta().await;
+    let chain = |server: &str| {
+        json!({"name": "gateway_execute", "arguments": {"chain": [
+            {"tool": format!("{server}:beta_tool"), "arguments": {}}
+        ]}})
+    };
+    let hidden = post_as_agent_cert(&router, "/mcp", chain("beta")).await;
+    let unregistered = post_as_agent_cert(&router, "/mcp", chain(UNREGISTERED)).await;
+    assert_alike("execute chain", "beta", &hidden, &unregistered);
 }
