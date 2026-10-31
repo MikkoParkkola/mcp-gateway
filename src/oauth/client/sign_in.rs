@@ -78,10 +78,21 @@ impl SignIn {
     }
 }
 
+/// What the cell keeps: a fixed status, or the secret-free facts of a held
+/// token, classified against the clock each time the cell is read.
+#[derive(Debug, Clone, Copy)]
+enum Stored {
+    Fixed(SignIn),
+    Held {
+        expires_at: Option<u64>,
+        refreshable: bool,
+    },
+}
+
 /// The backend-owned sign-in status, independent of the transport's lifetime.
 #[derive(Debug)]
 pub(crate) struct SignInStatus {
-    cell: parking_lot::Mutex<SignIn>,
+    cell: parking_lot::Mutex<Stored>,
     /// Bumped once a confirmed sign-in is durable in storage, so a client
     /// holding an older token knows to adopt the new one.
     installed: std::sync::atomic::AtomicU64,
@@ -91,7 +102,7 @@ impl SignInStatus {
     /// A cell holding `initial`.
     pub(crate) fn new(initial: SignIn) -> Self {
         Self {
-            cell: parking_lot::Mutex::new(initial),
+            cell: parking_lot::Mutex::new(Stored::Fixed(initial)),
             installed: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -111,14 +122,42 @@ impl SignInStatus {
 
     /// Replace the value.
     pub(crate) fn set(&self, next: SignIn) {
-        *self.cell.lock() = next;
+        *self.cell.lock() = Stored::Fixed(next);
+    }
+
+    /// Keep a held token's expiry and whether it can be refreshed, so the
+    /// status ages with the clock instead of freezing at publish time.
+    pub(crate) fn set_held(&self, expires_at: Option<u64>, refreshable: bool) {
+        *self.cell.lock() = Stored::Held {
+            expires_at,
+            refreshable,
+        };
     }
 
     /// The current value: one snapshot, so a variant and its `expires_at`
     /// cannot disagree.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn snapshot(&self) -> SignIn {
-        *self.cell.lock()
+        match *self.cell.lock() {
+            Stored::Fixed(status) => status,
+            // The one rule for a held token, `token_state`, on a token that
+            // carries only its expiry and whether it has a refresh token.
+            Stored::Held {
+                expires_at,
+                refreshable,
+            } => {
+                let mut token = TokenInfo::from_response_at(
+                    String::new(),
+                    None,
+                    refreshable.then(String::new),
+                    None,
+                    None,
+                    0,
+                );
+                token.expires_at = expires_at;
+                token_state(&token)
+            }
+        }
     }
 }
 
@@ -302,7 +341,12 @@ impl OAuthClient {
         let Some(status) = &self.sign_in_status else {
             return;
         };
-        status.set(self.sign_in_of(held));
+        match held {
+            Some(token) if self.auth_metadata.is_some() => {
+                status.set_held(token.expires_at, token.refresh_token.is_some());
+            }
+            _ => status.set(self.sign_in_of(held)),
+        }
     }
 
     fn sign_in_of(&self, held: Option<&TokenInfo>) -> SignIn {
