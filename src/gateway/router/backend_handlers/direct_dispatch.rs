@@ -513,8 +513,18 @@ pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> Back
 /// Answer a dispatch that failed, settling the reservation (`answer` consumes
 /// the failure context, so this takes the admission by value).
 async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &str) -> Rejection {
-    // Nothing reached the backend, so the nonce is given back (MIK-7698).
-    if e.is_pre_dispatch() {
+    // Nothing reached the backend: no send of this delivery counted, and the
+    // error is one the gateway raised before the backend or a refusal the
+    // send itself recorded. The lease is withdrawn, so the key is released.
+    // The nonce is offered back only through its refund witness, which this
+    // site never holds: it stays spent for every pre-dispatch class, as on
+    // `/mcp`, where a narrow pre-start refund was ruled out.
+    if crate::gateway::delivery_facts::unsent(&e) {
+        if crate::gateway::delivery_facts::refused_before_send_seen() {
+            crate::gateway::delivery_facts::raise(
+                crate::gateway::delivery_facts::ResponseEffect::Refused,
+            );
+        }
         give_back_nonce(admitted.failed.state, &mut admitted);
         super::direct_idempotency::withdraw(admitted.lease.as_ref());
     }

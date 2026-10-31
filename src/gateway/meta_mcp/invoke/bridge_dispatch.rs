@@ -355,9 +355,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         drop(admission);
         let error = match dispatched {
             Ok(value) => {
-                // Asked again: the backend has not acted on this round.
+                // Asked again, inside this one legacy call: no client
+                // continuation receives the key, and stopping to ask does not
+                // prove the backend has not acted, so a drop from here on
+                // settles as may-have-run.
                 if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
-                    arm(self.reservation, false);
+                    arm(self.reservation, true);
                 }
                 return Ok(value);
             }
