@@ -62,7 +62,7 @@ src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1
 src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
-src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	no-record	config reload: a security field only a restart applies
+src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
