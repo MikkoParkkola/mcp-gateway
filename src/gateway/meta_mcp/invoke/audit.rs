@@ -85,7 +85,8 @@ mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
 pub(crate) use decision::{
-    after_upstream_401, note_refused_by, take_refusal_kind, take_route_noted, with_route_scope,
+    after_upstream_401, note_refused_by, note_send_refusal, take_refusal_kind, take_route_noted,
+    with_route_scope,
 };
 
 /// Most process notes one record carries (a playbook may run many).

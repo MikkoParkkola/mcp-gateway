@@ -128,6 +128,7 @@ src/gateway/meta_mcp/invoke/policy.rs	check_attestation_scoped	gateway_refused	1
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	blocked_tool_refusal	1	recorded	Protocol refusal; the route stage withholds it first (PR-2a raise)
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	refuse_withheld	1	composite-or-replay	the invoke entry re-meeting a name the route stage withheld first (raised); reached by composite steps
 src/gateway/meta_mcp/invoke/policy.rs	refuse_unattested_plan	gateway_refused	1	recorded	sealed refusal, recorded at the outlet
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refuse_unbindable	2	not-a-decision	an internal failure: a continuation that cannot be bound
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	refuse_undeclared	1	recorded	raised while vouched at this call
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	Error::ResponseFirewallRefused	1	composite-or-replay	an idempotent replay of a stored firewall refusal; its frame is marked
@@ -209,6 +210,7 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	refusal	1	re
 src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_plain	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_sanitized	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_failure.rs	answer	direct_refusal	1	recorded	a 403 the direct recorder classes Denied (an account backend refusing the caller)
+src/gateway/router/backend_handlers/direct_failure.rs	answer	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/router/backend_handlers/direct_idempotency.rs	deliver_replay	refusal	2	recorded	refused() at each replay exit
 src/gateway/router/backend_handlers/direct_permit.rs	refused_send	refusal	1	recorded	direct outlet: records a sealed refusal
 src/gateway/router/backend_handlers/direct_preflight.rs	audit_mint	direct_refusal	1	recorded	a 403 the direct recorder classes Denied (missing required identity, or a mint failure)

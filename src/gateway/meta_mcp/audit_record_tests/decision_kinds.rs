@@ -171,10 +171,10 @@ async fn a_route_note_is_taken_even_when_the_dispatch_noted_a_check() {
     assert_eq!(next, None, "the next target starts from nothing");
 }
 
-/// A backend whose `tools/call` is refused at the send with the lender's
+/// A backend whose send of the named method is refused with the lender's
 /// `Forbidden` (a lent credential that failed its recheck): nothing reached
 /// the wire.
-struct RefusedAtSend;
+struct RefusedAtSend(&'static str);
 
 #[async_trait::async_trait]
 impl crate::transport::Transport for RefusedAtSend {
@@ -183,7 +183,7 @@ impl crate::transport::Transport for RefusedAtSend {
         method: &str,
         params: Option<Value>,
     ) -> crate::Result<crate::protocol::JsonRpcResponse> {
-        if method == "tools/call" {
+        if method == self.0 {
             return Err(crate::Error::Forbidden {
                 code: -32001,
                 status: 403,
@@ -212,7 +212,7 @@ impl crate::transport::Transport for RefusedAtSend {
 #[tokio::test]
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
-    let meta = logged_meta_with(&dir, Arc::new(RefusedAtSend));
+    let meta = logged_meta_with(&dir, Arc::new(RefusedAtSend("tools/call")));
     let who = api_key_caller();
     let caller = context(&AllowAll, &who);
     let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
@@ -220,7 +220,10 @@ async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
         .invoke_tool(&args, None, &caller)
         .await
         .expect("the meta route answers the refusal as an error result");
-    assert!(answer.to_string().contains("per-user send refused"), "{answer}");
+    assert!(
+        answer.to_string().contains("per-user send refused"),
+        "{answer}"
+    );
     let mut all = records(&dir);
     assert_eq!(all.len(), 1, "{all:?}");
     let record = all.remove(0);

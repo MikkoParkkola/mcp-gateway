@@ -205,7 +205,9 @@ async fn a_lent_only_call_carrying_no_credential_records_refused() {
     let invocations: Vec<Value> = raw
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
-        .filter(|entry| entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt")
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
         .collect();
     let [invocation] = invocations.as_slice() else {
         panic!("premise: one invocation record: {invocations:?}");
@@ -251,7 +253,9 @@ async fn a_send_its_recheck_refuses_answers_403_and_records_refused() {
     let invocations: Vec<Value> = raw
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
-        .filter(|entry| entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt")
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
         .collect();
     let [invocation] = invocations.as_slice() else {
         panic!("premise: one invocation record: {invocations:?}");

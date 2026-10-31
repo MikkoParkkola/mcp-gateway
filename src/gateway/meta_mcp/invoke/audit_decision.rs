@@ -36,6 +36,21 @@ pub(crate) async fn after_upstream_401(
     answer
 }
 
+/// A refusal raised at the send (a lent-only slot the call brought no
+/// credential for, a lent credential failing its per-send recheck), noted
+/// wherever a sent call's error is settled: it is about the caller's own
+/// credential, which no decision kind names yet, so it is noted unrecorded,
+/// as an account's answer to a 401 is, and the record says refused. The
+/// first noted kind wins, so a gate that refused earlier keeps its own.
+pub(crate) fn note_send_refusal(error: &crate::Error) {
+    if matches!(error, crate::Error::Forbidden { .. }) {
+        note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
+    }
+}
+
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));
