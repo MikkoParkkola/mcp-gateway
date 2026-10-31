@@ -135,10 +135,13 @@ async fn a_refused_step_does_not_make_a_sent_step_unsent() {
 }
 
 /// R21 (unit): a step that was sent does not make the next step, refused in
-/// its send, read as possibly sent: the send count does not cross steps.
+/// its send, read as possibly sent: the send count does not cross steps. The
+/// composite's own cell has a send too, so a step cell seeded from it, not
+/// fresh, also reads as sent.
 #[tokio::test]
 async fn a_sent_step_does_not_make_a_refused_step_sent() {
     scope(async {
+        let _ = counted_send(async { Ok::<(), Error>(()) }).await;
         step(async {
             let _ = counted_send(async { Ok::<(), Error>(()) }).await;
             assert!(
