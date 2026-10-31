@@ -13,13 +13,14 @@ fn load_warnings(yaml: &str) -> String {
     warnings
 }
 
+// Roots are single-quoted: a Windows path's backslashes are literal there.
 fn config(secret_key: &str, root: &str) -> String {
     format!(
         "backends:\n  fs:\n    command: \"true\"\n    secrets:\n      - name: fs_token\n        \
          credential_type: api_key\n        value: \"x\"\n        inject_as: argument\n        \
          inject_key: {secret_key}\n        tools: [\"*\"]\nsecurity:\n  firewall:\n    \
          enabled: true\n    rules:\n      - {{match: \"read_file\", servers: [\"fs\"], action: \
-         block, allowed_roots: [\"{root}\"], path_args: [\"path\"]}}\n"
+         block, allowed_roots: ['{root}'], path_args: [\"path\"]}}\n"
     )
 }
 
@@ -76,7 +77,7 @@ fn r22d_root_rule_covering_capabilities_is_warned() {
         format!(
             "capabilities:\n  name: caps\nbackends:\n  fs:\n    command: \"true\"\nsecurity:\n  \
              firewall:\n    enabled: true\n    rules:\n      - {{match: \"read_file\", \
-             servers: [{servers}], action: block, allowed_roots: [\"{root}\"], path_args: \
+             servers: [{servers}], action: block, allowed_roots: ['{root}'], path_args: \
              [\"path\"]}}\n"
         )
     };
