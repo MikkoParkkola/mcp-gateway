@@ -337,11 +337,17 @@ mod gate_tests;
 #[path = "signin_fixture.rs"]
 mod fixture;
 #[cfg(test)]
+#[path = "signin_outcome_tests.rs"]
+mod outcome_tests;
+#[cfg(test)]
 #[path = "signin_read_tests.rs"]
 mod read_tests;
 #[cfg(test)]
 #[path = "signin_secrecy_tests.rs"]
 mod secrecy_tests;
+#[cfg(test)]
+#[path = "signin_settle_tests.rs"]
+mod settle_tests;
 #[cfg(test)]
 #[path = "signin_tests.rs"]
 mod tests;
