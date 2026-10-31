@@ -195,6 +195,8 @@ pub(crate) mod stall_seam {
         Sealed,
         /// A saver's checkpoint thread, as it ends.
         CheckpointDone,
+        /// The saver, as it starts waiting for its writer threads.
+        Draining,
     }
 
     type Gate = (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>);

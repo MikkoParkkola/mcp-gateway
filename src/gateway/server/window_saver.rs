@@ -92,6 +92,13 @@ type Sink = Arc<Mutex<SinkState>>;
 struct Writers {
     running: AtomicUsize,
     idle: tokio::sync::Notify,
+    /// Test support: run once in `idle`, after the count is read and before
+    /// the await, so a row can end the last writer exactly there.
+    #[cfg(test)]
+    between_read_and_await: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// Test support: the next spawn fails as if the OS refused a thread.
+    #[cfg(test)]
+    fail_next_spawn: AtomicBool,
 }
 
 impl Writers {
@@ -103,12 +110,23 @@ impl Writers {
     ) -> std::io::Result<()> {
         self.running.fetch_add(1, Ordering::SeqCst);
         let writers = Arc::clone(self);
+        let thread = move || {
+            let _running = Running(writers);
+            work();
+        };
+        #[cfg(test)]
+        let spawned = if self.fail_next_spawn.swap(false, Ordering::SeqCst) {
+            drop(thread);
+            Err(std::io::Error::other("a forced spawn failure"))
+        } else {
+            std::thread::Builder::new()
+                .name(name.to_owned())
+                .spawn(thread)
+        };
+        #[cfg(not(test))]
         let spawned = std::thread::Builder::new()
             .name(name.to_owned())
-            .spawn(move || {
-                let _running = Running(writers);
-                work();
-            });
+            .spawn(thread);
         if spawned.is_err() {
             // The closure never ran, so its guard never will: uncount once.
             self.finished();
@@ -136,6 +154,15 @@ impl Writers {
             let notified = self.idle.notified();
             if self.running.load(Ordering::SeqCst) == 0 {
                 return;
+            }
+            #[cfg(test)]
+            if let Some(hook) = self
+                .between_read_and_await
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+            {
+                hook();
             }
             notified.await;
         }
@@ -209,6 +236,8 @@ pub(super) async fn start_window_saver(
         let deadline = tokio::time::Instant::now() + settings.close_bound;
         #[cfg(test)]
         let seam_path = window_paths(&data_dir).0;
+        #[cfg(test)]
+        let drain_seam_path = seam_path.clone();
         let close: super::persistence::ShutdownSave = (
             "protocol-revision window seal",
             Box::new(move || {
@@ -233,6 +262,8 @@ pub(super) async fn start_window_saver(
             }),
         );
         super::persistence::run_shutdown_saves(deadline, vec![close]).await;
+        #[cfg(test)]
+        stall_seam::pass(&drain_seam_path, stall_seam::Role::Draining);
         // Every write this saver began ends before its handle resolves, within
         // the same bound as the seal. A disk stalled past it keeps its thread
         // detached (MIK-8157): shutdown is never held longer.
