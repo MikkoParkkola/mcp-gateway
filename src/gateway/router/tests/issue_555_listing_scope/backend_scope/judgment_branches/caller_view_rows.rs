@@ -180,9 +180,10 @@ async fn run_two_step_playbook(deny_tools: &[&str]) -> (Value, Vec<String>) {
     )
     .await;
     let mut recorders = Vec::new();
+    // In step order, so the sends read in the order they were made.
     for (name, tools) in [
-        ("alpha", vec!["alpha_read", "alpha_write"]),
         ("beta", vec!["beta_tool"]),
+        ("alpha", vec!["alpha_read", "alpha_write"]),
     ] {
         let upstream = Arc::new(super::super::super::Upstream {
             tools,
