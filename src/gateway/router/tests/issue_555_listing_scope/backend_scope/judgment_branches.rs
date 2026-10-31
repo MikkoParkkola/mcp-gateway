@@ -304,10 +304,11 @@ async fn a_cold_backend_the_profile_leaves_out_answers_as_an_unregistered_name()
     }
 }
 
-/// A profile that admits only `alpha` refuses every other name by name,
-/// registered or not: `beta`, hidden by the certificate's rule, meets the
-/// profile's refusal exactly as the unregistered name does, never a pass to
-/// the dispatch's miss that the unregistered name does not get.
+/// A profile that admits only `alpha` hides `beta` from a caller whose
+/// certificate rule admits everything, and refuses every name it leaves
+/// out by name, registered or not: the hidden `beta` meets the profile's
+/// refusal exactly as the unregistered name does, never a pass to the
+/// dispatch's miss that the unregistered name does not get.
 #[tokio::test]
 async fn an_allow_list_profile_refuses_a_hidden_name_as_an_unregistered_one() {
     let profiles = HashMap::from([(
@@ -323,17 +324,17 @@ async fn an_allow_list_profile_refuses_a_hidden_name_as_an_unregistered_one() {
             meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "onlyalpha"))
         },
         (&["*"], &["*"]),
-        (&["beta"], &[]),
+        (&[], &[]),
     )
     .await;
     assert!(
         judgment(&state, None, Some(&agent_cert())).hides("beta"),
-        "premise: the certificate's rule hides beta"
+        "premise: the allow-list profile hides beta"
     );
     let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
     let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
     assert!(
-        unregistered.1.contains("routing profile") || unregistered.1.contains("does not list"),
+        unregistered.1.contains("routing profile"),
         "premise: the profile refuses the unregistered name: {unregistered:?}"
     );
     assert_alike("allow-list profile", "beta", &hidden, &unregistered);
