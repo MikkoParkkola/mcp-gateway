@@ -520,7 +520,7 @@ impl super::MetaMcp {
             crate::protocol::cacheable::clamp_delivered_scope(result);
             crate::security::signature_chain::strip_chain(result);
         }
-        if method == "tools/call" && !response.delivery_refusal {
+        if method == "tools/call" && !response.wire_meta.delivery_refusal {
             let source = response.chain_source;
             self.emit_origin_link(response, source, chain_nonce, None);
         }
@@ -738,11 +738,7 @@ pub(crate) fn error_response_preserving_status(
                 &error.to_string(),
             )
         }
-        _ => crate::protocol::JsonRpcResponse::error(
-            Some(id),
-            error.to_rpc_code(),
-            error.to_string(),
-        ),
+        _ => crate::protocol::JsonRpcResponse::of_error(Some(id), error),
     };
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on

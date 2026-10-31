@@ -17,6 +17,9 @@ use tracing::warn;
 
 use super::{NotificationMultiplexer, STREAMING_TARGET};
 use crate::gateway::auth::live::{Delivery, delivery};
+use crate::gateway::health_metrics::RpcError;
+use crate::gateway::health_metrics::clock::{Clock, rescoped};
+use crate::gateway::health_metrics::layers::{Sample, StreamAccounted, count_framed};
 use crate::gateway::outbound::{OutboundFrame, StreamJudge, sse_data, sse_message};
 use crate::gateway::streaming::Decision;
 
@@ -632,7 +635,10 @@ where
 {
     use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 
-    let mut dispatch = Box::pin(dispatch);
+    // The stream is polled after the latency layer returned, outside its
+    // scope: the clock rides every poll of the dispatch instead.
+    let clock = Clock::current();
+    let mut dispatch = rescoped(clock.clone(), Box::pin(dispatch));
     let first = tokio::select! {
         biased;
         Some(notification) = rx.recv() => notification,
@@ -648,6 +654,9 @@ where
         }
     };
 
+    // One latency sample: at the terminal event, or when the stream is
+    // dropped before it (including before its first poll).
+    let mut sample = Sample::of(clock);
     let body = stream! {
         if let Some(event) = sse_message(&judge.record(first).await) {
             yield Ok::<_, Infallible>(event);
@@ -675,10 +684,17 @@ where
                         .extensions()
                         .get::<crate::gateway::meta_mcp::sealed_hold::CarriedHolds>()
                         .cloned();
+                    // Read before `terminal_frame` consumes the response.
+                    let (status, marker) = (
+                        emitted.status().as_u16(),
+                        emitted.extensions().get::<RpcError>().copied(),
+                    );
                     let frame = terminal_frame(emitted).await;
+                    count_framed(status, marker, frame == UNFRAMEABLE_FRAME);
                     if let Some(carried) = &carried {
                         crate::gateway::meta_mcp::sealed_hold::hand_off(carried);
                     }
+                    sample.record();
                     yield Ok(frame);
                     break;
                 }
@@ -695,6 +711,8 @@ where
         CACHE_CONTROL,
         axum::http::HeaderValue::from_static("no-cache"),
     );
+    // The stream recorded (or will record) its own latency.
+    response.extensions_mut().insert(StreamAccounted);
     response
 }
 

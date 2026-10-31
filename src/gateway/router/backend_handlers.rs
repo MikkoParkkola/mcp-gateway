@@ -6,7 +6,6 @@ use crate::error::rpc_codes::{INVALID_PARAMS, INVALID_REQUEST};
 use std::sync::Arc;
 
 use axum::{
-    Json,
     extract::{Path, State},
     http::StatusCode,
 };
@@ -16,7 +15,7 @@ use tracing::warn;
 use super::AppState;
 use super::authorization::{ToolTarget, authorize_tool_target};
 use super::direct_guards::refusal;
-use super::helpers::{bodiless_accepted, build_http_error_response};
+use super::helpers::{RpcHttp, bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::relay::GatewayStamps;
 use crate::gateway::oauth::OAuthAgentIdentity;
@@ -28,7 +27,7 @@ use crate::security::firewall::FirewallAction;
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::security::validate_tool_name;
 
-type BackendRejection = (StatusCode, Json<Value>);
+type BackendRejection = RpcHttp;
 type BackendSecurityResult = Result<Option<Value>, BackendRejection>;
 
 /// Forwarded passthrough headers paired with the caller's stable upstream-session
@@ -285,7 +284,7 @@ fn take_attestation_token(params: Option<&mut Value>) -> Option<String> {
 }
 
 /// Build a `403 Forbidden` JSON-RPC error response for security rejections.
-fn backend_security_error(id: &RequestId, message: &str) -> (StatusCode, Json<Value>) {
+fn backend_security_error(id: &RequestId, message: &str) -> RpcHttp {
     build_http_error_response(
         Some(id.clone()),
         INVALID_REQUEST,
@@ -300,7 +299,7 @@ fn backend_security_error_with_status(
     code: i32,
     message: &str,
     status: StatusCode,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
     build_http_error_response(Some(id.clone()), code, message, status)
 }
 
@@ -492,7 +491,7 @@ async fn backend_handler_inner(
     request: axum::http::Request<axum::body::Body>,
     call: &mut Option<direct_audit::DirectCall>,
     reads: &mut direct_audit::DirectReads,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
     let state = &*state;
     let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
         Ok(resolved) => resolved,
@@ -618,7 +617,7 @@ fn settle_direct_idempotency(
     let Some(reservation) = reservation else {
         return;
     };
-    if response.delivery_refusal {
+    if response.wire_meta.delivery_refusal {
         reservation.fail(&stored_failure(
             crate::gateway::meta_mcp::invoke::dispatch_guards::firewall_refusal_body(),
         ));
