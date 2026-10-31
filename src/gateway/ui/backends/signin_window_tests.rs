@@ -289,3 +289,21 @@ async fn a_cancel_during_the_exchange_discards_the_token() {
         "the new flow holds no token from the old one"
     );
 }
+
+// The callback page of a UI-started sign-in tells the person to go back to the
+// dashboard and confirm: closing the window would abandon an unsaved login.
+// Red today: the page is the generic "you can close this window" one.
+#[tokio::test]
+async fn a_ui_callback_page_asks_for_confirmation() {
+    let gw = Gw::new().await;
+    let (url, _) = Gw::link(&gw.start(&gw.session()).await);
+
+    let page = gw.approve(&url).await;
+
+    assert!(
+        page.to_lowercase()
+            .contains("return to the dashboard and confirm"),
+        "{page}"
+    );
+    assert!(!page.to_lowercase().contains("close this window"), "{page}");
+}

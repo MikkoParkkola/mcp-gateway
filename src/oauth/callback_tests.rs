@@ -739,3 +739,23 @@ async fn a_provider_error_description_is_never_logged() {
         "a code off the allow-list reads as `other`: {err}"
     );
 }
+
+/// A command-line or startup callback page is unchanged: the login is done
+/// when the code arrives, so the person may close the window. Green today and
+/// pinned so the UI page change cannot leak into it.
+#[tokio::test]
+async fn the_cli_callback_page_still_says_the_window_can_be_closed() {
+    let (_server, url, client) = start_test_server("expected").await;
+    let page = tokio::time::timeout(
+        crate::test_wait::HANG_BOUND,
+        client.get(format!("{url}?code=c&state=expected")).send(),
+    )
+    .await
+    .expect("the callback is answered")
+    .expect("the callback sends")
+    .text()
+    .await
+    .expect("the page reads");
+
+    assert!(page.contains("You can close this window."), "{page}");
+}
