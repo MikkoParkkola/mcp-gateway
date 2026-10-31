@@ -492,14 +492,31 @@ fn backend_admitted(
     if agent.is_none() && !mtls {
         return true;
     }
-    backend_tool_names(state, client, server)
-        .iter()
-        .any(|tool| {
-            agent.is_none_or(|id| {
-                check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
-            }) && (!mtls
-                || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
-        })
+    admits_some_tool(
+        state,
+        (agent, cert_identity),
+        server,
+        &backend_tool_names(state, client, server),
+    )
+}
+
+/// Whether some tool of `tools` passes the agent's scopes and the mTLS policy
+/// on `server`: [`backend_admitted`]'s test, shared with the hiding judgment
+/// (`caller_hiding`), which reads `tools` unfiltered so it cannot re-enter
+/// the caller's view.
+pub(super) fn admits_some_tool(
+    state: &AppState,
+    (agent, cert_identity): (Option<&OAuthAgentIdentity>, Option<&CertIdentity>),
+    server: &str,
+    tools: &[String],
+) -> bool {
+    let mtls = !state.mtls_policy.is_empty();
+    tools.iter().any(|tool| {
+        agent.is_none_or(|id| {
+            check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
+        }) && (!mtls
+            || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
+    })
 }
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
@@ -710,6 +727,7 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
 /// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a
 /// background worker can rebuild the identical borrowed authorizer after the
 /// request future is gone.
+#[derive(Clone)]
 pub(crate) struct OwnedRouterAuthorizer {
     client: Option<AuthenticatedClient>,
     oauth_agent_identity: Option<OAuthAgentIdentity>,
@@ -729,6 +747,21 @@ impl OwnedRouterAuthorizer {
             cert_identity: cert.cloned(),
             principal: refusal_principal(client, oauth, cert),
         }
+    }
+
+    /// The caller's client, agent identity and certificate.
+    pub(super) fn parts(
+        &self,
+    ) -> (
+        Option<&AuthenticatedClient>,
+        Option<&OAuthAgentIdentity>,
+        Option<&CertIdentity>,
+    ) {
+        (
+            self.client.as_ref(),
+            self.oauth_agent_identity.as_ref(),
+            self.cert_identity.as_ref(),
+        )
     }
 
     /// The borrowed authorizer, judged by `generation`: the one current when

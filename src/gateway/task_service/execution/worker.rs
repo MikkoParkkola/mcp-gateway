@@ -304,6 +304,11 @@ async fn run_dispatched(
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
+    // The run judges hiding as its caller, live, readmission included. Boxed,
+    // as an input round is: each wrapper would otherwise hold and move the
+    // whole run inline, and `large_futures` cannot see it (never awaited
+    // here, only passed on), so the worker's stack overflows.
+    let dispatch = state.as_caller(&intent.owned, Box::pin(dispatch));
     let mut dispatch = Box::pin(dispatched_in_cell(
         crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
             Arc::clone(intent.owned.dispatch_log()),

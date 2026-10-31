@@ -187,6 +187,12 @@ impl MetaMcp {
         };
         super::visible::memo::with_visibility_memo(async move {
             let _pin = super::visible::memo::pin_surfaced(tool, server);
+            // A target hidden from the caller is absent from the memo's
+            // opening, before readmission could record it withheld: a
+            // withholding is never upgraded to absent later.
+            if super::hiding::hidden(server) {
+                super::visible::memo::record_absent(server, tool);
+            }
             dispatch.await
         })
         .await
