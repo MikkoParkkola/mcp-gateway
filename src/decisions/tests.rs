@@ -25,6 +25,7 @@ fn ready() -> DecisionSet {
     for source in [Source::Access, Source::ControlPlane, Source::Capability] {
         set.set_health(source, Health::Ready);
     }
+    set.set_discovery(Vec::new(), Vec::new(), at(0));
     set
 }
 
@@ -730,3 +731,5 @@ fn a_lost_note_affects_only_its_own_log() {
         "the other log's held event is kept"
     );
 }
+
+mod discovery;

@@ -419,6 +419,56 @@ impl DecisionSet {
 /// The kind a grant decision is written as.
 pub(crate) const GRANT_DECISION_KIND: &str = "identity_grant_decision";
 
+/// A client find the set may show as an adopt decision. Red rows only: the
+/// discovery source is built next.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct AdoptFind {
+    pub(crate) find_id: String,
+    pub(crate) name: String,
+    pub(crate) source: crate::discovery::DiscoverySource,
+    pub(crate) config_file: Option<String>,
+    pub(crate) transport: &'static str,
+    pub(crate) command: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) severity: crate::discovery::shadow::ShadowRiskSeverity,
+}
+
+/// Why a client config file could not be read.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnreadableReason {
+    NotAReadableFile,
+    NoPermission,
+    DidNotParse,
+}
+
+/// A client config file that exists but could not be read.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct UnreadableFile {
+    pub(crate) source: crate::discovery::DiscoverySource,
+    pub(crate) file: String,
+    pub(crate) path_digest: String,
+    pub(crate) reason: UnreadableReason,
+}
+
+#[cfg(test)]
+impl DecisionSet {
+    /// Replace the discovery source's finds and unreadable files. Red rows
+    /// only: does nothing yet.
+    pub(crate) fn set_discovery(
+        &mut self,
+        _finds: Vec<AdoptFind>,
+        _unreadable: Vec<UnreadableFile>,
+        _now: DateTime<Utc>,
+    ) {
+    }
+
+    /// The discovery source timed out with nothing cached. Red rows only.
+    pub(crate) fn discovery_down(&mut self) {}
+}
+
 /// A written grant-decision record read back into the event it was noted
 /// from, live or replayed alike; `None` for a record that names no subject.
 pub(crate) fn denial_from_record(record: &Map<String, Value>) -> Option<IdentityGrantAuditEvent> {
