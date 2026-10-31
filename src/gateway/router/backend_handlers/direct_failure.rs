@@ -57,6 +57,18 @@ impl DirectFailure<'_> {
             }
             _ => error,
         };
+        // A refusal raised at the send (a lent-only slot the call brought no
+        // credential for, a lent credential failing its per-send recheck) is
+        // about the caller's own credential, which no decision kind names
+        // yet: noted unrecorded, as an account's answer to a 401 is, so the
+        // record says refused. The first noted kind wins, so a gate that
+        // refused earlier keeps its own.
+        if matches!(error, crate::Error::Forbidden { .. }) {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Unrecorded,
+                None,
+            );
+        }
         // A full slot table says nothing about this caller (#2300).
         if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
             record_client_failure(self.state, self.client);

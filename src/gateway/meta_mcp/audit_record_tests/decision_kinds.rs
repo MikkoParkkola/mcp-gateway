@@ -162,3 +162,50 @@ async fn a_route_note_is_taken_even_when_the_dispatch_noted_a_check() {
     );
     assert_eq!(next, None, "the next target starts from nothing");
 }
+
+/// A backend whose `tools/call` is refused at the send with the lender's
+/// `Forbidden` (a lent credential that failed its recheck): nothing reached
+/// the wire.
+struct RefusedAtSend;
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for RefusedAtSend {
+    async fn request(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/call" {
+            return Err(crate::Error::Forbidden {
+                code: -32001,
+                status: 403,
+                message: "per-user send refused: this credential was refused".to_string(),
+            });
+        }
+        Scripted(Ok(ok_result())).request(method, params).await
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A refusal raised at the send on the meta route (`gateway_invoke`): about
+/// the caller's own credential, which no decision kind names yet, so it is
+/// recorded refused with kind `unrecorded`. Flips to that kind when an
+/// identity-standing kind is added.
+#[tokio::test]
+async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = logged_meta(&dir);
+    let alpha = meta.backends().get("alpha").expect("alpha is registered");
+    alpha.set_transport_for_test(Arc::new(RefusedAtSend));
+    let (error, record) = refused_record(&meta, &dir).await;
+    assert!(matches!(error, crate::Error::Forbidden { .. }), "{error}");
+    assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
+}

@@ -116,6 +116,18 @@ impl MetaMcp {
             }
             _ => e,
         };
+        // A refusal raised at the send (a lent-only slot the call brought no
+        // credential for, a lent credential failing its per-send recheck) is
+        // about the caller's own credential, which no decision kind names
+        // yet: noted unrecorded, as an account's answer to a 401 is, so the
+        // record says refused. The first noted kind wins, so a gate that
+        // refused earlier keeps its own.
+        if matches!(e, Error::Forbidden { .. }) {
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Unrecorded,
+                None,
+            );
+        }
         // MIK-8139: the account marker rides on the backend's own error, so
         // it is honoured only when the shared screen passes that error clean;
         // otherwise the error becomes the result the gates and firewall read.
