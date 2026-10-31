@@ -91,6 +91,7 @@ fn settings(close_bound: Duration) -> SaverSettings {
         open_bound: ARRIVAL,
         close_bound,
         clock_ms: crate::clock::unix_millis,
+        spawner: None,
     }
 }
 

@@ -154,6 +154,13 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
             window::load(dir.path()).is_ok_and(|w| w.http_segments.len() == 1)
         })
         .await;
+        // W3: the saver starts on a runtime worker, yet its open is
+        // attributed to this test, whose thread built the gateway.
+        assert_eq!(
+            stall_seam::opened_by(&path).as_deref(),
+            Some(crate::test_late_write::Creator::default().name()),
+            "the window's opener is not the test that built the gateway"
+        );
     }
     let (close_in, close_go) = stall_seam::arm(&path, stall_seam::Role::Close);
 

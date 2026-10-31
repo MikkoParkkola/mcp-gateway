@@ -49,6 +49,10 @@ pub(super) struct SaverSettings {
     pub(super) open_bound: Duration,
     pub(super) close_bound: Duration,
     pub(super) clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
+    /// The test this saver writes for, named on a late write; `None` takes
+    /// the name of the thread that starts the saver.
+    #[cfg(test)]
+    pub(super) spawner: Option<String>,
 }
 
 impl SaverSettings {
@@ -58,6 +62,8 @@ impl SaverSettings {
             open_bound: WINDOW_OPEN_STARTUP_BOUND,
             close_bound: super::persistence::SHUTDOWN_SAVES_TIMEOUT,
             clock_ms: crate::clock::unix_millis,
+            #[cfg(test)]
+            spawner: None,
         }
     }
 }
@@ -99,6 +105,9 @@ struct Writers {
     /// Test support: the next spawn fails as if the OS refused a thread.
     #[cfg(test)]
     fail_next_spawn: AtomicBool,
+    /// Test support: the test these writers write for (`Creator`).
+    #[cfg(test)]
+    spawner: Option<String>,
 }
 
 impl Writers {
@@ -110,8 +119,12 @@ impl Writers {
     ) -> std::io::Result<()> {
         self.running.fetch_add(1, Ordering::SeqCst);
         let writers = Arc::clone(self);
+        #[cfg(test)]
+        let spawner = self.spawner.clone();
         let thread = move || {
             let _running = Running(writers);
+            #[cfg(test)]
+            crate::test_late_write::writing_for(spawner);
             work();
         };
         #[cfg(test)]
@@ -194,7 +207,16 @@ pub(super) async fn start_window_saver(
         return None;
     }
     let sink: Sink = Arc::default();
-    let writers = Arc::new(Writers::default());
+    #[allow(unused_mut)]
+    let mut writers = Writers::default();
+    #[cfg(test)]
+    {
+        writers.spawner = settings
+            .spawner
+            .clone()
+            .or_else(|| std::thread::current().name().map(str::to_owned));
+    }
+    let writers = Arc::new(writers);
     // No readable clock means no start time to record: no segment is
     // written (never a 0), but the seal below still refuses late requests.
     let identity = if let Ok(started_ms) = (settings.clock_ms)() {
@@ -266,7 +288,7 @@ pub(super) async fn start_window_saver(
         stall_seam::pass(&drain_seam_path, stall_seam::Role::Draining);
         // Every write this saver began ends before its handle resolves, within
         // the same bound as the seal. A disk stalled past it keeps its thread
-        // detached (MIK-8157): shutdown is never held longer.
+        // detached, as every saver write already is: shutdown is never held longer.
         if tokio::time::timeout_at(deadline, writers.idle())
             .await
             .is_err()

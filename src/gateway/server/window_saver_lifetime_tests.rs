@@ -225,3 +225,79 @@ async fn a_failed_spawn_or_a_panicking_writer_leaves_no_count() {
         .await
         .expect("a panicking writer left a count behind");
 }
+
+/// Fails while set: a clock that can be made unreadable at the seal alone.
+static CLOCK_FAILS: AtomicBool = AtomicBool::new(false);
+
+fn clock_unreadable_at_the_seal() -> Result<u64, ClockBeforeEpoch> {
+    if CLOCK_FAILS.load(Ordering::SeqCst) {
+        Err(ClockBeforeEpoch)
+    } else {
+        crate::clock::unix_millis()
+    }
+}
+
+/// W1b: a seal whose clock is unreadable writes no seal, but still leaves the
+/// sink sealed: a checkpoint released after it writes nothing more.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_seal_with_no_clock_still_ends_the_writes() {
+    let rig = Rig::new();
+    let path = rig.window_path();
+    let (held_in, held_go) = stall_seam::arm(&path, Role::BeforeLock);
+    let (sealed_in, sealed_go) = stall_seam::arm(&path, Role::Sealed);
+    drop(sealed_go);
+    let (done_in, done_go) = stall_seam::arm(&path, Role::CheckpointDone);
+    drop(done_go);
+    let saver = rig
+        .start(
+            ProtocolRevisionWindow::Record,
+            SaverSettings {
+                clock_ms: clock_unreadable_at_the_seal,
+                ..quick(ARRIVAL)
+            },
+        )
+        .await
+        .expect("record");
+    assert_eq!(rig.segments().len(), 1, "premise: the segment opened");
+    held_in
+        .recv_timeout(ARRIVAL)
+        .expect("a checkpoint is held before the sink");
+    CLOCK_FAILS.store(true, Ordering::SeqCst);
+    rig.shutdown.send(()).expect("the saver subscribed");
+    sealed_in
+        .recv_timeout(ARRIVAL)
+        .expect("the seal ran to completion");
+    CLOCK_FAILS.store(false, Ordering::SeqCst);
+    rig.served.store(50, Ordering::SeqCst);
+    held_go.send(()).expect("release one checkpoint");
+    done_in
+        .recv_timeout(ARRIVAL)
+        .expect("the released checkpoint ended");
+    drop(held_go);
+    tokio::time::timeout(ARRIVAL, saver)
+        .await
+        .expect("the saver ends")
+        .expect("the saver does not panic");
+    let segment = rig.segments().remove(0);
+    assert_ne!(
+        segment.snapshot.total, 50,
+        "a checkpoint wrote after the seal: {segment:?}"
+    );
+}
+
+/// W3: a saver started directly attributes its open to the starting test's
+/// thread, though the open runs on a writer thread of its own.
+#[tokio::test]
+async fn the_window_open_names_the_test_that_started_the_saver() {
+    let rig = Rig::new();
+    let saver = rig
+        .start(ProtocolRevisionWindow::Record, settings(ARRIVAL))
+        .await
+        .expect("record");
+    assert_eq!(
+        stall_seam::opened_by(&rig.window_path()).as_deref(),
+        Some(crate::test_late_write::Creator::default().name()),
+        "the window's opener is not this test"
+    );
+    stop(&rig, saver).await;
+}

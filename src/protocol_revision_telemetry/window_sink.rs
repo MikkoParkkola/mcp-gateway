@@ -65,6 +65,12 @@ impl HttpSegmentSink {
     pub(crate) fn open(data_dir: &Path, identity: WriterIdentity, now: u64) -> io::Result<Self> {
         let (window_path, lock_path) = window_paths(data_dir);
         let directory = data_dir.join(DURABLE_TELEMETRY_DIR);
+        // A missing data directory here means the open is about to rebuild a
+        // test directory already removed: name the test that opened it.
+        #[cfg(test)]
+        let created_by = crate::test_late_write::Creator::default();
+        #[cfg(test)]
+        created_by.witness("telemetry window open", data_dir);
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
         #[cfg(test)]
@@ -86,13 +92,15 @@ impl HttpSegmentSink {
         window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
         let index = window.http_segments.len() - 1;
         write_window_v2(&window_path, &window)?;
+        #[cfg(test)]
+        stall_seam::record_opener(&window_path, created_by.name());
         Ok(Self {
             window_path,
             lock_path,
             index,
             identity,
             #[cfg(test)]
-            created_by: crate::test_late_write::Creator::default(),
+            created_by,
         })
     }
 
@@ -128,6 +136,10 @@ impl HttpSegmentSink {
         self.created_by
             .witness("telemetry window", &self.window_path);
         let _lock = ExclusiveFileLock::acquire(&self.lock_path)?;
+        // A lock taken beside a missing window is the lock-only leftover.
+        #[cfg(test)]
+        self.created_by
+            .witness("telemetry window lock", &self.window_path);
         let mut window = read_window_v2(&self.window_path)?;
         let segment = window
             .http_segments
@@ -217,6 +229,26 @@ pub(crate) mod stall_seam {
                 (entered_tx, Arc::new(Mutex::new(release_rx))),
             );
         (entered_rx, release_tx)
+    }
+
+    static OPENERS: Mutex<Option<HashMap<PathBuf, String>>> = Mutex::new(None);
+
+    /// Record the test a window at `path` was opened for.
+    pub(crate) fn record_opener(path: &Path, opener: &str) {
+        OPENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .insert(path.to_path_buf(), opener.to_owned());
+    }
+
+    /// The test the window at `path` was last opened for, if any.
+    pub(crate) fn opened_by(path: &Path) -> Option<String> {
+        OPENERS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|openers| openers.get(path).cloned())
     }
 
     pub(crate) fn pass(path: &Path, role: Role) {

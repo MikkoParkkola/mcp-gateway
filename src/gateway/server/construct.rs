@@ -149,7 +149,7 @@ impl Gateway {
 
         Ok(Self {
             #[cfg(test)]
-            test_seams: test_seams::TestSeams::default(),
+            test_seams: test_seams::TestSeams::new(),
             config,
             config_path,
             watched_config: None,
