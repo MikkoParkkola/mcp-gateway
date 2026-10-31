@@ -37,6 +37,8 @@ mod session_fp;
 mod admin_exposure;
 #[path = "tests/backend_lists.rs"]
 mod backend_lists;
+#[path = "tests/bridge_drop_tests.rs"]
+mod bridge_drop;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
 #[path = "tests/confirmation_binding.rs"]

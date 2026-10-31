@@ -21,6 +21,10 @@ mod headers;
 
 /// Session expiry, re-initialise and retry (MIK-5982), and per-call headers.
 mod session_expiry;
+/// A resend after an expired session that never connected may have run.
+/// Unix only: the row holds its port with `SO_REUSEPORT`.
+#[cfg(unix)]
+mod session_expiry_resend;
 
 /// An unpinned flavour connects as a Streamable pin does (MIK-8044).
 mod unpinned_flavour;
