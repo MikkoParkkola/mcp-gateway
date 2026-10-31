@@ -37,32 +37,32 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.7be1307414d1.js",
-        include_bytes!("shell/shell.7be1307414d1.js"),
+        "shell.8a50877dde1d.js",
+        include_bytes!("shell/shell.8a50877dde1d.js"),
     ),
     (
-        "shell.9555a8d2a896.css",
-        include_bytes!("shell/shell.9555a8d2a896.css"),
+        "shell.f49800d7fa75.css",
+        include_bytes!("shell/shell.f49800d7fa75.css"),
     ),
     (
-        "tips.7c43dc6560cf.json",
-        include_bytes!("shell/tips.7c43dc6560cf.json"),
+        "tips.2b1d0c91519f.json",
+        include_bytes!("shell/tips.2b1d0c91519f.json"),
     ),
     (
         "tools.24f226efcd24.css",
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.4636ac6c5b97.js",
-        include_bytes!("shell/tools.4636ac6c5b97.js"),
+        "tools.6599aed1b499.js",
+        include_bytes!("shell/tools.6599aed1b499.js"),
+    ),
+    (
+        "tooltip.32447d51da98.js",
+        include_bytes!("shell/tooltip.32447d51da98.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
-    ),
-    (
-        "tooltip.deb27f374db3.js",
-        include_bytes!("shell/tooltip.deb27f374db3.js"),
     ),
 ];
 

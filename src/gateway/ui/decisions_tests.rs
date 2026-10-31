@@ -8,13 +8,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::to_bytes;
-use axum::extract::{Extension, State};
-use axum::http::StatusCode;
+use axum::extract::State;
+use axum::http::{Method, StatusCode};
 use chrono::{DateTime, Utc};
 use serde_json::{Map, Value, json};
 
+use super::super::errors::admin_auth_required;
 use super::*;
 use crate::config::AuthConfig;
+use crate::gateway::auth::AuthenticatedClient;
 use crate::security::audit::AuditEnvelope;
 use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
 use crate::security::{TransparencyLogConfig, TransparencyLogger};
@@ -93,7 +95,8 @@ fn client(admin: bool) -> AuthenticatedClient {
 }
 
 async fn get(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
-    let response = list_decisions(State(Arc::clone(state)), Some(Extension(client(admin)))).await;
+    let guard = Guard::for_route(routes::UI_DECISIONS, &Method::GET, Some(client(admin)));
+    let response = list_decisions(State(Arc::clone(state)), guard).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
     (

@@ -59,6 +59,17 @@ export function readScreens(dir = SHELL_DIR) {
 }
 
 /**
+ * The shell module's source. The shell draws tooltips of its own (the top bar's
+ * environment chip) but registers no screen, so its ids count as drawn and never
+ * as a built tab: a11y.spec.mjs keeps reading the screens alone.
+ */
+export function readShell(dir = SHELL_DIR) {
+  const name = readdirSync(dir).find((f) => /^shell\.[0-9a-f]{12}\.js$/.test(f));
+  if (!name) throw new Error('no shell module (shell.<hash>.js) in src/gateway/ui/shell');
+  return readFileSync(dir + name, 'utf8');
+}
+
+/**
  * What the screens draw and build: `drawn` is every literal tip('<id>') argument,
  * `nonLiteral` counts tip( calls whose argument is not a string literal, and
  * `tabs` maps each registered page to its tabs, a tab being built unless its spec is null.

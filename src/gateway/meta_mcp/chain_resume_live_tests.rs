@@ -612,3 +612,112 @@ mod binding;
 #[cfg(feature = "cost-governance")]
 #[path = "chain_resume_nonce_tests.rs"]
 mod nonce_tests;
+
+/// Grants the caller only the backends it names; decides everything else Ok.
+struct Granted(Vec<String>);
+
+impl crate::gateway::authz::ToolAuthorizer for Granted {
+    fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
+        None
+    }
+    fn backend_grant(&self) -> crate::gateway::authz::BackendGrant<'_> {
+        crate::gateway::authz::BackendGrant::Scoped(&self.0)
+    }
+    fn decide<'a>(
+        &'a self,
+        _target: crate::gateway::authz::ToolTarget<'a>,
+    ) -> crate::gateway::authz::Decision<'a> {
+        crate::gateway::authz::Decision::of(Ok(()))
+    }
+    fn admits_backend(&self, server: &str) -> bool {
+        self.0.iter().any(|granted| granted == server)
+    }
+    fn transport(&self) -> crate::gateway::authz::Transport {
+        crate::gateway::authz::Transport::Test
+    }
+    fn caller_name(&self) -> Option<&str> {
+        None
+    }
+}
+
+/// The two-step chain stopped on its first step, then resumed by a caller
+/// judged by `authorizer`: the resumed answer and its delivery record's
+/// fields, and how often the pending step reached the backend in all.
+async fn resume_as(
+    authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
+) -> (Value, serde_json::Map<String, Value>, usize) {
+    use crate::gateway::delivery_facts;
+    let stub = Arc::new(AsksOnce::default());
+    let meta = meta_over(Arc::clone(&stub));
+    let (who, caps) = (identity(), elicitation_caps());
+    let stop = execute(&meta, 1, &who, &caps, &crate::protocol::mrtr::NO_RETRY).await;
+    let retry = answers(&handle_in(&stop));
+    let mut fields = serde_json::Map::new();
+    let resumed = delivery_facts::scope(async {
+        let mut ctx = resuming_ctx(&who, &caps, &retry);
+        ctx.authorizer = authorizer;
+        let response = Box::pin(meta.handle_tools_call(
+            RequestId::Number(2),
+            "gateway_execute",
+            json!({"chain": chain()}),
+            None,
+            ctx,
+        ))
+        .await;
+        delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
+        serde_json::to_value(&response).expect("response is JSON")
+    })
+    .await;
+    let asks = stub
+        .calls()
+        .iter()
+        .filter(|params| params.get("name").and_then(Value::as_str) == Some("ask"))
+        .count();
+    (resumed, fields, asks)
+}
+
+/// A resumed chain whose pending step the caller may no longer invoke is
+/// answered with the name it cannot see, before the step runs: the chain
+/// ends on the gateway's refusal.
+#[tokio::test]
+async fn a_resume_whose_pending_step_is_withheld_records_refused() {
+    static DENY_ASK: crate::gateway::authz::DenyOne =
+        crate::gateway::authz::DenyOne { tool: "ask" };
+    let (resumed, fields, asks) = resume_as(&DENY_ASK).await;
+    assert_eq!(
+        resumed["error"]["code"],
+        json!(-32601),
+        "premise: the absent name: {resumed}"
+    );
+    assert_eq!(asks, 1, "premise: the pending step never re-ran: {resumed}");
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&json!("refused")),
+        "{fields:?} {resumed}"
+    );
+}
+
+/// A resumed chain whose pending step's backend is outside the key's scope
+/// is refused with the backend miss, before the step runs: the chain ends
+/// on the gateway's refusal.
+#[tokio::test]
+async fn a_resume_whose_pending_step_is_out_of_scope_records_refused() {
+    let (resumed, fields, asks) = resume_as(&Granted(vec!["other".to_owned()])).await;
+    assert_eq!(
+        resumed["error"]["code"],
+        json!(-32001),
+        "premise: the backend miss: {resumed}"
+    );
+    assert!(
+        resumed["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("srv")),
+        "premise: the miss names the backend: {resumed}"
+    );
+    assert_eq!(asks, 1, "premise: the pending step never re-ran: {resumed}");
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&json!("refused")),
+        "{fields:?} {resumed}"
+    );
+}
