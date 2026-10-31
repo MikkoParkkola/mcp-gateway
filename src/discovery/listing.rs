@@ -170,6 +170,11 @@ impl DiscoveryCache {
         Ok((listing, false))
     }
 
+    /// Hand every new listing to `publish` while this cache still holds the
+    /// listing it replaced. Red rows only: nothing is published yet.
+    #[cfg(test)]
+    pub(crate) fn set_publisher(&self, _publish: Arc<dyn Fn(&Listing) + Send + Sync>) {}
+
     /// The find `find_id` names, from a fresh scan of the client files: the
     /// whole find, values included, for an adopt. Never cached, takes no
     /// cache lock and leaves the listing's time-out back-off alone. A find

@@ -56,6 +56,26 @@ pub(crate) struct ClientScan {
     pub(crate) unreadable: Vec<(DiscoverySource, String)>,
 }
 
+#[cfg(test)]
+impl ClientScan {
+    /// Each unreadable file as its file name, reason class and keyed path
+    /// digest. Red rows only: the reason and the digest are not recorded yet.
+    pub(crate) fn unreadable_rows(
+        &self,
+    ) -> Vec<(String, crate::decisions::UnreadableReason, String)> {
+        self.unreadable
+            .iter()
+            .map(|(_, file)| {
+                (
+                    file.clone(),
+                    crate::decisions::UnreadableReason::DidNotParse,
+                    String::new(),
+                )
+            })
+            .collect()
+    }
+}
+
 /// One line per candidate: its path, then its stamp or `absent`.
 fn stamp_line(path: &std::path::Path) -> String {
     let Ok(meta) = std::fs::metadata(path) else {

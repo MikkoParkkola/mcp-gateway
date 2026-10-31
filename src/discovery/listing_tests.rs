@@ -344,3 +344,29 @@ async fn a_resolve_time_out_leaves_the_listing_alone() {
     let (_, stale) = cache.listing().await.expect("a fresh listing");
     assert!(!stale, "the listing scanned instead of backing off");
 }
+
+/// R10: a new listing reaches the decision set while the cache still holds
+/// its lock, so an older listing can never be published over a newer one.
+#[tokio::test]
+async fn a_new_listing_is_published_while_the_cache_is_held() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));
+    let cache = Arc::new(cache(&fake));
+    let held: Arc<Mutex<Vec<bool>>> = Arc::default();
+    let weak = Arc::downgrade(&cache);
+    let seen = Arc::clone(&held);
+    cache.set_publisher(Arc::new(move |_listing: &Listing| {
+        let cache = weak.upgrade().expect("the cache is alive");
+        seen.lock()
+            .expect("seen")
+            .push(cache.current.try_lock().is_err());
+    }));
+    cache.listing().await.expect("listing");
+    fake.advance(CACHE_WINDOW);
+    cache.listing().await.expect("listing");
+    assert_eq!(
+        *held.lock().expect("seen"),
+        [true, true],
+        "each rescan publishes once, with the cache's lock held"
+    );
+}
