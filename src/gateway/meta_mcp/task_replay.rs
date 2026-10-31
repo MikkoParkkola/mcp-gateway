@@ -341,7 +341,8 @@ impl MetaMcp {
         {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
-            if self.may_invoke(server, tool, scope, session_id).is_err() {
+            if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+                super::invoke::audit::note_refused_by(kind, None);
                 return true;
             }
             let call = super::invoke::dispatch_guards::BackendCall {
@@ -403,9 +404,12 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        if backend.is_blocked_tool(tool)
-            || self.may_invoke(server, tool, scope, session_id).is_err()
-        {
+        if backend.is_blocked_tool(tool) {
+            super::invoke::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
+            return true;
+        }
+        if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+            super::invoke::audit::note_refused_by(kind, None);
             return true;
         }
         let call = super::invoke::dispatch_guards::BackendCall {

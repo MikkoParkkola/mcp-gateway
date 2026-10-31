@@ -18,6 +18,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
 
+use crate::security::decision_record::DecisionKind;
+
 /// Web UI tool calls that may run at once, per gateway. A constant: the
 /// shell's contract leaves no status for "wait", so a full pool refuses.
 pub(crate) const MAX_UI_CALLS: usize = 4;
@@ -142,7 +144,10 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         return Ok(());
     };
     if !call.targets(step) || !call.gated.load(Ordering::SeqCst) {
-        return Err(refused("this send is not the call the web UI checked"));
+        return Err(refused(
+            DecisionKind::AdminCapability,
+            "this send is not the call the web UI checked",
+        ));
     }
     // The send's claim: it loses only to a deadline that cancelled first.
     match call
@@ -150,7 +155,11 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         .compare_exchange(OPEN, SENDING, Ordering::SeqCst, Ordering::SeqCst)
     {
         Ok(_) | Err(SENDING) => Ok(()),
-        Err(_) => Err(refused("the web UI stopped waiting for this call")),
+        // The web UI's deadline: no kind names it yet.
+        Err(_) => Err(refused(
+            DecisionKind::Unrecorded,
+            "the web UI stopped waiting for this call",
+        )),
     }
 }
 
@@ -192,7 +201,7 @@ pub(crate) fn refuses_task() -> bool {
 
 /// The refusal for [`refuses_task`].
 pub(crate) fn task_refused() -> crate::Error {
-    refused("a web UI call does not run as a task")
+    refused(DecisionKind::Syntax, "a web UI call does not run as a task")
 }
 
 /// The gate before the send, where the dispatched backend and the caller's
@@ -208,7 +217,10 @@ pub(crate) fn gate(
     };
     // The principal is the one the route checked as an admin.
     if !call.targets(step) || principal != Some(call.principal.as_str()) {
-        return Err(refused("this call is not the one the web UI checked"));
+        return Err(refused(
+            DecisionKind::AdminCapability,
+            "this call is not the one the web UI checked",
+        ));
     }
     confirmed(&call, declared_read_only)?;
     call.gated.store(true, Ordering::SeqCst);
@@ -228,13 +240,17 @@ fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
     if call.confirm == Confirm::DeclaredReadOnlyOnly && !read_only {
         call.confirm_refused.store(true, Ordering::SeqCst);
         return Err(refused(
+            DecisionKind::ToolPolicy,
             "this tool is not declared read-only; confirm_write is required",
         ));
     }
     Ok(())
 }
 
-fn refused(message: &str) -> crate::Error {
+/// A refusal by this gate's `kind` of check, noted so the call's decision
+/// record names the check that refused it.
+fn refused(kind: DecisionKind, message: &str) -> crate::Error {
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(kind, None);
     // A gateway refusal of the delivery this call answers: its record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
     crate::Error::Forbidden {

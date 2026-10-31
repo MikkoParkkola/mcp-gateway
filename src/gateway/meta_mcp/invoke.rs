@@ -309,6 +309,8 @@ mod error_classification_tests;
 // ============================================================================
 
 #[cfg(test)]
+mod context_integrity_note_tests;
+#[cfg(test)]
 mod response_transform_tests;
 
 #[cfg(test)]

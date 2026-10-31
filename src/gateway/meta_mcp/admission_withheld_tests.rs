@@ -380,7 +380,7 @@ fn assert_sub4_refusal(answer: crate::Result<()>, row: &str) {
 /// A step answered from the response cache, then revoked: its replay refuses.
 #[tokio::test]
 async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
-    let answer = replay_after_revoking(Some("read"), "read").await;
+    let answer = Box::pin(replay_after_revoking(Some("read"), "read")).await;
     assert_sub4_refusal(answer, "cached step");
 }
 
@@ -388,7 +388,7 @@ async fn a_replay_past_revocation_of_a_cached_step_keeps_its_refusal() {
 /// dispatch path's own note is what proves it ran).
 #[tokio::test]
 async fn a_replay_past_revocation_of_a_sent_step_keeps_its_refusal() {
-    let answer = replay_after_revoking(None, "write").await;
+    let answer = Box::pin(replay_after_revoking(None, "write")).await;
     assert_sub4_refusal(answer, "sent step");
 }
 
@@ -429,6 +429,7 @@ impl ToolAuthorizer for DenyEach {
         if self.0.contains(&target.tool) {
             return crate::gateway::authz::Decision::of(Err(
                 crate::gateway::authz::AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::ToolPolicy,
                     -32003,
                     format!("denied by test authorizer: '{}'", target.tool),
                 ),

@@ -179,14 +179,34 @@ impl ReloadOutcome {
     }
 }
 
+/// A published generation and the revision naming it.
+struct Published {
+    generation: Arc<Generation>,
+    applied: Option<Arc<Applied>>,
+}
+
+/// The keyed digests a published config was built from, its revision, and
+/// what it asks for that only a restart applies (computed once per publish,
+/// never per call).
+pub(crate) struct Applied {
+    inputs: AppliedInputs,
+    pub(crate) revision: String,
+    pub(crate) pending_restart: Vec<&'static str>,
+}
+
 /// Live, atomically-swappable config snapshot shared across the gateway.
 ///
 /// Readers take a read-lock and clone the inner `Arc`; writers swap the whole
 /// `Arc` under a write-lock, so readers are never blocked for more than a
 /// pointer-width CAS.
 pub struct LiveConfig {
-    /// The published generation; its config is what `get` returns.
-    inner: RwLock<Arc<Generation>>,
+    /// The published generation and the revision naming it, swapped as one
+    /// so a reader never pairs a config with another config's revision.
+    inner: RwLock<Published>,
+    /// Derived from the record key; `None` publishes no revision at all.
+    revision_key: Option<[u8; 32]>,
+    /// The revision of what this process applied at startup.
+    running_revision: Option<String>,
     /// What the running process actually applied, fixed at startup.
     ///
     /// Kept apart from `inner` because the diff compares the file against the
@@ -231,7 +251,12 @@ impl LiveConfig {
     pub(crate) fn from_prepared(seed: Generation) -> Self {
         let running = Arc::clone(seed.config());
         Self {
-            inner: RwLock::new(Arc::new(seed)),
+            inner: RwLock::new(Published {
+                generation: Arc::new(seed),
+                applied: None,
+            }),
+            revision_key: None,
+            running_revision: None,
             running,
             policy_epoch: None,
             admission: RwLock::new(()),
@@ -289,14 +314,138 @@ impl LiveConfig {
     /// Clone the current active configuration snapshot.
     #[must_use]
     pub fn get(&self) -> Arc<Config> {
-        Arc::clone(self.inner.read().config())
+        Arc::clone(self.inner.read().generation.config())
     }
 
     /// The current generation. A request takes it once, on arrival, and is
     /// judged by it until it answers; never read it again mid-request.
     #[must_use]
     pub fn generation(&self) -> Arc<Generation> {
-        Arc::clone(&self.inner.read())
+        Arc::clone(&self.inner.read().generation)
+    }
+
+    /// Key revisions with `key` (derived from the record key).
+    #[must_use]
+    pub(crate) fn with_revision_key(mut self, key: [u8; 32]) -> Self {
+        self.revision_key = Some(key);
+        self
+    }
+
+    /// Record the inputs the startup config was built from: its revision is
+    /// both the running and the published one.
+    #[must_use]
+    pub(crate) fn with_applied(mut self, raw: RawInputs) -> Self {
+        let applied = self
+            .digest_over(raw, None)
+            .and_then(|inputs| self.applied(inputs, Vec::new()));
+        self.running_revision = applied.as_ref().map(|a| a.revision.clone());
+        self.inner.get_mut().applied = applied;
+        self
+    }
+
+    /// Key revisions by `record_key` and publish what the startup load read;
+    /// without inputs (a config built in memory) no revision is published.
+    #[must_use]
+    pub(crate) fn with_startup_revision(
+        self,
+        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+        raw: Option<RawInputs>,
+    ) -> Self {
+        let live = self.with_revision_key(record_key.config_revision_key());
+        match raw {
+            Some(raw) => live.with_applied(raw),
+            None => live,
+        }
+    }
+
+    /// The revision this process applied at startup.
+    #[must_use]
+    pub(crate) fn running_revision(&self) -> Option<&str> {
+        self.running_revision.as_deref()
+    }
+
+    fn applied(
+        &self,
+        inputs: AppliedInputs,
+        pending_restart: Vec<&'static str>,
+    ) -> Option<Arc<Applied>> {
+        let key = self.revision_key?;
+        let revision = revision::config_revision(&key, &inputs);
+        Some(Arc::new(Applied {
+            inputs,
+            revision,
+            pending_restart,
+        }))
+    }
+
+    /// The published revision and its restart state, for a record: one read
+    /// lock and one `Arc` clone.
+    #[must_use]
+    pub(crate) fn applied_now(&self) -> Option<Arc<Applied>> {
+        self.inner.read().applied.clone()
+    }
+
+    /// `raw` digested, with the grants and capability digests their own sinks
+    /// last published carried over from `current`: a config reload reads
+    /// neither.
+    fn digest_over(&self, raw: RawInputs, current: Option<&Applied>) -> Option<AppliedInputs> {
+        let key = self.revision_key?;
+        let mut inputs = AppliedInputs::digest(&key, raw);
+        if let Some(current) = current {
+            inputs.grants = current.inputs.grants;
+            inputs.capabilities.clone_from(&current.inputs.capabilities);
+        }
+        Some(inputs)
+    }
+
+    /// Atomically replace the current config with one built from `raw`; the
+    /// raw bytes are reduced to digests here and dropped.
+    /// `env_restart` names the startup environment values changed since
+    /// start, which only a restart applies.
+    pub(crate) fn set_applied(
+        &self,
+        generation: Arc<Generation>,
+        raw: RawInputs,
+        env_restart: &[String],
+    ) {
+        self.publish_with(generation, |current, pending| {
+            self.digest_over(raw, current)
+                .and_then(|inputs| self.applied(inputs, with_env_restart(pending, env_restart)))
+        });
+    }
+
+    /// The env files changed under an unchanged config file: same config,
+    /// new inputs, new revision.
+    pub(crate) fn set_inputs(&self, raw: RawInputs, env_restart: &[String]) {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let current = inner.applied.as_deref();
+        let pending = current
+            .map(|a| a.pending_restart.clone())
+            .unwrap_or_default();
+        let inputs = self.digest_over(raw, current);
+        let pending = with_env_restart(pending, env_restart);
+        inner.applied = inputs.and_then(|i| self.applied(i, pending));
+    }
+
+    /// New grants over the published config: only the grants part changes,
+    /// and the revision is recomputed under the same gate as a reload.
+    pub(crate) fn set_grants(&self, grants: Option<&[u8]>) {
+        self.replace_part(|key, inputs| {
+            inputs.grants = grants.map(|g| revision::part_digest(key, g));
+        });
+    }
+
+    fn replace_part(&self, change: impl FnOnce(&[u8; 32], &mut AppliedInputs)) {
+        let _gate = self.admission.write();
+        let mut inner = self.inner.write();
+        let (Some(key), Some(current)) = (self.revision_key, inner.applied.as_deref()) else {
+            return;
+        };
+        let mut inputs = current.inputs.clone();
+        let pending = current.pending_restart.clone();
+        change(&key, &mut inputs);
+        inner.applied = self.applied(inputs, pending);
     }
 
     /// Prepare `config` against the published generation, with no env
@@ -341,10 +490,32 @@ impl LiveConfig {
         Generation::prepare(config, overlay, (&*self.running, &**published.auth()))
     }
 
-    /// Publish a prepared generation in one swap.
+    /// Publish a prepared generation in one swap, with no revision; a reload
+    /// that knows its inputs calls [`LiveConfig::set_applied`] instead.
     pub fn publish(&self, generation: Arc<Generation>) {
+        self.publish_with(generation, |_, _| None);
+    }
+
+    /// Swap in `generation` with the revision `applied` builds from the
+    /// current one, both under the admission gate and the one write lock.
+    fn publish_with(
+        &self,
+        generation: Arc<Generation>,
+        applied: impl FnOnce(Option<&Applied>, Vec<&'static str>) -> Option<Arc<Applied>>,
+    ) {
         let gate = self.admission.write();
-        let old = std::mem::replace(&mut *self.inner.write(), generation);
+        let old = {
+            let mut inner = self.inner.write();
+            let pending = pending_restart_fields(&self.running, generation.config());
+            let applied = applied(inner.applied.as_deref(), pending);
+            std::mem::replace(
+                &mut *inner,
+                Published {
+                    generation,
+                    applied,
+                },
+            )
+        };
         #[cfg(test)]
         self.publishes.fetch_add(1, Ordering::SeqCst);
         if let Some(epoch) = &self.policy_epoch {
@@ -568,6 +739,8 @@ pub(crate) mod refusals;
 mod reload_context;
 pub(crate) mod reload_tally;
 mod reload_warm_hook;
+pub(crate) mod revision;
+use revision::{AppliedInputs, RawInputs};
 // Linux and macOS, as the other real-watcher rows (MIK-8181).
 #[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod reload_warm_hook_tests;
@@ -575,6 +748,21 @@ pub(crate) use reload_warm_hook::{OnRegistered, RegisteredChange};
 mod watcher;
 mod write;
 use diff::pending_restart_fields;
+
+/// The `pending_restart` entry for startup environment values (env files,
+/// secret files, process overrides) changed since start: one name, never the
+/// variables themselves.
+const ENV_RESTART: &str = "environment";
+
+/// `pending` with [`ENV_RESTART`] present exactly while `env_restart` is not
+/// empty.
+fn with_env_restart(mut pending: Vec<&'static str>, env_restart: &[String]) -> Vec<&'static str> {
+    pending.retain(|field| *field != ENV_RESTART);
+    if !env_restart.is_empty() {
+        pending.push(ENV_RESTART);
+    }
+    pending
+}
 #[cfg(test)]
 use diff::tracked_sections;
 pub use diff::{ConfigPatch, compute_diff};
