@@ -40,6 +40,13 @@ fn keyed_caps(
     let dir = tempfile::TempDir::new().expect("env dir");
     let file = dir.path().join("caps.env");
     std::fs::write(&file, format!("{KEY_VAR}=present\n")).expect("write env");
+    // An env file is read only when its owner alone may read it.
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        &file,
+        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
+    )
+    .expect("owner-only env file");
     let env = Arc::new(crate::config::LiveEnv::new(
         Arc::new(crate::config::EnvOverlay::from_paths(&[file])),
         crate::config::ResolvedEnvFiles::default(),
@@ -94,6 +101,11 @@ enum AfterRun {
 async fn stored_read(after: AfterRun) -> (String, String) {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
     let (caps, env, _dir) = keyed_caps(marker_endpoint().await);
+    assert_eq!(
+        caps.get_tools().len(),
+        1,
+        "premise: the keyed capability is listed while its key is set"
+    );
     state.meta_mcp.set_capabilities(caps);
     assert!(
         !judgment(&state, None, Some(&agent_cert())).hides("caps"),
