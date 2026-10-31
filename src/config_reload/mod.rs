@@ -207,10 +207,28 @@ pub struct LiveConfig {
 }
 
 impl LiveConfig {
-    /// Create a new `LiveConfig` seeded with the startup configuration.
+    /// A `LiveConfig` for `config` whose key table is resolved with no env
+    /// overlay and a throwaway record key. For tests and tools that judge no
+    /// production request; production starts through [`Self::from_prepared`]
+    /// with the auth it resolved at startup (a source pin holds this).
+    ///
+    /// # Panics
+    ///
+    /// When `config.auth` holds a secret reference the process environment
+    /// cannot resolve.
     #[must_use]
     pub fn new(config: Config) -> Self {
-        let seed = Generation::of(config);
+        use rand::RngExt;
+        let key: [u8; 32] = rand::rng().random();
+        let key = hex::encode(key);
+        let auth = crate::gateway::auth::ResolvedAuthConfig::from_config(&config.auth, &key);
+        Self::from_prepared(Generation::prepare_startup(config, Arc::new(auth)))
+    }
+
+    /// The startup `LiveConfig`, seeded with a prepared generation, so the
+    /// startup keys authenticate from the first request.
+    #[must_use]
+    pub(crate) fn from_prepared(seed: Generation) -> Self {
         let running = Arc::clone(seed.config());
         Self {
             inner: RwLock::new(Arc::new(seed)),
@@ -220,6 +238,17 @@ impl LiveConfig {
             #[cfg(test)]
             publishes: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// [`Self::from_prepared`] for `config` with `auth`, for unit-test
+    /// fixtures whose auth differs from `config.auth`.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_auth(
+        config: Config,
+        auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
+    ) -> Self {
+        Self::from_prepared(Generation::prepare_startup(config, auth))
     }
 
     /// Share the gateway policy epoch so a published reload can bump it.
@@ -270,11 +299,46 @@ impl LiveConfig {
         Arc::clone(&self.inner.read())
     }
 
-    /// Atomically replace the current config. Kept for callers that publish
-    /// a config no view can refuse; a reload prepares a [`Generation`] first
-    /// and calls [`Self::publish`].
+    /// Prepare `config` against the published generation, with no env
+    /// overlay, and publish it. For tests: a reload prepares a
+    /// [`Generation`] itself and calls [`Self::publish`] (a source pin holds
+    /// this).
+    ///
+    /// # Panics
+    ///
+    /// When the preparation refuses `config`.
     pub fn set(&self, config: Config) {
-        self.publish(Arc::new(Generation::of(config)));
+        let published = self.generation();
+        // An edit that leaves `auth` as published keeps the published key
+        // table: a fixture seeded with an auth of its own, then reloading an
+        // unrelated section, keeps its keys.
+        let same_auth = serde_json::to_value(&config.auth).ok()
+            == serde_json::to_value(&published.config().auth).ok();
+        let prepared = if same_auth {
+            Generation::prepare_startup(config, Arc::clone(published.auth()))
+        } else {
+            // A test-only path: a source pin keeps production off it.
+            // invariant: a config a test cannot prepare is a broken fixture.
+            self.prepare(config, &crate::config::EnvOverlay::none())
+                .expect("the config prepares")
+        };
+        self.publish(Arc::new(prepared));
+    }
+
+    /// Build the generation for `config` against what this process runs:
+    /// its startup config and the published key table's running settings.
+    /// The one way to a generation after startup (a source pin holds this).
+    ///
+    /// # Errors
+    ///
+    /// The reason `config` cannot be published, naming the setting.
+    pub fn prepare(
+        &self,
+        config: Config,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Generation, String> {
+        let published = self.generation();
+        Generation::prepare(config, overlay, (&*self.running, &**published.auth()))
     }
 
     /// Publish a prepared generation in one swap.
@@ -338,6 +402,8 @@ mod replica_restart_tests;
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(test)]
+mod live_keys_reload_tests;
 #[cfg(test)]
 mod live_sections_tests;
 

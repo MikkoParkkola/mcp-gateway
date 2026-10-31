@@ -17,16 +17,20 @@ const SCRAPE: &str = "scrape-token-c7";
 /// A gateway with auth on (admin bearer `ADMIN`) and the given config.
 async fn router_with(config: Config) -> (axum::Router, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) = test_router_app_state_with(StreamingConfig::default(), config).await;
-    Arc::get_mut(&mut state)
-        .expect("state is uniquely owned here")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
-        &AuthConfig {
-            enabled: true,
-            bearer_token: Some(ADMIN.to_string()),
-            ..Default::default()
-        },
-        crate::gateway::record_principal::TEST_RECORD_KEY,
-    ));
+    {
+        let seat = Arc::get_mut(&mut state).expect("state is uniquely owned here");
+        seat.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*seat.live_config.get()).clone(),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &AuthConfig {
+                    enabled: true,
+                    bearer_token: Some(ADMIN.to_string()),
+                    ..Default::default()
+                },
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
+        ));
+    }
     (create_router(state), store)
 }
 
