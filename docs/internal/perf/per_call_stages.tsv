@@ -581,11 +581,12 @@ src/gateway/router/handlers/tasks/stored_read.rs	prepare_stored_read	-	tasks/* m
 src/gateway/router/handlers/tasks/stored_read.rs	prepare_stored_read_with_policy	-	tasks/* methods and task-notification delivery only, not the tools/call path
 src/gateway/meta_mcp/invoke/audit.rs	backend_sample	http_invoke_tiny	on the HTTP gateway_invoke path (the count reads the call's send time)
 src/gateway/meta_mcp/invoke/audit.rs	note_backend	http_invoke_tiny	on the HTTP gateway_invoke path (each tools/call send notes its time)
-src/gateway/meta_mcp/invoke/send_timer.rs	discard	-	on-path, untimed: a capability HTTP send the SSRF policy refused on the first hop only
+src/gateway/meta_mcp/invoke/send_timer.rs	discard	-	on-path, untimed: a send that never left the gateway, or a capability HTTP send the SSRF policy refused on the first hop, only
 src/gateway/meta_mcp/invoke/send_timer.rs	drop	-	on-path, untimed: a send future dropped before it finished (a timeout or a cancelled call) only
 src/gateway/meta_mcp/invoke/send_timer.rs	elapsed	http_invoke_tiny	on the HTTP gateway_invoke path (every timed tools/call send)
 src/gateway/meta_mcp/invoke/send_timer.rs	end_of	http_invoke_tiny	on the HTTP gateway_invoke path (every timed tools/call send)
 src/gateway/meta_mcp/invoke/send_timer.rs	finish	http_invoke_tiny	on the HTTP gateway_invoke path (every timed tools/call send)
 src/gateway/meta_mcp/invoke/send_timer.rs	finish_with	http_invoke_tiny	on the HTTP gateway_invoke path (every timed tools/call send)
+src/gateway/meta_mcp/invoke/send_timer.rs	never_sent	-	on-path, untimed: a send that failed only
 src/gateway/meta_mcp/invoke/send_timer.rs	start	-	on-path, untimed: capability sends only (a CLI run, a capability HTTP request); the timed rows use an MCP stub backend
 src/gateway/meta_mcp/invoke/send_timer.rs	start_if	http_invoke_tiny	on the HTTP gateway_invoke path (the MCP transport send)
