@@ -10,6 +10,10 @@
 //! the caller's scoped view the judgment feeds. A decision that would rest on
 //! a catalogue not held now is no decision: the backend is hidden only if its
 //! name alone refuses it.
+//!
+//! One exception keeps every call that worked before: on a per-user backend,
+//! a caller whose own slot admits the call is not hidden, though the listing
+//! (which reads the shared slot) leaves the backend out.
 
 use std::sync::Arc;
 
@@ -18,24 +22,31 @@ use super::authorization::{OwnedRouterAuthorizer, admits_some_tool};
 use crate::gateway::meta_mcp::hiding::{CallerHiding, ListedCatalogue};
 use crate::gateway::meta_mcp::scoped_backends::Unscoped;
 use crate::gateway::oauth::scopes::Action;
+use crate::identity_propagation::{CallerProof, CallerProvenance};
+use crate::key_server::oidc::VerifiedIdentity;
 
 /// One caller's identity, as a hiding judgment.
 pub(crate) struct RouterHiding {
     state: Arc<AppState>,
     authorizer: OwnedRouterAuthorizer,
+    /// What the caller proved, to find its own slot on a per-user backend.
+    verified: Option<VerifiedIdentity>,
     session_id: Option<String>,
 }
 
 impl RouterHiding {
-    /// The judgment for `authorizer`'s caller, whose session is `session_id`.
+    /// The judgment for `authorizer`'s caller, who proved `verified` and
+    /// whose session is `session_id`.
     pub(crate) fn caller(
         state: Arc<AppState>,
         authorizer: OwnedRouterAuthorizer,
+        verified: Option<VerifiedIdentity>,
         session_id: Option<String>,
     ) -> Arc<dyn CallerHiding> {
         Arc::new(Self {
             state,
             authorizer,
+            verified,
             session_id,
         })
     }
@@ -54,6 +65,33 @@ impl RouterHiding {
 
 impl CallerHiding for RouterHiding {
     fn hides(&self, server: &str) -> bool {
+        self.unlisted(server) && !self.own_slot_admits(server)
+    }
+}
+
+impl RouterHiding {
+    /// Whether this caller's own slot on a per-user `server` admits a call,
+    /// so the caller keeps every call that worked before.
+    fn own_slot_admits(&self, server: &str) -> bool {
+        let state = self.state.as_ref();
+        let (client, agent, cert) = self.authorizer.parts();
+        let caller = CallerProof::new(
+            self.verified.as_ref(),
+            CallerProvenance::classify(client.map(|c| c.principal.storage_form())),
+        );
+        let Some(names) = state.meta_mcp.caller_slot_tools(server, caller) else {
+            return false;
+        };
+        !(agent.is_none() && state.agent_auth.enabled)
+            && state
+                .meta_mcp
+                .active_profile(self.session_id.as_deref())
+                .backend_allowed(server)
+            && admits_some_tool(state, (agent, cert), server, &names)
+    }
+
+    /// Whether the listing leaves `server` out for this caller.
+    fn unlisted(&self, server: &str) -> bool {
         let state = self.state.as_ref();
         if state.mtls_policy.is_empty() && !state.agent_auth.enabled {
             // Nothing is hidden beyond the grant, which the scoped view

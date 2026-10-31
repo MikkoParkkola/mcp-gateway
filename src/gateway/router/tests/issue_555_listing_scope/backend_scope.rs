@@ -467,6 +467,7 @@ fn judgment(
         Arc::clone(state),
         crate::gateway::router::OwnedRouterAuthorizer::capture(None, agent, cert),
         None,
+        None,
     )
 }
 

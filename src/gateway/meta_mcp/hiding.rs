@@ -125,3 +125,30 @@ impl super::MetaMcp {
         }
     }
 }
+
+impl super::MetaMcp {
+    /// The tools this caller's own slot holds on a per-user `server`, chosen
+    /// as a stored read chooses it ([`Self::stored_target_view`]): `None`
+    /// unless the backend keeps per-user catalogues and the slot is held and
+    /// fresh. Read without a mint or a fill. A caller whose own slot admits a
+    /// call is never refused it as hidden: the listing judges a per-user
+    /// backend by its shared slot alone.
+    pub(crate) fn caller_slot_tools(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> Option<Vec<String>> {
+        use super::listing_view::ListingView;
+        use super::scoped_backends::Unscoped;
+        let backend = self.registry().get_for(Unscoped::Visibility, server)?;
+        if !backend.keeps_per_user_catalogues() {
+            return None;
+        }
+        let ListingView::Caller(binding) = self.listing_view_for(&backend, caller) else {
+            return None;
+        };
+        let (cached, _, _, fresh) = backend.cached_tools_view(Some(&binding));
+        let tools = cached.filter(|_| fresh)?;
+        Some(tools.iter().map(|t| t.name.clone()).collect())
+    }
+}
