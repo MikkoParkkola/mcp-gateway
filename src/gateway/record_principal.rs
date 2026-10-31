@@ -84,18 +84,26 @@ impl RecordPrincipalKey {
 }
 
 /// The record key, only read: the configured reference, else the key file in
-/// `data_dir`. `None` when neither is there, or when one cannot be read: a
-/// reader that must create nothing never falls back to creating it.
-pub(crate) fn read_key(configured: Option<&str>, data_dir: &Path) -> Option<RecordPrincipalKey> {
+/// `data_dir`. `Ok(None)` when neither is there: a reader that must create
+/// nothing never falls back to creating it.
+///
+/// # Errors
+///
+/// When the configured reference or the key file is there but cannot be read
+/// or is not a key.
+pub(crate) fn read_key(
+    configured: Option<&str>,
+    data_dir: &Path,
+) -> crate::Result<Option<RecordPrincipalKey>> {
     let overlay = crate::config::EnvOverlay::none();
     let text = crate::config::read_record_key_text(
         configured,
         &overlay,
         &data_dir.join(KEY_FILE),
         KEY_FIELD,
-    )
-    .ok()??;
-    RecordPrincipalKey::from_text(&text).ok()
+    )?;
+    text.map(|text| RecordPrincipalKey::from_text(&text))
+        .transpose()
 }
 
 /// A key drawn for one use and held in memory only: never written, never

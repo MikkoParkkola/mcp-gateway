@@ -269,6 +269,7 @@ async fn started(
     let (stop, shutdown) = tokio::sync::broadcast::channel(1);
     let _set = super::decisions::start_with_source(
         &state.meta_mcp,
+        state.config_path.clone(),
         shutdown,
         Arc::clone(source) as Arc<dyn ScanSource>,
     );

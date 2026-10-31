@@ -263,7 +263,7 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
     let files = tempfile::tempdir().expect("tempdir");
     let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
-    let _tick = start_with(&state.meta_mcp, shutdown, 1, none);
+    let _tick = start_with(&state.meta_mcp, None, shutdown, 1, none);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -355,6 +355,7 @@ async fn a_replay_waits_for_the_one_already_running() {
     shared.update(|set| {
         set.set_health(Source::ControlPlane, Health::Ready);
         set.set_health(Source::Capability, Health::Absent);
+        set.set_health(Source::Discovery, Health::Ready);
     });
     let replays = Arc::new(Replays {
         path: log.path(),
@@ -400,6 +401,7 @@ async fn a_waiting_replay_unmarks_a_ready_it_did_not_read() {
         set.set_health(Source::ControlPlane, Health::Ready);
         set.set_health(Source::Capability, Health::Absent);
         set.set_health(Source::Access, Health::Ready);
+        set.set_health(Source::Discovery, Health::Ready);
     });
     assert!(shared.view().is_ok());
     drop(running);

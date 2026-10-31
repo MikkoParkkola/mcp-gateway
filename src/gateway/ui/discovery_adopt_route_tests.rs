@@ -473,15 +473,19 @@ async fn an_adopted_find_closes_its_decision() {
     let route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
     let source: Arc<dyn ScanSource> = route.clients.clone();
-    let _set =
-        crate::gateway::ui::decisions::start_with_source(&route.state.meta_mcp, shutdown, source);
+    let _set = crate::gateway::ui::decisions::start_with_source(
+        &route.state.meta_mcp,
+        route.state.config_path.clone(),
+        shutdown,
+        source,
+    );
     until("the adopt item opens", || {
         adopt_item_open(&route.state, "tool")
     })
     .await;
     let (id, revision) = route.listed("tool").await;
     let (status, body) = route.adopt(true, &id, &revision).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(status, StatusCode::CREATED, "{body}");
     until("the adopted find's item closes", || {
         !adopt_item_open(&route.state, "tool")
     })
@@ -495,8 +499,12 @@ async fn a_backend_written_by_hand_closes_its_decision() {
     let route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
     let source: Arc<dyn ScanSource> = route.clients.clone();
-    let _set =
-        crate::gateway::ui::decisions::start_with_source(&route.state.meta_mcp, shutdown, source);
+    let _set = crate::gateway::ui::decisions::start_with_source(
+        &route.state.meta_mcp,
+        route.state.config_path.clone(),
+        shutdown,
+        source,
+    );
     until("the adopt item opens", || {
         adopt_item_open(&route.state, "tool")
     })

@@ -9,7 +9,7 @@
 //! capability backend's pin mismatches and the log's retention edge. A read
 //! never scans anything: the route answers from memory.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -112,38 +112,49 @@ const LIVE_QUEUE: usize = 4096;
 
 /// Build the decision set for `meta`, start its replay, its tick and the
 /// client-file discovery cache's refresh, and attach both. Each ends on
-/// `shutdown`.
+/// `shutdown`. `config_path` is the gateway.yaml the discovery route reads,
+/// so the set judges adopt eligibility against the same file.
 pub(in crate::gateway) fn start(
     meta: &Arc<MetaMcp>,
+    config_path: Option<PathBuf>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     let files: Arc<dyn ScanSource> = Arc::new(ClientFiles(ConfigScanner::new()));
-    start_with(meta, shutdown, LIVE_QUEUE, files)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, files)
 }
 
 /// [`start`] over a given client-file scan source.
 #[cfg(test)]
 pub(in crate::gateway) fn start_with_source(
     meta: &Arc<MetaMcp>,
+    config_path: Option<PathBuf>,
     shutdown: tokio::sync::broadcast::Receiver<()>,
     source: Arc<dyn ScanSource>,
 ) -> tokio::task::JoinHandle<()> {
-    start_with(meta, shutdown, LIVE_QUEUE, source)
+    start_with(meta, config_path, shutdown, LIVE_QUEUE, source)
 }
 
 /// [`start`] with a hand-off queue of `queue` notes, over `files`.
 fn start_with(
     meta: &Arc<MetaMcp>,
+    config_path: Option<PathBuf>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
     queue: usize,
     files: Arc<dyn ScanSource>,
 ) -> tokio::task::JoinHandle<()> {
+    let config_path: Option<Arc<Path>> = config_path.map(Arc::from);
     let shared = Arc::new(Shared::with_key(rand::rng().random()));
     meta.set_decisions(Arc::clone(&shared));
     // UI decisions (a decline, a consumed allow) are first written by the
     // resolve routes; this build writes none, so there is none to read.
     shared.update(|set| set.set_health(Source::ControlPlane, Health::Ready));
-    let latest = start_discovery(meta, &shared, files, shutdown.resubscribe());
+    let latest = start_discovery(
+        meta,
+        &shared,
+        files,
+        config_path.clone(),
+        shutdown.resubscribe(),
+    );
 
     match meta.transparency_logger.as_ref() {
         None => shared.update(|set| set.set_health(Source::Access, Health::Absent)),
@@ -185,9 +196,11 @@ fn start_with(
             let (meta, shared) = (Arc::clone(&meta), Arc::clone(&shared));
             let read_edge = ticks.is_multiple_of(EDGE_EVERY);
             ticks = ticks.wrapping_add(1);
-            let latest = Arc::clone(&latest);
-            let _ =
-                tokio::task::spawn_blocking(move || tick(&meta, &shared, &latest, read_edge)).await;
+            let (latest, config) = (Arc::clone(&latest), config_path.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                tick(&meta, &shared, &latest, config.as_deref(), read_edge);
+            })
+            .await;
             tokio::select! {
                 _ = shutdown.recv() => return,
                 () = tokio::time::sleep(TICK) => {}
@@ -311,7 +324,13 @@ fn replay_grant_decisions(path: &Path, shared: &Shared) -> bool {
 
 /// One tick: the live grant rows at the current time, the capability
 /// backend's changes, and every `read_edge` tick the log's retention edge.
-fn tick(meta: &MetaMcp, shared: &Shared, latest: &Latest, read_edge: bool) {
+fn tick(
+    meta: &MetaMcp,
+    shared: &Shared,
+    latest: &Latest,
+    config_path: Option<&Path>,
+    read_edge: bool,
+) {
     // A clock before 1970 judges no expiry: the tick waits for a readable one.
     let Ok(now) = crate::clock::utc_now() else {
         return;
@@ -345,7 +364,7 @@ fn tick(meta: &MetaMcp, shared: &Shared, latest: &Latest, read_edge: bool) {
     // writes a disabled backend no reload registers, and a hand edit nudges
     // nothing, so only this sees either (R5).
     if let Some(listing) = latest.lock().clone() {
-        publish_discovery(meta, shared, &listing);
+        publish_discovery(config_path, shared, &listing);
     }
 }
 
@@ -360,6 +379,7 @@ fn start_discovery(
     meta: &Arc<MetaMcp>,
     shared: &Arc<Shared>,
     files: Arc<dyn ScanSource>,
+    config_path: Option<Arc<Path>>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
 ) -> Arc<Latest> {
     let cache = Arc::new(DiscoveryCache::with_record_key(
@@ -367,16 +387,10 @@ fn start_discovery(
         meta.record_key_shared(),
     ));
     let latest: Arc<Latest> = Arc::default();
-    let (weak, set, last) = (
-        Arc::downgrade(meta),
-        Arc::clone(shared),
-        Arc::clone(&latest),
-    );
+    let (set, last) = (Arc::clone(shared), Arc::clone(&latest));
     cache.set_publisher(Arc::new(move |listing: &Arc<Listing>| {
         *last.lock() = Some(Arc::clone(listing));
-        if let Some(meta) = weak.upgrade() {
-            publish_discovery(&meta, &set, listing);
-        }
+        publish_discovery(config_path.as_deref(), &set, listing);
     }));
     meta.set_discovery_cache(Arc::clone(&cache));
     let set = Arc::clone(shared);
@@ -397,15 +411,12 @@ fn start_discovery(
 }
 
 /// Hand one listing to the set: its adopt decisions under the gateway.yaml
-/// the reload context names, and its unreadable files.
-fn publish_discovery(meta: &MetaMcp, shared: &Shared, listing: &Listing) {
+/// the discovery route reads, and its unreadable files.
+fn publish_discovery(config_path: Option<&Path>, shared: &Shared, listing: &Listing) {
     let Ok(now) = crate::clock::utc_now() else {
         return;
     };
-    let config = meta
-        .reload_context()
-        .map(|context| context.config_path.clone());
-    let finds = super::discovery::adopt_finds(listing, config.as_deref());
+    let finds = super::discovery::adopt_finds(listing, config_path);
     let unreadable = listing.unreadable.clone();
     shared.update(|set| set.set_discovery(finds, unreadable, now));
 }

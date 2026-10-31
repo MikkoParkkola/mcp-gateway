@@ -32,16 +32,24 @@ impl ShadowScanReport {
         let configured = config
             .and_then(|config| config.security.record_principal_key.as_ref())
             .map(crate::config::RecordPrincipalKeyRef::as_str);
-        let found = crate::gateway::record_principal::read_key(configured, data_dir);
-        let (key, ids_note) = match found {
-            Some(key) => (key, None),
-            None => (
+        let one_run = |why: &str| {
+            (
                 crate::gateway::record_principal::one_run_key(),
-                Some(
-                    "asset ids of URL finds are for this run only: no record key was found"
-                        .to_string(),
-                ),
-            ),
+                Some(format!(
+                    "asset ids of URL finds are for this run only: {why}"
+                )),
+            )
+        };
+        let (key, ids_note) = match crate::gateway::record_principal::read_key(configured, data_dir)
+        {
+            Ok(Some(key)) => (key, None),
+            Ok(None) => one_run("no record key was found"),
+            Err(e) => {
+                // The error names the key file's full path: the log has it,
+                // the report does not.
+                tracing::warn!(error = %e, "the record key could not be read");
+                one_run("the record key could not be read (see the log)")
+            }
         };
         let mut report =
             Self::from_discovered_keyed(discovered, registered_names, gateway_config_path, &key);

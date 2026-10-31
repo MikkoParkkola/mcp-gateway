@@ -16,6 +16,8 @@ use serde_json::Value;
 
 const FIND: &str = "r12-remote";
 const KEY: &str = "r12-record-key-not-a-secret-0123456789abcdef0123456789";
+/// A key file holds 64 lowercase hex characters, as the gateway writes it.
+const KEY_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn write(path: &Path, text: &str) {
     if let Some(dir) = path.parent() {
@@ -129,7 +131,7 @@ fn with_no_key_the_cli_writes_none_and_says_its_ids_are_for_this_run() {
 #[test]
 fn with_a_key_file_the_ids_hold_and_nothing_is_written() {
     let home = home("backends: {}\n");
-    write(&data_dir(home.path()).join("record-principal.key"), KEY);
+    write(&data_dir(home.path()).join("record-principal.key"), KEY_HEX);
     let before = files(home.path());
     let (first, stdout) = shadow_run(home.path());
     let (second, _) = shadow_run(home.path());
@@ -140,7 +142,22 @@ fn with_a_key_file_the_ids_hold_and_nothing_is_written() {
         !stdout.to_ascii_lowercase().contains("this run only"),
         "a keyed run says its ids are for this run: {stdout}"
     );
-    assert!(!stdout.contains(KEY), "the key reached the output");
+    assert!(!stdout.contains(KEY_HEX), "the key reached the output");
+}
+
+#[test]
+fn a_key_file_that_is_no_key_is_reported_not_replaced() {
+    let home = home("backends: {}\n");
+    write(&data_dir(home.path()).join("record-principal.key"), KEY);
+    let before = files(home.path());
+    let (_, stdout) = shadow_run(home.path());
+    assert_eq!(files(home.path()), before, "a read command wrote a file");
+    let lower = stdout.to_ascii_lowercase();
+    assert!(
+        lower.contains("this run only") && lower.contains("could not be read"),
+        "no note that the key file could not be read: {stdout}"
+    );
+    assert!(!stdout.contains(KEY), "the file's text reached the output");
 }
 
 #[test]
