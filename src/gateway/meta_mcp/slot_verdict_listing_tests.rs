@@ -470,7 +470,9 @@ async fn l7b_passthrough_fills_publish_no_index_entry() {
             .any(|b| b == BINDING),
         "premise: alpha's passthrough slot holds a catalogue"
     );
-    fx.meta.remember_caller_slot(&backend, proof, Some(BINDING));
+    fx.meta
+        .remember_caller_slot(&backend, proof, Some(BINDING))
+        .await;
     assert!(
         backend.indexed_bindings_for_test().is_empty(),
         "L7b: a passthrough fill published an index entry"
