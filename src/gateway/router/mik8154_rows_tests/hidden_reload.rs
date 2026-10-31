@@ -26,6 +26,8 @@ enum Change {
     None,
     Hide,
     Remove,
+    /// Still visible, but no longer listing `read`.
+    Drop,
 }
 
 fn tool(name: &str) -> crate::protocol::Tool {
@@ -42,6 +44,11 @@ fn apply(state: &AppState, name: &str, change: Change) {
             .get(name)
             .expect("the backend")
             .store_shared_tools_for_test(vec![tool(BLOCKED)]),
+        Change::Drop => state
+            .backends
+            .get(name)
+            .expect("the backend")
+            .store_shared_tools_for_test(vec![tool("other")]),
         Change::Remove => {
             state.backends.remove(name);
         }
@@ -339,4 +346,51 @@ async fn a_backend_hidden_between_two_rounds_answers_as_one_removed() {
     );
     assert_eq!(hidden_sent, 1, "hidden: round 2 was sent");
     assert_eq!(hidden, removed, "hidden and removed answer alike");
+}
+
+/// A surfaced `read` (on `alpha`) submitted as a task while visible; `change`
+/// lands before the worker runs. Returns the answer, the sends and the body.
+#[cfg(feature = "firewall")]
+async fn surfaced_run(change: Change, key: &str) -> (String, usize, Value) {
+    let surfaced = vec![crate::config::SurfacedToolConfig {
+        server: "alpha".to_string(),
+        tool: "read".to_string(),
+    }];
+    let fx = Box::pin(fixture_built(Answer::Ok, move |meta| {
+        meta.with_surfaced_tools(surfaced)
+    }))
+    .await;
+    let fx = with_rule(fx, &[]);
+    warm(&fx, &["alpha"]);
+    let state = Arc::clone(&fx.state);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        apply(&state, "alpha", change);
+    });
+    let id = submit(&fx, "read", json!({}), key).await;
+    let body = settled(&fx, &id, &["working"]).await;
+    (answer(&body, &id), calls(&fx), body)
+}
+
+/// A surfaced-pin task whose backend turns hidden between submit and run
+/// settles as one whose surfaced name is no longer listed, and sends nothing.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_surfaced_task_hidden_before_its_run_answers_as_a_missing_name() {
+    let (control, control_sent, control_body) = Box::pin(surfaced_run(Change::None, "hr3-c")).await;
+    assert_eq!(
+        control_sent, 1,
+        "control: the run did not send: {control_body}"
+    );
+    let (hidden, hidden_sent, _) = Box::pin(surfaced_run(Change::Hide, "hr3-h")).await;
+    let (missing, missing_sent, missing_body) = Box::pin(surfaced_run(Change::Drop, "hr3-m")).await;
+    assert_eq!(
+        missing_sent, 0,
+        "premise: a missing name was sent: {missing_body}"
+    );
+    assert_ne!(
+        missing, control,
+        "premise: the miss changed nothing: {missing_body}"
+    );
+    assert_eq!(hidden_sent, 0, "hidden: the run was sent");
+    assert_eq!(hidden, missing, "hidden and missing answer alike");
 }
