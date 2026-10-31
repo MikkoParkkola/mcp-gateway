@@ -110,8 +110,14 @@ async fn t2_round_1s_continuation_runs_after_a_refused_retry() {
         .as_str()
         .unwrap_or_else(|| panic!("premise: a continuation: {first}"))
         .to_owned();
-    let (_, again) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
-    println!("direct fresh same-key call: {again}");
+    let (status, again) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    println!("direct fresh same-key call: {status} {again}");
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "the fresh call was not refused: {again}"
+    );
+    assert!(again.to_string().contains(UNAVAILABLE), "{again}");
     let resume = json!({
         "requestState": state,
         "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
@@ -158,6 +164,14 @@ async fn t3b_a_question_without_a_continuation_frees_the_key() {
     let fx = fixture(Answer::AskMalformed, |_| {}).await;
     let (_, first) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
     println!("direct malformed round: {first}");
+    assert!(
+        first.get("error").is_none(),
+        "premise: an answer, not a refusal: {first}"
+    );
+    assert_eq!(
+        first["result"]["resultType"], "input_required",
+        "premise: {first}"
+    );
     assert!(
         !first["result"]["requestState"].is_string(),
         "premise: no continuation handed out: {first}"

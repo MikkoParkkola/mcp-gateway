@@ -241,7 +241,8 @@ async fn r7_an_interim_answer_keeps_the_key_from_a_fresh_call() {
             asked["result"]["resultType"], "input_required",
             "{backend}: {asked}"
         );
-        let (_, again) = call(&fx, backend, Some("alice"), opening).await;
+        let (status, again) = call(&fx, backend, Some("alice"), opening).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{backend}: {again}");
         assert_eq!(
             dispatched(&fx),
             1,
