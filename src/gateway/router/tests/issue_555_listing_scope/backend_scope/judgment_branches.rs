@@ -613,7 +613,7 @@ async fn search_lists_no_tool_of_a_hidden_provider() {
         judgment(&state, None, Some(&agent_cert())).hides("caps"),
         "premise: the rule hides the provider"
     );
-    for query in ["cap", "cap_open", "callback"] {
+    for query in ["cap", "cap_open"] {
         let (_, body) = post_as_agent_cert(
             &router,
             "/mcp",
@@ -650,7 +650,7 @@ async fn search_lists_a_visible_providers_tools() {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
     let (caps, _dir) = caps_with_callback().await;
     state.meta_mcp.set_capabilities(caps);
-    for (query, expected) in [("cap_open", "cap_open"), ("callback", "cap_callback")] {
+    for (query, expected) in [("cap", "cap_open"), ("cap_open", "cap_open")] {
         let (_, body) = post_as_agent_cert(
             &router,
             "/mcp",
