@@ -33,8 +33,14 @@ use crate::{Error, Result};
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
 pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
     let redirects = Arc::new(AtomicU64::new(0));
-    let seen = Arc::clone(&redirects);
-    let http = route(proxy)
+    let http = http_client(proxy, Arc::clone(&redirects));
+    CapabilityClient { http, redirects }
+}
+
+/// The reqwest client [`build`] wraps, its redirect policy counting each
+/// redirect response into `seen`.
+fn http_client(proxy: Option<&url::Url>, seen: Arc<AtomicU64>) -> Client {
+    route(proxy)
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
@@ -70,8 +76,7 @@ pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
             }
         }))
         .build()
-        .expect("Failed to create HTTP client");
-    CapabilityClient { http, redirects }
+        .expect("Failed to create HTTP client")
 }
 
 /// A capability HTTP client and the redirect responses it has received, so a
