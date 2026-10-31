@@ -197,6 +197,9 @@ mod source_checks {
             "src/protocol/member_scope_tests.rs",
             "src/gateway/router/protocol_member_scope_tests.rs",
             "src/gateway/meta_mcp/chain_withheld_tests.rs",
+            // The notification ingress rows plant it in a backend's
+            // notification and read back whether it was removed.
+            "src/transport/notify_ingress_tests.rs",
         ];
         let mut offenders = Vec::new();
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));

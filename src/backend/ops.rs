@@ -17,7 +17,7 @@ use crate::{Error, Result};
 
 /// Which transport entry point one outbound request takes, and how many times.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Attempts {
+pub(super) enum Attempts {
     /// The ordinary path: the slot's retry policy decides.
     WithRetry,
     /// The upstream-tasks declaration, sent exactly once. A duplicate would
@@ -252,7 +252,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -313,7 +313,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -323,7 +323,7 @@ impl Backend {
         .await
     }
 
-    async fn request_attempted(
+    pub(super) async fn request_attempted(
         &self,
         method: &str,
         params: Option<Value>,
@@ -621,7 +621,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::default(),
@@ -660,7 +660,7 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::unchecked(extra_headers),

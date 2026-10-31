@@ -544,7 +544,7 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
     let url = mock_backend(|req| vec![progress(Some("tok-a"), 1), response_to(&req)]).await;
     let t = connected(&url).await;
 
-    let (call, mut rx) = crate::transport::notification_sink::scope(
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(
         None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
@@ -566,6 +566,32 @@ async fn ws_delivers_a_progress_notification_to_the_call_that_supplied_the_token
         Some(&json!("tok-a")),
         "the frame reaches the caller with the token it carried"
     );
+}
+
+/// WebSocket in-call: the I/O loop's delivery strips what
+/// the backend planted.
+#[tokio::test]
+async fn ws_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let url = mock_backend(|req| vec![planted_progress("tok-a"), response_to(&req)]).await;
+    let t = connected(&url).await;
+
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(
+        None,
+        t.request("tools/call", Some(call_params("tok-a"))),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), call)
+        .await
+        .expect("the call must not hang")
+        .expect("the call must succeed");
+
+    let got = rx
+        .try_recv()
+        .expect("the caller's sink must hold the progress frame");
+    let params = got.params.as_ref().expect("params");
+    assert_progress_stripped("websocket in-call", "tok-a", params);
 }
 
 /// S-03 over WebSocket: two calls in flight on one socket. The progress
@@ -593,11 +619,11 @@ async fn ws_does_not_deliver_another_calls_progress_token() {
     .await;
     let t = connected(&url).await;
 
-    let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+    let (a_call, mut a_rx) = crate::transport::notify_ingress::test_support::scope(
         None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
-    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(
+    let (b_call, mut b_rx) = crate::transport::notify_ingress::test_support::scope(
         None,
         t.request("tools/call", Some(call_params("tok-b"))),
     );
@@ -637,7 +663,7 @@ async fn ws_drops_a_notification_it_cannot_attribute_to_a_call() {
     .await;
     let t = connected(&url).await;
 
-    let (call, mut rx) = crate::transport::notification_sink::scope(
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(
         None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
@@ -663,7 +689,7 @@ async fn ws_a_retired_progress_token_can_be_registered_again() {
     let url = mock_backend(|req| vec![progress(Some("tok-a"), 1), response_to(&req)]).await;
     let t = connected(&url).await;
     for round in 0..2 {
-        let (call, mut rx) = crate::transport::notification_sink::scope(
+        let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(
             None,
             t.request("tools/call", Some(call_params("tok-a"))),
         );
@@ -709,11 +735,11 @@ async fn ws_a_live_token_is_never_rerouted_to_a_second_call() {
     .await;
     let t = connected(&url).await;
 
-    let (a_call, mut a_rx) = crate::transport::notification_sink::scope(
+    let (a_call, mut a_rx) = crate::transport::notify_ingress::test_support::scope(
         None,
         t.request("tools/call", Some(call_params("tok-a"))),
     );
-    let (b_call, mut b_rx) = crate::transport::notification_sink::scope(None, async {
+    let (b_call, mut b_rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         // Let A register first, so B is the call that finds the token taken.
         tokio::task::yield_now().await;
         let mut params = call_params("tok-a");
