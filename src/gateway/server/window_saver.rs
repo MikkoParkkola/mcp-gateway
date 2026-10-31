@@ -12,7 +12,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -85,6 +85,72 @@ enum SinkState {
 /// The sink every write of this process's segment takes in turn.
 type Sink = Arc<Mutex<SinkState>>;
 
+/// The saver's writer threads still running: counted before each spawn and
+/// uncounted when it ends (or fails to start), so the shutdown can wait for
+/// every write the saver began.
+#[derive(Default)]
+struct Writers {
+    running: AtomicUsize,
+    idle: tokio::sync::Notify,
+}
+
+impl Writers {
+    /// Run `work` on a writer thread named `name` that this count covers.
+    fn spawn(
+        self: &Arc<Self>,
+        name: &str,
+        work: impl FnOnce() + Send + 'static,
+    ) -> std::io::Result<()> {
+        self.running.fetch_add(1, Ordering::SeqCst);
+        let writers = Arc::clone(self);
+        let spawned = std::thread::Builder::new()
+            .name(name.to_owned())
+            .spawn(move || {
+                let _running = Running(writers);
+                work();
+            });
+        if spawned.is_err() {
+            // The closure never ran, so its guard never will: uncount once.
+            self.finished();
+        }
+        spawned.map(drop)
+    }
+
+    fn finished(&self) {
+        if self.running.fetch_sub(1, Ordering::SeqCst) == 1 {
+            // `notify_waiters`, never `notify_one`: a `Notified` future
+            // receives `notify_waiters` from the moment it is created, even
+            // unpolled (tokio's `Notify::notified`), which is what lets
+            // `idle` create it before reading the count. With `notify_one`
+            // that holds only after `enable()`, and the last wakeup could be
+            // lost.
+            self.idle.notify_waiters();
+        }
+    }
+
+    /// Resolves once no writer thread is running.
+    async fn idle(&self) {
+        loop {
+            // Created before the count is read, so a last writer ending
+            // between the read and the await still wakes this.
+            let notified = self.idle.notified();
+            if self.running.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+
+/// Uncounts its writer when the writer's thread ends, by return or panic.
+struct Running(Arc<Writers>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.finished();
+    }
+}
+
 /// Open the segment (waiting at most `open_bound`), then keep it current
 /// until `shutdown`, and seal it. `None` with `off`: nothing is recorded or
 /// sealed, and shutdown serves as in 3.5.x. Await the handle after the
@@ -101,6 +167,7 @@ pub(super) async fn start_window_saver(
         return None;
     }
     let sink: Sink = Arc::default();
+    let writers = Arc::new(Writers::default());
     // No readable clock means no start time to record: no segment is
     // written (never a 0), but the seal below still refuses late requests.
     let identity = if let Ok(started_ms) = (settings.clock_ms)() {
@@ -115,7 +182,7 @@ pub(super) async fn start_window_saver(
         None
     };
     if let Some(identity) = &identity {
-        let opened = open_detached(&sink, &data_dir, identity, settings.clock_ms);
+        let opened = open_detached(&writers, &sink, &data_dir, identity, settings.clock_ms);
         match tokio::time::timeout(settings.open_bound, opened).await {
             Ok(Ok(true)) => {}
             Ok(_) => warn!(data_dir = %data_dir.display(), "{NOT_DURABLE}"),
@@ -129,7 +196,7 @@ pub(super) async fn start_window_saver(
             tokio::select! {
                 _ = interval.tick() => {
                     if let Some(identity) = &identity {
-                        checkpoint_detached(&sink, &data_dir, identity, &counts, settings.clock_ms);
+                        checkpoint_detached(&writers, &sink, &data_dir, identity, &counts, settings.clock_ms);
                     }
                 }
                 _ = shutdown.recv() => break,
@@ -166,12 +233,22 @@ pub(super) async fn start_window_saver(
             }),
         );
         super::persistence::run_shutdown_saves(deadline, vec![close]).await;
+        // Every write this saver began ends before its handle resolves, within
+        // the same bound as the seal. A disk stalled past it keeps its thread
+        // detached (MIK-8157): shutdown is never held longer.
+        if tokio::time::timeout_at(deadline, writers.idle())
+            .await
+            .is_err()
+        {
+            warn!("{NOT_DURABLE}: a window write is still running");
+        }
     }))
 }
 
 /// Open the segment on a detached thread holding the sink mutex. Resolves to
 /// whether it opened; a stalled open keeps the mutex until it finishes.
 fn open_detached(
+    writers: &Arc<Writers>,
     sink: &Sink,
     data_dir: &std::path::Path,
     identity: &WriterIdentity,
@@ -179,14 +256,12 @@ fn open_detached(
 ) -> impl std::future::Future<Output = Result<bool, tokio::sync::oneshot::error::RecvError>> {
     let (done, opened) = tokio::sync::oneshot::channel();
     let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
-    let spawned = std::thread::Builder::new()
-        .name("protocol-revision window open".to_owned())
-        .spawn(move || {
-            let mut held = sink
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms));
-        });
+    let spawned = writers.spawn("protocol-revision window open", move || {
+        let mut held = sink
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = done.send(open_into(&mut held, &data_dir, identity, clock_ms));
+    });
     if let Err(error) = spawned {
         warn!(%error, "the window open could not start a thread");
     }
@@ -225,6 +300,7 @@ fn open_into(
 /// busy skips (`try_lock`); with no sink yet, it retries the open first.
 /// Counts are cumulative from process start, so a skipped tick loses nothing.
 fn checkpoint_detached(
+    writers: &Arc<Writers>,
     sink: &Sink,
     data_dir: &std::path::Path,
     identity: &WriterIdentity,
@@ -233,33 +309,31 @@ fn checkpoint_detached(
 ) {
     let (sink, data_dir, identity) = (Arc::clone(sink), data_dir.to_path_buf(), identity.clone());
     let counts = Arc::clone(counts);
-    let spawned = std::thread::Builder::new()
-        .name("protocol-revision window checkpoint".to_owned())
-        .spawn(move || {
-            #[cfg(test)]
-            let seam_path = window_paths(&data_dir).0;
-            #[cfg(test)]
-            stall_seam::pass(&seam_path, stall_seam::Role::BeforeLock);
-            let run = || {
-                let mut held = match sink.try_lock() {
-                    Ok(held) => held,
-                    Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-                    Err(std::sync::TryLockError::WouldBlock) => return,
-                };
-                if !open_into(&mut held, &data_dir, identity, clock_ms) {
-                    return;
-                }
-                let (SinkState::Open(sink), Ok(now_ms)) = (&mut *held, clock_ms()) else {
-                    return;
-                };
-                if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
-                    warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
-                }
+    let spawned = writers.spawn("protocol-revision window checkpoint", move || {
+        #[cfg(test)]
+        let seam_path = window_paths(&data_dir).0;
+        #[cfg(test)]
+        stall_seam::pass(&seam_path, stall_seam::Role::BeforeLock);
+        let run = || {
+            let mut held = match sink.try_lock() {
+                Ok(held) => held,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
             };
-            run();
-            #[cfg(test)]
-            stall_seam::pass(&seam_path, stall_seam::Role::CheckpointDone);
-        });
+            if !open_into(&mut held, &data_dir, identity, clock_ms) {
+                return;
+            }
+            let (SinkState::Open(sink), Ok(now_ms)) = (&mut *held, clock_ms()) else {
+                return;
+            };
+            if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
+                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
+            }
+        };
+        run();
+        #[cfg(test)]
+        stall_seam::pass(&seam_path, stall_seam::Role::CheckpointDone);
+    });
     if let Err(error) = spawned {
         warn!(%error, "a window checkpoint could not start a thread; skipped");
     }
