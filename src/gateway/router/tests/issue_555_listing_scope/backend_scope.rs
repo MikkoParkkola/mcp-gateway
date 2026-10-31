@@ -15,6 +15,8 @@ use crate::gateway::authz::ToolAuthorizer;
 use crate::gateway::router::authorization::RouterAuthorizer;
 use crate::gateway::test_helpers::CallerStanding;
 
+mod judgment_branches;
+
 /// The server names `gateway_list_servers` returns.
 fn server_names(body: &Value) -> Vec<String> {
     payload(body)["servers"]
@@ -256,11 +258,21 @@ async fn with_mtls_on(
     allow: (&[&str], &[&str]),
     deny: (&[&str], &[&str]),
 ) -> (axum::Router, Arc<crate::gateway::router::AppState>) {
+    with_mtls_tuned(auth, |meta| meta, allow, deny).await
+}
+
+/// [`with_mtls_on`], with `tune` editing the Meta-MCP first.
+async fn with_mtls_tuned(
+    auth: Auth,
+    tune: impl FnOnce(crate::gateway::meta_mcp::MetaMcp) -> crate::gateway::meta_mcp::MetaMcp,
+    allow: (&[&str], &[&str]),
+    deny: (&[&str], &[&str]),
+) -> (axum::Router, Arc<crate::gateway::router::AppState>) {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let owned = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
     let Fixture {
         router, mut state, ..
-    } = fixture(auth).await;
+    } = super::fixture_with(auth, tune).await;
     drop(router);
     let rule = PolicyRuleConfig {
         match_criteria: CertMatchConfig {
