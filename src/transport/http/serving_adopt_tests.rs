@@ -63,7 +63,7 @@ async fn confirm(pair: &Pair, token: TokenInfo) {
     let cancel = tokio_util::sync::CancellationToken::new();
     let by = tokio::time::Instant::now() + HANG_BOUND;
     pair.confirming
-        .save_confirmed(grant, Duration::ZERO, &cancel, by)
+        .save_confirmed(grant, &cancel, by)
         .await
         .expect("the confirm saves");
 }

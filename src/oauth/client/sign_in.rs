@@ -176,8 +176,10 @@ pub(crate) struct PendingGrant {
     pub(crate) refresh_token: Option<Zeroizing<String>>,
     /// The token type the provider named.
     pub(crate) token_type: Option<String>,
+    /// When the access token expires, as the exchange dated it.
+    pub(crate) expires_at: Option<u64>,
     /// Seconds the access token lives, as the provider said.
-    pub(crate) expires_in: Option<u64>,
+    pub(crate) lifetime_secs: Option<u64>,
     /// The scope the provider granted.
     pub(crate) scope: Option<String>,
 }
@@ -191,31 +193,33 @@ impl PendingGrant {
             access_token: Zeroizing::new(token.access_token),
             refresh_token: token.refresh_token.map(Zeroizing::new),
             token_type: Some(token.token_type),
-            expires_in: token.lifetime_secs,
+            expires_at: token.expires_at,
+            lifetime_secs: token.lifetime_secs,
             scope: token.scope,
         }
     }
 
-    /// The token to save, its lifetime shortened by the time it was `held_for`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the clock cannot be read.
-    pub(crate) fn into_token(mut self, held_for: Duration) -> crate::Result<TokenInfo> {
-        let now = super::issuance_clock()?;
-        let remaining = self
-            .expires_in
-            .map(|secs| secs.saturating_sub(held_for.as_secs()));
-        Ok(TokenInfo::from_response_at(
-            std::mem::take(&mut *self.access_token),
-            self.token_type.take(),
-            self.refresh_token
+    /// The token to save: the exchange's own expiry and lifetime, rebuilt
+    /// field by field. The secrets move out of their wiped buffers with
+    /// `mem::take`, so no plain copy is left behind.
+    pub(crate) fn into_token(mut self) -> TokenInfo {
+        TokenInfo {
+            access_token: std::mem::take(&mut *self.access_token),
+            token_type: self
+                .token_type
+                .take()
+                .unwrap_or_else(|| "Bearer".to_owned()),
+            refresh_token: self
+                .refresh_token
                 .as_mut()
                 .map(|r| std::mem::take(&mut **r)),
-            remaining,
-            self.scope.take(),
-            now,
-        ))
+            expires_at: self.expires_at,
+            scope: self.scope.take(),
+            token_endpoint: None,
+            client_id: None,
+            client_secret: None,
+            lifetime_secs: self.lifetime_secs,
+        }
     }
 }
 

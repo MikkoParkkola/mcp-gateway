@@ -121,7 +121,6 @@ pub(super) async fn start(
         until: deadline,
         until_at: crate::clock::system_time_or_before_epoch() + windows.start,
         grant: None,
-        held_since: None,
         wait_generation: 0,
         caller,
         outcome: Some(outcome_tx),
@@ -274,7 +273,6 @@ impl Run {
             // guard is `cancel_flow` taking the flow out of the slot.
             let flow = slot.as_mut().filter(|f| f.attempt_id == self.attempt_id)?;
             flow.grant = Some(grant);
-            flow.held_since = Some(Instant::now());
             Some(flow.until)
         });
         let Some(until) = until else {
@@ -395,7 +393,6 @@ pub(super) enum Decided {
 /// What a decision takes out of the flow.
 struct Taken {
     grant: crate::oauth::client::sign_in::PendingGrant,
-    held_for: std::time::Duration,
     generation: u64,
     until: Instant,
     outcome: Option<oneshot::Sender<Outcome>>,
@@ -423,9 +420,6 @@ fn take_for(backend: &Backend, owner: &str, attempt: &str) -> std::result::Resul
         };
         let taken = Taken {
             grant,
-            held_for: flow
-                .held_since
-                .map_or_else(Default::default, |at| at.elapsed()),
             generation: flow.wait_generation,
             until: flow.until,
             outcome: flow.outcome.take(),
@@ -490,7 +484,6 @@ pub(super) async fn decide(
     };
     let Taken {
         grant,
-        held_for,
         generation,
         until,
         outcome,
@@ -505,7 +498,7 @@ pub(super) async fn decide(
     // it), so the save takes a token nothing cancels, and ends at the flow's
     // own `until`.
     let never = tokio_util::sync::CancellationToken::new();
-    let saved = client.save_confirmed(grant, held_for, &never, until).await;
+    let saved = client.save_confirmed(grant, &never, until).await;
     let ok = saved.is_ok();
     if ok {
         backend.clear_auth_wait_if(generation);

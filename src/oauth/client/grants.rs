@@ -520,8 +520,8 @@ impl OAuthClient {
     }
 
     /// Save the grant a person just confirmed, cache it and publish the
-    /// sign-in status. The grant becomes a `TokenInfo` only here, its lifetime
-    /// shortened by the time it was `held_for`.
+    /// sign-in status. The grant becomes a `TokenInfo` only here, with the
+    /// exchange's own expiry.
     ///
     /// # Errors
     ///
@@ -531,11 +531,10 @@ impl OAuthClient {
     pub(crate) async fn save_confirmed(
         &self,
         grant: super::sign_in::PendingGrant,
-        held_for: std::time::Duration,
         cancel: &tokio_util::sync::CancellationToken,
         deadline: tokio::time::Instant,
     ) -> Result<()> {
-        let token = grant.into_token(held_for)?;
+        let token = grant.into_token();
         self.save_issued_until(&token, cancel, Some(deadline))
             .await?;
         *self.current_token.write() = Some(token);

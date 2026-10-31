@@ -343,7 +343,8 @@ fn the_pending_grant_secrets_are_zeroizing() {
         access_token: Zeroizing::new("a".into()),
         refresh_token: Some(Zeroizing::new("r".into())),
         token_type: None,
-        expires_in: None,
+        expires_at: None,
+        lifetime_secs: None,
         scope: None,
     };
     wiped(&grant.access_token);

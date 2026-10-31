@@ -71,8 +71,6 @@ pub(crate) struct Flow {
     pub(crate) until_at: SystemTime,
     /// The token the callback bought, until a decision takes it.
     pub(crate) grant: Option<PendingGrant>,
-    /// When the grant arrived, to shorten its lifetime by the time held.
-    pub(crate) held_since: Option<Instant>,
     /// The slot's `auth_wait` generation when the callback landed.
     pub(crate) wait_generation: u64,
     /// The starting caller, for the records of the flow's later ends.

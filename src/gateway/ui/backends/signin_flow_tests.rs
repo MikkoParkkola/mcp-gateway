@@ -23,7 +23,8 @@ fn a_grant() -> PendingGrant {
         access_token: Zeroizing::new("held".to_owned()),
         refresh_token: None,
         token_type: None,
-        expires_in: None,
+        expires_at: None,
+        lifetime_secs: None,
         scope: None,
     }
 }
@@ -40,7 +41,6 @@ fn seeded_flow(
         until: Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
         until_at: crate::clock::system_time_or_before_epoch() + OAUTH_AUTHORIZATION_WINDOW,
         grant: None,
-        held_since: None,
         wait_generation: 0,
         caller: None,
         outcome: None,
