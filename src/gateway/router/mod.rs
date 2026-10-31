@@ -123,6 +123,8 @@ mod direct_guards_fixture_a2a;
 #[cfg(test)]
 mod direct_guards_tests;
 #[cfg(test)]
+mod transport_double_run_tests;
+#[cfg(test)]
 mod direct_lent_arms_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
