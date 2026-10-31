@@ -92,16 +92,41 @@ fn expiring_server() -> (String, std::sync::mpsc::Receiver<usize>) {
 /// was healed, and the resend never connected. The transport answers a
 /// failure that may have run (`Transport`), with the connect cause kept, not
 /// the never-sent `TransportConnect` that would release the caller's key.
+///
+/// The freed port can be bound by a test running in parallel before the
+/// resend connects; that resend then meets a stranger, not a refusal. Every
+/// run must still read may-have-run; the scenario runs again until one resend
+/// met the refusal this row is about.
 #[tokio::test]
 async fn a_resend_that_never_connected_after_an_expired_session_may_have_run() {
+    for _ in 0..3 {
+        // A resend answered at all met a stranger on the freed port.
+        let Some(error) = resend_after_expiry().await else {
+            continue;
+        };
+        assert!(
+            matches!(error, crate::Error::Transport(_)),
+            "a resend after a sent request read as never sent: {error:?}"
+        );
+        assert!(!error.is_pre_dispatch(), "{error:?}");
+        if error
+            .to_string()
+            .contains("after the expired session's request was sent")
+        {
+            return;
+        }
+    }
+    panic!("no run's resend met a refused connection");
+}
+
+/// One run: a session that expires, heals, and whose resend is refused;
+/// `None` when the resend was answered.
+async fn resend_after_expiry() -> Option<crate::Error> {
     let (url, served_count) = expiring_server();
     let transport = make_transport(&url);
     *transport.message_url.write() = Some(url.clone());
     set_default_session(&transport, "stale-session");
-    let error = transport
-        .request("tools/list", None)
-        .await
-        .expect_err("the resend could not connect");
+    let error = transport.request("tools/list", None).await.err();
     // Bounded, so a server left waiting on a connection that never came fails
     // the row instead of hanging it.
     let served = served_count
@@ -116,15 +141,5 @@ async fn a_resend_that_never_connected_after_an_expired_session_may_have_run() {
         Some(FRESH),
         "premise: the session was healed"
     );
-    assert!(
-        matches!(error, crate::Error::Transport(_)),
-        "a resend after a sent request read as never sent: {error:?}"
-    );
-    assert!(!error.is_pre_dispatch(), "{error:?}");
-    assert!(
-        error
-            .to_string()
-            .contains("after the expired session's request was sent"),
-        "{error}"
-    );
+    error
 }

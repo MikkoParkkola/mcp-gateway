@@ -77,12 +77,17 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
     );
 }
 
-/// R10b: refused in its send, a signed call gives its nonce back. Read
-/// through the same nonce again: a kept nonce refuses it as a replay; a
-/// returned one lets it reach the send again, which refuses it for the rule.
+/// R10b: refused in its send, a signed call gives its nonce back. The tool
+/// list is warmed first, as in R24: a cold schema fill is itself a request to
+/// the backend, which keeps the nonce. Read through the same nonce again: a
+/// kept nonce refuses it as a replay; a returned one lets it reach the send
+/// again, which refuses it for the rule.
 #[tokio::test]
 async fn a_signed_direct_call_refused_in_its_send_gives_its_nonce_back() {
     let fx = fixture_signed_with_secrets(vec![query_rule()]).await;
+    let target = fx.state.backends.get("alpha").expect("fixture backend");
+    target.get_tools_shared().await.expect("warm the tool list");
+    let fills = target.list_fills();
     let who = ("k-std", "alpha");
     let (_, first) = signed_call(&fx, who, "alpha-presend-n1", json!({})).await;
     assert!(
@@ -93,6 +98,7 @@ async fn a_signed_direct_call_refused_in_its_send_gives_its_nonce_back() {
         fx.seen.lock().expect("recorder").is_empty(),
         "premise: nothing was sent"
     );
+    assert_eq!(target.list_fills(), fills, "premise: no fill");
     let (_, again) = signed_call(&fx, who, "alpha-presend-n1", json!({})).await;
     assert!(
         !again.to_string().to_lowercase().contains("replay"),

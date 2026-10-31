@@ -90,8 +90,8 @@ impl crate::transport::Transport for Disconnected {
 
 /// R12b: the managed slot's catalogue is warm; the slot is then cold, and its
 /// start meets a 401. The keyed call reads refused before its backend, no
-/// tools/call reaches the peer, and the same key runs again (the peer is
-/// started again) instead of being answered from the stored failure.
+/// tools/call reaches the peer, and the same key is not answered from a
+/// stored entry (it was released).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
     let custody = custody_with_steps(
@@ -166,16 +166,23 @@ async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
         "a start refused with 401 read as a dispatched call"
     );
 
-    let _again = crate::gateway::delivery_facts::scope(Box::pin(meta.invoke_tool_sourced(
+    let again = crate::gateway::delivery_facts::scope(Box::pin(meta.invoke_tool_sourced(
         &call,
         Some("fixture-session"),
         &caller,
         "t".to_owned(),
     )))
     .await;
+    // A kept key would answer the stored may-have-run entry (the side effect
+    // marker the early return commits), as a live value.
+    let replayed = matches!(
+        &again.outcome,
+        Ok(crate::gateway::meta_mcp::invoke::SourcedOutcome::Live((value, _, _)))
+            if value.to_string().contains("Side effect executed")
+    );
     assert!(
-        methods.lock().len() > started,
-        "the same key was answered from the stored failure instead of starting again: {:?}",
+        !replayed,
+        "the same key was answered from the stored failure: {:?}",
         methods.lock()
     );
 }
