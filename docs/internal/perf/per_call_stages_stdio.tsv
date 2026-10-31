@@ -244,11 +244,13 @@ src/gateway/server/task_runtime.rs	within	-	shutdown deadline helper, off the re
 src/gateway/server/test_seams.rs	bound_port_for_test	-	test seam setter, used only by tests
 src/gateway/server/test_seams.rs	data_dir	-	startup data-directory resolution, once per serve
 src/gateway/server/test_seams.rs	inflight_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	new	-	startup seam construction, once per gateway; in tests it also records the starting test's name
 src/gateway/server/test_seams.rs	report_bound_port	-	startup bind reporting to a test channel (no channel in production)
 src/gateway/server/test_seams.rs	report_inflight	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	report_stdio_meta_mcp	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	shutdown_signal_or_trigger	-	shutdown signal handling, off the request path
 src/gateway/server/test_seams.rs	shutdown_trigger_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	spawner	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	stdio_drain_seams_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	stdio_meta_mcp_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	take_shutdown_trigger	-	test-only seam (cfg(test))
@@ -445,10 +447,14 @@ src/gateway/server/warmstart/tests.rs	the_attempt_ceiling_follows_the_operators_
 src/gateway/server/warmstart/tests.rs	unreachable_backend	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	warm_start_prefetches_tools_in_both_modes	-	test-only (the module is cfg(test))
 src/gateway/server/window_saver.rs	checkpoint_detached	-	U1 window checkpoint on a detached thread every 5 s, off the request path
+src/gateway/server/window_saver.rs	drop	-	U1 window writer thread end (Running guard), off the request path
+src/gateway/server/window_saver.rs	finished	-	U1 window writer count on a writer's end, off the request path
 src/gateway/server/window_saver.rs	global_counts	-	U1 window counts for the saver's ticks and seal, off the request path
+src/gateway/server/window_saver.rs	idle	-	U1 window writer drain, once at shutdown
 src/gateway/server/window_saver.rs	open_detached	-	U1 window segment open, once per serve before serving
 src/gateway/server/window_saver.rs	open_into	-	U1 window segment open and its tick retries, off the request path
 src/gateway/server/window_saver.rs	production	-	startup saver settings, once per serve
+src/gateway/server/window_saver.rs	spawn	-	U1 window writer thread start for the open and each checkpoint, off the request path
 src/gateway/server/window_saver.rs	start_window_saver	-	startup U1 window saver, once per serve; seals at shutdown
 src/gateway/server/window_seal_http_backend.rs	answer	-	test-only (the module is cfg(test))
 src/gateway/server/window_seal_http_backend.rs	received	-	test-only (the module is cfg(test))

@@ -5,6 +5,10 @@
 
 use super::*;
 
+/// Bound on each wait for something that must happen (a hang guard); local
+/// so the timing gate resolves it in this file.
+const ARRIVAL: Duration = Duration::from_secs(30);
+
 /// The data directory below `rig`, made unwritable (a file stands where it
 /// should be) so the saver's first open fails.
 fn unwritable_data_dir(rig: &Rig) -> std::path::PathBuf {
