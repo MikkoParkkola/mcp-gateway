@@ -354,6 +354,15 @@ pub(super) async fn record(
         .as_deref()
         .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_code(server, tool))
         .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
+    // A withheld call's record carries the memo's code, so its check.
+    let mut notes = notes;
+    if let Some(kind) = call
+        .tool
+        .as_deref()
+        .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_kind(server, tool))
+    {
+        notes.refused_by_memo(kind);
+    }
     // D4: counted before the log check, so auth off still counts.
     let firewall = body
         .get("error")
@@ -377,6 +386,7 @@ pub(super) async fn record(
     let response_hash = body.get("result").is_some().then(|| sha256_of(body));
     // MIK-7116.MIN.1: what the gates saw, or the delivered value on a replay.
     let tenants = state.meta_mcp.request_tenants(&call.arguments);
+    let decision = Box::new(notes.decided(&state.meta_mcp, outcome));
     let attribution = notes.attribution(&state.meta_mcp, tenants, body.get("result"));
     let trace_id = trace_id.to_owned();
     let envelope = AuditEnvelope {
@@ -408,6 +418,7 @@ pub(super) async fn record(
                 &request_hash,
                 response_hash.as_deref(),
                 attribution,
+                Some(decision.as_ref()),
             )
         })
         .await;

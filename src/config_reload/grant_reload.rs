@@ -158,36 +158,9 @@ impl ReloadContext {
             ));
         };
 
-        // With an auditor, the grant file and journal are read under the
-        // journal lock, held through record (design 5.4).
-        let (file, locked) = if sink.auditor.is_some() {
-            let Some(read) =
-                crate::identity_grants::journal::read_locked(&sink.path, RELOAD_LOCK_WAIT).await
-            else {
-                error!(path = %sink.path.display(), "Identity-grant reload busy: grant journal locked");
-                return Some(Err(
-                    "identity grants reload busy: a grant change is in progress; retry".to_string(),
-                ));
-            };
-            (read.grants, Some((read.guard, read.journal)))
-        } else {
-            (
-                crate::identity_grants::read_identity_grants_file(&sink.path).await,
-                None,
-            )
-        };
-        let file = match file {
-            Ok(file) => {
-                *sink.read_errors.lock() = env_poll::WarnLimiter::default();
-                file
-            }
-            Err(reason) => {
-                env_poll::report_grants_refusal(&sink.read_errors, &sink.path, &reason);
-                return Some(Err(format!(
-                    "identity grants not reloaded from {}: {reason}",
-                    sink.path.display()
-                )));
-            }
+        let (file, bytes, locked) = match read_grant_file(sink).await {
+            Ok(read) => read,
+            Err(refusal) => return Some(Err(refusal)),
         };
 
         // Plan before publish: a plan that cannot be made durable refuses the
@@ -206,6 +179,9 @@ impl ReloadContext {
         let outgoing: Vec<_> = sink.store.read().values().cloned().collect();
         let incoming_rows: Vec<_> = incoming.values().cloned().collect();
         if outgoing == incoming_rows {
+            // The rows are the same but the file may not be: the revision
+            // names the bytes, so a comment-only edit is a new revision.
+            self.live_config.set_grants(Some(&bytes));
             // Still recorded: an identical-content `--replace` has an entry.
             let clause = audit_clause(sink.auditor.as_deref(), prepared);
             return Some(Ok(format!("identity grants unchanged{clause}")));
@@ -214,6 +190,8 @@ impl ReloadContext {
         let subjects = changed_grant_subjects(&outgoing, &incoming_rows);
         let delta = grant_delta::grant_delta(&outgoing, &incoming_rows);
         crate::gateway::publish_identity_grants(&sink.store, &sink.epoch, incoming);
+        self.live_config.set_grants(Some(&bytes));
+        drop(bytes);
 
         // Three distinct outcomes, and they must not share a counter:
         // "skipped by construction" is expected for a non-issuer authority,
@@ -272,5 +250,59 @@ fn audit_clause(auditor: Option<&GrantAuditor>, prepared: Option<Prepared>) -> S
             Recorded::Unrecorded(reason) => format!("; grant change UNRECORDED: {reason}"),
         },
         _ => String::new(),
+    }
+}
+
+/// The journal lock and journal read beside the grant file, held through
+/// record (design 5.4).
+type LockedJournal = (
+    Option<crate::fs_lock::ExclusiveFileLock>,
+    crate::config_reload::grant_audit::JournalRead,
+);
+
+/// The grant file a reload reads, the bytes it was parsed from (for the
+/// config revision), and, with an auditor, the journal under its lock.
+async fn read_grant_file(
+    sink: &IdentityGrantSink,
+) -> std::result::Result<
+    (
+        crate::identity_grants::IdentityGrantFile,
+        crate::config_reload::revision::RawBytes,
+        Option<LockedJournal>,
+    ),
+    String,
+> {
+    let (file, locked) = if sink.auditor.is_some() {
+        let Some(read) =
+            crate::identity_grants::journal::read_locked(&sink.path, RELOAD_LOCK_WAIT).await
+        else {
+            error!(path = %sink.path.display(), "Identity-grant reload busy: grant journal locked");
+            return Err(
+                "identity grants reload busy: a grant change is in progress; retry".to_string(),
+            );
+        };
+        (
+            read.grants
+                .map(|file| (file, read.bytes.unwrap_or_default())),
+            Some((read.guard, read.journal)),
+        )
+    } else {
+        (
+            crate::identity_grants::read_identity_grants_file_with_bytes(&sink.path).await,
+            None,
+        )
+    };
+    match file {
+        Ok((file, bytes)) => {
+            *sink.read_errors.lock() = env_poll::WarnLimiter::default();
+            Ok((file, bytes, locked))
+        }
+        Err(reason) => {
+            env_poll::report_grants_refusal(&sink.read_errors, &sink.path, &reason);
+            Err(format!(
+                "identity grants not reloaded from {}: {reason}",
+                sink.path.display()
+            ))
+        }
     }
 }

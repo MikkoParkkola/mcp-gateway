@@ -53,8 +53,8 @@ async fn first_wins_maps_keep_the_first_answer_and_reads_do_not_consume() {
             Some(SCHEMA),
             "a read keeps it"
         );
-        note_denial_code("s", "t", -32003);
-        note_denial_code("s", "t", -32601);
+        note_denial_code("s", "t", -32003, None);
+        note_denial_code("s", "t", -32601, None);
         assert_eq!(denial_code("s", "t"), Some(-32003));
         assert_eq!(denial_code("s", "t"), Some(-32003), "a read keeps it");
         record_account_outcome("s", &account("a"), AccountOutcome::NoView);
@@ -147,7 +147,7 @@ async fn keys_are_isolated_by_server_tool_and_account() {
     with_visibility_memo(async {
         let (a1, a2) = (account("a1"), account("a2"));
         record_visibility("s1", "t1", SCHEMA);
-        note_denial_code("s1", "t1", -32003);
+        note_denial_code("s1", "t1", -32003, None);
         record_account_transient("s1", "t1", "busy".to_owned());
         record_resolution_error("s1", "t1", error(-32001, "down"));
         record_account_outcome("s1", &a1, AccountOutcome::NoView);
@@ -192,7 +192,7 @@ async fn outside_a_memo_every_accessor_is_inert() {
     assert_eq!(recorded_visibility("s", "t"), None);
     record_absent("s", "t");
     assert_eq!(recorded_visibility("s", "t"), None);
-    note_denial_code("s", "t", -32003);
+    note_denial_code("s", "t", -32003, None);
     assert_eq!(denial_code("s", "t"), None);
     record_account_outcome("s", &account("a"), AccountOutcome::Live);
     assert_eq!(account_outcome("s", &account("a")), None);

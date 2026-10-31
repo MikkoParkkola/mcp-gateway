@@ -105,14 +105,18 @@ impl Gateway {
             super::super::meta_mcp::grant_audit::slot_rpc(
                 meta_mcp.transparency_logger.as_ref(),
                 id.clone(),
-                Box::pin(Self::dispatch_tools_call(
-                    meta_mcp,
-                    tool_policy,
-                    &mut request,
-                    id,
-                    client,
-                    &mut signing_context,
-                    &request_shape,
+                // In one route decision scope for the whole call, as on `/mcp`:
+                // inside the existing box, so nothing new is nested or boxed.
+                Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                    Self::dispatch_tools_call(
+                        meta_mcp,
+                        tool_policy,
+                        &mut request,
+                        id,
+                        client,
+                        &mut signing_context,
+                        &request_shape,
+                    ),
                 )),
             )
             .await

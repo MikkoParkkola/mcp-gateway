@@ -372,15 +372,19 @@ async fn meta_mcp_dispatch(
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
             // The request's visibility memo is already open (see the handler).
-            let call = Box::pin(dispatch_tools_call::tools_call(
-                &state,
-                &intake,
-                id,
-                &router_authorizer,
-                invoke_scope,
-                &mut signing_context,
-                &mut response_targets,
-                &mut execution,
+            // In a route decision scope: a pre-check refusal's record names
+            // the check that made it (MIK-8914.API2A.1).
+            let call = Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                dispatch_tools_call::tools_call(
+                    &state,
+                    &intake,
+                    id,
+                    &router_authorizer,
+                    invoke_scope,
+                    &mut signing_context,
+                    &mut response_targets,
+                    &mut execution,
+                ),
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,

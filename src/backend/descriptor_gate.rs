@@ -286,6 +286,20 @@ impl Backend {
         pending
     }
 
+    /// The check that blocks `tool` here, for its decision record: the
+    /// backend's `allowed_tools` list, or the descriptor check. Read only for
+    /// a tool [`Self::blocked_tool_refusal`] refuses.
+    pub(crate) fn blocked_tool_kind(
+        &self,
+        tool: &str,
+    ) -> crate::security::decision_record::DecisionKind {
+        if self.is_unselected(tool) {
+            crate::security::decision_record::DecisionKind::AllowedTools
+        } else {
+            crate::security::decision_record::DecisionKind::DescriptorBlock
+        }
+    }
+
     /// Refusal text when `tool` is blocked on this backend.
     pub(crate) fn blocked_tool_refusal(
         &self,
