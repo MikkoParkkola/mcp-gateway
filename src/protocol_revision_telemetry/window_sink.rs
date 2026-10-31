@@ -71,6 +71,10 @@ impl HttpSegmentSink {
         let created_by = crate::test_late_write::Creator::default();
         #[cfg(test)]
         created_by.witness("telemetry window open", data_dir);
+        // Recorded before anything is written, so a row that sees the segment
+        // on disk also sees who opened it.
+        #[cfg(test)]
+        stall_seam::record_opener(&window_path, created_by.name());
         std::fs::create_dir_all(&directory)?;
         force_directory_owner_only(&directory)?;
         #[cfg(test)]
@@ -92,8 +96,6 @@ impl HttpSegmentSink {
         window.updated_at_unix_seconds = window.updated_at_unix_seconds.max(now);
         let index = window.http_segments.len() - 1;
         write_window_v2(&window_path, &window)?;
-        #[cfg(test)]
-        stall_seam::record_opener(&window_path, created_by.name());
         Ok(Self {
             window_path,
             lock_path,
