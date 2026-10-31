@@ -84,3 +84,61 @@ pub(crate) fn hidden(server: &str) -> bool {
 #[cfg(test)]
 #[path = "hiding_tests.rs"]
 mod tests;
+
+/// What a caller's catalogue of one backend holds now.
+pub(crate) enum CallerCatalogue {
+    /// The tool names it holds, and whether they are the whole catalogue.
+    Tools { names: Vec<String>, complete: bool },
+    /// The caller has no view of the backend: it lacks every tool there.
+    NoView,
+    /// Not registered, or no fresh catalogue held for this caller.
+    Unknown,
+}
+
+impl super::MetaMcp {
+    /// The catalogue of `server` this caller would be shown, read without a
+    /// mint or a fill. The slot is chosen as a stored read chooses it
+    /// ([`Self::stored_target_view`]): the caller's own on a per-user
+    /// backend, the shared one otherwise; a passthrough backend's shared one.
+    pub(crate) fn caller_catalogue(
+        &self,
+        server: &str,
+        caller: crate::identity_propagation::CallerProof<'_>,
+    ) -> CallerCatalogue {
+        use super::listing_view::ListingView;
+        use super::scoped_backends::Unscoped;
+        let Some(backend) = self.registry().get_for(Unscoped::Visibility, server) else {
+            return self
+                .get_capabilities()
+                .filter(|cap| cap.name == server)
+                .map_or(CallerCatalogue::Unknown, |cap| CallerCatalogue::Tools {
+                    names: cap.get_tools().into_iter().map(|t| t.name).collect(),
+                    complete: true,
+                });
+        };
+        let passthrough = backend.identity_propagation_config().is_some_and(|idp| {
+            matches!(
+                idp.strategy,
+                crate::identity_propagation::PropagationStrategyKind::Passthrough
+            )
+        });
+        let binding = if passthrough {
+            None
+        } else {
+            match self.listing_view_for(&backend, caller) {
+                ListingView::NoView => return CallerCatalogue::NoView,
+                ListingView::Cold => return CallerCatalogue::Unknown,
+                ListingView::Shared => None,
+                ListingView::Caller(binding) => Some(binding),
+            }
+        };
+        let (cached, truncated, _, fresh) = backend.cached_tools_view(binding.as_deref());
+        match cached {
+            Some(tools) if fresh => CallerCatalogue::Tools {
+                names: tools.iter().map(|t| t.name.clone()).collect(),
+                complete: !truncated,
+            },
+            _ => CallerCatalogue::Unknown,
+        }
+    }
+}

@@ -234,6 +234,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
                 oauth_agent_identity.as_ref(),
                 cert_identity.as_ref(),
             ),
+            verified_identity.clone(),
             (!session_id.is_empty()).then(|| session_id.clone()),
         ),
     );

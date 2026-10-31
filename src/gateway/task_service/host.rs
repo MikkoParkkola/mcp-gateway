@@ -72,16 +72,16 @@ impl LiveHost {
     /// hidden there.
     pub(crate) async fn as_caller<F: Future>(
         &self,
-        authorizer: &crate::gateway::router::OwnedRouterAuthorizer,
-        session_id: Option<&str>,
+        owned: &super::execution::OwnedCallerContext,
         run: F,
     ) -> F::Output {
         match self {
             Self::Http(state) => {
                 let caller = crate::gateway::router::caller_hiding::RouterHiding::new(
                     Arc::clone(state),
-                    authorizer.clone(),
-                    session_id.map(str::to_owned),
+                    owned.authorizer().clone(),
+                    owned.verified_identity().cloned(),
+                    owned.session_id().map(str::to_owned),
                 );
                 crate::gateway::meta_mcp::hiding::with_caller(caller, run).await
             }

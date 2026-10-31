@@ -377,9 +377,7 @@ async fn dispatch(
             response = dispatched => Some(response),
         }
     });
-    state
-        .as_caller(owned.authorizer(), owned.session_id(), round)
-        .await
+    state.as_caller(owned, round).await
 }
 
 /// What a `tasks/update` carrying answers came to.
