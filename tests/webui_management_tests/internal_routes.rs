@@ -162,7 +162,12 @@ fn concrete_uri(uri: &str) -> String {
         .split(r#"<link rel="stylesheet" href="/ui/assets/"#)
         .nth(1)
         .and_then(|rest| rest.split('"').next())
-        .filter(|name| name.starts_with("shell.") && name.ends_with(".css"))
+        .filter(|name| {
+            name.starts_with("shell.")
+                && std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        })
         .expect("the shell document links the shell stylesheet");
     format!("/ui/assets/{name}")
 }

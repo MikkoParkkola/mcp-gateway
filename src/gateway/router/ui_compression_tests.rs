@@ -112,8 +112,8 @@ fn request(uri: &str, extra: &[(&str, &str)]) -> Request<Body> {
     let mut b = Request::builder()
         .uri(uri)
         .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_347))));
-    for (name, value) in extra {
-        b = b.header(name, *value);
+    for &(name, value) in extra {
+        b = b.header(name, value);
     }
     b.body(Body::empty()).expect("request builds")
 }
@@ -198,7 +198,10 @@ async fn z1_the_ui_pages_and_every_asset_gzip_when_asked() {
             .to_owned();
         let want = contract.gzips(&content_type, plain.len());
         // The pages and the text assets are what this change compresses.
-        if !uri.ends_with(".woff2") {
+        if !std::path::Path::new(&uri)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("woff2"))
+        {
             assert!(
                 want,
                 "{uri} ({content_type}) is compressible by the contract"
@@ -288,14 +291,19 @@ async fn z2b_the_ui_stream_is_never_compressed() {
     assert!(text.contains("\n\n"), "a whole event: {text:?}");
 }
 
-/// GZIP.4 (BREACH): nothing html_router serves depends on the caller, so
+/// GZIP.4 (BREACH): nothing `html_router` serves depends on the caller, so
 /// different cookies, credentials and paths get byte-identical bodies.
 #[tokio::test]
 async fn z4_the_ui_bodies_do_not_depend_on_the_caller() {
     let (state, _dir) = fixture().await;
     let asset = shell_assets()
         .into_iter()
-        .find(|(n, _)| n.starts_with("shell.") && n.ends_with(".js"))
+        .find(|(n, _)| {
+            n.starts_with("shell.")
+                && std::path::Path::new(n)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("js"))
+        })
         .map(|(n, _)| format!("/ui/assets/{n}"))
         .expect("the shell script");
     let callers: [&[(&str, &str)]; 3] = [
