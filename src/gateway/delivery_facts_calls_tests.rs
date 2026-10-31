@@ -112,11 +112,15 @@ fn the_send_facts_are_called_exactly_where_reviewed() {
     let mut found = BTreeMap::new();
     for file in &files {
         let source = std::fs::read_to_string(file).expect("a readable source file");
+        // Joined with `/` on every OS, so the keys read the same on Windows
+        // as the reviewed table does.
         let rel = file
             .strip_prefix(root)
             .expect("under the crate")
-            .display()
-            .to_string();
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         for name in NAMES {
             let n = calls(&source, name);
             if n > 0 {

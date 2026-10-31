@@ -43,20 +43,31 @@ pub(super) fn respond(mut stream: &std::net::TcpStream, status: &str, extra: &st
     stream.write_all(reply.as_bytes()).expect("write the reply");
 }
 
-/// A listening socket on a loopback port, and a second socket bound to the
-/// same port that never listens (both `SO_REUSEPORT`). Closing the listener
-/// leaves the port held by its twin, so no other socket can take it, and a
-/// connection to it is refused: no listening socket, no reuse.
-pub(super) fn held_listener() -> (std::net::TcpListener, tokio::net::TcpSocket) {
+/// A listening socket on a loopback port, and on Linux a second socket bound
+/// to the same port that never listens (both `SO_REUSEPORT`): closing the
+/// listener leaves the port held by its twin, so no other socket can take it,
+/// and a connection to it is refused. macOS drops a connection to a port such
+/// a twin holds instead of refusing it, even beside the open listener, so
+/// there no twin is bound: the closed listener's own connections stay in
+/// `TIME_WAIT` (the server closes each first) and keep an ordinary bind off
+/// the port, and a connection to it is refused.
+pub(super) fn held_listener() -> (std::net::TcpListener, Option<tokio::net::TcpSocket>) {
     let listening = tokio::net::TcpSocket::new_v4().expect("a socket");
+    #[cfg(target_os = "linux")]
     listening.set_reuseport(true).expect("reuse the port");
     listening
         .bind("127.0.0.1:0".parse().expect("an address"))
         .expect("bind");
-    let port = listening.local_addr().expect("its address");
-    let holder = tokio::net::TcpSocket::new_v4().expect("a socket");
-    holder.set_reuseport(true).expect("reuse the port");
-    holder.bind(port).expect("hold the port");
+    #[cfg(target_os = "linux")]
+    let holder = {
+        let port = listening.local_addr().expect("its address");
+        let holder = tokio::net::TcpSocket::new_v4().expect("a socket");
+        holder.set_reuseport(true).expect("reuse the port");
+        holder.bind(port).expect("hold the port");
+        Some(holder)
+    };
+    #[cfg(not(target_os = "linux"))]
+    let holder = None;
     let listener = listening
         .listen(16)
         .expect("listen")
@@ -70,24 +81,30 @@ pub(super) fn held_listener() -> (std::net::TcpListener, tokio::net::TcpSocket) 
 /// re-initialises, and closes its own listener when the client confirms the
 /// new session (`notifications/initialized`) and before answering it. Every
 /// reply closes its connection, so the resend must connect again, and is
-/// refused: the port stays held by the returned socket, so nothing else can
-/// answer it. Keep that socket until the resend has failed.
+/// refused: the port stays held ([`held_listener`]), so nothing else can
+/// answer it. Keep the returned holder until the resend has failed.
+///
+/// Each request is reported (its method, or "GET") before it is answered, so
+/// by the time the client has an answer, the server has already reported it.
 fn expiring_server() -> (
     String,
-    std::sync::mpsc::Receiver<usize>,
-    tokio::net::TcpSocket,
+    std::sync::mpsc::Receiver<String>,
+    Option<tokio::net::TcpSocket>,
 ) {
     let (listener, holder) = held_listener();
     let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
-    let (done, served_count) = std::sync::mpsc::channel();
+    let (report, served) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let mut served = 0usize;
         let mut listener = Some(listener);
         while let Some(open) = listener.as_ref() {
             let (stream, _) = open.accept().expect("accept");
             let (first, headers, body) = read_request(&stream);
-            served += 1;
             let method = body["method"].as_str().unwrap_or_default().to_owned();
+            let _ = report.send(if first.starts_with("POST") {
+                method.clone()
+            } else {
+                "GET".to_owned()
+            });
             if !first.starts_with("POST") {
                 respond(&stream, "405 Method Not Allowed", "", "");
             } else if method == "initialize" {
@@ -111,9 +128,8 @@ fn expiring_server() -> (
                 respond(&stream, "200 OK", "", &result.to_string());
             }
         }
-        let _ = done.send(served);
     });
-    (url, served_count, holder)
+    (url, served, holder)
 }
 
 /// R22: the stale session's request reached the server (404), the session
@@ -122,28 +138,26 @@ fn expiring_server() -> (
 /// the never-sent `TransportConnect` that would release the caller's key.
 #[tokio::test]
 async fn a_resend_that_never_connected_after_an_expired_session_may_have_run() {
-    let (url, served_count, _held) = expiring_server();
+    let (url, served, _held) = expiring_server();
     let transport = make_transport(&url);
     *transport.message_url.write() = Some(url.clone());
     set_default_session(&transport, "stale-session");
-    let error = transport
-        .request("tools/list", None)
-        .await
-        .expect_err("the resend could not connect");
-    // Bounded, so a server left waiting on a connection that never came fails
-    // the row instead of hanging it.
-    let served = served_count
-        .recv_timeout(Duration::from_secs(30))
-        .expect("the server closed its listener");
-    assert!(
-        served >= 3,
-        "premise: the stale request, initialize and its confirmation were served ({served})"
-    );
+    let outcome = transport.request("tools/list", None).await;
+    // Everything the client was answered was reported before its answer, so
+    // the reports are complete now: drained, not waited for.
+    let served: Vec<String> = served.try_iter().collect();
+    for step in ["tools/list", "initialize", "notifications/initialized"] {
+        assert!(
+            served.iter().any(|method| method == step),
+            "premise: {step} reached the server; served {served:?}, the request answered {outcome:?}"
+        );
+    }
     assert_eq!(
         default_session(&transport).as_deref(),
         Some(FRESH),
         "premise: the session was healed"
     );
+    let error = outcome.expect_err("the resend could not connect");
     assert!(
         matches!(error, crate::Error::Transport(_)),
         "a resend after a sent request read as never sent: {error:?}"
