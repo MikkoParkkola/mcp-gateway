@@ -269,7 +269,9 @@ fn warnings() -> (
 /// provider was removed at the same point, with nothing executed. Control:
 /// with nothing changed, the run executes the capability.
 #[cfg(feature = "firewall")]
-#[tokio::test]
+// Current-thread on purpose: the dispatch seam, the execution counter and
+// the warning capture are thread-local.
+#[tokio::test(flavor = "current_thread")]
 async fn a_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed() {
     assert_hidden_run_settles_as_removed(Called::Invoke, "keyed-run").await;
 }
@@ -281,7 +283,9 @@ async fn a_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed()
 /// removed one's run logs (the dispatch gate records the absence). Control:
 /// with nothing changed, the pinned run executes the capability.
 #[cfg(feature = "firewall")]
-#[tokio::test]
+// Current-thread on purpose: the dispatch seam, the execution counter and
+// the warning capture are thread-local.
+#[tokio::test(flavor = "current_thread")]
 async fn a_surfaced_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed() {
     assert_hidden_run_settles_as_removed(Called::Surfaced, "keyed-pin").await;
 }
@@ -418,6 +422,195 @@ async fn an_unkeyed_playbook_with_a_refused_later_step_runs_no_step() {
         sent,
         ["beta_tool", "alpha_read"],
         "control: a permitted playbook did not send both steps: {ran}"
+    );
+}
+
+use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
+    CAPABILITY_SERVER, CAPABILITY_TOOL, CapabilityAccount,
+};
+
+/// `account`'s capability provider (a REST capability on a per-caller
+/// managed account, so its tool stays listed) under no routing profile, for a
+/// certificate whose rule refuses every tool on the provider and on the
+/// unregistered twin by name: the provider is hidden by policy, and the twin
+/// meets the same rule. The router, the state and the store.
+async fn account_provider_hidden(
+    account: &CapabilityAccount,
+) -> (
+    axum::Router,
+    Arc<crate::gateway::router::AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    let (mut state, store) =
+        crate::gateway::router::tests::meta_fixture::test_router_app_state_with_meta(
+            &crate::config::AuthConfig::default(),
+            None,
+            |meta| account.install(meta),
+        )
+        .await;
+    let everything = ToolScopeConfig {
+        backends: vec!["*".to_string()],
+        tools: vec!["*".to_string()],
+    };
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![PolicyRuleConfig {
+            match_criteria: CertMatchConfig {
+                cn: Some("agent".to_string()),
+                ..Default::default()
+            },
+            allow: everything,
+            // The provider and the unregistered twin alike: the rule refuses
+            // every tool on either by name, so the provider is hidden.
+            deny: ToolScopeConfig {
+                backends: vec![CAPABILITY_SERVER.to_string(), UNREGISTERED.to_string()],
+                tools: Vec::new(),
+            },
+        }],
+        ..Default::default()
+    }));
+    assert!(
+        judgment(&state, None, Some(&agent_cert())).hides(CAPABILITY_SERVER),
+        "premise: the certificate's rule hides the provider"
+    );
+    (
+        crate::gateway::router::create_router(Arc::clone(&state)),
+        state,
+        store,
+    )
+}
+
+/// A modern `method` on `/mcp` as the `agent` certificate, carrying the
+/// verified `identity` when given: the status and the body.
+async fn send_modern(
+    router: &axum::Router,
+    (method, name): (&str, &str),
+    params: Value,
+    identity: Option<crate::key_server::oidc::VerifiedIdentity>,
+) -> (u16, String) {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 5, "method": method, "params": params}).to_string(),
+        ))
+        .expect("request");
+    request.extensions_mut().insert(agent_cert());
+    if let Some(identity) = identity {
+        request.extensions_mut().insert(identity);
+    }
+    let response = router.clone().oneshot(request).await.expect("answers");
+    let status = response.status().as_u16();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// `gateway_invoke` of the account capability's tool on `server`, modern,
+/// task-augmented under idempotency `key` when given.
+fn account_invoke(server: &str, task_key: Option<&str>) -> Value {
+    let mut meta = crate::gateway::router::tests::modern_meta();
+    let mut params = json!({"name": "gateway_invoke",
+        "arguments": {"server": server, "tool": CAPABILITY_TOOL, "arguments": {}}});
+    if let Some(key) = task_key {
+        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+        params["task"] = json!({});
+    }
+    params["_meta"] = meta;
+    params
+}
+
+/// Site 3 (`invoke/propagation.rs`, the capability account resolution): a
+/// caller with no verified identity, so no account binding, calls the
+/// hidden provider's account-backed tool. It answers as the unregistered
+/// name does, never with the account's refusal or connect offer, and nothing
+/// reaches the vendor.
+#[tokio::test]
+async fn an_unbound_callers_hidden_account_capability_answers_as_an_unregistered_name() {
+    let account = CapabilityAccount::start(false).await;
+    let (router, _state, _store) = account_provider_hidden(&account).await;
+    let route = ("tools/call", "gateway_invoke");
+    let hidden = send_modern(
+        &router,
+        route,
+        account_invoke(CAPABILITY_SERVER, None),
+        None,
+    )
+    .await;
+    let unregistered = send_modern(&router, route, account_invoke(UNREGISTERED, None), None).await;
+    assert_eq!(
+        account.peer_requests(),
+        0,
+        "the hidden capability reached the vendor"
+    );
+    assert_alike(
+        "unbound caller, account capability",
+        CAPABILITY_SERVER,
+        &hidden,
+        &unregistered,
+    );
+}
+
+/// What a task-augmented call on `server` shows the caller: the refusal at
+/// intake, or the submit and the task's settled `tasks/get`, the task id and
+/// the timestamps masked (`assert_alike` masks trace ids).
+async fn account_task_answer(server: &str) -> (u16, String) {
+    let account = CapabilityAccount::start(false).await;
+    let (router, _state, _store) = account_provider_hidden(&account).await;
+    account.fail_custody_for_test(true);
+    let alice = Some(CapabilityAccount::alice());
+    let submitted = send_modern(
+        &router,
+        ("tools/call", "gateway_invoke"),
+        account_invoke(server, Some("acct-task")),
+        alice.clone(),
+    )
+    .await;
+    let made: Value = serde_json::from_str(&submitted.1).expect("json");
+    let Some(id) = made.pointer("/result/taskId").and_then(Value::as_str) else {
+        return submitted;
+    };
+    let get = json!({"taskId": id, "_meta": crate::gateway::router::tests::modern_meta()});
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let read = send_modern(&router, ("tasks/get", id), get.clone(), alice.clone()).await;
+            let body: Value = serde_json::from_str(&read.1).expect("json");
+            if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
+                return read;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the task never settled");
+    assert_eq!(account.peer_requests(), 0, "{server}: the vendor was sent");
+    // The two tasks are made at different instants.
+    let instant = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z").expect("pattern");
+    let shown = format!("submitted {} settled {}", submitted.1, settled.1).replace(id, "TASK");
+    (settled.0, instant.replace_all(&shown, "AT").into_owned())
+}
+
+/// Site 1 (`account_outcome.rs`, the capability account a task intake
+/// judges): a task naming the hidden provider's account-backed tool, its
+/// account's custody busy, answers at submit and at settle as one naming an
+/// unregistered name: no account judgment, no retryable refusal naming it.
+#[tokio::test]
+async fn a_task_on_a_hidden_account_capability_with_busy_custody_answers_as_an_unregistered_name() {
+    let hidden = account_task_answer(CAPABILITY_SERVER).await;
+    let unregistered = account_task_answer(UNREGISTERED).await;
+    assert_alike(
+        "task, busy custody",
+        CAPABILITY_SERVER,
+        &hidden,
+        &unregistered,
     );
 }
 
