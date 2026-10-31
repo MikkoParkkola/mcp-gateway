@@ -318,3 +318,6 @@ fn wait_for(mut done: impl FnMut() -> bool) -> bool {
 
 #[path = "window_saver_stall_tests.rs"]
 mod stall;
+
+#[path = "window_saver_lifetime_tests.rs"]
+mod lifetime;

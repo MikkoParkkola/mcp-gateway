@@ -189,6 +189,12 @@ pub(crate) mod stall_seam {
         Open,
         Checkpoint,
         Close,
+        /// A saver's checkpoint thread, before it tries the sink mutex.
+        BeforeLock,
+        /// The saver's seal closure, once it has finished.
+        Sealed,
+        /// A saver's checkpoint thread, as it ends.
+        CheckpointDone,
     }
 
     type Gate = (mpsc::Sender<()>, Arc<Mutex<mpsc::Receiver<()>>>);
@@ -211,7 +217,7 @@ pub(crate) mod stall_seam {
         (entered_rx, release_tx)
     }
 
-    pub(super) fn pass(path: &Path, role: Role) {
+    pub(crate) fn pass(path: &Path, role: Role) {
         let gate = GATES
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

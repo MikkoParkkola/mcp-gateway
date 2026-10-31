@@ -21,6 +21,8 @@ use tracing::warn;
 use crate::clock::ClockBeforeEpoch;
 use crate::config::ProtocolRevisionWindow;
 use crate::protocol_revision_telemetry::window::{HttpSegmentSink, SegmentCounts, WriterIdentity};
+#[cfg(test)]
+use crate::protocol_revision_telemetry::window::{stall_seam, window_paths};
 
 /// How often an HTTP process rewrites its window segment.
 pub(super) const WINDOW_SAVE_INTERVAL: Duration = Duration::from_secs(5);
@@ -127,20 +129,27 @@ pub(super) async fn start_window_saver(
         let sealed_counts = counts(true);
         let sealed_at_ms = (settings.clock_ms)();
         let deadline = tokio::time::Instant::now() + settings.close_bound;
+        #[cfg(test)]
+        let seam_path = window_paths(&data_dir).0;
         let close: super::persistence::ShutdownSave = (
             "protocol-revision window seal",
             Box::new(move || {
-                let mut held = sink
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let (Some(sink), Ok(sealed_at_ms)) = (held.as_mut(), sealed_at_ms) else {
-                    warn!("{NOT_DURABLE}: the window segment was not sealed");
-                    return;
+                let seal = || {
+                    let mut held = sink
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let (Some(sink), Ok(sealed_at_ms)) = (held.as_mut(), sealed_at_ms) else {
+                        warn!("{NOT_DURABLE}: the window segment was not sealed");
+                        return;
+                    };
+                    let now = sealed_at_ms / 1_000;
+                    if let Err(error) = sink.close(&sealed_counts, now, sealed_at_ms) {
+                        warn!(%error, "{NOT_DURABLE}: the window segment seal did not land");
+                    }
                 };
-                let now = sealed_at_ms / 1_000;
-                if let Err(error) = sink.close(&sealed_counts, now, sealed_at_ms) {
-                    warn!(%error, "{NOT_DURABLE}: the window segment seal did not land");
-                }
+                seal();
+                #[cfg(test)]
+                stall_seam::pass(&seam_path, stall_seam::Role::Sealed);
             }),
         );
         super::persistence::run_shutdown_saves(deadline, vec![close]).await;
@@ -211,20 +220,29 @@ fn checkpoint_detached(
     let spawned = std::thread::Builder::new()
         .name("protocol-revision window checkpoint".to_owned())
         .spawn(move || {
-            let mut held = match sink.try_lock() {
-                Ok(held) => held,
-                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-                Err(std::sync::TryLockError::WouldBlock) => return,
+            #[cfg(test)]
+            let seam_path = window_paths(&data_dir).0;
+            #[cfg(test)]
+            stall_seam::pass(&seam_path, stall_seam::Role::BeforeLock);
+            let run = || {
+                let mut held = match sink.try_lock() {
+                    Ok(held) => held,
+                    Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                    Err(std::sync::TryLockError::WouldBlock) => return,
+                };
+                if !open_into(&mut held, &data_dir, identity, clock_ms) {
+                    return;
+                }
+                let (Some(sink), Ok(now_ms)) = (held.as_mut(), clock_ms()) else {
+                    return;
+                };
+                if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
+                    warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
+                }
             };
-            if !open_into(&mut held, &data_dir, identity, clock_ms) {
-                return;
-            }
-            let (Some(sink), Ok(now_ms)) = (held.as_mut(), clock_ms()) else {
-                return;
-            };
-            if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
-                warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
-            }
+            run();
+            #[cfg(test)]
+            stall_seam::pass(&seam_path, stall_seam::Role::CheckpointDone);
         });
     if let Err(error) = spawned {
         warn!(%error, "a window checkpoint could not start a thread; skipped");
