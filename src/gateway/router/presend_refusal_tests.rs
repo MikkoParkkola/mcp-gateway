@@ -78,10 +78,10 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
 }
 
 /// R10b: refused in its send, a signed call keeps its nonce spent, as every
-/// failure the direct route answers at its failure site does (MIK-8379 D4:
-/// the direct route gives the nonce answer `/mcp` gives for each
-/// pre-dispatch class, which is keep; a narrow pre-start refund class is
-/// rejected). The tool list is warmed first, so the keep comes from the
+/// failure the direct route answers at its failure site does: it gives the
+/// nonce answer `/mcp` gives for each pre-dispatch class, which is keep, and
+/// a narrow pre-start refund class was ruled out. The tool list is warmed
+/// first, so the keep comes from the
 /// failure site, not from a cold schema fill. Read through the same nonce
 /// again: it is refused as a replay and never reaches the send.
 #[tokio::test]

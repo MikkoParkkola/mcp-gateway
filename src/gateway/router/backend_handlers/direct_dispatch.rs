@@ -518,7 +518,7 @@ async fn answer_failure(mut admitted: Admitted<'_>, e: crate::Error, method: &st
     // send itself recorded. The lease is withdrawn, so the key is released.
     // The nonce is offered back only through its refund witness, which this
     // site never holds: it stays spent for every pre-dispatch class, as on
-    // `/mcp` (MIK-8379 D4, superseding MIK-7698's refund here).
+    // `/mcp`, where a narrow pre-start refund was ruled out.
     if crate::gateway::delivery_facts::unsent(&e) {
         if crate::gateway::delivery_facts::refused_before_send_seen() {
             crate::gateway::delivery_facts::raise(

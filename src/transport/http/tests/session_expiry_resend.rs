@@ -11,7 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 const FRESH: &str = "fresh-session-after-expiry";
 
 /// One request read off `stream`: its method line, headers and body.
-fn read_request(stream: &std::net::TcpStream) -> (String, String, Value) {
+pub(super) fn read_request(stream: &std::net::TcpStream) -> (String, String, Value) {
     let mut reader = BufReader::new(stream);
     let mut first = String::new();
     reader.read_line(&mut first).expect("a request line");
@@ -34,7 +34,7 @@ fn read_request(stream: &std::net::TcpStream) -> (String, String, Value) {
     (first, headers, body)
 }
 
-fn respond(mut stream: &std::net::TcpStream, status: &str, extra: &str, body: &str) {
+pub(super) fn respond(mut stream: &std::net::TcpStream, status: &str, extra: &str, body: &str) {
     let reply = format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
          Connection: close\r\n{extra}\r\n{body}",
@@ -47,7 +47,7 @@ fn respond(mut stream: &std::net::TcpStream, status: &str, extra: &str, body: &s
 /// same port that never listens (both `SO_REUSEPORT`). Closing the listener
 /// leaves the port held by its twin, so no other socket can take it, and a
 /// connection to it is refused: no listening socket, no reuse.
-fn held_listener() -> (std::net::TcpListener, tokio::net::TcpSocket) {
+pub(super) fn held_listener() -> (std::net::TcpListener, tokio::net::TcpSocket) {
     let listening = tokio::net::TcpSocket::new_v4().expect("a socket");
     listening.set_reuseport(true).expect("reuse the port");
     listening
