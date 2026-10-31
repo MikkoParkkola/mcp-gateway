@@ -127,9 +127,9 @@ fn each_unreadable_file_is_its_own_item_and_closes_alone() {
         unreadable("d-cursor", UnreadableReason::NoPermission),
     ];
     set.set_discovery(Vec::new(), files, at(1));
-    let items = items(&set);
-    let shown = of_kind(&items, "client_config_unreadable");
-    assert_eq!(shown.len(), 2, "{items:?}");
+    let listed = items(&set);
+    let shown = of_kind(&listed, "client_config_unreadable");
+    assert_eq!(shown.len(), 2, "{listed:?}");
     assert_ne!(shown[0]["id"], shown[1]["id"]);
     for item in &shown {
         assert_eq!(
@@ -145,8 +145,8 @@ fn each_unreadable_file_is_its_own_item_and_closes_alone() {
 
     let kept = vec![unreadable("d-cursor", UnreadableReason::NoPermission)];
     set.set_discovery(Vec::new(), kept, at(2));
-    let items = items(&set);
-    assert_eq!(of_kind(&items, "client_config_unreadable").len(), 1);
+    let after = items(&set);
+    assert_eq!(of_kind(&after, "client_config_unreadable").len(), 1);
 }
 
 /// R11: an unchanged listing keeps every item's `observed_at`, the order and
