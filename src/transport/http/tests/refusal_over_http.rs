@@ -12,13 +12,13 @@ const FRESH: &str = "fresh-session-after-refusal";
 
 /// A server that answers the stale session's request with 404 (expired),
 /// re-initialises, sets `healed` and stops listening once the client
-/// confirms the new session. The port stays held by the returned socket.
+/// confirms the new session. The port stays held as `held_listener` holds it.
 fn healing_server(
     healed: Arc<AtomicBool>,
 ) -> (
     String,
     std::sync::mpsc::Receiver<usize>,
-    tokio::net::TcpSocket,
+    Option<tokio::net::TcpSocket>,
 ) {
     let (listener, holder) = held_listener();
     let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
