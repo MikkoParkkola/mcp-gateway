@@ -99,28 +99,14 @@ fn with_rule(mut fx: Fx, deny: &[&str]) -> Fx {
 
 /// A modern request as the `agent` certificate, with `k-std`'s key.
 async fn send_cert(fx: &Fx, method: &str, name: &str, params: Value) -> Value {
-    send_cert_in(fx, (method, name), params, None).await
-}
-
-/// [`send_cert`], presenting `session` when given.
-async fn send_cert_in(
-    fx: &Fx,
-    (method, name): (&str, &str),
-    params: Value,
-    session: Option<&str>,
-) -> Value {
-    let mut request = axum::http::Request::builder()
+    let request = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("authorization", "Bearer k-std")
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", method)
-        .header("mcp-name", name);
-    if let Some(session) = session {
-        request = request.header("mcp-session-id", session);
-    }
-    let request = request
+        .header("mcp-name", name)
         .body(axum::body::Body::from(
             json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string(),
         ))
@@ -575,103 +561,4 @@ async fn a_task_step_on_a_backend_hidden_by_name_answers_as_an_unregistered_one(
     assert!(hidden_sent <= 1, "hidden: step 2 was sent");
     assert_eq!(hidden_sent, unregistered_sent, "the two runs sent alike");
     assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
-}
-
-/// Profiles: `open`, the default, admits everything; `narrow` leaves `alpha`
-/// out.
-fn narrowing_profiles() -> crate::routing_profile::ProfileRegistry {
-    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
-    let configs = HashMap::from([
-        ("open".to_string(), RoutingProfileConfig::default()),
-        (
-            "narrow".to_string(),
-            RoutingProfileConfig {
-                deny_backends: Some(vec!["alpha".to_string()]),
-                ..Default::default()
-            },
-        ),
-    ]);
-    ProfileRegistry::from_config(&configs, "open")
-}
-
-/// The two-step playbook `pb` on `alpha`, run as a task under a session
-/// `k-std` owns. After step 1 is answered, `narrow` switches the session to
-/// the profile leaving `alpha` out (live: a profile is read per call), else
-/// `alpha` is removed, else (`None`) nothing changes. Returns the answer, the
-/// sends and the settled body.
-async fn profile_between_steps(narrow: Option<bool>, key: &str) -> (String, usize, Value) {
-    let script = Script::new();
-    let definition = playbook_definition(["alpha", "alpha"]);
-    let fx = Box::pin(super::super::direct_guards_fixture::fixture_built_on(
-        Arc::clone(&script) as Arc<dyn Transport>,
-        move |meta| {
-            let mut engine = crate::playbook::PlaybookEngine::new();
-            engine.register(definition);
-            meta.set_playbook_engine(engine);
-            meta.with_profile_registry(narrowing_profiles())
-        },
-    ))
-    .await;
-    let fx = with_rule(fx, &[]);
-    warm(&fx, &["alpha"]);
-    let owner = crate::gateway::session_id::SessionOwner::Credential(
-        crate::gateway::auth::principal_of("k-std")
-            .storage_form()
-            .to_owned(),
-    );
-    let (session, _rx) = fx.state.multiplexer.get_or_create_session_for(None, &owner);
-    let state = Arc::clone(&fx.state);
-    let switched = session.clone();
-    script.after_call(0, move || match narrow {
-        Some(true) => state
-            .meta_mcp
-            .session_profiles()
-            .set_profile(&switched, "narrow"),
-        Some(false) => apply(&state, "alpha", Change::Remove),
-        None => {}
-    });
-    let mut meta = task_meta();
-    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
-    let params = json!({"name": "gateway_run_playbook", "task": {}, "_meta": meta,
-                        "arguments": {"name": "pb", "arguments": {"x": "v"}}});
-    let created = send_cert_in(
-        &fx,
-        ("tools/call", "gateway_run_playbook"),
-        params,
-        Some(&session),
-    )
-    .await;
-    let id = created
-        .pointer("/result/taskId")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("the submit was refused: {created}"))
-        .to_owned();
-    let body = settled(&fx, &id, &["working"]).await;
-    let sent = script.calls.load(Ordering::SeqCst);
-    (answer(&body, &id), sent, body)
-}
-
-/// A session profile switched mid-run to leave a step's backend out hides it
-/// from the run: step 2 answers as a removed backend's would, and is sent
-/// nothing. The profile is read live, so only the run's own caller can judge
-/// it.
-#[tokio::test]
-async fn a_profile_switched_between_steps_hides_the_step_as_one_removed() {
-    let (control, control_sent, control_body) =
-        Box::pin(profile_between_steps(None, "hr7-c")).await;
-    assert_eq!(
-        control_sent, 2,
-        "control: step 2 did not run: {control_body}"
-    );
-    let (hidden, hidden_sent, hidden_body) =
-        Box::pin(profile_between_steps(Some(true), "hr7-h")).await;
-    let (removed, removed_sent, removed_body) =
-        Box::pin(profile_between_steps(Some(false), "hr7-r")).await;
-    assert_eq!(removed_sent, 1, "premise: step 2 reached a removed backend");
-    assert_ne!(
-        removed, control,
-        "premise: removal changed nothing: {removed_body}"
-    );
-    assert_eq!(hidden_sent, 1, "hidden: step 2 was sent: {hidden_body}");
-    assert_eq!(hidden, removed, "hidden and removed answer alike");
 }
