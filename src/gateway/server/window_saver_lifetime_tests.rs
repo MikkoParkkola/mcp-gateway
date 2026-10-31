@@ -364,10 +364,14 @@ async fn the_window_open_names_the_test_that_started_the_saver() {
         .start(ProtocolRevisionWindow::Record, settings(ARRIVAL))
         .await
         .expect("record");
-    assert_eq!(
-        stall_seam::opened_by(&rig.window_path()).as_deref(),
-        Some(crate::test_late_write::Creator::default().name()),
-        "the window's opener is not this test"
+    // Named for this test, not compared with this thread's own name: both
+    // sides reading `unnamed thread` would pass a comparison.
+    let opener = stall_seam::opened_by(&rig.window_path());
+    assert!(
+        opener.as_deref().is_some_and(
+            |name| name.ends_with("::the_window_open_names_the_test_that_started_the_saver")
+        ),
+        "the window's opener is not this test: {opener:?}"
     );
     stop(&rig, saver).await;
 }

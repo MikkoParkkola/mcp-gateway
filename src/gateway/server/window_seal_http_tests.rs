@@ -156,10 +156,14 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
         .await;
         // W3: the saver starts on a runtime worker, yet its open is
         // attributed to this test, whose thread built the gateway.
-        assert_eq!(
-            stall_seam::opened_by(&path).as_deref(),
-            Some(crate::test_late_write::Creator::default().name()),
-            "the window's opener is not the test that built the gateway"
+        // Named for the one row that runs with the window on, not compared
+        // with this thread's own name, which could also be unnamed.
+        let opener = stall_seam::opened_by(&path);
+        assert!(
+            opener.as_deref().is_some_and(|name| name.ends_with(
+                "::with_record_a_request_counted_after_the_seal_is_refused_on_both_routes"
+            )),
+            "the window's opener is not the test that built the gateway: {opener:?}"
         );
     }
     let (close_in, close_go) = stall_seam::arm(&path, stall_seam::Role::Close);
