@@ -64,7 +64,11 @@ fn admitted(
     // only, never the email label, as the admin audit layer names an SSO admin.
     let subject = identity.and_then(|id| GrantSubject::checked(id.issuer, id.subject, None));
     let actor = client.map(|c| Actor {
-        who: AuditWho::from_request(Some(&c), subject.as_ref(), state.auth_config.record_key()),
+        who: AuditWho::from_request(
+            Some(&c),
+            subject.as_ref(),
+            state.live_config.generation().auth().record_key(),
+        ),
     });
     let (Some(actor), Some(hub)) = (actor, state.meta_mcp.events()) else {
         return Err(Box::new(

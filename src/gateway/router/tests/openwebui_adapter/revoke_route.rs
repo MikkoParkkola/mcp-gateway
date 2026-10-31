@@ -136,7 +136,12 @@ async fn gateway_with(
     let logger = crate::security::TransparencyLogger::open(Arc::new(log)).unwrap();
     {
         let state = Arc::get_mut(&mut state).unwrap();
-        state.auth_config = auth;
+        {
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                (*state.live_config.get()).clone(),
+                auth,
+            ));
+        }
         state.transparency_log = Some(Arc::new(logger));
     }
     let fixture = RevokeFixture::start(ACCOUNT, RESOURCE, seeds, endpoint).await;

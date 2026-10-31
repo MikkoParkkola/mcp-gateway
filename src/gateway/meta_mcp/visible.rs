@@ -453,6 +453,8 @@ pub(crate) mod seams {
         static AFTER_CALLER: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AT_TASK_START: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
         static AFTER_LIST_SNAPSHOT: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+        static AFTER_REVALIDATE: RefCell<Option<Pause>> = const { RefCell::new(None) };
+        static AFTER_CUSTODY_READ: RefCell<Option<Pause>> = const { RefCell::new(None) };
         static INSPECTED_SERVERS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -476,6 +478,52 @@ pub(crate) mod seams {
     pub(crate) fn list_snapshot_taken() {
         if let Some(hook) = AFTER_LIST_SNAPSHOT.with(|slot| slot.borrow_mut().take()) {
             hook();
+        }
+    }
+
+    /// A pause point's `(reached, release)` pair.
+    type Pause = (
+        std::sync::Arc<tokio::sync::Notify>,
+        std::sync::Arc<tokio::sync::Notify>,
+    );
+
+    /// Arm a pause, the next time `revalidate_caller_slots` on this thread
+    /// returns: between a listing's account re-check and its read of the held
+    /// slots. Returns `(reached, release)`, as `test_pause::Slot::arm`.
+    pub(crate) fn after_revalidate() -> Pause {
+        let pair: Pause = Default::default();
+        AFTER_REVALIDATE.with(|slot| *slot.borrow_mut() = Some(pair.clone()));
+        pair
+    }
+
+    /// Arm a pause, the next time `revalidate_caller_slots` on this thread has
+    /// read a backend's custody and not yet judged the held slot by it.
+    /// Returns `(reached, release)`.
+    pub(crate) fn after_custody_read() -> Pause {
+        let pair: Pause = Default::default();
+        AFTER_CUSTODY_READ.with(|slot| *slot.borrow_mut() = Some(pair.clone()));
+        pair
+    }
+
+    /// Called where `revalidate_caller_slots` has read custody: stop there if
+    /// armed.
+    pub(crate) async fn custody_read() {
+        if let Some((reached, release)) = AFTER_CUSTODY_READ.with(|slot| slot.borrow_mut().take()) {
+            reached.notify_one();
+            release.notified().await;
+        }
+    }
+
+    /// Disarm a pause [`after_revalidate`] armed that nothing reached.
+    pub(crate) fn disarm_revalidate() {
+        AFTER_REVALIDATE.with(|slot| slot.borrow_mut().take());
+    }
+
+    /// Called where `revalidate_caller_slots` returns: stop there if armed.
+    pub(crate) async fn revalidated() {
+        if let Some((reached, release)) = AFTER_REVALIDATE.with(|slot| slot.borrow_mut().take()) {
+            reached.notify_one();
+            release.notified().await;
         }
     }
 

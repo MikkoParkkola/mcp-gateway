@@ -151,7 +151,7 @@ async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Respons
                 ..AuditEnvelope::ok(AuditWho::from_request(
                     client.as_ref(),
                     subject.as_ref(),
-                    state.auth_config.record_key(),
+                    state.live_config.generation().auth().record_key(),
                 ))
             };
             match log.append_admin_action("admin_ui", fields, &envelope) {
@@ -203,7 +203,7 @@ pub(super) fn record_admin_action_as(
         ..AuditEnvelope::ok(AuditWho::from_request(
             client,
             subject.as_ref(),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ))
     };
     log.append_admin_action(surface, fields, &envelope)

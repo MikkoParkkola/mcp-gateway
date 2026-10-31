@@ -590,7 +590,9 @@ async fn dispatch_inline(
     if let Some(sanitized_params) = admitted.sanitized.take() {
         return forward_sanitized(scope, envelope, stages, (admitted, sanitized_params)).await;
     }
-    match forward_plain(scope, envelope, stages, &mut admitted).await {
+    // Boxed: with the live key read and the notification strip, this arm's
+    // future crosses clippy's 16 KiB `large_futures` limit.
+    match Box::pin(forward_plain(scope, envelope, stages, &mut admitted)).await {
         Err(refusal) => refusal,
         Ok(Ok(response)) => {
             finish_response(scope, envelope, stages.0, (&mut admitted, response)).await

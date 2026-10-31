@@ -330,17 +330,21 @@ fn before_epoch() -> std::time::SystemTime {
 fn a_handoff_code_on_a_clock_before_the_epoch_is_refused_and_kept() {
     let b = DashboardBootstrap::new();
     let t0 = Now::read();
-    let code = b.mint_handoff(t0, None);
+    let code = b.mint_handoff(t0, super::Bound::default());
+    let keys = &crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
     let stepped = Now {
         mono: t0.mono + SEC,
         wall: before_epoch(),
     };
     assert!(
-        b.take_handoff(&code, stepped).is_none(),
+        b.take_handoff(&code, stepped, keys).is_none(),
         "a clock before 1970 redeemed a sign-in code"
     );
     assert!(
-        b.take_handoff(&code, at(t0, SEC)).is_some(),
+        b.take_handoff(&code, at(t0, SEC), keys).is_some(),
         "an unreadable clock spent a live sign-in code"
     );
 }
@@ -400,11 +404,16 @@ fn a_capped_session_ends_at_its_cap() {
     let now = Now::read();
     let limits = SessionLimits::default();
     let value = store.rearm_until(Some(now.wall + Duration::from_secs(600)));
-    let super::Redeem::Issued(redemption) = store.consume_capped(&value) else {
+    let super::Redeem::Issued(redemption) = store.consume_capped(
+        &value,
+        &crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        ),
+    ) else {
         panic!("the value redeems");
     };
-    let not_after = redemption.not_after;
-    let handle = store.issue_session_until(now, &limits, not_after);
+    let handle = store.issue_session_until(now, &limits, redemption.bound);
     let at = |secs| Now {
         mono: now.mono + Duration::from_secs(secs),
         wall: now.wall + Duration::from_secs(secs),
@@ -416,5 +425,84 @@ fn a_capped_session_ends_at_its_cap() {
     assert_eq!(
         store.check_session(&handle, at(601), &limits, Touch::No),
         SessionCheck::Expired
+    );
+}
+
+/// K13 at the store: a key table holding `secret` as an admin key, its quota
+/// identity, and a table without it.
+fn k13_tables(
+    secret: &str,
+) -> (
+    crate::gateway::auth::ResolvedAuthConfig,
+    crate::gateway::auth::QuotaPrincipal,
+    crate::gateway::auth::ResolvedAuthConfig,
+) {
+    let with = crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig {
+            enabled: true,
+            api_keys: vec![crate::config::ApiKeyConfig {
+                key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+                name: "k13".to_owned(),
+                backends: vec!["*".to_owned()],
+                admin: true,
+                ..Default::default()
+            }],
+            ..crate::config::AuthConfig::default()
+        },
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    let key = with
+        .validate_token(secret)
+        .and_then(|client| client.quota_principal)
+        .expect("the key has a quota identity");
+    let without = crate::gateway::auth::ResolvedAuthConfig::from_config(
+        &crate::config::AuthConfig::default(),
+        crate::gateway::record_principal::TEST_RECORD_KEY,
+    );
+    (with, key, without)
+}
+
+/// K13: a handoff code minted for a key is refused once the key is gone
+/// from the table; with the key present it redeems (control).
+#[cfg(feature = "webui")]
+#[test]
+fn a_handoff_code_ends_with_its_minting_key() {
+    let (with, key, without) = k13_tables("k13-handoff-secret");
+    let bound = || super::Bound {
+        not_after: None,
+        key: Some(key.clone()),
+    };
+    let store = DashboardBootstrap::new();
+    let now = super::Now::read();
+    let code = store.mint_handoff(now, bound());
+    assert!(
+        store.take_handoff(&code, now, &without).is_none(),
+        "a handoff code outlived its key"
+    );
+    let code = store.mint_handoff(now, bound());
+    assert!(store.take_handoff(&code, now, &with).is_some());
+}
+
+/// K13: an event delivery for a session minted by a key stops once the key
+/// is gone from the table it is judged by; with the key present it holds.
+#[test]
+fn an_event_delivery_ends_with_the_sessions_minting_key() {
+    let (with, key, without) = k13_tables("k13-delivery-secret");
+    let store = DashboardBootstrap::new();
+    let now = super::Now::read();
+    let limits = super::SessionLimits::default();
+    let handle = store.issue_session_until(
+        now,
+        &limits,
+        super::Bound {
+            not_after: None,
+            key: Some(key),
+        },
+    );
+    let digest = crate::hashing::sha256_hex(handle.as_bytes());
+    assert!(store.live_digest(&digest, now, &limits, &with));
+    assert!(
+        !store.live_digest(&digest, now, &limits, &without),
+        "an event delivery outlived the session's key"
     );
 }

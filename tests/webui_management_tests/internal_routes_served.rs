@@ -247,12 +247,16 @@ async fn writable() -> (
     write_owner_only(&config_path, crate::yaml::to_string(&initial).unwrap()).unwrap();
     let (mut state, live, _store) =
         make_app_state_with_reload(initial, None, config_path.clone()).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
-        &auth_on(),
-        crate::record_key::RECORD_KEY,
-    ));
+    {
+        let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
+        seat.live_config = std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            (*seat.live_config.get()).clone(),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &auth_on(),
+                crate::record_key::RECORD_KEY,
+            )),
+        ));
+    }
     register_http_backend(&state, "docs");
     let gw = Gateway {
         router: create_router(Arc::clone(&state)),
