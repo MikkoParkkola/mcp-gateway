@@ -134,6 +134,9 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+/// A call refused in its own send is no call a backend ran (tasks, plans).
+#[cfg(feature = "firewall")]
+mod presend_refused_send;
 mod proven_subject_admission;
 /// MIK-8398 C1d: a task the worker runs stores a sealed result.
 mod provenance_seal;

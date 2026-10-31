@@ -602,6 +602,10 @@ impl Gateway {
             if let Some(every) = self.test_seams.window_save_every() {
                 settings.every = every;
             }
+            #[cfg(test)]
+            {
+                settings.spawner = self.test_seams.spawner();
+            }
             window_saver::start_window_saver(
                 self.config.server.protocol_revision_window,
                 data_dir.clone(),
