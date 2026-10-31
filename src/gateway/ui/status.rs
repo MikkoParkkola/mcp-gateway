@@ -75,10 +75,7 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
             sign_in: Some(backend.sign_in()).filter(|sign_in| *sign_in != SignIn::NotOAuth),
             // A sign-in in flight: only its phase and end, never a secret.
             sign_in_flow: backend.sign_in_flow_view().map(|(phase, until)| {
-                json!({
-                    "phase": phase.word(),
-                    "until": chrono::DateTime::<chrono::Utc>::from(until).to_rfc3339(),
-                })
+                super::backends::with_time(json!({ "phase": phase.word() }), "until", until)
             }),
             calls_24h: None,
             calls_prev_24h: None,

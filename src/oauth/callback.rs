@@ -65,6 +65,7 @@ pub struct CallbackResult {
 
 /// State shared with the callback handler
 struct CallbackState {
+    page: SuccessPage,
     expected_state: String,
     tx: Option<oneshot::Sender<Result<CallbackResult>>>,
 }
@@ -240,6 +241,40 @@ pub async fn start_callback_server(
     port: Option<u16>,
     path: Option<&str>,
 ) -> Result<CallbackServer> {
+    start_callback_server_with(SuccessPage::Close, expected_state, host, port, path).await
+}
+
+/// What the page of a good callback tells the person.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SuccessPage {
+    /// The login is done: the window can be closed.
+    Close,
+    /// A dashboard sign-in: return to the dashboard and confirm, or the login
+    /// is lost.
+    ConfirmInDashboard,
+}
+
+impl SuccessPage {
+    fn html(self) -> &'static str {
+        match self {
+            Self::Close => {
+                "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>"
+            }
+            Self::ConfirmInDashboard => {
+                "<html><body><h1>Almost done</h1><p>Return to the dashboard and confirm to finish signing in.</p></body></html>"
+            }
+        }
+    }
+}
+
+/// [`start_callback_server`] with the page a good callback shows chosen.
+pub(crate) async fn start_callback_server_with(
+    page: SuccessPage,
+    expected_state: String,
+    host: Option<&str>,
+    port: Option<u16>,
+    path: Option<&str>,
+) -> Result<CallbackServer> {
     let effective_host = host.unwrap_or("localhost");
     let callback_path = path.unwrap_or("/oauth/callback");
     let dual_bind = effective_host == "localhost";
@@ -310,6 +345,7 @@ pub async fn start_callback_server(
     let (tx, rx) = oneshot::channel();
 
     let state = Arc::new(tokio::sync::Mutex::new(CallbackState {
+        page,
         expected_state,
         tx: Some(tx),
     }));
@@ -369,6 +405,7 @@ async fn handle_callback(
     );
 
     let mut state = state.lock().await;
+    let page = state.page;
 
     // State first: refuse before looking at `error` or `code`.
     let state_ok = params
@@ -450,10 +487,7 @@ async fn handle_callback(
         let _ = tx.send(result);
     }
 
-    Html(
-        "<html><body><h1>Authorization Successful!</h1><p>You can close this window.</p></body></html>".to_string()
-    )
-    .into_response()
+    Html(page.html().to_string()).into_response()
 }
 
 fn escape_html(input: &str) -> String {

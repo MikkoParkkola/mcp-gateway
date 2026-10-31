@@ -201,7 +201,10 @@ impl Drop for UnlessLinked {
         }
         self.cancel.cancel();
         self.backend.with_flow(|slot| {
-            if slot.as_ref().is_some_and(|f| f.attempt_id == self.attempt_id) {
+            if slot
+                .as_ref()
+                .is_some_and(|f| f.attempt_id == self.attempt_id)
+            {
                 slot.take();
             }
         });

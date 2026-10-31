@@ -437,6 +437,9 @@ impl OAuthClient {
     fn store_issued_locked(&self, key: &str, token: &TokenInfo) -> Result<()> {
         let key = key.to_string();
         self.storage.save(&key, &self.resource_url, token)?;
+        // Every successful save tells the status, so a login or a grant that
+        // installs a token no longer leaves the backend reading as signed out.
+        self.publish_token_state(Some(token));
         // A token a login issues was never marked in flight, so a damaged
         // sidecar's lost marker cannot name it (MIK-8091). Rewrite the sidecar
         // clean, keeping the rotation observation, or every fresh token would
@@ -588,7 +591,13 @@ impl OAuthClient {
 
         // Start callback server FIRST to get the actual callback URL
         // This must happen BEFORE client registration so we know the port
-        let mut callback_server = callback::start_callback_server(
+        let page = if held_for_ui {
+            callback::SuccessPage::ConfirmInDashboard
+        } else {
+            callback::SuccessPage::Close
+        };
+        let mut callback_server = callback::start_callback_server_with(
+            page,
             state.clone(),
             self.callback_host.as_deref(),
             self.callback_port,

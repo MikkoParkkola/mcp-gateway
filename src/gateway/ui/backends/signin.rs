@@ -149,8 +149,20 @@ fn audited(mut response: Response, name: &str, outcome: &str) -> Response {
     response
 }
 
-fn rfc3339(at: std::time::SystemTime) -> String {
-    chrono::DateTime::<chrono::Utc>::from(at).to_rfc3339()
+/// `body` with `key` set to `at` as RFC 3339, left out when the clock reads
+/// before the epoch.
+pub(in crate::gateway::ui) fn with_time(
+    mut body: Value,
+    key: &str,
+    at: std::time::SystemTime,
+) -> Value {
+    if let (Some(time), Some(map)) = (
+        crate::config_reload::refusals::rfc3339(at),
+        body.as_object_mut(),
+    ) {
+        map.insert(key.to_owned(), json!(time));
+    }
+    body
 }
 
 /// `POST /ui/api/backends/:name/signin` — start a sign-in.
@@ -192,11 +204,11 @@ pub(super) async fn start_sign_in(
             (
                 StatusCode::OK,
                 [(header::CACHE_CONTROL, "no-store")],
-                Json(json!({
-                    "authorization_url": url,
-                    "expires_at": rfc3339(expires_at),
-                    "attempt_id": attempt_id,
-                })),
+                Json(with_time(
+                    json!({ "authorization_url": url, "attempt_id": attempt_id }),
+                    "expires_at",
+                    expires_at,
+                )),
             )
                 .into_response(),
             "started",
@@ -235,13 +247,16 @@ fn in_progress(
 ) -> Response {
     (
         StatusCode::CONFLICT,
-        Json(json!({
-            "error": "sign_in_in_progress",
-            "message": "a sign-in for this backend is already in progress",
-            "owner": holder.word(),
-            "expires_at": rfc3339(expires_at),
-            "retry_after_secs": retry_after_secs,
-        })),
+        Json(with_time(
+            json!({
+                "error": "sign_in_in_progress",
+                "message": "a sign-in for this backend is already in progress",
+                "owner": holder.word(),
+                "retry_after_secs": retry_after_secs,
+            }),
+            "expires_at",
+            expires_at,
+        )),
     )
         .into_response()
 }

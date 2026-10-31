@@ -133,6 +133,15 @@ impl OAuthClient {
                     lead.end(None);
                     return Ok(access);
                 }
+                // The retry hint of a sign-in started from the dashboard names
+                // the deadline this login really runs to.
+                #[cfg(feature = "webui")]
+                if let Some(deadline) = deadline {
+                    lead.set_end(crate::oauth::login_gate::stage_end(
+                        super::OAUTH_AUTHORIZATION_WINDOW,
+                        deadline,
+                    ));
+                }
                 let listeners = lead.take_listeners_guard();
                 let result = self
                     .authorize_until_by(lead.cancel_token(), listeners, deadline)
@@ -185,6 +194,7 @@ impl OAuthClient {
             .filter(|token| !token.is_expired())?;
         self.reload_registered_client_id(&key);
         let access = token.access_token.clone();
+        self.publish_token_state(Some(&token));
         *self.current_token.write() = Some(token);
         Some(access)
     }
