@@ -277,10 +277,11 @@ async fn t1c_a_state_only_interim_is_minted_without_a_bridged_round() {
     );
 }
 
-/// T2 — the `NoSession` fallthrough declines the reservation: a retry under
-/// the same key reaches the backend again rather than being replayed.
+/// T2 — the `NoSession` fallthrough mints a continuation, and the key is held
+/// for it: a retry under the same key that does not present the envelope is
+/// answered in progress, and the backend is not called again.
 #[tokio::test]
-async fn t2_the_no_session_fallthrough_releases_the_idempotency_key() {
+async fn t2_the_no_session_fallthrough_holds_the_key_for_its_continuation() {
     let (m, calls) = meta_that_always_asks(ROOTS);
     let m = with_idempotency(m);
     let channel = NoSessionCounted::default();
@@ -289,13 +290,15 @@ async fn t2_the_no_session_fallthrough_releases_the_idempotency_key() {
     m.invoke_tool(&args(), Some("session-1"), &caller)
         .await
         .expect("first call mints");
-    m.invoke_tool(&args(), Some("session-1"), &caller)
-        .await
-        .expect("second call mints");
+    let second = m.invoke_tool(&args(), Some("session-1"), &caller).await;
     assert_eq!(
         calls.lock().len(),
-        2,
-        "the key was settled, so the retry was replayed"
+        1,
+        "the key was released, so the retry ran again: {second:?}"
+    );
+    assert!(
+        second.is_err_and(|e| e.to_string().contains("in progress")),
+        "the retry was not answered in progress"
     );
 }
 
@@ -343,10 +346,12 @@ async fn t3_an_exhausted_exchange_resumes_from_its_last_round() {
     );
 }
 
-/// T3b — exhausting the rounds does not settle the idempotency key: a backend
-/// that stopped to ask has not acted, so a retry under the key is admitted.
+/// T3b — an exhausted exchange hands its last round back as a sealed
+/// continuation, and the key is held for that continuation: the backend ran
+/// every round, so a retry under the key that does not present the envelope
+/// is answered in progress and does not run them again.
 #[tokio::test]
-async fn t3b_an_exhausted_exchange_releases_the_idempotency_key() {
+async fn t3b_an_exhausted_exchange_holds_the_key_for_its_continuation() {
     let (m, calls) = meta_that_always_asks(ROOTS);
     let m = with_idempotency(m);
     let channel = Answering::default();
@@ -356,10 +361,11 @@ async fn t3b_an_exhausted_exchange_releases_the_idempotency_key() {
         .await
         .expect("an exhausted exchange is handed back, not failed");
     let first = calls.lock().len();
-    let _ = m.invoke_tool(&args(), Some("session-1"), &caller).await;
-    assert!(
-        calls.lock().len() > first,
-        "the key was settled, so the retry was replayed"
+    let again = m.invoke_tool(&args(), Some("session-1"), &caller).await;
+    assert_eq!(
+        calls.lock().len(),
+        first,
+        "the key was released, so the retry ran the rounds again: {again:?}"
     );
 }
 

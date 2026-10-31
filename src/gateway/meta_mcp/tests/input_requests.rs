@@ -202,16 +202,12 @@ async fn a_continuation_that_is_never_retried_stores_nothing_gateway_side() {
     );
 }
 
-// The third thing that must not survive the refusal: the idempotency key.
-// After dispatch the gateway settles the key as completed so that a
-// post-dispatch gate cannot readmit a retry that would repeat the side effect.
-// An interim result is the backend stating it has *not* acted, so there is no
-// side effect to protect here — and settling one is not merely redundant, it is
-// permanent and false: the stored placeholder reads "side effect executed", so
-// a client that declared the capability it was missing and retried under the
-// same key would be served that sentence in place of its question, forever.
+// The idempotency key after the refusal. The backend received the call and
+// answered it by asking, so the call may have acted: the key is kept, and a
+// same-key retry is served the may-have-run notice, not run again. A client
+// that declared the capability it was missing reruns under a new key.
 #[tokio::test]
-async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
+async fn a_refused_input_request_keeps_the_idempotency_key() {
     let mut meta = MetaMcp::new(backend_asking_for_elicitation());
     meta.enable_idempotency(
         Arc::new(crate::idempotency::IdempotencyCache::new()),
@@ -224,21 +220,26 @@ async fn a_refused_input_request_leaves_the_idempotency_key_retryable() {
     let mut ctx = allow_all_ctx_declaring(crate::protocol::meta::Declared::NONE);
     ctx.retry = &retry;
 
-    // The second attempt is the assertion. It stands for the client that read
-    // the refusal, declared the capability and came back with the same key: it
-    // must be judged on its merits rather than answered from what the first
-    // attempt left behind.
-    for attempt in ["first", "second"] {
-        let err = meta
-            .invoke_tool(&book_flight(), Some("session-1"), &ctx)
-            .await
-            .expect_err("a refusal must not be replaced by a stored result");
-        assert_eq!(
-            err.to_rpc_code(),
-            -32021,
-            "the {attempt} attempt must be refused as an undeclared capability"
-        );
-    }
+    let err = meta
+        .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+        .await
+        .expect_err("the undeclared question is refused");
+    assert_eq!(
+        err.to_rpc_code(),
+        -32021,
+        "refused as an undeclared capability"
+    );
+    let again = meta
+        .invoke_tool(&book_flight(), Some("session-1"), &ctx)
+        .await;
+    let text = match &again {
+        Ok(value) => value.to_string(),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        text.contains("it may have executed"),
+        "a same-key retry was not served the may-have-run notice: {again:?}"
+    );
 }
 
 // MRTR.9 end-to-end: the refusal happens on the live invoke path, not only in
