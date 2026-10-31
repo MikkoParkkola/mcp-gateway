@@ -98,7 +98,7 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
     for _ in 0..3 {
         let outcome = tokio::time::timeout(
             crate::test_wait::HANG_BOUND,
-            super::send_with_retry(client.get(&url), "test", true, &health),
+            super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
         )
         .await
         .expect("bounded");
@@ -146,7 +146,7 @@ async fn a_refused_redirect_hop_notes_a_failed_send() {
     seam::inject(send);
     let (outcome, notes) = with_dispatch_scope(tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
-        super::send_with_retry(client.get(&url), "test", true, &health),
+        super::send_with_retry(client.get(&url), &client.redirects, "test", true, &health),
     ))
     .await;
     seam::clear();

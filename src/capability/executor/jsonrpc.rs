@@ -196,6 +196,7 @@ impl ProtocolExecutor for JsonRpcExecutor<'_> {
                 .headers(headers)
                 .json(&body)
                 .timeout(timeout),
+            &self.executor.client.redirects,
             "JSON-RPC request",
             false,
             &self.executor.health,

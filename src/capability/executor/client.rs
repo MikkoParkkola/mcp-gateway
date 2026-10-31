@@ -3,12 +3,15 @@
 //! The executor's HTTP client: direct and pinned, or through the operator's
 //! `capabilities.egress_proxy` (#1881).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use reqwest::Client;
 
 use crate::counters::End;
 use crate::gateway::SendTimer;
+use crate::security::RedirectEvidence;
 use crate::security::ssrf::{RedirectDecision, redirect_decision};
 use crate::{Error, Result};
 
@@ -28,13 +31,17 @@ use crate::{Error, Result};
 /// # Panics
 ///
 /// Panics if the reqwest client cannot be created (invalid TLS config, etc.).
-pub(super) fn build(proxy: Option<&url::Url>) -> Client {
-    route(proxy)
+pub(super) fn build(proxy: Option<&url::Url>) -> CapabilityClient {
+    let redirects = Arc::new(AtomicU64::new(0));
+    let seen = Arc::clone(&redirects);
+    let http = route(proxy)
         .timeout(Duration::from_secs(60))
         .pool_max_idle_per_host(10)
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            // A response came back, whether this hop is followed or refused.
+            seen.fetch_add(1, Ordering::SeqCst);
             // A 307/308 re-sends the body and every header but `Authorization`,
             // so a request that started on TLS or loopback (where a credential
             // may go) never continues in cleartext off this machine (#3013).
@@ -63,7 +70,39 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
             }
         }))
         .build()
-        .expect("Failed to create HTTP client")
+        .expect("Failed to create HTTP client");
+    CapabilityClient { http, redirects }
+}
+
+/// A capability HTTP client and the redirect responses it has received, so a
+/// send can tell whether its own request may have followed one. The count is
+/// per client, shared by concurrent calls: a refusal is discarded only when
+/// the count did not move across its attempt, so a concurrent call's redirect
+/// can at worst add a Failed sample, never drop a real one. (The MCP HTTP
+/// transport keeps the same kind of counter for its retry evidence.)
+#[derive(Debug, Clone)]
+pub(crate) struct CapabilityClient {
+    pub(super) http: Client,
+    pub(super) redirects: Arc<AtomicU64>,
+}
+
+impl CapabilityClient {
+    /// `http`, counting nothing: a test client with its own redirect policy.
+    #[cfg(test)]
+    pub(super) fn uncounted(http: Client) -> Self {
+        Self {
+            http,
+            redirects: Arc::default(),
+        }
+    }
+}
+
+impl std::ops::Deref for CapabilityClient {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        &self.http
+    }
 }
 
 /// The route of every capability call: pinned and direct, or through
@@ -154,6 +193,7 @@ pub(super) fn redact_url(e: reqwest::Error) -> reqwest::Error {
 
 pub(super) async fn send_with_retry(
     request: reqwest::RequestBuilder,
+    redirects: &AtomicU64,
     label: &str,
     retry_timeouts: bool,
     health: &crate::failsafe::HealthTracker,
@@ -171,7 +211,7 @@ pub(super) async fn send_with_retry(
                 None => return Err(Error::Internal(format!("{label}: request already sent"))),
             },
         };
-        let e = match timed_attempt(this).await {
+        let e = match timed_attempt(this, redirects).await {
             Ok(resp) => {
                 health.record_success(started.elapsed());
                 return Ok(resp);
@@ -220,15 +260,23 @@ enum Failed {
 /// stalled body counts and the backoff between attempts does not. The body
 /// is read here (every caller reads it whole) and handed back in a rebuilt
 /// response, which callers read as they did the original.
-async fn timed_attempt(request: reqwest::RequestBuilder) -> std::result::Result<reqwest::Response, Failed> {
+async fn timed_attempt(
+    request: reqwest::RequestBuilder,
+    redirects: &AtomicU64,
+) -> std::result::Result<reqwest::Response, Failed> {
     let (client, built) = request.build_split();
     let request = built.map_err(Failed::Send)?;
-    let first_hop = request.url().clone();
+    let before = redirects.load(Ordering::SeqCst);
     let timer = SendTimer::start();
     let sent = match client.execute(request).await {
         Ok(sent) => sent,
         Err(e) => {
-            end_send(timer, &e, &first_hop);
+            let evidence = if redirects.load(Ordering::SeqCst) == before {
+                RedirectEvidence::NoRedirectFollowed
+            } else {
+                RedirectEvidence::MayHaveRedirected
+            };
+            end_send(timer, &e, evidence);
             return Err(Failed::Send(e));
         }
     };
@@ -249,13 +297,16 @@ async fn timed_attempt(request: reqwest::RequestBuilder) -> std::result::Result<
     }
 }
 
-/// How a send that failed before any answer ended. A destination the SSRF
-/// policy refused on the first hop (`first_hop`, the URL the request named)
-/// was never sent to: nothing is noted. A refusal on any later URL means a
-/// server answered with a redirect first, so the send failed; a timeout is
-/// reqwest's own flag, read before the error is wrapped as `Transport`.
-fn end_send(timer: SendTimer, e: &reqwest::Error, first_hop: &reqwest::Url) {
-    if crate::security::http_diagnostics::ssrf_refusal(e).is_some() && e.url() == Some(first_hop) {
+/// How a send that failed before any answer ended. An SSRF refusal with no
+/// redirect response across the attempt refused the first hop, which was
+/// never sent to: nothing is noted. After a redirect response a server
+/// answered first, so the send failed (a concurrent call's redirect can only
+/// add such a sample: see [`CapabilityClient`]). A timeout is reqwest's own
+/// flag, read before the error is wrapped as `Transport`.
+fn end_send(timer: SendTimer, e: &reqwest::Error, evidence: RedirectEvidence) {
+    if crate::security::http_diagnostics::ssrf_refusal(e).is_some()
+        && evidence == RedirectEvidence::NoRedirectFollowed
+    {
         timer.discard();
     } else if e.is_timeout() {
         timer.finish(End::TimedOut);

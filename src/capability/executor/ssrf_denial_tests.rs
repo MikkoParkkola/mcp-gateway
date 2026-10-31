@@ -56,7 +56,7 @@ async fn capability_ssrf_denial_is_not_retried() {
     // one would show.
     for call in 1..=3 {
         let request = client.get("http://private.test/");
-        let error = send_with_retry(request, "test", true, &health)
+        let error = send_with_retry(request, &std::sync::atomic::AtomicU64::new(0), "test", true, &health)
             .await
             .expect_err("a private destination is refused");
         assert_eq!(error.to_rpc_code(), -32600, "call {call}: {error}");
@@ -81,7 +81,7 @@ async fn capability_connect_error_still_retried() {
     let (client, lookups) = pinned_client(None);
     let health = crate::failsafe::HealthTracker::new("test");
     let request = client.get("http://unresolvable.test/");
-    let error = send_with_retry(request, "test", true, &health)
+    let error = send_with_retry(request, &std::sync::atomic::AtomicU64::new(0), "test", true, &health)
         .await
         .expect_err("resolution fails");
     assert_eq!(error.to_rpc_code(), -32000, "{error}");
@@ -99,7 +99,7 @@ async fn a_first_hop_ssrf_denial_notes_no_send_time() {
     let (client, _) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
     let health = crate::failsafe::HealthTracker::new("test");
     let (result, notes) = crate::gateway::with_dispatch_scope(async {
-        send_with_retry(client.get("http://private.test/"), "test", true, &health).await
+        send_with_retry(client.get("http://private.test/"), &std::sync::atomic::AtomicU64::new(0), "test", true, &health).await
     })
     .await;
     assert!(result.is_err());
@@ -124,12 +124,29 @@ async fn a_redirect_refused_at_dns_notes_a_failed_send() {
             );
         }
     });
-    let (client, lookups) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    // The pinned resolver of `pinned_client`, under a redirect policy that
+    // follows every hop and counts each redirect response, as the capability
+    // client's own policy does.
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let redirects = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let seen = Arc::clone(&redirects);
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .dns_resolver(PinningResolver::new(Counting {
+            lookups: Arc::clone(&lookups),
+            answer: Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))),
+        }))
+        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
+            seen.fetch_add(1, Ordering::SeqCst);
+            attempt.follow()
+        }))
+        .build()
+        .unwrap();
     let health = crate::failsafe::HealthTracker::new("test");
     let send = std::time::Duration::from_millis(7);
     crate::gateway::send_timer_seam::inject(send);
     let (result, notes) = crate::gateway::with_dispatch_scope(async {
-        send_with_retry(client.get(format!("http://{addr}/")), "test", true, &health).await
+        send_with_retry(client.get(format!("http://{addr}/")), &redirects, "test", true, &health).await
     })
     .await;
     crate::gateway::send_timer_seam::clear();

@@ -246,6 +246,7 @@ impl ProtocolExecutor for GraphqlExecutor<'_> {
                 .headers(headers)
                 .json(&body)
                 .timeout(timeout),
+            &self.executor.client.redirects,
             "GraphQL request",
             false,
             &self.executor.health,

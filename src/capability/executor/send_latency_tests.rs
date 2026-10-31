@@ -65,7 +65,7 @@ async fn a_stalled_body_notes_timed_out() {
     let health = crate::failsafe::HealthTracker::new("test");
     seam::inject(SEND);
     let (result, notes) = with_dispatch_scope(async {
-        send_with_retry(client.get(&url), "test", false, &health).await
+        send_with_retry(client.get(&url), &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await
     })
     .await;
     seam::clear();
@@ -82,7 +82,7 @@ async fn an_answered_http_send_notes_one_sample() {
     let health = crate::failsafe::HealthTracker::new("test");
     seam::inject(SEND);
     let (result, notes) = with_dispatch_scope(async {
-        send_with_retry(reqwest::Client::new().get(&url), "test", false, &health).await
+        send_with_retry(reqwest::Client::new().get(&url), &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await
     })
     .await;
     seam::clear();
@@ -103,7 +103,7 @@ async fn an_http_send_past_its_timeout_notes_timed_out() {
     let health = crate::failsafe::HealthTracker::new("test");
     seam::inject(SEND);
     let (result, notes) = with_dispatch_scope(async {
-        send_with_retry(client.get(&url), "test", false, &health).await
+        send_with_retry(client.get(&url), &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await
     })
     .await;
     seam::clear();
@@ -126,7 +126,7 @@ async fn retried_http_sends_note_once() {
     let health = crate::failsafe::HealthTracker::new("test");
     seam::inject(SEND);
     let (result, notes) = with_dispatch_scope(async {
-        send_with_retry(reqwest::Client::new().get(&url), "test", true, &health).await
+        send_with_retry(reqwest::Client::new().get(&url), &std::sync::atomic::AtomicU64::new(0), "test", true, &health).await
     })
     .await;
     seam::clear();
