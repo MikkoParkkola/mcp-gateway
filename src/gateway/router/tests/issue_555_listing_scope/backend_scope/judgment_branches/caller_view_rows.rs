@@ -8,31 +8,15 @@ use super::*;
 
 /// The env key the keyed capability's credential is read from.
 const KEY_VAR: &str = "HIDDEN_ORACLE_ROW_CAP_KEY";
-/// A value only the provider's stored output carries.
-const MARKER: &str = "stored-output-marker-7f3c";
-
-/// A loopback endpoint answering every GET on `/read` with [`MARKER`].
-async fn marker_endpoint() -> u16 {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let port = listener.local_addr().expect("address").port();
-    tokio::spawn(async move {
-        let app = axum::Router::new().route(
-            "/read",
-            axum::routing::get(|| async { axum::Json(json!({ "marker": MARKER })) }),
-        );
-        axum::serve(listener, app).await.expect("serve");
-    });
-    port
-}
+/// Text only the keyed capability's stored result carries: its executor
+/// refuses to send the key in cleartext to the fixture host, and that tool
+/// result (`isError`, status completed) is what the task stores.
+const MARKER: &str = "refusing to send a capability credential in cleartext";
 
 /// The provider `caps` with `cap_keyed`, whose credential [`KEY_VAR`] is set
-/// in the returned environment, served by `port`: the provider and the
-/// environment (the temp dir holds its file).
-fn keyed_caps(
-    port: u16,
-) -> (
+/// in the returned environment: the provider and the environment (the temp
+/// dir holds its file).
+fn keyed_caps() -> (
     Arc<crate::capability::CapabilityBackend>,
     Arc<crate::config::LiveEnv>,
     tempfile::TempDir,
@@ -51,7 +35,7 @@ fn keyed_caps(
         Arc::new(crate::config::EnvOverlay::from_paths(&[file])),
         crate::config::ResolvedEnvFiles::default(),
     ));
-    let base_url = crate::test_fixture_host::fixture_url(port);
+    let base_url = crate::test_fixture_host::fixture_url(9);
     let definition = crate::capability::parse_capability(&format!(
         "name: cap_keyed\n\
          description: Read with a key\n\
@@ -100,7 +84,7 @@ enum AfterRun {
 /// masked.
 async fn stored_read(after: AfterRun) -> (String, String) {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
-    let (caps, env, _dir) = keyed_caps(marker_endpoint().await);
+    let (caps, env, _dir) = keyed_caps();
     assert_eq!(
         caps.get_tools().len(),
         1,
