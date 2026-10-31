@@ -25,7 +25,7 @@ fn ready() -> DecisionSet {
     for source in [Source::Access, Source::ControlPlane, Source::Capability] {
         set.set_health(source, Health::Ready);
     }
-    set.set_discovery(Vec::new(), Vec::new(), at(0));
+    set.set_discovery(Vec::new(), Vec::new(), 0, at(0));
     set
 }
 
@@ -372,7 +372,7 @@ fn eviction_closes_a_request_whose_refusals_left_the_log() {
 fn booting() -> DecisionSet {
     let mut set = DecisionSet::with_key(KEY);
     set.set_health(Source::Capability, Health::Absent);
-    set.set_discovery(Vec::new(), Vec::new(), at(0));
+    set.set_discovery(Vec::new(), Vec::new(), 0, at(0));
     set
 }
 
@@ -491,7 +491,7 @@ fn the_capability_source_is_unavailable_until_its_backend_reports() {
     let mut set = DecisionSet::with_key(KEY);
     set.set_health(Source::Access, Health::Ready);
     set.set_health(Source::ControlPlane, Health::Ready);
-    set.set_discovery(Vec::new(), Vec::new(), at(0));
+    set.set_discovery(Vec::new(), Vec::new(), 0, at(0));
     assert_eq!(set.snapshot(), None);
     set.set_capability_changes(
         "caps",

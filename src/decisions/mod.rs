@@ -172,6 +172,9 @@ pub(crate) struct DecisionSet {
     changes: BTreeMap<(String, String), CapabilityChange>,
     adopt: Vec<AdoptFind>,
     unreadable: Vec<UnreadableFile>,
+    /// The generation of the discovery listing `adopt` and `unreadable`
+    /// came from.
+    discovery_generation: Option<u64>,
     first_seen: BTreeMap<String, DateTime<Utc>>,
     items: Vec<Value>,
 }
@@ -192,6 +195,7 @@ impl DecisionSet {
             changes: BTreeMap::new(),
             adopt: Vec::new(),
             unreadable: Vec::new(),
+            discovery_generation: None,
             first_seen: BTreeMap::new(),
             items: Vec::new(),
         }
@@ -472,13 +476,24 @@ pub(crate) struct UnreadableFile {
 
 impl DecisionSet {
     /// Replace the discovery source's adopt finds and unreadable files, from
-    /// one listing; the source is `Ready` from its first listing on.
+    /// the listing of `generation`; the source is `Ready` from its first
+    /// listing on. A listing older than the one held is ignored: a reader
+    /// that took a listing before a newer one landed cannot put it back. The
+    /// same generation again applies, so eligibility is re-judged.
     pub(crate) fn set_discovery(
         &mut self,
         finds: Vec<AdoptFind>,
         unreadable: Vec<UnreadableFile>,
+        generation: u64,
         now: DateTime<Utc>,
     ) {
+        if self
+            .discovery_generation
+            .is_some_and(|held| generation < held)
+        {
+            return;
+        }
+        self.discovery_generation = Some(generation);
         self.adopt = finds;
         self.unreadable = unreadable;
         self.health.insert(Source::Discovery, Health::Ready);

@@ -64,6 +64,9 @@ pub(crate) struct Listing {
     pub(crate) finds: Vec<ListedFind>,
     /// Each unreadable client file by name, reason and keyed path digest.
     pub(crate) unreadable: Vec<crate::decisions::UnreadableFile>,
+    /// Counts up with each scan this cache keeps: a newer listing has a
+    /// larger one, so a reader holding an older listing can tell.
+    pub(crate) generation: u64,
     fingerprint: Fingerprint,
     taken: Instant,
 }
@@ -123,6 +126,8 @@ struct Cached {
     /// For one `SCAN_TIMEOUT` after a timed-out scan, reads answer from what
     /// is cached instead of each waiting out another scan.
     timed_out_at: Option<Instant>,
+    /// The generation of the last listing kept.
+    generation: u64,
 }
 
 impl DiscoveryCache {
@@ -190,7 +195,8 @@ impl DiscoveryCache {
             current.timed_out_at = Some(self.source.now());
             return stale(&current);
         };
-        let listing = Arc::new(self.project(scan));
+        let generation = current.generation + 1;
+        let listing = Arc::new(self.project(scan, generation));
         // Published before the lock is released, whoever triggered the
         // rescan: an older listing can then never land after a newer one.
         if let Some(publish) = self.publisher.get() {
@@ -199,6 +205,7 @@ impl DiscoveryCache {
         *current = Cached {
             listing: Some(Arc::clone(&listing)),
             timed_out_at: None,
+            generation,
         };
         Ok((listing, false))
     }
@@ -233,7 +240,7 @@ impl DiscoveryCache {
 
     /// Reduce a scan to what may be cached, then drop the scan, values and
     /// all. A find without a client entry is not listed (ADR-021).
-    fn project(&self, scan: ClientScan) -> Listing {
+    fn project(&self, scan: ClientScan, generation: u64) -> Listing {
         let finds = scan
             .finds
             .iter()
@@ -252,6 +259,7 @@ impl DiscoveryCache {
                     reason: file.reason,
                 })
                 .collect(),
+            generation,
             fingerprint: scan.fingerprint,
             taken: self.source.now(),
         }

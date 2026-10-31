@@ -57,7 +57,7 @@ fn keys(item: &Value) -> Vec<&str> {
 #[test]
 fn an_eligible_find_is_one_adopt_item_with_exactly_its_shown_fields() {
     let mut set = ready();
-    set.set_discovery(vec![find("f1", "remote-docs")], Vec::new(), at(1));
+    set.set_discovery(vec![find("f1", "remote-docs")], Vec::new(), 1, at(1));
     let items = items(&set);
     let adopt = of_kind(&items, "adopt");
     assert_eq!(adopt.len(), 1, "{items:?}");
@@ -105,7 +105,7 @@ fn the_count_waits_for_discovery_and_names_it_while_down() {
         "{:?}",
         set.unavailable()
     );
-    set.set_discovery(Vec::new(), Vec::new(), at(1));
+    set.set_discovery(Vec::new(), Vec::new(), 1, at(1));
     assert_eq!(set.snapshot().map(|s| s.0), Some(0));
     set.discovery_down();
     assert_eq!(set.snapshot(), None, "a scan timed out, nothing cached");
@@ -126,7 +126,7 @@ fn each_unreadable_file_is_its_own_item_and_closes_alone() {
         unreadable("d-vscode", UnreadableReason::DidNotParse),
         unreadable("d-cursor", UnreadableReason::NoPermission),
     ];
-    set.set_discovery(Vec::new(), files, at(1));
+    set.set_discovery(Vec::new(), files, 1, at(1));
     let listed = items(&set);
     let shown = of_kind(&listed, "client_config_unreadable");
     assert_eq!(shown.len(), 2, "{listed:?}");
@@ -144,7 +144,7 @@ fn each_unreadable_file_is_its_own_item_and_closes_alone() {
     assert_eq!(count(&set), 2, "the count includes them");
 
     let kept = vec![unreadable("d-cursor", UnreadableReason::NoPermission)];
-    set.set_discovery(Vec::new(), kept, at(2));
+    set.set_discovery(Vec::new(), kept, 2, at(2));
     let after = items(&set);
     assert_eq!(of_kind(&after, "client_config_unreadable").len(), 1);
 }
@@ -155,13 +155,13 @@ fn each_unreadable_file_is_its_own_item_and_closes_alone() {
 #[test]
 fn an_unchanged_listing_keeps_observed_at_order_and_revision() {
     let mut set = ready();
-    set.set_discovery(vec![find("f1", "one")], Vec::new(), at(1));
+    set.set_discovery(vec![find("f1", "one")], Vec::new(), 1, at(1));
     let finds = vec![find("f1", "one"), find("f2", "two"), find("f3", "three")];
     let files = vec![
         unreadable("d1", UnreadableReason::DidNotParse),
         unreadable("d2", UnreadableReason::NotAReadableFile),
     ];
-    set.set_discovery(finds.clone(), files.clone(), at(2));
+    set.set_discovery(finds.clone(), files.clone(), 2, at(2));
     let before = items(&set);
     let revision = set.view().expect("ready").revision;
     let kinds: Vec<&Value> = before.iter().map(|item| &item["kind"]).collect();
@@ -182,8 +182,30 @@ fn an_unchanged_listing_keeps_observed_at_order_and_revision() {
     assert_eq!(first_seen[2], &json!(at(1).to_rfc3339()), "{before:?}");
     assert!(before[0]["id"].as_str() < before[1]["id"].as_str());
 
-    set.set_discovery(finds, files, at(3));
+    set.set_discovery(finds, files, 3, at(3));
     set.expire(at(4));
     assert_eq!(items(&set), before, "an unchanged rescan and a tick");
     assert_eq!(set.view().expect("ready").revision, revision);
+}
+
+/// A reader that took a listing before a newer one landed (the tick, reading
+/// gateway.yaml) cannot put the older one back; the same generation again
+/// still applies, so eligibility is re-judged.
+#[test]
+fn an_older_listing_never_replaces_a_newer_one() {
+    let mut set = ready();
+    set.set_discovery(vec![find("f2", "newer")], Vec::new(), 2, at(2));
+    set.set_discovery(vec![find("f1", "older")], Vec::new(), 1, at(3));
+    let names = |set: &DecisionSet| -> Vec<Value> {
+        of_kind(&items(set), "adopt")
+            .iter()
+            .map(|item| item["server"]["name"].clone())
+            .collect()
+    };
+    assert_eq!(names(&set), [json!("newer")], "the older listing landed");
+    set.set_discovery(Vec::new(), Vec::new(), 2, at(4));
+    assert!(
+        names(&set).is_empty(),
+        "the same generation re-judged nothing"
+    );
 }

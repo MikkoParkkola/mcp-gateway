@@ -418,7 +418,7 @@ fn publish_discovery(config_path: Option<&Path>, shared: &Shared, listing: &List
     };
     let finds = super::discovery::adopt_finds(listing, config_path);
     let unreadable = listing.unreadable.clone();
-    shared.update(|set| set.set_discovery(finds, unreadable, now));
+    shared.update(|set| set.set_discovery(finds, unreadable, listing.generation, now));
 }
 
 /// The backend's pin mismatches as decisions, each from one read of its
