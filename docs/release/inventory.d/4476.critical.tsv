@@ -1,0 +1,2 @@
+src/gateway/server/window_saver.rs	finished	1	standard	borderline	window_saver::Writers::finished	Uncounts a window writer and wakes every waiting drain when the last one ends; a lost wakeup would make shutdown report a durable window as not durable
+src/gateway/server/window_saver.rs	idle	1	standard	borderline	window_saver::Writers::idle	Resolves once no window writer runs; decides whether shutdown reports the window as durable within its bound

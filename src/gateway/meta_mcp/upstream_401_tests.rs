@@ -224,6 +224,9 @@ async fn body_text_401_in_200_is_not_detected() {
 #[path = "upstream_401_mcp_tests.rs"]
 mod mcp_route;
 
+#[path = "upstream_401_startup_tests.rs"]
+mod startup_route;
+
 #[path = "upstream_401_direct_tests.rs"]
 mod direct_route;
 

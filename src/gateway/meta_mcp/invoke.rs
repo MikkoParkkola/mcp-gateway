@@ -309,6 +309,8 @@ mod error_classification_tests;
 // ============================================================================
 
 #[cfg(test)]
+mod context_integrity_note_tests;
+#[cfg(test)]
 mod response_transform_tests;
 
 #[cfg(test)]
@@ -365,3 +367,5 @@ mod stage_boundary_tests;
 
 #[cfg(test)]
 mod plan_step_guard_tests;
+#[cfg(test)]
+mod presend_refusal_tests;

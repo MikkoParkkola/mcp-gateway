@@ -660,12 +660,30 @@ impl super::MetaMcp {
         let Some(store) = &self.nonce_store else {
             return Ok(None);
         };
+        let refused = |kind| super::invoke::audit::note_refused_by(kind, None);
         match nonce {
-            Some(nonce) => store.register_for_principal(nonce, principal).map(Some),
-            None if self.require_nonce => Err(crate::Error::json_rpc(
-                -32001,
-                "Nonce required when message signing is enforced",
-            )),
+            Some(nonce) => store
+                .register_for_principal(nonce, principal)
+                .map(Some)
+                .inspect_err(|e| {
+                    // A malformed nonce is the request's shape; a replayed or
+                    // over-limit one has no kind naming it yet (MIK-8914.API2A.17),
+                    // and `syntax` would call a replay malformed.
+                    refused(
+                        if e.to_rpc_code() == crate::error::rpc_codes::INVALID_PARAMS {
+                            crate::security::decision_record::DecisionKind::Syntax
+                        } else {
+                            crate::security::decision_record::DecisionKind::Unrecorded
+                        },
+                    );
+                }),
+            None if self.require_nonce => {
+                refused(crate::security::decision_record::DecisionKind::Syntax);
+                Err(crate::Error::json_rpc(
+                    -32001,
+                    "Nonce required when message signing is enforced",
+                ))
+            }
             None => Ok(None),
         }
     }

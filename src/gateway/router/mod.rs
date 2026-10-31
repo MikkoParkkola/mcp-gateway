@@ -193,6 +193,9 @@ mod mik8154_lease_rows_tests;
 mod overview_sources_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A call refused in its own send releases its key on the direct route.
+#[cfg(test)]
+mod presend_refusal_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]
 mod protocol_member_scope_tests;
@@ -204,6 +207,10 @@ mod rule_keys_route_tests;
 /// Secret injection applies on the direct route as through gateway_invoke.
 #[cfg(test)]
 mod secret_injection_direct_tests;
+#[cfg(test)]
+mod step_parent_key_tests;
+#[cfg(test)]
+mod transport_double_run_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
