@@ -253,6 +253,48 @@ pub(crate) mod stall_seam {
             .and_then(|openers| openers.get(path).cloned())
     }
 
+    static LIVE: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+    /// A saver write for the window at `path`, counted until it drops.
+    pub(crate) struct Live(PathBuf);
+
+    /// Count a saver write for the window at `path` while the guard lives.
+    pub(crate) fn live(path: &Path) -> Live {
+        *LIVE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get_or_insert_with(HashMap::new)
+            .entry(path.to_path_buf())
+            .or_default() += 1;
+        Live(path.to_path_buf())
+    }
+
+    impl Drop for Live {
+        fn drop(&mut self) {
+            if let Some(count) = LIVE
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_mut()
+                .and_then(|live| live.get_mut(&self.0))
+            {
+                *count -= 1;
+            }
+        }
+    }
+
+    /// Saver writes still running for windows under `dir`.
+    pub(crate) fn live_under(dir: &Path) -> usize {
+        LIVE.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, |live| {
+                live.iter()
+                    .filter(|(path, _)| path.starts_with(dir))
+                    .map(|(_, count)| count)
+                    .sum()
+            })
+    }
+
     pub(crate) fn pass(path: &Path, role: Role) {
         let gate = GATES
             .lock()

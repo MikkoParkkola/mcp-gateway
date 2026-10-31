@@ -218,6 +218,12 @@ async fn across_shutdown(mode: ProtocolRevisionWindow) -> Answers {
         .expect("run returns after the shutdown")
         .expect("run does not panic");
     assert!(ended.is_ok(), "a graceful shutdown returns Ok: {ended:?}");
+    // W4: run's end covers every saver write it started.
+    assert_eq!(
+        stall_seam::live_under(dir.path()),
+        0,
+        "a saver write outlived the run"
+    );
     Answers {
         meta_before,
         backend_before,

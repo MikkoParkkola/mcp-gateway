@@ -108,6 +108,10 @@ struct Writers {
     /// Test support: the test these writers write for (`Creator`).
     #[cfg(test)]
     spawner: Option<String>,
+    /// Test support: the window each writer is counted live for, so a test
+    /// can tell whether a write it started is still running.
+    #[cfg(test)]
+    seam_path: Option<PathBuf>,
 }
 
 impl Writers {
@@ -121,8 +125,13 @@ impl Writers {
         let writers = Arc::clone(self);
         #[cfg(test)]
         let spawner = self.spawner.clone();
+        #[cfg(test)]
+        let live = self.seam_path.as_deref().map(stall_seam::live);
         let thread = move || {
             let _running = Running(writers);
+            // Dropped before `_running`, so a drained saver leaves none live.
+            #[cfg(test)]
+            let _live = live;
             #[cfg(test)]
             crate::test_late_write::writing_for(spawner);
             work();
@@ -215,6 +224,7 @@ pub(super) async fn start_window_saver(
             .spawner
             .clone()
             .or_else(|| std::thread::current().name().map(str::to_owned));
+        writers.seam_path = Some(window_paths(&data_dir).0);
     }
     let writers = Arc::new(writers);
     // No readable clock means no start time to record: no segment is
@@ -260,9 +270,13 @@ pub(super) async fn start_window_saver(
         let seam_path = window_paths(&data_dir).0;
         #[cfg(test)]
         let drain_seam_path = seam_path.clone();
+        #[cfg(test)]
+        let live = stall_seam::live(&seam_path);
         let close: super::persistence::ShutdownSave = (
             "protocol-revision window seal",
             Box::new(move || {
+                #[cfg(test)]
+                let _live = live;
                 let seal = || {
                     let mut held = sink
                         .lock()

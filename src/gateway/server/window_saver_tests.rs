@@ -80,6 +80,23 @@ impl Rig {
     fn segments(&self) -> Vec<window::Segment> {
         window::load(self.dir.path()).map_or_else(|_| Vec::new(), |w| w.http_segments)
     }
+
+    /// Wait until no saver write this rig's test started is still running.
+    fn writes_ended(&self) -> bool {
+        wait_for(|| stall_seam::live_under(self.dir.path()) == 0)
+    }
+}
+
+/// W4: a test that returns while a saver write it started still runs fails
+/// here, before the directory is removed: that write would land in the
+/// removed directory and rebuild it as a leftover.
+impl Drop for Rig {
+    fn drop(&mut self) {
+        let live = stall_seam::live_under(self.dir.path());
+        if live > 0 && !std::thread::panicking() {
+            panic!("{live} saver write(s) outlived the test that started them");
+        }
+    }
 }
 
 /// Settings for a row that is not about the startup bound: the open gets
@@ -192,6 +209,7 @@ async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
         wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly)),
         "the released close never landed"
     );
+    assert!(rig.writes_ended(), "the released close never ended");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -217,6 +235,7 @@ async fn a_final_write_released_after_its_bound_lands_the_exact_sealed_counts() 
     let landed = wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly));
     assert!(landed, "the released close never landed");
     assert_eq!(rig.segments()[0].snapshot.total, 4);
+    assert!(rig.writes_ended(), "the released close never ended");
 }
 
 /// Reads before 1970 once (the saver's start-time read), then normally. Only

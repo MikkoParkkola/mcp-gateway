@@ -146,6 +146,7 @@ async fn a_write_held_past_the_bound_does_not_hold_the_handle() {
             .recv_timeout(ARRIVAL)
             .expect("a released checkpoint ends before the row does");
     }
+    assert!(rig.writes_ended(), "a released checkpoint never ended");
 }
 
 /// W2c: the last writer ends after `idle` read a nonzero count and before it
