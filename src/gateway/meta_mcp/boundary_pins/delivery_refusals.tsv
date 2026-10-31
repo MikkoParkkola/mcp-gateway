@@ -27,9 +27,9 @@ src/capability/executor/cli_argv.rs	build_cli_invocation	refuse_nul	1	not-a-deci
 src/capability/executor/cli_argv.rs	push_each	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	render_element	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/cli_argv.rs	render_stdin	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
-src/capability/executor/client.rs	build	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
-src/capability/executor/client.rs	build	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
 src/capability/executor/client.rs	end_send	ssrf_refusal	1	pending:capability-refusals	a capability HTTP call the SSRF guard refuses; fixed by the capability-refusals follow-up
+src/capability/executor/client.rs	http_client	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
+src/capability/executor/client.rs	http_client	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
 src/capability/executor/client.rs	send_with_retry	ssrf_refusal	1	pending:capability-refusals	a capability HTTP call the SSRF guard refuses; fixed by the capability-refusals follow-up
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
 src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
