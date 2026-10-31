@@ -69,7 +69,7 @@ async fn hidden_provider_fixture() -> Fixture {
         ..FirewallConfig::default()
     };
     // The firewall and the Meta-MCP share one keyring, as the suite's own
-    // fixture and the gateway pair them (#2210, MIK-8276).
+    // fixture and the gateway pair them.
     let first = MetaMcp::new(Arc::clone(&state_mut.backends));
     let firewall =
         Arc::new(Firewall::from_config(config, None).with_continuations(first.continuation()));
@@ -185,6 +185,21 @@ async fn a_relay_in_meta_to_a_hidden_provider_is_refused_as_for_an_unregistered_
         "base: alice's read is delivered: {read}"
     );
     let relay = json!({"progressToken": PROSE});
+    // Control: the same relay to a visible backend is refused, so the
+    // detector holds alice's read and checks `_meta`.
+    let visible = invoke_as_agent(
+        &fx,
+        "b",
+        ("alpha", "send", json!({"text": "hello"})),
+        &relay,
+    )
+    .await;
+    assert_eq!(
+        envelope(&visible.1)["error"]["code"],
+        -32002,
+        "control: a relay in `_meta` to a visible backend was not refused: {}",
+        visible.1
+    );
     let call = |server| (server, "cap_open", json!({"text": "hello"}));
     let before = crate::capability::CapabilityBackend::executed_for_test();
     let hidden = invoke_as_agent(&fx, "b", call("caps"), &relay).await;
