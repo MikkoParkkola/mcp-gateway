@@ -14,6 +14,7 @@ src/backend/metadata.rs	get_cached_list_for	refuse_shared_start	1	not-delivered	
 src/backend/ops.rs	blocked_call_refusal	blocked_tool_refusal	1	feeds	the backend's send backstop for a withheld tool
 src/backend/ops.rs	notify_with_headers_lent	blocked_call_refusal	1	no-record	a notification to a backend; notifications carry no delivery record
 src/backend/ops.rs	request_attempted	blocked_call_refusal	1	composite-or-replay	the send backstop: every route's gate withholds the name first (raised there); reached only by a name the gates missed
+src/backend/ops.rs	request_attempted	refuse_unredacted	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/backend/pool.rs	refuse_shared_start	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/pool_eviction.rs	arm_refusal_eviction	on_definitive_refusal	1	not-delivered	registers the slot's eviction on a definitive refusal
 src/backend/secret_send.rs	prepare_secrets	refuse_secret_target	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
@@ -307,14 +308,15 @@ src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capa
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate
+src/security/needles.rs	scrub_answer	refusal	2	not-a-decision	a backend answer that holds a value the gateway injected is replaced: a property of the backend's answer, not a decision about the caller
 src/security/ssrf/destination.rs	check_literal	literal_refusal	1	feeds	the SSRF literal-address refusal its callers deliver
 src/security/ssrf/redirect.rs	ssrf_redirect_policy	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/budget.rs	charge	response_refusal	1	no-record	the start-once preview only (budget.rs: only the preview attaches a budget)
 src/transport/http/client.rs	build	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/requests.rs	lent_for	counted_refusal	1	recorded	a refused per-user send's Forbidden, recorded by the outlet where a call delivers it
-src/transport/http/requests.rs	read_answer	is_deterministic_refusal	1	not-delivered	predicate
-src/transport/http/requests.rs	read_answer	peer_refusal	1	not-a-decision	the backend's own refusal status
-src/transport/http/requests.rs	read_answer	status_refusal	1	not-a-decision	the backend's own refusal status
+src/transport/http/requests.rs	read_answer_unscrubbed	is_deterministic_refusal	1	not-delivered	predicate
+src/transport/http/requests.rs	read_answer_unscrubbed	peer_refusal	1	not-a-decision	the backend's own refusal status
+src/transport/http/requests.rs	read_answer_unscrubbed	status_refusal	1	not-a-decision	the backend's own refusal status
 src/transport/http/sse_channel.rs	over_budget	response_refusal	1	no-record	the start-once preview only
 src/transport/lender.rs	counted_refusal	count_refusal	1	not-delivered	the metric count
 src/transport/lender.rs	lent_for	counted_refusal	4	recorded	a refused per-user send's Forbidden, recorded by the outlet where a call delivers it
