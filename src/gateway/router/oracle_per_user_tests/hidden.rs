@@ -4,10 +4,12 @@
 //! the caller's own slot.
 //!
 //! The listing judges a per-user backend by its shared slot alone. A backend
-//! it leaves out is hidden, and answers as an unregistered name, unless the
-//! caller's own slot admits the call: a caller is never refused what it could
-//! call before. The listing gap that remains (the listing ignores the caller's
-//! own slot) is tracked separately.
+//! it leaves out is hidden, and answers as an unregistered name, only when
+//! the caller's own slot is held and refuses the call too: a slot that admits
+//! keeps the call, and a cold one proves nothing, so a caller is never
+//! refused what it could call before. A caller with no view of the backend
+//! (no binding that could ever fill) is hidden. The listing gap that remains
+//! (the listing ignores the caller's own slot) is tracked separately.
 
 use std::sync::Arc;
 
@@ -16,8 +18,9 @@ use serde_json::{Value, json};
 use tower::ServiceExt;
 
 use super::{Gateway, gateway_on};
-use crate::config::InputSchemaEnforcement;
-use crate::gateway::meta_mcp::slot_verdict_fixture::{BACKEND, BINDING, CallerSlot, Warmth, valid};
+use crate::gateway::meta_mcp::slot_verdict_fixture::{
+    BACKEND, BINDING, CallerSlot, Warmth, arm_alpha_upstream, valid,
+};
 use crate::key_server::oidc::VerifiedIdentity;
 
 /// A tool only alpha's own slot holds; the shared slot never lists it.
@@ -140,15 +143,44 @@ async fn a_caller_whose_own_slot_admits_is_not_hidden_though_unlisted() {
     assert!(!hides(&gw, true), "a caller its own slot admits was hidden");
 }
 
-/// Cold: alpha's slot is not held, so nothing admits beyond the listing, and
-/// the backend the listing leaves out is hidden.
+/// Cold: alpha's slot is not held, so it proves no refusal, and the backend
+/// the listing leaves out is not hidden: hiding it would refuse the first
+/// call, which then never fills the slot.
 #[tokio::test]
-async fn a_cold_caller_slot_hides_an_unlisted_backend() {
+async fn a_cold_caller_slot_does_not_hide_an_unlisted_backend() {
     let gw = gateway(Warmth::Cold).await;
     assert!(!listed(&gw, true).await, "the listing named the backend");
+    assert!(!hides(&gw, true), "a cold caller slot hid the backend");
+}
+
+/// Guard: with a cold slot, the caller's first call still reaches the
+/// backend, which fills the slot.
+#[tokio::test]
+async fn a_cold_caller_slot_first_call_reaches_the_backend() {
+    let gw = gateway(Warmth::Cold).await;
+    let upstream = arm_alpha_upstream(&gw.backend, &["note", "read", OWN_TOOL]);
+    let (status, body) = send(
+        &gw,
+        json!({"name": "gateway_invoke",
+               "arguments": {"server": BACKEND, "tool": OWN_TOOL, "arguments": {"q": "x"}}}),
+        true,
+    )
+    .await;
+    let text = body.to_string();
+    assert_eq!(status, 200, "{text}");
+    for absent in [
+        "Backend not found",
+        "lacks scope",
+        "blocked by certificate policy",
+    ] {
+        assert!(
+            !text.contains(absent),
+            "the first call was refused ({absent}): {text}"
+        );
+    }
     assert!(
-        hides(&gw, true),
-        "an unlisted backend with a cold slot was not hidden"
+        upstream.calls() > 0,
+        "the first call never reached the backend: {text}"
     );
 }
 

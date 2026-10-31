@@ -11,15 +11,16 @@
 //! a catalogue not held now is no decision: the backend is hidden only if its
 //! name alone refuses it.
 //!
-//! One exception keeps every call that worked before: on a per-user backend,
-//! a caller whose own slot admits the call is not hidden, though the listing
-//! (which reads the shared slot) leaves the backend out.
+//! On a per-user backend the listing reads the shared slot alone, so the
+//! caller's own slot decides too: an unlisted backend is hidden only when the
+//! caller's own slot is held and refuses the call. A cold one proves nothing
+//! and hides nothing, so no caller is refused a call it could make before.
 
 use std::sync::Arc;
 
 use super::AppState;
 use super::authorization::{OwnedRouterAuthorizer, admits_some_tool};
-use crate::gateway::meta_mcp::hiding::{CallerHiding, ListedCatalogue};
+use crate::gateway::meta_mcp::hiding::{CallerHiding, CallerSlot, ListedCatalogue};
 use crate::gateway::meta_mcp::scoped_backends::Unscoped;
 use crate::gateway::oauth::scopes::Action;
 use crate::identity_propagation::{CallerProof, CallerProvenance};
@@ -65,22 +66,25 @@ impl RouterHiding {
 
 impl CallerHiding for RouterHiding {
     fn hides(&self, server: &str) -> bool {
-        self.unlisted(server) && !self.own_slot_admits(server)
+        self.unlisted(server) && !self.own_slot_keeps(server)
     }
 }
 
 impl RouterHiding {
-    /// Whether this caller's own slot on a per-user `server` admits a call,
-    /// so the caller keeps every call that worked before.
-    fn own_slot_admits(&self, server: &str) -> bool {
+    /// Whether this caller's own slot on a per-user `server` keeps the
+    /// backend from being hidden: it admits a call, or it is not held and so
+    /// proves no refusal.
+    fn own_slot_keeps(&self, server: &str) -> bool {
         let state = self.state.as_ref();
         let (client, agent, cert) = self.authorizer.parts();
         let caller = CallerProof::new(
             self.verified.as_ref(),
             CallerProvenance::classify(client.map(|c| c.principal.storage_form())),
         );
-        let Some(names) = state.meta_mcp.caller_slot_tools(server, caller) else {
-            return false;
+        let names = match state.meta_mcp.caller_slot(server, caller) {
+            CallerSlot::Listing => return false,
+            CallerSlot::Undecided => return true,
+            CallerSlot::Held(names) => names,
         };
         !(agent.is_none() && state.agent_auth.enabled)
             && state

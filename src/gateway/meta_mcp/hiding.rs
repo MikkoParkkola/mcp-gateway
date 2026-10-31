@@ -126,29 +126,46 @@ impl super::MetaMcp {
     }
 }
 
+/// What a caller's own slot on a backend can decide about hiding it.
+pub(crate) enum CallerSlot {
+    /// The listing's answer stands: not a per-user backend, a caller that
+    /// reads the shared slot, or one with no view (no binding can ever fill).
+    Listing,
+    /// The caller's own slot is held, fresh and complete: these tools.
+    Held(Vec<String>),
+    /// Cold, stale or truncated: nothing is proved, so nothing is hidden.
+    Undecided,
+}
+
 impl super::MetaMcp {
-    /// The tools this caller's own slot holds on a per-user `server`, chosen
-    /// as a stored read chooses it ([`Self::stored_target_view`]): `None`
-    /// unless the backend keeps per-user catalogues and the slot is held and
-    /// fresh. Read without a mint or a fill. A caller whose own slot admits a
-    /// call is never refused it as hidden: the listing judges a per-user
-    /// backend by its shared slot alone.
-    pub(crate) fn caller_slot_tools(
+    /// What this caller's own slot on `server` decides, the slot chosen as a
+    /// stored read chooses it ([`Self::stored_target_view`]), read without a
+    /// mint or a fill. The listing judges a per-user backend by its shared
+    /// slot alone; a caller's own slot can keep a call it could make before.
+    pub(crate) fn caller_slot(
         &self,
         server: &str,
         caller: crate::identity_propagation::CallerProof<'_>,
-    ) -> Option<Vec<String>> {
+    ) -> CallerSlot {
         use super::listing_view::ListingView;
         use super::scoped_backends::Unscoped;
-        let backend = self.registry().get_for(Unscoped::Visibility, server)?;
-        if !backend.keeps_per_user_catalogues() {
-            return None;
-        }
-        let ListingView::Caller(binding) = self.listing_view_for(&backend, caller) else {
-            return None;
+        let Some(backend) = self.registry().get_for(Unscoped::Visibility, server) else {
+            return CallerSlot::Listing;
         };
-        let (cached, _, _, fresh) = backend.cached_tools_view(Some(&binding));
-        let tools = cached.filter(|_| fresh)?;
-        Some(tools.iter().map(|t| t.name.clone()).collect())
+        if !backend.keeps_per_user_catalogues() {
+            return CallerSlot::Listing;
+        }
+        let binding = match self.listing_view_for(&backend, caller) {
+            ListingView::Shared | ListingView::NoView => return CallerSlot::Listing,
+            ListingView::Cold => return CallerSlot::Undecided,
+            ListingView::Caller(binding) => binding,
+        };
+        let (cached, truncated, _, fresh) = backend.cached_tools_view(Some(&binding));
+        match cached {
+            Some(tools) if fresh && !truncated => {
+                CallerSlot::Held(tools.iter().map(|t| t.name.clone()).collect())
+            }
+            _ => CallerSlot::Undecided,
+        }
     }
 }
