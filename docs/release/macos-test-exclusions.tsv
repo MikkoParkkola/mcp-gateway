@@ -12,3 +12,5 @@ src/security/dump_guard_tests.rs	lease_t11_child	inherent	The child half of leas
 src/security/dump_guard_tests.rs	lease_t11_linux_guard_is_observable	inherent	Runs lease_t11_child in a fresh process to observe the not-dumpable mark, which only Linux and Android have; on macOS no test observes the guard's zero core limit.
 tests/preview_sandbox_inherited_fd.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
 tests/preview_sandbox_linux.rs	*	inherent	The Linux preview sandbox (util-linux unshare, mount namespaces); macOS has its own sandbox, tested separately (ADR-027).
+src/security/firewall/allowed_root_spelling_tests.rs	r33d_nfd_beside_nfc_is_refused_on_linux	inherent	Linux filesystems keep NFC and NFD names distinct; APFS does not, and macOS runs the twin row r33d_nfd_resolving_to_the_one_entry_is_allowed_on_macos instead.
+src/security/firewall/allowed_root_spelling_tests.rs	r33l_non_utf8_entry_is_compared_by_bytes	inherent	APFS refuses a file name that is not valid UTF-8, so the entry the row needs cannot be created on macOS.

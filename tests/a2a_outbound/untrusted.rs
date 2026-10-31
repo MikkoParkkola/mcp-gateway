@@ -61,6 +61,8 @@ fn blocking_firewall() -> Firewall {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         }],
         ..FirewallConfig::default()
     };

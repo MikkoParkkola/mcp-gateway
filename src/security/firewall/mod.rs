@@ -28,6 +28,11 @@ use crate::security::ResponseScanner;
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::transition::TransitionTracker;
 
+mod allowed_root;
+pub(crate) use allowed_root::ScanSubject;
+#[cfg(test)]
+pub(crate) use allowed_root::plain_rule;
+pub(crate) use allowed_root::warn_at_load as warn_folder_rules_at_load;
 pub mod anomaly;
 pub(crate) mod anomaly_config;
 mod anomaly_gate;
@@ -120,6 +125,11 @@ pub struct Firewall {
     audit: Option<audit::AuditLogger>,
     #[cfg(test)]
     response_observer: response_observer::ResponseObserver,
+    /// Backend and capability views the folder check reads at check time.
+    registries: allowed_root::Registries,
+    /// The filesystem, clock and pool replacements a row sets.
+    #[cfg(test)]
+    seams: allowed_root::Seams,
 }
 
 /// A compiled firewall rule with a pre-processed glob pattern.
@@ -134,6 +144,9 @@ struct CompiledRule {
     except: Vec<verdict::CompiledException>,
     #[allow(dead_code)]
     reason: Option<String>,
+    /// The folder part of a rule carrying `allowed_roots`; such a rule
+    /// decides only its own findings, never a content finding.
+    root: Option<allowed_root::CompiledRoot>,
 }
 
 /// Verdict from the firewall for a single tool invocation.
@@ -258,7 +271,15 @@ impl Firewall {
         config: FirewallConfig,
         transition_tracker: Option<Arc<TransitionTracker>>,
     ) -> Self {
-        let rules = config.rules.iter().map(compile_rule).collect();
+        let rules = config
+            .rules
+            .iter()
+            .enumerate()
+            .map(|(i, rule)| CompiledRule {
+                root: allowed_root::compile(i, rule),
+                ..compile_rule(rule)
+            })
+            .collect();
         let response_scanner = ResponseScanner::new();
         let input_scanner = input_scanner::InputScanner::new();
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());
@@ -300,6 +321,9 @@ impl Firewall {
             audit,
             #[cfg(test)]
             response_observer: response_observer::ResponseObserver::default(),
+            registries: allowed_root::Registries::default(),
+            #[cfg(test)]
+            seams: allowed_root::Seams::default(),
         }
     }
 
@@ -336,12 +360,30 @@ impl Firewall {
     /// stateful guards (anomaly, tenant, budget, learning): those judged the
     /// logical call once, at its route scan, and a second pass would count it
     /// twice. Design note `design-b1-rescan.md` r2.
-    pub(crate) fn rescan(&self, target: RuleTarget<'_>, args: &Value) -> FirewallVerdict {
+    ///
+    /// `subject` says whether `args` are the dispatched arguments or a bridge
+    /// retry's answers: the folder check runs on the arguments only.
+    /// `backend` is the instance the send will use, so a reload between the
+    /// route scan and the send cannot split what was checked from what is sent.
+    pub(crate) fn rescan(
+        &self,
+        target: RuleTarget<'_>,
+        args: &Value,
+        subject: ScanSubject,
+        backend: Option<&crate::backend::Backend>,
+    ) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
         }
-        let findings = self.content_findings(target.tool, args);
-        let action = self.resolve_action(target, &findings);
+        let roots = match subject {
+            ScanSubject::Arguments => allowed_root::root_check(self, target, args, backend),
+            ScanSubject::Answers => allowed_root::RootOutcome::default(),
+        };
+        let mut findings = self.content_findings(target.tool, args);
+        let (action, root_findings) =
+            allowed_root::apply_roots(roots, self.resolve_action(target, &findings));
+        // A root finding leads: the refusal's wire text is the first finding's.
+        findings.splice(0..0, root_findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -383,7 +425,7 @@ impl Firewall {
             tool,
             key: KeyOf::NotKnown,
         };
-        self.check_request_keyed(session_id, target, args, caller, control_identity)
+        self.check_request_keyed(session_id, target, args, caller, control_identity, None)
     }
 
     /// [`Self::check_request`] with the caller's proven key, for a rule's
@@ -395,6 +437,7 @@ impl Firewall {
         args: &Value,
         caller: &str,
         control_identity: &str,
+        backend: Option<&crate::backend::Backend>,
     ) -> FirewallVerdict {
         if !self.config.enabled {
             return FirewallVerdict::allow();
@@ -427,10 +470,16 @@ impl Firewall {
         // principal as the anomaly detector, over an explicit window.
         let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
 
+        // The folder check (allowed_root.rs), the same helper `rescan` calls.
+        let roots = allowed_root::root_check(self, target, args, backend);
+        let content_action = self.resolve_action(target, &findings);
+        let (rooted_action, root_findings) = allowed_root::apply_roots(roots, content_action);
+        // A root finding leads: the refusal's wire text is the first finding's.
+        findings.splice(0..0, root_findings);
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            self.resolve_action(target, &findings)
+            rooted_action
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -483,6 +532,23 @@ impl Firewall {
     /// The process's cross-tenant read history.
     pub(crate) const fn reads(&self) -> &Arc<tenant_reads::ReadHistory> {
         &self.reads
+    }
+
+    /// The live backend registry and the capability slot shared with
+    /// `MetaMcp`. The folder check classifies a call's backend through them
+    /// at check time, so a reload or a runtime-added capability is judged as
+    /// it is now.
+    #[must_use]
+    pub(crate) fn with_registries(
+        mut self,
+        backends: Arc<crate::backend::BackendRegistry>,
+        capabilities: allowed_root::CapabilitySlot,
+    ) -> Self {
+        self.registries = allowed_root::Registries {
+            backends: Some(backends),
+            capabilities: Some(capabilities),
+        };
+        self
     }
 
     /// The tenant guard, for attribution reads that record nothing (MIN.1).

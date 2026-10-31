@@ -196,6 +196,8 @@ fn exec_rule_elevates_sql_injection_to_block() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         }],
         ..FirewallConfig::default()
     };

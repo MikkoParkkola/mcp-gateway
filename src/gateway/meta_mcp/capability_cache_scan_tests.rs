@@ -81,6 +81,8 @@ fn gateway(port: u16) -> MetaMcp {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     let config = FirewallConfig {
         enabled: true,
