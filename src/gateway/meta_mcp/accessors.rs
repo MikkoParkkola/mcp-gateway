@@ -42,24 +42,22 @@ impl MetaMcp {
     }
 
     /// The session profile's check of `(server, tool)` for this request's
-    /// caller. Its refusal names the backend, so for a backend hidden from
-    /// the caller it is the unregistered name's miss instead (`super::hiding`):
-    /// refused all the same, never let through. A caller hiding does not
-    /// apply to keeps the profile's refusal.
+    /// caller. A name hidden from the caller is absent to it: as for an
+    /// unregistered name, the profile has nothing to refuse (its refusal would
+    /// name the backend), and the call meets the dispatch's miss, which routes
+    /// by the caller's view (`super::hiding`). A caller hiding does not apply
+    /// to keeps the profile's refusal.
     pub(in crate::gateway) fn caller_profile_check(
         &self,
         session_id: Option<&str>,
         (server, tool): (&str, &str),
     ) -> crate::Result<()> {
+        if super::hiding::hidden(server) {
+            return Ok(());
+        }
         self.active_profile(session_id)
             .check(server, tool)
-            .map_err(|refusal| {
-                if super::hiding::hidden(server) {
-                    crate::Error::BackendNotFound(server.to_string())
-                } else {
-                    crate::Error::Protocol(refusal)
-                }
-            })
+            .map_err(crate::Error::Protocol)
     }
 
     /// The capability provider as this request's caller sees it: `None` when
