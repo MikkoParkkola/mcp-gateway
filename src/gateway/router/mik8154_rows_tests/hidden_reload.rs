@@ -562,3 +562,87 @@ async fn a_task_step_on_a_backend_hidden_by_name_answers_as_an_unregistered_one(
     assert_eq!(hidden_sent, unregistered_sent, "the two runs sent alike");
     assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
 }
+
+/// [`send_cert`] with `bearer`'s key.
+async fn send_as(fx: &Fx, bearer: &str, method: &str, name: &str, params: Value) -> Value {
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("authorization", format!("Bearer {bearer}"))
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", method)
+        .header("mcp-name", name)
+        .body(axum::body::Body::from(
+            json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).to_string(),
+        ))
+        .expect("request");
+    request.extensions_mut().insert(crate::mtls::CertIdentity {
+        common_name: Some("agent".to_string()),
+        display_name: "agent".to_string(),
+        ..Default::default()
+    });
+    let response = fx.router.clone().oneshot(request).await.expect("answers");
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    serde_json::from_slice(&bytes).expect("json")
+}
+
+/// A playbook task under `k-alpha-ghost` (it grants `alpha` and `ghost`) whose
+/// second step names `second`: what the submit answers, and the sends.
+async fn submit_playbook_under_alpha_ghost(second: &str, key: &str) -> (Value, usize) {
+    let script = Script::new();
+    let definition = playbook_definition(["alpha", second]);
+    let fx = Box::pin(super::super::direct_guards_fixture::fixture_built_on(
+        Arc::clone(&script) as Arc<dyn Transport>,
+        move |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    ))
+    .await;
+    warm(&fx, &["alpha", "alpha-pt"]);
+    let mut meta = task_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let params = json!({"name": "gateway_run_playbook", "task": {}, "_meta": meta,
+                        "arguments": {"name": "pb", "arguments": {"x": "v"}}});
+    let created = send_as(
+        &fx,
+        "k-alpha-ghost",
+        "tools/call",
+        "gateway_run_playbook",
+        params,
+    )
+    .await;
+    (created, script.calls.load(Ordering::SeqCst))
+}
+
+/// A playbook step outside the key's grant is refused at intake, before any
+/// task is made: every step's target meets the strict route authorize
+/// (`dispatch_tools_call.rs`), so a run never reaches a backend its key did not
+/// grant at submit. That is why the run's hiding judgment, built from the
+/// submit-time key, never disagrees with the key re-checked at dispatch; a
+/// relaxed intake would reopen that. Control: a step the key grants is
+/// accepted.
+#[tokio::test]
+async fn a_playbook_step_outside_the_keys_grant_is_refused_at_intake() {
+    let (refused, refused_sent) =
+        Box::pin(submit_playbook_under_alpha_ghost("alpha-pt", "grant-out")).await;
+    assert_eq!(
+        (refused["error"]["code"].clone(), refused_sent),
+        (json!(-32003), 0),
+        "a step outside the key's grant was not refused at intake: {refused}"
+    );
+    assert!(
+        refused.pointer("/result/taskId").is_none(),
+        "a task was made: {refused}"
+    );
+    let (accepted, _) = Box::pin(submit_playbook_under_alpha_ghost("alpha", "grant-in")).await;
+    assert!(
+        accepted.pointer("/result/taskId").is_some(),
+        "control: a step the key grants was refused: {accepted}"
+    );
+}

@@ -641,3 +641,37 @@ async fn search_lists_no_tool_of_a_hidden_provider() {
         }
     }
 }
+
+/// Control for the search pin: with the provider visible, the same searches
+/// list its tools, so an empty result for a hidden one is not an empty index
+/// or a query that never matched.
+#[tokio::test]
+async fn search_lists_a_visible_providers_tools() {
+    let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
+    let (caps, _dir) = caps_with_callback().await;
+    state.meta_mcp.set_capabilities(caps);
+    for (query, expected) in [("cap_open", "cap_open"), ("callback", "cap_callback")] {
+        let (_, body) = post_as_agent_cert(
+            &router,
+            "/mcp",
+            json!({ "name": "gateway_search", "arguments": { "query": query } }),
+        )
+        .await;
+        let matches = payload(&serde_json::from_str(&body).expect("json"))["matches"].clone();
+        let named: Vec<String> = matches
+            .as_array()
+            .unwrap_or_else(|| panic!("matches array: {body}"))
+            .iter()
+            .filter_map(|m| {
+                m["tool"]
+                    .as_str()
+                    .or_else(|| m["name"].as_str())
+                    .map(str::to_string)
+            })
+            .collect();
+        assert!(
+            named.iter().any(|n| n.contains(expected)),
+            "search for {query:?} does not list the visible provider's {expected}: {body}"
+        );
+    }
+}
