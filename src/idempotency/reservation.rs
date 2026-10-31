@@ -106,9 +106,39 @@ impl IdempotencyReservation {
         result: &Value,
         read: (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
+        // Settled already (parked for a continuation, or failed): nothing
+        // later may overwrite that, least of all with a non-final result.
+        if self.settled {
+            return false;
+        }
         self.settled = true;
         self.cache
             .mark_completed_read(&self.key, result.clone(), &self.fingerprint, read)
+    }
+
+    /// Park the key for the continuation of `envelope`, the envelope minted
+    /// for the input-required round this reservation's call answered.
+    /// `deadlines` are the envelope's `(issued_at, expires_at)`;
+    /// `expired_answer` is what the key answers once the park expires.
+    /// Returns `false`, changing nothing, once the reservation is settled.
+    pub(crate) fn park(
+        &mut self,
+        envelope: &str,
+        deadlines: (u64, u64),
+        expired_answer: Value,
+    ) -> bool {
+        if self.settled {
+            return false;
+        }
+        self.settled = true;
+        self.cache.park(
+            &self.key,
+            &self.fingerprint,
+            envelope,
+            deadlines,
+            expired_answer,
+        );
+        true
     }
 
     /// Record that the protected side effect has committed.

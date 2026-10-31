@@ -39,11 +39,23 @@ pub fn enforce(
     key: &str,
     fingerprint: &str,
 ) -> Result<GuardOutcome> {
+    enforce_claimed(cache, key, fingerprint, None)
+}
+
+/// [`enforce`] for a call that may continue an input-required round: `claim`
+/// is the digest of the `requestState` it presents ([`super::claim_of`]),
+/// which claims a key parked for that round's continuation.
+pub(crate) fn enforce_claimed(
+    cache: &Arc<IdempotencyCache>,
+    key: &str,
+    fingerprint: &str,
+    claim: Option<&str>,
+) -> Result<GuardOutcome> {
     // Minted before `admit` publishes the entry that points at it, and moved
     // into the reservation immediately after, so a published in-flight entry is
     // never momentarily ownerless — the window ADR-012 A2 closes.
     let owner = Arc::new(OwnerToken);
-    match cache.admit(key, fingerprint, &owner) {
+    match cache.admit(key, fingerprint, claim, &owner) {
         AdmitOutcome::Proceed => Ok(GuardOutcome::Proceed(IdempotencyReservation::new(
             Arc::clone(cache),
             key,

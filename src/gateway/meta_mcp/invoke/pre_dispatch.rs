@@ -18,7 +18,7 @@ use crate::gateway::meta_mcp::prompt_cache::CacheKeyDeriver;
 use crate::gateway::meta_mcp::support::{
     CachePrincipal, augment_with_predictions, augment_with_trace, response_cache_key_for,
 };
-use crate::idempotency::{GuardOutcome, IdempotencyReservation, enforce};
+use crate::idempotency::{GuardOutcome, IdempotencyReservation, claim_of, enforce_claimed};
 use crate::protocol::LoggingLevel;
 use crate::transport::notification_sink::emit_log;
 use crate::{Error, Result};
@@ -122,12 +122,20 @@ impl MetaMcp {
             // The guard's own refusals (mismatch, in flight, at capacity)
             // reserve nothing: they ask for the nonce back, and the witness
             // decides (MIK-8353 3d). A stored failure below is an answer.
-            let admitted = enforce(idem_cache, key, fingerprint).inspect_err(|_| {
-                super::nonce_settle::settle_pre_send(
-                    caller,
-                    super::nonce_settle::PreSendExit::AskRefund,
-                );
-            })?;
+            // A continuation claims a key parked for its round by the
+            // envelope it presents.
+            let claim = caller
+                .retry
+                .is_retry()
+                .then(|| claim_of(caller.retry.request_state.as_deref()))
+                .flatten();
+            let admitted = enforce_claimed(idem_cache, key, fingerprint, claim.as_deref())
+                .inspect_err(|_| {
+                    super::nonce_settle::settle_pre_send(
+                        caller,
+                        super::nonce_settle::PreSendExit::AskRefund,
+                    );
+                })?;
             match admitted {
                 // A dispatched call that failed is terminal: serving the stored
                 // error is what stops the retry re-running a side effect that
