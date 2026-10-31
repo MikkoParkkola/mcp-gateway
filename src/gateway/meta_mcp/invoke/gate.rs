@@ -496,8 +496,7 @@ impl MetaMcp {
         tool: &str,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        self.active_profile(session_id)
-            .check(server, tool)
+        self.caller_profile_check(session_id, (server, tool))
             .err()
             .map(Error::Protocol)
     }

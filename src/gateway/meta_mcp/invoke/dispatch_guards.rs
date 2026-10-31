@@ -163,8 +163,7 @@ impl MetaMcp {
         call: &BackendCall<'_>,
     ) -> Result<()> {
         let (server, tool) = (call.server, call.tool);
-        self.active_profile(call.session_id)
-            .check(server, tool)
+        self.caller_profile_check(call.session_id, (server, tool))
             .map_err(Error::Protocol)?;
         self.admit_backend_wide(server)
     }

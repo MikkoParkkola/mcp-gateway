@@ -79,8 +79,7 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
-        self.active_profile(session_id)
-            .check(server, tool)
+        self.caller_profile_check(session_id, (server, tool))
             .map_err(Error::Protocol)?;
         // `{}`, never `Null`: invocation builds its target with an empty
         // object, and two gates that see different targets can disagree.
