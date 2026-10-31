@@ -76,7 +76,6 @@ fn dispatched(fx: &Fx) -> usize {
     fx.calls.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-const DIRECT: (&str, &str) = ("/mcp/alpha", "read");
 /// Both direct arms: sanitized (`alpha`) and pass-through (`alpha-pt`).
 const DIRECT_ARMS: [(&str, &str); 2] = [("/mcp/alpha", "read"), ("/mcp/alpha-pt", "read")];
 
@@ -106,43 +105,46 @@ async fn t4_meta_fresh_same_key_call_after_a_question_is_refused() {
 /// completion, not run.
 #[tokio::test]
 async fn t2_round_1s_continuation_runs_after_a_refused_retry() {
-    let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let (_, first) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
-    let state = first["result"]["requestState"]
-        .as_str()
-        .unwrap_or_else(|| panic!("premise: a continuation: {first}"))
-        .to_owned();
-    let (status, again) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
-    println!("direct fresh same-key call: {status} {again}");
-    assert_eq!(
-        status,
-        StatusCode::CONFLICT,
-        "the fresh call was not refused: {again}"
-    );
-    assert!(again.to_string().contains(UNAVAILABLE), "{again}");
-    let resume = json!({
-        "requestState": state,
-        "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
-    });
-    let (status, done) = call(&fx, DIRECT, &no_args(), form(), resume.clone()).await;
-    println!("direct continuation: {status} {done}");
-    assert_eq!(status, StatusCode::OK, "{done}");
-    assert_eq!(done["result"]["resultType"], "complete", "{done}");
-    assert!(
-        done.get("error").is_none(),
-        "the continuation failed: {done}"
-    );
-    assert_eq!(
-        dispatched(&fx),
-        2,
-        "round 1 + its continuation, nothing else"
-    );
-    let (status, replay) = call(&fx, DIRECT, &no_args(), form(), resume).await;
-    println!("direct keyed replay: {status} {replay}");
-    assert_eq!(status, StatusCode::OK, "{replay}");
-    assert!(replay.get("error").is_none(), "{replay}");
-    assert_eq!(replay["result"]["content"], done["result"]["content"]);
-    assert_eq!(dispatched(&fx), 2, "the replay ran");
+    for target in DIRECT_ARMS {
+        let fx = fixture(Answer::AskOnce, |_| {}).await;
+        let (_, first) = call(&fx, target, &no_args(), form(), json!({})).await;
+        let state = first["result"]["requestState"]
+            .as_str()
+            .unwrap_or_else(|| panic!("premise: a continuation: {first}"))
+            .to_owned();
+        let (status, again) = call(&fx, target, &no_args(), form(), json!({})).await;
+        println!("{target:?} fresh same-key call: {status} {again}");
+        assert_eq!(
+            status,
+            StatusCode::CONFLICT,
+            "the fresh call was not refused: {again}"
+        );
+        assert!(again.to_string().contains(UNAVAILABLE), "{again}");
+        let resume = json!({
+            "requestState": state,
+            "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
+        });
+        let (status, done) = call(&fx, target, &no_args(), form(), resume.clone()).await;
+        println!("{target:?} continuation: {status} {done}");
+        assert_eq!(status, StatusCode::OK, "{done}");
+        assert_eq!(done["result"]["resultType"], "complete", "{done}");
+        assert!(
+            done.get("error").is_none(),
+            "the continuation failed: {done}"
+        );
+        assert_eq!(
+            dispatched(&fx),
+            2,
+            "round 1 + its continuation, nothing else"
+        );
+        let (status, replay) = call(&fx, target, &no_args(), form(), resume).await;
+        println!("{target:?} keyed replay: {status} {replay}");
+        assert_eq!(status, StatusCode::OK, "{replay}");
+        assert!(replay.get("error").is_none(), "{replay}");
+        assert_eq!(replay["result"]["resultType"], "complete", "{replay}");
+        assert_eq!(replay["result"]["content"], done["result"]["content"]);
+        assert_eq!(dispatched(&fx), 2, "the replay ran");
+    }
 }
 
 /// T3 (preservation): a question the client did not declare is refused

@@ -389,7 +389,9 @@ async fn l7a_a_delivered_question_keeps_the_lease() {
     let key = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "l7a"}});
     let (_, asked) = super::direct_continuation_tests::call(&fx, "alpha", None, key).await;
     assert!(
-        asked.pointer("/result/requestState").is_some(),
+        asked
+            .pointer("/result/requestState")
+            .is_some_and(Value::is_string),
         "premise: the backend's question was not delivered: {asked}"
     );
     let after = keyed(&fx, Via::Invoke, "l7a").await;

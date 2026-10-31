@@ -82,6 +82,19 @@ async fn parent_then_retry(
     (count, first, (status, again))
 }
 
+/// A Code Mode parent relays its step's question: input required, with the
+/// gateway's continuation.
+fn assert_relayed(label: &str, first: &Value) {
+    assert_eq!(
+        first["result"]["resultType"], "input_required",
+        "{label} premise: the question was not relayed: {first}"
+    );
+    assert!(
+        first["result"]["requestState"].is_string(),
+        "{label} premise: no continuation: {first}"
+    );
+}
+
 /// The answer the parent's outer entry gives a fresh same-key call after an
 /// input-required answer: unavailable, with HTTP 409.
 fn assert_unavailable(label: &str, (status, again): &(StatusCode, Value)) {
@@ -119,6 +132,10 @@ async fn a_plan_step_that_asks_does_not_run_again_under_the_parent_key() {
     // A run carries no continuation: it completes with the question inside
     // its report, and the parent's entry replays that report.
     assert_eq!(status, StatusCode::OK, "{again}");
+    assert!(
+        first["result"]["content"].is_array(),
+        "premise: a completed report: {first}"
+    );
     assert_eq!(
         again["result"]["content"], first["result"]["content"],
         "not the stored report"
@@ -129,7 +146,7 @@ async fn a_plan_step_that_asks_does_not_run_again_under_the_parent_key() {
 #[tokio::test]
 async fn a_chain_step_that_asks_does_not_run_again_under_the_parent_key() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let (count, _, again) = parent_then_retry(
+    let (count, first, again) = parent_then_retry(
         &fx,
         "chain",
         "gateway_execute",
@@ -137,6 +154,7 @@ async fn a_chain_step_that_asks_does_not_run_again_under_the_parent_key() {
     )
     .await;
     assert_eq!(count, 1, "the chain step ran again under the parent's key");
+    assert_relayed("chain", &first);
     assert_unavailable("chain", &again);
 }
 
@@ -144,7 +162,7 @@ async fn a_chain_step_that_asks_does_not_run_again_under_the_parent_key() {
 #[tokio::test]
 async fn a_code_mode_call_that_asks_does_not_run_again_under_the_parent_key() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let (count, _, again) = parent_then_retry(
+    let (count, first, again) = parent_then_retry(
         &fx,
         "code mode",
         "gateway_execute",
@@ -155,5 +173,6 @@ async fn a_code_mode_call_that_asks_does_not_run_again_under_the_parent_key() {
         count, 1,
         "the Code Mode call ran again under the parent's key"
     );
+    assert_relayed("code mode", &first);
     assert_unavailable("code mode", &again);
 }
