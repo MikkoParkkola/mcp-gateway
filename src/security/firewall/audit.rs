@@ -58,6 +58,10 @@ struct AuditFinding {
     scan_type: super::ScanType,
     severity: crate::security::Severity,
     location: super::FindingLocation,
+    /// A root refusal's reason code; absent on every other finding, and on
+    /// every row an older gateway wrote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<super::allowed_root::RootReason>,
 }
 
 impl From<&Finding> for AuditFinding {
@@ -66,6 +70,11 @@ impl From<&Finding> for AuditFinding {
             scan_type: finding.scan_type,
             severity: finding.severity,
             location: finding.location,
+            // A root refusal words its code first ("<code>: rule ..."); the
+            // row keeps the code, a closed enum, never the text.
+            reason: (finding.scan_type == super::ScanType::RootRefused)
+                .then(|| finding.description.split(':').next().unwrap_or_default())
+                .and_then(|code| serde_json::from_value(serde_json::Value::from(code)).ok()),
         }
     }
 }
@@ -79,6 +88,7 @@ const _: () = {
     copy::<super::ScanType>();
     copy::<crate::security::Severity>();
     copy::<super::FindingLocation>();
+    copy::<super::allowed_root::RootReason>();
 };
 
 /// Every finding of `verdict` as the audit log may hold it.
