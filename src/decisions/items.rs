@@ -39,19 +39,95 @@ type Dated = (DateTime<Utc>, Value);
 type Blocks = BTreeMap<String, Vec<String>>;
 
 pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
-    let (mut changed, blocks) = changed_capabilities(set);
+    let mut live = Vec::new();
+    let (mut changed, blocks) = changed_capabilities(set, &mut live);
     let mut requests = access_requests(set, &blocks);
-    sort(&mut changed);
-    sort(&mut requests);
+    let mut adopt = adopt_items(set, &mut live);
+    let mut unreadable = unreadable_files(set, &mut live);
+    // Pruned once, over every kind's ids: a kind pruning alone would drop the
+    // first-seen time of every other kind (R11).
+    set.first_seen.retain(|seen, _| live.contains(seen));
+    for kind in [&mut changed, &mut requests, &mut adopt, &mut unreadable] {
+        sort(kind);
+    }
     changed
         .into_iter()
         .chain(requests)
+        .chain(adopt)
+        .chain(unreadable)
         .map(|(_, item)| item)
         .collect()
 }
 
+/// The time `item_id` was first shown, recorded now if this is its first.
+fn first_seen(set: &mut DecisionSet, item_id: &str, live: &mut Vec<String>) -> DateTime<Utc> {
+    let now = set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    live.push(item_id.to_string());
+    *set.first_seen.entry(item_id.to_string()).or_insert(now)
+}
+
+/// One adopt decision per unmanaged client find; an adopt waits on nothing.
+fn adopt_items(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated> {
+    let key = set.key;
+    let finds = set.adopt.clone();
+    finds
+        .iter()
+        .map(|find| {
+            let item_id = id(&key, "adopt", &json!([find.find_id]));
+            let observed = first_seen(set, &item_id, live);
+            (
+                observed,
+                json!({
+                    "id": item_id,
+                    "kind": "adopt",
+                    "server": {
+                        "name": display::name(&key, &find.name),
+                        "source": find.source,
+                        "config_file": find.config_file,
+                        "transport": find.transport,
+                        "command": find.command,
+                        "url": find.url,
+                    },
+                    "severity": find.severity,
+                    "observed_at": time(observed),
+                    "waits_on": [],
+                }),
+            )
+        })
+        .collect()
+}
+
+/// One decision per client config file that could not be read: its file name
+/// and reason class, never its path or contents.
+fn unreadable_files(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated> {
+    let key = set.key;
+    let files = set.unreadable.clone();
+    files
+        .iter()
+        .map(|file| {
+            let item_id = id(
+                &key,
+                "client_config_unreadable",
+                &json!([file.source, file.path_digest]),
+            );
+            let observed = first_seen(set, &item_id, live);
+            (
+                observed,
+                json!({
+                    "id": item_id,
+                    "kind": "client_config_unreadable",
+                    "source": file.source,
+                    "file": file.file,
+                    "reason": file.reason.as_str(),
+                    "observed_at": time(observed),
+                }),
+            )
+        })
+        .collect()
+}
+
 /// The changed capabilities, and which trusted name each one blocks.
-fn changed_capabilities(set: &mut DecisionSet) -> (Vec<Dated>, Blocks) {
+fn changed_capabilities(set: &mut DecisionSet, live: &mut Vec<String>) -> (Vec<Dated>, Blocks) {
     let key = set.key;
     let now = set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
     let mut blocks: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -107,7 +183,7 @@ fn changed_capabilities(set: &mut DecisionSet) -> (Vec<Dated>, Blocks) {
             }),
         ));
     }
-    set.first_seen.retain(|seen, _| live_ids.contains(seen));
+    live.extend(live_ids);
     (changed, blocks)
 }
 

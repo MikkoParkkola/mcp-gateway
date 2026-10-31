@@ -33,6 +33,8 @@ pub(crate) enum Source {
     ControlPlane,
     /// Pin mismatches on the capability backend.
     Capability,
+    /// Client config files on this host, through the shared discovery cache.
+    Discovery,
 }
 
 /// Whether a source can be read.
@@ -168,6 +170,8 @@ pub(crate) struct DecisionSet {
     /// log's replay must run again before its source can be ready.
     held_lost: std::collections::BTreeSet<Source>,
     changes: BTreeMap<(String, String), CapabilityChange>,
+    adopt: Vec<AdoptFind>,
+    unreadable: Vec<UnreadableFile>,
     first_seen: BTreeMap<String, DateTime<Utc>>,
     items: Vec<Value>,
 }
@@ -186,6 +190,8 @@ impl DecisionSet {
             held: Vec::new(),
             held_lost: std::collections::BTreeSet::new(),
             changes: BTreeMap::new(),
+            adopt: Vec::new(),
+            unreadable: Vec::new(),
             first_seen: BTreeMap::new(),
             items: Vec::new(),
         }
@@ -356,18 +362,11 @@ impl DecisionSet {
         })
     }
 
-    /// The open count and revision for an admin, or `None` for anyone else
-    /// and while any source is `Unavailable`. In memory; never blocks.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the event stream's read, wired after the adopt kind"
-        )
-    )]
-    pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
-        let view = self.view().filter(|_| admin)?;
-        Some((view.decisions.len(), view.revision))
+    /// The open count and revision, or `None` while any source is not yet
+    /// readable. In memory, never blocks, and copies no item. Who may read it
+    /// is the route's guard's question, not the set's.
+    pub(crate) fn snapshot(&self) -> Option<(usize, u64)> {
+        self.readable().then_some((self.items.len(), self.revision))
     }
 
     /// Each source not yet readable, and why: `replaying` before it first
@@ -377,6 +376,7 @@ impl DecisionSet {
             (Source::Access, "grant_decisions"),
             (Source::ControlPlane, "ui_decisions"),
             (Source::Capability, "capability_changes"),
+            (Source::Discovery, "discovery"),
         ]
         .into_iter()
         .filter_map(|(source, name)| match self.health.get(&source) {
@@ -389,14 +389,19 @@ impl DecisionSet {
 
     /// Whether every source has been read: none is `Unavailable` or unset.
     fn readable(&self) -> bool {
-        [Source::Access, Source::ControlPlane, Source::Capability]
-            .iter()
-            .all(|source| {
-                matches!(
-                    self.health.get(source),
-                    Some(Health::Ready | Health::Absent)
-                )
-            })
+        [
+            Source::Access,
+            Source::ControlPlane,
+            Source::Capability,
+            Source::Discovery,
+        ]
+        .iter()
+        .all(|source| {
+            matches!(
+                self.health.get(source),
+                Some(Health::Ready | Health::Absent)
+            )
+        })
     }
 
     /// The list route's answer, or `None` while any source is `Unavailable`.
@@ -404,7 +409,7 @@ impl DecisionSet {
         self.readable().then(|| View {
             decisions: self.items.clone(),
             revision: self.revision,
-            missing_kinds: vec!["adopt"],
+            missing_kinds: Vec::new(),
             partial_kinds: vec!["capability_changed"],
         })
     }
@@ -419,14 +424,9 @@ impl DecisionSet {
 /// The kind a grant decision is written as.
 pub(crate) const GRANT_DECISION_KIND: &str = "identity_grant_decision";
 
-/// A client find the set may show as an adopt decision. Red rows only: the
-/// discovery source is built next.
-#[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "a red-row placeholder until the discovery source is built"
-)]
-#[derive(Debug, Clone)]
+/// An unmanaged client find the set shows as an adopt decision: only what the
+/// discovery route may show, never a value (ADR-021).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct AdoptFind {
     pub(crate) find_id: String,
     pub(crate) name: String,
@@ -439,21 +439,30 @@ pub(crate) struct AdoptFind {
 }
 
 /// Why a client config file could not be read.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum UnreadableReason {
+    /// Not a regular file, or larger than any client config: never read.
     NotAReadableFile,
+    /// The gateway may not open it.
     NoPermission,
+    /// It was read but did not parse, or the read failed otherwise.
     DidNotParse,
 }
 
-/// A client config file that exists but could not be read.
-#[cfg(test)]
-#[expect(
-    dead_code,
-    reason = "a red-row placeholder until the discovery source is built"
-)]
-#[derive(Debug, Clone)]
+impl UnreadableReason {
+    /// The reason as the item shows it.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAReadableFile => "not_a_readable_file",
+            Self::NoPermission => "no_permission",
+            Self::DidNotParse => "did_not_parse",
+        }
+    }
+}
+
+/// A client config file that exists but could not be read: its file name and
+/// a keyed digest of its path, never the path.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UnreadableFile {
     pub(crate) source: crate::discovery::DiscoverySource,
     pub(crate) file: String,
@@ -461,28 +470,28 @@ pub(crate) struct UnreadableFile {
     pub(crate) reason: UnreadableReason,
 }
 
-#[cfg(test)]
 impl DecisionSet {
-    /// Replace the discovery source's finds and unreadable files. Red rows
-    /// only: does nothing yet.
-    #[expect(
-        clippy::unused_self,
-        reason = "a red-row placeholder until the discovery source is built"
-    )]
+    /// Replace the discovery source's adopt finds and unreadable files, from
+    /// one listing; the source is `Ready` from its first listing on.
     pub(crate) fn set_discovery(
         &mut self,
-        _finds: Vec<AdoptFind>,
-        _unreadable: Vec<UnreadableFile>,
-        _now: DateTime<Utc>,
+        finds: Vec<AdoptFind>,
+        unreadable: Vec<UnreadableFile>,
+        now: DateTime<Utc>,
     ) {
+        self.adopt = finds;
+        self.unreadable = unreadable;
+        self.health.insert(Source::Discovery, Health::Ready);
+        self.now = Some(now);
+        self.refresh();
     }
 
-    /// The discovery source timed out with nothing cached. Red rows only.
-    #[expect(
-        clippy::unused_self,
-        reason = "a red-row placeholder until the discovery source is built"
-    )]
-    pub(crate) fn discovery_down(&mut self) {}
+    /// The discovery source timed out with no listing to fall back on: the
+    /// count is unavailable until a scan lands.
+    pub(crate) fn discovery_down(&mut self) {
+        self.health.insert(Source::Discovery, Health::Unavailable);
+        self.refresh();
+    }
 }
 
 /// A written grant-decision record read back into the event it was noted
@@ -539,12 +548,8 @@ impl Shared {
     }
 
     /// [`DecisionSet::snapshot`] under the read lock.
-    #[expect(
-        dead_code,
-        reason = "the event stream's read, wired after the adopt kind"
-    )]
-    pub(crate) fn snapshot(&self, admin: bool) -> Option<(usize, u64)> {
-        self.0.read().snapshot(admin)
+    pub(crate) fn snapshot(&self) -> Option<(usize, u64)> {
+        self.0.read().snapshot()
     }
 
     /// [`DecisionSet::view`] under the read lock, or the sources not yet

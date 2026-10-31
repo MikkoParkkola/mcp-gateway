@@ -99,16 +99,16 @@ fn the_count_waits_for_discovery_and_names_it_while_down() {
     for source in [Source::Access, Source::ControlPlane, Source::Capability] {
         set.set_health(source, Health::Ready);
     }
-    assert_eq!(set.snapshot(true), None, "no listing yet");
+    assert_eq!(set.snapshot(), None, "no listing yet");
     assert!(
         set.unavailable().contains(&("discovery", "replaying")),
         "{:?}",
         set.unavailable()
     );
     set.set_discovery(Vec::new(), Vec::new(), at(1));
-    assert_eq!(set.snapshot(true).map(|s| s.0), Some(0));
+    assert_eq!(set.snapshot().map(|s| s.0), Some(0));
     set.discovery_down();
-    assert_eq!(set.snapshot(true), None, "a scan timed out, nothing cached");
+    assert_eq!(set.snapshot(), None, "a scan timed out, nothing cached");
     assert!(
         set.unavailable().contains(&("discovery", "unreadable")),
         "{:?}",

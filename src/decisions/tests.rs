@@ -107,7 +107,7 @@ fn decide(set: &mut DecisionSet, offset: u64, capability: &str, minute: i64) {
 }
 
 fn count(set: &DecisionSet) -> usize {
-    set.snapshot(true).expect("all sources ready").0
+    set.snapshot().expect("all sources ready").0
 }
 
 #[test]
@@ -288,20 +288,19 @@ fn every_row_evaluate_would_match_closes_the_item() {
 }
 
 #[test]
-fn snapshot_is_none_for_a_non_admin_and_while_a_source_is_unavailable() {
+fn snapshot_is_none_while_a_source_is_unavailable() {
     let mut set = ready();
-    assert_eq!(set.snapshot(true).map(|s| s.0), Some(0));
-    assert_eq!(set.snapshot(false), None);
+    assert_eq!(set.snapshot().map(|s| s.0), Some(0));
     set.set_health(Source::ControlPlane, Health::Unavailable);
-    assert_eq!(set.snapshot(true), None);
+    assert_eq!(set.snapshot(), None);
     set.set_health(Source::ControlPlane, Health::Absent);
     assert_eq!(
-        set.snapshot(true).map(|s| s.0),
+        set.snapshot().map(|s| s.0),
         Some(0),
         "an absent source is not an error"
     );
     assert_eq!(
-        DecisionSet::with_key(KEY).snapshot(true),
+        DecisionSet::with_key(KEY).snapshot(),
         None,
         "sources start unavailable"
     );
@@ -310,7 +309,7 @@ fn snapshot_is_none_for_a_non_admin_and_while_a_source_is_unavailable() {
 #[test]
 fn revision_rises_on_open_close_and_field_change_and_not_on_a_no_op() {
     let mut set = ready();
-    let rev = |set: &DecisionSet| set.snapshot(true).expect("ready").1;
+    let rev = |set: &DecisionSet| set.snapshot().expect("ready").1;
     let r0 = rev(&set);
     deny(&mut set, 113, &missing("stripe.charges", 1));
     let r1 = rev(&set);
@@ -373,6 +372,7 @@ fn eviction_closes_a_request_whose_refusals_left_the_log() {
 fn booting() -> DecisionSet {
     let mut set = DecisionSet::with_key(KEY);
     set.set_health(Source::Capability, Health::Absent);
+    set.set_discovery(Vec::new(), Vec::new(), at(0));
     set
 }
 
@@ -465,15 +465,15 @@ fn a_live_event_during_replay_is_neither_lost_nor_counted_twice() {
         pos(Source::Access, 2),
         Fold::Denial(missing("stripe.charges", 2)),
     );
-    assert_eq!(set.snapshot(true), None, "held while the replay runs");
+    assert_eq!(set.snapshot(), None, "held while the replay runs");
     set.replay_done(Source::Access);
     assert_eq!(
-        set.snapshot(true),
+        set.snapshot(),
         None,
         "the control-plane replay is still running"
     );
     set.replay_done(Source::ControlPlane);
-    assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
+    assert_eq!(set.snapshot().map(|s| s.0), Some(1));
     assert_eq!(set.list()[0]["refused_calls"], 3);
 }
 
@@ -491,13 +491,14 @@ fn the_capability_source_is_unavailable_until_its_backend_reports() {
     let mut set = DecisionSet::with_key(KEY);
     set.set_health(Source::Access, Health::Ready);
     set.set_health(Source::ControlPlane, Health::Ready);
-    assert_eq!(set.snapshot(true), None);
+    set.set_discovery(Vec::new(), Vec::new(), at(0));
+    assert_eq!(set.snapshot(), None);
     set.set_capability_changes(
         "caps",
         vec![change("/c/a.yaml", "h1", Some("stripe.charges"))],
         at(1),
     );
-    assert_eq!(set.snapshot(true).map(|s| s.0), Some(1));
+    assert_eq!(set.snapshot().map(|s| s.0), Some(1));
 }
 
 #[test]
@@ -542,10 +543,7 @@ fn the_view_names_missing_and_partial_kinds_and_carries_the_snapshot_revision() 
     let view = set.view().expect("ready");
     assert_eq!(view.missing_kinds, vec!["adopt"]);
     assert_eq!(view.partial_kinds, vec!["capability_changed"]);
-    assert_eq!(
-        Some((view.decisions.len(), view.revision)),
-        set.snapshot(true)
-    );
+    assert_eq!(Some((view.decisions.len(), view.revision)), set.snapshot());
     assert_eq!(DecisionSet::with_key(KEY).view(), None);
 }
 
@@ -691,7 +689,7 @@ fn held_notes_are_bounded_and_a_lost_one_forces_another_replay() {
 
     // The replay that was running did not see the dropped notes.
     assert!(!set.replay_done(Source::Access), "a lost note is not ready");
-    assert_eq!(set.snapshot(true), None, "never a count missing notes");
+    assert_eq!(set.snapshot(), None, "never a count missing notes");
 
     // The next replay reads every note back from the log.
     for n in 0..over {
