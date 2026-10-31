@@ -71,6 +71,7 @@ src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the in
 src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	-	on-path, untimed: called only by note_refused_by
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untimed: failed sends only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	with_route_scope	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit/settlement.rs	append_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
