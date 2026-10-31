@@ -631,3 +631,115 @@ async fn a_task_naming_a_hidden_backend_is_refused_as_an_unregistered_one() {
     }
     assert_alike("task submit", "beta", &hidden, &unregistered);
 }
+
+/// The `beta` backend registered in `state`.
+fn backend(
+    state: &Arc<crate::gateway::router::AppState>,
+    name: &str,
+) -> Arc<crate::backend::Backend> {
+    use crate::gateway::meta_mcp::scoped_backends::Unscoped;
+    state
+        .meta_mcp
+        .registry()
+        .get_for(Unscoped::Visibility, name)
+        .expect("a fixture backend")
+}
+
+fn agent_cert() -> crate::mtls::CertIdentity {
+    crate::mtls::CertIdentity {
+        common_name: Some("agent".to_string()),
+        display_name: "agent".to_string(),
+        ..Default::default()
+    }
+}
+
+/// Cleared: a backend the caller may use whose catalogue was cleared is not
+/// hidden (nothing is proved), so its call is not refused as unregistered.
+#[tokio::test]
+async fn a_cleared_catalogue_hides_no_backend_the_caller_may_use() {
+    let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &["alpha_write"])).await;
+    backend(&state, "alpha").invalidate_tools_cache();
+    assert!(!judgment(&state, None, Some(&agent_cert())).hides("alpha"));
+    let (status, body) = post_as_agent_cert(&router, "/mcp", invoke("alpha", "alpha_read")).await;
+    assert_eq!(status, 200, "{body}");
+    for absent in ["Backend not found", "blocked by certificate policy"] {
+        assert!(
+            !body.contains(absent),
+            "a cleared catalogue refused the call: {body}"
+        );
+    }
+}
+
+/// Cold under a rule denying the backend by name: hidden with no catalogue,
+/// and answered as the unregistered name the same rule denies.
+#[tokio::test]
+async fn a_cold_backend_denied_by_name_is_hidden() {
+    let (router, state) = with_mtls_state((&["*"], &["*"]), (&["beta", UNREGISTERED], &[])).await;
+    backend(&state, "beta").invalidate_tools_cache();
+    assert!(judgment(&state, None, Some(&agent_cert())).hides("beta"));
+    let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
+    let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
+    assert_alike("cold denied by name", "beta", &hidden, &unregistered);
+}
+
+/// Cold under an allow list that leaves the backend out: hidden by name.
+#[tokio::test]
+async fn a_cold_backend_left_out_of_the_allow_list_is_hidden() {
+    let (_, state) = with_mtls_state((&["alpha", "caps"], &["*"]), (&[], &[])).await;
+    backend(&state, "beta").invalidate_tools_cache();
+    assert!(judgment(&state, None, Some(&agent_cert())).hides("beta"));
+}
+
+/// Cold for an agent whose scopes can grant on the backend (`tools:*`, or a
+/// backend-prefixed scope): not hidden, so its first call is not refused.
+#[tokio::test]
+async fn a_cold_backend_an_agent_may_use_is_not_hidden() {
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let f = with_agent_auth(registry).await;
+    let beta = backend(&f.state, "beta");
+    beta.invalidate_tools_cache();
+    for scope in ["tools:*", "tools:beta:*"] {
+        let agent = crate::gateway::oauth::OAuthAgentIdentity {
+            client_id: "a3-agent".to_string(),
+            agent_name: "a3-agent".to_string(),
+            scopes: vec![crate::gateway::oauth::Scope::parse(scope).expect("scope")],
+            raw_scopes: vec![scope.to_string()],
+            quota_principal: None,
+        };
+        assert!(
+            !judgment(&f.state, Some(&agent), None).hides("beta"),
+            "{scope}: a cold backend the agent may use was hidden"
+        );
+    }
+}
+
+/// Truncated: a catalogue that lists none of the allowed tools but is
+/// truncated proves nothing, so the backend is not hidden.
+#[tokio::test]
+async fn a_truncated_catalogue_proves_no_refusal() {
+    let (_, state) = with_mtls_state((&["*"], &["ghost_tool"]), (&[], &[])).await;
+    backend(&state, "beta").mark_shared_truncated_for_test();
+    assert!(!judgment(&state, None, Some(&agent_cert())).hides("beta"));
+}
+
+/// Blocked: a tool the listing drops as blocked does not admit the backend
+/// to the judgment either, so listed and not hidden still agree.
+#[tokio::test]
+async fn a_blocked_tool_counts_for_neither_the_listing_nor_the_judgment() {
+    let (router, state) = with_mtls_state((&["*"], &["beta_tool"]), (&[], &[])).await;
+    backend(&state, "beta").block_tool_for_test("beta_tool");
+    let (_, body) = post_as_agent_cert(
+        &router,
+        "/mcp",
+        json!({ "name": "gateway_list_servers", "arguments": {} }),
+    )
+    .await;
+    let listed = server_names(&serde_json::from_str(&body).expect("json"))
+        .iter()
+        .any(|n| n == "beta");
+    assert_eq!(
+        listed,
+        !judgment(&state, None, Some(&agent_cert())).hides("beta"),
+        "listed {listed}"
+    );
+}
