@@ -1,0 +1,1 @@
+src/gateway/router/mod.rs	compression	1	Builds the response compression layer with tower-http's default predicate; it chooses an encoding the client accepts and decides nothing about who may call a route or what it returns.

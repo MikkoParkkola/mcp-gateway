@@ -156,16 +156,19 @@ fn concrete_uri(uri: &str) -> String {
         return uri.to_string();
     }
     let document = include_str!("../../src/gateway/ui/shell/index.html");
+    // The stylesheet link itself: the document also names screen stylesheets
+    // (the screens table), which load only when their screen does.
     let name = document
-        .split("/ui/assets/")
-        .skip(1)
-        .filter_map(|rest| rest.split(['"', '\'']).next())
-        .find(|name| {
-            std::path::Path::new(name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        .split(r#"<link rel="stylesheet" href="/ui/assets/"#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|name| {
+            name.starts_with("shell.")
+                && std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
         })
-        .expect("the shell document links a stylesheet");
+        .expect("the shell document links the shell stylesheet");
     format!("/ui/assets/{name}")
 }
 

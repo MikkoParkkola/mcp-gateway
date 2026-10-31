@@ -206,6 +206,9 @@ mod u17_ui_shell_tests;
 /// The web UI API's access answers per path, method and caller, pinned.
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;
+/// The web UI compressed by the router's one rule.
+#[cfg(all(test, feature = "webui"))]
+mod ui_compression_tests;
 /// U3: the UI live stream.
 #[cfg(all(test, feature = "webui"))]
 mod ui_stream_tests;
@@ -722,7 +725,7 @@ pub(crate) fn create_router_with_accounts(
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .merge(unauthenticated_routes())
         .layer(CatchPanicLayer::new())
-        .layer(CompressionLayer::new())
+        .layer(compression())
         // Method and route only (#1529). Routes merged below are outside it.
         .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
         .with_state(state);
@@ -744,10 +747,11 @@ pub(crate) fn create_router_with_accounts(
         app = app.merge(metrics_route(&startup_config));
     }
 
-    // Merge web UI HTML route (unauthenticated — static HTML, no data)
+    // Merge web UI HTML route (unauthenticated — static HTML, no data). Outside
+    // the TraceLayer as before, but compressed by the same one rule as the rest.
     #[cfg(feature = "webui")]
     {
-        app = app.merge(super::ui::html_router());
+        app = app.merge(super::ui::html_router().layer(compression()));
     }
 
     if let Some(extra) = extra {
@@ -783,6 +787,12 @@ pub(crate) fn create_router_with_accounts(
     // Added last so it runs first, on every route merged above and the
     // fallback, whether or not the route authenticates (ADR-023).
     app.layer(middleware::from_fn_with_state(pin_source, pin_generation))
+}
+
+/// The gateway's one compression rule, tower-http's default predicate, and
+/// `src/gateway/ui/compression.json` writes it down for the fixture server.
+pub(crate) fn compression() -> CompressionLayer {
+    CompressionLayer::new()
 }
 
 /// Pin the published generation on a request before anything else runs. Every
