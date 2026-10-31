@@ -474,6 +474,8 @@ mod identity;
 #[cfg(test)]
 mod issue_token_tests;
 #[cfg(test)]
+mod publish_tests;
+#[cfg(test)]
 mod refresh_flight_tests;
 #[cfg(test)]
 pub(crate) mod token_server_fixture;
