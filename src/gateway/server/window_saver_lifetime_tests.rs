@@ -97,7 +97,7 @@ async fn arrive(signal: std::sync::mpsc::Receiver<()>) -> std::sync::mpsc::Recei
 
 /// W2a: a checkpoint held before it takes the sink, through the seal: the
 /// saver is still pending once it drains, and its handle resolves only after
-/// that checkpoint ends, with no NOT_DURABLE warning. One thread, so the
+/// that checkpoint ends, with no `NOT_DURABLE` warning. One thread, so the
 /// saver task logs into this test's capture.
 #[tokio::test]
 async fn the_handle_waits_for_a_write_in_flight() {
@@ -141,7 +141,7 @@ async fn the_handle_waits_for_a_write_in_flight() {
 }
 
 /// W2b: a checkpoint held past the bound: the handle resolves at the bound
-/// with the checkpoint still held and warns NOT_DURABLE once; the
+/// with the checkpoint still held and warns `NOT_DURABLE` once; the
 /// checkpoint, released, ends before the row does.
 #[tokio::test]
 async fn a_write_held_past_the_bound_does_not_hold_the_handle() {
