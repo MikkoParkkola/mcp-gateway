@@ -459,3 +459,120 @@ async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
         );
     }
 }
+
+/// The executions counted on this test's thread so far.
+fn executed() -> usize {
+    crate::capability::CapabilityBackend::executed_for_test()
+}
+
+/// A modern task submit of `gateway_invoke` on `server`'s `tool`, keyed by
+/// `key`; returns the task id.
+async fn submit_task(router: &axum::Router, server: &str, tool: &str, key: &str) -> String {
+    let mut meta = crate::gateway::router::tests::modern_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let params = json!({"name": "gateway_invoke",
+                        "arguments": {"server": server, "tool": tool, "arguments": {}},
+                        "task": {}, "_meta": meta});
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let (_, body) = post_cert_headers(router, "/mcp", None, params, &headers).await;
+    let body: Value = serde_json::from_str(&body).expect("json");
+    body.pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the submit was refused: {body}"))
+        .to_owned()
+}
+
+/// Poll `tasks/get` for `id` until it is no longer working.
+async fn settle_task(router: &axum::Router, id: &str) -> Value {
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tasks/get"),
+        ("mcp-name", id),
+    ];
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let params =
+                json!({"taskId": id, "_meta": crate::gateway::router::tests::modern_meta()});
+            let (_, body) = post_rpc_cert_headers(router, "tasks/get", params, &headers).await;
+            let body: Value = serde_json::from_str(&body).expect("json");
+            if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
+                return body;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the task never settled")
+}
+
+/// `method` with `params` on `/mcp` as the `agent` certificate, with extra
+/// request `headers`.
+async fn post_rpc_cert_headers(
+    router: &axum::Router,
+    method: &str,
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (u16, String) {
+    let mut builder = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
+    let mut request = builder
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": 6, "method": method, "params": params }).to_string(),
+        ))
+        .expect("request");
+    request.extensions_mut().insert(agent_cert());
+    let response = router.clone().oneshot(request).await.expect("answers");
+    let status = response.status().as_u16();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+/// Control for the execution count: a provider the caller sees is executed,
+/// and counted on this test's thread, exactly once per call on each route the
+/// zero-execution row covers. A route that read 0 here would make that row's
+/// zero vacuous.
+#[tokio::test]
+async fn the_execution_count_sees_a_visible_capability_on_every_route() {
+    let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
+    let (caps, _dir) = caps_with_callback().await;
+    state.meta_mcp.set_capabilities(caps);
+    let mut seen = executed();
+    let mut once = |route: &str| {
+        let now = executed();
+        assert_eq!(
+            now,
+            seen + 1,
+            "{route}: a visible capability was not counted once"
+        );
+        seen = now;
+    };
+    post_as_agent_cert(&router, "/mcp", invoke("caps", "cap_open")).await;
+    once("/mcp gateway_invoke");
+    let chain = json!({"name": "gateway_execute", "arguments": {"chain": [
+        {"tool": "caps:cap_open", "arguments": {}}
+    ]}});
+    post_as_agent_cert(&router, "/mcp", chain).await;
+    once("gateway_execute chain step");
+    post_cert_key(
+        &router,
+        "/mcp/caps",
+        None,
+        json!({"name": "cap_open", "arguments": {}}),
+    )
+    .await;
+    once("per-backend route");
+    let id = submit_task(&router, "caps", "cap_open", "count-control").await;
+    settle_task(&router, &id).await;
+    once("task run");
+}
