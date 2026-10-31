@@ -543,6 +543,25 @@ impl EnvOverlay {
         Ok(())
     }
 
+    /// Each env file of `order` with the bytes the parser consumed; `None`
+    /// for one that was skipped as absent.
+    pub(super) fn env_file_inputs(
+        &self,
+        order: &[PathBuf],
+    ) -> Vec<(String, Option<crate::config_reload::revision::RawBytes>)> {
+        order
+            .iter()
+            .map(|path| {
+                let parsed = self
+                    .sources
+                    .iter()
+                    .find(|(source, _)| source == path)
+                    .map(|(_, text)| text.as_bytes().to_vec());
+                (path.to_string_lossy().into_owned(), parsed)
+            })
+            .collect()
+    }
+
     /// The first env file whose own bytes substitute a key these same files
     /// define, with the key named.
     ///
@@ -599,6 +618,9 @@ pub struct LiveEnv {
     overlay: RwLock<Arc<EnvOverlay>>,
     startup: Arc<EnvOverlay>,
     env_paths: ResolvedEnvFiles,
+    /// What the startup load read, taken once when the server publishes its
+    /// first config, so the raw bytes never ride along for the process life.
+    startup_inputs: std::sync::Mutex<Option<crate::config_reload::revision::RawInputs>>,
 }
 
 impl Default for LiveEnv {
@@ -618,7 +640,31 @@ impl LiveEnv {
             startup: Arc::clone(&overlay),
             overlay: RwLock::new(overlay),
             env_paths,
+            startup_inputs: std::sync::Mutex::new(None),
         }
+    }
+
+    /// The grants startup served, into the startup inputs not yet taken.
+    pub(crate) fn set_startup_grants(
+        &self,
+        grants: Option<crate::config_reload::revision::RawBytes>,
+    ) {
+        if let Some(inputs) = self
+            .startup_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            inputs.grants = grants;
+        }
+    }
+
+    /// The startup load's inputs, once: every later call returns `None`.
+    pub(crate) fn take_startup_inputs(&self) -> Option<crate::config_reload::revision::RawInputs> {
+        self.startup_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
     }
 
     /// The overlay in force. Cheap enough for the request path.
@@ -678,4 +724,22 @@ pub struct Evaluated {
     /// overlays to report a rotation no running holder can take.
     // ci-allow-secret-debug: names only, recorded before substitution; values live in `config`.
     pub secret_refs: std::collections::BTreeSet<String>,
+    /// What the evaluation read, for the config revision. Raw until publish
+    /// reduces it to keyed digests; empty for a literal load.
+    pub(crate) inputs: crate::config_reload::revision::RawInputs,
+}
+
+impl Evaluated {
+    /// The environment to publish, carrying this load's inputs (moved out,
+    /// never copied) for the server's first publish to take.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn live_env(&mut self) -> LiveEnv {
+        let env = LiveEnv::new(Arc::clone(&self.overlay), self.env_paths.clone());
+        *env.startup_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(std::mem::take(&mut self.inputs));
+        env
+    }
 }

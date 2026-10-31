@@ -24,7 +24,7 @@ struct VisibilityMemo {
     /// (`http_nonce_alloc` ALLOC.2).
     carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
-    denial_code: Keyed<TargetKey, i32>,
+    denial_code: Keyed<TargetKey, (i32, Option<crate::security::decision_record::DecisionKind>)>,
     judged: parking_lot::Mutex<Judged>,
     /// MIK-8392: each target account's liveness, filled once per request by
     /// the async pre-pass and only read after it. Never a [`Visibility`]: an
@@ -507,14 +507,38 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     .flatten()
 }
 
-/// MIK-8361: keep the route stage's refusal code for `(server, tool)`, so the
-/// answer's one record names it; dropped outside a request scope.
-pub(crate) fn note_denial_code(server: &str, tool: &str, code: i32) {
-    in_memo(|memo| memo.denial_code.first(target_key(server, tool), code));
+/// MIK-8361: keep the route stage's refusal code for `(server, tool)`, and
+/// the check that made it, so the answer's one record names both; dropped
+/// outside a request scope.
+pub(crate) fn note_denial_code(
+    server: &str,
+    tool: &str,
+    code: i32,
+    kind: Option<crate::security::decision_record::DecisionKind>,
+) {
+    in_memo(|memo| {
+        memo.denial_code
+            .first(target_key(server, tool), (code, kind))
+    });
 }
 
 /// The code [`note_denial_code`] kept for `(server, tool)`, if any.
 pub(crate) fn denial_code(server: &str, tool: &str) -> Option<i32> {
+    kept_denial(server, tool).map(|(code, _)| code)
+}
+
+/// The check [`note_denial_code`] kept for `(server, tool)`, if any.
+pub(crate) fn denial_kind(
+    server: &str,
+    tool: &str,
+) -> Option<crate::security::decision_record::DecisionKind> {
+    kept_denial(server, tool).and_then(|(_, kind)| kind)
+}
+
+fn kept_denial(
+    server: &str,
+    tool: &str,
+) -> Option<(i32, Option<crate::security::decision_record::DecisionKind>)> {
     in_memo(|memo| {
         memo.denial_code
             .get(&target(server, tool) as &(dyn Pair + '_))
@@ -562,7 +586,11 @@ pub(crate) fn refuse_withheld(server: &str, tool: &str) -> crate::Result<()> {
 /// [`absent_name`] when `judged` is withheld.
 pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crate::Result<()> {
     match judged {
-        Some(Visibility::Withheld(_)) => Err(absent_name(tool)),
+        Some(Visibility::Withheld(reason)) => {
+            // The record names the real reason; the caller sees an absent name.
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(reason.kind(), None);
+            Err(absent_name(tool))
+        }
         _ => Ok(()),
     }
 }

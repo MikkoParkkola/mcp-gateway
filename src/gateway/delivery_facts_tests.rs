@@ -304,7 +304,7 @@ enum TransformUse {
     Suspended,
 }
 
-/// Every production occurrence of the transform's three entry points.
+/// Every production occurrence of the transform's four entry points.
 const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
     (
         "apply_context_integrity(",
@@ -314,15 +314,21 @@ const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
     ),
     (
         "apply_context_integrity(",
-        "src/gateway/meta_mcp/invoke/policy.rs",
-        1,
-        TransformUse::Delivering,
-    ),
-    (
-        "apply_context_integrity(",
         "src/gateway/meta_mcp/invoke/relay.rs",
         1,
         TransformUse::Suspended,
+    ),
+    (
+        "context_integrity_outcome(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+    (
+        "context_integrity_outcome(",
+        "src/gateway/meta_mcp/invoke/policy.rs",
+        1,
+        TransformUse::Delivering,
     ),
     (
         "context_integrity_delivered_result(",
