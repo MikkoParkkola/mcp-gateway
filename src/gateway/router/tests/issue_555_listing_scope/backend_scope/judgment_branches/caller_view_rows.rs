@@ -208,7 +208,16 @@ async fn keyed_run(called: Called, after: Option<AfterRun>, key: &str) -> (Strin
         Called::Invoke => submit_task(&router, "caps", "cap_keyed", key).await,
         Called::Surfaced => submit_surfaced(&router, "cap_keyed", key).await,
     };
-    let settled = settle_task(&router, &id).await.to_string();
+    let settled = settle_task(&router, &id).await;
+    // Settled: a terminal status, or the read's own refusal of a task whose
+    // provider is gone from the reader's view (the removed-backend answer).
+    let status = settled.pointer("/result/status").and_then(Value::as_str);
+    assert!(
+        matches!(status, Some("completed" | "failed" | "cancelled"))
+            || settled.get("error").is_some(),
+        "the run did not settle: {settled}"
+    );
+    let settled = settled.to_string();
     let ran = executed() - before;
     let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
     let instant = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z").expect("pattern");
@@ -265,11 +274,12 @@ async fn a_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed()
     assert_hidden_run_settles_as_removed(Called::Invoke, "keyed-run").await;
 }
 
-/// The surfaced pin records a hidden target as absent before readmission:
-/// a surfaced capability whose key is revoked between the submit and the run
-/// settles as one whose surfaced name no longer resolves (its provider
-/// removed at the same point), with nothing executed. Control: with nothing
-/// changed, the pinned run executes the capability.
+/// A surfaced pin on the capability provider is judged as its caller at run
+/// time too: a surfaced capability whose key is revoked between the submit
+/// and the run settles as one whose surfaced name no longer resolves (its
+/// provider removed at the same point), executes nothing, and logs what the
+/// removed one's run logs (the dispatch gate records the absence). Control:
+/// with nothing changed, the pinned run executes the capability.
 #[cfg(feature = "firewall")]
 #[tokio::test]
 async fn a_surfaced_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed() {
