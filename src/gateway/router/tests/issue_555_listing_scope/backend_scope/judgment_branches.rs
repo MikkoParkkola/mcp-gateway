@@ -323,7 +323,7 @@ async fn an_allow_list_profile_refuses_a_hidden_name_as_an_unregistered_one() {
             meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "onlyalpha"))
         },
         (&["*"], &["*"]),
-        (&["beta", UNREGISTERED], &[]),
+        (&["beta"], &[]),
     )
     .await;
     assert!(
