@@ -299,7 +299,7 @@ fn nobeta_profiles() -> ProfileRegistry {
 }
 
 /// Control: a caller hiding does not apply to (no mTLS policy, no agent
-/// auth) keeps the profile's own refusal for a backend it leaves out.
+/// auth) keeps today's answer for a backend its profile leaves out.
 #[tokio::test]
 async fn outside_hiding_the_profile_refusal_stands() {
     let f = super::super::fixture_with(Auth::Off, |meta| {
@@ -314,20 +314,20 @@ async fn outside_hiding_the_profile_refusal_stands() {
         invoke("beta", "beta_tool"),
     )
     .await;
+    // Today's answer: a profile-withheld name answers as a tool the backend
+    // does not list, naming the tool, never the profile.
+    let inner = serde_json::to_string_pretty(&json!({
+        "content": [{ "text": "the backend does not list a tool named `beta_tool`", "type": "text" }],
+        "isError": true,
+    }))
+    .expect("json");
     assert_eq!(
+        (status.as_u16(), body),
         (
-            status.as_u16(),
-            body["error"]["code"].clone(),
-            body["error"]["message"].clone()
-        ),
-        (
-            400,
-            json!(-32600),
-            json!(
-                "Protocol error: Backend 'beta' is not available in the 'nobeta' routing profile"
-            )
-        ),
-        "{body}"
+            200,
+            json!({ "id": 5, "jsonrpc": "2.0",
+                    "result": { "content": [{ "text": inner, "type": "text" }], "isError": true } })
+        )
     );
 }
 
