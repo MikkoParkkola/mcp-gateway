@@ -53,11 +53,6 @@ fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
         Error::Internal("x".into()),
         Error::Protocol("x".into()),
         Error::ResponseFirewallRefused,
-        Error::Forbidden {
-            code: -32003,
-            status: 403,
-            message: "x".into(),
-        },
         Error::JsonRpc {
             code: -32602,
             message: "x".into(),
@@ -74,6 +69,12 @@ fn only_an_error_raised_before_the_send_is_a_determined_outcome() {
         assert!(error.outcome_undetermined(), "{error:?}");
     }
     let determined = [
+        Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: "x".into(),
+        },
+        Error::gateway_refused(-32000, "x"),
         Error::TransportConnect("x".into()),
         Error::BackendUnavailable("x".into()),
         Error::BackendNotFound("x".into()),

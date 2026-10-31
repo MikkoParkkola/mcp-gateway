@@ -42,3 +42,33 @@ fn a_peer_error_for_another_request_is_withheld() {
         "a reply to another request was attributed: {refusal:?}"
     );
 }
+
+/// A backend's 403 is its own answer, after the request reached it: with a
+/// JSON-RPC body carrying the gateway's own denial code (-32003), and with no
+/// body, it is never the gateway's denial, so it never reads as never sent
+/// and never frees the caller's key.
+#[test]
+fn a_backends_403_is_never_the_gateways_denial() {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "error": {"code": -32003, "message": "not permitted"}
+    })
+    .to_string();
+    let peer = peer_refusal(&body, &RequestId::Number(7), reqwest::StatusCode::FORBIDDEN)
+        .expect("the peer's error is surfaced");
+    assert!(
+        matches!(peer, Error::JsonRpc { code: -32003, .. }),
+        "{peer:?}"
+    );
+    assert!(!peer.is_pre_dispatch(), "{peer:?}");
+    let bare = crate::security::http_diagnostics::safe_http_status_error(
+        reqwest::StatusCode::FORBIDDEN,
+        "",
+    );
+    assert!(
+        !matches!(bare, Error::Forbidden { .. } | Error::GatewayRefused { .. }),
+        "{bare:?}"
+    );
+    assert!(!bare.is_pre_dispatch(), "{bare:?}");
+}

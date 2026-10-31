@@ -531,14 +531,93 @@ fn reviewed(sites: &[(&str, usize)]) -> BTreeMap<String, usize> {
 /// The items allowed to build `Error::Forbidden`, or to call a builder that
 /// does, which `is_pre_dispatch` lists: each refuses before anything reaches
 /// the backend. Keyed as above.
-const FORBIDDEN_SITES: &[(&str, usize)] = &[];
+const FORBIDDEN_SITES: &[(&str, usize)] = &[
+    // A lent-only slot's dispatch with no credential, before anything is built.
+    ("backend::lend::Backend::lend_to_slot", 1),
+    // A shared slot refused to a per-user call, before it starts.
+    ("backend::pool::Backend::refuse_shared_start", 1),
+    // Imports of `step_not_permitted`, not constructions.
+    ("gateway::meta_mcp::<module>", 1),
+    ("gateway::meta_mcp::support::<module>", 1),
+    // A forwarded call outside the caller's scope, before dispatch.
+    (
+        "gateway::meta_mcp::caller_forward::MetaMcp::scope_refusal",
+        1,
+    ),
+    // The request firewall's verdict on the outbound request, before the send.
+    (
+        "gateway::meta_mcp::invoke::chokepoint::MetaMcp::rescan_outbound",
+        2,
+    ),
+    (
+        "gateway::meta_mcp::invoke::chokepoint::MetaMcp::route_request_scan",
+        2,
+    ),
+    // The call-level policy, judged before dispatch.
+    (
+        "gateway::meta_mcp::invoke::gate::MetaMcp::check_call_level_policy",
+        1,
+    ),
+    // A relayed catalogue the caller may not read, before any call.
+    (
+        "gateway::meta_mcp::invoke::relay_catalogue::MetaMcp::catalogue_refusal",
+        1,
+    ),
+    // A playbook step's outcome relabelled to the neutral refusal (A3). A step
+    // sent and failed while a grant was revoked is relabelled too, a race
+    // tracked on its own; its key is kept by its own send count and the run's
+    // lease.
+    (
+        "gateway::meta_mcp::playbook_invoker::MetaMcpInvoker::invoke",
+        1,
+    ),
+    // The neutral step refusal: its definition and its literal.
+    ("gateway::meta_mcp::playbook_invoker::step_not_permitted", 2),
+    // A chain step's refusal rebuilt with its index: a step's own refusal.
+    ("gateway::meta_mcp::search::chain_exec::step_failure", 1),
+    // A stored task's targets judged again before its replay: no send.
+    (
+        "gateway::meta_mcp::task_replay::judging::MetaMcp::authorize_stored",
+        1,
+    ),
+    // An admin-only capability refused to a non-admin, before dispatch.
+    (
+        "gateway::meta_mcp::visibility::MetaMcp::admin_capability_rule",
+        1,
+    ),
+    // A match pattern wrapped in `Err(..)`, which the scan counts: no value is
+    // built there.
+    (
+        "gateway::router::handlers::dispatch_tools_call::tools_call",
+        1,
+    ),
+    // The stdio route stage's refusal of a step target, before dispatch.
+    ("gateway::server::stdio_route_stage::authorize_targets", 1),
+    // The web UI call's gates: before the capability or the send runs.
+    ("gateway::ui_call::admit_send", 2),
+    ("gateway::ui_call::confirmed", 1),
+    ("gateway::ui_call::gate", 1),
+    ("gateway::ui_call::task_refused", 1),
+    ("gateway::ui_call::ui_call_refused", 2),
+    // A playbook refused before its first step, and a step's arguments
+    // refused before the step is invoked.
+    ("playbook::engine::PlaybookEngine::execute_definition", 1),
+    ("playbook::engine::checked_arguments", 1),
+    // The lender's refusal while a lent send's headers are built, before the
+    // request leaves: the import, the no-lender check, the per-loan checks,
+    // and the counted builder and its builder (definitions and calls).
+    ("transport::http::requests::<module>", 1),
+    ("transport::http::requests::HttpTransport::lent_for", 1),
+    ("transport::lender::Lender::lent_for", 4),
+    ("transport::lender::counted_refusal", 2),
+    ("transport::lender::send_refused", 2),
+];
 
 #[test]
 fn a_denial_is_built_only_at_reviewed_pre_send_sites() {
     assert_eq!(
         summed_sites(&[
             "Error::Forbidden",
-            "Self::Forbidden",
             "step_not_permitted",
             "send_refused",
             "counted_refusal",
@@ -553,7 +632,33 @@ fn a_denial_is_built_only_at_reviewed_pre_send_sites() {
 
 /// The items allowed to build `Error::GatewayRefused`, or to call its builder,
 /// which `is_pre_dispatch` lists: the admission checks, before any send.
-const GATEWAY_REFUSED_SITES: &[(&str, usize)] = &[];
+const GATEWAY_REFUSED_SITES: &[(&str, usize)] = &[
+    // The builder: its definition and its literal.
+    ("error::Error::gateway_refused", 2),
+    // The admission checks, each before dispatch.
+    (
+        "gateway::meta_mcp::invoke::dispatch::MetaMcp::admit_spend",
+        1,
+    ),
+    (
+        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_backend_wide",
+        1,
+    ),
+    (
+        "gateway::meta_mcp::invoke::dispatch_guards::MetaMcp::admit_enabled_capability",
+        1,
+    ),
+    (
+        "gateway::meta_mcp::invoke::policy::MetaMcp::check_attestation_scoped",
+        1,
+    ),
+    (
+        "gateway::meta_mcp::invoke::policy::MetaMcp::refuse_unattested_plan",
+        1,
+    ),
+    // A chain step's refusal rebuilt with its index and its own code.
+    ("gateway::meta_mcp::search::chain_exec::step_failure", 1),
+];
 
 #[test]
 fn a_gateway_refusal_is_built_only_at_reviewed_pre_send_sites() {
@@ -594,6 +699,19 @@ fn the_transport_denies_only_while_building_headers() {
             .all(|k| !k.starts_with("transport::") && !k.starts_with("a2a::")),
         "a gateway refusal built in the transport: {refused:?}"
     );
+}
+
+/// A value built right after a closure's parameters is a construction: the
+/// closing `|` of `|_|` is not a pattern alternative.
+#[test]
+fn a_construction_after_a_closures_parameters_is_counted() {
+    let src = "fn f(r: Result<(), E>) -> Result<(), Error> {\n\
+               r.map_err(|_| crate::Error::BackendUnavailable(String::new()))\n\
+               }\n\
+               fn g(e: &Error) -> bool {\n\
+               matches!(e, Error::Transport(_)\n    | Error::BackendUnavailable(_))\n\
+               }\n";
+    assert_eq!(constructions(src), 1, "{src}");
 }
 
 /// A struct variant's patterns are not constructions; a built value is.
