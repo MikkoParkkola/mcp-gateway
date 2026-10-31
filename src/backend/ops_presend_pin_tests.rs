@@ -104,7 +104,13 @@ fn the_never_sent_list_is_the_reviewed_one() {
     let end = start + ERROR[start..].find("\n    }\n").expect("the body ends");
     let whole = &ERROR[start..end];
     // The members are the arms before the one `=> true`: every variant is
-    // named somewhere in the match, so only that group is the list.
+    // named somewhere in the match, so only that group is the list. A second
+    // arm answering `true` would hold members this pin never reads.
+    assert_eq!(
+        whole.matches("=> true").count(),
+        1,
+        "is_pre_dispatch answers true in exactly one arm"
+    );
     let body = &whole[..whole.find("=> true,").expect("one arm answers true")];
     let mut members: Vec<&str> = body
         .split("Self::")
