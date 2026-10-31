@@ -743,3 +743,34 @@ async fn a_blocked_tool_counts_for_neither_the_listing_nor_the_judgment() {
         "listed {listed}"
     );
 }
+
+/// Ordering on the direct route: a request `/mcp` would refuse (a modern
+/// era declared without its mirrored headers) is refused before the backend
+/// lookup, so the hidden backend meets that same refusal, never an earlier
+/// 404 an unregistered name would not get.
+#[tokio::test]
+async fn a_refused_request_on_the_direct_route_is_refused_alike_before_lookup() {
+    let router = with_mtls_denying_beta().await;
+    let headers = [("mcp-protocol-version", "2026-07-28")];
+    let call = json!({ "name": "beta_tool", "arguments": {} });
+    let hidden = post_cert_headers(&router, "/mcp/beta", None, call.clone(), &headers).await;
+    let unregistered = post_cert_headers(
+        &router,
+        &format!("/mcp/{UNREGISTERED}"),
+        None,
+        call,
+        &headers,
+    )
+    .await;
+    assert_ne!(
+        unregistered.0, 404,
+        "the request was not refused before the lookup: {}",
+        unregistered.1
+    );
+    assert_alike(
+        "direct route request refusal",
+        "beta",
+        &hidden,
+        &unregistered,
+    );
+}
