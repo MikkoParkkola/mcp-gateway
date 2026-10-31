@@ -203,7 +203,7 @@ impl crate::transport::Transport for RefusedAtSend {
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
     let meta = logged_meta(&dir);
-    let alpha = meta.backends().get("alpha").expect("alpha is registered");
+    let alpha = meta.backends.get("alpha").expect("alpha is registered");
     alpha.set_transport_for_test(Arc::new(RefusedAtSend));
     let (error, record) = refused_record(&meta, &dir).await;
     assert!(matches!(error, crate::Error::Forbidden { .. }), "{error}");
