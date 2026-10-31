@@ -250,6 +250,14 @@ impl AutoDiscovery {
         Ok(unique_servers)
     }
 
+    /// The radar's own scan: what the environment and running processes name,
+    /// without the client config files the shared cache reads. Red rows only:
+    /// it still reads everything.
+    #[cfg(test)]
+    pub(crate) async fn discover_non_client(&self) -> Result<Vec<DiscoveredServer>> {
+        self.discover_all().await
+    }
+
     /// Discover from specific source
     ///
     /// # Errors
@@ -317,3 +325,7 @@ mod yaml_redaction_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "non_client_tests.rs"]
+mod non_client_tests;
