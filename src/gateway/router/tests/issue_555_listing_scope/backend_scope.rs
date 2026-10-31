@@ -233,7 +233,14 @@ const UNREGISTERED: &str = "gamma";
 /// unregistered name by the same rule: the policy treats both names alike, so
 /// only registration could tell them apart.
 async fn with_mtls_denying_beta() -> axum::Router {
+    with_mtls((&["*"], &["*"]), (&["beta", UNREGISTERED], &[])).await
+}
+
+/// The fixture under one mTLS rule for the `agent` certificate: `allow` and
+/// `deny` as (backends, tools).
+async fn with_mtls(allow: (&[&str], &[&str]), deny: (&[&str], &[&str])) -> axum::Router {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    let owned = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
     let Fixture {
         router, mut state, ..
     } = fixture(Auth::Off).await;
@@ -244,12 +251,12 @@ async fn with_mtls_denying_beta() -> axum::Router {
             ..Default::default()
         },
         allow: ToolScopeConfig {
-            backends: vec!["*".to_string()],
-            tools: vec!["*".to_string()],
+            backends: owned(allow.0),
+            tools: owned(allow.1),
         },
         deny: ToolScopeConfig {
-            backends: vec!["beta".to_string(), UNREGISTERED.to_string()],
-            tools: Vec::new(),
+            backends: owned(deny.0),
+            tools: owned(deny.1),
         },
     };
     Arc::get_mut(&mut state)
@@ -380,5 +387,55 @@ async fn agent_hidden_backend_direct_route_answers_like_an_unregistered_one() {
         "agent direct route",
         (hs.as_u16(), hb.to_string()),
         (us.as_u16(), ub.to_string()),
+    );
+}
+
+/// `gateway_invoke` of `tool` on `server`.
+fn invoke(server: &str, tool: &str) -> Value {
+    json!({ "name": "gateway_invoke",
+            "arguments": { "server": server, "tool": tool, "arguments": {} } })
+}
+
+/// A tool name the policy permits but no backend lists: the hidden backend
+/// must not answer it unlike an unregistered one (a permitted call reaches
+/// later stages than a refused one).
+#[tokio::test]
+async fn mtls_permitted_unlisted_tool_on_a_hidden_backend_answers_like_an_unregistered_one() {
+    // Only `ghost_tool` is allowed: no backend lists it, so every backend is
+    // hidden from this certificate and the call itself is permitted.
+    let router = with_mtls((&["*"], &["ghost_tool"]), (&[], &[])).await;
+    let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "ghost_tool")).await;
+    let unregistered =
+        post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "ghost_tool")).await;
+    assert_alike("mtls permitted unlisted", hidden, unregistered);
+}
+
+/// The capability provider is a backend name like any other: an agent scoped
+/// to `alpha` is not told `caps` exists.
+#[tokio::test]
+async fn agent_hidden_capability_provider_invokes_like_an_unregistered_one() {
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let token = super::direct_route::agent_token(&registry);
+    let f = with_agent_auth(registry).await;
+    let ask = |params: Value| post(&f.router, "/mcp", Some(&token), "tools/call", params);
+    let (hs, hb) = ask(invoke("caps", "cap_open")).await;
+    let (us, ub) = ask(invoke(UNREGISTERED, "cap_open")).await;
+    assert_alike(
+        "agent hidden capability provider",
+        (hs.as_u16(), hb.to_string()),
+        (us.as_u16(), ub.to_string()),
+    );
+}
+
+/// Control: a backend the certificate can see keeps today's answer for a tool
+/// the policy refuses on it (the withheld path, answered as a missing tool).
+#[tokio::test]
+async fn mtls_visible_backend_refused_tool_keeps_its_answer() {
+    let router = with_mtls((&["*"], &["*"]), (&[], &["alpha_write"])).await;
+    let (status, body) = post_as_agent_cert(&router, "/mcp", invoke("alpha", "alpha_write")).await;
+    assert_eq!(status, 200, "{body}");
+    assert!(
+        body.contains("the backend does not list a tool named `alpha_write`"),
+        "a visible backend's refused tool changed its answer: {body}"
     );
 }
