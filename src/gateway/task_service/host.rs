@@ -77,7 +77,7 @@ impl LiveHost {
     ) -> F::Output {
         match self {
             Self::Http(state) => {
-                let caller = crate::gateway::router::caller_hiding::RouterHiding::new(
+                let caller = crate::gateway::router::caller_hiding::RouterHiding::caller(
                     Arc::clone(state),
                     owned.authorizer().clone(),
                     owned.verified_identity().cloned(),

@@ -36,6 +36,15 @@ thread_local! {
     static JUDGING: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Clears [`JUDGING`] however a judgment ends.
+struct Judging;
+
+impl Drop for Judging {
+    fn drop(&mut self) {
+        JUDGING.with(|flag| flag.set(false));
+    }
+}
+
 /// Run `request` with an empty caller slot its intake fills once identities
 /// are known ([`record_caller`]). A slot already open is kept.
 pub(crate) async fn with_caller_slot<F: Future>(request: F) -> F::Output {
@@ -68,13 +77,6 @@ pub(crate) fn hidden(server: &str) -> bool {
     if JUDGING.with(Cell::get) {
         debug_assert!(false, "a hiding judgment re-entered the caller's view");
         return false;
-    }
-    /// Clears the flag however the judgment ends.
-    struct Judging;
-    impl Drop for Judging {
-        fn drop(&mut self) {
-            JUDGING.with(|flag| flag.set(false));
-        }
     }
     JUDGING.with(|flag| flag.set(true));
     let _judging = Judging;

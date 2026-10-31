@@ -377,7 +377,8 @@ async fn dispatch(
             response = dispatched => Some(response),
         }
     });
-    state.as_caller(owned, round).await
+    // Boxed: the round is too large to hold inline (`large_futures`).
+    state.as_caller(owned, Box::pin(round)).await
 }
 
 /// What a `tasks/update` carrying answers came to.

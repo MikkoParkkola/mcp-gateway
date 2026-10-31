@@ -227,7 +227,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // This caller's hiding judgment, before any per-caller lookup (the
     // sanitize exemption below among them) reads the scoped view.
     crate::gateway::meta_mcp::hiding::record_caller(
-        crate::gateway::router::caller_hiding::RouterHiding::new(
+        crate::gateway::router::caller_hiding::RouterHiding::caller(
             Arc::clone(state),
             crate::gateway::router::OwnedRouterAuthorizer::capture(
                 client.as_ref(),

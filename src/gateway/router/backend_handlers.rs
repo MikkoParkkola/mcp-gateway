@@ -503,7 +503,7 @@ async fn backend_handler_inner(
         Err(response) => return response,
     };
     // Before the absence stage and the backend lookup read the scoped view.
-    crate::gateway::meta_mcp::hiding::record_caller(super::caller_hiding::RouterHiding::new(
+    crate::gateway::meta_mcp::hiding::record_caller(super::caller_hiding::RouterHiding::caller(
         shared,
         super::OwnedRouterAuthorizer::capture(
             caller.client.as_ref(),

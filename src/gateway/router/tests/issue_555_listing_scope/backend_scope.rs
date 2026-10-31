@@ -298,8 +298,13 @@ async fn post_as_agent_cert(router: &axum::Router, uri: &str, params: Value) -> 
 }
 
 /// The hidden backend's answer and the unregistered one's, the latter with
-/// its name read as `beta`: a caller must not tell them apart.
-fn assert_alike(route: &str, hidden: (u16, String), unregistered: (u16, String)) {
+/// its name read as `hidden_name`: a caller must not tell them apart.
+fn assert_alike(
+    route: &str,
+    hidden_name: &str,
+    hidden: &(u16, String),
+    unregistered: &(u16, String),
+) {
     // A trace id is minted per call, so it differs between any two calls.
     let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
     let hidden = (hidden.0, trace.replace_all(&hidden.1, "gw-ID").into_owned());
@@ -307,7 +312,7 @@ fn assert_alike(route: &str, hidden: (u16, String), unregistered: (u16, String))
         unregistered.0,
         trace
             .replace_all(&unregistered.1, "gw-ID")
-            .replace(UNREGISTERED, "beta"),
+            .replace(UNREGISTERED, hidden_name),
     );
     assert_eq!(
         hidden, unregistered,
@@ -326,7 +331,7 @@ async fn mtls_hidden_backend_invokes_like_an_unregistered_one() {
     };
     let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta")).await;
     let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED)).await;
-    assert_alike("mtls gateway_invoke", hidden, unregistered);
+    assert_alike("mtls gateway_invoke", "beta", &hidden, &unregistered);
 }
 
 /// The direct route answers the same two names alike under that policy.
@@ -336,7 +341,7 @@ async fn mtls_hidden_backend_direct_route_answers_like_an_unregistered_one() {
     let call = json!({ "name": "beta_tool", "arguments": {} });
     let hidden = post_as_agent_cert(&router, "/mcp/beta", call.clone()).await;
     let unregistered = post_as_agent_cert(&router, &format!("/mcp/{UNREGISTERED}"), call).await;
-    assert_alike("mtls direct route", hidden, unregistered);
+    assert_alike("mtls direct route", "beta", &hidden, &unregistered);
 }
 
 /// An agent scoped to `alpha` is not told `beta` exists: `gateway_invoke` of
@@ -355,8 +360,9 @@ async fn agent_hidden_backend_invokes_like_an_unregistered_one() {
     let (us, ub) = ask(invoke(UNREGISTERED)).await;
     assert_alike(
         "agent gateway_invoke",
-        (hs.as_u16(), hb.to_string()),
-        (us.as_u16(), ub.to_string()),
+        "beta",
+        &(hs.as_u16(), hb.to_string()),
+        &(us.as_u16(), ub.to_string()),
     );
 }
 
@@ -385,8 +391,9 @@ async fn agent_hidden_backend_direct_route_answers_like_an_unregistered_one() {
     .await;
     assert_alike(
         "agent direct route",
-        (hs.as_u16(), hb.to_string()),
-        (us.as_u16(), ub.to_string()),
+        "beta",
+        &(hs.as_u16(), hb.to_string()),
+        &(us.as_u16(), ub.to_string()),
     );
 }
 
@@ -407,7 +414,7 @@ async fn mtls_permitted_unlisted_tool_on_a_hidden_backend_answers_like_an_unregi
     let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "ghost_tool")).await;
     let unregistered =
         post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "ghost_tool")).await;
-    assert_alike("mtls permitted unlisted", hidden, unregistered);
+    assert_alike("mtls permitted unlisted", "beta", &hidden, &unregistered);
 }
 
 /// The capability provider is a backend name like any other: an agent scoped
@@ -422,8 +429,9 @@ async fn agent_hidden_capability_provider_invokes_like_an_unregistered_one() {
     let (us, ub) = ask(invoke(UNREGISTERED, "cap_open")).await;
     assert_alike(
         "agent hidden capability provider",
-        (hs.as_u16(), hb.to_string()),
-        (us.as_u16(), ub.to_string()),
+        "caps",
+        &(hs.as_u16(), hb.to_string()),
+        &(us.as_u16(), ub.to_string()),
     );
 }
 

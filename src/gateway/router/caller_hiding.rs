@@ -34,7 +34,7 @@ pub(crate) struct RouterHiding {
 impl RouterHiding {
     /// The judgment for `authorizer`'s caller, who proved `verified` and
     /// whose session is `session_id`.
-    pub(crate) fn new(
+    pub(crate) fn caller(
         state: Arc<AppState>,
         authorizer: OwnedRouterAuthorizer,
         verified: Option<VerifiedIdentity>,
