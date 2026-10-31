@@ -38,6 +38,7 @@ async fn send_raw(fx: &Fx, uri: &str, key: &str, body: &Value) -> Value {
 
 mod c2e;
 mod encoded;
+mod hidden_reload;
 mod mik8378;
 mod resume;
 mod signed_order;
