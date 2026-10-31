@@ -354,11 +354,11 @@ fn p95_rank_agrees_with_the_failsafe_tracker() {
             tracker.record_success(sample);
             sketch.add(bin_of(sample));
         }
-        let tracked = tracker.metrics().latency_p95_ms.expect("samples recorded");
+        let tracker_p95 = tracker.metrics().latency_p95_ms.expect("samples recorded");
         assert_eq!(
             sketch.p95_bin(),
-            Some(bin_of(Duration::from_millis(tracked))),
-            "n = {n}: tracker p95 {tracked} ms"
+            Some(bin_of(Duration::from_millis(tracker_p95))),
+            "n = {n}: tracker p95 {tracker_p95} ms"
         );
     }
 }

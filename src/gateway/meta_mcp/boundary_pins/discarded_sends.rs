@@ -44,8 +44,10 @@ const SITES: [(&str, Fate); 15] = [
         Fate::Delivered,
     ),
     ("src/backend/ops.rs\trequest", Fate::Delivered),
-    ("src/backend/ops.rs\trequest_attempted", Fate::Delivered),
     ("src/backend/ops.rs\trequest_with_headers", Fate::Delivered),
+    // The transport send of `request_attempted`, timed in its own child
+    // module; every result goes back to it, as before.
+    ("src/backend/ops/attempt.rs\tsend_timed", Fate::Delivered),
     (
         "src/gateway/meta_mcp/caller_forward.rs\tforward_for_caller",
         Fate::Delivered,
