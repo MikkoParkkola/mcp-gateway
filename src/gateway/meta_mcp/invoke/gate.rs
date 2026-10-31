@@ -496,9 +496,7 @@ impl MetaMcp {
         tool: &str,
         session_id: Option<&str>,
     ) -> Option<Error> {
-        self.caller_profile_check(session_id, (server, tool))
-            .err()
-            .map(Error::Protocol)
+        self.caller_profile_check(session_id, (server, tool)).err()
     }
 
     /// The dispatch-time backstop (design r2 item 4): a refusal the policy

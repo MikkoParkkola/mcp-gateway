@@ -79,8 +79,7 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> Result<()> {
-        self.caller_profile_check(session_id, (server, tool))
-            .map_err(Error::Protocol)?;
+        self.caller_profile_check(session_id, (server, tool))?;
         // `{}`, never `Null`: invocation builds its target with an empty
         // object, and two gates that see different targets can disagree.
         let empty = json!({});
