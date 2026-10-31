@@ -365,7 +365,10 @@ impl MetaMcp {
         // A backend that stopped to ask still received the call. Its key is
         // armed to commit may-have-run, never freed: delivery parks it for the
         // continuation when the answer carries a minted envelope, and every
-        // other exit (a refusal, a replaced round, a drop) commits the notice.
+        // other exit (a refusal, a replaced round, a drop) commits the notice,
+        // except the undeclared-question refusal below, which frees it: a
+        // client that declares the capability and retries under the same key
+        // runs, a re-run of round 1 the release line accepts.
         if let Some(reservation) = idem_reservation.as_mut() {
             if stopped_to_ask {
                 reservation.commit(&uncertain_side_effect());
@@ -380,8 +383,14 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
-            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id).inspect_err(
+            |_| {
+                crate::gateway::delivery_facts::refused_while_vouched();
+                if let Some(reservation) = idem_reservation.as_mut() {
+                    reservation.disarm();
+                }
+            },
+        )?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
