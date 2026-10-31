@@ -124,7 +124,7 @@ impl Writers {
         self.running.fetch_add(1, Ordering::SeqCst);
         let writers = Arc::clone(self);
         #[cfg(test)]
-        let spawner = self.spawner.clone();
+        let started_by = self.spawner.clone();
         #[cfg(test)]
         let counted = self.seam_path.as_deref().map(stall_seam::live);
         let thread = move || {
@@ -133,7 +133,7 @@ impl Writers {
             #[cfg(test)]
             let _live = counted;
             #[cfg(test)]
-            crate::test_late_write::writing_for(spawner);
+            crate::test_late_write::writing_for(started_by);
             work();
         };
         #[cfg(test)]
