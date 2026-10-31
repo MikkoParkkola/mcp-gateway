@@ -99,6 +99,13 @@ fn name_refusal(gateway: &Gateway, name: &str) -> Option<&'static str> {
     }
 }
 
+/// Whether `find` is an adopt decision under this gateway.yaml: the rule the
+/// route shows as `adoptable`. Red rows only: says yes to every find.
+#[cfg(test)]
+fn adopt_eligible(_find: &ListedFind, _gateway: &Gateway) -> bool {
+    true
+}
+
 fn listed(find: &ListedFind, gateway: &Gateway) -> serde_json::Value {
     let mut refusals: Vec<Refusal> = find.refusals.clone();
     let name = name_refusal(gateway, &find.name);
