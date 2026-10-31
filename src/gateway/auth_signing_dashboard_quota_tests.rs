@@ -36,15 +36,15 @@ fn auth_state(enabled: bool) -> (AuthState, Arc<DashboardBootstrap>) {
     let bootstrap = Arc::new(DashboardBootstrap::new());
     (
         AuthState {
-            auth_config: Arc::new(ResolvedAuthConfig::from_config(
-                &config,
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )),
             key_server: None,
             dashboard_bootstrap: Arc::clone(&bootstrap),
             tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                Arc::new(ResolvedAuthConfig::from_config(
+                    &config,
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,
@@ -83,7 +83,9 @@ async fn identity_for_request(
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
-        ));
+        ))
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::Extension(state.live_config.generation()));
 
     let mut builder = Request::builder()
         .uri(PROBE_PATH)

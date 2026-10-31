@@ -261,7 +261,10 @@ async fn meta_mcp_dispatch(
                 Err(why) => break 'events JsonRpcResponse::error(Some(id), INTERNAL_ERROR, why),
             };
             let caller = crate::events::Caller {
-                principal: events::principal(events_owner, state.auth_config.enabled),
+                principal: events::principal(
+                    events_owner,
+                    state.live_config.generation().auth().enabled,
+                ),
                 identity: verified_identity.clone(),
                 read_key: read_key.clone(),
                 credential,
@@ -415,7 +418,7 @@ async fn meta_mcp_dispatch(
                     let credential =
                         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
                             client.as_ref(),
-                            state.auth_config.record_key(),
+                            state.live_config.generation().auth().record_key(),
                         );
                     return super::judged_answer::record_error_exit(
                         &state.meta_mcp,
@@ -651,7 +654,7 @@ async fn meta_mcp_dispatch(
         &delivery.correlation,
         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
             client.as_ref(),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         finalized,
     )
@@ -687,9 +690,17 @@ async fn meta_mcp_dispatch(
         && !response.excludes_client_accounting()
     {
         if response.error.is_some() {
-            state.auth_config.record_client_failure(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_failure(client);
         } else {
-            state.auth_config.record_client_success(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_success(client);
         }
     }
 

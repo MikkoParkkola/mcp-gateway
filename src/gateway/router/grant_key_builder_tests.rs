@@ -283,7 +283,9 @@ async fn view_judge_hides_a_granted_capability_from_the_static_bearer() {
     .await;
     let Some((bearer, _)) = fx
         .state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .validate_token_with_origin(BEARER_SECRET)
     else {
         panic!("the fixture static bearer resolves");
@@ -322,7 +324,13 @@ async fn view_judge_shows_a_granted_capability_to_the_api_key() {
         }
     })
     .await;
-    let Some((key, _)) = fx.state.auth_config.validate_token_with_origin(KEY) else {
+    let Some((key, _)) = fx
+        .state
+        .live_config
+        .generation()
+        .auth()
+        .validate_token_with_origin(KEY)
+    else {
         panic!("the fixture api key resolves");
     };
     let judge = super::view_judge::OwnedViewJudge::shared(&fx.state);

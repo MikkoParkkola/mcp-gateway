@@ -402,6 +402,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/ui/tool_call.rs", ".map(|c| c.principal.storage_form().to_owned())", 1, Store, "the principal a web UI call must dispatch as, compared by the call gate; never recorded"),
     ("src/gateway/router/handlers/owner.rs", "SessionOwner::Credential(principal.storage_form().to_owned())", 1, Store, "session owner: an in-process lookup key"),
     ("src/gateway/router/watch_poll.rs", "client.principal.storage_form(),", 1, Store, "presence classification only"),
+    ("src/gateway/router/authorization.rs", ".and_then(|at| keys.client_for_key_at(name, client.principal.storage_form(), at))", 1, Store, "a queued task's key found again by its stored principal at dispatch"),
     ("src/gateway/record_principal.rs", "const PREFIX: &str = crate::gateway::auth::CREDENTIAL_OWNER_PREFIX", 1, Keyed, "record_owner: the keying helper"),
     ("src/gateway/router/view_judge.rs", "client.principal.storage_form(),", 1, Store, "presence classification only"),
     ("src/gateway/router/backend_handlers/direct_caller.rs", ".map(|client| client.principal.storage_form())", 2, Store, "a provenance classification and an admission owner key argument"),

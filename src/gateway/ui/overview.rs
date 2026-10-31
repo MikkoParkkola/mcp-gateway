@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
-use axum::extract::State;
+use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
@@ -85,7 +85,11 @@ fn clip_field(value: &Value) -> Value {
 
 /// `GET /ui/api/overview`. Admin only: an authenticated non-admin gets 403
 /// here, and an unauthenticated caller never reaches it (401 upstream).
-pub(super) async fn overview(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
+pub(super) async fn overview(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
+) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
@@ -117,7 +121,7 @@ pub(super) async fn overview(State(state): State<Arc<AppState>>, guard: Guard) -
     let mut checklist = Map::new();
     checklist.insert(
         "has_key".into(),
-        (!state.auth_config.api_keys().is_empty()).into(),
+        (!generation.auth().api_keys().is_empty()).into(),
     );
     source.add_tool_tried(&mut checklist);
     body.insert("checklist".into(), checklist.into());

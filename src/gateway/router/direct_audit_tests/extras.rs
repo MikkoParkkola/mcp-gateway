@@ -82,7 +82,10 @@ pub(super) fn backend_config(setup: &Setup, name: &str) -> BackendConfig {
 pub(super) fn harden(state: &mut crate::gateway::router::AppState) {
     let mut config = (*state.live_config.get()).clone();
     config.security.posture = crate::security::SecurityPosture::Hardened;
-    state.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    state.live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        config,
+        std::sync::Arc::clone(state.live_config.generation().auth()),
+    ));
 }
 
 /// `meta` with attestation enforced.
