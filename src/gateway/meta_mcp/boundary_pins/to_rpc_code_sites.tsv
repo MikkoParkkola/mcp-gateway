@@ -5,7 +5,7 @@ src/backend/ops.rs	record_dispatch_error	2	log field only; no frame
 src/gateway/meta_mcp/admission_replay.rs	defer_or_serve_replay	2	grant and JSON-RPC refusals only; gateway-origin frame
 src/gateway/meta_mcp/caller_forward.rs	prompt_credential	2	credential steps return Config, JsonRpc or Internal only; gateway-origin frame
 src/gateway/meta_mcp/grant_audit.rs	slot_http	1	audit-unavailable refusal; gateway-origin frame
-src/gateway/meta_mcp/invoke/audit.rs	audit_replay	1	the audit write's own failure on a replay; gateway-origin frame
+src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	1	the audit write's own failure on a replay; gateway-origin frame
 src/gateway/meta_mcp/invoke/audit.rs	note_dispatch_failure	1	failure note for the audit record; no frame
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	1	task-state error record; no frame
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	1	response-firewall refusal body; gateway-origin
@@ -15,11 +15,11 @@ src/gateway/meta_mcp/invoke/stored_proof.rs	lift_deferred	1	grant and JSON-RPC r
 src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	1	response-firewall arm only; every other error goes through of_error
 src/gateway/meta_mcp/response_security.rs	recovered_result_error	1	gateway recovery refusal; gateway-origin frame
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	1	audit-unavailable refusal; gateway-origin frame
+src/gateway/meta_mcp/signing.rs	admit_signing_nonce_stamped	1	picks the decision-record kind of a refused signing nonce (the gateway's own nonce store); no frame
 src/gateway/outbound/audit.rs	recorded	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/outbound/http.rs	emit_pending	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/router/authorization.rs	require_admin_tool_access	1	builds an AuthorizationError, not a frame
 src/gateway/router/backend_handlers.rs	backend_handler	1	audit-unavailable refusal; gateway-origin frame
-src/gateway/router/backend_handlers.rs	guard_tool_call	1	refusal code for the audit record; no frame
 src/gateway/router/backend_handlers/direct_audit.rs	record	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	1	log field only; the frame goes through of_error
 src/gateway/router/backend_handlers/direct_caller.rs	refused	1	sanitize-step refusal; gateway-origin frame
@@ -31,6 +31,7 @@ src/gateway/router/backend_handlers/direct_preflight.rs	check_attestation	1	atte
 src/gateway/router/backend_handlers/direct_preflight.rs	parse_direct_arguments	1	argument-parse refusal; gateway-origin frame
 src/gateway/router/backend_handlers/direct_preflight.rs	propagate_identity	1	OAuth isolation refusal; gateway-origin frame
 src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	nonce refusal; gateway-origin frame
+src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	1	refusal code of a gateway routing-profile refusal for the caller verdict; no backend origin
 src/gateway/router/direct_guards.rs	refusal	2	every caller passes a gate's own error; gateway-origin frame
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	4	signing, nonce and sanitize refusals; gateway-origin frame
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	6	admission, kill-switch and audit refusals; gateway-origin frame
