@@ -343,6 +343,21 @@ fn restore_reapplies_the_bounds() {
         [(now - 9, 10), (now - 6, 40), (now - 3, bin_ms(5))],
         "{closed:?}"
     );
+    // Within the live cap, a slot held both live and closed is not closed
+    // early; without the rule its live copy would close behind the closed
+    // row on the clock, two rows for one slot.
+    let file: SeriesFile = serde_json::from_value(serde_json::json!({
+        "half": {
+            "live": [[now - 6, 1, 0, 0, [[9, 1]]], [now, 1, 0, 0, [[2, 1]]]],
+            "closed": [[now - 6, 40, 2, 0, 0]],
+        },
+    }))
+    .expect("a file of the right shape");
+    let series = LatencySeries::from_file(&file, now * 1_800, None);
+    let closed: Vec<(u64, u64)> = series.half.closed.iter().map(|c| (c.bucket, c.p95_ms)).collect();
+    assert_eq!(closed, [(now - 6, 40)], "one row for the slot: {closed:?}");
+    let live: Vec<u64> = series.half.live.iter().map(|l| l.bucket).collect();
+    assert_eq!(live, [now], "{live:?}");
 }
 
 /// Review #12 (dedup is on the operator list; no visibility change here): the
