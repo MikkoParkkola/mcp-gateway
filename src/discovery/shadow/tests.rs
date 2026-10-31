@@ -632,3 +632,5 @@ fn a_quoted_windows_program_keeps_only_its_name() {
         "{json}"
     );
 }
+
+mod endpoint;

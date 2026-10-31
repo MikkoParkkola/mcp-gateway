@@ -177,7 +177,7 @@ test('T6 stale data reads its time and dims the numbers until it clears', async 
   expect(title).toMatch(/^Updates stopped at .+ · reconnecting$/);
 });
 
-test('T7 a failed To do count reads "?", a route not shipped shows nothing, and a known count replaces "?"', async ({ page }) => {
+test('T7 a failed To do count reads "?", a 404 reads "?" too, and a known count replaces "?"', async ({ page }) => {
   let reply = { status: 500, json: {} };
   await page.route(COUNT, (r) => r.fulfill(reply));
   await open(page);
@@ -190,9 +190,13 @@ test('T7 a failed To do count reads "?", a route not shipped shows nothing, and 
   reply = { json: { total: 3 } }; // an answer without a whole-number count
   await inShell(page, (m) => m.refreshCounts());
   await expect(badge).toHaveText('?');
+  reply = { json: { count: 2 } };
+  await inShell(page, (m) => m.refreshCounts());
+  await expect(badge).toHaveText('2');
+  // The count route ships with the queue: a 404 is now a failure like any other.
   reply = { status: 404, json: {} };
   await inShell(page, (m) => m.refreshCounts());
-  await expect(badge).toHaveCount(0);
+  await expect(badge).toHaveText('?');
 });
 
 for (const width of WIDTHS) {

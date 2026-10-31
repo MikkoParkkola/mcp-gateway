@@ -62,6 +62,12 @@ async fn list_decisions(State(state): State<Arc<AppState>>, guard: Guard) -> Res
     }
 }
 
+/// `GET /ui/api/decisions/count`: not built yet (red rows only).
+#[cfg(test)]
+async fn count_decisions(State(_state): State<Arc<AppState>>, _guard: Guard) -> Response {
+    StatusCode::NOT_FOUND.into_response()
+}
+
 /// 503 naming each source not yet readable and why.
 fn unavailable(sources: &[(&'static str, &'static str)]) -> Response {
     let sources: Vec<Value> = sources

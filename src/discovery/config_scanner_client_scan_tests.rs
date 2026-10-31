@@ -128,3 +128,40 @@ fn the_candidates_name_no_environment_or_process_source() {
         DiscoverySource::Environment | DiscoverySource::RunningProcess
     )));
 }
+
+/// R13: a client file behind a directory the gateway may not search is not
+/// "absent": its stamp differs from a missing file's, and the scan names it
+/// unreadable. Skipped under root, where permissions do not bind.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_behind_an_unsearchable_directory_is_not_absent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sub = dir.path().join("client");
+    std::fs::create_dir(&sub).expect("dir");
+    let path = sub.join("claude.json");
+    let candidates = [claude(&path)];
+    let absent = ConfigScanner::fingerprint(&candidates);
+
+    write(&path, &entry("v"));
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let premise = std::fs::metadata(&path).map_err(|e| e.kind());
+    let denied = ConfigScanner::fingerprint(&candidates);
+    let scan = ConfigScanner::new().scan_candidates(&candidates).await;
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).expect("restore");
+
+    assert_eq!(
+        premise.err(),
+        Some(std::io::ErrorKind::PermissionDenied),
+        "premise: the file's metadata is refused"
+    );
+    assert_ne!(denied, absent, "an unsearchable file read as absent");
+    assert_eq!(
+        scan.unreadable.len(),
+        1,
+        "an unsearchable file was skipped as absent"
+    );
+}

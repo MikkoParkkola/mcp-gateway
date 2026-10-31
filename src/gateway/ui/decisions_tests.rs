@@ -431,3 +431,50 @@ fn a_log_with_no_sealed_segment_has_an_edge() {
         .expect("a written record");
     assert!(edge <= last, "the edge keeps the record just written");
 }
+
+async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
+    let guard = Guard::for_route(routes::UI_DECISIONS, &Method::GET, Some(client(admin)));
+    let response = count_decisions(State(Arc::clone(state)), guard).await;
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// R6: the count is the list's length and revision, for an admin only, and
+/// answers the list's 503 while a source is unavailable.
+#[tokio::test]
+async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let now = crate::clock::utc_now().expect("a readable clock");
+    write(&log, note("stripe.charges", now));
+    let (state, _store) = state_with(&log).await;
+
+    let (status, body) = count(&state, true).await;
+    assert_eq!(
+        status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "before start: {body}"
+    );
+    assert_eq!(body["error"], "decisions_unavailable", "{body}");
+
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _tick = start(&state.meta_mcp, shutdown);
+    let list = served_when(&state, |body| scope_len(body) == 1).await;
+
+    let (status, body) = count(&state, true).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({
+            "count": list["decisions"].as_array().map_or(0, Vec::len),
+            "revision": list["revision"],
+        }),
+    );
+
+    let (status, _) = count(&state, false).await;
+    assert_eq!(status, admin_auth_required().0, "a non-admin is refused");
+}
