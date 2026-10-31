@@ -36,9 +36,9 @@ fn listener(reply: Option<&'static str>) -> String {
     format!("http://{addr}/")
 }
 
-/// A listener that sends a 200 with a 100-byte body, writes part of it, and
-/// stalls, on its own thread.
-fn stalled_body() -> String {
+/// A listener that sends `status` (a status line, e.g. `200 OK`) with a
+/// 100-byte body, writes part of it, and stalls, on its own thread.
+fn stalled_body(status: &'static str) -> String {
     let server = TcpListener::bind("127.0.0.1:0").expect("a local port");
     let addr = server.local_addr().expect("its address");
     std::thread::spawn(move || {
@@ -46,7 +46,8 @@ fn stalled_body() -> String {
             let Ok(mut stream) = stream else { continue };
             let mut buf = [0u8; 4096];
             let _ = stream.read(&mut buf);
-            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\npartial");
+            let head = format!("HTTP/1.1 {status}\r\nRetry-After: 1\r\nContent-Length: 100\r\n\r\npartial");
+            let _ = stream.write_all(head.as_bytes());
             std::thread::sleep(Duration::from_secs(30));
         }
     });
@@ -57,7 +58,7 @@ fn stalled_body() -> String {
 /// `TimedOut`: the send is timed through its body, not to its headers.
 #[tokio::test]
 async fn a_stalled_body_notes_timed_out() {
-    let url = stalled_body();
+    let url = stalled_body("200 OK");
     let client = reqwest::Client::builder()
         .timeout(Duration::from_millis(200))
         .build()
@@ -70,6 +71,35 @@ async fn a_stalled_body_notes_timed_out() {
     .await;
     seam::clear();
     assert!(matches!(result, Err(crate::Error::Protocol(_))), "{result:?}");
+    assert_eq!(notes.backend_sample(), Some((SEND, End::TimedOut)));
+}
+
+/// Review r2 R2: a refusal whose body stalls keeps its status: a 429 comes
+/// back as a response, which the caller types as a rate limit (by status,
+/// `status_error`), and the send notes `TimedOut`. (A success whose body
+/// stalls is an error, never an empty success: `a_stalled_body_notes_timed_out`.)
+#[tokio::test]
+async fn a_refusal_with_a_stalled_body_keeps_its_status() {
+    let url = stalled_body("429 Too Many Requests");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(200))
+        .build()
+        .expect("a client");
+    let health = crate::failsafe::HealthTracker::new("test");
+    seam::inject(SEND);
+    let (result, notes) = with_dispatch_scope(async {
+        send_with_retry(client.get(&url), &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await
+    })
+    .await;
+    seam::clear();
+    let response = result.expect("the refusal comes back as a response");
+    assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.headers()["retry-after"], "1");
+    let error = super::params::status_error(response, "API").await;
+    assert!(
+        matches!(&error, crate::Error::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS)),
+        "{error}"
+    );
     assert_eq!(notes.backend_sample(), Some((SEND, End::TimedOut)));
 }
 

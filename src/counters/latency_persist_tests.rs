@@ -196,15 +196,18 @@ fn size_realistic_full_cap() {
     assert!(bytes <= 3_000_000, "{bytes} bytes");
 }
 
-/// Review F9: a save after the clock has left a slot stores it closed (its
-/// p95 and counts), not as a live histogram, though the idle store never
-/// recorded again to close it.
+/// Review F9 and r2 R1: a save after the clock has left a slot stores it
+/// closed (its p95 and counts), not as a live histogram, though the idle
+/// store never recorded again to close it. Through the gateway's own save
+/// (`CounterFile::save`), read back from the file it wrote.
 #[test]
 fn save_stores_idle_slots_closed() {
-    let store = CounterStore::new(T0);
-    timed(&store, "alpha", T0 + 10, 100);
-    let now = T0 + 3 * HALF;
-    let file = json(&store.encode("v1", now));
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let path = dir.path().join("counters.json");
+    let restored = crate::counters::persist::CounterFile::restore(path.clone(), T0, "v1", &Utc);
+    timed(&restored.store, "alpha", T0 + 10, 100);
+    restored.file.save(&restored.store, "v1", T0 + 3 * HALF);
+    let file = json(&std::fs::read(&path).expect("the saved file"));
     let half = &file["latency"]["server"][0][1]["half"];
     assert_eq!(half["live"], serde_json::json!([]), "{half}");
     assert_eq!(half["closed"][0][0], T0 / HALF, "{half}");

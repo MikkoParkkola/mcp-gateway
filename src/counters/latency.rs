@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 /// Histogram bins: bin 0 is under 1 ms, bin `i` in 1..=62 is
 /// `[1.25^(i-1), 1.25^i)` ms, bin 63 is everything from `1.25^62` ms
-/// (about 27 minutes) up.
+/// (about 17 minutes) up.
 pub(crate) const BINS: u8 = 64;
 const RATIO: f64 = 1.25;
 
@@ -466,6 +466,10 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
         // slots cut back to the window's newest `W`.
         ring.live.make_contiguous().sort_by_key(|l| l.bucket);
         dedup_slots(&mut ring.live, |l| l.bucket);
+        // A slot a file holds both live and closed keeps its closed row: that
+        // history was finalized, and one slot is never both.
+        let closed: std::collections::BTreeSet<u64> = ring.closed.iter().map(|c| c.bucket).collect();
+        ring.live.retain(|l| !closed.contains(&l.bucket));
         while ring.live.len() > usize::try_from(LIVE).unwrap_or(usize::MAX) {
             if let Some(oldest) = ring.live.pop_front() {
                 ring.closed.push_back(oldest.close());

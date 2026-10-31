@@ -553,15 +553,21 @@ impl CounterStore {
     /// serialized after it is released.
     #[cfg(test)]
     pub(crate) fn encode(&self, binary_version: &str, saved_at: u64) -> Vec<u8> {
+        snapshot::encode(&self.saved_snapshot(saved_at), binary_version, saved_at)
+    }
+
+    /// The copy of the store a save at `saved_at` writes: half-hour latency
+    /// slots the clock has left are closed, not saved as live histograms
+    /// (the live store closes them on its next record). Every save path
+    /// takes it, so what a test encodes is what the gateway writes.
+    pub(crate) fn saved_snapshot(&self, saved_at: u64) -> Inner {
         let mut inner = self.snapshot();
-        // Half-hour slots the clock has left are saved closed, not as live
-        // histograms (the live store closes them on its next record).
         inner.global.latency.finalize(saved_at, None);
         inner.server.overflow.latency.finalize(saved_at, None);
         for series in inner.server.labels.values_mut() {
             series.latency.finalize(saved_at, None);
         }
-        snapshot::encode(&inner, binary_version, saved_at)
+        inner
     }
 
     /// Restore from `bytes` at `now`, re-applying every bound. Returns the

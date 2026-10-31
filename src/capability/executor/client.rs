@@ -298,6 +298,8 @@ async fn timed_attempt(
     match sent.bytes().await {
         Ok(body) => {
             timer.finish(End::Answered);
+            // The rebuilt response carries no request URL: no capability
+            // caller reads one, and `status_error` strips it anyway.
             let mut rebuilt = axum::http::Response::new(body);
             *rebuilt.status_mut() = status;
             *rebuilt.version_mut() = version;
@@ -306,7 +308,22 @@ async fn timed_attempt(
         }
         Err(e) => {
             timer.finish(if e.is_timeout() { End::TimedOut } else { End::Failed });
-            Err(Failed::Body(e))
+            // A refusal (a 401, a 429) keeps its status even when its body
+            // never arrives: callers classify by status (credential refresh,
+            // rate limits), so it goes back with an empty body. A success
+            // whose body failed is an error, never an empty success.
+            if status.is_success() {
+                Err(Failed::Body(e))
+            } else {
+                // Its headers too (a 429's Retry-After), less a length the
+                // empty body no longer has.
+                let mut empty = axum::http::Response::new(axum::body::Bytes::new());
+                *empty.status_mut() = status;
+                *empty.version_mut() = version;
+                *empty.headers_mut() = headers;
+                empty.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+                Ok(reqwest::Response::from(empty))
+            }
         }
     }
 }

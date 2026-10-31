@@ -315,8 +315,14 @@ fn restore_reapplies_the_bounds() {
                 [now, 1, 0, 0, [[2, 1]]],
                 [now - 1, 1, 0, 0, [[4, 1]]],
                 [now - 3, 1, 0, 0, [[5, 1]]],
+                [now - 6, 1, 0, 0, [[9, 1]]],
             ],
-            "closed": [[now - 9, 10, 1, 0, 0], [now - 9, 20, 1, 0, 0], [now - 8, 30]],
+            "closed": [
+                [now - 9, 10, 1, 0, 0],
+                [now - 9, 20, 1, 0, 0],
+                [now - 8, 30],
+                [now - 6, 40, 2, 0, 0],
+            ],
         },
     }))
     .expect("a file of the right shape");
@@ -329,9 +335,14 @@ fn restore_reapplies_the_bounds() {
         .collect();
     assert_eq!(live, [(now - 1, vec![(4, 1)]), (now, vec![(3, 3)])], "{live:?}");
     let closed: Vec<(u64, u64)> = series.half.closed.iter().map(|c| (c.bucket, c.p95_ms)).collect();
-    // The duplicate closed row and the two-field one are gone; the extra
-    // live slot is closed, not lost.
-    assert_eq!(closed, [(now - 9, 10), (now - 3, bin_ms(5))], "{closed:?}");
+    // The duplicate closed row and the two-field one are gone; the slot held
+    // both live and closed keeps its closed row (40 ms, not bin 9's value);
+    // the extra live slot is closed, not lost.
+    assert_eq!(
+        closed,
+        [(now - 9, 10), (now - 6, 40), (now - 3, bin_ms(5))],
+        "{closed:?}"
+    );
 }
 
 /// Review #12 (dedup is on the operator list; no visibility change here): the

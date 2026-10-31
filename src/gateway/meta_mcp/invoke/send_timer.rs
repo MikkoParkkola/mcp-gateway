@@ -81,21 +81,13 @@ impl Drop for SendTimer {
     }
 }
 
-/// Failures a transport raises before anything is written to the backend: no
-/// caller slot, an authorization that never completed, a connection that
-/// never opened (the stdio writer reports an unsent request this way), or
-/// shutdown. None of them is the backend's latency.
+/// Failures that prove nothing was written to the backend: the crate's own
+/// pre-dispatch set ([`crate::Error::is_pre_dispatch`]: no caller slot, an
+/// authorization that never completed, a connection that never opened (the
+/// stdio writer reports an unsent request this way), a refusal before the
+/// send), plus shutdown. None of them is the backend's latency.
 fn never_sent(e: &crate::Error) -> bool {
-    matches!(
-        e,
-        crate::Error::IdentitySlotsExhausted { .. }
-            | crate::Error::AuthorizationCancelled { .. }
-            | crate::Error::AuthorizationIncomplete { .. }
-            | crate::Error::AuthorizationRequired { .. }
-            | crate::Error::AuthorizationPending { .. }
-            | crate::Error::TransportConnect(_)
-            | crate::Error::Shutdown
-    )
+    e.is_pre_dispatch() || matches!(e, crate::Error::Shutdown)
 }
 
 /// The send's time: the injected test duration when a row set one.
