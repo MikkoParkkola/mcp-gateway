@@ -22,3 +22,9 @@ src/oauth/client/sign_in.rs	token_state	1	Reads a held token as signed in or exp
 src/oauth/login_gate.rs	set_end	1	Records when a login ends, for the retry hint.
 src/oauth/login_gate.rs	current_end	1	Reads when the login in flight ends, for the retry hint.
 src/oauth/storage.rs	legacy_token_exists	1	Reports whether a 3.x token file exists so the status can say a re-sign-in is needed; it reads nothing from it.
+src/oauth/callback.rs	html	1	Chooses the static page a good callback shows; decides nothing.
+src/oauth/callback.rs	start_callback_server_with	1	The callback server start with the success page chosen; the state check is in the handler.
+src/oauth/client/sign_in.rs	installed	1	Reads the confirmed-sign-in count.
+src/oauth/client/sign_in.rs	bump_installed	1	Counts a confirmed sign-in once its file is durable.
+src/oauth/client/sign_in.rs	set_held	1	Stores a held token's expiry and refreshability for the status; it gates no request.
+src/oauth/login_gate.rs	attempt	1	Hands out the login attempt whose finish a decision awaits.
