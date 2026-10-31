@@ -121,7 +121,7 @@ const MERGED_WITHOUT_MCP_ROUTES: &[&str] = &[
     "jwks_route",
     "protected_resource_route",
     "metrics_route(&startup_config, multiplexer)",
-    "super::ui::html_router()",
+    "super::ui::html_router().layer(compression())",
     "extra",
     "accounts_router",
 ];

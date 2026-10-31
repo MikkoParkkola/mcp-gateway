@@ -382,7 +382,7 @@ tr:hover td{{background:var(--bg3);}}
 /// backends; an anonymous caller already learns on/off from 401 versus 200.
 fn auth_facts(state: &AppState, client: Option<&AuthenticatedClient>) -> Value {
     json!({
-        "enabled": state.auth_config.enabled,
+        "enabled": state.live_config.generation().auth().enabled,
         "signed_in": client.is_some_and(|c| c.authenticated),
         "admin": is_admin(client),
     })

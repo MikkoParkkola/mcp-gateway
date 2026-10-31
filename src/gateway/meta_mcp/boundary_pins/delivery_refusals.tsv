@@ -53,6 +53,7 @@ src/config/strict_keys.rs	refuse_unrecognised_keys	removed_refusal	1	no-record	c
 src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record	a config write
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
+src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	config reload: a key edit that would flip the running multi-user status is refused before it applies
 src/config_reload/grant_reload.rs	reload_identity_grants	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
@@ -72,8 +73,10 @@ src/fs_lock_windows.rs	lock_dir	directory_refusal	1	no-record	a state-directory 
 src/fs_lock_windows.rs	lock_directory_finding	directory_refusal	1	no-record	a state-directory file lock, not a call delivery
 src/fs_lock_windows.rs	sidecar	held_refusal	2	no-record	a state-directory file lock, not a call delivery
 src/gateway/auth_bootstrap.rs	try_dashboard_bootstrap	clock_refusal	2	no-record	a dashboard sign-in link exchange, not a call delivery
-src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_digests	1	no-record	config load: two credentials sharing a secret
-src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_shared_principals	1	no-record	config load: two credentials sharing a principal
+src/gateway/auth_resolved.rs	refuse_collisions	refuse_shared_digests	1	no-record	config load and reload: two credentials sharing a secret
+src/gateway/auth_resolved.rs	refuse_collisions	refuse_shared_principals	1	no-record	config load and reload: two credentials sharing a principal
+src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_collisions	1	no-record	config load: the key list's collision check (refuse_collisions)
+src/gateway/auth_resolved.rs	with_keys_of	refuse_collisions	1	no-record	config reload: a reloaded key list that collides is refused whole; no call is delivered
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	refuse_on_playbook_run	1	not-a-decision	client-protocol rejection: retry fields on a playbook run

@@ -327,18 +327,15 @@ impl Stdio {
         let policy = Arc::new(crate::security::ToolPolicy::default());
         let (tasks, expiry) = stdio_tasks::open(
             &config,
-            &crate::config::EnvOverlay::default(),
             &self.meta,
             &policy,
-            (
-                &std::sync::Arc::new(
-                    crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                        crate::gateway::record_principal::TEST_RECORD_KEY,
-                    )
-                    .expect("test key"),
-                ),
-                &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
-            ),
+            &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                config.clone(),
+                std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
+                    &crate::config::EnvOverlay::default(),
+                    std::sync::Arc::new(crate::gateway::record_principal::test_record_key()),
+                )),
+            )),
         )
         .await
         .expect("the stdio store opens");

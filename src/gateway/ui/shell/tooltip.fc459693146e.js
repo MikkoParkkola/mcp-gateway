@@ -25,7 +25,8 @@ const cssReady = new Promise((resolve, reject) => {
   css.dataset.tooltipCss = '';
   css.onload = () => resolve();
   css.onerror = () => reject(new Error('stylesheet not loaded'));
-  document.head.append(css);
+  // After the shell's own stylesheet (linked at the end of the body), so its rules win ties.
+  document.body.append(css);
 });
 // Handled here; load() reports a failure when a tooltip asks for it.
 cssReady.catch(() => {});

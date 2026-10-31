@@ -287,7 +287,7 @@ async fn audited_call_judged(
                 &correlation,
                 DeliveryCredential {
                     kind: credential_kind,
-                    principal: principal.record_form(state.auth_config.record_key()),
+                    principal: principal.record_form(&state.record_key()),
                 },
                 read,
             )
