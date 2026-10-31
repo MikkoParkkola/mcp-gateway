@@ -216,7 +216,7 @@ mod send_site_scan {
         ),
         (
             "src/capability/executor",
-            &[".send().await"],
+            &[".send().await", "client.execute("],
             "src/capability/executor/client.rs",
         ),
     ];

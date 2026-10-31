@@ -159,71 +159,102 @@ pub(super) async fn send_with_retry(
     health: &crate::failsafe::HealthTracker,
 ) -> Result<reqwest::Response> {
     let started = std::time::Instant::now();
-    // This call's backend send time, retries and backoff included.
-    let timer = SendTimer::start();
     let mut backoff_ms: u64 = 100;
+    let mut request = Some(request);
     for attempt in 1..=MAX_SEND_ATTEMPTS {
-        let Some(attempt_req) = request.try_clone() else {
-            // Non-cloneable body: a single attempt is the best we can do.
-            return match request.send().await {
-                Ok(resp) => {
-                    health.record_success(started.elapsed());
-                    timer.finish(End::Answered);
-                    Ok(resp)
-                }
-                Err(e) => {
-                    end_send(timer, &e);
-                    Err(
-                        crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
-                            health.record_failure();
-                            Error::Transport(format!("{label} failed: {}", redact_url(e)))
-                        }),
-                    )
-                }
-            };
+        // A non-cloneable body gets a single attempt: the best we can do.
+        let (this, last) = match request.as_ref().and_then(reqwest::RequestBuilder::try_clone) {
+            Some(clone) => (clone, attempt == MAX_SEND_ATTEMPTS),
+            None => match request.take() {
+                Some(only) => (only, true),
+                None => unreachable!("the request is taken only for a final attempt"),
+            },
         };
-        match attempt_req.send().await {
+        let e = match timed_attempt(this).await {
             Ok(resp) => {
                 health.record_success(started.elapsed());
-                timer.finish(End::Answered);
                 return Ok(resp);
             }
-            Err(e) => {
-                // A refused destination is refused again: one attempt, no health mark.
-                if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
-                    end_send(timer, &e);
-                    return Err(refused);
-                }
-                let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
-                let e = redact_url(e);
-                if transient && attempt < MAX_SEND_ATTEMPTS {
-                    tracing::warn!(
-                        label = label,
-                        attempt = attempt,
-                        backoff_ms = backoff_ms,
-                        error = %e,
-                        "transient outbound transport error; retrying"
-                    );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2;
-                    continue;
-                }
+            Err(Failed::Body(e)) => {
                 health.record_failure();
-                end_send(timer, &e);
-                return Err(Error::Transport(format!("{label} failed: {e}")));
+                return Err(Error::Protocol(format!(
+                    "{label}: failed to read the response body: {}",
+                    redact_url(e)
+                )));
             }
+            Err(Failed::Send(e)) => e,
+        };
+        // A refused destination is refused again: one attempt, no health mark.
+        if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
+            return Err(refused);
         }
+        let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
+        let e = redact_url(e);
+        if transient && !last {
+            tracing::warn!(
+                label = label,
+                attempt = attempt,
+                backoff_ms = backoff_ms,
+                error = %e,
+                "transient outbound transport error; retrying"
+            );
+            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            backoff_ms *= 2;
+            continue;
+        }
+        health.record_failure();
+        return Err(Error::Transport(format!("{label} failed: {e}")));
     }
     // The final attempt always returns above; the loop cannot fall through.
     unreachable!("send_with_retry exhausted attempts without returning")
 }
 
-/// How a failed send ended. A destination the SSRF policy refused
-/// on the first hop was never sent to: nothing is noted. A refused redirect
-/// hop means a server answered first, so the send failed; a timeout is
+/// How one attempt failed: before an answer arrived, or reading its body.
+enum Failed {
+    Send(reqwest::Error),
+    Body(reqwest::Error),
+}
+
+/// One attempt, timed from the send through the body read, so a slow or
+/// stalled body counts and the backoff between attempts does not. The body
+/// is read here (every caller reads it whole) and handed back in a rebuilt
+/// response, which callers read as they did the original.
+async fn timed_attempt(request: reqwest::RequestBuilder) -> std::result::Result<reqwest::Response, Failed> {
+    let (client, built) = request.build_split();
+    let request = built.map_err(Failed::Send)?;
+    let first_hop = request.url().clone();
+    let timer = SendTimer::start();
+    let sent = match client.execute(request).await {
+        Ok(sent) => sent,
+        Err(e) => {
+            end_send(timer, &e, &first_hop);
+            return Err(Failed::Send(e));
+        }
+    };
+    let (status, version, headers) = (sent.status(), sent.version(), sent.headers().clone());
+    match sent.bytes().await {
+        Ok(body) => {
+            timer.finish(End::Answered);
+            let mut rebuilt = axum::http::Response::new(body);
+            *rebuilt.status_mut() = status;
+            *rebuilt.version_mut() = version;
+            *rebuilt.headers_mut() = headers;
+            Ok(reqwest::Response::from(rebuilt))
+        }
+        Err(e) => {
+            timer.finish(if e.is_timeout() { End::TimedOut } else { End::Failed });
+            Err(Failed::Body(e))
+        }
+    }
+}
+
+/// How a send that failed before any answer ended. A destination the SSRF
+/// policy refused on the first hop (`first_hop`, the URL the request named)
+/// was never sent to: nothing is noted. A refusal on any later URL means a
+/// server answered with a redirect first, so the send failed; a timeout is
 /// reqwest's own flag, read before the error is wrapped as `Transport`.
-fn end_send(timer: SendTimer, e: &reqwest::Error) {
-    if crate::security::http_diagnostics::ssrf_refusal(e).is_some() && !e.is_redirect() {
+fn end_send(timer: SendTimer, e: &reqwest::Error, first_hop: &reqwest::Url) {
+    if crate::security::http_diagnostics::ssrf_refusal(e).is_some() && e.url() == Some(first_hop) {
         timer.discard();
     } else if e.is_timeout() {
         timer.finish(End::TimedOut);

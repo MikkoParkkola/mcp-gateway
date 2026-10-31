@@ -105,3 +105,36 @@ async fn a_first_hop_ssrf_denial_notes_no_send_time() {
     assert!(result.is_err());
     assert_eq!(notes.backend_sample(), None);
 }
+
+/// Review F4: a public hop answers 302 to a host that resolves to a denied
+/// address; the redirect is followed and the DNS pin refuses the next hop. A
+/// server answered, so the call notes one send, Failed, not nothing.
+#[tokio::test]
+async fn a_redirect_refused_at_dns_notes_a_failed_send() {
+    use std::io::{Read, Write};
+    let server = std::net::TcpListener::bind("127.0.0.1:0").expect("a local port");
+    let addr = server.local_addr().expect("its address");
+    std::thread::spawn(move || {
+        for stream in server.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(
+                b"HTTP/1.1 302 Found\r\nLocation: http://private.test/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+        }
+    });
+    let (client, lookups) = pinned_client(Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    let health = crate::failsafe::HealthTracker::new("test");
+    let send = std::time::Duration::from_millis(7);
+    crate::gateway::send_timer_seam::inject(send);
+    let (result, notes) = crate::gateway::with_dispatch_scope(async {
+        send_with_retry(client.get(format!("http://{addr}/")), "test", true, &health).await
+    })
+    .await;
+    crate::gateway::send_timer_seam::clear();
+    let error = result.expect_err("the next hop is refused");
+    assert!(crate::security::ssrf::is_ssrf_refusal(&error), "{error}");
+    assert_eq!(lookups.load(Ordering::SeqCst), 1, "the redirect's host was resolved");
+    assert_eq!(notes.backend_sample(), Some((send, crate::counters::End::Failed)));
+}
