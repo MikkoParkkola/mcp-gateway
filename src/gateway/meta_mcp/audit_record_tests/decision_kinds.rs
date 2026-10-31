@@ -18,6 +18,14 @@ use crate::security::transparency_log::TransparencyLogConfig;
 
 /// A gateway whose one backend `alpha` answers every call, logging to `dir`.
 fn logged_meta(dir: &tempfile::TempDir) -> MetaMcp {
+    logged_meta_with(dir, Arc::new(Scripted(Ok(ok_result()))))
+}
+
+/// [`logged_meta`], `alpha` on `transport`.
+fn logged_meta_with(
+    dir: &tempfile::TempDir,
+    transport: Arc<dyn crate::transport::Transport>,
+) -> MetaMcp {
     let registry = Arc::new(BackendRegistry::new());
     let backend = Arc::new(Backend::new(
         "alpha",
@@ -25,7 +33,7 @@ fn logged_meta(dir: &tempfile::TempDir) -> MetaMcp {
         &FailsafeConfig::default(),
         Duration::from_secs(300),
     ));
-    backend.set_transport_for_test(Arc::new(Scripted(Ok(ok_result()))));
+    backend.set_transport_for_test(transport);
     let _ = registry.register(backend);
     let logger = crate::security::TransparencyLogger::open(Arc::new(TransparencyLogConfig {
         enabled: true,
@@ -202,9 +210,7 @@ impl crate::transport::Transport for RefusedAtSend {
 #[tokio::test]
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
-    let meta = logged_meta(&dir);
-    let alpha = meta.backends.get("alpha").expect("alpha is registered");
-    alpha.set_transport_for_test(Arc::new(RefusedAtSend));
+    let meta = logged_meta_with(&dir, Arc::new(RefusedAtSend));
     let (error, record) = refused_record(&meta, &dir).await;
     assert!(matches!(error, crate::Error::Forbidden { .. }), "{error}");
     assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
