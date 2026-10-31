@@ -37,12 +37,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/fonts/OverpassMono-400.9b51e031ff0d.woff2"),
     ),
     (
-        "shell.2414a5ac4862.js",
-        include_bytes!("shell/shell.2414a5ac4862.js"),
+        "shell.8a1ede0f5317.css",
+        include_bytes!("shell/shell.8a1ede0f5317.css"),
     ),
     (
-        "shell.f49800d7fa75.css",
-        include_bytes!("shell/shell.f49800d7fa75.css"),
+        "shell.e73047b07499.js",
+        include_bytes!("shell/shell.e73047b07499.js"),
     ),
     (
         "tips.2b1d0c91519f.json",
@@ -53,24 +53,52 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/tools.24f226efcd24.css"),
     ),
     (
-        "tools.6da7d55c4201.js",
-        include_bytes!("shell/tools.6da7d55c4201.js"),
-    ),
-    (
-        "tooltip.32447d51da98.js",
-        include_bytes!("shell/tooltip.32447d51da98.js"),
+        "tools.6cb526dbdd11.js",
+        include_bytes!("shell/tools.6cb526dbdd11.js"),
     ),
     (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
+    (
+        "tooltip.fc459693146e.js",
+        include_bytes!("shell/tooltip.fc459693146e.js"),
+    ),
 ];
 
-/// The shell's policy: everything from this origin, nothing inline, no
-/// framing. Fonts come from `font-src 'self'`, so they are self-hosted.
-pub(super) const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-     img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
-     form-action 'self'; frame-ancestors 'none'";
+/// The frame stylesheet the document inlines (`<style id="frame">`).
+#[cfg(test)]
+const FRAME_CSS: &str = include_str!("shell-src/frame.css");
+
+/// The shell's policy with `{frame}` for the inlined frame's hash source:
+/// everything from this origin, nothing else inline, no framing. Fonts come
+/// from `font-src 'self'`, so they are self-hosted. The fixture server
+/// (ui-tests/server.mjs) builds its policy from the same file.
+const CSP_BASE: &str = include_str!("csp-base.txt");
+
+/// The policy the document is served with: the base, allowing exactly the
+/// document's inlined frame by its SHA-256, and no `'unsafe-inline'`.
+pub(super) fn csp() -> &'static str {
+    static CSP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let source = format!(
+            "'sha256-{}'",
+            crate::hashing::sha256_base64(inlined_frame().as_bytes())
+        );
+        CSP_BASE.trim_end().replace("{frame}", &source)
+    });
+    &CSP
+}
+
+/// The text between the document's `<style id="frame">` and its `</style>`,
+/// exactly as served; empty when there is none (a shell test refuses that).
+fn inlined_frame() -> &'static str {
+    let open = r#"<style id="frame">"#;
+    DOCUMENT
+        .find(open)
+        .map(|i| &DOCUMENT[i + open.len()..])
+        .and_then(|rest| rest.find("</style>").map(|end| &rest[..end]))
+        .unwrap_or_default()
+}
 
 /// `GET /ui/{*path}`: the shell document, except under `api` and `assets`,
 /// which answer 404 so an unrouted API or asset path never gets HTML.
@@ -82,7 +110,7 @@ pub(super) async fn document(Path(path): Path<String>) -> Response {
     (
         [
             (header::CACHE_CONTROL, "no-cache, no-store, must-revalidate"),
-            (header::CONTENT_SECURITY_POLICY, CSP),
+            (header::CONTENT_SECURITY_POLICY, csp()),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],

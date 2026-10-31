@@ -7,6 +7,7 @@
 //! `search.rs` is over the file-size ceiling and may not grow.
 
 use super::MetaMcp;
+use super::visible::memo::{DescriptorId, HeldView, judge_held};
 use crate::backend::Backend;
 use crate::identity_propagation::{CallerProof, PropagationError};
 use crate::personal_accounts::ViewBinding;
@@ -116,6 +117,39 @@ impl MetaMcp {
         backend: &Backend,
         caller: CallerProof<'_>,
     ) -> std::result::Result<bool, PropagationError> {
+        let required = backend
+            .identity_propagation_config()
+            .is_some_and(|cfg| cfg.required);
+        let read = if required {
+            self.classified_read(backend, caller).await
+        } else {
+            None
+        };
+        self.no_view_decision(backend, caller, read)
+    }
+
+    /// The caller's one mint-free view read on `backend`: `None` when the
+    /// caller has no principal there or the backend has no managed vault.
+    async fn classified_read(
+        &self,
+        backend: &Backend,
+        caller: CallerProof<'_>,
+    ) -> Option<ViewBinding> {
+        let principal = self.principal_for(backend, caller)?;
+        let vault = self
+            .account_strategies
+            .managed_vault(backend.account_descriptor_id())?;
+        Some(vault.view_binding_classified(principal).await)
+    }
+
+    /// Whether `backend` has no view for `caller`, decided over the one read
+    /// ([`Self::classified_read`]); `None` is no read, as with no vault.
+    fn no_view_decision(
+        &self,
+        backend: &Backend,
+        caller: CallerProof<'_>,
+        read: Option<ViewBinding>,
+    ) -> std::result::Result<bool, PropagationError> {
         if self.lacks_principal_on_required(backend, caller) {
             return Ok(true);
         }
@@ -125,16 +159,13 @@ impl MetaMcp {
         if !required {
             return Ok(false);
         }
-        let Some(principal) = self.principal_for(backend, caller) else {
+        if self.principal_for(backend, caller).is_none() {
             return Ok(true);
-        };
-        let Some(vault) = self
-            .account_strategies
-            .managed_vault(backend.account_descriptor_id())
-        else {
+        }
+        let Some(read) = read else {
             return Ok(false);
         };
-        match vault.view_binding_classified(principal).await {
+        match read {
             ViewBinding::Bound(binding) => Ok(self
                 .meta_route_isolation_refused_for_caller(backend, Some(&binding))
                 || !backend.fetch_carries_caller_identity(Some(&binding))),
@@ -144,53 +175,66 @@ impl MetaMcp {
     }
 
     /// Re-check this caller's indexed slot on every managed-account backend
-    /// against its current grant, read without refreshing or minting
-    /// (`view_binding`), and forget an entry the current grant no longer
-    /// yields (MIK-8356 design R4.2, gpt r3 F2). Run at a listing's async
-    /// entry, so the synchronous readers after it read a rotated or revoked
-    /// grant's slot as cold, never as the caller's. A revoked caller's entry
-    /// becomes `NoView` even over a stored read's running cold lease
-    /// (MIK-8392 d1 F9): intended, the revocation is the newer fact. A busy
-    /// custody is not a revocation: it leaves a running cold lease standing,
-    /// so that lease's winner still publishes.
+    /// against its current grant, read without refreshing or minting, and
+    /// forget an entry the current grant no longer yields. Run at a listing's
+    /// async entry, so the synchronous
+    /// readers after it read a rotated or revoked grant's slot as cold, never
+    /// as the caller's. One classified read per managed-account backend, with
+    /// or without a slot indexed; it also becomes this request's account
+    /// read (`memo::held_view_current`), so a publish that lands after it is
+    /// judged against the grant it saw. A revoked caller's entry becomes
+    /// `NoView` even over a stored read's running cold lease: intended, the
+    /// revocation is the newer fact. A busy custody is not
+    /// a revocation: it leaves a running cold lease standing, so that lease's
+    /// winner can still publish once its gate reads the grant. With no lease
+    /// standing, a busy read records `NoView` as before.
     pub(crate) async fn revalidate_caller_slots(&self, caller: CallerProof<'_>) {
         for backend in self
             .backends
             .all_for(crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery)
         {
-            if !backend.keeps_per_user_catalogues() {
-                continue;
+            if backend.keeps_per_user_catalogues() {
+                self.revalidate_backend_slot(&backend, caller).await;
             }
-            let Some(principal) = self.principal_for(&backend, caller) else {
-                continue;
-            };
-            let id = principal.stable_actor_id();
-            // R3.7: a caller with no view lacks the backend on every listing
-            // after this entry. One decision, `has_no_view_for`; a caller with
-            // no principal at all is read synchronously by `listing_view`.
-            match self.has_no_view_for_classified(&backend, caller).await {
-                Ok(false) => {}
-                Err(_) if backend.cold_lease_remaining(&id).is_some() => continue,
-                Ok(true) | Err(_) => {
-                    backend.record_no_view(&id);
-                    continue;
-                }
+        }
+        #[cfg(test)]
+        super::visible::seams::revalidated().await;
+    }
+
+    /// [`Self::revalidate_caller_slots`] for one backend.
+    async fn revalidate_backend_slot(&self, backend: &Backend, caller: CallerProof<'_>) {
+        let Some(principal) = self.principal_for(backend, caller) else {
+            return;
+        };
+        let id = principal.stable_actor_id();
+        // Captured before the awaited read: an entry published during it is
+        // not the one judged, and survives the conditional forget below.
+        let seen = backend.caller_slot_held(&id);
+        let read = self.classified_read(backend, caller).await;
+        #[cfg(test)]
+        super::visible::seams::custody_read().await;
+        let bound = match &read {
+            Some(ViewBinding::Bound(binding)) => Some(binding.clone()),
+            _ => None,
+        };
+        if let Some(read) = &read {
+            record_read(backend, read);
+        }
+        match self.no_view_decision(backend, caller, read) {
+            Ok(false) => {}
+            Err(_) if backend.cold_lease_remaining(&id).is_some() => return,
+            Ok(true) | Err(_) => {
+                backend.record_no_view(&id);
+                return;
             }
-            if backend.caller_has_no_view(&id) {
-                backend.forget_caller_principal(&id);
-            }
-            let Some(vault) = self
-                .account_strategies
-                .managed_vault(backend.account_descriptor_id())
-            else {
-                continue;
-            };
-            let Some(indexed) = backend.caller_slot_binding(&id) else {
-                continue;
-            };
-            if vault.view_binding(principal).await.as_deref() != Some(indexed.as_str()) {
-                backend.forget_caller_principal(&id);
-            }
+        }
+        if backend.caller_has_no_view(&id) {
+            backend.forget_caller_principal(&id);
+        }
+        if let (Some(seen), Some(current)) = (seen, bound)
+            && judge_held(Some(&current), seen.binding()) == HeldView::Stale
+        {
+            backend.forget_caller_held(&id, &seen);
         }
     }
 
@@ -354,6 +398,28 @@ impl MetaMcp {
             && !self.meta_route_isolation_refused(backend)
         {
             Self::refresh_stale_backend_tools_in_background(backend);
+        }
+    }
+}
+
+/// Make `read` this request's account read for `backend`'s account: the
+/// binding a `Bound` read gave, else the unchecked marker (overwriting).
+pub(super) fn record_read(backend: &Backend, read: &ViewBinding) {
+    let Some(account) = backend.account_descriptor_id() else {
+        return;
+    };
+    let account = DescriptorId(account.to_owned());
+    match read {
+        ViewBinding::Bound(binding) => {
+            super::visible::memo::record_account_binding(&backend.name, &account, binding);
+        }
+        failed => {
+            debug!(
+                backend = %backend.name,
+                error = ?failed.failure(),
+                "account read did not bind; held views read cold for this request"
+            );
+            super::visible::memo::record_account_unchecked(&backend.name, &account);
         }
     }
 }

@@ -499,17 +499,31 @@ async fn a_blocked_direct_tool_list_is_not_a_client_success() {
             description: format!("echo; uses token {CANARY}"),
         }) as Arc<dyn Transport>);
     let lister = state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .validate_token("lister-key")
         .expect("the lister key");
-    state.auth_config.record_client_failure(&lister);
+    state
+        .live_config
+        .generation()
+        .auth()
+        .record_client_failure(&lister);
     let body = json!({"jsonrpc": "2.0", "id": "d2", "method": "tools/list"});
     let headers = [("authorization", "Bearer lister-key")];
     let (_status, body) = post(&state, "/mcp/demo", &headers, &body).await;
     assert_refused(&body);
-    state.auth_config.record_client_failure(&lister);
+    state
+        .live_config
+        .generation()
+        .auth()
+        .record_client_failure(&lister);
     assert_eq!(
-        state.auth_config.client_circuit_state(&lister),
+        state
+            .live_config
+            .generation()
+            .auth()
+            .client_circuit_state(&lister),
         Some(CircuitState::Open),
         "the refused listing must not have reset the failure count"
     );

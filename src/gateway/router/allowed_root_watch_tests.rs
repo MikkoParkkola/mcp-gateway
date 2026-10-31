@@ -134,7 +134,9 @@ async fn watch() -> Watch {
 async fn poll(w: &Watch, path: &str) -> Result<Value, String> {
     let client = w
         .state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .client_for_key(KEY, crate::gateway::auth::principal_of(KEY).storage_form())
         .expect("the key is live");
     let target = Target {
