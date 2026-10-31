@@ -478,3 +478,38 @@ async fn hiding_a_step_leaves_the_runs_judged_record_unchanged() {
         "hiding moved the judged record: {hidden_seen:?}"
     );
 }
+
+/// `gateway_invoke` of `read` on `server` with a NUL argument, as the
+/// `agent` certificate, sanitizing on and `deny` refused by its rule.
+async fn invoke_nul(server: &str, deny: &[&str]) -> (String, bool) {
+    let fx = Box::pin(sanitizing(true, fixture_built(Answer::Ok, |meta| meta))).await;
+    let fx = with_rule(fx, deny);
+    let params = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": server, "tool": "read", "arguments": {"cmd": NUL}},
+        "_meta": task_meta(),
+    });
+    let body = send_cert(&fx, "tools/call", "gateway_invoke", params).await;
+    let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
+    let text = trace.replace_all(&body.to_string(), "gw-ID").into_owned();
+    (text.replace(server, "SERVER"), forwarded_nul(&fx))
+}
+
+/// A passthrough backend hidden by the caller's rule is sanitized like an
+/// unregistered name, so a NUL is refused alike; a visible one keeps its
+/// exemption.
+#[tokio::test]
+async fn a_hidden_passthrough_backend_is_sanitized_as_an_unregistered_one() {
+    let (visible, forwarded) = Box::pin(invoke_nul("alpha-pt", &["gamma"])).await;
+    assert!(
+        forwarded,
+        "control: the NUL did not reach the visible backend: {visible}"
+    );
+    let (hidden, hidden_forwarded) = Box::pin(invoke_nul("alpha-pt", &["alpha-pt", "gamma"])).await;
+    let (unregistered, _) = Box::pin(invoke_nul("gamma", &["alpha-pt", "gamma"])).await;
+    assert!(
+        !hidden_forwarded,
+        "hidden: the NUL reached the backend: {hidden}"
+    );
+    assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
+}
