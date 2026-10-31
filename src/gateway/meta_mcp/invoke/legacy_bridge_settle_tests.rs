@@ -29,9 +29,9 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 const KEY: &str = "k-parked-settle";
 
 /// A reservation of `KEY` on a fresh cache.
-fn reserve(cache: &Arc<IdempotencyCache>) -> Option<IdempotencyReservation> {
+fn reserve(cache: &Arc<IdempotencyCache>) -> IdempotencyReservation {
     match enforce(cache, KEY, "fp").expect("a fresh key is admitted") {
-        GuardOutcome::Proceed(reservation) => Some(reservation),
+        GuardOutcome::Proceed(reservation) => reservation,
         other => panic!("a fresh key must proceed: {other:?}"),
     }
 }
@@ -89,7 +89,7 @@ async fn a_parked_round_that_sent_nothing_withdraws_its_lease_and_releases_its_k
     };
     let lease = dispatched_lease(&meta, &caller);
     let cache = Arc::new(IdempotencyCache::new());
-    let mut held = reserve(&cache);
+    let mut held = Some(reserve(&cache));
 
     delivery_facts::scope(async {
         assert!(
@@ -130,7 +130,7 @@ async fn a_parked_round_after_a_counted_send_keeps_its_lease_and_commits_its_key
     };
     let lease = dispatched_lease(&meta, &caller);
     let cache = Arc::new(IdempotencyCache::new());
-    let mut held = reserve(&cache);
+    let mut held = Some(reserve(&cache));
 
     delivery_facts::scope(async {
         delivery_facts::counted_send(async { Ok::<(), crate::Error>(()) })

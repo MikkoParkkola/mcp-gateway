@@ -93,7 +93,9 @@ fn production_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
             if name != "tests" {
                 production_files(&path, out);
             }
-        } else if name.ends_with(".rs")
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
             && !name.ends_with("_tests.rs")
             && !name.contains("test_support")
         {

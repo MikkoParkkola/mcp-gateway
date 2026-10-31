@@ -25,7 +25,7 @@ fn query_rule() -> CredentialRule {
 }
 
 /// One direct call under idempotency key `key` with `arguments`.
-fn keyed(key: &str, arguments: Value) -> Value {
+fn keyed(key: &str, arguments: &Value) -> Value {
     json!({"arguments": arguments, "_meta": {IDEMPOTENCY_KEY_META: key}})
 }
 
@@ -49,7 +49,7 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
         &fx,
         "alpha",
         None,
-        keyed("k-direct", json!({"cmd": "first"})),
+        keyed("k-direct", &json!({"cmd": "first"})),
     )
     .await;
     assert!(
@@ -64,7 +64,7 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
         &fx,
         "alpha",
         None,
-        keyed("k-direct", json!({"cmd": "second"})),
+        keyed("k-direct", &json!({"cmd": "second"})),
     )
     .await;
     assert!(

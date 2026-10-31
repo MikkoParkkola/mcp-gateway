@@ -89,11 +89,20 @@ pub(crate) struct DeliveryFacts {
     /// Whether a composite's latest step ended in a gateway refusal the
     /// composite has not carried on past.
     last_step: LastStep,
-    /// Sends of this delivery that entered a transport and were not proven
-    /// unsent: while any is counted, the delivery may have reached its backend.
-    sends_entered: u32,
+    /// What this delivery's backend sends did.
+    sends: Sends,
+}
+
+/// The two facts a delivery keeps about its sends. Both can hold at once (a
+/// later round refused before its send after an earlier one was sent), so
+/// they are two facts, not one state.
+#[derive(Debug, Clone, Copy, Default)]
+struct Sends {
+    /// Sends that entered a transport and were not proven unsent: while any
+    /// is counted, the delivery may have reached its backend.
+    entered: u32,
     /// The backend's send refused this delivery's call before any byte left.
-    refused_before_send: bool,
+    refused_before: bool,
 }
 
 /// How a composite's latest step ended, for the composite's own record.
@@ -114,8 +123,7 @@ impl Default for DeliveryFacts {
             vouched: true,
             lone_target: false,
             last_step: LastStep::Settled,
-            sends_entered: 0,
-            refused_before_send: false,
+            sends: Sends::default(),
         }
     }
 }
@@ -277,7 +285,7 @@ pub(crate) fn outlet(error: &crate::Error) {
 /// have reached the backend. Recorded before the transport call; a dropped or
 /// panicking call never takes it back.
 pub(crate) fn send_began() {
-    with(|facts| facts.sends_entered += 1);
+    with(|facts| facts.sends.entered += 1);
 }
 
 /// Run one transport call of this delivery as a counted send: counted when
@@ -298,14 +306,14 @@ pub(crate) async fn counted_send<T>(
 /// nothing was sent (`is_pre_dispatch`), so it is taken back.
 pub(crate) fn send_returned(error: &crate::Error) {
     if error.is_pre_dispatch() {
-        with(|facts| facts.sends_entered = facts.sends_entered.saturating_sub(1));
+        with(|facts| facts.sends.entered = facts.sends.entered.saturating_sub(1));
     }
 }
 
 /// The backend's send refused this call before any byte left: the fact only.
 /// The settlement that delivers the refusal raises `Refused` ([`unsent`]).
 pub(crate) fn refused_before_send<E>(error: E) -> E {
-    with(|facts| facts.refused_before_send = true);
+    with(|facts| facts.sends.refused_before = true);
     error
 }
 
@@ -328,7 +336,7 @@ pub(crate) fn unsent(error: &crate::Error) -> bool {
 /// verdict.
 pub(crate) fn nothing_sent() -> bool {
     FACTS
-        .try_with(|cell| cell.borrow().sends_entered == 0)
+        .try_with(|cell| cell.borrow().sends.entered == 0)
         .unwrap_or(true)
 }
 
@@ -336,7 +344,7 @@ pub(crate) fn nothing_sent() -> bool {
 /// settlement that raises `Refused` for it.
 pub(crate) fn refused_before_send_seen() -> bool {
     FACTS
-        .try_with(|cell| cell.borrow().refused_before_send)
+        .try_with(|cell| cell.borrow().sends.refused_before)
         .unwrap_or(false)
 }
 
