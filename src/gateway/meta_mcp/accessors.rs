@@ -41,6 +41,15 @@ impl MetaMcp {
         self.capabilities.read().clone()
     }
 
+    /// The capability provider as this request's caller sees it: `None` when
+    /// it is hidden from the caller, as for a gateway with none
+    /// (`super::hiding`). Per-caller paths read this; a judgment of hiding
+    /// itself reads [`Self::get_capabilities`].
+    pub(in crate::gateway) fn caller_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
+        self.get_capabilities()
+            .filter(|cap| !super::hiding::hidden(&cap.name))
+    }
+
     /// Return the full `Tool` objects for all dynamically promoted tools in a session.
     ///
     /// Promotion entries are stored as `"server:tool"` strings.  Each is resolved

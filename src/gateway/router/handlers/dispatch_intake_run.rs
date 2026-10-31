@@ -224,6 +224,19 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // MIK-8161: the notification screen's verdicts name this caller and session.
     let screen_caller = client.as_ref().map_or("anonymous", |c| c.name.as_str());
     crate::transport::notification_sink::bind_screen(screen_caller, &session_id);
+    // This caller's hiding judgment, before any per-caller lookup (the
+    // sanitize exemption below among them) reads the scoped view.
+    crate::gateway::meta_mcp::hiding::record_caller(
+        crate::gateway::router::caller_hiding::RouterHiding::new(
+            Arc::clone(state),
+            crate::gateway::router::OwnedRouterAuthorizer::capture(
+                client.as_ref(),
+                oauth_agent_identity.as_ref(),
+                cert_identity.as_ref(),
+            ),
+            (!session_id.is_empty()).then(|| session_id.clone()),
+        ),
+    );
 
     let raw_id = crate::protocol::mrtr::raw_request_id(&request);
     // A failed grant-decision write refuses under this id (MIK-7663.GH2409.3).

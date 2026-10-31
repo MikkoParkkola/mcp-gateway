@@ -347,7 +347,8 @@ async fn dispatch(
     // covers the readmission as well as the dispatch.
     let meta = state.meta_mcp();
     let recorded = call.surfaced_server.as_ref();
-    meta.with_surfaced_pin(&call.tool, recorded, async {
+    // The round judges hiding as its caller, live, readmission included.
+    let round = meta.with_surfaced_pin(&call.tool, recorded, async {
         let (arguments, judged) = match state
             .readmit(call, &caller, (owned.session_id(), &generation))
             .await
@@ -375,8 +376,10 @@ async fn dispatch(
             _ = cancel_rx.changed() => None,
             response = dispatched => Some(response),
         }
-    })
-    .await
+    });
+    state
+        .as_caller(owned.authorizer(), owned.session_id(), round)
+        .await
 }
 
 /// What a `tasks/update` carrying answers came to.

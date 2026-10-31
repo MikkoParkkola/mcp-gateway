@@ -471,9 +471,12 @@ pub(super) async fn backend_handler(
     // instance the send compares), boxed so the scope wraps a pointer.
     // The minted-receipt scope rides outside the memo.
     crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-            direct_audit::audited_call(Arc::clone(&state), name, request),
-        )),
+        // The caller's hiding judgment, filled once the caller is resolved.
+        crate::gateway::meta_mcp::hiding::with_caller_slot(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                direct_audit::audited_call(Arc::clone(&state), name, request),
+            )),
+        ),
     ))
     .await
 }
@@ -493,11 +496,22 @@ async fn backend_handler_inner(
     call: &mut Option<direct_audit::DirectCall>,
     reads: &mut direct_audit::DirectReads,
 ) -> (StatusCode, Json<Value>) {
+    let shared = Arc::clone(&state);
     let state = &*state;
     let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
+    // Before the absence stage and the backend lookup read the scoped view.
+    crate::gateway::meta_mcp::hiding::record_caller(super::caller_hiding::RouterHiding::new(
+        shared,
+        super::OwnedRouterAuthorizer::capture(
+            caller.client.as_ref(),
+            caller.oauth_agent_identity.as_ref(),
+            caller.cert_identity.as_ref(),
+        ),
+        None,
+    ));
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,

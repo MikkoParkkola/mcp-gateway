@@ -304,6 +304,12 @@ async fn run_dispatched(
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
+    // The run judges hiding as its caller, live, readmission included.
+    let dispatch = state.as_caller(
+        intent.owned.authorizer(),
+        intent.owned.session_id(),
+        dispatch,
+    );
     let mut dispatch = Box::pin(dispatched_in_cell(
         crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
             Arc::clone(intent.owned.dispatch_log()),

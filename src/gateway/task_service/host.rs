@@ -66,6 +66,29 @@ impl LiveHost {
         }
     }
 
+    /// Run `run` as the caller `authorizer` captured, so a lookup it makes
+    /// misses a backend hidden from that caller (`meta_mcp::hiding`), judged
+    /// live. A stdio host carries no certificate or agent token: nothing is
+    /// hidden there.
+    pub(crate) async fn as_caller<F: Future>(
+        &self,
+        authorizer: &crate::gateway::router::OwnedRouterAuthorizer,
+        session_id: Option<&str>,
+        run: F,
+    ) -> F::Output {
+        match self {
+            Self::Http(state) => {
+                let caller = crate::gateway::router::caller_hiding::RouterHiding::new(
+                    Arc::clone(state),
+                    authorizer.clone(),
+                    session_id.map(str::to_owned),
+                );
+                crate::gateway::meta_mcp::hiding::with_caller(caller, run).await
+            }
+            Self::Stdio(_) => run.await,
+        }
+    }
+
     pub(crate) fn meta_mcp(&self) -> &Arc<MetaMcp> {
         match self {
             Self::Http(state) => &state.meta_mcp,

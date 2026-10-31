@@ -416,7 +416,7 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
     ) -> Result<Option<GrantVerdict>> {
-        let Some(cap) = self.get_capabilities() else {
+        let Some(cap) = self.caller_capabilities() else {
             return Ok(None);
         };
         if server != cap.name {
