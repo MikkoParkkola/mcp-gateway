@@ -691,3 +691,6 @@ mod sse_decoder_tests;
 
 #[cfg(test)]
 mod private_redirect_tests;
+
+#[cfg(all(test, feature = "webui"))]
+mod serving_adopt_tests;

@@ -510,6 +510,19 @@ impl OAuthClient {
 
 #[cfg(all(test, feature = "webui"))]
 impl OAuthClient {
+    /// Store `token` under this client's credential and hold it in memory, as
+    /// a completed login would, and publish the status.
+    pub(crate) fn seed_token_for_test(&self, token: &TokenInfo) {
+        let key = self
+            .credential_key()
+            .expect("a resolved issuer keys the store");
+        self.storage
+            .save(&key, &self.resource_url, token)
+            .expect("the seed saves");
+        *self.current_token.write() = Some(token.clone());
+        self.publish_sign_in();
+    }
+
     /// The token this client holds in memory.
     pub(crate) fn cached_token_for_test(&self) -> Option<TokenInfo> {
         self.current_token.read().clone()
