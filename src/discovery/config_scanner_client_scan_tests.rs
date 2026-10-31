@@ -18,6 +18,14 @@ fn claude(path: &Path) -> Candidate {
     }
 }
 
+/// Each unreadable file as its app and file name.
+fn unreadable_names(scan: &ClientScan) -> Vec<(DiscoverySource, String)> {
+    scan.unreadable
+        .iter()
+        .map(|file| (file.source.clone(), file.file_name()))
+        .collect()
+}
+
 fn write(path: &Path, value: &serde_json::Value) {
     crate::gateway::test_helpers::write_owner_only(path, value.to_string()).expect("write");
 }
@@ -73,7 +81,7 @@ async fn an_unreadable_file_is_named_and_the_others_still_scan() {
     let names: Vec<&str> = scan.finds.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["srv"]);
     assert_eq!(
-        scan.unreadable,
+        unreadable_names(&scan),
         vec![(DiscoverySource::VsCode, "settings.json".to_string())]
     );
     assert_eq!(scan.fingerprint, ConfigScanner::fingerprint(&candidates));
@@ -95,7 +103,7 @@ async fn a_huge_file_or_a_directory_never_reaches_a_parser() {
 
     assert!(scan.finds.is_empty(), "{:?}", scan.finds);
     assert_eq!(
-        scan.unreadable,
+        unreadable_names(&scan),
         vec![
             (DiscoverySource::ClaudeDesktop, "huge.json".to_string()),
             (DiscoverySource::ClaudeDesktop, "folder.json".to_string()),

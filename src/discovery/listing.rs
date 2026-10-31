@@ -10,7 +10,6 @@
 //! adopt rule's refusals, the radar's severity and a keyed hash of the raw
 //! client entry (`find_id`).
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -19,7 +18,7 @@ use serde::Serialize;
 
 use super::adopt::refusals;
 use super::config_scanner::client_scan::{ClientScan, Fingerprint};
-use super::shadow::{ShadowRiskSeverity, ShadowScanReport, executable_name};
+use super::shadow::{ShadowAsset, ShadowRiskSeverity, executable_name};
 use super::{ConfigScanner, DiscoveredServer, DiscoverySource, REDACTED};
 use crate::config::TransportConfig;
 
@@ -52,13 +51,19 @@ pub(crate) struct ListedFind {
     /// The radar's severity for this find, judged with no backend registered.
     #[serde(skip)]
     pub(crate) severity: ShadowRiskSeverity,
+    /// The radar's row for this find, classified at scan time from the whole
+    /// find and holding no value: a file name, a URL origin and a keyed id.
+    /// The control-plane radar reads it instead of scanning the files again.
+    #[serde(skip)]
+    pub(crate) radar: ShadowAsset,
 }
 
 /// One cached scan.
 #[derive(Debug)]
 pub(crate) struct Listing {
     pub(crate) finds: Vec<ListedFind>,
-    pub(crate) unreadable: Vec<(DiscoverySource, String)>,
+    /// Each unreadable client file by name, reason and keyed path digest.
+    pub(crate) unreadable: Vec<crate::decisions::UnreadableFile>,
     fingerprint: Fingerprint,
     taken: Instant,
 }
@@ -99,10 +104,17 @@ pub(crate) struct DiscoveryCache {
     /// Drawn once per process: `find_id` is an HMAC under it, so a find id
     /// cannot be used to test guesses at a client's values offline.
     key: [u8; 32],
+    /// Keys the radar's asset ids, so they hold across restarts.
+    record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
     /// One scan at a time: a GET that misses holds this across its scan, and
     /// one waiting behind it then finds the fresh result.
     current: tokio::sync::Mutex<Cached>,
+    /// Who hears of each new listing: the decision set. Set once.
+    publisher: std::sync::OnceLock<Publisher>,
 }
+
+/// Handed each new listing while the cache still holds its lock.
+pub(crate) type Publisher = Arc<dyn Fn(&Arc<Listing>) + Send + Sync>;
 
 /// The last listing, and when the last scan timed out.
 #[derive(Default)]
@@ -114,18 +126,34 @@ struct Cached {
 }
 
 impl DiscoveryCache {
-    /// A cache over `source`, with a fresh process key.
+    /// A cache over `source`, with a fresh process key, for tests.
+    #[cfg(test)]
     pub(crate) fn new(source: Arc<dyn ScanSource>) -> Self {
         use rand::RngExt as _;
         Self::with_key(source, rand::rng().random())
     }
 
-    /// A cache with a given key, for tests that check `find_id`.
+    /// A cache whose radar ids are keyed by the gateway's record key.
+    pub(crate) fn with_record_key(
+        source: Arc<dyn ScanSource>,
+        record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+    ) -> Self {
+        use rand::RngExt as _;
+        Self {
+            record_key,
+            ..Self::with_key(source, rand::rng().random())
+        }
+    }
+
+    /// A cache with a given key, for tests that check `find_id`. Its radar
+    /// ids are keyed for this cache alone.
     pub(crate) fn with_key(source: Arc<dyn ScanSource>, key: [u8; 32]) -> Self {
         Self {
             source,
             key,
+            record_key: Arc::new(crate::gateway::record_principal::one_run_key()),
             current: tokio::sync::Mutex::new(Cached::default()),
+            publisher: std::sync::OnceLock::new(),
         }
     }
 
@@ -163,6 +191,11 @@ impl DiscoveryCache {
             return stale(&current);
         };
         let listing = Arc::new(self.project(scan));
+        // Published before the lock is released, whoever triggered the
+        // rescan: an older listing can then never land after a newer one.
+        if let Some(publish) = self.publisher.get() {
+            publish(&listing);
+        }
         *current = Cached {
             listing: Some(Arc::clone(&listing)),
             timed_out_at: None,
@@ -170,14 +203,11 @@ impl DiscoveryCache {
         Ok((listing, false))
     }
 
-    /// Hand every new listing to `publish` while this cache still holds the
-    /// listing it replaced. Red rows only: nothing is published yet.
-    #[cfg(test)]
-    #[expect(
-        clippy::unused_self,
-        reason = "a red-row placeholder until the discovery source is built"
-    )]
-    pub(crate) fn set_publisher(&self, _publish: Arc<dyn Fn(&Listing) + Send + Sync>) {}
+    /// Hand every new listing to `publish` while this cache still holds its
+    /// lock. Set once; a second call is ignored.
+    pub(crate) fn set_publisher(&self, publish: Publisher) {
+        let _ = self.publisher.set(publish);
+    }
 
     /// The find `find_id` names, from a fresh scan of the client files: the
     /// whole find, values included, for an adopt. Never cached, takes no
@@ -212,7 +242,16 @@ impl DiscoveryCache {
             .collect();
         Listing {
             finds,
-            unreadable: scan.unreadable,
+            unreadable: scan
+                .unreadable
+                .iter()
+                .map(|file| crate::decisions::UnreadableFile {
+                    source: file.source.clone(),
+                    file: file.file_name(),
+                    path_digest: file.path_digest(&self.key),
+                    reason: file.reason,
+                })
+                .collect(),
             fingerprint: scan.fingerprint,
             taken: self.source.now(),
         }
@@ -226,11 +265,8 @@ impl DiscoveryCache {
             #[cfg(feature = "a2a")]
             TransportConfig::A2a { .. } => ("a2a", None, None),
         };
-        let severity =
-            ShadowScanReport::from_discovered(std::slice::from_ref(server), &HashSet::new(), None)
-                .assets
-                .first()
-                .map_or(ShadowRiskSeverity::Low, |asset| asset.severity.clone());
+        let radar = ShadowAsset::from_server(server, None, &self.record_key);
+        let severity = radar.severity.clone();
         ListedFind {
             find_id: crate::hashing::hmac_sha256_hex(&self.key, server.entry_digest.as_bytes()),
             name: server.name.clone(),
@@ -262,6 +298,7 @@ impl DiscoveryCache {
                 })
                 .collect(),
             severity,
+            radar,
         }
     }
 }

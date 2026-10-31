@@ -153,7 +153,7 @@ impl Route {
         };
         let response = adopt_discovery(
             axum::extract::State(Arc::clone(&self.state)),
-            Extension(Arc::clone(&self.cache)),
+            Some(Extension(Arc::clone(&self.cache))),
             Guard::for_route(
                 crate::gateway::routes::UI_DISCOVERY_ADOPT,
                 &axum::http::Method::POST,

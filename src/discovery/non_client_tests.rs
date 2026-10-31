@@ -64,11 +64,7 @@ fn child() {
         all.iter().any(|n| n == FILE_FIND) && all.iter().any(|n| n == ENV_FIND),
         "premise: the full scan sees both fixtures: {all:?}"
     );
-    let own = names(
-        runtime
-            .block_on(discovery.discover_non_client())
-            .expect("scan"),
-    );
+    let own = names(runtime.block_on(discovery.discover_non_client()));
     assert!(
         own.iter().any(|n| n == ENV_FIND),
         "the environment find is missing: {own:?}"

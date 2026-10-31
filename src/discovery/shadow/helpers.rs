@@ -290,15 +290,28 @@ pub(super) fn ensure_unique_ids(assets: &mut [ShadowAsset]) {
     }
 }
 
-pub(super) fn stable_shadow_id(server: &DiscoveredServer, transport: &ShadowTransport) -> String {
+pub(super) fn stable_shadow_id(
+    server: &DiscoveredServer,
+    transport: &ShadowTransport,
+    key: &crate::gateway::record_principal::RecordPrincipalKey,
+) -> String {
     let mut parts = vec![
         "shadow".to_string(),
         slug(&format!("{:?}", server.source)),
         slug(&server.name),
     ];
 
-    if let Some(endpoint) = &transport.endpoint {
-        parts.push(slug(endpoint));
+    if transport.endpoint.is_some()
+        && let Some(raw) = raw_url(&server.transport)
+    {
+        // A keyed digest of the URL with its path, never a slug of it: a
+        // token in the path would otherwise be spelled out in the id. The
+        // path stays in the digest, so two finds on one origin keep two ids.
+        let normalised = crate::security::sanitize::redact_url_keep_path(raw);
+        parts.push(format!(
+            "ep-{}",
+            crate::gateway::record_principal::shadow_endpoint_id(key, &normalised)
+        ));
     } else if let Some(port) = server.metadata.port {
         parts.push(format!("port-{port}"));
     } else if let Some(command) = &server.metadata.command
@@ -308,6 +321,21 @@ pub(super) fn stable_shadow_id(server: &DiscoveredServer, transport: &ShadowTran
     }
 
     parts.join(":")
+}
+
+impl ShadowAsset {
+    /// This asset as a report naming `gateway_config` shows it: the parts a
+    /// scan-time row leaves out, because the cache that holds it serves every
+    /// report, set here alone.
+    pub(crate) fn with_gateway_config(mut self, gateway_config: Option<&str>) -> Self {
+        self.evidence.gateway_config = gateway_config.map(ToOwned::to_owned);
+        self.remediation.dry_run_command = Some(format_shadow_command(gateway_config, false));
+        self.remediation.verification_step = format_shadow_command(gateway_config, false);
+        if self.remediation.apply_command.is_some() {
+            self.remediation.apply_command = Some(format_shadow_command(gateway_config, true));
+        }
+        self
+    }
 }
 
 fn format_shadow_command(gateway_config: Option<&str>, apply: bool) -> String {
@@ -335,8 +363,23 @@ fn shell_word(value: &str) -> String {
     }
 }
 
+/// A found server's URL as the radar shows it: scheme, host and port only. A
+/// path can carry a token and a query a key; neither is shown, for any find.
+/// A URL without a host shows nothing rather than a placeholder.
 pub(super) fn sanitize_url(raw: &str) -> Option<String> {
-    (!raw.is_empty()).then(|| crate::security::sanitize::redact_url_keep_path(raw))
+    url::Url::parse(raw).ok()?.host_str()?;
+    Some(crate::security::sanitize::redact_url_for_diagnostics(raw))
+}
+
+/// The URL a transport names, if it names one.
+fn raw_url(transport: &TransportConfig) -> Option<&str> {
+    match transport {
+        TransportConfig::Stdio { .. } => None,
+        TransportConfig::Http { http_url, .. } => Some(http_url),
+        TransportConfig::WebSocket { ws_url, .. } => Some(ws_url),
+        #[cfg(feature = "a2a")]
+        TransportConfig::A2a { a2a_url, .. } => Some(a2a_url),
+    }
 }
 
 pub(super) fn is_loopback_url(raw: &str) -> bool {

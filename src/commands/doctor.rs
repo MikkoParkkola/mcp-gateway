@@ -277,10 +277,13 @@ async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<
 
     match discovery.discover_all().await {
         Ok(discovered) => {
+            // The record key is only read here, never created.
             let report = ShadowScanReport::from_discovered(
                 &discovered,
                 &registered_names,
                 gateway_config_path,
+                Some(config),
+                &mcp_gateway::config_persistence::gateway_data_dir(),
             );
             let handoff = report.consumer_handoff();
             if handoff.doctor_findings.is_empty() {

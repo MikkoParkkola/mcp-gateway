@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+use crate::discovery::DiscoverySource;
+
 use super::{
     DiscoveredServer, HashMap, HashSet, Path, SHADOW_ENTERPRISE_BOUNDARY_SCHEMA_VERSION,
     SHADOW_HANDOFF_SCHEMA_VERSION, SHADOW_REPORT_SCHEMA_VERSION, ShadowAsset, ShadowAuthExposure,
@@ -14,39 +16,105 @@ use super::{
 };
 
 impl ShadowScanReport {
-    /// [`Self::from_discovered`] with asset ids keyed by `key`, finds
-    /// de-duplicated by name (client config first). Red rows only: the key and
-    /// the de-duplication are not applied yet.
-    #[cfg(test)]
-    pub(crate) fn from_discovered_keyed(
-        discovered: &[DiscoveredServer],
-        registered_names: &HashSet<String>,
-        gateway_config_path: Option<&Path>,
-        _key: &crate::gateway::record_principal::RecordPrincipalKey,
-    ) -> Self {
-        Self::from_discovered(discovered, registered_names, gateway_config_path)
-    }
-
-    /// Build a passive local report from discovered servers.
+    /// Build a passive local report from discovered servers, its asset ids
+    /// keyed by the gateway's record key: `config`'s
+    /// `security.record_principal_key` reference when set, else the key file
+    /// in `data_dir`. Both are only read: with neither, the ids are keyed for
+    /// this report alone and [`Self::ids_note`] says so. Nothing is written.
     #[must_use]
     pub fn from_discovered(
         discovered: &[DiscoveredServer],
         registered_names: &HashSet<String>,
         gateway_config_path: Option<&Path>,
+        config: Option<&crate::config::Config>,
+        data_dir: &Path,
     ) -> Self {
-        let discovered_total = discovered.len();
-        let managed_total = discovered
+        let configured = config
+            .and_then(|config| config.security.record_principal_key.as_ref())
+            .map(crate::config::RecordPrincipalKeyRef::as_str);
+        let found = crate::gateway::record_principal::read_key(configured, data_dir);
+        let (key, ids_note) = match found {
+            Some(key) => (key, None),
+            None => (
+                crate::gateway::record_principal::one_run_key(),
+                Some(
+                    "asset ids of URL finds are for this run only: no record key was found"
+                        .to_string(),
+                ),
+            ),
+        };
+        let mut report =
+            Self::from_discovered_keyed(discovered, registered_names, gateway_config_path, &key);
+        report.ids_note = ids_note;
+        report
+    }
+
+    /// Build a report with asset ids keyed by `key`. One name found in a
+    /// client config, the environment and a process is one asset: the
+    /// client config's, then the environment's, as discovery has always
+    /// preferred.
+    pub(crate) fn from_discovered_keyed(
+        discovered: &[DiscoveredServer],
+        registered_names: &HashSet<String>,
+        gateway_config_path: Option<&Path>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> Self {
+        let unique = unique_by_name(discovered);
+        let managed_total = unique
             .iter()
             .filter(|server| registered_names.contains(&server.name))
             .count();
         let gateway_config = gateway_config_path.map(|path| path.display().to_string());
-
-        let mut assets: Vec<ShadowAsset> = discovered
+        let assets = unique
             .iter()
             .filter(|server| !registered_names.contains(&server.name))
-            .map(|server| ShadowAsset::from_server(server, gateway_config.as_deref()))
+            .map(|server| ShadowAsset::from_server(server, gateway_config.as_deref(), key))
             .collect();
+        Self::from_assets(assets, unique.len(), managed_total)
+    }
 
+    /// The control-plane radar's report: the client-file rows the shared
+    /// discovery cache classified at scan time, plus `others` (the
+    /// environment's and processes' finds), each name once, a client file's
+    /// first.
+    pub(crate) fn from_cached_and_found(
+        client: Vec<ShadowAsset>,
+        others: &[DiscoveredServer],
+        registered_names: &HashSet<String>,
+        gateway_config_path: Option<&Path>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> Self {
+        let gateway_config = gateway_config_path.map(|path| path.display().to_string());
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut kept: Vec<ShadowAsset> = Vec::new();
+        for asset in client {
+            if seen.insert(asset.name.clone()) {
+                kept.push(asset.with_gateway_config(gateway_config.as_deref()));
+            }
+        }
+        for server in unique_by_name(others) {
+            if seen.insert(server.name.clone()) {
+                kept.push(ShadowAsset::from_server(
+                    server,
+                    gateway_config.as_deref(),
+                    key,
+                ));
+            }
+        }
+        let discovered_total = kept.len();
+        let (managed, unmanaged): (Vec<ShadowAsset>, Vec<ShadowAsset>) = kept
+            .into_iter()
+            .partition(|asset| registered_names.contains(&asset.name));
+        Self::from_assets(unmanaged, discovered_total, managed.len())
+    }
+
+    /// A report over finished assets: sorted, ports and ids made unique, and
+    /// totalled.
+    pub(crate) fn from_assets(
+        mut assets: Vec<ShadowAsset>,
+        discovered_total: usize,
+        managed_total: usize,
+    ) -> Self {
         assets.sort_by(|left, right| left.id.cmp(&right.id).then(left.name.cmp(&right.name)));
         mark_duplicate_ports(&mut assets);
         ensure_unique_ids(&mut assets);
@@ -89,6 +157,7 @@ impl ShadowScanReport {
             },
             assets,
             action_groups,
+            ids_note: None,
         }
     }
 
@@ -208,7 +277,11 @@ impl ShadowEnterpriseBoundary {
 }
 
 impl ShadowAsset {
-    fn from_server(server: &DiscoveredServer, gateway_config: Option<&str>) -> Self {
+    pub(crate) fn from_server(
+        server: &DiscoveredServer,
+        gateway_config: Option<&str>,
+        key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> Self {
         let transport = ShadowTransport::from_transport(&server.transport);
         let auth_exposure = ShadowAuthExposure::from_server(server);
         let data_risk = classify_data_risk(server);
@@ -224,7 +297,7 @@ impl ShadowAsset {
         let evidence =
             ShadowEvidence::from_server(server, gateway_config, transport.endpoint.as_deref());
         let risk_reasons = risk_reasons(server, &auth_exposure, &data_risk, &ownership);
-        let id = stable_shadow_id(server, &transport);
+        let id = stable_shadow_id(server, &transport, key);
         let risks = build_risks(&risk_reasons, &severity);
         let remediation_hints = remediation_hints(&remediation);
 
@@ -360,4 +433,21 @@ fn remediation_hints(remediation: &ShadowRemediation) -> Vec<String> {
         hints.push(command.clone());
     }
     hints
+}
+
+/// Each name once: a client config's find first, then the environment's,
+/// then a process's, each keeping discovery's order within its kind.
+fn unique_by_name(discovered: &[DiscoveredServer]) -> Vec<&DiscoveredServer> {
+    let rank = |server: &&DiscoveredServer| match server.source {
+        DiscoverySource::Environment => 1,
+        DiscoverySource::RunningProcess => 2,
+        _ => 0,
+    };
+    let mut ranked: Vec<&DiscoveredServer> = discovered.iter().collect();
+    ranked.sort_by_key(rank);
+    let mut seen = HashSet::new();
+    ranked
+        .into_iter()
+        .filter(|server| seen.insert(server.name.as_str()))
+        .collect()
 }

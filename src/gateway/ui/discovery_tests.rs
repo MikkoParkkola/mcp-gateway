@@ -11,6 +11,7 @@ use futures::future::BoxFuture;
 
 use super::*;
 use crate::config::TransportConfig;
+use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;
 use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
@@ -26,7 +27,13 @@ impl ScanSource for Fixed {
         let scan = ClientScan {
             finds: self.0.clone(),
             fingerprint: self.fingerprint(),
-            unreadable: vec![(DiscoverySource::VsCode, "settings.json".to_string())],
+            unreadable: vec![
+                crate::discovery::config_scanner::client_scan::UnreadableClientFile {
+                    source: DiscoverySource::VsCode,
+                    path: std::path::PathBuf::from("/home/someone/.config/Code/settings.json"),
+                    reason: crate::decisions::UnreadableReason::DidNotParse,
+                },
+            ],
         };
         Box::pin(async move { scan })
     }

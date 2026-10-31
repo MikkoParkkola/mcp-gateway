@@ -34,6 +34,8 @@ impl MetaMcp {
             counters: std::sync::OnceLock::new(),
             #[cfg(feature = "webui")]
             decisions: std::sync::OnceLock::new(),
+            #[cfg(feature = "webui")]
+            discovery_cache: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -237,6 +239,22 @@ impl MetaMcp {
         key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
     ) {
         self.record_key = Some(key);
+    }
+
+    /// [`Self::record_key`], shared, for a holder that outlives one call.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::record_key`].
+    pub(crate) fn record_key_shared(
+        &self,
+    ) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
+        Arc::clone(
+            self.record_key
+                .as_ref()
+                // invariant: build_meta_mcp installed the key (G-META).
+                .expect("the record key is installed by build_meta_mcp before any record is written"),
+        )
     }
 
     /// The record key every record this gateway writes is keyed with.

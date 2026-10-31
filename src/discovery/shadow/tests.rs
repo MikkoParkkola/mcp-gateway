@@ -67,10 +67,11 @@ fn report(discovered: &[DiscoveredServer], registered: &[&str]) -> ShadowScanRep
         .iter()
         .map(|name| (*name).to_string())
         .collect::<HashSet<_>>();
-    ShadowScanReport::from_discovered(
+    ShadowScanReport::from_discovered_keyed(
         discovered,
         &registered_names,
         Some(Path::new("gateway.yaml")),
+        &crate::gateway::record_principal::test_record_key(),
     )
 }
 

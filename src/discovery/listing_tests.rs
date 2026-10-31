@@ -355,7 +355,7 @@ async fn a_new_listing_is_published_while_the_cache_is_held() {
     let held: Arc<Mutex<Vec<bool>>> = Arc::default();
     let weak = Arc::downgrade(&cache);
     let seen = Arc::clone(&held);
-    cache.set_publisher(Arc::new(move |_listing: &Listing| {
+    cache.set_publisher(Arc::new(move |_listing: &Arc<Listing>| {
         let cache = weak.upgrade().expect("the cache is alive");
         seen.lock()
             .expect("seen")

@@ -250,12 +250,20 @@ impl AutoDiscovery {
         Ok(unique_servers)
     }
 
-    /// The radar's own scan: what the environment and running processes name,
-    /// without the client config files the shared cache reads. Red rows only:
-    /// it still reads everything.
-    #[cfg(test)]
-    pub(crate) async fn discover_non_client(&self) -> Result<Vec<DiscoveredServer>> {
-        self.discover_all().await
+    /// The radar's own scan: what the environment and running processes
+    /// name, without the client config files the shared discovery cache
+    /// reads. Environment finds first, as [`Self::discover_all`] orders them;
+    /// a failed scan is logged and the other's finds still answer, as there.
+    pub(crate) async fn discover_non_client(&self) -> Vec<DiscoveredServer> {
+        let mut servers = self.config_scanner.scan_environment().unwrap_or_else(|e| {
+            tracing::warn!("Environment scan failed: {e}");
+            Vec::new()
+        });
+        match self.process_scanner.scan().await {
+            Ok(mut found) => servers.append(&mut found),
+            Err(e) => tracing::warn!("Process scan failed: {e}"),
+        }
+        servers
     }
 
     /// Discover from specific source

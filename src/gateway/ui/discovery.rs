@@ -25,25 +25,44 @@ use super::errors::flat_error;
 use super::guard::Guard;
 use crate::config::Config;
 use crate::config_reload::FileRevision;
-use crate::discovery::config_scanner::ConfigScanner;
-use crate::discovery::listing::{ClientFiles, DiscoveryCache, ListedFind, Listing, Refusal};
+use crate::discovery::listing::{DiscoveryCache, ListedFind, Listing, Refusal};
 use crate::discovery::shadow::ShadowRiskSeverity;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 
-/// The discovery routes over this host's client config files.
+/// The discovery routes over the gateway's shared discovery cache, read at
+/// request time from `MetaMcp`: a router built before the cache (or a
+/// gateway that never attached one) answers 503 rather than scanning alone.
 pub(super) fn discovery_router() -> Router<Arc<AppState>> {
-    discovery_router_with(Arc::new(DiscoveryCache::new(Arc::new(ClientFiles(
-        ConfigScanner::new(),
-    )))))
-}
-
-/// The discovery routes over a given cache, for tests.
-pub(super) fn discovery_router_with(cache: Arc<DiscoveryCache>) -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_DISCOVERY, get(list_discovery))
         .route(routes::UI_DISCOVERY_ADOPT, post(adopt::adopt_discovery))
-        .layer(Extension(cache))
+}
+
+/// The discovery routes over a given cache, for tests.
+#[cfg(test)]
+pub(super) fn discovery_router_with(cache: Arc<DiscoveryCache>) -> Router<Arc<AppState>> {
+    discovery_router().layer(Extension(cache))
+}
+
+/// The cache a request reads: one a test router injected, else the
+/// gateway's shared one.
+fn cache_for(
+    state: &AppState,
+    injected: Option<Extension<Arc<DiscoveryCache>>>,
+) -> Option<Arc<DiscoveryCache>> {
+    injected
+        .map(|Extension(cache)| cache)
+        .or_else(|| state.meta_mcp.discovery_cache().cloned())
+}
+
+/// The answer while no discovery cache is attached.
+fn discovery_unavailable() -> Response {
+    flat_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "discovery is not available",
+    )
+    .into_response()
 }
 
 /// What gateway.yaml says, read once for one request.
@@ -62,6 +81,16 @@ enum Gateway {
 /// file is no config; any other failure is logged with its cause (never the
 /// file's contents) and answered without one.
 fn read_gateway(path: Option<&Path>) -> Result<Gateway, &'static str> {
+    load_gateway(path).map_err(|error| {
+        if let Some(path) = path {
+            tracing::warn!(%error, path = %path.display(), "discovery: gateway.yaml could not be loaded");
+        }
+        "gateway.yaml could not be loaded"
+    })
+}
+
+/// [`read_gateway`] without the log line.
+fn load_gateway(path: Option<&Path>) -> Result<Gateway, crate::Error> {
     let Some(path) = path else {
         return Ok(Gateway::None);
     };
@@ -70,16 +99,11 @@ fn read_gateway(path: Option<&Path>) -> Result<Gateway, &'static str> {
     {
         return Ok(Gateway::None);
     }
-    match Config::load_literal_with_text(path) {
-        Ok((config, text)) => Ok(Gateway::File {
-            revision: FileRevision::of(text.as_bytes()),
-            config: Box::new(config),
-        }),
-        Err(error) => {
-            tracing::warn!(%error, path = %path.display(), "discovery: gateway.yaml could not be loaded");
-            Err("gateway.yaml could not be loaded")
-        }
-    }
+    let (config, text) = Config::load_literal_with_text(path)?;
+    Ok(Gateway::File {
+        revision: FileRevision::of(text.as_bytes()),
+        config: Box::new(config),
+    })
 }
 
 /// Why `find` cannot be adopted under this gateway.yaml, beyond the adopt
@@ -100,10 +124,37 @@ fn name_refusal(gateway: &Gateway, name: &str) -> Option<&'static str> {
 }
 
 /// Whether `find` is an adopt decision under this gateway.yaml: the rule the
-/// route shows as `adoptable`. Red rows only: says yes to every find.
-#[cfg(test)]
-fn adopt_eligible(_find: &ListedFind, _gateway: &Gateway) -> bool {
-    true
+/// route shows as `adoptable`, one rule for both.
+fn adopt_eligible(find: &ListedFind, gateway: &Gateway) -> bool {
+    find.refusals.is_empty() && name_refusal(gateway, &find.name).is_none()
+}
+
+/// The adopt decisions in `listing` under the gateway.yaml at `config_path`.
+/// A gateway.yaml that cannot be loaded makes none: nothing could be
+/// adopted into it. Read quietly: the decision set's tick reads it every
+/// pass, and the route already logs a file it cannot load.
+pub(super) fn adopt_finds(
+    listing: &Listing,
+    config_path: Option<&Path>,
+) -> Vec<crate::decisions::AdoptFind> {
+    let Ok(gateway) = load_gateway(config_path) else {
+        return Vec::new();
+    };
+    listing
+        .finds
+        .iter()
+        .filter(|find| adopt_eligible(find, &gateway))
+        .map(|find| crate::decisions::AdoptFind {
+            find_id: find.find_id.clone(),
+            name: find.name.clone(),
+            source: find.source.clone(),
+            config_file: find.config_file.clone(),
+            transport: find.transport,
+            command: find.command.clone(),
+            url: find.url.clone(),
+            severity: find.severity.clone(),
+        })
+        .collect()
 }
 
 fn listed(find: &ListedFind, gateway: &Gateway) -> serde_json::Value {
@@ -126,12 +177,15 @@ fn listed(find: &ListedFind, gateway: &Gateway) -> serde_json::Value {
 
 async fn list_discovery(
     State(state): State<Arc<AppState>>,
-    Extension(cache): Extension<Arc<DiscoveryCache>>,
+    injected: Option<Extension<Arc<DiscoveryCache>>>,
     guard: Guard,
 ) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
+    let Some(cache) = cache_for(&state, injected) else {
+        return discovery_unavailable();
+    };
     let path = state.config_path.clone();
     let gateway = match tokio::task::spawn_blocking(move || read_gateway(path.as_deref())).await {
         Ok(Ok(gateway)) => gateway,
@@ -182,7 +236,7 @@ fn body(gateway: &Gateway, listing: &Listing, outdated: bool) -> serde_json::Val
     let unreadable: Vec<serde_json::Value> = listing
         .unreadable
         .iter()
-        .map(|(source, file)| json!({"source": source, "file": file}))
+        .map(|file| json!({"source": file.source, "file": file.file}))
         .collect();
     json!({
         "revision": revision,

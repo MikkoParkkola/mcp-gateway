@@ -148,7 +148,7 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
     // The note kept before start is replayed.
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     assert_eq!(body["decisions"][0]["kind"], "access_request", "{body}");
-    assert_eq!(body["missing_kinds"], json!(["adopt"]), "{body}");
+    assert_eq!(body["missing_kinds"], json!([]), "{body}");
     assert_eq!(
         body["partial_kinds"],
         json!(["capability_changed"]),
@@ -207,7 +207,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     // Both are open (the hand-off is asynchronous) before the edge is read.
     served_when(&state, |body| scope_len(body) == 2).await;
     let decisions = state.meta_mcp.decisions().expect("attached");
-    tick(&state.meta_mcp, decisions, true);
+    tick(&state.meta_mcp, decisions, &Latest::default(), true);
 
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     let scope = body["decisions"][0]["scope"]
@@ -261,7 +261,9 @@ async fn a_burst_past_the_queue_is_replayed_not_lost() {
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start_with(&state.meta_mcp, shutdown, 1);
+    let files = tempfile::tempdir().expect("tempdir");
+    let none = super::super::discovery_wiring_tests::Scripted::new(files.path(), &[]);
+    let _tick = start_with(&state.meta_mcp, shutdown, 1, none);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -433,7 +435,11 @@ fn a_log_with_no_sealed_segment_has_an_edge() {
 }
 
 async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
-    let guard = Guard::for_route(routes::UI_DECISIONS, &Method::GET, Some(client(admin)));
+    let guard = Guard::for_route(
+        routes::UI_DECISIONS_COUNT,
+        &Method::GET,
+        Some(client(admin)),
+    );
     let response = count_decisions(State(Arc::clone(state)), guard).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");

@@ -122,16 +122,22 @@ impl MetaMcp {
         let _ = self.decisions.set(decisions);
     }
 
-    /// Attach the shared discovery cache. Red rows only: not kept yet.
-    #[cfg(test)]
-    #[expect(
-        clippy::unused_self,
-        reason = "a red-row placeholder until the discovery source is built"
-    )]
+    /// Attach the shared discovery cache. Called once by the HTTP server; a
+    /// second call is ignored.
     pub(crate) fn set_discovery_cache(
         &self,
-        _cache: Arc<crate::discovery::listing::DiscoveryCache>,
+        cache: Arc<crate::discovery::listing::DiscoveryCache>,
     ) {
+        let _ = self.discovery_cache.set(cache);
+    }
+
+    /// The shared discovery cache, when the server attached one: read at
+    /// request time, so a router built before it (or without it) answers
+    /// "unavailable" rather than scanning on its own.
+    pub(crate) fn discovery_cache(
+        &self,
+    ) -> Option<&Arc<crate::discovery::listing::DiscoveryCache>> {
+        self.discovery_cache.get()
     }
 
     /// The decision set, when the server attached one.
