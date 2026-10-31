@@ -143,7 +143,7 @@ async fn an_admin_is_served_the_open_decisions_and_no_one_else() {
     assert_eq!(body["error"], "decisions_unavailable", "{body}");
 
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
 
     // The note kept before start is replayed.
     let body = served_when(&state, |body| scope_len(body) == 1).await;
@@ -172,7 +172,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     let log = log_in(&dir, 2048, 1);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
     let now = crate::clock::utc_now().expect("a readable clock");
 
     write(
@@ -207,7 +207,7 @@ async fn a_request_whose_refusals_left_the_log_is_closed() {
     // Both are open (the hand-off is asynchronous) before the edge is read.
     served_when(&state, |body| scope_len(body) == 2).await;
     let decisions = state.meta_mcp.decisions().expect("attached");
-    tick(&state.meta_mcp, decisions, &Latest::default(), true);
+    tick(&state.meta_mcp, decisions, &Latest::default(), None, true);
 
     let body = served_when(&state, |body| scope_len(body) == 1).await;
     let scope = body["decisions"][0]["scope"]
@@ -239,7 +239,7 @@ async fn a_reader_that_cannot_take_the_set_does_not_hold_up_an_append() {
     let log = log_in(&dir, 1 << 20, 12);
     let (state, _store) = state_with(&log).await;
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
     served_when(&state, |_| true).await;
 
     let release = hold_the_set(Arc::clone(state.meta_mcp.decisions().expect("attached"))).await;
@@ -470,7 +470,7 @@ async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
     assert_eq!(body["error"], "decisions_unavailable", "{body}");
 
     let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
-    let _tick = start(&state.meta_mcp, shutdown);
+    let _tick = start(&state.meta_mcp, None, shutdown);
     let list = served_when(&state, |body| scope_len(body) == 1).await;
 
     let (status, body) = count(&state, true).await;
