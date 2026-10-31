@@ -377,11 +377,13 @@ async fn l8b_a_call_cancelled_before_dispatch_releases() {
     assert_eq!(calls(&fx), 1, "l8b: the invoke did not run");
 }
 
-/// L7a CONTROL (kills "withdraw replaced by settle"): a direct call under K
-/// whose backend stops to ask did not act, so its lease releases and a
-/// `gateway_invoke` of the same target under K proceeds.
+/// L7a: a direct call under K whose backend asks, and whose question is
+/// delivered with a continuation, keeps its lease counted: the backend
+/// received round 1 and may have acted, so a `gateway_invoke` of the same
+/// target under K is refused rather than run a second time. A refusal of the
+/// question, or a failure before dispatch (L7b), still withdraws it.
 #[tokio::test]
-async fn l7a_an_interim_answer_withdraws_the_lease() {
+async fn l7a_a_delivered_question_keeps_the_lease() {
     let fx = fixture_built(Answer::AskOnce, |meta| meta).await;
     // A modern call declaring form elicitation, so the question is delivered.
     let key = json!({"_meta": {crate::protocol::mrtr::IDEMPOTENCY_KEY_META: "l7a"}});
@@ -391,11 +393,11 @@ async fn l7a_an_interim_answer_withdraws_the_lease() {
         "premise: the backend's question was not delivered: {asked}"
     );
     let after = keyed(&fx, Via::Invoke, "l7a").await;
-    assert!(
-        after.get("error").is_none(),
-        "l7a: the invoke did not run: {after}"
+    assert_eq!(
+        after["error"]["code"], 409,
+        "l7a: the invoke was not refused: {after}"
     );
-    assert_eq!(calls(&fx), 2, "l7a: the invoke did not reach the backend");
+    assert_eq!(calls(&fx), 1, "l7a: the invoke reached the backend again");
 }
 
 /// L7b CONTROL (kills "withdraw replaced by settle"): a failure raised before
