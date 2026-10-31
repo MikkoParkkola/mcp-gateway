@@ -458,9 +458,11 @@ impl Gateway {
             );
 
         // ── Local identity grants (MIK-6553 free/core) ───────────────────────
-        if let Some((path, grants)) =
+        if let Some((path, grants, bytes)) =
             load_configured_identity_grants(&self.config.security.identity_grants).await?
         {
+            // Into the startup inputs, moved: the first publish digests them.
+            self.env.set_startup_grants(Some(bytes));
             let count = grants.len();
             Arc::get_mut(&mut meta_mcp)
                 .expect("no other Arc references at this point")

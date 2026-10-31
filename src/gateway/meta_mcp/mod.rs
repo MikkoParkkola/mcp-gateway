@@ -240,6 +240,9 @@ pub struct MetaMcp {
     session_lifecycle:
         std::sync::OnceLock<std::sync::Weak<crate::gateway::session_lifecycle::SessionLifecycle>>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// The live config built at startup, with or without a config file, so
+    /// every record names a revision (a reload context shares the same one).
+    pub(super) startup_live_config: std::sync::OnceLock<Arc<crate::config_reload::LiveConfig>>,
     /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
     /// at least one backend is configured for propagation; the dispatch path
     /// uses it to mint a per-user credential for such backends. `None` disables

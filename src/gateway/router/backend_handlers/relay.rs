@@ -69,6 +69,11 @@ pub(super) fn relay_refusal(
         scanned.as_ref().unwrap_or(params),
         (session_id, caller_name),
     )?;
+    // The firewall's relay check, as on the meta route.
+    crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::Firewall,
+        None,
+    );
     Some(backend_security_error_with_status(
         id,
         -32002,

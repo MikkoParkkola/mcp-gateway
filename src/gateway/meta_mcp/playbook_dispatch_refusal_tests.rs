@@ -30,6 +30,7 @@ impl ToolAuthorizer for RefusesArguments {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.arguments.as_object().is_some_and(|a| !a.is_empty()) {
             return Decision::of(Err(AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
                 -32003,
                 "refused for its arguments".to_owned(),
             )));

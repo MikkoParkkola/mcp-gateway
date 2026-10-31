@@ -605,6 +605,9 @@ impl Services {
                     &body_hash,
                     None,
                     extra,
+                    // A delivery its subscription made, not a call any gate
+                    // decided: it carries no decision object.
+                    None,
                 )
             })
             .await;
