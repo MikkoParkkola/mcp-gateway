@@ -545,9 +545,9 @@ async fn meta_grant_decision_failure_leaves_no_receipt() {
 /// MIK-8340 row 7 over HTTP.
 #[path = "meta/chain_key.rs"]
 mod chain_key;
+#[path = "meta/hidden_provider.rs"]
+mod hidden_provider;
 #[path = "meta/withheld.rs"]
 mod withheld;
 #[path = "meta/writes.rs"]
 mod writes;
-#[path = "meta/hidden_provider.rs"]
-mod hidden_provider;
