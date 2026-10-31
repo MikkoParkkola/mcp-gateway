@@ -125,6 +125,8 @@ mod direct_guards_tests;
 #[cfg(test)]
 mod transport_double_run_tests;
 #[cfg(test)]
+mod step_parent_key_tests;
+#[cfg(test)]
 mod direct_lent_arms_tests;
 #[cfg(test)]
 mod direct_list_scope_tests;
