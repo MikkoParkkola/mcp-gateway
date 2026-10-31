@@ -33,7 +33,7 @@ fn production_files(root: &std::path::Path) -> Vec<String> {
                 .to_string_lossy()
                 .replace('\\', "/");
             let name = rel.rsplit('/').next().unwrap_or_default();
-            if rel.ends_with(".rs")
+            if path.extension().is_some_and(|e| e == "rs")
                 && !name.ends_with("_tests.rs")
                 && name != "tests.rs"
                 && !name.contains("_test")
