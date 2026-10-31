@@ -657,6 +657,16 @@ fn backend(
         .expect("a fixture backend")
 }
 
+/// Make `name`'s shared catalogue stale, so the judgment holds none of it.
+/// (`invalidate_tools_cache` drops only an empty list.)
+fn go_cold(state: &Arc<crate::gateway::router::AppState>, name: &str) {
+    backend(state, name).age_tools_cache_for_test(None, 3600);
+    assert!(matches!(
+        state.meta_mcp.listed_catalogue(name),
+        crate::gateway::meta_mcp::hiding::ListedCatalogue::NotHeld
+    ));
+}
+
 fn agent_cert() -> crate::mtls::CertIdentity {
     crate::mtls::CertIdentity {
         common_name: Some("agent".to_string()),
@@ -670,7 +680,7 @@ fn agent_cert() -> crate::mtls::CertIdentity {
 #[tokio::test]
 async fn a_cleared_catalogue_hides_no_backend_the_caller_may_use() {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &["alpha_write"])).await;
-    backend(&state, "alpha").invalidate_tools_cache();
+    go_cold(&state, "alpha");
     assert!(!judgment(&state, None, Some(&agent_cert())).hides("alpha"));
     let (status, body) = post_as_agent_cert(&router, "/mcp", invoke("alpha", "alpha_read")).await;
     assert_eq!(status, 200, "{body}");
@@ -687,7 +697,7 @@ async fn a_cleared_catalogue_hides_no_backend_the_caller_may_use() {
 #[tokio::test]
 async fn a_cold_backend_denied_by_name_is_hidden() {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&["beta", UNREGISTERED], &[])).await;
-    backend(&state, "beta").invalidate_tools_cache();
+    go_cold(&state, "beta");
     assert!(judgment(&state, None, Some(&agent_cert())).hides("beta"));
     let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
     let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
@@ -698,7 +708,7 @@ async fn a_cold_backend_denied_by_name_is_hidden() {
 #[tokio::test]
 async fn a_cold_backend_left_out_of_the_allow_list_is_hidden() {
     let (_, state) = with_mtls_state((&["alpha", "caps"], &["*"]), (&[], &[])).await;
-    backend(&state, "beta").invalidate_tools_cache();
+    go_cold(&state, "beta");
     assert!(judgment(&state, None, Some(&agent_cert())).hides("beta"));
 }
 
@@ -708,8 +718,7 @@ async fn a_cold_backend_left_out_of_the_allow_list_is_hidden() {
 async fn a_cold_backend_an_agent_may_use_is_not_hidden() {
     let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
     let f = with_agent_auth(registry).await;
-    let beta = backend(&f.state, "beta");
-    beta.invalidate_tools_cache();
+    go_cold(&f.state, "beta");
     for scope in ["tools:*", "tools:beta:*"] {
         let agent = crate::gateway::oauth::OAuthAgentIdentity {
             client_id: "a3-agent".to_string(),
