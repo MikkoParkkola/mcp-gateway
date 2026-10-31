@@ -71,8 +71,19 @@ pub(super) fn global_counts(seal: Arc<AtomicBool>) -> CountsFn {
     })
 }
 
+/// This process's segment, as every write of it finds it under the sink
+/// mutex. `Sealed` is final: the seal sets it whatever it found, and no open
+/// follows it, so a write that reaches the sink after the seal opens nothing.
+#[derive(Default)]
+enum SinkState {
+    #[default]
+    Unopened,
+    Open(HttpSegmentSink),
+    Sealed,
+}
+
 /// The sink every write of this process's segment takes in turn.
-type Sink = Arc<Mutex<Option<HttpSegmentSink>>>;
+type Sink = Arc<Mutex<SinkState>>;
 
 /// Open the segment (waiting at most `open_bound`), then keep it current
 /// until `shutdown`, and seal it. `None` with `off`: nothing is recorded or
@@ -138,7 +149,9 @@ pub(super) async fn start_window_saver(
                     let mut held = sink
                         .lock()
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let (Some(sink), Ok(sealed_at_ms)) = (held.as_mut(), sealed_at_ms) else {
+                    let found = std::mem::replace(&mut *held, SinkState::Sealed);
+                    let (SinkState::Open(mut sink), Ok(sealed_at_ms)) = (found, sealed_at_ms)
+                    else {
                         warn!("{NOT_DURABLE}: the window segment was not sealed");
                         return;
                     };
@@ -180,22 +193,25 @@ fn open_detached(
     opened
 }
 
-/// Open into `held` unless already open. `true` once a sink is held.
+/// Open into `held` unless already open. `true` once a sink is held; never
+/// after the seal.
 fn open_into(
-    held: &mut Option<HttpSegmentSink>,
+    held: &mut SinkState,
     data_dir: &std::path::Path,
     identity: WriterIdentity,
     clock_ms: fn() -> Result<u64, ClockBeforeEpoch>,
 ) -> bool {
-    if held.is_some() {
-        return true;
+    match held {
+        SinkState::Open(_) => return true,
+        SinkState::Sealed => return false,
+        SinkState::Unopened => {}
     }
     let Ok(now_ms) = clock_ms() else {
         return false;
     };
     match HttpSegmentSink::open(data_dir, identity, now_ms / 1_000) {
         Ok(opened) => {
-            *held = Some(opened);
+            *held = SinkState::Open(opened);
             true
         }
         Err(error) => {
@@ -233,7 +249,7 @@ fn checkpoint_detached(
                 if !open_into(&mut held, &data_dir, identity, clock_ms) {
                     return;
                 }
-                let (Some(sink), Ok(now_ms)) = (held.as_mut(), clock_ms()) else {
+                let (SinkState::Open(sink), Ok(now_ms)) = (&mut *held, clock_ms()) else {
                     return;
                 };
                 if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
