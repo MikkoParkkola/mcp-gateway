@@ -298,10 +298,24 @@ async fn post_cert_key(
     key: Option<&str>,
     params: Value,
 ) -> (u16, String) {
+    post_cert_headers(router, uri, key, params, &[]).await
+}
+
+/// [`post_cert_key`] with extra request `headers`.
+async fn post_cert_headers(
+    router: &axum::Router,
+    uri: &str,
+    key: Option<&str>,
+    params: Value,
+    headers: &[(&str, &str)],
+) -> (u16, String) {
     let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json");
+    for (name, value) in headers {
+        builder = builder.header(*name, *value);
+    }
     if let Some(key) = key {
         builder = builder.header("authorization", format!("Bearer {key}"));
     }
@@ -587,4 +601,33 @@ async fn an_execute_step_on_a_hidden_backend_answers_as_an_unregistered_one() {
     let hidden = post_as_agent_cert(&router, "/mcp", chain("beta")).await;
     let unregistered = post_as_agent_cert(&router, "/mcp", chain(UNREGISTERED)).await;
     assert_alike("execute chain", "beta", &hidden, &unregistered);
+}
+
+/// A task naming a hidden backend is refused at submit as one naming an
+/// unregistered backend is, and neither makes a task.
+#[tokio::test]
+async fn a_task_naming_a_hidden_backend_is_refused_as_an_unregistered_one() {
+    let router = with_mtls_denying_beta().await;
+    let submit = |server: &str| {
+        let mut meta = crate::gateway::router::tests::modern_meta();
+        meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(format!("task-{server}"));
+        json!({"name": "gateway_invoke",
+               "arguments": {"server": server, "tool": "beta_tool", "arguments": {}},
+               "task": {}, "_meta": meta})
+    };
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let hidden = post_cert_headers(&router, "/mcp", None, submit("beta"), &headers).await;
+    let unregistered =
+        post_cert_headers(&router, "/mcp", None, submit(UNREGISTERED), &headers).await;
+    for (side, (_, body)) in [("hidden", &hidden), ("unregistered", &unregistered)] {
+        assert!(
+            !body.contains("\"taskId\""),
+            "{side}: a task was made: {body}"
+        );
+    }
+    assert_alike("task submit", "beta", &hidden, &unregistered);
 }
