@@ -116,7 +116,7 @@ async fn a_joiner_of_a_failed_save_gets_the_save_error() {
 // it ends with success.
 #[tokio::test]
 async fn a_hold_that_finds_its_flow_gone_ends_the_login_cancelled() {
-    let gw = Gw::new().await;
+    let gw = Arc::new(Gw::new().await);
     let (reached, release) = gw.backend.sign_in.hold_pause.arm();
     let owner = gw.session();
     let (url, attempt) = Gw::link(&gw.start(&owner).await);
@@ -124,11 +124,17 @@ async fn a_hold_that_finds_its_flow_gone_ends_the_login_cancelled() {
     crate::test_pause::within("the task reaches its hold", reached.notified()).await;
     let waiting = joiner(&gw);
     parked().await;
-    let cancel = gw.confirm(&owner, &attempt, "cancel").await;
-    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    // The cancel answers once the gate reflects it, after the parked task.
+    let cancel = tokio::spawn({
+        let gw = Arc::clone(&gw);
+        async move { gw.confirm(&owner, &attempt, "cancel").await }
+    });
+    parked().await;
 
     release.notify_one();
 
+    let cancel = cancel.await.expect("the request ran");
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
     let error = told(waiting).await;
     assert!(is_cancelled(&error), "{error}");
 }

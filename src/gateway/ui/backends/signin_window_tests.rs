@@ -236,15 +236,22 @@ async fn a_late_callback_after_cancel_is_ignored() {
 // the meantime: a start is refused until it resumes.
 #[tokio::test]
 async fn a_cancel_during_the_exchange_discards_the_token() {
-    let gw = Gw::new().await;
+    let gw = Arc::new(Gw::new().await);
     let owner = gw.session();
     let (reached, release) = gw.backend.sign_in.hold_pause.arm();
     let (url, attempt) = Gw::link(&gw.start(&owner).await);
     let _ = gw.approve(&url).await;
     crate::test_pause::within("the flow task reaches its hold", reached.notified()).await;
 
-    let cancel = gw.confirm(&owner, &attempt, "cancel").await;
-    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
+    // The cancel answers only once the gate reflects it, which waits for the
+    // parked task: run it on a task of its own.
+    let cancel = tokio::spawn({
+        let (gw, owner) = (Arc::clone(&gw), owner.clone());
+        async move { gw.confirm(&owner, &attempt, "cancel").await }
+    });
+    for _ in 0..500 {
+        tokio::task::yield_now().await;
+    }
     let blocked = gw.start(&owner).await;
     assert_eq!(
         blocked.status,
@@ -253,6 +260,11 @@ async fn a_cancel_during_the_exchange_discards_the_token() {
         blocked.body
     );
     release.notify_one();
+    let cancel = tokio::time::timeout(HANG_BOUND, cancel)
+        .await
+        .expect("the cancel answers")
+        .expect("the request ran");
+    assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
     let began = std::time::Instant::now();
     while gw.backend.login_gate.in_flight() && began.elapsed() < HANG_BOUND {
         tokio::time::sleep(Duration::from_millis(10)).await;
