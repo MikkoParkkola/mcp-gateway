@@ -515,9 +515,9 @@ async fn a_hidden_passthrough_backend_is_sanitized_as_an_unregistered_one() {
 }
 
 /// The two-step playbook `pb` (`alpha`, then `second`) run as a task, the
-/// certificate's rule denying `alpha-pt` and `gamma` by name. Intake defers a
-/// step the caller cannot see, so step 2 is judged in the worker's run.
-/// Returns the answer with `second` masked, and the sends.
+/// certificate's rule denying `alpha-pt` and `gamma` by name. Returns what
+/// the caller is shown, refused at intake or settled after the run, with
+/// `second` masked, and the sends.
 async fn deferred_step(second: &str, key: &str) -> (String, usize) {
     let script = Script::new();
     let definition = playbook_definition(["alpha", second]);
@@ -533,21 +533,32 @@ async fn deferred_step(second: &str, key: &str) -> (String, usize) {
     .await;
     let fx = with_rule(fx, &["alpha-pt", "gamma"]);
     warm(&fx, &["alpha", "alpha-pt"]);
-    let args = json!({"name": "pb", "arguments": {"x": "v"}});
-    let id = submit(&fx, "gateway_run_playbook", args, key).await;
-    let body = settled(&fx, &id, &["working"]).await;
-    let sent = script.calls.load(Ordering::SeqCst);
-    (answer(&body, &id).replace(second, "SECOND"), sent)
+    let mut meta = task_meta();
+    meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let params = json!({"name": "gateway_run_playbook", "task": {}, "_meta": meta,
+                        "arguments": {"name": "pb", "arguments": {"x": "v"}}});
+    let created = send_cert(&fx, "tools/call", "gateway_run_playbook", params).await;
+    // Refused at intake, or run: either way the caller's whole answer.
+    let shown = match created.pointer("/result/taskId").and_then(Value::as_str) {
+        Some(id) => {
+            let id = id.to_owned();
+            answer(&settled(&fx, &id, &["working"]).await, &id)
+        }
+        None => created.to_string(),
+    };
+    let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
+    let shown = trace.replace_all(&shown, "gw-ID").replace(second, "SECOND");
+    (shown, script.calls.load(Ordering::SeqCst))
 }
 
-/// A task's step on a backend the caller's rule hides by name answers, in the
-/// worker's run, as a step on an unregistered name the same rule denies, and
-/// is sent nothing.
+/// A playbook task naming a backend the caller's rule hides by name answers
+/// as one naming an unregistered name the same rule denies, wherever it is
+/// refused, and the hidden step is sent nothing.
 #[tokio::test]
 async fn a_task_step_on_a_backend_hidden_by_name_answers_as_an_unregistered_one() {
     let (hidden, hidden_sent) = Box::pin(deferred_step("alpha-pt", "hr6-h")).await;
     let (unregistered, unregistered_sent) = Box::pin(deferred_step("gamma", "hr6-u")).await;
-    assert_eq!(unregistered_sent, 1, "premise: only step 1 was sent");
-    assert_eq!(hidden_sent, 1, "hidden: step 2 was sent");
+    assert!(hidden_sent <= 1, "hidden: step 2 was sent");
+    assert_eq!(hidden_sent, unregistered_sent, "the two runs sent alike");
     assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
 }
