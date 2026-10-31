@@ -9,10 +9,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 /// The names pinned. `presend` is `before_send` as `request_attempted`
-/// imports it.
-const NAMES: [&str; 7] = [
+/// imports it; `before_send` itself is pinned too, with no reviewed call, so
+/// a wrap that calls it by its own name elsewhere fails here.
+const NAMES: [&str; 8] = [
     "counted_send",
     "presend",
+    "before_send",
     "refused_before_send",
     "unsent",
     "nothing_sent",

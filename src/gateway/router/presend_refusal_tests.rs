@@ -6,8 +6,8 @@
 
 use serde_json::{Value, json};
 
-use super::direct_continuation_tests::call;
-use super::direct_guards_fixture::fixture_with_secrets;
+use super::direct_continuation_tests::{call, signed_call};
+use super::direct_guards_fixture::{fixture_signed_with_secrets, fixture_with_secrets};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::secret_injection::{CredentialRule, CredentialType, InjectTarget};
 
@@ -39,7 +39,9 @@ fn message(body: &Value) -> String {
 /// R10: refused in its send, the call's key is released. Read through a
 /// second call under the same key with other arguments: a kept key refuses
 /// it as a key reused for a different request; a released one lets it reach
-/// the send again, which refuses it for the rule.
+/// the send again, which refuses it for the rule. On this route the key is
+/// held by the call's execution lease, so the release read here is the
+/// lease's withdrawal.
 #[tokio::test]
 async fn a_direct_call_refused_in_its_send_releases_its_key() {
     let fx = fixture_with_secrets(vec![query_rule()], None, None).await;
@@ -72,5 +74,32 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
     assert!(
         message(&second).contains("secret rule 'api'"),
         "the second call did not reach the send: {second}"
+    );
+}
+
+/// R10b: refused in its send, a signed call gives its nonce back. Read
+/// through the same nonce again: a kept nonce refuses it as a replay; a
+/// returned one lets it reach the send again, which refuses it for the rule.
+#[tokio::test]
+async fn a_signed_direct_call_refused_in_its_send_gives_its_nonce_back() {
+    let fx = fixture_signed_with_secrets(vec![query_rule()]).await;
+    let who = ("k-std", "alpha");
+    let (_, first) = signed_call(&fx, who, "alpha-presend-n1", json!({})).await;
+    assert!(
+        message(&first).contains("secret rule 'api'"),
+        "premise: refused for the rule: {first}"
+    );
+    assert!(
+        fx.seen.lock().expect("recorder").is_empty(),
+        "premise: nothing was sent"
+    );
+    let (_, again) = signed_call(&fx, who, "alpha-presend-n1", json!({})).await;
+    assert!(
+        !again.to_string().to_lowercase().contains("replay"),
+        "the nonce was kept after a call refused in its send: {again}"
+    );
+    assert!(
+        message(&again).contains("secret rule 'api'"),
+        "the second call did not reach the send: {again}"
     );
 }
