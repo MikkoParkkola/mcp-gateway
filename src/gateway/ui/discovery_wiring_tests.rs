@@ -29,6 +29,9 @@ pub(super) struct Scripted {
     scans: AtomicUsize,
     finds: Mutex<Vec<DiscoveredServer>>,
     watched: Vec<Candidate>,
+    now: Mutex<Instant>,
+    /// A scan that never ends, to hit the timeout.
+    hang: std::sync::atomic::AtomicBool,
 }
 
 impl Scripted {
@@ -41,6 +44,8 @@ impl Scripted {
                 source: DiscoverySource::ClaudeDesktop,
                 format: Format::Claude,
             }],
+            now: Mutex::new(Instant::now()),
+            hang: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -50,6 +55,16 @@ impl Scripted {
         let path: &PathBuf = &self.watched[0].path;
         let previous = std::fs::read(path).unwrap_or_default();
         std::fs::write(path, [previous, b"x".to_vec()].concat()).expect("edit");
+    }
+
+    /// Move the cache's clock on by `by`.
+    pub(super) fn advance(&self, by: std::time::Duration) {
+        *self.now.lock().expect("clock") += by;
+    }
+
+    /// Make every scan from now on hang, or stop hanging.
+    pub(super) fn hang(&self, on: bool) {
+        self.hang.store(on, Ordering::SeqCst);
     }
 
     pub(super) fn scans(&self) -> usize {
@@ -68,10 +83,16 @@ impl ScanSource for Scripted {
             fingerprint: self.fingerprint(),
             unreadable: Vec::new(),
         };
-        Box::pin(async move { scan })
+        let hang = self.hang.load(Ordering::SeqCst);
+        Box::pin(async move {
+            if hang {
+                std::future::pending::<()>().await;
+            }
+            scan
+        })
     }
     fn now(&self) -> Instant {
-        Instant::now()
+        *self.now.lock().expect("clock")
     }
 }
 
@@ -229,4 +250,95 @@ async fn a_get_that_rescans_publishes_before_it_returns() {
         Some(vec!["r15-b".to_string()]),
         "the rescan was not published before the GET returned"
     );
+}
+
+/// A gateway with an empty gateway.yaml, so every scripted find is an adopt
+/// decision, and its decision set started over `source`.
+async fn started(
+    dir: &Path,
+    source: &Arc<Scripted>,
+) -> (
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+    tokio::sync::broadcast::Sender<()>,
+) {
+    let path = dir.join("gateway.yaml");
+    crate::gateway::test_helpers::write_owner_only(&path, "backends: {}\n").expect("write");
+    let (mut state, store) = state().await;
+    Arc::get_mut(&mut state).expect("unique").config_path = Some(path);
+    let (stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let _set = super::decisions::start_with_source(
+        &state.meta_mcp,
+        shutdown,
+        Arc::clone(source) as Arc<dyn ScanSource>,
+    );
+    (state, store, stop)
+}
+
+fn adopt_open(state: &AppState, name: &str) -> bool {
+    state
+        .meta_mcp
+        .decisions()
+        .and_then(|set| set.view().ok())
+        .is_some_and(|view| {
+            view.decisions
+                .iter()
+                .any(|item| item["kind"] == "adopt" && item["server"]["name"] == name)
+        })
+}
+
+/// Wait until `done` holds. The guard is wall-clock time: these rows pause
+/// Tokio's clock, which skips every sleep.
+async fn until(what: &str, done: impl Fn() -> bool) {
+    let guard = std::time::Instant::now();
+    while !done() {
+        assert!(
+            guard.elapsed() < std::time::Duration::from_secs(30),
+            "never: {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// R4: an edited client file reaches the decision set on the cache's own
+/// refresh, with no GET.
+#[tokio::test(start_paused = true)]
+async fn an_edit_reaches_the_set_without_a_get() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(dir.path(), &["r4-a"]);
+    let (state, _store, _stop) = started(dir.path(), &source).await;
+    until("the first find opens", || adopt_open(&state, "r4-a")).await;
+    source.edit(&["r4-b"]);
+    source.advance(crate::discovery::listing::CACHE_WINDOW);
+    tokio::time::advance(crate::discovery::listing::CACHE_WINDOW).await;
+    until("the edited find opens", || adopt_open(&state, "r4-b")).await;
+    assert!(!adopt_open(&state, "r4-a"), "the removed find closed");
+}
+
+/// R3 (warm): a scan that times out with a listing cached keeps the set's
+/// items and its count; a later good scan replaces them.
+#[tokio::test(start_paused = true)]
+async fn a_timed_out_scan_keeps_the_cached_decisions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(dir.path(), &["r3-a"]);
+    let (state, _store, _stop) = started(dir.path(), &source).await;
+    until("the first find opens", || adopt_open(&state, "r3-a")).await;
+    let scans = source.scans();
+    source.hang(true);
+    source.edit(&["r3-b"]);
+    source.advance(crate::discovery::listing::CACHE_WINDOW);
+    tokio::time::advance(crate::discovery::listing::CACHE_WINDOW).await;
+    until("a scan starts and hangs", || source.scans() > scans).await;
+    tokio::time::advance(crate::discovery::listing::SCAN_TIMEOUT).await;
+    let set = state.meta_mcp.decisions().expect("a set");
+    assert!(set.view().is_ok(), "the count stays a number");
+    assert!(adopt_open(&state, "r3-a"), "the cached item is kept");
+
+    source.hang(false);
+    source.advance(crate::discovery::listing::CACHE_WINDOW);
+    tokio::time::advance(crate::discovery::listing::CACHE_WINDOW).await;
+    until("a good scan replaces the listing", || {
+        adopt_open(&state, "r3-b")
+    })
+    .await;
 }
