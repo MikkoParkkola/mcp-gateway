@@ -430,3 +430,48 @@ async fn a_clean_answer_is_not_recorded_as_rewritten() {
     );
     assert_ne!(effect, serde_json::json!("rewritten"), "{answer}");
 }
+
+/// An answer that arrives after its call timed out finds no call to scrub it:
+/// the reader drops it, and no log line quotes it. The child answers the
+/// timed-out call only once the next call arrives, then answers that one, so
+/// the second answer proves the late one was read first.
+#[test]
+fn a_late_answer_is_never_logged_raw() {
+    const LATE: &str = "late-answer-secret-3c90";
+    let logged = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                // timing: precondition
+                let (_w, t) = started_with_timeout(
+                    &format!(
+                        r#"read -r first
+read -r second
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"{LATE}"}}]}}}}\n' "$(id_of "$first")"
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$(id_of "$second")"
+while IFS= read -r l; do :; done"#
+                    ),
+                    Duration::from_millis(300),
+                )
+                .await;
+                let needles = crate::security::needles::NeedleSet::with_grace(
+                    Duration::from_secs(3_600),
+                );
+                needles.insert("b", LATE);
+                t.attach_needles(Arc::new(needles));
+                let first = t.request("tools/call", None).await;
+                assert!(
+                    matches!(first, Err(Error::BackendTimeout(_))),
+                    "premise: the first call timed out: {first:?}"
+                );
+                t.request("tools/list", None)
+                    .await
+                    .expect("the second call is answered after the late one");
+                let _ = t.close().await;
+            });
+    });
+    let log = serde_json::to_string(&logged).expect("records serialise");
+    assert!(!log.contains(LATE), "a late answer reached the log: {log}");
+}
