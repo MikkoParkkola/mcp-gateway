@@ -502,6 +502,9 @@ async fn backend_handler_inner(
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
+    // The owned session first: hiding is judged under the profile the call
+    // is routed under.
+    let session = direct_caller::owned_session(state, &caller, key);
     // Before the absence stage and the backend lookup read the scoped view.
     crate::gateway::meta_mcp::hiding::record_caller(super::caller_hiding::RouterHiding::caller(
         shared,
@@ -511,14 +514,14 @@ async fn backend_handler_inner(
             caller.cert_identity.as_ref(),
         ),
         caller.verified_identity.clone(),
-        None,
+        session.map(str::to_owned),
     ));
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,
             Err(response) => return response,
         };
-    let route = match direct_caller::route(state, &name, &caller, key, &envelope) {
+    let route = match direct_caller::route(state, &name, &caller, session, &envelope) {
         Ok(route) => route,
         Err(response) => return response,
     };
