@@ -122,6 +122,14 @@ impl MetaMcp {
         let _ = self.decisions.set(decisions);
     }
 
+    /// Attach the shared discovery cache. Red rows only: not kept yet.
+    #[cfg(test)]
+    pub(crate) fn set_discovery_cache(
+        &self,
+        _cache: Arc<crate::discovery::listing::DiscoveryCache>,
+    ) {
+    }
+
     /// The decision set, when the server attached one.
     pub(crate) fn decisions(&self) -> Option<&Arc<crate::decisions::Shared>> {
         self.decisions.get()

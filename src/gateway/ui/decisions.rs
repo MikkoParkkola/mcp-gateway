@@ -102,6 +102,17 @@ pub(in crate::gateway) fn start(
     start_with(meta, shutdown, LIVE_QUEUE)
 }
 
+/// [`start`] over a given client-file scan source. Red rows only: the
+/// source is not used yet.
+#[cfg(test)]
+pub(in crate::gateway) fn start_with_source(
+    meta: &Arc<MetaMcp>,
+    shutdown: tokio::sync::broadcast::Receiver<()>,
+    _source: Arc<dyn crate::discovery::listing::ScanSource>,
+) -> tokio::task::JoinHandle<()> {
+    start(meta, shutdown)
+}
+
 /// [`start`] with a hand-off queue of `queue` notes.
 fn start_with(
     meta: &Arc<MetaMcp>,

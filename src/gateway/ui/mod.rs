@@ -679,3 +679,6 @@ fn call_windows(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod discovery_wiring_tests;
