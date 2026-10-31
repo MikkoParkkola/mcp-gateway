@@ -117,12 +117,25 @@ async fn direct_under_session(default: &str, session_profile: &str) -> (axum::Ro
         (&[], &[]),
     )
     .await;
-    let owner = crate::gateway::session_id::SessionOwner::Credential(
-        crate::gateway::auth::principal_of("u1")
-            .storage_form()
-            .to_owned(),
-    );
-    let (session, _rx) = state.multiplexer.get_or_create_session_for(None, &owner);
+    // The session a legacy request from this same caller (key and
+    // certificate) is given, so the route counts it as the caller's own.
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer u1")
+        .body(axum::body::Body::from(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" }).to_string(),
+        ))
+        .expect("request");
+    request.extensions_mut().insert(agent_cert());
+    let response = router.clone().oneshot(request).await.expect("answers");
+    let session = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|v| v.to_str().ok())
+        .expect("a legacy request is given a session")
+        .to_owned();
     state
         .meta_mcp
         .session_profiles()
@@ -267,5 +280,91 @@ async fn a_cold_backend_the_profile_leaves_out_answers_as_an_unregistered_name()
         let unregistered =
             post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
         assert_alike(stage, "beta", &hidden, &unregistered);
+    }
+}
+
+/// Profiles with the default `nobeta`, which leaves `beta` out, and `open`.
+fn nobeta_profiles() -> ProfileRegistry {
+    let profiles = HashMap::from([
+        ("open".to_string(), RoutingProfileConfig::default()),
+        (
+            "nobeta".to_string(),
+            RoutingProfileConfig {
+                deny_backends: Some(vec!["beta".to_string()]),
+                ..Default::default()
+            },
+        ),
+    ]);
+    ProfileRegistry::from_config(&profiles, "nobeta")
+}
+
+/// Control: a caller hiding does not apply to (no mTLS policy, no agent
+/// auth) keeps the profile's own refusal for a backend it leaves out.
+#[tokio::test]
+async fn outside_hiding_the_profile_refusal_stands() {
+    let f = super::super::fixture_with(Auth::Off, |meta| {
+        meta.with_profile_registry(nobeta_profiles())
+    })
+    .await;
+    let (status, body) = post(
+        &f.router,
+        "/mcp",
+        None,
+        "tools/call",
+        invoke("beta", "beta_tool"),
+    )
+    .await;
+    assert_eq!(
+        (
+            status.as_u16(),
+            body["error"]["code"].clone(),
+            body["error"]["message"].clone()
+        ),
+        (
+            400,
+            json!(-32600),
+            json!(
+                "Protocol error: Backend 'beta' is not available in the 'nobeta' routing profile"
+            )
+        ),
+        "{body}"
+    );
+}
+
+/// Control: under mTLS, a backend the profile admits answers exactly as with
+/// no routing profile at all, warm and cold.
+#[tokio::test]
+async fn a_backend_the_profile_admits_answers_as_without_a_profile() {
+    let allowing = || {
+        HashMap::from([(
+            "open".to_string(),
+            RoutingProfileConfig {
+                deny_backends: Some(vec!["beta".to_string()]),
+                ..Default::default()
+            },
+        )])
+    };
+    let (with_profile, profiled) = with_mtls_tuned(
+        Auth::Off,
+        move |meta| meta.with_profile_registry(ProfileRegistry::from_config(&allowing(), "open")),
+        (&["*"], &["*"]),
+        (&[], &[]),
+    )
+    .await;
+    let (without_profile, plain) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
+    let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
+    for cold in [false, true] {
+        if cold {
+            go_cold(&profiled, "alpha");
+            go_cold(&plain, "alpha");
+        }
+        let call = invoke("alpha", "alpha_read");
+        let a = post_as_agent_cert(&with_profile, "/mcp", call.clone()).await;
+        let b = post_as_agent_cert(&without_profile, "/mcp", call).await;
+        assert_eq!(
+            (a.0, trace.replace_all(&a.1, "gw-ID").into_owned()),
+            (b.0, trace.replace_all(&b.1, "gw-ID").into_owned()),
+            "cold {cold}: an admitted backend's answer changed"
+        );
     }
 }
