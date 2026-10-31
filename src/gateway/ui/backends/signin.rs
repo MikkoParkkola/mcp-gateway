@@ -334,6 +334,9 @@ pub(super) async fn confirm_sign_in(
 mod gate_tests;
 
 #[cfg(test)]
+#[path = "signin_admission_tests.rs"]
+mod admission_tests;
+#[cfg(test)]
 #[path = "signin_fixture.rs"]
 mod fixture;
 #[cfg(test)]

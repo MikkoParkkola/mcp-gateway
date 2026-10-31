@@ -307,3 +307,40 @@ async fn a_ui_callback_page_asks_for_confirmation() {
     );
     assert!(!page.to_lowercase().contains("close this window"), "{page}");
 }
+
+// 14.4: the saved token carries the exchange's own expiry and lifetime, with
+// time passing both before the grant enters `hold` and before the confirm. The
+// thread's clock is set, not slept. Red today: the confirm stamps the expiry
+// from the confirm-time clock.
+#[tokio::test]
+async fn a_confirmed_token_keeps_the_exchange_expiry() {
+    let t0 = crate::clock::unix_secs().expect("a readable clock");
+    let clock = crate::clock::test_clock::at_secs(t0);
+    let gw = Gw::new().await;
+    let owner = gw.session();
+    let (reached, release) = gw.backend.sign_in.hold_pause.arm();
+    let (url, attempt) = Gw::link(&gw.start(&owner).await);
+    let _ = gw.approve(&url).await;
+    crate::test_pause::within("the task reaches its hold", reached.notified()).await;
+    drop(clock);
+    let clock = crate::clock::test_clock::at_secs(t0 + 10);
+    release.notify_one();
+    gw.wait_until_held().await;
+    drop(clock);
+    let _clock = crate::clock::test_clock::at_secs(t0 + 30);
+
+    let confirm = gw.confirm(&owner, &attempt, "confirm").await;
+
+    assert_eq!(confirm.status, StatusCode::OK, "{}", confirm.body);
+    let saved = gw.saved().expect("the token is saved");
+    assert_eq!(
+        saved.expires_at,
+        Some(t0 + 3600),
+        "the exchange's own expiry"
+    );
+    assert_eq!(
+        saved.lifetime_secs,
+        Some(3600),
+        "the exchange's own lifetime"
+    );
+}

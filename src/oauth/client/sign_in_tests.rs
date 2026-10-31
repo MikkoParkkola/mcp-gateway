@@ -349,3 +349,25 @@ fn the_pending_grant_secrets_are_zeroizing() {
     wiped(&grant.access_token);
     wiped_opt(grant.refresh_token.as_ref());
 }
+
+// 14.3: one cell, no republish. An unexpired, unrefreshable token reads
+// `SignedIn`; the clock then passes its expiry and the same cell reads
+// `Expired`. Red today: the cell holds the classification made at publish time.
+#[tokio::test]
+async fn the_same_cell_ages_from_signed_in_to_expired() {
+    let dir = tempfile::tempdir().unwrap();
+    let (issuer, _forms) = token_endpoint(None).await;
+    let (client, cell) = publishing(dir.path(), &issuer, true);
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    seed(&client, &token(None, now + 600));
+    client.publish_sign_in();
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+        "{:?}",
+        cell.snapshot()
+    );
+
+    let _later = crate::clock::test_clock::at_secs(now + 1200);
+
+    assert_eq!(cell.snapshot(), SignIn::Expired);
+}
