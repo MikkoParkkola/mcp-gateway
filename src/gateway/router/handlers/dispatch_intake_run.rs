@@ -599,7 +599,7 @@ pub(in crate::gateway::router::handlers) async fn intake(
     // Auth DISABLED is not a defect: a validated agent JWT owns its tasks apart
     // (`route_task_owner`) and every other caller shares one pool, the
     // operator's own choice (`anonymous_client`) that a refusal would break.
-    let unattributed = owners.task.is_empty() && state.auth_config.enabled;
+    let unattributed = owners.task.is_empty() && state.live_config.generation().auth().enabled;
 
     // The refusal names nothing. An unattributed caller must not be able to
     // tell "no task here is yours" from "that task does not exist", which is
@@ -723,7 +723,7 @@ pub(super) fn intake_judgement(
     // whose admission still refuses it -32003.
     // `params.task` by key, not by JSON pointer (MIK-8014 PERF.11).
     let task = request.get("params").and_then(|params| params.get("task"));
-    if !state.auth_config.enabled && task.is_some() {
+    if !state.live_config.generation().auth().enabled && task.is_some() {
         return None;
     }
     let caller_key = crate::gateway::router::identity::caller_key(
@@ -782,7 +782,7 @@ async fn answer_intake(
         client,
         grant_subject,
         session_id,
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     )
     .answer_intake(state, target, id, error)
     .await

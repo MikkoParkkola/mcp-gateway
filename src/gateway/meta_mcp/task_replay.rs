@@ -272,7 +272,8 @@ impl MetaMcp {
         else {
             return None;
         };
-        let attempt = super::invoke::ColdAttempt::new(backend, id, generation);
+        let gate = self.gate_inputs(&backend, caller);
+        let attempt = super::invoke::ColdAttempt::new(backend, id, generation, gate);
         self.resolve_cold_view((server, tool), attempt, caller)
             .await
     }
@@ -474,7 +475,7 @@ impl MetaMcp {
 /// another reader may try (MIK-8392 B'): the idle reaper's own sweep, so a
 /// cold state outlasts eviction by at most one sweep, and an outage costs at
 /// most one resolution per caller per backend per minute.
-const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Which stored delivery is judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

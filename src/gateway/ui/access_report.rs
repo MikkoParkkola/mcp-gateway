@@ -32,7 +32,8 @@ pub(super) fn report(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
 ) -> Option<Value> {
-    let auth_on = state.auth_config.enabled;
+    // The table that authenticated this request: its pinned generation.
+    let auth_on = generation.auth().enabled;
     if auth_on && !client.is_some_and(|c| c.authenticated) {
         return None;
     }

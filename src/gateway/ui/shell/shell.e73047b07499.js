@@ -60,7 +60,9 @@ function sheet(href) {
         link.remove();
         fail(new Error(`stylesheet ${href} did not load`));
       });
-      document.head.append(link);
+      // After the shell's own stylesheet, at the end of the body, so a screen's
+      // rules still win ties with it, as they did when it was in the head.
+      document.body.append(link);
     });
     load.catch(() => sheets.delete(href));
     sheets.set(href, load);
@@ -1276,6 +1278,13 @@ function draw(seq, held = null) {
 const LOADING_MS = 300;
 /** Once shown, the loading state stays this long, so it never flickers. */
 const LOADING_MIN_MS = 400;
+/**
+ * The latest the other screens start to preload after first paint, idle or not.
+ * Two seconds: long enough that the preload stays out of the way of the first
+ * page's own reads and rendering, short enough that a busy device still has the
+ * other screens (and the palette's entries) well before a user moves on.
+ */
+const PRELOAD_DEADLINE_MS = 2000;
 
 /**
  * Show the loading state above `body`, and say it once, if this attempt has
@@ -1291,11 +1300,18 @@ function watchLoading(content, body, label, current) {
   let shownAt = 0;
   let withdraw = null;
   const guard = { epoch: authEpoch, seq: renderSeq };
+  // Marks the timer's start and the state's arrival where each happens, so a
+  // test can time the onset by the page's own clock. Only the latest attempt's
+  // pair is kept, so navigations and Retries do not pile marks up.
+  performance.clearMarks('ui-loading-armed');
+  performance.clearMarks('ui-loading-shown');
+  performance.mark('ui-loading-armed');
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
     if (!current() || body.hasChildNodes() || !body.isConnected) return;
     node = state('loading');
     content.insertBefore(node, body);
+    performance.mark('ui-loading-shown');
     shownAt = Date.now();
     withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
   }, LOADING_MS);
@@ -1651,7 +1667,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.32447d51da98.js');
+    m = await import('/ui/assets/tooltip.fc459693146e.js');
   } catch {
     return;
   }
@@ -1905,31 +1921,48 @@ function boot() {
     document.getElementById('content').focus();
   });
   render();
-  openStream();
-  // The other screens load once the first paint is out, when the browser is idle,
-  // so the palette lists their actions and settings and a later visit is instant.
-  // Without paint timing they load after this first render instead; either way
-  // the rest of boot runs.
-  const preload = () => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  // Nothing the frame's first paint draws needs an /ui/api answer, so the boot reads
+  // and the live stream start once that paint is out: on a slow link they would
+  // otherwise take round trips from the stylesheet and fonts. A screen's own data
+  // read is its content and still starts at render. /ui/overview/status starts no
+  // /ui/api request before first paint (the first-paint budget's page); a screen that
+  // lands there reads after paint, or the budget's rows catch it.
+  // A signed-out user sees the sign-in prompt one paint later.
+  afterFirstPaint(() => {
+    openStream();
+    refreshCounts();
+    loadWho().then(() => {
+      // Only a browser still signed out is told; one with a session has nothing to fix.
+      // A key check the user has started owns the error line; a late startup
+      // answer must not write over it.
+      if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
+      const error = document.querySelector('.signin-error');
+      signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
+    });
+    // The other screens load after that, when the browser is idle, so the palette
+    // lists their actions and settings and a later visit is instant. The idle request
+    // carries a deadline: a browser that never sees the page as idle may otherwise
+    // hold the preload back indefinitely.
+    if (window.requestIdleCallback) window.requestIdleCallback(loadAllScreens, { timeout: PRELOAD_DEADLINE_MS });
+    else setTimeout(loadAllScreens, 50);
+  });
+}
+
+/**
+ * Run `fn` once the first contentful paint is out. Without paint timing, or when
+ * observing it throws, `fn` runs now, after the first render; either way it runs.
+ */
+function afterFirstPaint(fn) {
   try {
     if (!PerformanceObserver.supportedEntryTypes?.includes('paint')) throw new Error('no paint timing');
     new PerformanceObserver((list, observer) => {
       if (!list.getEntriesByName('first-contentful-paint').length) return;
       observer.disconnect();
-      preload();
+      fn();
     }).observe({ type: 'paint', buffered: true });
   } catch {
-    preload();
+    fn();
   }
-  refreshCounts();
-  loadWho().then(() => {
-    // Only a browser still signed out is told; one with a session has nothing to fix.
-    // A key check the user has started owns the error line; a late startup
-    // answer must not write over it.
-    if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
-    const error = document.querySelector('.signin-error');
-    signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
-  });
 }
 
 document.addEventListener('DOMContentLoaded', boot);
