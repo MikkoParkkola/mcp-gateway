@@ -451,8 +451,29 @@ async fn count(state: &Arc<AppState>, admin: bool) -> (StatusCode, Value) {
     )
 }
 
-/// R6: the count is the list's length and revision, for an admin only, and
-/// answers the list's 503 while a source is unavailable.
+/// R6: while a source is unavailable the count answers the list's own 503,
+/// never a number.
+#[tokio::test]
+async fn the_count_is_unavailable_while_a_source_is() {
+    let dir = tempfile::tempdir().expect("dir");
+    let log = log_in(&dir, 1 << 20, 12);
+    let (state, _store) = state_with(&log).await;
+    let shared = Arc::new(Shared::with_key([7; 32]));
+    shared.update(|set| {
+        set.set_health(Source::ControlPlane, Health::Ready);
+        set.set_health(Source::Capability, Health::Absent);
+        set.set_health(Source::Access, Health::Ready);
+        set.discovery_down();
+    });
+    state.meta_mcp.set_decisions(shared);
+    let (status, list) = get(&state, true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{list}");
+    let (status, body) = count(&state, true).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(body, list, "the count's 503 is the list's");
+}
+
+/// R6: the count is the list's length and revision, for an admin only.
 #[tokio::test]
 async fn the_count_is_the_lists_length_and_revision_for_an_admin_only() {
     let dir = tempfile::tempdir().expect("dir");

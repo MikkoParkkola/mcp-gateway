@@ -130,10 +130,16 @@ fn with_no_key_the_cli_writes_none_and_says_its_ids_are_for_this_run() {
     let (first, stdout) = shadow_run(home.path());
     let (second, _) = shadow_run(home.path());
     doctor_run(home.path());
+    let key = data_dir(home.path()).join("record-principal.key");
+    if let Ok(meta) = std::fs::metadata(&key) {
+        panic!("a read command created the key file ({} bytes)", meta.len());
+    }
     assert_eq!(files(home.path()), before, "a read command wrote a file");
     assert!(
-        stdout.to_ascii_lowercase().contains("this run only"),
-        "no note that the ids are for this run: {stdout}"
+        stdout
+            .to_ascii_lowercase()
+            .contains("this run only: no record key was found"),
+        "no note that no key was found: {stdout}"
     );
     assert_ne!(first, second, "ids from a one-run key held across runs");
 }
