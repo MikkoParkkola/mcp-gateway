@@ -95,12 +95,65 @@ async fn a_refusal_with_a_stalled_body_keeps_its_status() {
     let response = result.expect("the refusal comes back as a response");
     assert_eq!(response.status(), reqwest::StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(response.headers()["retry-after"], "1");
+    assert!(
+        response.headers().get(reqwest::header::CONTENT_LENGTH).is_none(),
+        "the empty body carries no length"
+    );
     let error = super::params::status_error(response, "API").await;
     assert!(
         matches!(&error, crate::Error::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS)),
         "{error}"
     );
     assert_eq!(notes.backend_sample(), Some((SEND, End::TimedOut)));
+}
+
+/// A listener that sends `status` with a 100-byte body, writes part of it,
+/// and closes the connection, on its own thread.
+fn truncated_body(status: &'static str) -> String {
+    let server = TcpListener::bind("127.0.0.1:0").expect("a local port");
+    let addr = server.local_addr().expect("its address");
+    std::thread::spawn(move || {
+        for stream in server.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            let head = format!("HTTP/1.1 {status}\r\nContent-Length: 100\r\n\r\npartial");
+            let _ = stream.write_all(head.as_bytes());
+            // Dropped here: the body ends early, a read error, not a timeout.
+        }
+    });
+    format!("http://{addr}/")
+}
+
+/// Review r2 R2 (after verify): a 401 whose body is cut short keeps its
+/// status, which the caller types for credential recovery (`Error::Http`),
+/// and a body failure that is not a timeout notes `Failed`.
+#[tokio::test]
+async fn a_refusal_with_a_truncated_body_keeps_its_status() {
+    let url = truncated_body("401 Unauthorized");
+    let health = crate::failsafe::HealthTracker::new("test");
+    seam::inject(SEND);
+    let (result, notes) = with_dispatch_scope(async {
+        send_with_retry(
+            reqwest::Client::new().get(&url),
+            &std::sync::atomic::AtomicU64::new(0),
+            "test",
+            false,
+            &health,
+        )
+        .await
+    })
+    .await;
+    seam::clear();
+    let response = result.expect("the refusal comes back as a response");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert!(response.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
+    let error = super::params::status_error(response, "API").await;
+    assert!(
+        matches!(&error, crate::Error::Http(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED)),
+        "{error}"
+    );
+    assert_eq!(notes.backend_sample(), Some((SEND, End::Failed)));
 }
 
 /// Row 21 (HTTP): an answered send notes one sample, Answered.

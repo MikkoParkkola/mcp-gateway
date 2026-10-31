@@ -189,6 +189,9 @@ mod tests {
                 limit: "backend",
             },
             crate::Error::Shutdown,
+            // In the crate's pre-dispatch set, not in the narrower list
+            // the check once kept: a revert to that list would note it.
+            crate::Error::BackendUnavailable("no healthy backend".into()),
         ];
         for error in unsent {
             let ((), notes) = with_dispatch_scope(async {
