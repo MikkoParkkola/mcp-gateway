@@ -422,6 +422,10 @@ pub(crate) const GRANT_DECISION_KIND: &str = "identity_grant_decision";
 /// A client find the set may show as an adopt decision. Red rows only: the
 /// discovery source is built next.
 #[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "a red-row placeholder until the discovery source is built"
+)]
 #[derive(Debug, Clone)]
 pub(crate) struct AdoptFind {
     pub(crate) find_id: String,
@@ -445,6 +449,10 @@ pub(crate) enum UnreadableReason {
 
 /// A client config file that exists but could not be read.
 #[cfg(test)]
+#[expect(
+    dead_code,
+    reason = "a red-row placeholder until the discovery source is built"
+)]
 #[derive(Debug, Clone)]
 pub(crate) struct UnreadableFile {
     pub(crate) source: crate::discovery::DiscoverySource,
@@ -457,6 +465,10 @@ pub(crate) struct UnreadableFile {
 impl DecisionSet {
     /// Replace the discovery source's finds and unreadable files. Red rows
     /// only: does nothing yet.
+    #[expect(
+        clippy::unused_self,
+        reason = "a red-row placeholder until the discovery source is built"
+    )]
     pub(crate) fn set_discovery(
         &mut self,
         _finds: Vec<AdoptFind>,
@@ -466,6 +478,10 @@ impl DecisionSet {
     }
 
     /// The discovery source timed out with nothing cached. Red rows only.
+    #[expect(
+        clippy::unused_self,
+        reason = "a red-row placeholder until the discovery source is built"
+    )]
     pub(crate) fn discovery_down(&mut self) {}
 }
 

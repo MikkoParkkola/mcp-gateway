@@ -502,7 +502,7 @@ async fn a_backend_written_by_hand_closes_its_decision() {
     })
     .await;
     write_owner_only(
-        &route.config(),
+        route.config(),
         "secrets:\n  store: files\nbackends:\n  tool:\n    command: npx tool\n    enabled: false\n",
     )
     .expect("write config");

@@ -27,7 +27,7 @@ fn url_find(source: DiscoverySource, pid: Option<u32>) -> DiscoveredServer {
     server
 }
 
-fn assert_no_canary(source: DiscoverySource, pid: Option<u32>) {
+fn assert_no_canary(source: &DiscoverySource, pid: Option<u32>) {
     let report = report(&[url_find(source.clone(), pid)], &[]);
     let json = serde_json::to_string(&report).expect("serializes");
     assert!(
@@ -42,17 +42,17 @@ fn assert_no_canary(source: DiscoverySource, pid: Option<u32>) {
 
 #[test]
 fn a_client_config_find_shows_no_url_path_or_config_path() {
-    assert_no_canary(DiscoverySource::McpConfig, None);
+    assert_no_canary(&DiscoverySource::McpConfig, None);
 }
 
 #[test]
 fn an_environment_find_shows_no_url_path() {
-    assert_no_canary(DiscoverySource::Environment, None);
+    assert_no_canary(&DiscoverySource::Environment, None);
 }
 
 #[test]
 fn a_process_find_shows_no_url_path() {
-    assert_no_canary(DiscoverySource::RunningProcess, Some(4242));
+    assert_no_canary(&DiscoverySource::RunningProcess, Some(4242));
 }
 
 /// The endpoint the radar shows is the URL's origin.

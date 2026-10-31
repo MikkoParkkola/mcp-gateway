@@ -173,6 +173,10 @@ impl DiscoveryCache {
     /// Hand every new listing to `publish` while this cache still holds the
     /// listing it replaced. Red rows only: nothing is published yet.
     #[cfg(test)]
+    #[expect(
+        clippy::unused_self,
+        reason = "a red-row placeholder until the discovery source is built"
+    )]
     pub(crate) fn set_publisher(&self, _publish: Arc<dyn Fn(&Listing) + Send + Sync>) {}
 
     /// The find `find_id` names, from a fresh scan of the client files: the

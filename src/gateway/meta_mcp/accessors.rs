@@ -124,6 +124,10 @@ impl MetaMcp {
 
     /// Attach the shared discovery cache. Red rows only: not kept yet.
     #[cfg(test)]
+    #[expect(
+        clippy::unused_self,
+        reason = "a red-row placeholder until the discovery source is built"
+    )]
     pub(crate) fn set_discovery_cache(
         &self,
         _cache: Arc<crate::discovery::listing::DiscoveryCache>,
