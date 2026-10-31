@@ -13,12 +13,14 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// The transport's send methods.
-const SENDS: [&str; 5] = [
+const SENDS: [&str; 6] = [
     "request_with_headers",
     "request_with_headers_lent",
     "request_with_task_capability",
     "notify_with_headers",
     "notify_with_headers_lent",
+    // The scoped notify every caller goes through (`backend/send_scope.rs`).
+    "notify_in_scope",
 ];
 
 /// What a send site's function does with the send's error.
@@ -31,13 +33,14 @@ enum Fate {
 }
 
 /// Every send site, by `file\tfunction`.
-const SITES: [(&str, Fate); 15] = [
+const SITES: [(&str, Fate); 16] = [
     ("src/backend/era.rs\tprobe", Fate::Dropped),
+    ("src/backend/list_drain.rs\tdrain_pages", Fate::Delivered),
+    ("src/backend/ops.rs\tnotify", Fate::Delivered),
     (
-        "src/backend/list_drain.rs\tdrain_list_pages",
+        "src/backend/send_scope.rs\tnotify_in_scope",
         Fate::Delivered,
     ),
-    ("src/backend/ops.rs\tnotify", Fate::Delivered),
     ("src/backend/ops.rs\tnotify_with_headers", Fate::Delivered),
     (
         "src/backend/ops.rs\tnotify_with_headers_lent",
