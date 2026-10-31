@@ -24,13 +24,59 @@ fn cert_of(who: &str) -> crate::mtls::CertIdentity {
     }
 }
 
+/// The provider `caps` with one capability, `cap_open`.
+fn open_caps() -> Arc<crate::capability::CapabilityBackend> {
+    let caps = Arc::new(crate::capability::CapabilityBackend::new(
+        "caps",
+        Arc::new(crate::capability::CapabilityExecutor::new()),
+    ));
+    let definition = crate::capability::parse_capability(
+        "name: cap_open\n\
+         description: Open\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: https://example.invalid\n\
+         \x20     path: /open\n",
+    )
+    .expect("the capability parses");
+    caps.register_capability(definition)
+        .expect("the capability registers");
+    caps
+}
+
+/// An mTLS policy whose rules admit every backend and tool for the
+/// certificates of `a` and `b`.
+fn admit_both() -> crate::mtls::MtlsPolicy {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    let admit_all = |who: &str| PolicyRuleConfig {
+        match_criteria: CertMatchConfig {
+            cn: cert_of(who).common_name,
+            ..Default::default()
+        },
+        allow: ToolScopeConfig {
+            backends: vec!["*".to_string()],
+            tools: vec!["*".to_string()],
+        },
+        deny: ToolScopeConfig {
+            backends: Vec::new(),
+            tools: Vec::new(),
+        },
+    };
+    crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![admit_all("a"), admit_all("b")],
+        ..Default::default()
+    })
+}
+
 /// The relay fixture (detection blocking, `alpha:read` its source) with two
 /// unscoped keys, `a` (alice) and `b` (bob), and the provider `caps`
 /// (`cap_open`) under a default profile that leaves it out, for certificates
 /// whose rules admit everything: `caps` is hidden from either caller
 /// presenting it, and nothing refuses it before the route stage.
 async fn hidden_provider_fixture() -> Fixture {
-    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let unscoped = |secret: &[u8], name: &str| ApiKeyConfig {
         backends: vec!["*".to_string()],
         ..key(secret, name)
@@ -92,45 +138,10 @@ async fn hidden_provider_fixture() -> Fixture {
         },
     )]);
     let meta = meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "nocaps"));
-    let caps = Arc::new(crate::capability::CapabilityBackend::new(
-        "caps",
-        Arc::new(crate::capability::CapabilityExecutor::new()),
-    ));
-    let definition = crate::capability::parse_capability(
-        "name: cap_open\n\
-         description: Open\n\
-         providers:\n\
-         \x20 primary:\n\
-         \x20   service: rest\n\
-         \x20   config:\n\
-         \x20     base_url: https://example.invalid\n\
-         \x20     path: /open\n",
-    )
-    .expect("the capability parses");
-    caps.register_capability(definition)
-        .expect("the capability registers");
-    meta.set_capabilities(caps);
+    meta.set_capabilities(open_caps());
     state_mut.firewall = Some(firewall);
     state_mut.meta_mcp = Arc::new(meta);
-    let admit_all = |who: &str| PolicyRuleConfig {
-        match_criteria: CertMatchConfig {
-            cn: cert_of(who).common_name,
-            ..Default::default()
-        },
-        allow: ToolScopeConfig {
-            backends: vec!["*".to_string()],
-            tools: vec!["*".to_string()],
-        },
-        deny: ToolScopeConfig {
-            backends: Vec::new(),
-            tools: Vec::new(),
-        },
-    };
-    state_mut.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
-        enabled: true,
-        policies: vec![admit_all("a"), admit_all("b")],
-        ..Default::default()
-    }));
+    state_mut.mtls_policy = Arc::new(admit_both());
     Fixture {
         state,
         read,
