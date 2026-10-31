@@ -219,7 +219,12 @@ async fn a_grant_rotated_between_bridge_rounds_refuses_that_loan_and_keeps_the_s
 #[tokio::test]
 async fn a_send_refused_on_a_later_bridged_round_notes_unrecorded() {
     let (second, _, _, noted) = two_rounds(ROTATED).await;
-    assert!(second.is_err(), "premise: the second round was refused");
+    assert!(
+        second
+            .as_ref()
+            .is_err_and(|e| e.contains("per-user send refused")),
+        "premise: the second round's send was refused: {second:?}"
+    );
     assert_eq!(
         noted,
         Some(crate::security::decision_record::DecisionKind::Unrecorded),
