@@ -119,7 +119,7 @@ pub(super) fn find(name: &str) -> DiscoveredServer {
 pub(super) async fn admin_get(state: &Arc<AppState>, uri: &str) -> (StatusCode, Value) {
     let request = Request::builder()
         .uri(uri)
-        .extension(state.live_config.get())
+        .extension(state.live_config.generation())
         .extension(crate::gateway::auth::AuthenticatedClient {
             admin: true,
             authenticated: true,
