@@ -18,7 +18,9 @@ use tower::ServiceExt as _;
 
 use crate::config::TransportConfig;
 use crate::discovery::config_scanner::ConfigScanner;
-use crate::discovery::config_scanner::client_scan::{Candidate, ClientScan, Fingerprint, Format};
+use crate::discovery::config_scanner::client_scan::{
+    Candidate, ClientScan, Fingerprint, Format, UnreadableClientFile,
+};
 use crate::discovery::listing::{DiscoveryCache, ScanSource};
 use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
 use crate::gateway::router::AppState;
@@ -32,6 +34,8 @@ pub(super) struct Scripted {
     now: Mutex<Instant>,
     /// A scan that never ends, to hit the timeout.
     hang: std::sync::atomic::AtomicBool,
+    /// Files every scan reports as there but unreadable.
+    unreadable: Mutex<Vec<UnreadableClientFile>>,
 }
 
 impl Scripted {
@@ -46,7 +50,13 @@ impl Scripted {
             }],
             now: Mutex::new(Instant::now()),
             hang: std::sync::atomic::AtomicBool::new(false),
+            unreadable: Mutex::default(),
         })
+    }
+
+    /// Every later scan also reports `file` as there but unreadable.
+    pub(super) fn add_unreadable(&self, file: UnreadableClientFile) {
+        self.unreadable.lock().expect("unreadable").push(file);
     }
 
     /// Replace the finds and change the fingerprint, as an edited file would.
@@ -81,7 +91,7 @@ impl ScanSource for Scripted {
         let scan = ClientScan {
             finds: self.finds.lock().expect("finds").clone(),
             fingerprint: self.fingerprint(),
-            unreadable: Vec::new(),
+            unreadable: self.unreadable.lock().expect("unreadable").clone(),
         };
         let hang = self.hang.load(Ordering::SeqCst);
         Box::pin(async move {
@@ -299,6 +309,32 @@ async fn until(what: &str, done: impl Fn() -> bool) {
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
+}
+
+/// R9 (wiring): an unreadable client file the cache's scan reports reaches
+/// the decision set as its own item, through the cache's publication.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_unreadable_file_reaches_the_set_through_the_cache() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(dir.path(), &["r9w-find"]);
+    source.add_unreadable(UnreadableClientFile {
+        source: DiscoverySource::Cursor,
+        path: dir.path().join("r9w").join("mcp.json"),
+        reason: crate::decisions::UnreadableReason::DidNotParse,
+    });
+    let (state, _store, _stop) = started(dir.path(), &source).await;
+    until("the unreadable file's item opens", || {
+        state
+            .meta_mcp
+            .decisions()
+            .and_then(|set| set.view().ok())
+            .is_some_and(|view| {
+                view.decisions.iter().any(|item| {
+                    item["kind"] == "client_config_unreadable" && item["file"] == "mcp.json"
+                })
+            })
+    })
+    .await;
 }
 
 /// R4: an edited client file reaches the decision set on the cache's own

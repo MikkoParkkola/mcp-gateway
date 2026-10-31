@@ -37,6 +37,16 @@ fn home(gateway: &str) -> tempfile::TempDir {
         .to_string(),
     );
     write(&home.path().join("gateway.yaml"), gateway);
+    // The data directory exists, owner-only, as an installed gateway leaves
+    // it: a command that created the key on a miss could then write it.
+    let data = data_dir(home.path());
+    std::fs::create_dir_all(&data).expect("data dir");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o700))
+            .expect("owner-only data dir");
+    }
     home
 }
 
