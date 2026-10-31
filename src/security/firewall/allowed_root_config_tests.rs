@@ -58,9 +58,12 @@ fn on(tool: &str) -> RuleTarget<'_> {
 fn d4_d4b_section_one_example_loads_and_confines() {
     let (a, b, out) = (tempdir(), tempdir(), tempdir());
     let (a_path, b_path) = (a.path().to_string_lossy(), b.path().to_string_lossy());
+    // Single-quoted scalars: a Windows path's `\` is an escape in a
+    // double-quoted one.
+    let quoted = |p: &str| format!("'{}'", p.replace('\'', "''"));
     let yaml = EXAMPLE
-        .replace("/srv/data", &a_path)
-        .replace("~/projects", &b_path);
+        .replace("\"/srv/data\"", &quoted(&a_path))
+        .replace("\"~/projects\"", &quoted(&b_path));
     let config = load(&yaml).expect("D4: the example loads");
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(backend("filesystem", stdio())));
@@ -85,7 +88,7 @@ fn d4_d4b_section_one_example_loads_and_confines() {
 }
 
 fn tempdir() -> tempfile::TempDir {
-    tempfile::tempdir().expect("tempdir")
+    crate::test_tempdir::tempdir()
 }
 
 /// R23e [keep]: a backend named like the capabilities backend at load is

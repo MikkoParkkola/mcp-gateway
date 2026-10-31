@@ -78,7 +78,7 @@ struct Watch {
 }
 
 async fn watch() -> Watch {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_tempdir::tempdir();
     for sub in ["safe", "outside"] {
         std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
     }

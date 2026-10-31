@@ -80,7 +80,7 @@ impl Fx {
         rules: impl FnOnce(String) -> Vec<FirewallRule>,
         tweak: impl FnOnce(&mut FirewallConfig),
     ) -> Self {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = crate::test_tempdir::tempdir();
         for sub in ["safe", "outside"] {
             std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
         }

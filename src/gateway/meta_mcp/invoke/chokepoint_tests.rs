@@ -282,7 +282,7 @@ fn the_chokepoint_judges_dispatched_arguments_not_answers() {
         Firewall, FirewallAction, FirewallConfig, FirewallRule, plain_rule,
     };
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_tempdir::tempdir();
     for sub in ["safe", "outside"] {
         std::fs::create_dir(dir.path().join(sub)).expect("mkdir");
     }

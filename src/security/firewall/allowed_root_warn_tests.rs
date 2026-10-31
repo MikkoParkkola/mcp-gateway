@@ -27,7 +27,7 @@ fn config(secret_key: &str, root: &str) -> String {
 /// control: one owning `token` is not.
 #[test]
 fn l9_secret_owning_a_path_argument_is_warned() {
-    let dir = tempfile::tempdir().expect("root");
+    let dir = crate::test_tempdir::tempdir();
     let root = dir.path().to_string_lossy().into_owned();
     let warned = load_warnings(&config("path", &root));
     assert!(
@@ -46,7 +46,7 @@ fn l9_secret_owning_a_path_argument_is_warned() {
 /// named, by key path and never by value; the config still loads.
 #[test]
 fn l10_unresolvable_root_is_warned_not_refused() {
-    let dir = tempfile::tempdir().expect("root");
+    let dir = crate::test_tempdir::tempdir();
     let gone = dir.path().join("SENTINEL-8939-gone");
     let warned = load_warnings(&config("token", &gone.to_string_lossy()));
     assert!(
@@ -70,7 +70,7 @@ fn l10_unresolvable_root_is_warned_not_refused() {
 /// rule scoped to the config backend is not.
 #[test]
 fn r22d_root_rule_covering_capabilities_is_warned() {
-    let dir = tempfile::tempdir().expect("root");
+    let dir = crate::test_tempdir::tempdir();
     let root = dir.path().to_string_lossy().into_owned();
     let yaml = |servers: &str| {
         format!(

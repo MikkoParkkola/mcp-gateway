@@ -288,12 +288,14 @@ fn assert_refused(rule: &str, path: &str, reason: &str) {
 }
 
 const ROOT: &str = "match: \"read_text_file\", action: block";
+/// An absolute root on this OS: `/srv` is not absolute on Windows.
+const SRV: &str = if cfg!(windows) { "C:/srv" } else { "/srv" };
 
 /// L1: `allowed_roots` without `path_args`, and the reverse.
 #[test]
 fn l1_roots_and_path_args_come_together() {
     assert_refused(
-        &format!("{{{ROOT}, allowed_roots: [\"/srv\"]}}"),
+        &format!("{{{ROOT}, allowed_roots: [\"{SRV}\"]}}"),
         "security.firewall.rules[0].path_args",
         "required with allowed_roots",
     );
@@ -313,7 +315,7 @@ fn l2_empty_lists_are_refused() {
         "must not be empty",
     );
     assert_refused(
-        &format!("{{{ROOT}, allowed_roots: [\"/srv\"], path_args: []}}"),
+        &format!("{{{ROOT}, allowed_roots: [\"{SRV}\"], path_args: []}}"),
         "security.firewall.rules[0].path_args",
         "must not be empty",
     );
@@ -358,7 +360,7 @@ fn l3c_extra_separators_after_tilde_stay_home() {
 fn l4_bad_path_arg_entries_are_refused() {
     for bad in ["a..b", "[]", "name??", "name?[]"] {
         assert_refused(
-            &format!("{{{ROOT}, allowed_roots: [\"/srv\"], path_args: [\"{bad}\"]}}"),
+            &format!("{{{ROOT}, allowed_roots: [\"{SRV}\"], path_args: [\"{bad}\"]}}"),
             "security.firewall.rules[0].path_args[0]",
             "not a path argument",
         );
@@ -393,13 +395,15 @@ fn l6_path_outside_root_is_not_listable_in_scan() {
 fn l7_l8_root_rule_scan_and_action_constraints() {
     assert_refused(
         &format!(
-            "{{{ROOT}, scan: [credentials], allowed_roots: [\"/srv\"], path_args: [\"path\"]}}"
+            "{{{ROOT}, scan: [credentials], allowed_roots: [\"{SRV}\"], path_args: [\"path\"]}}"
         ),
         "security.firewall.rules[0].scan",
         "a root rule decides only its own findings",
     );
     assert_refused(
-        "{match: \"read_text_file\", action: allow, allowed_roots: [\"/srv\"], path_args: [\"path\"]}",
+        &format!(
+            "{{match: \"read_text_file\", action: allow, allowed_roots: [\"{SRV}\"], path_args: [\"path\"]}}"
+        ),
         "security.firewall.rules[0].action",
         "warn or block",
     );

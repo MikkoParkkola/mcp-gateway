@@ -298,3 +298,6 @@ pub(crate) mod test_fifo;
 
 #[cfg(test)]
 pub(crate) mod test_symlink;
+
+#[cfg(test)]
+pub(crate) mod test_tempdir;
