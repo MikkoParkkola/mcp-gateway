@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
-use crate::discovery::DiscoverySource;
-
 use super::{
     DiscoveredServer, HashMap, HashSet, Path, SHADOW_ENTERPRISE_BOUNDARY_SCHEMA_VERSION,
     SHADOW_HANDOFF_SCHEMA_VERSION, SHADOW_REPORT_SCHEMA_VERSION, ShadowAsset, ShadowAuthExposure,
@@ -72,7 +70,7 @@ impl ShadowScanReport {
         gateway_config_path: Option<&Path>,
         key: &crate::gateway::record_principal::RecordPrincipalKey,
     ) -> Self {
-        let unique = unique_by_name(discovered);
+        let unique = crate::discovery::unique_by_name(discovered.iter().collect());
         let managed_total = unique
             .iter()
             .filter(|server| registered_names.contains(&server.name))
@@ -106,7 +104,7 @@ impl ShadowScanReport {
                 kept.push(asset.with_gateway_config(gateway_config.as_deref()));
             }
         }
-        for server in unique_by_name(others) {
+        for server in crate::discovery::unique_by_name(others.iter().collect()) {
             if seen.insert(server.name.clone()) {
                 kept.push(ShadowAsset::from_server(
                     server,
@@ -447,21 +445,4 @@ fn remediation_hints(remediation: &ShadowRemediation) -> Vec<String> {
         hints.push(command.clone());
     }
     hints
-}
-
-/// Each name once: a client config's find first, then the environment's,
-/// then a process's, each keeping discovery's order within its kind.
-fn unique_by_name(discovered: &[DiscoveredServer]) -> Vec<&DiscoveredServer> {
-    let rank = |server: &&DiscoveredServer| match server.source {
-        DiscoverySource::Environment => 1,
-        DiscoverySource::RunningProcess => 2,
-        _ => 0,
-    };
-    let mut ranked: Vec<&DiscoveredServer> = discovered.iter().collect();
-    ranked.sort_by_key(rank);
-    let mut seen = HashSet::new();
-    ranked
-        .into_iter()
-        .filter(|server| seen.insert(server.name.as_str()))
-        .collect()
 }

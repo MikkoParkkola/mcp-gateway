@@ -59,22 +59,32 @@ pub(super) fn build(set: &mut DecisionSet) -> Vec<Value> {
         .collect()
 }
 
-/// The time `item_id` was first shown, recorded now if this is its first.
-fn first_seen(set: &mut DecisionSet, item_id: &str, live: &mut Vec<String>) -> DateTime<Utc> {
-    let now = set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+/// The time `item_id` was first shown, recorded as `now` if this is its
+/// first, and the id kept live. Takes the set's fields, not the set, so a
+/// kind can call it while it reads its own items from the set.
+fn first_seen(
+    seen: &mut BTreeMap<String, DateTime<Utc>>,
+    now: DateTime<Utc>,
+    item_id: &str,
+    live: &mut Vec<String>,
+) -> DateTime<Utc> {
     live.push(item_id.to_string());
-    *set.first_seen.entry(item_id.to_string()).or_insert(now)
+    *seen.entry(item_id.to_string()).or_insert(now)
+}
+
+/// The set's current time, or the epoch before it has one.
+fn now(set: &DecisionSet) -> DateTime<Utc> {
+    set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
 }
 
 /// One adopt decision per unmanaged client find; an adopt waits on nothing.
 fn adopt_items(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated> {
-    let key = set.key;
-    let finds = set.adopt.clone();
-    finds
+    let (key, now) = (set.key, now(set));
+    set.adopt
         .iter()
         .map(|find| {
             let item_id = id(&key, "adopt", &json!([find.find_id]));
-            let observed = first_seen(set, &item_id, live);
+            let observed = first_seen(&mut set.first_seen, now, &item_id, live);
             (
                 observed,
                 json!({
@@ -100,9 +110,8 @@ fn adopt_items(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated> {
 /// One decision per client config file that could not be read: its file name
 /// and reason class, never its path or contents.
 fn unreadable_files(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated> {
-    let key = set.key;
-    let files = set.unreadable.clone();
-    files
+    let (key, now) = (set.key, now(set));
+    set.unreadable
         .iter()
         .map(|file| {
             let item_id = id(
@@ -110,7 +119,7 @@ fn unreadable_files(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated>
                 "client_config_unreadable",
                 &json!([file.source, file.path_digest]),
             );
-            let observed = first_seen(set, &item_id, live);
+            let observed = first_seen(&mut set.first_seen, now, &item_id, live);
             (
                 observed,
                 json!({
@@ -128,19 +137,16 @@ fn unreadable_files(set: &mut DecisionSet, live: &mut Vec<String>) -> Vec<Dated>
 
 /// The changed capabilities, and which trusted name each one blocks.
 fn changed_capabilities(set: &mut DecisionSet, live: &mut Vec<String>) -> (Vec<Dated>, Blocks) {
-    let key = set.key;
-    let now = set.now.unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+    let (key, now) = (set.key, now(set));
     let mut blocks: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut changed: Vec<Dated> = Vec::new();
-    let mut live_ids = Vec::new();
     for ((backend, file), change) in &set.changes {
         let item_id = id(
             &key,
             "capability_changed",
             &json!([backend, file, change.actual]),
         );
-        let observed = *set.first_seen.entry(item_id.clone()).or_insert(now);
-        live_ids.push(item_id.clone());
+        let observed = first_seen(&mut set.first_seen, now, &item_id, live);
         if let Some(trusted) = &change.loaded_as {
             blocks
                 .entry(trusted.clone())
@@ -183,7 +189,6 @@ fn changed_capabilities(set: &mut DecisionSet, live: &mut Vec<String>) -> (Vec<D
             }),
         ));
     }
-    live.extend(live_ids);
     (changed, blocks)
 }
 

@@ -28,6 +28,20 @@ pub use secret_map::{REDACTED, SecretMap};
 use config_scanner::ConfigScanner;
 use process_scanner::ProcessScanner;
 
+/// Each name once: a client config's find first, then the environment's,
+/// then a process's, each keeping discovery's order within its kind. The one
+/// precedence rule for discovery and the shadow radar.
+fn unique_by_name<T: std::borrow::Borrow<DiscoveredServer>>(mut servers: Vec<T>) -> Vec<T> {
+    servers.sort_by_key(|server| match server.borrow().source {
+        DiscoverySource::Environment => 1,
+        DiscoverySource::RunningProcess => 2,
+        _ => 0,
+    });
+    let mut seen = std::collections::HashSet::new();
+    servers.retain(|server| seen.insert(server.borrow().name.clone()));
+    servers
+}
+
 /// Discovered MCP server
 ///
 /// `#[non_exhaustive]` since 4.0: build one with [`DiscoveredServer::new`].
@@ -239,15 +253,7 @@ impl AutoDiscovery {
             }
         }
 
-        // Deduplicate by name (prefer config over process)
-        let mut unique_servers: Vec<DiscoveredServer> = Vec::new();
-        for server in servers {
-            if !unique_servers.iter().any(|s| s.name == server.name) {
-                unique_servers.push(server);
-            }
-        }
-
-        Ok(unique_servers)
+        Ok(unique_by_name(servers))
     }
 
     /// The radar's own scan: what the environment and running processes
