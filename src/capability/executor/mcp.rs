@@ -775,3 +775,7 @@ impl super::CapabilityExecutor {
             .evict(Duration::MAX, &|name| name != capability);
     }
 }
+
+#[cfg(test)]
+#[path = "mcp_presend_tests.rs"]
+mod presend_tests;
