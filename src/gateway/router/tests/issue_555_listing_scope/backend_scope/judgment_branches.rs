@@ -541,10 +541,11 @@ async fn post_rpc_cert_headers(
     (status, String::from_utf8_lossy(&body).into_owned())
 }
 
-/// Control for the execution count: a provider the caller sees is executed,
-/// and counted on this test's thread, exactly once per call on each route the
-/// zero-execution row covers. A route that read 0 here would make that row's
-/// zero vacuous.
+/// Control for the zero-execution row's counts: a provider the caller sees is
+/// executed, and counted on this test's thread, exactly once per call on each
+/// route that can run it, and a visible backend is sent once on the
+/// per-backend route. A route that read 0 here would make that row's zero
+/// vacuous.
 #[tokio::test]
 async fn the_execution_count_sees_a_visible_capability_on_every_route() {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
@@ -570,14 +571,27 @@ async fn the_execution_count_sees_a_visible_capability_on_every_route() {
     ]}});
     let (_, answer) = post_as_agent_cert(&router, "/mcp", chain).await;
     once("gateway_execute chain step", &answer);
+    // The per-backend route serves registry backends only (it resolves through
+    // `backend_choke::backend_for`), never the capability provider: it is
+    // proven live with an MCP backend's recorded sends instead.
+    let upstream = Arc::new(super::super::Upstream {
+        tools: vec!["beta_tool"],
+        calls: parking_lot::Mutex::new(Vec::new()),
+    });
+    backend(&state, "beta")
+        .set_transport_for_test(Arc::clone(&upstream) as Arc<dyn crate::transport::Transport>);
     let (_, answer) = post_cert_key(
         &router,
-        "/mcp/caps",
+        "/mcp/beta",
         None,
-        json!({"name": "cap_open", "arguments": {}}),
+        json!({"name": "beta_tool", "arguments": {}}),
     )
     .await;
-    once("per-backend route", &answer);
+    assert_eq!(
+        upstream.calls.lock().len(),
+        1,
+        "per-backend route: a visible backend was not sent once: {answer}"
+    );
     let id = submit_task(&router, "caps", "cap_open", "count-control").await;
     let settled = settle_task(&router, &id).await;
     once("task run", &settled.to_string());
