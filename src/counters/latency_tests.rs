@@ -300,3 +300,65 @@ fn retention_holds_96_half_hours_and_30_days() {
     assert_eq!(days.len(), 30);
     assert_eq!(days[0].bucket, 700_101);
 }
+
+/// Review #11: a restored file is a system boundary. Bins past the last,
+/// zero counts and duplicate bins in a live histogram, duplicate slots, and
+/// more live slots than a ring keeps are dropped, summed or cut back.
+#[test]
+fn restore_reapplies_the_bounds() {
+    let now = 1_800 * 1_000_000 / 1_800;
+    let file: SeriesFile = serde_json::from_value(serde_json::json!({
+        "half": {
+            "live": [
+                [now, 9, 0, 0, [[70, 5], [3, 2], [3, 1], [1, 0]]],
+                [now, 1, 0, 0, [[2, 1]]],
+                [now - 1, 1, 0, 0, [[4, 1]]],
+                [now - 3, 1, 0, 0, [[5, 1]]],
+            ],
+            "closed": [[now - 9, 10, 1, 0, 0], [now - 9, 20, 1, 0, 0], [now - 8, 30]],
+        },
+    }))
+    .expect("a file of the right shape");
+    let series = LatencySeries::from_file(&file, now * 1_800, None);
+    let live: Vec<(u64, Vec<(u8, u32)>)> = series
+        .half
+        .live
+        .iter()
+        .map(|l| (l.bucket, l.sketch.bins().to_vec()))
+        .collect();
+    assert_eq!(live, [(now - 1, vec![(4, 1)]), (now, vec![(3, 3)])], "{live:?}");
+    let closed: Vec<(u64, u64)> = series.half.closed.iter().map(|c| (c.bucket, c.p95_ms)).collect();
+    // The duplicate closed row and the two-field one are gone; the extra
+    // live slot is closed, not lost.
+    assert_eq!(closed, [(now - 9, 10), (now - 3, bin_ms(5))], "{closed:?}");
+}
+
+/// Review #12 (dedup is on the operator list; no visibility change here): the
+/// sketch's p95 rank and the failsafe tracker's (`percentile_index`) agree.
+/// The same whole-ms samples, each a factor 1.3 apart so every sample has a
+/// bin of its own, go to both; the tracker's p95 sample is in the sketch's
+/// p95 bin, so a rank one apart would show.
+#[test]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "whole, positive ms under 2 * 1.3^40, about 72 seconds"
+)]
+fn p95_rank_agrees_with_the_failsafe_tracker() {
+    for n in [1_u32, 19, 20, 21, 40] {
+        let tracker = crate::failsafe::HealthTracker::new("rank");
+        let mut sketch = Sketch::default();
+        for k in 0..n {
+            let ms_whole = (2.0 * 1.3_f64.powi(i32::try_from(k).unwrap())).round();
+            let sample = Duration::from_millis(ms_whole as u64);
+            tracker.record_success(sample);
+            sketch.add(bin_of(sample));
+        }
+        let tracked = tracker.metrics().latency_p95_ms.expect("samples recorded");
+        assert_eq!(
+            sketch.p95_bin(),
+            Some(bin_of(Duration::from_millis(tracked))),
+            "n = {n}: tracker p95 {tracked} ms"
+        );
+    }
+}

@@ -420,13 +420,24 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
 
     /// The ring a file describes; a malformed row is dropped, never fatal,
     /// so a damaged latency field cannot cost the counts beside it.
+    /// The ring a file holds, with every bound re-applied: a hand-edited or
+    /// damaged file can hold bins out of range, duplicate bins or slots, or
+    /// more slots than a ring keeps; those are dropped, summed or cut back.
     fn from_file(file: &RingFile) -> Self {
         let narrow = |v: u64| u32::try_from(v).unwrap_or(u32::MAX);
         let mut ring = Self::default();
         for (bucket, _calls, failed, timed_out, sketch) in &file.live {
+            // Rebuilt through `merge`: sorted, duplicate bins summed, zero
+            // counts and bins past the last dropped.
+            let mut clean = Sketch::default();
+            for &(bin, count) in &sketch.0 {
+                if bin < BINS && count > 0 {
+                    clean.merge(&Sketch(vec![(bin, count)]));
+                }
+            }
             ring.live.push_back(Live {
                 bucket: *bucket,
-                sketch: sketch.clone(),
+                sketch: clean,
                 failed: *failed,
                 timed_out: *timed_out,
             });
@@ -450,10 +461,35 @@ impl<const W: u64, const LIVE: u64> LatRing<W, LIVE> {
                 late: narrow(late),
             });
         }
+        // One row per slot (the first a file names). Live slots past the
+        // `LIVE` a ring keeps are closed, the oldest first, and the closed
+        // slots cut back to the window's newest `W`.
         ring.live.make_contiguous().sort_by_key(|l| l.bucket);
+        dedup_slots(&mut ring.live, |l| l.bucket);
+        while ring.live.len() > usize::try_from(LIVE).unwrap_or(usize::MAX) {
+            if let Some(oldest) = ring.live.pop_front() {
+                ring.closed.push_back(oldest.close());
+            }
+        }
         ring.closed.make_contiguous().sort_by_key(|c| c.bucket);
+        dedup_slots(&mut ring.closed, |c| c.bucket);
+        while ring.closed.len() > usize::try_from(W).unwrap_or(usize::MAX) {
+            ring.closed.pop_front();
+        }
         ring
     }
+}
+
+/// Drop every slot after the first with the same bucket from `slots`, which
+/// is sorted by bucket.
+fn dedup_slots<T>(slots: &mut VecDeque<T>, bucket: impl Fn(&T) -> u64) {
+    let mut seen: Option<u64> = None;
+    slots.retain(|slot| {
+        let b = bucket(slot);
+        let keep = seen != Some(b);
+        seen = Some(b);
+        keep
+    });
 }
 
 impl LatencySeries {
