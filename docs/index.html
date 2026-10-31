@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Gateway: unlimited MCP tools at one fixed context cost</title>
+<meta name="description" content="A single Rust binary between your AI client and all of its tools. Connect any number of MCP servers and REST APIs; the agent sees a compact set of 11 tools and finds the rest on demand.">
+<link rel="icon" href="site/mark.svg" type="image/svg+xml">
+<meta property="og:title" content="MCP Gateway: unlimited MCP tools at one fixed context cost">
+<meta property="og:description" content="A single Rust binary between your AI client and all of its tools. The agent sees a compact set of tools and finds the rest on demand.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://mikkoparkkola.github.io/mcp-gateway/">
+<meta name="twitter:card" content="summary">
+<link rel="stylesheet" href="site/copper.css">
+<link rel="stylesheet" href="site/site.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="./"><img src="site/mark.svg" alt="" width="28" height="28"><span>mcp-gateway</span></a>
+  <nav aria-label="Primary">
+    <a href="#how">How it works</a>
+    <a href="#install">Install</a>
+    <a href="#license">License</a>
+    <a href="https://github.com/MikkoParkkola/mcp-gateway">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="hero">
+    <p class="plate">MCP Gateway</p>
+    <h1>Unlimited MCP servers, tools and APIs. One fixed context cost.</h1>
+    <p class="lede">Plug every tool you own into Claude, Cursor, Codex or any MCP client. MCP Gateway is a single Rust binary that sits between an AI client and all of its tools. The agent sees a compact set of meta-tools (11 in the default setup) instead of hundreds of tool definitions, and finds and calls the right backend tool when it needs it.</p>
+    <div class="actions">
+      <a class="btn primary" href="#install">Install</a>
+      <a class="btn" href="https://github.com/MikkoParkkola/mcp-gateway">View on GitHub</a>
+    </div>
+  </section>
+
+  <section class="measure" aria-label="Context cost on a 100-tool stack">
+    <h2>Context cost on a 100-tool stack</h2>
+    <div class="dim">
+      <div class="bar"><span class="fill" style="width:7.3%"></span></div>
+      <p><strong>~1,100 tokens</strong> of tool definitions per request through the gateway, against <strong>~15,000</strong> when every tool is loaded directly.</p>
+    </div>
+    <p class="note">Modeled, not measured: about 150 tokens per tool and 100 per meta-tool, from the project's published benchmark claims. A client that loads definitions lazily pays less either way, and a task that searches before it calls can spend more tokens over the whole task. <a href="https://github.com/MikkoParkkola/mcp-gateway/blob/main/docs/BENCHMARKS.md">Method</a></p>
+  </section>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <ol class="route">
+      <li><span class="station"></span><div><h3>Your AI client connects once</h3><p>Claude, Cursor, Codex or any MCP client talks to one gateway and loads its small, fixed set of meta-tools.</p></div></li>
+      <li><span class="station"></span><div><h3>The agent searches the catalog</h3><p><code>gateway_search_tools</code> finds the right tool across every connected server and API.</p></div></li>
+      <li><span class="station"></span><div><h3>It calls the tool on demand</h3><p><code>gateway_invoke</code> routes the call to the backend: an MCP server over stdio or HTTP, or one of 130+ built-in REST capabilities.</p></div></li>
+    </ol>
+  </section>
+
+  <section class="grid" aria-label="Features">
+    <article><h3>One binary</h3><p>Self-hosted gateway and proxy in one Rust binary. No runtime to install.</p></article>
+    <article><h3>Import what you have</h3><p>One command imports the MCP servers you already use and wires up your clients.</p></article>
+    <article><h3>130+ capabilities built in</h3><p>REST APIs such as GitHub and Stripe are ready to call without writing a server.</p></article>
+    <article><h3>Security in the path</h3><p>A firewall checks requests and responses, and access rules decide which caller sees which tools.</p></article>
+  </section>
+
+  <section id="install">
+    <h2>Install</h2>
+    <p class="note">This page describes 4.0. Until 4.0.0 is released, these commands install the current 3.x release.</p>
+    <pre><code>brew trust --tap MikkoParkkola/tap   # Homebrew 6.0+
+brew install MikkoParkkola/tap/mcp-gateway
+mcp-gateway setup wizard --configure-client
+mcp-gateway serve
+mcp-gateway doctor   # in a second terminal, while serve runs</code></pre>
+    <p>Also on <a href="https://crates.io/crates/mcp-gateway">crates.io</a>: <code>cargo install mcp-gateway</code>. Nothing to import yet? <code>mcp-gateway init</code> writes a working configuration with public capabilities.</p>
+  </section>
+
+  <section id="license">
+    <h2>License</h2>
+    <p>Personal and noncommercial use is free, including running the full gateway. Commercial use needs a commercial license. From 4.0 the gateway is under PolyForm Noncommercial; MIT grants on earlier 3.x releases are unchanged. <a href="https://github.com/MikkoParkkola/mcp-gateway/blob/main/LICENSES.md">License details</a></p>
+  </section>
+</main>
+
+<footer>
+  <p>MCP Gateway · <a href="https://github.com/MikkoParkkola/mcp-gateway">Source</a> · <a href="https://crates.io/crates/mcp-gateway">crates.io</a> · <a href="https://modelcontextprotocol.io">Model Context Protocol</a></p>
+</footer>
+</body>
+</html>
