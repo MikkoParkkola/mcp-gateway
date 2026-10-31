@@ -203,15 +203,26 @@ impl crate::transport::Transport for RefusedAtSend {
     }
 }
 
-/// A refusal raised at the send on the meta route (`gateway_invoke`): about
-/// the caller's own credential, which no decision kind names yet, so it is
-/// recorded refused with kind `unrecorded`. Flips to that kind when an
-/// identity-standing kind is added.
+/// A refusal raised at the send on the meta route (`gateway_invoke`): the
+/// route answers it as an error result, not a refusal, but the gateway's
+/// lender refused the call, so its record must never read `default_allow`.
+/// The check is about the caller's own credential, which no decision kind
+/// names yet: kind `unrecorded`. Flips to that kind when an identity-standing
+/// kind is added.
 #[tokio::test]
 async fn a_send_refusal_on_the_meta_route_records_unrecorded() {
     let dir = tempfile::tempdir().unwrap();
     let meta = logged_meta_with(&dir, Arc::new(RefusedAtSend));
-    let (error, record) = refused_record(&meta, &dir).await;
-    assert!(matches!(error, crate::Error::Forbidden { .. }), "{error}");
+    let who = api_key_caller();
+    let caller = context(&AllowAll, &who);
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let answer = meta
+        .invoke_tool(&args, None, &caller)
+        .await
+        .expect("the meta route answers the refusal as an error result");
+    assert!(answer.to_string().contains("per-user send refused"), "{answer}");
+    let mut all = records(&dir);
+    assert_eq!(all.len(), 1, "{all:?}");
+    let record = all.remove(0);
     assert_eq!(record["decision"]["kind"], json!("unrecorded"), "{record}");
 }
