@@ -242,7 +242,7 @@ async fn send_with_retry_recovers_from_transient_timeouts() {
 
     // Idempotent (retry_timeouts = true): timeouts are retried.
     let health = crate::failsafe::HealthTracker::new("test");
-    let resp = send_with_retry(req, "test", true, &health).await;
+    let resp = send_with_retry(req, &std::sync::atomic::AtomicU64::new(0), "test", true, &health).await;
     assert!(
         resp.is_ok(),
         "retry should recover from transient timeouts, got {resp:?}"
@@ -285,7 +285,7 @@ async fn send_with_retry_records_transport_failures() {
         let req = client
             .get(&url)
             .timeout(std::time::Duration::from_millis(200));
-        let resp = send_with_retry(req, "test", false, &health).await;
+        let resp = send_with_retry(req, &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await;
         assert!(resp.is_err(), "connect to a refused port must fail");
     }
     assert!(
@@ -318,7 +318,7 @@ async fn send_with_retry_does_not_retry_timeouts_when_not_idempotent() {
         .post(&url)
         .timeout(std::time::Duration::from_millis(120));
 
-    let resp = send_with_retry(req, "test", false, &health).await;
+    let resp = send_with_retry(req, &std::sync::atomic::AtomicU64::new(0), "test", false, &health).await;
     // The call was made and failed: `send_with_retry` records exactly one
     // failure, on its final error path, so a skipped send leaves 0. With the
     // listener live, the only failure left is the request timeout (inferred:

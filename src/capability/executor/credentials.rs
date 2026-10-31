@@ -608,7 +608,7 @@ mod tests {
 
     fn executor_with(token_storage: Option<Arc<TokenStorage>>) -> CapabilityExecutor {
         CapabilityExecutor {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::new().into(),
             refresh: super::super::client::build_refresh(None),
             cache: ResponseCache::new(),
             token_storage,

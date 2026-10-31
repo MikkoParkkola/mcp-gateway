@@ -72,7 +72,7 @@ async fn projecting_executor() -> (
     });
     let mut executor =
         CapabilityExecutor::new().with_policy_epoch(Arc::new(std::sync::atomic::AtomicU64::new(0)));
-    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2)).into();
     let base_url = crate::test_fixture_host::fixture_url(port);
     let capability = crate::capability::parse_capability(&format!(
         r"

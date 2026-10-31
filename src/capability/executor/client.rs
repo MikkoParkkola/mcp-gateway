@@ -102,6 +102,15 @@ impl CapabilityClient {
     }
 }
 
+/// A test's own reqwest client, counting nothing (its redirect policy is the
+/// test's).
+#[cfg(test)]
+impl From<Client> for CapabilityClient {
+    fn from(http: Client) -> Self {
+        Self::uncounted(http)
+    }
+}
+
 impl std::ops::Deref for CapabilityClient {
     type Target = Client;
 

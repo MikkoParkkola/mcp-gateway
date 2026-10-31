@@ -46,7 +46,8 @@ async fn call_raw(yaml: &str, arguments: serde_json::Value, seen: &Seen) -> (Str
     executor.client = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
-        .unwrap();
+        .unwrap()
+        .into();
     let context = CapabilityExecutionContext::default().with_isolated_loopback_egress();
     executor
         .execute_with_context(&capability, validation.coerced, context)
