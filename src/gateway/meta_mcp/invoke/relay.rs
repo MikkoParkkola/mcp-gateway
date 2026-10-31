@@ -103,7 +103,7 @@ impl MetaMcp {
             use crate::security::firewall::RelayCaller;
             let fw = self.firewall.as_ref().filter(|fw| fw.relay_active())?;
             let capability = self
-                .get_capabilities()
+                .caller_capabilities()
                 .is_some_and(|cap| server == cap.name && cap.get(tool).is_some());
             // The backend's secret rules overwrite their keys on the send:
             // what the caller put there never leaves, so it is not checked.

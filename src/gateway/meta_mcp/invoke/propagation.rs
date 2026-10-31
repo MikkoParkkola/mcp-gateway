@@ -544,7 +544,7 @@ impl MetaMcp {
     ) -> Result<CapabilityAccount> {
         use crate::identity_propagation::AccountCredential;
 
-        let Some(capabilities) = self.get_capabilities() else {
+        let Some(capabilities) = self.caller_capabilities() else {
             return Ok((None, None));
         };
         if server != capabilities.name {
