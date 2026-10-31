@@ -405,7 +405,6 @@ async fn handle_callback(
     );
 
     let mut state = state.lock().await;
-    let page = state.page;
 
     // State first: refuse before looking at `error` or `code`.
     let state_ok = params
@@ -487,7 +486,7 @@ async fn handle_callback(
         let _ = tx.send(result);
     }
 
-    Html(page.html().to_string()).into_response()
+    Html(state.page.html().to_string()).into_response()
 }
 
 fn escape_html(input: &str) -> String {
