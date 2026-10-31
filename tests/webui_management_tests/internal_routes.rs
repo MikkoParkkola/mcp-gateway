@@ -112,10 +112,10 @@ async fn gateway(fixture: Fixture) -> Gateway {
             Fixture::AuthOff => Config::default().auth,
             Fixture::AuthOn | Fixture::Configured => auth_on(),
         };
-        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(
-            &auth,
-            crate::record_key::RECORD_KEY,
-        ));
+        let resolved = ResolvedAuthConfig::from_config(&auth, crate::record_key::RECORD_KEY);
+        let current = (*s.live_config.get()).clone();
+        let live = mcp_gateway::gateway::test_helpers::live_config(current, Arc::new(resolved));
+        s.live_config = Arc::new(live);
         if fixture == Fixture::Configured {
             s.control_plane_store = Some(Arc::new(InMemoryControlPlaneStore::new()));
             s.export_status = Some(Arc::new(ExportStatus::default()));

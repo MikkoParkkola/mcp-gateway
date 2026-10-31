@@ -199,6 +199,7 @@ src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, unti
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	-	startup step of the stdio loop, once per serve
 src/gateway/server/stdio_startup.rs	key_error	-	startup error of the stdio loop, once per serve
 src/gateway/server/stdio_tasks.rs	advertised	-	initialize and server/discover answers only
+src/gateway/server/stdio_tasks.rs	default_auth	-	builds stdio's auth once at session start
 src/gateway/server/stdio_tasks.rs	degraded	-	task store open failure at session start
 src/gateway/server/stdio_tasks.rs	dispatch	-	tasks/* methods only, not the tools/call path
 src/gateway/server/stdio_tasks.rs	dispatch_get	-	tasks/* methods only, not the tools/call path

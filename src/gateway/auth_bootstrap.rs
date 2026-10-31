@@ -11,7 +11,7 @@ use tracing::warn;
 use crate::security::security_metrics::{AuthFailureKind, auth_failure};
 
 use super::{
-    AuthState, DashboardBootstrap, Now, Redeem, Redemption, SessionLimits,
+    AuthState, DashboardBootstrap, Now, Redeem, Redemption, ResolvedAuthConfig, SessionLimits,
     bearer_unauthorized_response, cookie_secure, session_cookie,
 };
 
@@ -22,6 +22,7 @@ use super::{
 /// worth being able to see in one screen.
 pub(super) fn try_dashboard_bootstrap(
     state: &AuthState,
+    auth_config: &ResolvedAuthConfig,
     request: &Request<Body>,
 ) -> Option<Response> {
     if request.uri().path() != "/dashboard" {
@@ -102,8 +103,8 @@ pub(super) fn try_dashboard_bootstrap(
         // mechanically required — demanding one refused every API-key-only
         // operator over a token the exchange would not have used. A RESTRICTED
         // key does not count: the session it opens carries admin.
-        let has_admin_credential = state.auth_config.bearer_token.is_some()
-            || state.auth_config.api_keys().iter().any(|k| k.admin);
+        let has_admin_credential =
+            auth_config.bearer_token.is_some() || auth_config.api_keys().iter().any(|k| k.admin);
         if !has_admin_credential {
             auth_failure(AuthFailureKind::BootstrapRefused);
             warn!("Dashboard bootstrap unusable: no admin credential is configured");
@@ -142,7 +143,7 @@ pub(super) fn try_dashboard_bootstrap(
             // a build with the dashboard serves the page the code is entered on.
             #[cfg(feature = "webui")]
             if let super::handoff::Handoff::Shown(page) =
-                super::handoff::hand_off(state, &candidate)
+                super::handoff::hand_off(state, auth_config, &candidate)
             {
                 return Some(page);
             }
@@ -157,32 +158,34 @@ pub(super) fn try_dashboard_bootstrap(
                 refused_value(),
             ));
         }
-        let Redemption { not_after, now } =
-            match state.dashboard_bootstrap.consume_capped(&candidate) {
-                Redeem::Issued(redemption) => redemption,
-                // Refused but kept: the clock reads before 1970 (MIK-8202). Said
-                // to every candidate, decided before any compare, so it does not
-                // tell the live value from a guess.
-                Redeem::ClockUnreadable => {
-                    auth_failure(AuthFailureKind::BootstrapRefused);
-                    return Some(clock_refusal());
-                }
-                Redeem::Refused => {
-                    auth_failure(AuthFailureKind::BootstrapRefused);
-                    warn!("Dashboard bootstrap rejected: wrong or already-used value");
-                    return Some(refused_sign_in(
-                        Navigation::of(request.headers()),
-                        refused_value(),
-                    ));
-                }
-            };
+        let Redemption { bound, now } = match state
+            .dashboard_bootstrap
+            .consume_capped(&candidate, auth_config)
+        {
+            Redeem::Issued(redemption) => redemption,
+            // Refused but kept: the clock reads before 1970 (MIK-8202). Said
+            // to every candidate, decided before any compare, so it does not
+            // tell the live value from a guess.
+            Redeem::ClockUnreadable => {
+                auth_failure(AuthFailureKind::BootstrapRefused);
+                return Some(clock_refusal());
+            }
+            Redeem::Refused => {
+                auth_failure(AuthFailureKind::BootstrapRefused);
+                warn!("Dashboard bootstrap rejected: wrong or already-used value");
+                return Some(refused_sign_in(
+                    Navigation::of(request.headers()),
+                    refused_value(),
+                ));
+            }
+        };
         // Hand the browser an opaque session in an HttpOnly cookie and redirect.
         // Done here rather than in the handler so the token never leaves this
         // module, and so the address bar keeps nothing after the redirect.
         Some(signed_in(
             &state.dashboard_bootstrap,
             &state.live_config,
-            not_after,
+            bound,
             now,
             secure,
         ))
@@ -252,17 +255,19 @@ fn refused_value() -> Response {
 }
 
 /// A fresh session for a redeemed link or handoff code: an opaque handle in a
-/// cookie and a 303 to `/dashboard`. The session ends at `not_after`, the
-/// minting credential's expiry, when that comes before the absolute limit.
+/// cookie and a 303 to `/dashboard`. The session ends at `bound`'s cap, the
+/// minting credential's expiry, when that comes before the absolute limit,
+/// and with its minting key.
 pub(super) fn signed_in(
     bootstrap: &DashboardBootstrap,
     live: &crate::config_reload::LiveConfig,
-    not_after: Option<std::time::SystemTime>,
+    bound: super::Bound,
     now: Now,
     secure: bool,
 ) -> Response {
+    let not_after = bound.not_after;
     let limits = SessionLimits::from(&live.get().auth.dashboard_session);
-    let handle = bootstrap.issue_session_until(now, &limits, not_after);
+    let handle = bootstrap.issue_session_until(now, &limits, bound);
     // The cookie lives exactly as long as the server will honour it, so a
     // browser never keeps presenting a handle the server already dropped:
     // the absolute limit, or less when the minting credential expires first.

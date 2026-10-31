@@ -36,7 +36,7 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -475,8 +475,6 @@ use clients::{
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
 pub struct AuthState {
-    /// Static key / bearer token configuration.
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Key server for OIDC-issued temporary tokens (optional).
     pub key_server: Option<Arc<KeyServer>>,
     /// Single-use value that opens the dashboard from a printed link.
@@ -484,8 +482,10 @@ pub struct AuthState {
     /// Whether this listener speaks TLS, so the session cookie is `Secure`.
     /// A live HTTPS `public_url` also makes it `Secure` (`cookie_secure`).
     pub tls_enabled: bool,
-    /// The live config, whose `control_plane.role_mapping` confers admin per
-    /// request (E1-a).
+    /// The live config: its generations hold the API key table and the
+    /// running `auth` settings, and its `control_plane.role_mapping` confers
+    /// admin per request (E1-a). A request is judged by the generation the
+    /// router pinned on it; a held credential by the one current at delivery.
     pub live_config: Arc<crate::config_reload::LiveConfig>,
     /// Agent authentication, holding the same registry the agent middleware
     /// validates against at ingress, so a held agent token is re-judged by
@@ -505,7 +505,10 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let auth_config = &state.auth_config;
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
+    };
+    let auth_config = &*pinned;
 
     // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
@@ -539,10 +542,15 @@ pub async fn auth_middleware(
             Touch::Yes
         };
         let limits = session_limits(&state);
-        match state
-            .dashboard_bootstrap
-            .check_session(&handle, Now::read(), &limits, touch)
-        {
+        // Judged by the request's pinned key table: a session whose minting
+        // key a reload removed, demoted or expired ends here (K13).
+        match state.dashboard_bootstrap.check_session_with(
+            &handle,
+            Now::read(),
+            &limits,
+            touch,
+            auth_config,
+        ) {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
                 return next.run(request).await;
@@ -606,7 +614,10 @@ async fn authenticate_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let auth_config = &state.auth_config;
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
+    };
+    let auth_config = &*pinned;
     let path = request.uri().path();
 
     // A public path skips the credential REQUIREMENT, not the credential. An
@@ -662,7 +673,7 @@ async fn authenticate_request(
     // The dashboard bootstrap link. A browser navigation carries no header and
     // no cookie yet, so this is the one path where a credential arrives in the
     // URL — which is why the value is single-use and is not the admin token.
-    if let Some(response) = try_dashboard_bootstrap(&state, &request) {
+    if let Some(response) = try_dashboard_bootstrap(&state, auth_config, &request) {
         return handoff::private(response);
     }
 

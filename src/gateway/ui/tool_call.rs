@@ -489,7 +489,7 @@ fn via_label(
     let who = crate::security::audit::AuditWho::from_request(
         client,
         subject.as_ref(),
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     let kind = who
         .credential_kind
