@@ -1,0 +1,360 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The shell stylesheet after its frame (src/gateway/ui/shell-src/frame.css,
+   inlined in the document): the shared design language's components and the
+   shell's own dialogs, palette and sign-in, revision 27f0f48. The rule that
+   hides the chrome while signed out is in the frame, with the screen-reader-only
+   rule: the frame draws both before this file can load. */
+/* Bundled fonts and their licences (SIL Open Font License 1.1), verbatim.
+   Big Shoulders 700 and 800:
+
+Copyright 2019 The Big Shoulders Project Authors (https://github.com/xotypeco/big_shoulders)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://openfontlicense.org
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+   Overpass 400 and Overpass Mono 400:
+
+Copyright 2021 The Overpass Project Authors (https://github.com/RedHatOfficial/Overpass)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+*/
+
+/* Corner ticks instead of boxes. Wrap a section: <div class="tk"><i class="c1"></i><i class="c2"></i>…</div> */
+.tk { position: relative; padding: var(--space-3) var(--space-4); }
+.tk::before, .tk::after, .tk > .c1, .tk > .c2 { content: ""; position: absolute; width: var(--size-tick); height: var(--size-tick);
+  border: 0 solid var(--color-border-control); pointer-events: none; }
+.tk::before { left: 0; top: 0; border-width: var(--size-tick-stroke) 0 0 var(--size-tick-stroke); }
+.tk::after { right: 0; top: 0; border-width: var(--size-tick-stroke) var(--size-tick-stroke) 0 0; }
+.tk > .c1 { left: 0; bottom: 0; border-width: 0 0 var(--size-tick-stroke) var(--size-tick-stroke); }
+.tk > .c2 { right: 0; bottom: 0; border-width: 0 var(--size-tick-stroke) var(--size-tick-stroke) 0; }
+.tk.sel::before, .tk.sel::after, .tk.sel > .c1, .tk.sel > .c2 { border-color: var(--color-text-primary); }
+
+/* Dimension line: a measured span between two ticks, with the measurement in mono. See patterns/dimension-lines.md. */
+.dim { display: flex; align-items: center; gap: var(--space-1-5); font: var(--type-dim); color: var(--color-text-secondary); }
+.dim > i { flex: 1; height: var(--size-dim-stroke); background: var(--color-border-control); position: relative; min-width: 12px; }
+.dim > i::before, .dim > i::after { content: ""; position: absolute; top: calc(var(--size-dim-cap) / -2); width: var(--size-tick-stroke);
+  height: var(--size-dim-cap); background: var(--color-border-control); }
+.dim > i::before { left: 0; } .dim > i::after { right: 0; }
+.dim .lim { color: var(--color-text-primary); }
+
+/* Numbers */
+.figure .v { font: var(--type-num-lg); font-variant-numeric: tabular-nums; }
+.figure .hero { font: var(--type-hero); }
+.delta.good { color: var(--color-status-success-fg); } .delta.bad { color: var(--color-status-danger-fg); }
+
+
+/* Line badge: status as icon + word + colour, framed like a line marker. */
+.lb { display: inline-flex; align-items: center; gap: var(--space-1-5); padding: 1px var(--space-2); border: var(--size-badge-stroke) solid currentColor;
+  border-radius: var(--radius-sm); font: var(--type-kicker); letter-spacing: var(--type-kicker-tracking); text-transform: uppercase; }
+.lb.success { color: var(--color-status-success-fg); } .lb.warning { color: var(--color-status-warning-fg); }
+.lb.danger { color: var(--color-status-danger-fg); } .lb.neutral { color: var(--color-status-neutral-fg); }
+.lb.plain { border-color: transparent; padding-inline: 0; }
+
+/* Input */
+.field { display: grid; gap: var(--space-1); }
+.field label { font: var(--type-kicker); letter-spacing: var(--type-kicker-tracking); text-transform: uppercase; color: var(--color-text-secondary); }
+.input { min-height: var(--size-row); padding: 0 var(--space-3); width: 100%; border-radius: var(--radius-sm);
+  border: var(--size-rule) solid var(--color-border-control); background: var(--color-bg-sunken); color: var(--color-text-primary); font: var(--type-body); }
+.input::placeholder { color: var(--color-text-tertiary); }
+.field.err .input { border-color: var(--color-status-danger-fg); }
+.field .msg { font: var(--type-small); color: var(--color-status-danger-fg); }
+.auto { display: flex; align-items: center; gap: var(--space-2); min-height: var(--size-row); }
+.auto .override { margin-left: auto; }
+
+/* Tooltip: hover, focus, Enter or tap opens it; Esc or tapping outside closes it. */
+.has-tip { position: relative; text-decoration: underline dotted var(--color-text-tertiary); text-underline-offset: 3px; cursor: help; }
+.tip { position: absolute; z-index: var(--z-tooltip); width: max-content; max-width: 320px; padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-raised); color: var(--color-text-primary); border: var(--size-rule) solid var(--color-border-control);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-2); font: var(--type-small); display: grid; gap: 2px;
+  opacity: 0; transform: translateY(calc(4px * var(--motion-distance))); pointer-events: none;
+  transition: opacity var(--duration-fast) var(--easing-exit), transform var(--duration-fast) var(--easing-exit); }
+.has-tip:hover .tip, .has-tip:focus-visible .tip, .tip.open { opacity: 1; transform: none; transition-timing-function: var(--easing-enter); }
+
+
+/* Table: rules only. */
+table.t { width: 100%; border-collapse: collapse; }
+.t th { text-align: left; font: var(--type-kicker); letter-spacing: var(--type-kicker-tracking); text-transform: uppercase; color: var(--color-text-secondary);
+  padding: 0 var(--space-3); height: var(--size-row); border-bottom: var(--size-rule) solid var(--color-border-default); }
+.t td { padding: 0 var(--space-3); height: var(--size-row); border-bottom: var(--size-rule) solid var(--color-border-subtle); }
+.t .n { text-align: right; font-family: var(--font-family-mono); font-variant-numeric: tabular-nums; }
+.t tr:hover td { background: var(--color-bg-raised); }
+.t tr.sel td { background: var(--color-bg-raised); } .t tr.sel td:first-child { box-shadow: inset 3px 0 var(--color-text-primary); }
+
+/* Banner, toast, confirmation */
+.banner { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-2) var(--space-4); border-left: 5px solid var(--color-status-neutral-fg);
+  border-block: var(--size-rule) solid var(--color-border-default); color: var(--color-text-primary); }
+.banner.warning { border-left-color: var(--color-status-warning-fg); } .banner.danger { border-left-color: var(--color-status-danger-fg); }
+.toast { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); max-width: 380px; background: var(--color-bg-raised);
+  border: var(--size-rule) solid var(--color-border-control); border-radius: var(--radius-sm); box-shadow: var(--shadow-2); }
+.modal { width: min(460px, 100%); background: var(--color-bg-surface); box-shadow: var(--shadow-3); padding: var(--space-5) var(--space-5) var(--space-4); display: grid; gap: var(--space-3); }
+.modal h2 { margin: 0; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; }
+.modal .acts { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+.scrim { background: var(--color-bg-overlay); padding: var(--space-8); display: grid; place-items: center; }
+
+/* A page error over the route's last good data: readable, muted, not operable. */
+/* Stale data (UI1.22): the tab's numbers are muted until updates resume. Screens mark
+   numbers with .num, .figure, td.num, .t .n or [data-num]. */
+[data-stale] :is(.num, .figure, td.num, .t .n, [data-num]) { color: var(--color-text-secondary); }
+.failure { display: grid; gap: var(--space-3); }
+.failure [data-dimmed] { padding: var(--space-3); border: var(--size-rule) dashed var(--color-border-subtle); border-radius: var(--radius-sm);
+  color: var(--color-text-secondary); pointer-events: none; }
+.btn:disabled { cursor: default; }
+/* Retry renders here, laid out at full width but unseen, until it succeeds. */
+.staging { visibility: hidden; position: absolute; inset: 0 0 auto; padding: inherit; box-sizing: border-box; }
+
+/* Flow map (metro): see patterns/components.md#flow-map */
+.fm-route { stroke: var(--color-route-line); fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.fm-route.warning { stroke: var(--color-status-warning-fg); } .fm-route.danger { stroke: var(--color-status-danger-fg); }
+.fm-route.neutral { stroke: var(--color-status-neutral-fg); stroke-dasharray: 2 6; }
+.fm-stn { fill: var(--color-bg-canvas); stroke: var(--color-route-station); stroke-width: var(--size-station-stroke); }
+.fm-stn.warning { stroke: var(--color-status-warning-fg); } .fm-stn.danger { stroke: var(--color-status-danger-fg); } .fm-stn.neutral { stroke: var(--color-status-neutral-fg); }
+.fm-name { fill: var(--color-text-primary); font: var(--type-small); font-weight: var(--font-weight-bold); }
+.fm-meta { fill: var(--color-text-secondary); font: var(--type-caption); }
+.fm-block { fill: var(--color-status-warning-fg); }
+.st-success { fill: var(--color-status-success-fg); } .st-warning { fill: var(--color-status-warning-fg); }
+.st-danger { fill: var(--color-status-danger-fg); } .st-neutral { fill: var(--color-status-neutral-fg); }
+/* Phone form of the flow map: the station list, problems first. */
+.stlist { display: grid; }
+.stl { display: grid; grid-template-columns: 24px 1fr auto; align-items: center; min-height: var(--size-touch); border-bottom: var(--size-rule) solid var(--color-border-subtle); }
+.ring { width: var(--size-station); height: var(--size-station); border-radius: 50%; border: 4px solid var(--color-route-station); }
+.ring.success { border-color: var(--color-status-success-fg); } .ring.warning { border-color: var(--color-status-warning-fg); }
+.ring.danger { border-color: var(--color-status-danger-fg); } .ring.neutral { border-color: var(--color-status-neutral-fg); }
+.fm-hub { fill: var(--color-plate-fill); } .fm-hub-key { fill: none; stroke: var(--color-plate-keyline); stroke-width: var(--size-plate-keyline); }
+.fm-hub-name { fill: var(--color-plate-on); font: var(--type-plate-sm); letter-spacing: var(--type-plate-sm-tracking); }
+.palette { margin: 120px auto auto; width: min(640px, calc(100% - 24px)); padding: 0; border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-raised); color: var(--color-text-primary); box-shadow: var(--shadow-3); }
+.palette::backdrop { background: var(--color-bg-overlay); }
+/* The confirmation (the only other modal): placed by the shell in the visible part of the
+   page, centred and clear of its opener; the body scrolls, the buttons stay in view. */
+dialog.confirm { position: fixed; inset: auto; margin: 0; box-sizing: border-box; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: var(--space-3); padding: var(--space-5) var(--space-5) var(--space-4); border: 0; background: var(--color-bg-surface);
+  color: var(--color-text-primary); box-shadow: var(--shadow-3); overflow: auto; }
+dialog.confirm::backdrop { background: var(--color-bg-overlay); }
+dialog.confirm h2 { margin: 0; font: var(--type-title); letter-spacing: var(--type-title-tracking); text-transform: uppercase; overflow-wrap: anywhere; }
+.confirm-body { overflow: auto; min-height: 0; display: grid; gap: var(--space-2); overflow-wrap: anywhere; }
+.confirm-body ul { margin: 0; padding-left: var(--space-4); }
+.confirm-typed { display: grid; gap: var(--space-1); margin: 0; }
+.confirm-typed input { min-height: var(--size-row); padding: 0 var(--space-2); border: var(--size-rule) solid var(--color-border-control); border-radius: var(--radius-sm); background: var(--color-bg-sunken); color: inherit; font: inherit; }
+.confirm-progress, .confirm-message p { margin: 0; }
+.confirm-message { display: grid; gap: var(--space-1); }
+dialog.confirm .acts { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+@media (max-width: 640px) { dialog.confirm .acts { flex-direction: column; align-items: stretch; } }
+.done-notice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); padding: var(--space-2) var(--space-3);
+  border-left: 5px solid var(--color-status-success-fg); border-top: var(--size-rule) solid var(--color-border-subtle); border-bottom: var(--size-rule) solid var(--color-border-subtle); }
+.done-title { margin: 0; }
+.done-notice .btn { margin-left: auto; }
+.palette input { width: 100%; padding: 14px 16px; border: 0; border-bottom: var(--size-rule) solid var(--color-border-subtle); background: none; color: inherit; font: var(--type-body); outline: none; }
+.palette [role="listbox"] { max-height: 50vh; overflow-y: auto; padding: 6px 0; }
+.palette-group { padding: 8px 16px 4px; font: var(--type-small); color: var(--color-text-secondary); }
+.palette-option { display: flex; justify-content: space-between; gap: 12px; padding: 8px 16px; cursor: pointer; }
+.palette-option[aria-selected="true"] { background: var(--color-accent-tint); }
+.palette-option span:last-child { font: var(--type-small); }
+.palette-empty { padding: 12px 16px; }
+.palette-foot { display: flex; justify-content: space-between; gap: 12px; padding: 10px 16px; border-top: var(--size-rule) solid var(--color-border-subtle); font: var(--type-small); }
+.segmented { display: inline-flex; gap: 2px; }
+.segmented button { padding: 2px 8px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-text-tertiary); font: var(--type-small); font-family: var(--font-family-mono); cursor: pointer; }
+.segmented button[aria-pressed="true"] { background: var(--color-bg-raised); color: var(--color-text-primary); }
+
+/* Sign-in (frame 32): the only thing on the page while signed out. */
+.signin { flex: 1; min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+.signin[hidden] { display: none; }
+.signin-card { width: min(400px, 100%); display: grid; gap: 16px; padding: 26px; }
+.signin-name { font: var(--type-title); letter-spacing: var(--type-title-tracking); }
+.signin-host { margin-top: -14px; font: var(--type-body); color: var(--color-text-secondary); }
+.signin form { display: grid; gap: 8px; margin-top: 12px; }
+.signin input { min-height: var(--size-touch); font-family: var(--font-family-mono); background: var(--color-bg-surface); border-color: var(--color-border-default); }
+.signin .btn { min-height: 40px; margin-top: 8px; }
+.signin label { font: var(--type-small); color: var(--color-text-secondary); }
+.signin .btn { justify-content: center; }
+.signin-error { color: var(--color-status-danger-fg); font: var(--type-small); }
+.signin-notice { color: var(--color-text-secondary); font: var(--type-small); }
+.signin-note { font: var(--type-small); }
+.signin-note code { font-family: var(--font-family-mono); }
+
+@media (max-width: 640px) {
+  .palette { margin-top: 12px; }
+  .palette-foot span:last-child { display: none; }
+}
+@media (pointer: coarse) {
+  .palette-option { min-height: var(--size-touch); align-items: center; }
+  .signin .btn { min-height: var(--size-touch); }
+}
