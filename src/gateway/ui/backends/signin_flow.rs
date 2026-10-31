@@ -436,6 +436,8 @@ pub(super) async fn decide(
         client,
         caller,
     } = taken;
+    #[cfg(test)]
+    backend.sign_in.commit_pause.pause().await;
     let cancel = tokio_util::sync::CancellationToken::new();
     let by = Instant::now() + backend.sign_in_windows().confirm;
     let saved = client.save_confirmed(grant, held_for, &cancel, by).await;

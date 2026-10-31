@@ -29,6 +29,15 @@ pub(crate) struct SignInState {
     /// before it stores the grant.
     #[cfg(all(test, feature = "webui"))]
     pub(crate) hold_pause: crate::test_pause::Slot,
+    /// Where a test holds a decision's outcome before the flow task sees it.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) outcome_pause: crate::test_pause::Slot,
+    /// Where a test holds a confirm after it took the grant, before it saves.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) commit_pause: crate::test_pause::Slot,
+    /// Where a test holds a start at the top of client discovery.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) discovery_pause: crate::test_pause::Slot,
 }
 
 impl SignInState {
@@ -52,6 +61,12 @@ impl SignInState {
             expiry_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             hold_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            outcome_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            commit_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            discovery_pause: crate::test_pause::Slot::default(),
         }
     }
 }

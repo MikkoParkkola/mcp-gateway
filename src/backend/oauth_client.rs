@@ -177,6 +177,8 @@ impl Backend {
     /// endpoint, or discovery fails.
     pub(crate) async fn sign_in_client(&self) -> Result<Arc<OAuthClient>> {
         #[cfg(test)]
+        self.sign_in.discovery_pause.pause().await;
+        #[cfg(test)]
         if let Some(client) = self.sign_in.installed_client.lock().clone() {
             return Ok(client);
         }

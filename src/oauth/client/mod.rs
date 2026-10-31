@@ -64,6 +64,10 @@ pub struct OAuthClient {
     /// one.
     sign_in_status: Option<Arc<sign_in::SignInStatus>>,
 
+    /// Where a test holds a login at the top of its client registration.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) registration_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -235,6 +239,8 @@ impl OAuthClient {
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
             destination: crate::security::ssrf::DestinationPolicy::Configured,
             sign_in_status: None,
+            #[cfg(all(test, feature = "webui"))]
+            registration_pause: crate::test_pause::Slot::default(),
         }
     }
 

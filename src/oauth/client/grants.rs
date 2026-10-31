@@ -599,6 +599,8 @@ impl OAuthClient {
             backend: self.backend_name().to_string(),
         };
 
+        #[cfg(all(test, feature = "webui"))]
+        self.registration_pause.pause().await;
         // Now ensure we have a client ID, passing the actual callback URL for
         // registration. A cancel during registration ends it there: no
         // browser opens, and the listener is closed before this returns.
