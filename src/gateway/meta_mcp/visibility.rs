@@ -369,7 +369,7 @@ impl MetaMcp {
         is_admin: bool,
     ) -> Result<()> {
         if !is_admin
-            && let Some(capabilities) = self.get_capabilities()
+            && let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && capabilities
                 .with_definition(

@@ -214,7 +214,7 @@ impl MetaMcp {
         session_id: Option<&str>,
     ) -> Option<Error> {
         let defined = self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
         self.active_profile(session_id)
             .check(server, tool)
@@ -236,7 +236,7 @@ impl MetaMcp {
         is_admin: bool,
     ) -> Option<Error> {
         let defined = self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool));
         if !defined {
             return None;
@@ -639,7 +639,7 @@ impl MetaMcp {
             // stage kept first stands.
             note_denial_code(server, tool, refusal.to_rpc_code());
         }
-        if let Some(cap) = self.get_capabilities()
+        if let Some(cap) = self.caller_capabilities()
             && server == cap.name
         {
             // A capability the caller may not reach answers as one that is
