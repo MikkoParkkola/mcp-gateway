@@ -54,7 +54,7 @@ src/config_persistence_atomic_windows.rs	prepare_from	source_refusal	1	no-record
 src/config_persistence_keyedit_shape.rs	place	attach_refusal	1	no-record	a config write
 src/config_reload/env_poll.rs	report_failure	is_posture_refusal	1	not-delivered	predicate (env-file reload)
 src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	config reload: a key edit that would flip the running multi-user status is refused before it applies
-src/config_reload/grant_reload.rs	reload_identity_grants	report_grants_refusal	1	no-record	identity grants file reload
+src/config_reload/grant_reload.rs	read_grant_file	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
 src/config_reload/reload_context.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
@@ -62,6 +62,7 @@ src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1
 src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
+src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	no-record	config reload: a security field only a restart applies
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
@@ -275,7 +276,7 @@ src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-
 src/gateway/ui/tool_call.rs	parse	refusal	4	no-record	admin UI tool route: a body too large, unreadable or invalid, before any dispatch; admin_action record only
 src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs refused, recorded); admin_action records the disposition
 src/gateway/ui_call.rs	refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
-src/identity_grants.rs	read_identity_grants_file	parse_refusal	1	no-record	identity grants file load
+src/identity_grants.rs	read_identity_grants_file_with_bytes	parse_refusal	1	no-record	identity grants file load
 src/identity_propagation/account_strategies_resolve.rs	resolve	audit_refusal	3	not-delivered	audit row
 src/identity_propagation/account_strategies_resolve.rs	resolve	transient_mint_refusal	1	not-a-decision	a credential mint failure
 src/identity_propagation/account_strategies_resolve.rs	revalidate	transient_mint_refusal	1	not-a-decision	a credential mint failure
@@ -310,6 +311,9 @@ src/provider/mcp_provider.rs	invoke	blocked_tool_refusal	1	feeds	the provider's 
 src/registry/mod.rs	build_index	refuse_unloadable	1	no-record	registry index build
 src/registry/mod.rs	fetch_capability	ssrf_refusal	1	no-record	registry fetch (admin), not a call
 src/secret_injection.rs	inject_rules	refusal	3	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
+src/security/decision_record.rs	decision	refusal	1	not-delivered	reads the noted refusing check for the audit record
+src/security/decision_record.rs	has_refusal	refusal	1	not-delivered	predicate over the noted refusing check
+src/security/decision_record.rs	refusal_kind	refusal	1	not-delivered	reads the noted refusing check for the audit record
 src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capability-refusals	an OAuth destination refusal, reached in a call by a token refresh (refresh_flight); fixed by the capability-refusals follow-up
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
