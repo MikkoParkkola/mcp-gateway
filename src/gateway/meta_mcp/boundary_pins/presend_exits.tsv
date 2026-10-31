@@ -5,11 +5,12 @@ src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	1	0	excl
 src/gateway/meta_mcp/invoke/bridge_settle.rs	classify_bridged_dispatch_error	1	0	excluded	a classifier: its NotAdmitted is marked where the bridge settles it (bridge_legacy_ask)
 src/gateway/meta_mcp/invoke/intake.rs	directives	0	1	marks	an unparsable argument object: refused before the backend
 src/gateway/meta_mcp/invoke/keys.rs	admit_keys	0	1	settles	an unproven stored replay: refused before the backend (its served exits settle through settle_pre_send)
-src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	2	2	marks	the relay refusal and a cold-slot NotAdmitted round
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	settle_bridged	2	1	marks	every bridged exchange that did not complete: refused before its backend (marked, released) only when nothing was sent
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_refused_submit	1	0	excluded	a task submit refused before its task exists: no row, no invocation, no call recorded
 src/gateway/meta_mcp/invoke/nonce_settle.rs	refused_submit_answer	1	0	excluded	a task submit refused before its task is begun: no row, no invocation, no call recorded
 src/gateway/meta_mcp/invoke/nonce_settle.rs	settle_pre_send	4	1	marks	the one pre-send settlement: marks every refusal exit, Served clears
-src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	2	1	marks	a dispatch error the backend never saw
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_unsent	1	1	marks	a dispatch that provably sent nothing: marked, its key released
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	1	0	excluded	decides with unsent; both of its refusals are marked in settle_unsent
 src/gateway/meta_mcp/invoke/resolve.rs	resolve	1	3	marks	a resolution that answers for itself or fails, and the cooldown after the credential
 src/gateway/meta_mcp/invoke/stored_proof.rs	lift_deferred	0	1	marks	a deferred lift refused at its serving point: nothing replayed, nothing sent
 src/gateway/meta_mcp/invoke/stored_proof.rs	prove_target_live	1	0	excluded	the repeated-task account check: runs outside any invocation and records no call
