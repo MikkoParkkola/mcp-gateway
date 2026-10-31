@@ -1,9 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Falsifier: over HTTP, does a fresh same-key call after an input-required
-//! round 1 reach the backend again? A verified modern caller that declared
-//! form elicitation, on the meta route (`/mcp`, `gateway_invoke`) and on the
-//! direct route (`/mcp/{name}`). Each row prints what the client saw.
+//! Over HTTP, a same-key call after a backend stopped to ask. A verified
+//! modern caller, on the meta route (`/mcp`, `gateway_invoke`) and on the
+//! direct route (`/mcp/{name}`). Each row prints what the client saw and
+//! counts the backend's `tools/call` sends.
 
 use axum::body::to_bytes;
 use axum::http::StatusCode;
@@ -13,6 +13,9 @@ use tower::ServiceExt;
 use super::direct_guards_fixture::{Answer, Fx, fixture};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+
+const KEY: &str = "k-question";
+const UNAVAILABLE: &str = "Secured execution result is unavailable";
 
 fn alice() -> VerifiedIdentity {
     VerifiedIdentity {
@@ -24,17 +27,31 @@ fn alice() -> VerifiedIdentity {
     }
 }
 
-/// One modern `tools/call` named `name` on `uri` as alice, under `key`.
-async fn call(fx: &Fx, uri: &str, name: &str, arguments: Value, key: &str) -> (StatusCode, Value) {
-    let params = json!({
+fn form() -> Value {
+    json!({"elicitation": {"form": {}}})
+}
+
+/// One modern `tools/call` named `name` on `uri` as alice under `KEY`,
+/// declaring `caps`, with `extra` merged into the params (retry fields).
+async fn call(
+    fx: &Fx,
+    (uri, name): (&str, &str),
+    arguments: &Value,
+    caps: Value,
+    extra: Value,
+) -> (StatusCode, Value) {
+    let mut params = json!({
         "name": name,
         "arguments": arguments,
         "_meta": {
-            IDEMPOTENCY_KEY_META: key,
+            IDEMPOTENCY_KEY_META: KEY,
             "io.modelcontextprotocol/protocolVersion": "2026-07-28",
-            "io.modelcontextprotocol/clientCapabilities": {"elicitation": {"form": {}}},
+            "io.modelcontextprotocol/clientCapabilities": caps,
         },
     });
+    if let (Some(params), Some(extra)) = (params.as_object_mut(), extra.as_object()) {
+        params.extend(extra.clone());
+    }
     let mut request = axum::http::Request::builder()
         .method("POST")
         .uri(uri)
@@ -59,38 +76,86 @@ fn dispatched(fx: &Fx) -> usize {
     fx.calls.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Round 1 then a fresh same-key call on `uri`; the backend count after it.
-async fn round_then_retry(uri: &str, name: &str, arguments: Value) -> usize {
+const DIRECT: (&str, &str) = ("/mcp/alpha", "read");
+
+fn no_args() -> Value {
+    json!({})
+}
+
+/// T4: the meta route, unchanged. A fresh same-key call after a relayed
+/// question is answered 409 and does not reach the backend.
+#[tokio::test]
+async fn t4_meta_fresh_same_key_call_after_a_question_is_refused() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let (status, first) = call(&fx, uri, name, arguments.clone(), "k-falsify").await;
-    println!("{uri} round 1: {status} {first}");
-    assert_eq!(
-        first["result"]["resultType"], "input_required",
-        "premise: round 1 asks: {first}"
+    let target = ("/mcp", "gateway_invoke");
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let (status, first) = call(&fx, target, &args, form(), json!({})).await;
+    println!("meta round 1: {status} {first}");
+    assert_eq!(first["result"]["resultType"], "input_required", "{first}");
+    let (status, again) = call(&fx, target, &args, form(), json!({})).await;
+    println!("meta fresh same-key call: {status} {again}");
+    assert_eq!(dispatched(&fx), 1, "the meta route ran the tool again");
+    assert!(again.to_string().contains(UNAVAILABLE), "{again}");
+}
+
+/// T2: after the refused fresh call, round 1's continuation runs once and
+/// completes; replayed identically under the key it is served its stored
+/// completion, not run.
+#[tokio::test]
+async fn t2_round_1s_continuation_runs_after_a_refused_retry() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let (_, first) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    let state = first["result"]["requestState"]
+        .as_str()
+        .unwrap_or_else(|| panic!("premise: a continuation: {first}"))
+        .to_owned();
+    let (_, again) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    println!("direct fresh same-key call: {again}");
+    let resume = json!({
+        "requestState": state,
+        "inputResponses": {"k1": {"action": "accept", "content": {"account": "work"}}},
+    });
+    let (status, done) = call(&fx, DIRECT, &no_args(), form(), resume.clone()).await;
+    println!("direct continuation: {status} {done}");
+    assert!(
+        done.get("error").is_none(),
+        "the continuation failed: {done}"
     );
-    assert_eq!(dispatched(&fx), 1, "premise: one tools/call");
-    let (status, again) = call(&fx, uri, name, arguments, "k-falsify").await;
-    println!("{uri} fresh same-key call: {status} {again}");
-    let count = dispatched(&fx);
-    println!("{uri} backend count: {count}");
-    count
+    assert_eq!(
+        dispatched(&fx),
+        2,
+        "round 1 + its continuation, nothing else"
+    );
+    let (status, replay) = call(&fx, DIRECT, &no_args(), form(), resume).await;
+    println!("direct keyed replay: {status} {replay}");
+    assert!(replay.get("error").is_none(), "{replay}");
+    assert_eq!(replay["result"]["content"], done["result"]["content"]);
+    assert_eq!(dispatched(&fx), 2, "the replay ran");
 }
 
-/// F1, pass: count 1 (the outer layer answers the fresh call).
+/// T3 (preservation): a question the client did not declare is refused
+/// (-32021); declaring it and retrying under the same key runs.
 #[tokio::test]
-async fn f1_meta_route_fresh_same_key_call_after_a_question() {
-    let count = round_then_retry(
-        "/mcp",
-        "gateway_invoke",
-        json!({"server": "alpha", "tool": "read", "arguments": {}}),
-    )
-    .await;
-    assert_eq!(count, 1, "the meta route ran the tool again");
+async fn t3_a_direct_undeclared_refusal_frees_the_key() {
+    let fx = fixture(Answer::AskOnce, |_| {}).await;
+    let (_, refused) = call(&fx, DIRECT, &no_args(), json!({}), json!({})).await;
+    println!("direct undeclared: {refused}");
+    assert_eq!(refused["error"]["code"], -32021, "premise: {refused}");
+    let (_, retried) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    println!("direct declared retry: {retried}");
+    assert!(retried.get("error").is_none(), "{retried}");
+    assert_eq!(dispatched(&fx), 2, "the declared retry did not run");
 }
 
-/// F2, pass: count 2 (the double run is real on the direct route).
+/// T3b (preservation): a question the gateway cannot hand back as a
+/// continuation (a malformed round) frees the key: a same-key retry runs.
 #[tokio::test]
-async fn f2_direct_route_fresh_same_key_call_after_a_question() {
-    let count = round_then_retry("/mcp/alpha", "read", json!({})).await;
-    assert_eq!(count, 2, "the direct route did not run the tool again");
+async fn t3b_a_question_without_a_continuation_frees_the_key() {
+    let fx = fixture(Answer::AskMalformed, |_| {}).await;
+    let (_, first) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    println!("direct malformed round: {first}");
+    assert!(first["result"].get("requestState").is_none(), "{first}");
+    let (_, again) = call(&fx, DIRECT, &no_args(), form(), json!({})).await;
+    println!("direct retry: {again}");
+    assert_eq!(dispatched(&fx), 2, "the retry was refused: {again}");
 }

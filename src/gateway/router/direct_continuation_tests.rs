@@ -227,12 +227,12 @@ async fn full_store() -> Fx {
     .await
 }
 
-/// R7 (preservation, green on the base too: the cache already refuses a
-/// non-final result): an interim answer is not settled under the
-/// idempotency key, so re-sending the opening call under the same key reaches
-/// the backend again rather than replaying the stored question.
+/// R7: a relayed question keeps the call's execution entry. The backend
+/// received round 1 and may have acted, so a fresh same-key call is answered
+/// "unavailable" as on the meta route, and the backend is not called again;
+/// only the continuation can go on. The stored question is never replayed.
 #[tokio::test]
-async fn r7_an_interim_answer_does_not_settle_the_key() {
+async fn r7_an_interim_answer_keeps_the_key_from_a_fresh_call() {
     for backend in BACKENDS {
         let fx = fixture(Answer::AskOnce, |_| {}).await;
         let opening = json!({"_meta": { IDEMPOTENCY_KEY_META: format!("k-8078-{backend}") }});
@@ -244,8 +244,14 @@ async fn r7_an_interim_answer_does_not_settle_the_key() {
         let (_, again) = call(&fx, backend, Some("alice"), opening).await;
         assert_eq!(
             dispatched(&fx),
-            2,
-            "{backend}: answered from the cache: {again}"
+            1,
+            "{backend}: a fresh same-key call ran the tool again: {again}"
+        );
+        assert!(
+            again
+                .to_string()
+                .contains("Secured execution result is unavailable"),
+            "{backend}: {again}"
         );
         assert!(
             !again.to_string().contains(BACKEND_STATE),
