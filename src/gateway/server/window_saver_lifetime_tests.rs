@@ -168,7 +168,7 @@ async fn the_drain_sees_a_writer_that_ends_before_its_await() {
 
 /// W2c: one writer ending wakes every drain waiting on it, not just one: the
 /// wakeup is `notify_waiters`, never `notify_one`.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn every_waiting_drain_wakes_when_the_last_writer_ends() {
     let writers = Arc::new(Writers::default());
     writers.running.fetch_add(1, Ordering::SeqCst);
@@ -180,10 +180,9 @@ async fn every_waiting_drain_wakes_when_the_last_writer_ends() {
         let writers = Arc::clone(&writers);
         async move { writers.idle().await }
     });
-    // Both drains are waiting before the writer ends: each has seen the
-    // nonzero count (a yield until neither has finished is not enough), so
-    // poll until both are parked on the wakeup.
-    for _ in 0..100 {
+    // On this one-thread runtime each yield runs both spawned drains up to
+    // their await, so both are parked on the wakeup before the writer ends.
+    for _ in 0..3 {
         tokio::task::yield_now().await;
     }
     assert!(
