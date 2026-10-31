@@ -25,8 +25,8 @@ use crate::backend::Backend;
 use crate::gateway::auth::{AuthenticatedClient, Now, SessionCheck, SessionLimits, Touch};
 use crate::gateway::record_principal::sign_in_owner;
 use crate::gateway::router::AppState;
-use crate::gateway::ui::errors::{admin_auth_required, flat_error, structured_error};
-use crate::gateway::ui::is_admin;
+use crate::gateway::ui::errors::{flat_error, structured_error};
+use crate::gateway::ui::guard::Guard;
 
 /// What A12 tells a person whose dashboard is not on the gateway host.
 const GATEWAY_HOST_REASON: &str = "open the dashboard at localhost or 127.0.0.1 on the gateway host to sign in (through a tunnel, forward the callback port too)";
@@ -168,6 +168,7 @@ pub(in crate::gateway::ui) fn with_time(
 /// `POST /ui/api/backends/:name/signin` — start a sign-in.
 pub(super) async fn start_sign_in(
     State(state): State<Arc<AppState>>,
+    guard: Guard,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
     uri: Uri,
@@ -175,8 +176,8 @@ pub(super) async fn start_sign_in(
     body: Bytes,
 ) -> Response {
     let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     if let Some(refused) = refuse_body(&headers) {
         return refused;
@@ -271,6 +272,7 @@ struct ConfirmBody {
 /// `POST /ui/api/backends/:name/signin/confirm` — confirm or cancel it.
 pub(super) async fn confirm_sign_in(
     State(state): State<Arc<AppState>>,
+    guard: Guard,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
     uri: Uri,
@@ -278,8 +280,8 @@ pub(super) async fn confirm_sign_in(
     body: Bytes,
 ) -> Response {
     let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     if let Some(refused) = refuse_body(&headers) {
         return refused;
