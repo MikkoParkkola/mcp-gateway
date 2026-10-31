@@ -81,7 +81,7 @@ fn the_never_sent_list_is_the_reviewed_one() {
     // only in meta_mcp/invoke/dispatch.rs (a name that is both a backend and
     // the capability, refused while routing, before any send), from #4414.
     // Forbidden and GatewayRefused: every construction and builder call is a
-    // reviewed pre-send site in error_pre_send_scan_tests.rs.
+    // reviewed pre-send site in error_pre_send_scan_refusal_tests.rs.
     const REVIEWED: [&str; 14] = [
         "AmbiguousBackend",
         "AuthorizationCancelled",

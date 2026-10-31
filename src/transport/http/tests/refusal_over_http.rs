@@ -28,10 +28,12 @@ fn healing_server(
         let mut listener = Some(listener);
         while let Some(open) = listener.as_ref() {
             let (stream, _) = open.accept().expect("accept");
-            let (_, headers, body) = read_request(&stream);
+            let (first, headers, body) = read_request(&stream);
             served += 1;
             let method = body["method"].as_str().unwrap_or_default().to_owned();
-            if method == "initialize" {
+            if !first.starts_with("POST") {
+                respond(&stream, "405 Method Not Allowed", "", "");
+            } else if method == "initialize" {
                 let result = json!({"jsonrpc": "2.0", "id": body["id"], "result": {
                     "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                     "serverInfo": {"name": "mock", "version": "0"}}});
