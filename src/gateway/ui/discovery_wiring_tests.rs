@@ -331,6 +331,12 @@ async fn a_timed_out_scan_keeps_the_cached_decisions() {
     tokio::time::advance(crate::discovery::listing::CACHE_WINDOW).await;
     until("a scan starts and hangs", || source.scans() > scans).await;
     tokio::time::advance(crate::discovery::listing::SCAN_TIMEOUT).await;
+    // The GET waits for the cache's lock, so it answers once the timed-out
+    // scan is recorded: the cached listing, marked stale. Only then may the
+    // fake clock move on, or the timeout is recorded at the later time.
+    let (status, body) = admin_get(&state, "/ui/api/discovery").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["stale"], true, "{body}");
     let set = state.meta_mcp.decisions().expect("a set");
     assert!(set.view().is_ok(), "the count stays a number");
     assert!(adopt_open(&state, "r3-a"), "the cached item is kept");
