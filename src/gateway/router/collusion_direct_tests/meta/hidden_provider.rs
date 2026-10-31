@@ -5,10 +5,7 @@
 //! on everything it would forward, `_meta` included, never on its arguments
 //! alone as a capability's call is.
 
-use std::collections::HashMap;
-
 use super::*;
-use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
 
 /// A name no backend or provider registers.
 const UNREGISTERED: &str = "gamma";
@@ -24,25 +21,40 @@ fn cert_of(who: &str) -> crate::mtls::CertIdentity {
     }
 }
 
-/// The provider `caps` with one capability, `cap_open`.
-fn open_caps() -> Arc<crate::capability::CapabilityBackend> {
+/// An env key no fixture sets: the keyed capability's credential.
+const UNSET_KEY: &str = "HIDDEN_PROVIDER_RELAY_ROW_UNSET_KEY";
+
+/// The provider `caps` with one capability, `cap_keyed`, whose required key
+/// [`UNSET_KEY`] is not set. A capability whose credential is missing is not
+/// listed (`CapabilityBackend::get_tools`), so `caps` lists nothing and the
+/// caller's rule admits none of its tools: it is hidden by its catalogue,
+/// with no routing profile. It still defines `cap_keyed`.
+fn keyless_caps() -> Arc<crate::capability::CapabilityBackend> {
     let caps = Arc::new(crate::capability::CapabilityBackend::new(
         "caps",
         Arc::new(crate::capability::CapabilityExecutor::new()),
     ));
-    let definition = crate::capability::parse_capability(
-        "name: cap_open\n\
-         description: Open\n\
-         providers:\n\
+    let definition = crate::capability::parse_capability(&format!(
+        "name: cap_keyed\n\
+             description: Read with a key\n\
+             auth:\n\
+             \x20 required: true\n\
+             \x20 type: api_key\n\
+             \x20 key: env:{UNSET_KEY}\n\
+             providers:\n\
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
          \x20     base_url: https://example.invalid\n\
-         \x20     path: /open\n",
-    )
+             \x20     path: /read\n"
+    ))
     .expect("the capability parses");
     caps.register_capability(definition)
         .expect("the capability registers");
+    assert!(
+        caps.get_tools().is_empty() && caps.get("cap_keyed").is_some(),
+        "premise: the keyless capability is defined but not listed"
+    );
     caps
 }
 
@@ -72,10 +84,11 @@ fn admit_both() -> crate::mtls::MtlsPolicy {
 }
 
 /// The relay fixture (detection blocking, `alpha:read` its source) with two
-/// unscoped keys, `a` (alice) and `b` (bob), and the provider `caps`
-/// (`cap_open`) under a default profile that leaves it out, for certificates
-/// whose rules admit everything: `caps` is hidden from either caller
-/// presenting it, and nothing refuses it before the route stage.
+/// unscoped keys, `a` (alice) and `b` (bob), and the keyless provider `caps`
+/// ([`keyless_caps`]), for certificates whose rules admit everything: `caps`
+/// is hidden from either caller presenting one, by its empty catalogue, and
+/// no rule or profile refuses `cap_keyed` by name, so the call goes on to
+/// the send stage as the unregistered name's does.
 async fn hidden_provider_fixture() -> Fixture {
     let unscoped = |secret: &[u8], name: &str| ApiKeyConfig {
         backends: vec!["*".to_string()],
@@ -130,15 +143,7 @@ async fn hidden_provider_fixture() -> Fixture {
     meta.share_keyring_with_for_test(&firewall);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
-    let profiles = HashMap::from([(
-        "nocaps".to_string(),
-        RoutingProfileConfig {
-            deny_backends: Some(vec!["caps".to_string()]),
-            ..Default::default()
-        },
-    )]);
-    let meta = meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "nocaps"));
-    meta.set_capabilities(open_caps());
+    meta.set_capabilities(keyless_caps());
     state_mut.firewall = Some(firewall);
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.mtls_policy = Arc::new(admit_both());
@@ -217,7 +222,7 @@ async fn a_relay_in_meta_to_a_hidden_provider_is_refused_as_for_an_unregistered_
         "control: a relay in `_meta` to a visible backend was not refused: {}",
         visible.1
     );
-    let call = |server| (server, "cap_open", json!({"text": "hello"}));
+    let call = |server| (server, "cap_keyed", json!({"text": "hello"}));
     let before = crate::capability::CapabilityBackend::executed_for_test();
     let hidden = invoke_as_agent(&fx, "b", call("caps"), &relay).await;
     let unregistered = invoke_as_agent(&fx, "b", call(UNREGISTERED), &relay).await;
