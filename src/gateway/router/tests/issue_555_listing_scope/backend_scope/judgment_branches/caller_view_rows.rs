@@ -167,9 +167,10 @@ enum Called {
 /// A task of `cap_keyed` on `caps`, `called` as given, submitted while its
 /// key is set, with `after` landing as the worker starts its dispatch
 /// (`None` changes nothing): the settled `tasks/get` (task id, trace ids and
-/// instants masked) and the capability executions the run made.
+/// instants masked), the capability executions the run made, and how many
+/// operator warnings named the call a withheld surfaced tool.
 #[cfg(feature = "firewall")]
-async fn keyed_run(called: Called, after: Option<AfterRun>, key: &str) -> (String, usize) {
+async fn keyed_run(called: Called, after: Option<AfterRun>, key: &str) -> (String, usize, usize) {
     let surfaced = match called {
         Called::Invoke => Vec::new(),
         Called::Surfaced => vec![crate::config::SurfacedToolConfig {
@@ -201,6 +202,7 @@ async fn keyed_run(called: Called, after: Option<AfterRun>, key: &str) -> (Strin
         )),
         None => {}
     });
+    let (_logs, logged) = warnings();
     let before = executed();
     let id = match called {
         Called::Invoke => submit_task(&router, "caps", "cap_keyed", key).await,
@@ -213,7 +215,43 @@ async fn keyed_run(called: Called, after: Option<AfterRun>, key: &str) -> (Strin
     let masked = trace
         .replace_all(&settled.replace(id.as_str(), "TASK"), "gw-ID")
         .into_owned();
-    (instant.replace_all(&masked, "AT").into_owned(), ran)
+    let withheld = String::from_utf8_lossy(&logged.lock().expect("log buffer"))
+        .matches("Surfaced tool withheld from a call by its name")
+        .count();
+    (
+        instant.replace_all(&masked, "AT").into_owned(),
+        ran,
+        withheld,
+    )
+}
+
+/// The warnings written on this thread while the guard lives, as text.
+/// Thread-local: the run's worker shares the test's current-thread runtime.
+#[cfg(feature = "firewall")]
+fn warnings() -> (
+    tracing::subscriber::DefaultGuard,
+    Arc<std::sync::Mutex<Vec<u8>>>,
+) {
+    struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    crate::test_log_capture::keep_interest_open();
+    let buffer = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writer = Arc::clone(&buffer);
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(move || Sink(Arc::clone(&writer)))
+        .finish();
+    (tracing::subscriber::set_default(subscriber), buffer)
 }
 
 /// The task worker judges hiding as its caller at run time: a provider whose
@@ -239,21 +277,29 @@ async fn a_surfaced_task_whose_provider_is_hidden_before_its_run_settles_as_one_
 }
 
 /// [`keyed_run`] three times, `called` alike: unchanged (the control),
-/// hidden and removed. The hidden run executes nothing and settles as the
-/// removed one.
+/// hidden and removed. The hidden run executes nothing, settles as the
+/// removed one, and leaves the operator the removed one's record: a pinned
+/// target recorded absent is never logged as a surfaced tool withheld for
+/// lack of a listing.
 #[cfg(feature = "firewall")]
 async fn assert_hidden_run_settles_as_removed(called: Called, key: &str) {
-    let (control, control_ran) = keyed_run(called, None, &format!("{key}-c")).await;
+    let (control, control_ran, _) = keyed_run(called, None, &format!("{key}-c")).await;
     assert!(
         control_ran > 0 && control.contains(MARKER),
         "control: the visible provider's run did not execute: {control}"
     );
-    let (hidden, hidden_ran) = keyed_run(called, Some(AfterRun::Hide), &format!("{key}-h")).await;
-    let (removed, _) = keyed_run(called, Some(AfterRun::Unregister), &format!("{key}-r")).await;
+    let (hidden, hidden_ran, hidden_logged) =
+        keyed_run(called, Some(AfterRun::Hide), &format!("{key}-h")).await;
+    let (removed, _, removed_logged) =
+        keyed_run(called, Some(AfterRun::Unregister), &format!("{key}-r")).await;
     assert_eq!(hidden_ran, 0, "the hidden provider ran: {hidden}");
     assert_eq!(
         hidden, removed,
         "a task whose provider was hidden before its run settles unlike a removed one"
+    );
+    assert_eq!(
+        hidden_logged, removed_logged,
+        "the operator's record of a hidden run differs from a removed one's"
     );
 }
 
