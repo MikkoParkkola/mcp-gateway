@@ -186,6 +186,12 @@ async fn a_final_write_stalled_past_its_bound_leaves_the_segment_unclean() {
         "an unlanded close reads clean"
     );
     drop(release);
+    // The released close lands on its detached thread; wait for it before
+    // the rig drops its directory, or the write rebuilds the removed folder.
+    assert!(
+        wait_for(|| rig.segments().first().is_some_and(|s| s.closed_cleanly)),
+        "the released close never landed"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
