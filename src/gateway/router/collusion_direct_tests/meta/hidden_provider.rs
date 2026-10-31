@@ -59,7 +59,10 @@ async fn hidden_provider_fixture() -> Fixture {
     }));
     assert!(state_mut.backends.register(alpha));
     let window = Duration::from_secs(600);
+    // The suite fixture's firewall: a wildcard `allow`, which must not soften
+    // a relay block.
     let config = FirewallConfig {
+        rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").expect("rules"),
         collusion: CollusionConfig {
             action: CollusionAction::Block,
             window_secs: window.as_secs(),
