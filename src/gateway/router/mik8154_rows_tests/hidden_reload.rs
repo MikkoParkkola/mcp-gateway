@@ -513,3 +513,41 @@ async fn a_hidden_passthrough_backend_is_sanitized_as_an_unregistered_one() {
     );
     assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
 }
+
+/// The two-step playbook `pb` (`alpha`, then `second`) run as a task, the
+/// certificate's rule denying `alpha-pt` and `gamma` by name. Intake defers a
+/// step the caller cannot see, so step 2 is judged in the worker's run.
+/// Returns the answer with `second` masked, and the sends.
+async fn deferred_step(second: &str, key: &str) -> (String, usize) {
+    let script = Script::new();
+    let definition = playbook_definition(["alpha", second]);
+    let fx = Box::pin(super::super::direct_guards_fixture::fixture_built_on(
+        Arc::clone(&script) as Arc<dyn Transport>,
+        move |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+    ))
+    .await;
+    let fx = with_rule(fx, &["alpha-pt", "gamma"]);
+    warm(&fx, &["alpha", "alpha-pt"]);
+    let args = json!({"name": "pb", "arguments": {"x": "v"}});
+    let id = submit(&fx, "gateway_run_playbook", args, key).await;
+    let body = settled(&fx, &id, &["working"]).await;
+    let sent = script.calls.load(Ordering::SeqCst);
+    (answer(&body, &id).replace(second, "SECOND"), sent)
+}
+
+/// A task's step on a backend the caller's rule hides by name answers, in the
+/// worker's run, as a step on an unregistered name the same rule denies, and
+/// is sent nothing.
+#[tokio::test]
+async fn a_task_step_on_a_backend_hidden_by_name_answers_as_an_unregistered_one() {
+    let (hidden, hidden_sent) = Box::pin(deferred_step("alpha-pt", "hr6-h")).await;
+    let (unregistered, unregistered_sent) = Box::pin(deferred_step("gamma", "hr6-u")).await;
+    assert_eq!(unregistered_sent, 1, "premise: only step 1 was sent");
+    assert_eq!(hidden_sent, 1, "hidden: step 2 was sent");
+    assert_eq!(hidden, unregistered, "hidden and unregistered answer alike");
+}
