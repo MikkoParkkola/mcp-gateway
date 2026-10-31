@@ -54,9 +54,10 @@ pub(crate) fn bin_of(elapsed: Duration) -> u8 {
     u8::try_from(EDGES_NS.partition_point(|edge| *edge <= ns)).unwrap_or(BINS - 1)
 }
 
-/// The value a bin reports, in ms: the geometric midpoint of an interior
-/// bin (within a factor of √1.25 of any sample in it), the edge of the two
-/// open bins.
+/// The value a bin reports, in whole ms: the geometric midpoint of an
+/// interior bin, rounded (within a factor of √1.25 of any sample in it, plus
+/// up to 0.5 ms of rounding), the edge of the two open bins (no relative
+/// bound).
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,

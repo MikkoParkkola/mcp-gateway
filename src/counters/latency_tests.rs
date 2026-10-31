@@ -116,8 +116,7 @@ fn p95_bin_is_the_exact_samples_bin() {
 /// Row 4b: the value each bin reports, hand-computed as the round-half-up of
 /// its geometric midpoint 1.25^(b - 0.5) ms: bin 10 [7.45, 9.31) -> 8.33 -> 8,
 /// bin 22 -> 121.22 -> 121, bin 27 -> 369.93 -> 370, bin 40 -> 6728.92 -> 6729,
-/// bin 62 -> 911939.02 -> 911939. From bin 11 (9.31 ms) up the reported
-/// value is within √1.25 of any sample in its bin.
+/// bin 62 -> 911939.02 -> 911939.
 #[test]
 fn interior_bins_report_their_midpoint() {
     for (bin, reported) in [(10, 8), (22, 121), (27, 370), (40, 6_729), (62, 911_939)] {
@@ -127,8 +126,8 @@ fn interior_bins_report_their_midpoint() {
 
 /// Sub-10 ms p95s are whole milliseconds by design (a recorded LAT.4
 /// deviation): bin 2, [1.25, 1.5625) ms, reports exactly 1 and bin 3,
-/// [1.5625, 1.95) ms, exactly 2, so below ~9.3 ms the reported value can sit
-/// outside √1.25 of the sample. A change to this rounding is a decision.
+/// [1.5625, 1.95) ms, exactly 2: there the 0.5 ms of rounding outweighs the
+/// √1.25 bin width. A change to this rounding is a decision.
 #[test]
 fn sub_10ms_p95_is_whole_ms_rounded() {
     let one_and_a_half = Sketch::from_bins(vec![(bin_of(ms(1.5)), 1)]);
@@ -136,6 +135,31 @@ fn sub_10ms_p95_is_whole_ms_rounded() {
     assert_eq!(one_and_a_half.p95_ms(), Some(1));
     assert_eq!(Sketch::from_bins(vec![(3, 1)]).p95_ms(), Some(2));
     assert_eq!(Sketch::from_bins(vec![(5, 1)]).p95_ms(), Some(3));
+}
+
+/// The stated bound: for the lowest and the highest sample of every interior
+/// bin, the reported value is within a factor √1.25 of the sample, plus up to
+/// 0.5 ms of rounding (an 11.6 ms sample reports 10 ms: 10 >= 11.6/√1.25 - 0.5).
+#[test]
+fn interior_p95_within_root_ratio_plus_rounding() {
+    let root = RATIO.sqrt();
+    for bin in 1..BINS - 1 {
+        let low = RATIO.powi(i32::from(bin) - 1);
+        // 2 ns under the bin's upper edge, the highest sample it holds.
+        let high = RATIO.powi(i32::from(bin)) - 2e-6;
+        for sample in [low, high] {
+            assert_eq!(bin_of(ms(sample)), bin, "sample {sample} ms");
+            let reported = Sketch::from_bins(vec![(bin_of(ms(sample)), 1)])
+                .p95_ms()
+                .expect("one sample");
+            #[expect(clippy::cast_precision_loss, reason = "at most 1.25^62 ms, exact in f64")]
+            let reported = reported as f64;
+            assert!(
+                (sample / root - 0.5..=sample * root + 0.5).contains(&reported),
+                "bin {bin}: sample {sample} ms reported {reported} ms"
+            );
+        }
+    }
 }
 
 /// Row 5: the open bins report their edges.
