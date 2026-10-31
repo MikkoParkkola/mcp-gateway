@@ -144,7 +144,8 @@ fn sub_10ms_p95_is_whole_ms_rounded() {
 fn interior_p95_within_root_ratio_plus_rounding() {
     let root = RATIO.sqrt();
     for bin in 1..BINS - 1 {
-        let low = RATIO.powi(i32::from(bin) - 1);
+        // The lowest whole-ns sample in the bin: its edge, rounded up to a ns.
+        let low = (RATIO.powi(i32::from(bin) - 1) * 1e6).ceil() / 1e6;
         // 2 ns under the bin's upper edge, the highest sample it holds.
         let high = RATIO.powi(i32::from(bin)) - 2e-6;
         for sample in [low, high] {

@@ -110,7 +110,9 @@ fn positional_encoding_shape() {
         &Utc,
         Some((Duration::from_millis(100), End::TimedOut)),
     );
-    let now = T0 + 3 * HALF;
+    // Saved inside the slot, so it is still live (a save after it closes
+    // stores it closed: `save_stores_idle_slots_closed`).
+    let now = T0 + 30;
     let file = json(&store.encode("v1", now));
     let alpha = &file["latency"]["server"][0];
     assert_eq!(alpha[0], "alpha");
