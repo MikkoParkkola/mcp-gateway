@@ -13,7 +13,7 @@ use axum::{
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
-use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+use super::auth::{AuthState, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
@@ -172,6 +172,10 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(all(test, feature = "webui"))]
+mod live_keys_dashboard_tests;
+#[cfg(test)]
+mod live_keys_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -388,8 +392,6 @@ pub struct AppState {
     pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
-    /// Authentication configuration (static keys)
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Single-use value that opens the dashboard from the link `serve` prints.
     pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Listeners on open `subscriptions/listen` streams.
@@ -531,7 +533,6 @@ async fn readyz(
 /// from the request that opened it.
 pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
-        auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
@@ -805,6 +806,14 @@ async fn pin_generation(
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
     next.run(request).await
+}
+
+impl AppState {
+    /// The process's record key: resolved once at startup, the same in every
+    /// generation, so any generation's copy is this one.
+    pub(crate) fn record_key(&self) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
+        self.live_config.generation().auth().shared_record_key()
+    }
 }
 
 /// The refusal for a request that reached a reader without a pinned

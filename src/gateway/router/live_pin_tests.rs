@@ -141,7 +141,10 @@ async fn auth_off_mcp_held_request_keeps_its_generation() {
         auth_off(fixture_built(Answer::Ok, |meta| meta)),
     ))
     .await;
-    assert!(!fx.state.auth_config.enabled, "fixture: auth is on");
+    assert!(
+        !fx.state.live_config.generation().auth().enabled,
+        "fixture: auth is on"
+    );
     seams::after_intake(reload_to(&fx, false));
     let body = meta_call(&fx).await;
     assert_reloaded(&fx, false);
