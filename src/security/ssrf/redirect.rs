@@ -56,6 +56,11 @@ pub(crate) fn refuse_hop(
     attempt: reqwest::redirect::Attempt<'_>,
     reason: String,
 ) -> reqwest::redirect::Action {
+    // The request was already sent: the backend may have run it. A blocked
+    // answer after the send is recorded as post_dispatch.rs records a
+    // withheld one, `refused` while the cell vouches for it. Outside a call
+    // (a spec import) there is no cell and this is a no-op.
+    crate::gateway::delivery_facts::refused_while_vouched();
     attempt.error(SsrfDenied::new(reason))
 }
 

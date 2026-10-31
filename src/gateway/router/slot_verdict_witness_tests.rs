@@ -147,7 +147,10 @@ async fn hardened_signed_gateway(surfaced: Surfaced) -> Gateway {
         |state: &mut super::AppState| {
             let mut config = (*state.live_config.running()).clone();
             config.security.posture = crate::security::SecurityPosture::Hardened;
-            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::new(config));
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                config,
+                std::sync::Arc::clone(state.live_config.generation().auth()),
+            ));
         },
     )
     .await

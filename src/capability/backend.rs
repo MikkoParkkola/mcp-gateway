@@ -156,14 +156,16 @@ pub struct CapabilityBackend {
     capabilities: RwLock<IndexedCapabilities>,
     /// Directories to load capabilities from
     directories: RwLock<Vec<String>>,
-    /// Capability names currently quarantined by a rug-pull detection event.
+    /// Rug-pull records by capability file, from a detection event.
     ///
     /// Populated by the file watcher when an on-disk YAML's `sha256:` pin no
-    /// longer matches its content. Quarantined names are removed from the
-    /// active tool set and will NOT be automatically re-loaded by `reload()`
-    /// until the operator clears the state (e.g. by re-running
-    /// `mcp-gateway cap pin` after reviewing the diff).
+    /// longer matches its content. A quarantined capability is removed from
+    /// the active tool set. This map does not keep it out: `reload()` never
+    /// reads it, and the loader's own pin check is what skips the file until
+    /// its pin matches again (e.g. after `mcp-gateway cap pin`).
     rug_pull_state: RwLock<HashMap<String, RugPullRecord>>,
+    /// The name each file was last loaded under, its pin having matched.
+    loaded_from: RwLock<HashMap<String, String>>,
     /// Declares whether the owning gateway serves more than one principal
     /// (ADR-008 INV-2 parity, MIK-6751). Mirrors `MetaMcp::multi_user`;
     /// `MetaMcp::set_multi_user`/`set_capabilities` keep the two in sync since
@@ -190,6 +192,9 @@ pub struct RugPullRecord {
     pub expected: String,
     /// Hash actually observed on disk at detection time.
     pub actual: String,
+    /// The name this file was last loaded under while its pin matched, when
+    /// it ever was: `capability` comes from the changed bytes and is not.
+    pub loaded_as: Option<String>,
 }
 
 impl CapabilityBackend {
@@ -201,6 +206,7 @@ impl CapabilityBackend {
             capabilities: RwLock::new(IndexedCapabilities::default()),
             directories: RwLock::new(Vec::new()),
             rug_pull_state: RwLock::new(HashMap::new()),
+            loaded_from: RwLock::new(HashMap::new()),
             multi_user: std::sync::atomic::AtomicBool::new(false),
             initial_scan: std::sync::atomic::AtomicU8::new(1), // bits, see initial_scan.rs
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
@@ -275,12 +281,15 @@ impl CapabilityBackend {
     pub fn mark_rug_pull(&self, record: RugPullRecord) {
         self.rug_pull_state
             .write()
-            .insert(record.capability.clone(), record);
+            .insert(record.file.clone(), record);
     }
 
     /// Check whether a capability is currently quarantined.
     pub fn is_rug_pulled(&self, name: &str) -> bool {
-        self.rug_pull_state.read().contains_key(name)
+        let state = self.rug_pull_state.read();
+        state
+            .values()
+            .any(|r| r.loaded_as.as_deref().unwrap_or(&r.capability) == name)
     }
 
     /// Snapshot all active rug-pull records (e.g. for status / observability).
@@ -330,7 +339,7 @@ impl CapabilityBackend {
     /// capability is not an error here — it is reported in
     /// [`DirectoryLoad::rejected`] so the caller decides.
     pub async fn load_from_directory_reporting(&self, path: &str) -> Result<DirectoryLoad> {
-        let loaded = CapabilityLoader::load_directory(path).await?;
+        let loaded = CapabilityLoader::load_directory_with_paths(path).await?;
         let mut report = DirectoryLoad {
             admitted: loaded.len(),
             rejected: Vec::new(),
@@ -348,9 +357,9 @@ impl CapabilityBackend {
         // admission gate. A refused capability is LOGGED and dropped rather
         // than published: the operator gets a named error, and no caller gets a
         // tool whose account reference cannot resolve.
-        for cap in loaded {
+        for (file, cap) in loaded {
             let capability = cap.name.clone();
-            if let Err(error) = self.register_capability(cap) {
+            if let Err(error) = self.admit_from(file, cap) {
                 warn!(
                     backend = %self.name,
                     capability = %capability,
@@ -384,17 +393,17 @@ impl CapabilityBackend {
             return Ok(0);
         }
 
-        let mut all_caps = Vec::new();
+        let mut paths = Vec::new();
         let mut total = 0;
         // A directory that could not be read leaves the catalogue partial:
         // its capabilities are missing from this load, not deleted (MIK-8028).
         let mut partial = false;
 
         for dir in &dirs {
-            match CapabilityLoader::load_directory(dir).await {
+            match CapabilityLoader::load_directory_with_paths(dir).await {
                 Ok(loaded) => {
                     total += loaded.len();
-                    all_caps.extend(loaded);
+                    paths.extend(loaded);
                 }
                 Err(e) => {
                     partial = true;
@@ -404,11 +413,14 @@ impl CapabilityBackend {
         }
 
         // The same admission gate the initial load applies.
-        let mut admitted = Vec::with_capacity(all_caps.len());
+        let (mut admitted, mut trusted) = (Vec::with_capacity(paths.len()), Vec::new());
         let mut refused = std::collections::HashSet::new();
-        for cap in all_caps {
+        for (file, cap) in paths {
             match validate_capability_account_binding(&cap, self.executor.account_strategies()) {
-                Ok(()) => admitted.push(cap),
+                Ok(()) => {
+                    trusted.push((file, cap.name.clone()));
+                    admitted.push(cap);
+                }
                 Err(error) => {
                     total -= 1;
                     refused.insert(cap.name.clone());
@@ -453,6 +465,7 @@ impl CapabilityBackend {
             });
         }
         self.catalogue_changed();
+        self.note_admitted(trusted, !partial);
 
         info!(backend = %self.name, count = total, directories = dirs.len(), "Hot-reloaded capabilities");
         Ok(total)

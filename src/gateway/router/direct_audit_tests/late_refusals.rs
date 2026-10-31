@@ -361,3 +361,22 @@ async fn a_catalogue_withheld_direct_call_records_refused() {
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
     assert_last_refused(&fx);
 }
+
+/// `prompts/get` on a backend that requires the caller's identity, by a
+/// caller that carries none, is the gateway refusing the read: it records
+/// refused.
+#[tokio::test]
+async fn a_prompt_read_without_the_required_identity_records_refused() {
+    let fx = fixture(Setup {
+        extras: &[Extra::AlphaRequiresIdentity],
+        ..Setup::default()
+    })
+    .await;
+    let (status, body) = post_to(&fx, "/mcp", &prompt_get("alpha"), &Caller::Anonymous).await;
+    assert!(
+        body.to_string().contains("no verified end-user identity"),
+        "premise: the identity denial: {status} {body}"
+    );
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "premise: never sent");
+    assert_last_refused(&fx);
+}

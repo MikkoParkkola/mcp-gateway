@@ -33,6 +33,53 @@ fn cut_back(file: &std::fs::File, path: &Path, good: u64) -> io::Result<()> {
     writer.set_len(good)
 }
 
+/// A reader of appended records: the record's fields as the caller gave them
+/// (its envelope included, the chain fields not), its `entry_hash`, and its
+/// chain `counter`, which orders records across segments.
+pub(crate) type Subscriber = std::sync::Arc<dyn Fn(&Map<String, Value>, &str, u64) + Send + Sync>;
+
+/// Readers told of each record of their `kind` once it is written. They run
+/// under the log's lock, which every audit write takes, so they see records
+/// in append order and never one whose write failed. A reader must only hand
+/// the record off without waiting (a `try_send` into a bounded queue, or an
+/// insert taking no other lock): one that blocks holds up every write. It
+/// must not append to this log.
+#[derive(Default)]
+pub(crate) struct Subscribers(std::sync::RwLock<Vec<(String, Subscriber)>>);
+
+impl Subscribers {
+    fn wants(&self, fields: &Map<String, Value>) -> bool {
+        let Some(kind) = fields.get("kind").and_then(Value::as_str) else {
+            return false;
+        };
+        self.0
+            .read()
+            .is_ok_and(|readers| readers.iter().any(|(wanted, _)| wanted == kind))
+    }
+
+    fn publish(&self, fields: &Map<String, Value>, entry_hash: &str, counter: u64) {
+        let kind = fields.get("kind").and_then(Value::as_str);
+        let Ok(readers) = self.0.read() else {
+            return;
+        };
+        for (wanted, reader) in readers.iter() {
+            if kind == Some(wanted.as_str()) {
+                reader(fields, entry_hash, counter);
+            }
+        }
+    }
+}
+
+impl TransparencyLogger {
+    /// Tell `reader` of every record of `kind` written from now on.
+    #[cfg(feature = "webui")]
+    pub(crate) fn subscribe(&self, kind: &str, reader: Subscriber) {
+        if let Ok(mut readers) = self.subscribers.0.write() {
+            readers.push((kind.to_string(), reader));
+        }
+    }
+}
+
 impl TransparencyLogger {
     #[cfg_attr(not(test), allow(clippy::unused_self))] // the clock offset is a test seam
     fn now(&self) -> Option<u64> {
@@ -53,6 +100,7 @@ impl TransparencyLogger {
         fields: Map<String, Value>,
         resync: bool,
     ) -> io::Result<String> {
+        let published = self.subscribers.wants(&fields).then(|| fields.clone());
         let path = self.path();
         // Every append checks for a rotated or deleted path, on every
         // writer; a synced (governance) append always re-reads the tail.
@@ -99,7 +147,7 @@ impl TransparencyLogger {
         // A failed rotation step is an append failure like any other; on
         // ENOSPC it takes the same rebuild-then-expire path (F23).
         let first = rotated.and_then(|()| self.write_record(inner, &path, fields.clone(), resync));
-        match first {
+        let written = match first {
             Err(e)
                 if e.kind() == io::ErrorKind::StorageFull
                     && rot.on_disk_full == OnDiskFull::ExpireOldest =>
@@ -115,7 +163,11 @@ impl TransparencyLogger {
                 retried
             }
             other => other,
+        };
+        if let (Ok(entry_hash), Some(fields)) = (&written, published) {
+            self.subscribers.publish(&fields, entry_hash, inner.counter);
         }
+        written
     }
 
     /// Re-run open-time recovery under the held guard: reopen after another
@@ -453,3 +505,7 @@ impl TransparencyLogger {
         self.expire(inner, path, oldest, "storage_full", g)
     }
 }
+
+#[cfg(all(test, feature = "webui"))]
+#[path = "transparency_log_subscribe_tests.rs"]
+mod subscribe_tests;

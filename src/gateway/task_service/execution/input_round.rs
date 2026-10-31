@@ -340,7 +340,13 @@ async fn dispatch(
         return None;
     }
     let generation = state.generation();
-    let authorizer = state.authorizer(owned.authorizer(), &generation);
+    // K15: the key that created this task, as the current table holds it: a
+    // reload since the round was accepted can refuse the continuation.
+    let rejudged = match state.rejudge(owned.authorizer(), &generation) {
+        Ok(rejudged) => rejudged,
+        Err(refused) => return Some(*refused),
+    };
+    let authorizer = state.authorizer(rejudged.as_ref().unwrap_or(owned.authorizer()), &generation);
     let _key_hold = owned.hold_caller_key(state);
     let caller = owned.dispatch_context_retrying(state, &authorizer, retry);
     // `redeeming_dispatch` has checked the surfaced target holds. The pin

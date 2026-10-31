@@ -202,7 +202,10 @@ fn is_admin_view(reply: &Reply) -> bool {
 fn with_running(mut state: Arc<AppState>, running: crate::config::Config) -> Arc<AppState> {
     Arc::get_mut(&mut state)
         .expect("state is unique")
-        .live_config = Arc::new(crate::config_reload::LiveConfig::new(running));
+        .live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        running,
+        std::sync::Arc::clone(state.live_config.generation().auth()),
+    ));
     state
 }
 

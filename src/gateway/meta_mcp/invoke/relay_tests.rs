@@ -15,7 +15,7 @@ use crate::security::firewall::{
 };
 
 /// Ordinary prose, long enough for several fingerprints.
-const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+pub(super) const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
     the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
     August, and which crew pruned the older trees after the second frost. It closes with the \
     count of crates sent to the cooperative press and a note about the broken ladder by the barn.";

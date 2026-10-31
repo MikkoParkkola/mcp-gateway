@@ -11,7 +11,6 @@ mod common;
 use common::*;
 
 use axum::http::Method;
-use mcp_gateway::config_reload::LiveConfig;
 use mcp_gateway::control_plane::role_mapping::{ControlPlaneBaseInfo, ControlPlaneBaseSource};
 
 const TOKEN: &str = "f6-admin-token";
@@ -109,8 +108,12 @@ async fn auth_off_reports_auth_off() {
         ..Fixture::default()
     })
     .await;
-    // The running config has auth off, which is why startup opened no store.
-    Arc::get_mut(&mut app).unwrap().live_config = Arc::new(LiveConfig::new(Config::default()));
+    // The running config has auth off, which is why startup opened no store;
+    // the request still authenticates against the fixture's key table.
+    let auth = Arc::clone(app.live_config.generation().auth());
+    Arc::get_mut(&mut app).unwrap().live_config = Arc::new(
+        mcp_gateway::gateway::test_helpers::live_config(Config::default(), auth),
+    );
 
     let (status, body) = send(&app, Method::GET, "/ui/api/control-plane", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");

@@ -1,11 +1,11 @@
-src/gateway/server/warmstart.rs	default	1	Constructs the default WarmStartPolicy timing constants; no decision.
-src/gateway/server/warmstart.rs	gap_before_attempt	1	Pure arithmetic computing the retry back-off gap from elapsed time; schedules, decides no access.
-src/gateway/server/warmstart.rs	is_readiness_error	1	Classifies an Error as retryable-not-ready versus permanent; it only picks whether warm-start keeps retrying, while auth and backend gating are decided elsewhere (Backend::ensure_started and the transport).
-src/gateway/server/warmstart.rs	is_transient_io	1	Pure match of io::ErrorKind values as transient for retry purposes; no security decision.
-src/gateway/server/warmstart.rs	dormant_action	1	Pure choice between Done, Yield and FetchAnyway from a tool count and yield counter; scheduling only.
-src/gateway/server/warmstart.rs	effective_attempt_timeout	1	Pure max/saturating-multiply deriving a hang-detector timeout from the backend's own timeout; no enforcement.
+src/gateway/server/warmstart/retry.rs	default	1	Constructs the default WarmStartPolicy timing constants; no decision.
+src/gateway/server/warmstart/retry.rs	gap_before_attempt	1	Pure arithmetic computing the retry back-off gap from elapsed time; schedules, decides no access.
+src/gateway/server/warmstart/retry.rs	is_readiness_error	1	Classifies an Error as retryable-not-ready versus permanent; it only picks whether warm-start keeps retrying, while auth and backend gating are decided elsewhere (Backend::ensure_started and the transport).
+src/gateway/server/warmstart/retry.rs	is_transient_io	1	Pure match of io::ErrorKind values as transient for retry purposes; no security decision.
+src/gateway/server/warmstart/retry.rs	dormant_action	1	Pure choice between Done, Yield and FetchAnyway from a tool count and yield counter; scheduling only.
+src/gateway/server/warmstart/retry.rs	effective_attempt_timeout	1	Pure max/saturating-multiply deriving a hang-detector timeout from the backend's own timeout; no enforcement.
 src/jitter.rs	full_jitter	1	Random jitter on a retry gap; no decision.
-src/gateway/server/warmstart.rs	retry_warm_start_attempts	1	Generic retry loop that sleeps and re-invokes an attempt closure under a timeout; the actual backend call and any refusal are in Backend::ensure_started and warm_tools.
+src/gateway/server/warmstart/retry.rs	retry_warm_start_attempts	1	Generic retry loop that sleeps and re-invokes an attempt closure under a timeout; the actual backend call and any refusal are in Backend::ensure_started and warm_tools.
 src/gateway/server/warmstart.rs	build_warm_start_list	1	Collects backend names into the warm-start list via resolve_warm_start_names; plain selection plumbing.
 src/gateway/server/warmstart.rs	warm_start_prefetches_tools	1	Const matches! that is true for both modes; no decision.
 src/gateway/server/warmstart.rs	warm_start_until_cached	1	Retry orchestration that resolves the backend by name, skips a superseded instance and calls ensure_started and warm_tools; it carries no auth decision, which is made in Backend::ensure_started and the transport (borderline: it gates the warm-start backend call on instance identity).

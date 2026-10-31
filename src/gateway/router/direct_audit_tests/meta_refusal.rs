@@ -181,3 +181,42 @@ async fn meta_firewall_refusal_append_failure_follows_the_policy() {
         assert_eq!(answer["id"], 5, "the request id was dropped: {answer}");
     }
 }
+
+/// `gateway_list_tools` naming a backend outside the key's scope is answered
+/// as a backend that does not exist (A3): the gateway's refusal, recorded
+/// as one.
+#[tokio::test]
+async fn meta_list_tools_out_of_scope_records_refused() {
+    let fx = fixture(Setup {
+        auth: Some(key_for_alpha(None)),
+        ..Setup::default()
+    })
+    .await;
+    let list = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": {"server": "beta"}}});
+    let (status, answer) = post_to(&fx, "/mcp", &list.to_string(), &Caller::Key).await;
+    assert!(
+        answer.to_string().contains("beta"),
+        "premise: answered as absent: {status} {answer}"
+    );
+    let record = super::composite_refusals::last_delivery(&fx);
+    assert_eq!(record["response_effect"], "refused", "{record}");
+}
+
+/// Control: an unscoped caller naming a backend that does not exist gets the
+/// plain miss, which is no decision about the caller and records no refusal.
+/// (A name outside a scoped key's grant is a scope refusal whether or not it
+/// exists, so that the answer never tells which names exist.)
+#[tokio::test]
+async fn meta_list_tools_of_a_nonexistent_backend_records_no_refused() {
+    let fx = fixture(Setup::default()).await;
+    let list = json!({"jsonrpc": "2.0", "id": 5, "method": "tools/call",
+        "params": {"name": "gateway_list_tools", "arguments": {"server": "nope"}}});
+    let (status, answer) = post_to(&fx, "/mcp", &list.to_string(), &Caller::Anonymous).await;
+    assert!(
+        answer.to_string().contains("nope"),
+        "premise: answered as absent: {status} {answer}"
+    );
+    let record = super::composite_refusals::last_delivery(&fx);
+    assert_ne!(record["response_effect"], "refused", "{record}");
+}

@@ -44,7 +44,7 @@ async fn load_configured_identity_grants_reads_enabled_local_file() {
         path: path.display().to_string(),
         fail_on_error: true,
     };
-    let (loaded_path, store) = load_configured_identity_grants(&config)
+    let (loaded_path, store, _bytes) = load_configured_identity_grants(&config)
         .await
         .unwrap()
         .unwrap();

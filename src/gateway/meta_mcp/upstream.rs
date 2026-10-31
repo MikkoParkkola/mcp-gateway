@@ -190,12 +190,14 @@ impl NativeUpstreamTasks {
             // its own `tools/call` will, and `query`/`cancel` run this under
             // `non_interactive`. A non-interactive discovery is refused while a
             // start holds the backend, which would silently disarm recovery.
-            backend.request_with_headers_lent(
+            // Its error is dropped below, so a refusal it meets is not the
+            // dispatch's answer.
+            crate::gateway::delivery_facts::discarded(backend.request_with_headers_lent(
                 "server/discover",
                 None,
                 crate::transport::LentCredential::default(),
                 None,
-            ),
+            )),
         )
         .await;
         // Silence, a transport failure and a JSON-RPC REFUSAL are all "the peer

@@ -33,6 +33,7 @@ fn write(logger: &TransparencyLogger, extra: Map<String, Value>) -> io::Result<(
         "sha256:req",
         Some("sha256:resp"),
         extra,
+        None,
     )
 }
 
@@ -147,4 +148,72 @@ fn an_invocation_on_an_unreadable_clock_is_recorded_undated() {
     assert!(rows[0].get("clock_invalid").is_none(), "{}", rows[0]);
     assert_eq!(rows[1]["timestamp"], Value::Null, "{}", rows[1]);
     assert_eq!(rows[1]["clock_invalid"], true, "{}", rows[1]);
+}
+
+fn decided() -> crate::security::decision_record::Decision {
+    use crate::security::decision_record::{Decided, Decision, DecisionKind};
+    Decision {
+        v: 1,
+        config_revision: Some("hmac-sha256:00".to_owned()),
+        running_revision: None,
+        pending_restart: Vec::new(),
+        kind: DecisionKind::DefaultAllow,
+        rule_id: None,
+        grant_id: None,
+        request_findings: Some(Vec::new()),
+        request_findings_truncated: false,
+        declared_effect: None,
+        decided: Decided::Fresh,
+    }
+}
+
+/// MIK-8914.API2A.3: the writer's own decision argument is written under its
+/// field, inside the hashed and signed entry, and reads back exactly.
+#[test]
+fn api2a_3_the_decision_is_written_by_the_writer_and_reads_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (logger, path) = open(&dir);
+    let decision = decided();
+    logger
+        .log_invocation_attributed(
+            CorrelationKey {
+                id: "trace-1",
+                source: CorrelationSource::TraceId,
+            },
+            &AuditEnvelope::gateway(),
+            InvocationTarget::meta("alpha", "read"),
+            "sha256:req",
+            Some("sha256:resp"),
+            Map::new(),
+            Some(&decision),
+        )
+        .unwrap();
+    write(&logger, Map::new()).unwrap();
+    let records = invocations(&path);
+    let field = crate::security::decision_record::FIELD;
+    let written: crate::security::decision_record::Decision =
+        serde_json::from_value(records[0][field].clone()).expect("the decision reads back");
+    assert_eq!(written, decision);
+    assert!(
+        records[1].get(field).is_none(),
+        "a record written without one carries no decision"
+    );
+    assert!(
+        verify_log(&path).unwrap().ok,
+        "the decision is inside the chain"
+    );
+}
+
+/// A caller's attribution can never supply or overwrite the decision.
+#[test]
+fn api2a_3_attribution_naming_the_decision_field_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (logger, path) = open(&dir);
+    let mut extra = Map::new();
+    extra.insert(
+        crate::security::decision_record::FIELD.into(),
+        json!({"v": 1, "kind": "default_allow", "decided": "fresh"}),
+    );
+    assert!(write(&logger, extra).is_err());
+    assert!(invocations(&path).is_empty());
 }

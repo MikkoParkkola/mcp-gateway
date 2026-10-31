@@ -501,20 +501,15 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // gateway carries, never into the process environment, so the environment
     // has to travel with the config it was evaluated against.
     let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
-        Ok(evaluated) => {
+        Ok(mut evaluated) => {
+            let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
                 eprintln!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            (
-                config,
-                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
-                    evaluated.overlay,
-                    evaluated.env_paths,
-                )),
-            )
+            (config, env)
         }
         Err(e) => {
             eprintln!("Failed to load configuration: {e}");
@@ -561,20 +556,15 @@ async fn run_server(cli: Cli) -> ExitCode {
     // serve_config_path / run_stdio_server.
     let (discovered, load_path) = discovered_config::resolve(cli.config.as_deref());
     let (config, env) = match commands::load_for_serve(load_path.as_deref()) {
-        Ok(evaluated) => {
+        Ok(mut evaluated) => {
+            let env = std::sync::Arc::new(evaluated.live_env());
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
                 error!("Failed to apply configuration overrides: {e}");
                 return ExitCode::FAILURE;
             }
-            (
-                config,
-                std::sync::Arc::new(mcp_gateway::config::LiveEnv::new(
-                    evaluated.overlay,
-                    evaluated.env_paths,
-                )),
-            )
+            (config, env)
         }
         Err(e) => {
             error!("Failed to load configuration: {e}");

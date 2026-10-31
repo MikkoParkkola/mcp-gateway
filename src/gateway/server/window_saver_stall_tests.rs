@@ -104,6 +104,7 @@ async fn a_stalled_open_delays_serving_by_its_bound_only() {
         "the released writes never landed: {:?}",
         rig.segments()
     );
+    assert!(rig.writes_ended(), "the released writes never ended");
     let root = rig.dir.path().to_owned();
     drop(rig);
     assert!(!root.exists(), "a write outlived the rig's directory");
@@ -133,6 +134,7 @@ async fn a_stalled_open_released_after_the_deadline_lands_the_sealed_counts() {
         rig.segments()
     );
     assert_eq!(rig.segments()[0].snapshot.total, 2);
+    assert!(rig.writes_ended(), "the released writes never ended");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

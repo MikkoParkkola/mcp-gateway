@@ -82,7 +82,13 @@ fn construction_offsets(clean: &str, name: &str) -> Vec<usize> {
         let before = b[..path_start]
             .iter()
             .rposition(|c| !c.is_ascii_whitespace());
-        let after_alt = before.is_some_and(|p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|'));
+        // A pattern alternative's `|` follows whitespace (`A | B`, or a leading
+        // `| B` on its own line). A closure's parameter list ends in a `|` right
+        // after its last parameter (`|_| build()`), so a value built there is
+        // a construction, not a pattern. Text-based: this holds while rustfmt
+        // writes alternatives with a space, which CI enforces.
+        let after_alt =
+            before.is_some_and(|p| b[p] == b'|' && p > 0 && b[p - 1].is_ascii_whitespace());
         let open = next_non_ws(end).map(|p| end + p);
         // A struct variant: `{ .. }`, an arm, an alternative or a `let`
         // destructure is a pattern; anything else builds the value.
@@ -488,6 +494,19 @@ fn the_clash_refusal_is_built_only_at_reviewed_pre_send_sites() {
          before anything reaches the backend: review every new or removed call \
          site (left: found, right: reviewed)"
     );
+}
+
+/// A value built right after a closure's parameters is a construction: the
+/// closing `|` of `|_|` is not a pattern alternative.
+#[test]
+fn a_construction_after_a_closures_parameters_is_counted() {
+    let src = "fn f(r: Result<(), E>) -> Result<(), Error> {\n\
+               r.map_err(|_| crate::Error::BackendUnavailable(String::new()))\n\
+               }\n\
+               fn g(e: &Error) -> bool {\n\
+               matches!(e, Error::Transport(_)\n    | Error::BackendUnavailable(_))\n\
+               }\n";
+    assert_eq!(constructions(src), 1, "{src}");
 }
 
 /// A struct variant's patterns are not constructions; a built value is.

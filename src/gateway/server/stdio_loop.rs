@@ -53,12 +53,14 @@ impl Gateway {
             ..
         } = self.build_meta_mcp().await?;
         // Held for the whole serve: it owns the governance store's lease.
-        let grant_sink = identity_grants::stdio_identity_grants(
+        let (grant_sink, grants_read) = identity_grants::stdio_identity_grants(
             &self.config,
             self.config_path.as_deref(),
             &meta_mcp,
         )
         .await?;
+        // Published later, with the stdio session's config.
+        grants_read.into_startup(&self.env);
         // MIK-8278: this session announces tool-list changes to an
         // initialize-era client, so it may say so; the feed is installed
         // before warm-start and the capability load, so their nudges count.
@@ -105,19 +107,28 @@ impl Gateway {
         };
         // One config for everything stdio judges with and for its reload
         // context, so a stdio reload reaches intake, tasks and policy (ADR-023).
+        // Records name its revision with or without a config file; the startup
+        // load's raw bytes are taken here and never outlive this function.
+        // Its auth is the default one: stdio authenticates by API key nothing,
+        // and the gateway's own `auth` is never resolved here, so one that does
+        // not resolve cannot turn stdio's tasks off.
         let live_config = Arc::new(
-            crate::config_reload::LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
+            crate::config_reload::LiveConfig::from_prepared(
+                crate::config_reload::Generation::prepare_startup(
+                    self.config.clone(),
+                    Arc::new(stdio_tasks::default_auth(
+                        self.env.startup(),
+                        Arc::clone(&record_key),
+                    )),
+                ),
+            )
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_startup_revision(meta_mcp.record_key(), self.env.take_startup_inputs()),
         );
+        meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
-        let task_store = stdio_tasks::open(
-            &self.config,
-            self.env.startup(),
-            &meta_mcp,
-            &tool_policy,
-            (&record_key, &live_config),
-        )
-        .await;
+        let task_store =
+            stdio_tasks::open(&self.config, &meta_mcp, &tool_policy, &live_config).await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());

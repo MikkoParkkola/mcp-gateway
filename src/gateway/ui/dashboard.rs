@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 
+use super::guard::Guard;
 use super::{
-    AppState, Arc, AuthenticatedClient, BackendHealth, CacheStats, DashboardRenderer,
-    DashboardState, Extension, HealthStatus, IntoResponse, SessionSummary, State, StatsSnapshot,
-    StatusCode, avg_latency_from_backends, compute_error_rate, is_admin,
+    AppState, Arc, BackendHealth, CacheStats, DashboardRenderer, DashboardState, HealthStatus,
+    IntoResponse, SessionSummary, State, StatsSnapshot, StatusCode, avg_latency_from_backends,
+    compute_error_rate,
 };
 
 /// Served in place of the dashboard when the caller holds no admin credential.
@@ -31,12 +32,11 @@ with a bearer token, keeping <code>/health</code> and <code>/mcp</code> in \
 /// Admin only. The page renders backend names, tool names and call counts,
 /// which is the same inventory `/ui/api/status` redacts for a non-admin caller,
 /// so it follows the same rule rather than serving as a way around it.
-pub async fn dashboard_handler(
+pub(super) async fn dashboard_handler(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
+    if guard.admit().is_err() {
         // HTML, not JSON. A browser navigating here cannot attach an
         // Authorization header, so a bare 403 would leave an operator staring at
         // a JSON-RPC error with no way forward. The page says what is missing

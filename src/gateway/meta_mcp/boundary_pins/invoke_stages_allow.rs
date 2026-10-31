@@ -70,13 +70,15 @@ pub(super) const S1_INTAKE_ALLOW: &[&str] = &[
 /// S2 `directives`, now `invoke/intake.rs` `directives` (it was invoke.rs:159-199
 /// at acf56382d); the line references in this block cite intake.rs (MIK-8663).
 pub(super) const S2_DIRECTIVES_ALLOW: &[&str] = &[
-    "parse_tool_arguments",                     // intake.rs:147
-    "admission::execution_arguments",           // intake.rs:161 the shared directive strip
-    "extract_client_claim",                     // intake.rs:158 read before the strip
+    "parse_tool_arguments",                                     // intake.rs:147
+    "admission::execution_arguments", // intake.rs:161 the shared directive strip
+    "extract_client_claim",           // intake.rs:158 read before the strip
     "crate::projection::projection_key_suffix", // intake.rs:174
-    "self.projection_mode",                     // intake.rs:174
-    "tracing::Span::current",                   // intake.rs:176 the span record stays in S2
-    "self.active_profile",                      // intake.rs:178
+    "self.projection_mode",           // intake.rs:174
+    "tracing::Span::current",         // intake.rs:176 the span record stays in S2
+    "self.active_profile",            // intake.rs:178
+    "audit::note_pre_send", // intake.rs:147 an unparsable argument object: refused before its backend
+    "crate::gateway::meta_mcp::dispatch_log::PreSend::Refused", // intake.rs:147 the mark's value
 ];
 
 /// S3 `resolve`, from invoke.rs:214-252.
@@ -91,6 +93,8 @@ pub(super) const S3_RESOLVE_ALLOW: &[&str] = &[
     "rw::dispatch_effect",            // invoke.rs:238
     "TracedOutcome::Live",            // invoke.rs:227 the Break exit; listed from the live body
     "TracedOutcome::Stored", // invoke.rs:248 the lift replay exit; listed from the live body
+    "audit::note_pre_send", // resolve.rs the resolution's own answer, its failure, the cooldown: refused before the backend
+    "PreSend::Refused",     // resolve.rs the mark's value
 ];
 
 /// S4 `admit_keys`, from invoke.rs:253-322.
@@ -105,6 +109,8 @@ pub(super) const S4_ADMIT_KEYS_ALLOW: &[&str] = &[
     "nonce_settle::PreSendExit::Served", // invoke.rs:318 the Served constructor nested in the mapping call
     "stored_proof::refuse_unproven",     // invoke.rs:322
     "TracedOutcome::Live", // invoke.rs:320 the stored-hit exit; listed from the live body
+    "audit::note_pre_send", // keys.rs an unproven stored replay: refused before its backend
+    "crate::gateway::meta_mcp::dispatch_log::PreSend::Refused", // keys.rs the mark's value
 ];
 
 /// S5 `pre_send`, from invoke.rs:324-397.

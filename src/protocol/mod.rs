@@ -14,6 +14,7 @@ pub mod meta;
 pub mod modern_refusal;
 pub mod mrtr;
 mod negotiate;
+pub(crate) mod notifications;
 pub mod param_headers;
 pub(crate) mod reserved_members;
 pub mod subscriptions;

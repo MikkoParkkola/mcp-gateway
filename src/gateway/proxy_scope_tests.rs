@@ -38,15 +38,15 @@ api_keys:
 fn authorizer(yaml: &str, key_server: Option<Arc<KeyServer>>) -> AuthState {
     let config: AuthConfig = crate::yaml::from_str(yaml).unwrap();
     AuthState {
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(
-            &config,
-            crate::gateway::record_principal::TEST_RECORD_KEY,
-        )),
         key_server,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &config,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, std::sync::Arc::default()),
     }

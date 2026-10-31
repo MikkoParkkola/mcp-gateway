@@ -400,9 +400,10 @@ only when a test exists that fails on its mutant.
   subject. U1's change reaches U1 only and U2's reaches U2 only, and each user is
   served (positive half); absence is checked with a window after the positive
   delivery. Once with `signed_assertion` and once with `token_exchange`.
-- **ISO-T2.** *Covered at the delivery layer* by the `iso_t2_*` rows in src/events/worker_vault_fence_tests.rs;
-  the end-to-end variant with a managed-account listener is not built. The same with managed accounts on a multi-user gateway, plus a lease
-  rotation mid-test: nothing observed under the old lease is delivered after it.
+- **ISO-T2.** *Covered* at the delivery layer by the `iso_t2_*` rows in src/events/worker_vault_fence_tests.rs,
+  and end to end, with each user's managed-account listener on its own minted credential, by the `iso_t2_*`
+  rows in src/events/lease_replace_managed_tests.rs. The same with managed accounts on a multi-user gateway,
+  plus a lease rotation mid-test: nothing observed under the old lease is delivered after it.
 - **ISO-T3.** *Covered.* Durable path: U1's occurrence is queued, then U1's row is re-granted or its
   lease rotates. The queued record is buried as `observation_changed`, and dead-letter replay refuses
   it. Pinned by

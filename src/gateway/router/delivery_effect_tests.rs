@@ -304,3 +304,45 @@ async fn an_annotated_answer_records_annotated() {
         assert_eq!(row["response_effect"], "annotated", "{route:?}: {row}");
     }
 }
+
+/// A direct call to a tool the routing profile excludes is answered as an
+/// absent name (an `isError` result); the gateway refused it, so its delivery record says
+/// `refused`. The profile is judged in `withheld_verdict` and raised by
+/// `guard_tool_call`, its caller.
+#[tokio::test]
+async fn a_direct_profile_withheld_call_records_refused() {
+    use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
+    let (_dir, log) = temp_log(None);
+    let meta_log = std::sync::Arc::clone(&log);
+    let fx = fixture::fixture_firewalled_logged(
+        Answer::Ok,
+        None,
+        std::sync::Arc::clone(&log),
+        move |mut meta| {
+            meta.enable_transparency_log(meta_log);
+            let mut configs = std::collections::HashMap::new();
+            configs.insert(
+                "no-read".to_string(),
+                RoutingProfileConfig {
+                    deny_tools: Some(vec!["read".to_string()]),
+                    ..RoutingProfileConfig::default()
+                },
+            );
+            meta.with_profile_registry(ProfileRegistry::from_config(&configs, "no-read"))
+        },
+    )
+    .await;
+    let params = serde_json::json!({"name": "read", "arguments": {}});
+    let body = fixture::send(&fx, "/mcp/alpha", "k-std", "tools/call", params, None)
+        .await
+        .1;
+    assert!(
+        body.pointer("/result/isError") == Some(&Value::Bool(true))
+            && body
+                .to_string()
+                .contains("does not list a tool named `read`"),
+        "premise: answered as an absent name: {body}"
+    );
+    let row = only_delivery(HttpRoute::Direct, &delivery_rows(&log).await);
+    assert_eq!(row["response_effect"], "refused", "{row}");
+}

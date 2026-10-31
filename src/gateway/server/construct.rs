@@ -75,6 +75,9 @@ impl Gateway {
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // Before any await: in a test, this thread is the test's own.
+        #[cfg(test)]
+        let test_seams = test_seams::TestSeams::new();
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
         posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
@@ -149,7 +152,7 @@ impl Gateway {
 
         Ok(Self {
             #[cfg(test)]
-            test_seams: test_seams::TestSeams::default(),
+            test_seams,
             config,
             config_path,
             watched_config: None,

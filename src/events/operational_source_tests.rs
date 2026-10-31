@@ -66,7 +66,15 @@ fn hub_with(
     credentials: LiveCredentials,
 ) -> (Arc<EventsHub>, Arc<LiveConfig>) {
     let hub = EventsHub::open(&crate::config::EventsConfig::default(), dir).expect("hub");
-    let live = Arc::new(LiveConfig::new(config(keys)));
+    // The raw keys as published, unresolved: the operational source reads
+    // them from the config, and a row may hold a pair load would refuse.
+    let live = Arc::new(LiveConfig::with_auth(
+        config(keys),
+        Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+            &crate::config::AuthConfig::default(),
+            crate::gateway::record_principal::TEST_RECORD_KEY,
+        )),
+    ));
     let services = Services {
         live: Arc::clone(&live),
         #[cfg(feature = "firewall")]

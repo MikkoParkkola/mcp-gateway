@@ -1,0 +1,3 @@
+src/gateway/router/authorization.rs	refused	1	Builds the -32600 AuthorizationError a decide_tool_target gate returns, with the gate's kind; decides nothing
+src/gateway/router/backend_handlers/direct_caller.rs	note_absent	1	Notes the check behind an absent-backend answer (backend_scope or not_found) and its memo code; the refusal is decided before it is called
+src/gateway/server/identity_grants.rs	into_startup	1	Hands the grants the startup audit served to the startup inputs for the config revision; decides nothing

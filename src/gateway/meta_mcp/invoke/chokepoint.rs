@@ -329,15 +329,24 @@ impl MetaMcp {
         };
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
-            decision.emit(Emit::Audit).map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            decision.emit(Emit::Audit).map_err(|e| {
+                super::audit::note_refused_by(e.kind, None);
+                Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                }
             })
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
             self.admin_capability_rule(server, tool, scope.is_admin)
+                .inspect_err(|_| {
+                    super::audit::note_refused_by(
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    );
+                })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -424,6 +433,10 @@ impl MetaMcp {
             );
             return Ok(());
         }
+        super::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
         // The stateless rescan has no anomaly findings, so this is the
         // `-32600` arm of the one shared wording.
         let (code, message) = verdict.request_refusal().unwrap_or_else(|| {

@@ -32,6 +32,7 @@ impl ToolAuthorizer for RevokedAfter {
             return AllowAll.decide(target);
         }
         Decision::of(Err(AuthorizationError::forbidden(
+            crate::security::decision_record::DecisionKind::Grant,
             -32003,
             "grant revoked".to_owned(),
         )))

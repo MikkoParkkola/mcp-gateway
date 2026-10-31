@@ -294,7 +294,8 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
         if stored.targets.is_empty() {
-            // A recording gateway's empty list means nothing was dispatched.
+            // A recording gateway's empty list means nothing was planned or
+            // attempted (`Record::targets`).
             // An older row's empty list means it has no upstream descriptor to
             // name its call (`CommittedTask::of`): `task.tool()` is the meta
             // tool, and the backend's current list is no record of what ran, so

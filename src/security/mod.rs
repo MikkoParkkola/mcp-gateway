@@ -19,6 +19,7 @@ pub mod audit;
 pub(crate) mod audit_rotation_config;
 pub mod caller_identity;
 pub mod data_flow;
+pub(crate) mod decision_record;
 pub(crate) mod dump_guard;
 #[cfg(feature = "firewall")]
 pub mod firewall;

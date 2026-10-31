@@ -188,7 +188,10 @@ fn code_of(result: &crate::Result<Value>) -> Option<i32> {
 }
 
 /// M3: a bridged retry round whose answers carry what `alice` was delivered
-/// is refused before it reaches the backend, and the key is released.
+/// is refused before it reaches the backend. Round one already reached it,
+/// and a backend that stopped to ask may have acted, so the key is kept as
+/// may-have-run: the same-key retry is not run again. Each
+/// call runs in a delivery cell, as every production entry point does.
 #[tokio::test]
 async fn meta_retry_round_relay_refused() {
     let (meta, firewall, calls) =
@@ -199,9 +202,12 @@ async fn meta_retry_round_relay_refused() {
         reply: roots(PROSE),
     };
     let bob = caller("bob", &json!({"roots": {}}), Era::Legacy, &relaying, &retry);
-    let result = meta
-        .invoke_tool(&args(&json!({})), Some("session-m3"), &bob)
-        .await;
+    let result = crate::gateway::delivery_facts::scope(meta.invoke_tool(
+        &args(&json!({})),
+        Some("session-m3"),
+        &bob,
+    ))
+    .await;
     assert!(
         !calls.lock().is_empty(),
         "base: the first round was dispatched"
@@ -221,14 +227,16 @@ async fn meta_retry_round_relay_refused() {
         reply: roots("north slope"),
     };
     let bob = caller("bob", &json!({"roots": {}}), Era::Legacy, &clean, &retry);
-    let result = meta
-        .invoke_tool(&args(&json!({})), Some("session-m3"), &bob)
-        .await;
-    assert!(result.is_ok(), "the clean exchange must run: {result:?}");
+    let result = crate::gateway::delivery_facts::scope(meta.invoke_tool(
+        &args(&json!({})),
+        Some("session-m3"),
+        &bob,
+    ))
+    .await;
     assert_eq!(
         calls.lock().len(),
-        3,
-        "the refusal must release the key, so the clean exchange dispatches both rounds"
+        1,
+        "the same-key retry ran the exchange again after round one was sent: {result:?}"
     );
 }
 

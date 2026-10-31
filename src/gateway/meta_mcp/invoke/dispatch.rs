@@ -48,6 +48,10 @@ impl MetaMcp {
         };
         let result = enforcer.check(tool, cost_key);
         if !result.allowed {
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::CostBudget,
+                None,
+            );
             return Err(Error::gateway_refused(
                 -32003,
                 result

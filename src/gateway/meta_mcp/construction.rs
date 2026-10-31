@@ -32,6 +32,8 @@ impl MetaMcp {
             change_feed: std::sync::OnceLock::new(),
             events: std::sync::OnceLock::new(),
             counters: std::sync::OnceLock::new(),
+            #[cfg(feature = "webui")]
+            decisions: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -57,6 +59,7 @@ impl MetaMcp {
             session_profiles: Arc::new(SessionProfileStore::new()),
             session_lifecycle: std::sync::OnceLock::new(),
             reload_context: RwLock::new(None),
+            startup_live_config: std::sync::OnceLock::new(),
             identity_propagation: RwLock::new(None),
             backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
             account_strategies: Arc::new(

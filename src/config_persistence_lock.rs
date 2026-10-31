@@ -218,6 +218,9 @@ pub(crate) struct Locked {
     /// is on bytes that are no longer on disk, and a live gateway owes a
     /// reload.
     pub(crate) recovered: Recovered,
+    /// A replace journal was left beside the config and is not yet
+    /// recovered: only [`lock_config_deferred`] leaves one.
+    pub(crate) journal_pending: bool,
     /// The configured path was a symlink to a missing target when it was
     /// resolved: damage, not absence (GH462).
     dangling: bool,
@@ -314,7 +317,22 @@ impl Locked {
 /// leaves recovery running unlocked, and the thread stops waiting within one
 /// poll of the cancel.
 pub(crate) async fn lock_config(config: &Path, deadline: Instant) -> Result<Locked, NotLocked> {
-    match lock_with(config, deadline, Preflight::None).await {
+    match lock_with(config, deadline, Preflight::None, Recovery::OnAcquire).await {
+        Ok(locked) => locked,
+        // Preflight::None loads nothing, so it refuses nothing.
+        Err(e) => Err(NotLocked::Failed(e.to_string())),
+    }
+}
+
+/// [`lock_config`] that leaves a pending replace journal where it is and
+/// reports it ([`Locked::journal_pending`]): an audited writer appends its
+/// recovery intent first, then recovers ([`super::journal::recover`]). A
+/// refused acquisition recovers nothing.
+pub(crate) async fn lock_config_deferred(
+    config: &Path,
+    deadline: Instant,
+) -> Result<Locked, NotLocked> {
+    match lock_with(config, deadline, Preflight::None, Recovery::Deferred).await {
         Ok(locked) => locked,
         // Preflight::None loads nothing, so it refuses nothing.
         Err(e) => Err(NotLocked::Failed(e.to_string())),
@@ -335,7 +353,16 @@ pub(crate) async fn lock_config_loading(
     config: &Path,
     deadline: Instant,
 ) -> crate::Result<Result<Locked, NotLocked>> {
-    lock_with(config, deadline, Preflight::Loads).await
+    lock_with(config, deadline, Preflight::Loads, Recovery::OnAcquire).await
+}
+
+/// When a pending replace journal is recovered.
+#[derive(Clone, Copy)]
+enum Recovery {
+    /// Before the lock is handed over.
+    OnAcquire,
+    /// By the holder, after its own audit intent.
+    Deferred,
 }
 
 /// What the lock thread checks before it opens the sidecar.
@@ -350,6 +377,7 @@ async fn lock_with(
     config: &Path,
     deadline: Instant,
     preflight: Preflight,
+    recovery: Recovery,
 ) -> crate::Result<Result<Locked, NotLocked>> {
     let config = config.to_path_buf();
     let waiting = Arc::new(AtomicBool::new(true));
@@ -358,7 +386,7 @@ async fn lock_with(
         if matches!(preflight, Preflight::Loads) && !super::journal::exists(&config) {
             super::load_existing_or_default(&config)?;
         }
-        Ok(acquire(&config, deadline, &|| waiting.load(SeqCst), |_| {}))
+        Ok(acquire(&config, deadline, recovery, &|| waiting.load(SeqCst), |_| {}))
     })
     .await
     .unwrap_or_else(|why| {
@@ -388,6 +416,7 @@ impl Drop for StopWaiting {
 fn acquire(
     config: &Path,
     deadline: Instant,
+    recovery: Recovery,
     waiting: &dyn Fn() -> bool,
     on_wait: impl FnOnce(&Path),
 ) -> Result<Locked, NotLocked> {
@@ -405,12 +434,19 @@ fn acquire(
         if let Some(held) = try_once(config, &lock, Owners::UserOrRoot)? {
             // An unusable journal releases the lock and refuses, naming what
             // to do by hand.
-            let recovered = super::journal::recover(&target).map_err(NotLocked::Failed)?;
+            let (recovered, journal_pending) = match recovery {
+                Recovery::OnAcquire => (
+                    super::journal::recover(&target).map_err(NotLocked::Failed)?,
+                    false,
+                ),
+                Recovery::Deferred => (Recovered::Nothing, super::journal::exists(&target)),
+            };
             let existed = std::fs::symlink_metadata(&target).is_ok();
             return Ok(Locked {
                 target,
                 held,
                 recovered,
+                journal_pending,
                 dangling,
                 existed,
             });
@@ -608,54 +644,12 @@ pub(crate) fn lock_config_blocking(
     deadline: Instant,
     on_wait: impl FnOnce(&Path),
 ) -> Result<Locked, NotLocked> {
-    acquire(config, deadline, &|| true, on_wait)
+    acquire(config, deadline, Recovery::OnAcquire, &|| true, on_wait)
 }
 
-/// What a reload that did not start the write may do about the lock.
-pub(crate) enum ReaderLock {
-    /// Held (and any journal recovered): load its target under it.
-    Held(Locked),
-    /// No writer can exist (read-only filesystem, or a directory this
-    /// account cannot write) and no journal is pending: load this resolved
-    /// config without it.
-    Unlocked(PathBuf),
-    /// Do not load this time; the next event retries. The reason, for a log.
-    Skip(String),
-}
-
-/// Take the lock for a reader: the file watcher, the env poll, a reload
-/// the admin asked for. Writers replace gateway.yaml by atomic rename, so an
-/// unlocked reader sees whole old or whole new bytes; the lock keeps it from
-/// loading bytes a refused reload is about to roll back.
-///
-/// Read without the lock only when the sidecar cannot even be created
-/// because no writer can exist here, and no journal is pending (a stat finds
-/// none). Every other failure skips this reload: never an unlocked read.
-pub(crate) async fn reader_lock(config: &Path, deadline: Instant) -> ReaderLock {
-    match lock_config(config, deadline).await {
-        Ok(locked) => ReaderLock::Held(locked),
-        Err(NotLocked::Busy) => ReaderLock::Skip(format!(
-            "another writer holds the lock beside {} past the wait",
-            config.display()
-        )),
-        Err(NotLocked::Failed(message)) => {
-            let probed = config.to_path_buf();
-            let probe = off_runtime(move || {
-                let target = resolved(&probed);
-                let journal = super::journal::journal_path(&target);
-                (
-                    no_writer_possible(&target),
-                    journal_pending(&target),
-                    target,
-                    journal,
-                )
-            })
-            .await
-            .ok();
-            classify_unlockable(config, message, probe)
-        }
-    }
-}
+#[path = "config_persistence_lock_reader.rs"]
+mod reader;
+pub(crate) use reader::{ReaderLock, reader_lock, reader_lock_deferred};
 
 /// The vault lock's blocking wait: one attempt per `POLL` until `deadline`,
 /// with `on_wait` told once when the lock is held. The config locks wait in

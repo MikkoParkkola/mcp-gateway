@@ -4,6 +4,8 @@
 
 use super::super::super::auth::AuthenticatedClient;
 use super::super::super::router::AppState;
+use super::super::access_table::CpCheck;
+use super::super::guard::Guard;
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneActor, ControlPlaneAuditEvent, ControlPlaneDecisionTargetKind,
     ControlPlaneGrant, ControlPlaneMutation, ControlPlanePolicy, ControlPlaneRole,
@@ -11,7 +13,7 @@ use crate::control_plane::{
 };
 use crate::key_server::oidc::VerifiedIdentity;
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde::{Deserialize, Serialize};
@@ -47,24 +49,45 @@ pub(super) struct MutationResponse {
     pub(super) reason: String,
 }
 
+/// The actor and the action its row authorizes, derived where the handler
+/// always derived its actor: the RBAC check itself stays in
+/// `validate_for_actor`, after the store check.
+fn admitted_actor(
+    state: &AppState,
+    guard: &Guard,
+) -> Result<(crate::control_plane::ControlPlaneActor, ControlPlaneAction), super::super::guard::Early>
+{
+    guard.admit_control_plane(|client, identity, check| match check {
+        CpCheck::Action(action) => Ok((
+            actor_from_client(
+                client,
+                identity,
+                &state.live_config.get().control_plane.role_mapping,
+            ),
+            action,
+        )),
+        CpCheck::Read | CpCheck::FromBody(_) => Err(Box::new(
+            super::super::guard::Refused::AdminRequired.into_response(),
+        )),
+    })
+}
+
 /// POST a grant upsert: RBAC via `validate_for_actor`, then 409. Dispatch
 /// enforces grants from the identity-grants file, never from this store.
 pub(super) async fn mutate_grant(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Json(req): Json<GrantMutationRequest>,
-) -> impl IntoResponse {
-    let actor = actor_from_client(
-        client.map(|Extension(c)| c).as_ref(),
-        identity.map(|Extension(id)| id).as_ref(),
-        &state.live_config.get().control_plane.role_mapping,
-    );
+) -> axum::response::Response {
+    let (actor, action) = match admitted_actor(&state, &guard) {
+        Ok(admitted) => admitted,
+        Err(refused) => return *refused,
+    };
     let target_id = req.grant.grant_id.clone();
     apply_mutation(
         control_plane_store(&state),
         &actor,
-        ControlPlaneAction::MutateGrant,
+        action,
         target_id,
         format!("upsert grant {}", req.grant.grant_id),
         req.reason,
@@ -77,20 +100,18 @@ pub(super) async fn mutate_grant(
 /// Dispatch enforces policies from gateway config, never from this store.
 pub(super) async fn mutate_policy(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Json(req): Json<PolicyMutationRequest>,
-) -> impl IntoResponse {
-    let actor = actor_from_client(
-        client.map(|Extension(c)| c).as_ref(),
-        identity.map(|Extension(id)| id).as_ref(),
-        &state.live_config.get().control_plane.role_mapping,
-    );
+) -> axum::response::Response {
+    let (actor, action) = match admitted_actor(&state, &guard) {
+        Ok(admitted) => admitted,
+        Err(refused) => return *refused,
+    };
     let target_id = req.policy.policy_id.clone();
     apply_mutation(
         control_plane_store(&state),
         &actor,
-        ControlPlaneAction::MutatePolicy,
+        action,
         target_id,
         format!("upsert policy {}", req.policy.policy_id),
         req.reason,
@@ -129,15 +150,23 @@ pub(super) struct DecisionRequest {
 /// actionable here yet and return 422.
 pub(super) async fn resolve_decision(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Json(req): Json<DecisionRequest>,
 ) -> axum::response::Response {
-    let actor = actor_from_client(
-        client.map(|Extension(c)| c).as_ref(),
-        identity.map(|Extension(id)| id).as_ref(),
-        &state.live_config.get().control_plane.role_mapping,
-    );
+    // Only a body-chosen row admits here; the action is checked below.
+    let actor = match guard.admit_control_plane(|client, identity, check| match check {
+        CpCheck::FromBody(_) => Ok(actor_from_client(
+            client,
+            identity,
+            &state.live_config.get().control_plane.role_mapping,
+        )),
+        CpCheck::Read | CpCheck::Action(_) => Err(Box::new(
+            super::super::guard::Refused::AdminRequired.into_response(),
+        )),
+    }) {
+        Ok(actor) => actor,
+        Err(refused) => return *refused,
+    };
     resolve_decision_core(control_plane_store(&state), &actor, req)
 }
 
@@ -368,7 +397,7 @@ pub(super) fn apply_mutation(
 /// role mapping (MIK-6688); an identity that matches no rule gets `Auditor`
 /// (least privilege). With no verified identity, the legacy admin-key
 /// projection applies (admin key -> Admin, else Auditor) — backward compatible.
-pub(super) fn actor_from_client(
+pub(in crate::gateway::ui) fn actor_from_client(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     role_mapping: &ControlPlaneRoleMappingConfig,

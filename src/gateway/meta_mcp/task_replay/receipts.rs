@@ -41,18 +41,14 @@ impl MetaMcp {
                     // A plan whose steps all ran on one distinct target:
                     // the deduplicated targets record a single target, but
                     // the task is still a plan, so it takes the plan replay
-                    // as the multi-target arm does. Only a missing replay
-                    // entry (a restart, an eviction, a detection-off
-                    // delivery) falls back to the single-target receipt,
-                    // which the writes restored above it already serve, so
-                    // it renews exactly what it renewed before.
+                    // as the multi-target arm does. A missing replay entry
+                    // (a restart, an eviction, a detection-off delivery)
+                    // stages nothing: the plan's result is its own assembly,
+                    // which can hold the gateway's text for a step refused
+                    // before its backend, so the whole of it is never
+                    // receipted as the one target's answer.
                     super::super::invoke::gateway_writes::restore(&stored.gateway_writes);
-                    if super::super::invoke::relay::stage_task_replay(self, who, stored) {
-                        return;
-                    }
-                    if let Some(result) = stored.backend_result() {
-                        self.stage_relay_receipt(who, to, result);
-                    }
+                    super::super::invoke::relay::stage_task_replay(self, who, stored);
                 } else if let Some(result) = stored.backend_result() {
                     // MIK-7993.STORE.1: the members the gateway wrote into the
                     // stored result are its own text; restored into this

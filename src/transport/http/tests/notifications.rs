@@ -32,7 +32,7 @@ async fn sse_decode_captures_the_notification_seen_before_the_response() {
     );
 
     // WHEN: the transport decodes it inside the caller's sink scope
-    let (response, notifications) = crate::transport::notification_sink::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
@@ -74,7 +74,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
     );
 
     // WHEN: the transport decodes it
-    let (_, notifications) = crate::transport::notification_sink::collect(None, async {
+    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(None, async {
         // ADR-014 §4: a relayed `notifications/message` reaches the caller
         // only if the caller declared a level, so the request this row is
         // about declares one. What the row asserts is unchanged.
@@ -101,7 +101,7 @@ async fn sse_decode_preserves_the_order_two_notifications_arrived_in() {
 #[tokio::test]
 async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"ok\":true}}\n";
-    let (response, notifications) = crate::transport::notification_sink::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(body)),
     )
@@ -116,6 +116,61 @@ async fn sse_decode_delivers_no_notifications_when_the_server_sent_none() {
         notifications.len(),
         0,
         "a clean stream must not manufacture a notification"
+    );
+}
+
+/// The SSE stream of a call carrying `frame` ahead of its answer.
+fn sse_with(frame: &serde_json::Value) -> String {
+    format!(
+        "event: message\ndata: {frame}\n\nevent: message\ndata: {}\n",
+        serde_json::json!({"jsonrpc": "2.0", "id": 5, "result": {"content": []}})
+    )
+}
+
+/// HTTP in-call: a backend's progress frame reaches the
+/// caller without the gateway-only and scoped members it planted.
+#[tokio::test]
+async fn sse_decode_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let body = sse_with(&planted_progress("t-1"));
+    let (_, notifications) = crate::transport::notify_ingress::test_support::collect(
+        None,
+        sse_decoder::decode_sse_exchange(sse_stream(body)),
+    )
+    .await;
+    assert_eq!(notifications.len(), 1, "the progress frame must arrive");
+    let params = notifications[0].params.as_ref().expect("params");
+    assert_progress_stripped("http in-call", "t-1", params);
+}
+
+/// A backend's `notifications/tasks` is the gateway's own
+/// to raise; one a backend sends during a call never reaches the caller.
+#[tokio::test]
+async fn sse_decode_withholds_a_backend_tasks_notification() {
+    let frame = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/tasks",
+        "params": {"taskId": "FORGED-TASK", "status": "completed"},
+    });
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
+        None,
+        sse_decoder::decode_sse_exchange(sse_stream(sse_with(&frame))),
+    )
+    .await;
+    // The decode succeeded, so an empty sink is the withholding, not a
+    // failed read.
+    assert!(
+        response
+            .expect("the response must still decode")
+            .result
+            .is_some(),
+        "the answer after the withheld frame was lost"
+    );
+    assert!(
+        notifications.is_empty(),
+        "a backend notifications/tasks reached the caller: {notifications:?}"
     );
 }
 

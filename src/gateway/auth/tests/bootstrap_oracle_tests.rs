@@ -29,8 +29,8 @@ fn observe(
         ))))
         .body(Body::empty())
         .expect("request builds");
-    let response =
-        try_dashboard_bootstrap(state, &request).expect("a bootstrap link is always answered here");
+    let response = try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
+        .expect("a bootstrap link is always answered here");
     let status = response.status();
     let mut headers: Vec<(String, String)> = response
         .headers()
@@ -121,7 +121,14 @@ fn r14_an_empty_code_slot_still_runs_the_compare() {
     assert!(
         state
             .dashboard_bootstrap
-            .take_handoff(&GUESS, crate::gateway::auth::Now::read())
+            .take_handoff(
+                &GUESS,
+                crate::gateway::auth::Now::read(),
+                &crate::gateway::auth::ResolvedAuthConfig::from_config(
+                    &crate::config::AuthConfig::default(),
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )
+            )
             .is_none()
     );
     assert!(
@@ -176,7 +183,10 @@ fn r10_an_https_front_without_a_handoff_answers_every_value_as_a_wrong_one() {
     let (mut state, printed) = bootstrap_state(Some("bearer"), vec![]);
     let mut config = crate::config::Config::default();
     config.server.public_url = Some("https://gw.example".to_string());
-    state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::new(config));
+    state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+        config,
+        std::sync::Arc::clone(state.live_config.generation().auth()),
+    ));
     let live = observe(&state, &printed, LOCAL);
     let guess = observe(&state, &GUESS, LOCAL);
     assert_eq!(
@@ -205,7 +215,8 @@ fn r7b_no_admin_credential_keeps_its_401_for_a_browser() {
         .header("sec-fetch-dest", "document")
         .body(Body::empty())
         .expect("request builds");
-    let response = try_dashboard_bootstrap(&state, &request).expect("answered");
+    let response = try_dashboard_bootstrap(&state, state.live_config.generation().auth(), &request)
+        .expect("answered");
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     assert!(
         response

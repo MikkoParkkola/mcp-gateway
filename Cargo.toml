@@ -326,6 +326,12 @@ task-sdk-recovery = []
 ## call path (src/runtime/provision.rs). NOT in default — foundation code.
 runtime-substrate = []
 
+## Test-only seams for the command preview's fetch phase (ADR-027 P1 rows S1-S8).
+## NEVER in a release build: the crate refuses to compile it without
+## debug_assertions, and release clippy takes its list from
+## scripts/ci/release_features.py, which leaves it out.
+sandbox-fixtures = []
+
 [[bin]]
 name = "mcp-gateway"
 path = "src/main.rs"

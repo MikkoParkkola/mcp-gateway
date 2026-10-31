@@ -22,9 +22,9 @@ src/events/rpc.rs	judged_backends	statement	Discovery	getx1
 src/events/rpc.rs	resolve_upstream	statement	Discovery	getx1
 src/events/upstream.rs	detected_in	statement	Background	getx1
 src/events/upstream_listener.rs	answering	statement	Background	getx1
-src/events/upstream_listener.rs	authorize_uri	statement	Background	getx1
-src/events/upstream_listener.rs	knows	statement	Background	getx1
 src/events/upstream_listener.rs	ledger	statement	Background	getx1
+src/events/upstream_listener_authz.rs	authorize_uri	statement	Background	getx1
+src/events/upstream_listener_authz.rs	knows	statement	Background	getx1
 src/events/upstream_session.rs	registered_anew	statement	Background	getx1
 src/events/upstream_session.rs	run	statement	Background	getx1
 src/events/upstream_session_poll.rs	poll	statement	Background	getx1

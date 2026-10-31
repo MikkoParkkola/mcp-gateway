@@ -57,15 +57,15 @@ pub(super) fn authorizer(key_server: Arc<crate::key_server::KeyServer>) -> AuthS
         ..crate::config::AuthConfig::default()
     };
     AuthState {
-        auth_config: Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
-            &config,
-            crate::gateway::record_principal::TEST_RECORD_KEY,
-        )),
         key_server: Some(key_server),
         dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &config,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
     }

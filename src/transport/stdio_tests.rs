@@ -481,7 +481,7 @@ async fn stdio_streams_a_progress_notification_while_its_call_is_still_running()
     let reader = std::sync::Arc::clone(&transport);
     let (release, held) = tokio::sync::oneshot::channel::<()>();
 
-    let (call, mut rx) = crate::transport::notification_sink::scope(None, async move {
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async move {
         let _ = transport.register_progress_token("tok-a");
         tokio::spawn(async move {
             reader

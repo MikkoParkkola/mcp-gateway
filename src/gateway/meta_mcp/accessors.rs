@@ -24,6 +24,30 @@ impl MetaMcp {
         self.reload_context.read().clone()
     }
 
+    /// The live config, for a record's config revision: the one startup
+    /// built, else the reload context's; `None` only before startup sets it.
+    pub(crate) fn live_config(&self) -> Option<Arc<crate::config_reload::LiveConfig>> {
+        let from_reload = self
+            .reload_context
+            .read()
+            .as_ref()
+            .map(|context| Arc::clone(&context.live_config));
+        // One live config: a reload context built at startup shares it.
+        debug_assert!(
+            match (self.startup_live_config.get(), from_reload.as_ref()) {
+                (Some(startup), Some(reload)) => Arc::ptr_eq(startup, reload),
+                _ => true,
+            },
+            "the reload context publishes a different live config than startup's"
+        );
+        self.startup_live_config.get().cloned().or(from_reload)
+    }
+
+    /// Startup's live config; a second call keeps the first.
+    pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
+        let _ = self.startup_live_config.set(live);
+    }
+
     /// Public accessor for the reload context — used by UI management endpoints.
     pub fn reload_context(&self) -> Option<Arc<ReloadContext>> {
         self.reload_context.read().clone()
@@ -111,5 +135,24 @@ impl MetaMcp {
             |sid| self.session_profiles.get_profile_name(sid, default_name),
         );
         self.profile_registry.get_shared(&name)
+    }
+}
+
+#[cfg(feature = "webui")]
+impl MetaMcp {
+    /// Attach the decision set. Called once by the HTTP server; a second call
+    /// is ignored.
+    pub(crate) fn set_decisions(&self, decisions: Arc<crate::decisions::Shared>) {
+        let _ = self.decisions.set(decisions);
+    }
+
+    /// The decision set, when the server attached one.
+    pub(crate) fn decisions(&self) -> Option<&Arc<crate::decisions::Shared>> {
+        self.decisions.get()
+    }
+
+    /// Every live grant row, copied: what the decision set closes against.
+    pub(crate) fn grant_rows(&self) -> Vec<crate::identity_grants::IdentityGrant> {
+        self.identity_grants.read().values().cloned().collect()
     }
 }

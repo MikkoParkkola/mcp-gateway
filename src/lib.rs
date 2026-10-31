@@ -57,6 +57,9 @@ pub mod control_plane;
 pub mod cost_accounting;
 mod counters;
 mod debug_trust_roots;
+// The decision set serves only the web UI's routes and stream.
+#[cfg(feature = "webui")]
+mod decisions;
 #[doc(hidden)]
 pub mod discovery;
 mod duration_bound;
@@ -103,6 +106,13 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+
+// The preview sandbox's test seams must never ship: a release build with them
+// fails here, and CI proves it with a build that must fail.
+#[cfg(all(feature = "sandbox-fixtures", not(debug_assertions)))]
+compile_error!(
+    "the sandbox-fixtures feature is for tests only and cannot be built without debug_assertions"
+);
 #[doc(hidden)]
 pub mod projection;
 #[doc(hidden)]

@@ -273,9 +273,11 @@ impl MetaMcp {
                     }
                 };
             if absent {
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.release();
-                }
+                // Refused before its backend: the key released, as before.
+                super::nonce_settle::settle_pre_send(
+                    caller,
+                    super::nonce_settle::PreSendExit::ReleaseKey(idem_reservation.as_mut()),
+                );
                 return Err(self.absent_on_slot(
                     (server, backend),
                     tool,
@@ -349,9 +351,11 @@ impl MetaMcp {
                 {
                     Ok((value, _)) => Some(value),
                     Err(e) => {
-                        if let Some(reservation) = idem_reservation.as_mut() {
-                            reservation.release();
-                        }
+                        // Refused before its backend: the key released, as before.
+                        super::nonce_settle::settle_pre_send(
+                            caller,
+                            super::nonce_settle::PreSendExit::ReleaseKey(idem_reservation.as_mut()),
+                        );
                         return self.with_connect_offer(Err(e), verified_identity).await;
                     }
                 }

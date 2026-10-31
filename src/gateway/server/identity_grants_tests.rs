@@ -80,7 +80,8 @@ impl Started {
         let gateway = Gateway::new(config.clone()).await.expect("valid config");
         let meta = gateway.build_meta_mcp().await?.meta_mcp;
         let store = build_control_plane_store(&config, &base)?;
-        let sink = start_identity_grant_audit(&config, &meta, store.as_ref(), &base.path).await?;
+        let (sink, _) =
+            start_identity_grant_audit(&config, &meta, store.as_ref(), &base.path).await?;
         Ok(Self { store, sink, meta })
     }
 
@@ -204,7 +205,7 @@ async fn t5a_no_store_refuses_start_with_auth_and_grants() {
     let meta = gateway.build_meta_mcp().await.unwrap().meta_mcp;
     let stdio = stdio_identity_grants(&config, Some(&config_path), &meta).await;
     let err = stdio
-        .map(|s| s.is_some())
+        .map(|(s, _)| s.is_some())
         .expect_err("stdio: started unaudited")
         .to_string();
     assert!(err.contains("governance audit log"), "{err}");
@@ -405,9 +406,10 @@ async fn t3cd_failed_snapshot_append_serves_nothing() {
         flaky.fail_from.store(fail_at, Ordering::SeqCst);
         let store: Arc<dyn ControlPlaneStore> = flaky.clone();
         std::fs::create_dir_all(store_dir(dir.path())).unwrap();
-        let sink = start_identity_grant_audit(&config, &meta, Some(&store), &store_dir(dir.path()))
-            .await
-            .unwrap();
+        let (sink, _) =
+            start_identity_grant_audit(&config, &meta, Some(&store), &store_dir(dir.path()))
+                .await
+                .unwrap();
         let (live, _) = meta.identity_grant_sink();
         assert!(live.read().values().next().is_none(), "fail_at={fail_at}");
         // The refusal holds for the whole run: a later reload must not serve

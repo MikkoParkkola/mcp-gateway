@@ -28,11 +28,23 @@ async fn tools_list_never_warms_a_backend_the_grant_excludes_http() {
         reached.is_empty(),
         "tools/list reached a backend the caller's grant excludes: {reached:?}"
     );
+    // A backend the grant excludes is skipped, not refused: no shared start
+    // is attempted for it, so the listing records no refusal.
+    let raw = std::fs::read_to_string(fx.dirs.0.path().join("audit.jsonl")).unwrap_or_default();
+    let delivered: Vec<Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect();
+    let [listing] = delivered.as_slice() else {
+        panic!("premise: one delivery record for the listing: {delivered:?}");
+    };
+    assert_ne!(listing["response_effect"], "refused", "{listing}");
 }
 
 /// The surfaced entries in a `tools/list` answer whose trust card names
 /// `server`.
-fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
+pub(super) fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
     answer
         .pointer("/result/tools")
         .and_then(Value::as_array)
@@ -43,7 +55,7 @@ fn surfaced_on<'a>(answer: &'a Value, server: &str) -> Vec<&'a Value> {
 }
 
 /// Whether an entry carries the shared slot's schema B (a `folder` property).
-fn is_shared_schema(entry: &Value) -> bool {
+pub(super) fn is_shared_schema(entry: &Value) -> bool {
     entry.pointer("/inputSchema/properties/folder").is_some()
 }
 
@@ -123,7 +135,7 @@ async fn two_surfaced(gateway: DirectAccountGateway, auth: &AuthConfig) -> Fx {
 }
 
 /// The fill bound of `server`.
-fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
+pub(super) fn fill_bound(fx: &Fx, server: &str) -> std::time::Duration {
     fx.gateway
         .backends()
         .get(server)
@@ -232,12 +244,40 @@ async fn a_backend_past_the_cap_is_listed_after_its_late_fill_http() {
     );
 }
 
-/// SHARED.5 (busy custody): a second listing that starts while the first
-/// one's lease is mid-fill, with custody busy, waits on that lease and serves
-/// its result, with no second fill.
+/// `server`'s `tools_known` in a `gateway_list_servers` answer, wherever the
+/// entry sits in the (text-carried) JSON.
+fn servers_know_tools(answer: &Value, server: &str) -> bool {
+    fn find(value: &Value, server: &str) -> Option<bool> {
+        match value {
+            Value::String(text) => find(&serde_json::from_str(text).ok()?, server),
+            Value::Array(items) => items.iter().find_map(|item| find(item, server)),
+            Value::Object(map) => {
+                if map.get("name") == Some(&json!(server))
+                    && let Some(known) = map.get("tools_known")
+                {
+                    return Some(known == &json!(true));
+                }
+                map.values().find_map(|item| find(item, server))
+            }
+            _ => None,
+        }
+    }
+    find(answer, server)
+        .unwrap_or_else(|| panic!("premise: gateway_list_servers lists {server}: {answer}"))
+}
+
+/// SHARED.5 (busy custody), superseded by D3: busy custody fails closed for
+/// per-user tools, and a fill that finishes under an unreadable gate does not
+/// publish. A second listing that starts while the first one's lease is
+/// mid-fill, with custody busy, withholds the per-user backend's tools and
+/// still lists a shared backend's; no second fill runs. The per-user tools
+/// stay hidden for up to the retry backoff after a busy read: once custody
+/// is back and the backoff has passed, the next listing claims afresh, reads
+/// custody, and shows the current grant's tools.
 #[tokio::test(start_paused = true)]
-async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
+async fn a_busy_custody_listing_withholds_per_user_tools_then_recovers_http() {
     let fx = Arc::new(fixture().await);
+    shared_backend(&fx);
     let bound = fill_bound(&fx, BACKEND);
     fx.gateway.delay_lists_on(BACKEND, bound / 2);
     let first = tokio::spawn({
@@ -252,20 +292,48 @@ async fn a_listing_waits_on_a_running_lease_through_a_busy_custody_http() {
     );
     fx.gateway.fail_custody_for_test(true);
     let second = rpc(&fx, 2, "tools/list", json!({})).await;
+    let servers = rpc(
+        &fx,
+        3,
+        "tools/call",
+        json!({"name": "gateway_list_servers", "arguments": {}}),
+    )
+    .await;
     fx.gateway.fail_custody_for_test(false);
+    first.await.expect("the first listing");
     assert!(
-        surfaced_on(&second, BACKEND)
+        !surfaced_on(&second, BACKEND)
             .iter()
             .any(|t| !is_shared_schema(t)),
-        "the second listing did not serve the running lease's fill: {second}"
+        "a busy custody listed the per-user backend's own tools: {second}"
     );
-    assert_eq!(fx.gateway.lists_to(BACKEND), 1, "a second fill ran");
-    let first = first.await.expect("the first listing");
     assert!(
-        surfaced_on(&first, BACKEND)
+        servers_know_tools(&servers, "shared-ledger"),
+        "a busy custody hid a shared backend's tools: {servers}"
+    );
+    assert!(
+        !servers_know_tools(&servers, BACKEND),
+        "a busy custody let the per-user backend's tools list: {servers}"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        1,
+        "a second fill ran while custody was busy"
+    );
+    let within = rpc(&fx, 4, "tools/list", json!({})).await;
+    assert!(
+        !surfaced_on(&within, BACKEND)
             .iter()
             .any(|t| !is_shared_schema(t)),
-        "the first listing lost its own fill: {first}"
+        "the retry backoff did not hold after the refused publish: {within}"
+    );
+    tokio::time::sleep(crate::gateway::meta_mcp::COLD_RETRY_BACKOFF + bound).await;
+    let third = rpc(&fx, 5, "tools/list", json!({})).await;
+    assert!(
+        surfaced_on(&third, BACKEND)
+            .iter()
+            .any(|t| !is_shared_schema(t)),
+        "the current grant's tools did not list after custody recovered: {third}"
     );
 }
 

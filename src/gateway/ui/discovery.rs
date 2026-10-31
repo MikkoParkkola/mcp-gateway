@@ -21,14 +21,13 @@ use axum::routing::{get, post};
 use serde_json::json;
 
 use super::backends::validate_backend_name;
-use super::errors::{admin_auth_required, flat_error};
-use super::is_admin;
+use super::errors::flat_error;
+use super::guard::Guard;
 use crate::config::Config;
 use crate::config_reload::FileRevision;
 use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::listing::{ClientFiles, DiscoveryCache, ListedFind, Listing, Refusal};
 use crate::discovery::shadow::ShadowRiskSeverity;
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::gateway::routes;
 
@@ -121,11 +120,10 @@ fn listed(find: &ListedFind, gateway: &Gateway) -> serde_json::Value {
 async fn list_discovery(
     State(state): State<Arc<AppState>>,
     Extension(cache): Extension<Arc<DiscoveryCache>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let path = state.config_path.clone();
     let gateway = match tokio::task::spawn_blocking(move || read_gateway(path.as_deref())).await {

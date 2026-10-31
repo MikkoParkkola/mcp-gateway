@@ -164,7 +164,8 @@ pub(super) async fn forward_plain(
         // Index the slot a complete drain stored.
         state
             .meta_mcp
-            .remember_caller_slot(&route.backend, caller.proof(), key);
+            .remember_caller_slot(&route.backend, caller.proof(), key)
+            .await;
         return Ok(drained);
     }
     let admission = if method == "tools/call" {

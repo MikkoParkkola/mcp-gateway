@@ -44,7 +44,11 @@ pub(super) fn context(path: &Path) -> Arc<ReloadContext> {
 pub(super) fn to(expected: Expected, bytes: &'static str, replaced: Replaced) -> Replace {
     Replace {
         expected,
-        compute: Box::new(move |_, _| Ok(bytes.as_bytes().to_vec())),
+        compute: Box::new(move |_| {
+            Ok(crate::config_persistence::keyedit::Template::plain(
+                bytes.as_bytes().to_vec(),
+            ))
+        }),
         replaced,
         secrets: None,
     }

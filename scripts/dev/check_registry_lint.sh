@@ -244,13 +244,13 @@ for name in $entries; do
 done
 
 # `-D warnings` as CI does, `--cap-lints warn` so the plants stay warnings.
-run_pass() { # mode, extra cargo args...
+run_pass() { # mode, extra cargo args (features included)...
   local mode=$1 out="$scratch/clippy-$1.json" rc=0
   shift
   (
     cd "$scratch"
     CLIPPY_CONF_DIR="$scratch/scripts/lint/registry-ban" CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$root/target}" \
-      ${CARGO:-cargo} clippy --lib --all-features "$@" --message-format=json -- \
+      ${CARGO:-cargo} clippy --lib "$@" --message-format=json -- \
       -D warnings -W clippy::disallowed_methods --cap-lints warn
   ) > "$out" 2> "$scratch/clippy-$mode.stderr" || rc=$?
   python3 -I "$checker" "$mode" "$out" "$scratch/$plant" "$plant" "$rc" "$scratch/clippy-$mode.stderr"
@@ -265,9 +265,13 @@ if [ "$action" = "--cache-probe" ]; then
       ${CARGO:-cargo} clippy --lib --all-features --quiet -- \
       -D warnings -W clippy::disallowed_methods --cap-lints warn
   ) > "$tmp/warm.log" 2>&1 || { cat "$tmp/warm.log" >&2; echo "check_registry_lint: warm-up pass failed" >&2; exit 1; }
-  run_pass dev
+  run_pass dev --all-features
   echo "check_registry_lint: cache probe ok: a CLIPPY_CONF_DIR change re-lints a warm cache"
   exit 0
 fi
-run_pass dev
-run_pass release --release
+run_pass dev --all-features
+# The release pass takes every feature but the test-only ones, which refuse
+# to build without debug_assertions, as CI's release clippy does. Its own
+# line, so a failing script stops here instead of linting with no features.
+feats=$(python3 "$root/scripts/ci/release_features.py")
+run_pass release --release --features "$feats"

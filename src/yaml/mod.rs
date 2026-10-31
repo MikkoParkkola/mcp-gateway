@@ -44,6 +44,7 @@ mod value_de;
 /// Any string as one valid double-quoted YAML scalar.
 pub(crate) use emit::quote_double as double_quoted;
 pub(crate) use error::{Error, Limit, Location, redact_message};
+pub(crate) use guard::MAX_YAML_BYTES;
 use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;

@@ -16,7 +16,10 @@ use crate::commands::doctor::CheckStatus;
 
 #[path = "npm_pin_wire_fixture.rs"]
 mod fixture;
-use fixture::{Cert, Fake, Proxy, Reply};
+use fixture::{
+    Cert, Fake, HANG_GUARD, Proxy, Reply, STALL_OUTLASTS_BUDGET, assert_all_released,
+    assert_budget_ended, check_within_guard, lookup_within_guard,
+};
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -199,15 +202,45 @@ async fn every_off_reason_sends_nothing_and_prints_one_skipped_pass() {
 
 // ── fail-soft: every failure is silence, inside the budget ─────────────────
 
-/// The longest a whole check may take: the budget plus one second for
-/// scheduling on a loaded CI runner. A literal, so the timing guard can read
-/// it; `the_budget_bound_is_the_budget_plus_one_second` keeps it in step.
-// timing-oracle: vs BUDGET (MIK-8512)
-const BUDGET_BOUND: Duration = Duration::from_secs(5);
+#[test]
+fn the_bounds_nest_budget_hang_guard_stall() {
+    assert_eq!(
+        BUDGET,
+        Duration::from_secs(4),
+        "the budget is the policy value"
+    );
+    assert!(BUDGET < HANG_GUARD, "the guard sits past the budget");
+    assert!(
+        HANG_GUARD < STALL_OUTLASTS_BUDGET,
+        "a stall outlives the guard, so only the budget ends a check"
+    );
+}
 
 #[test]
-fn the_budget_bound_is_the_budget_plus_one_second() {
-    assert_eq!(BUDGET + Duration::from_secs(1), BUDGET_BOUND);
+fn production_keeps_its_request_bounds() {
+    assert_eq!(ClientCfg::production().bounds_override, None);
+    assert_eq!(CONNECT_TIMEOUT, Duration::from_secs(2));
+    assert_eq!(REQUEST_TIMEOUT, Duration::from_secs(3));
+}
+
+/// One stalled lookup on the production request bounds, with no budget
+/// around it: only the request bound can end it.
+#[tokio::test]
+async fn the_request_timeout_alone_ends_one_stalled_lookup() {
+    let fake = Fake::start(&[(MEMORY_PATH, Reply::Stall)]).await;
+    let cfg = fake.cfg(&[]);
+    let http = client(&cfg).expect("the fake builds a client");
+    let started = Instant::now();
+    let doc = lookup_within_guard(&http, &cfg, "@modelcontextprotocol/server-memory").await;
+    let took = started.elapsed();
+    eprintln!("the lookup took {took:?}");
+    assert!(doc.is_none(), "a stalled lookup is no answer");
+    assert!(
+        took >= REQUEST_TIMEOUT.saturating_sub(Duration::from_millis(200)),
+        "the request bound ran out: {took:?}"
+    );
+    assert_eq!(fake.requests().len(), 1, "the stall was reached");
+    assert_all_released(&fake).await;
 }
 
 #[tokio::test]
@@ -218,6 +251,7 @@ async fn offline_is_silent() {
         base: Url::parse("https://127.0.0.1:1/").expect("parses"),
         roots: rustls::RootCertStore::empty(),
         proxy: ProxyEnv::default(),
+        bounds_override: None,
     };
     let rows = check(
         &config_of(&[("memory", memory_on("2026.8.31"))]),
@@ -228,8 +262,8 @@ async fn offline_is_silent() {
     assert!(rows.is_empty(), "{rows:?}");
 }
 
-/// Five stalled packages need two waves at four in flight; without the
-/// aggregate budget the second wave alone would end past it.
+/// Five stalled packages at four in flight, each outlasting every request
+/// bound: only the budget can end the check, and it lets go of every stall.
 #[tokio::test]
 async fn stalls_end_inside_the_budget_and_never_exceed_the_concurrency() {
     let packages = [
@@ -256,18 +290,16 @@ async fn stalls_end_inside_the_budget_and_never_exceed_the_concurrency() {
         .iter()
         .map(|(n, b)| (n.as_str(), b.clone()))
         .collect();
-    let started = Instant::now();
-    let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
-    let took = started.elapsed();
+    let (rows, took) = check_within_guard(&config_of(&named), &fake.cfg_outlasting_budget()).await;
     assert!(rows.is_empty(), "{rows:?}");
-    assert!(
-        took < BUDGET_BOUND,
-        "the budget bounds the whole check: {took:?}"
+    assert_budget_ended(took);
+    assert_eq!(
+        fake.requests().len(),
+        CONCURRENCY,
+        "the first wave reached the stalls"
     );
-    assert!(
-        took >= REQUEST_TIMEOUT,
-        "the stall was waited on, not skipped: {took:?}"
-    );
+    assert_eq!(fake.peak.load(Ordering::SeqCst), CONCURRENCY);
+    assert_all_released(&fake).await;
 }
 
 /// Eight packages that each answer after 300 ms: never more than four in
@@ -311,9 +343,9 @@ async fn at_most_four_requests_are_in_flight() {
     assert_eq!(fake.peak.load(Ordering::SeqCst), CONCURRENCY);
 }
 
-/// The memory warning finishes at once; seven stalled packages keep the
-/// pool busy past one request bound, so the second wave is still running
-/// when the aggregate budget ends. The finished row must survive that.
+/// The memory warning finishes at once; seven stalled packages, each
+/// outlasting every request bound, keep the pool busy until the budget ends
+/// the check. The finished row must survive that.
 #[tokio::test]
 async fn a_finished_warning_survives_the_budget_running_out() {
     let stalled = [
@@ -344,22 +376,27 @@ async fn a_finished_warning_survives_the_budget_running_out() {
         .iter()
         .map(|(n, b)| (n.as_str(), b.clone()))
         .collect();
-    let started = Instant::now();
-    let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
-    let took = started.elapsed();
-    assert!(
-        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
-        "the budget ran out: {took:?}"
-    );
-    assert!(took < BUDGET_BOUND, "{took:?}");
+    let (rows, took) = check_within_guard(&config_of(&named), &fake.cfg_outlasting_budget()).await;
+    assert_budget_ended(took);
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["memory: npm pin"], "{rows:?}");
+    // The memory answer freed one slot; the next stalled package took it.
+    assert_eq!(
+        fake.requests().len(),
+        CONCURRENCY + 1,
+        "{:?}",
+        fake.requests()
+    );
+    assert_all_released(&fake).await;
 }
 
-/// tavily-mcp is asked in the second wave, after airtable-mcp-server, which stalls past the budget.
+/// The first four packages answer at once, so airtable-mcp-server and
+/// tavily-mcp start in the second wave. airtable stalls past the budget;
+/// tavily's warning, which lands while airtable still stalls, must not be
+/// held behind it.
 #[tokio::test]
 async fn a_second_wave_warning_is_not_held_behind_a_stalled_request() {
-    let stalled = [
+    let first_wave = [
         ("@modelcontextprotocol/server-filesystem", FILESYSTEM_PATH),
         ("@modelcontextprotocol/server-memory", MEMORY_PATH),
         (
@@ -367,37 +404,47 @@ async fn a_second_wave_warning_is_not_held_behind_a_stalled_request() {
             "/@modelcontextprotocol%2Fserver-sequential-thinking",
         ),
         ("@playwright/mcp", "/@playwright%2Fmcp"),
-        ("airtable-mcp-server", "/airtable-mcp-server"),
     ];
-    let mut replies: Vec<(&str, Reply)> = stalled
+    let mut replies: Vec<(&str, Reply)> = first_wave
         .iter()
-        .map(|(_, path)| (*path, Reply::Stall))
+        .map(|(_, path)| (*path, Reply::Json(br#"{"versions":{}}"#.to_vec())))
         .collect();
+    replies.push(("/airtable-mcp-server", Reply::Stall));
     replies.push((
         "/tavily-mcp",
         Reply::Json(br#"{"versions":{"1.0.0":{"deprecated":"use 2"}}}"#.to_vec()),
     ));
     let fake = Fake::start(&replies).await;
-    let mut backends: Vec<(String, BackendConfig)> = stalled
+    let mut backends: Vec<(String, BackendConfig)> = first_wave
         .iter()
         .enumerate()
         .map(|(i, (name, _))| (format!("s{i}"), stdio(&format!("npx -y {name}@1.0.0"), &[])))
         .collect();
+    backends.push((
+        "a".to_string(),
+        stdio("npx -y airtable-mcp-server@1.0.0", &[]),
+    ));
     backends.push(("t".to_string(), stdio("npx -y tavily-mcp@1.0.0", &[])));
     let named: Vec<(&str, BackendConfig)> = backends
         .iter()
         .map(|(n, b)| (n.as_str(), b.clone()))
         .collect();
-    let started = Instant::now();
-    let rows = check(&config_of(&named), &fake.cfg(&[]), Lookup::On).await;
-    let took = started.elapsed();
-    assert!(
-        took >= BUDGET.saturating_sub(Duration::from_millis(200)),
-        "the budget ran out: {took:?}"
-    );
-    assert!(took < BUDGET_BOUND, "{took:?}");
+    // Lookups start in package-name order, four at a time: the four
+    // scoped names fill the first wave, so airtable and tavily start together.
+    let order: Vec<&str> = first_wave
+        .iter()
+        .map(|(name, _)| *name)
+        .chain(["airtable-mcp-server", "tavily-mcp"])
+        .collect();
+    let mut sorted = order.clone();
+    sorted.sort_unstable();
+    assert_eq!(order, sorted, "the waves are as described");
+    let (rows, took) = check_within_guard(&config_of(&named), &fake.cfg_outlasting_budget()).await;
+    assert_budget_ended(took);
     let labels: Vec<&str> = warns(&rows).iter().map(|r| r.label.as_str()).collect();
     assert_eq!(labels, ["t: npm pin"], "{rows:?}");
+    assert_eq!(fake.requests().len(), 6, "every package was asked");
+    assert_all_released(&fake).await;
 }
 
 #[tokio::test]
@@ -662,7 +709,12 @@ async fn child_runs_one_lookup() {
     };
     let rows = check(
         &config_of(&[("memory", memory_on("2026.8.31"))]),
-        &ClientCfg { base, roots, proxy },
+        &ClientCfg {
+            base,
+            roots,
+            proxy,
+            bounds_override: None,
+        },
         Lookup::On,
     )
     .await;

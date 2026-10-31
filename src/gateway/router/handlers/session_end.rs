@@ -35,7 +35,7 @@ pub(in crate::gateway::router) async fn mcp_delete_handler(
     // Public paths may reach this handler without a validated identity even
     // when authentication is enabled. Their shared anonymous owner is not a
     // credential, so refuse before inspecting any session identifier.
-    if state.auth_config.enabled
+    if state.live_config.generation().auth().enabled
         && client
             .as_ref()
             .is_none_or(|c| c.credential_principal().is_none())

@@ -6,6 +6,7 @@
 //! and gives the nonce back only if a step asked and none dispatched.
 
 use crate::gateway::meta_mcp::MetaMcpCallerContext;
+use crate::gateway::meta_mcp::dispatch_log::PreSend;
 use crate::gateway::meta_mcp::refund_witness::{Effect, RefundWitness};
 use crate::gateway::task_service::execution::BeginOutcome;
 
@@ -83,6 +84,9 @@ pub(crate) fn note_served(caller: &MetaMcpCallerContext<'_>, step: (&str, &str))
 /// backend is reached: from here on neither the key nor the nonce is given
 /// back, as a replay would repeat what the backend did.
 pub(crate) fn mark_dispatched(caller: &MetaMcpCallerContext<'_>, step: (&str, &str)) {
+    // A send after an earlier refusal in the same call (a fill retry, a
+    // backstop that falls through) is a call: the refusal no longer stands.
+    super::audit::note_pre_send(PreSend::Clear);
     // A web UI call learns the backend may act from here on (U12).
     #[cfg(feature = "webui")]
     crate::gateway::ui_call::note_dispatched(step);
@@ -119,6 +123,12 @@ pub(super) enum PreSendExit<'r> {
 /// Settle one pre-send exit: the one place the invoke path decides what a
 /// refusal or an early answer before the send gives back.
 pub(super) fn settle_pre_send(caller: &MetaMcpCallerContext<'_>, exit: PreSendExit<'_>) {
+    // Every exit but `Served` is a refusal before the backend: no call the
+    // task made. A served answer is the backend's earlier output: a call.
+    super::audit::note_pre_send(match exit {
+        PreSendExit::Served(_) => PreSend::Clear,
+        _ => PreSend::Refused,
+    });
     match exit {
         PreSendExit::AskRefund => ask_refund(caller),
         PreSendExit::GiveBackUnsent(reservation) => {
@@ -193,3 +203,48 @@ impl Drop for Witnessed<'_, '_> {
 #[cfg(all(test, feature = "cost-governance"))]
 #[path = "refund_waiter_tests.rs"]
 mod refund_waiter_tests;
+
+#[cfg(test)]
+mod pre_send_tests {
+    use super::{PreSendExit, mark_dispatched, settle_pre_send};
+    use crate::gateway::authz::AllowAll;
+    use crate::gateway::meta_mcp::authz_tests::ctx;
+    use crate::gateway::meta_mcp::dispatch_log::PreSend;
+
+    /// A refusal exit marks the call refused; a later send, or an answer
+    /// served from a stored or cached result, makes it a call again.
+    #[tokio::test]
+    async fn a_refusal_marks_the_call_and_a_send_or_served_answer_clears_it() {
+        let allow = AllowAll;
+        let caller = ctx(&allow);
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Refused,
+            "refused before its backend"
+        );
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+            mark_dispatched(&caller, ("s", "t"));
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Clear,
+            "a send after a refusal is a call"
+        );
+        let ((), notes) = super::super::audit::with_dispatch_scope(async {
+            settle_pre_send(&caller, PreSendExit::AskRefund);
+            settle_pre_send(&caller, PreSendExit::Served(("s", "t")));
+        })
+        .await;
+        assert_eq!(
+            notes.pre_send(),
+            PreSend::Clear,
+            "a served answer is a call"
+        );
+    }
+}

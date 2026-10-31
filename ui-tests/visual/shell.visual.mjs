@@ -28,7 +28,9 @@ const CASES = [
     ['sidebar', 0, 0, 232, 400, 0.03, 'no logo mark; the frame shows a sample decisions count'],
     ['title', 232, 52, 500, 70]]],
   ['40-overview-390.png', 390, 844, 'dark', [
-    ['top bar', 0, 0, 390, 56, 0.07, 'no logo or Live indicator yet; the frame draws the search glyph differently'],
+    // 0.075, not 0.07: the shell draws the MCP-GATEWAY wordmark where the frame has a logo, which
+    // pushes the environment chip right of the frame chip. The logo swap is out of scope here.
+    ['top bar', 0, 0, 390, 56, 0.075, 'no logo or Live indicator yet; the frame draws the search glyph differently; the wordmark pushes the environment chip right'],
     ['title', 0, 56, 390, 60]]],
   // Frame 46 exists only at 1440 px, dark. Its entries are the github page's
   // own data, so only the palette's input row is compared; the frame draws

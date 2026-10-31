@@ -40,19 +40,25 @@ fn key(secret: &str, admin: bool) -> ApiKeyConfig {
 }
 
 /// Auth on, one admin and one standard key.
-async fn fixture() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
-    let auth = AuthConfig {
+fn auth_on() -> AuthConfig {
+    AuthConfig {
         enabled: true,
         api_keys: vec![key(ADMIN, true), key(STANDARD, false)],
         ..AuthConfig::default()
-    };
-    test_router_app_state_with_auth_and_key_server(&auth, None).await
+    }
+}
+
+async fn fixture() -> (Arc<AppState>, Arc<tempfile::TempDir>) {
+    test_router_app_state_with_auth_and_key_server(&auth_on(), None).await
 }
 
 /// `fixture`, with `config` as the configuration the process started with.
 async fn fixture_with(config: Config) -> (Arc<AppState>, Arc<tempfile::TempDir>) {
     let (mut state, dir) = fixture().await;
-    Arc::get_mut(&mut state).expect("unshared").live_config = Arc::new(LiveConfig::new(config));
+    // The fixture's key table stays: keys are judged by the live generation.
+    let auth = Arc::clone(state.live_config.generation().auth());
+    Arc::get_mut(&mut state).expect("unshared").live_config =
+        Arc::new(LiveConfig::with_auth(config, auth));
     (state, dir)
 }
 
@@ -92,7 +98,12 @@ fn attach_reload_context(state: &AppState, dir: &tempfile::TempDir) -> Arc<Reloa
     let path = dir.path().join("gateway.yaml");
     crate::gateway::test_helpers::write_owner_only(
         &path,
-        crate::yaml::to_string(&Config::default()).expect("yaml"),
+        // The fixture's own keys: a reload applies the file's key list.
+        crate::yaml::to_string(&Config {
+            auth: auth_on(),
+            ..Config::default()
+        })
+        .expect("yaml"),
     )
     .expect("config written owner-only");
     let context = Arc::new(

@@ -215,3 +215,46 @@ async fn each_caller_field_keeps_callers_apart() {
         );
     }
 }
+
+/// Only a written record reaches a log reader: a poll whose decision is
+/// suppressed as a repeat publishes nothing, so a reader (the decision set)
+/// counts one refusal however often a finished task is polled.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_suppressed_repeat_note_is_not_published() {
+    use std::sync::{Arc, Mutex};
+
+    let (endpoint, dir) = (Endpoint::start(false).await, tempfile::tempdir().unwrap());
+    let meta = gateway(
+        &endpoint,
+        vec![],
+        Some(&dir),
+        AuditFailurePolicy::FailClosed,
+    );
+    let published: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&published);
+    meta.transparency_logger
+        .as_ref()
+        .expect("the gateway writes a log")
+        .subscribe(
+            "identity_grant_decision",
+            Arc::new(
+                move |_fields: &serde_json::Map<String, serde_json::Value>,
+                      hash: &str,
+                      _counter: u64| {
+                    sink.lock().unwrap().push(hash.to_string());
+                },
+            ),
+        );
+    let stored = finished_task();
+    for _ in 0..4 {
+        assert!(
+            poll(&meta, &stored).await.is_some(),
+            "no grant refuses delivery"
+        );
+    }
+    let written = decisions(&dir);
+    assert_eq!(written.len(), 1, "one record for four polls: {written:#?}");
+    let hash = written[0]["entry_hash"].as_str().expect("an entry hash");
+    assert_eq!(*published.lock().unwrap(), vec![hash.to_string()]);
+}

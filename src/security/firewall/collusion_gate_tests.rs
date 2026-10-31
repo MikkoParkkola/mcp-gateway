@@ -104,11 +104,11 @@ fn collusion_settings_are_checked_at_load_and_off_loads_anything() {
         ),
         (
             "    collusion:\n      action: observe\n      sources: [\"a:[\"]\n",
-            "collusion.sources",
+            "collusion.sources[0] is not a valid glob",
         ),
         (
             "    collusion:\n      action: observe\n      non_egress: [\"a:[\"]\n",
-            "collusion.non_egress",
+            "collusion.non_egress[0] is not a valid glob",
         ),
     ];
     for (firewall, field) in cases {
@@ -627,11 +627,15 @@ fn allowed_flows_are_checked_at_load() {
     let bad = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:[\", egress: \"b:*\"}\n";
     let err = load(bad).expect_err("bad source glob").to_string();
     assert!(
-        err.contains("security.firewall.collusion.allowed_flows"),
+        err.contains("security.firewall.collusion.allowed_flows[0].source is not a valid glob"),
         "{err}"
     );
     let bad = "    collusion:\n      action: observe\n      allowed_flows:\n        - {source: \"a:*\", egress: \"b:[\"}\n";
-    assert!(load(bad).is_err(), "bad egress glob");
+    let err = load(bad).expect_err("bad egress glob").to_string();
+    assert!(
+        err.contains("security.firewall.collusion.allowed_flows[0].egress is not a valid glob"),
+        "{err}"
+    );
     let many = "        - {source: \"a:*\", egress: \"b:*\"}\n".repeat(65);
     let many = format!("    collusion:\n      action: observe\n      allowed_flows:\n{many}");
     assert!(load(&many).is_err(), "65 entries");

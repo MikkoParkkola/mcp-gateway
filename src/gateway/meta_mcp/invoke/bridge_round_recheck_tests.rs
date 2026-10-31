@@ -121,10 +121,19 @@ fn credential(state: &Arc<AtomicU8>) -> LentCredential {
     }
 }
 
+/// What two bridged rounds left: the second round's outcome, the
+/// `tools/call` count after each round, whether the caller's slot survived,
+/// and the decision kind the second round noted.
+type TwoRounds = (
+    Result<Value, String>,
+    [usize; 2],
+    bool,
+    Option<crate::security::decision_record::DecisionKind>,
+);
+
 /// Run two bridged rounds of one call, with the grant moved to `between`
-/// after the first. Returns the second round's outcome, the `tools/call`
-/// count after each round, and whether the caller's slot survived.
-async fn two_rounds(between: u8) -> (Result<Value, String>, [usize; 2], bool) {
+/// after the first.
+async fn two_rounds(between: u8) -> TwoRounds {
     let (url, calls) = peer().await;
     let meta = meta_over(url);
     let state = Arc::new(AtomicU8::new(VALID));
@@ -170,7 +179,11 @@ async fn two_rounds(between: u8) -> (Result<Value, String>, [usize; 2], bool) {
         .expect("premise: the first round is sent");
     let first = calls.load(Ordering::SeqCst);
     state.store(between, Ordering::SeqCst);
-    let second = round.invoke(json!({})).await.map_err(|e| format!("{e:?}"));
+    let (second, noted) = super::audit::with_route_scope(async {
+        let second = round.invoke(json!({})).await.map_err(|e| format!("{e:?}"));
+        (second, super::audit::take_refusal_kind())
+    })
+    .await;
     let slot = PoolKey::PerUser {
         binding: BINDING.to_owned(),
     };
@@ -180,12 +193,12 @@ async fn two_rounds(between: u8) -> (Result<Value, String>, [usize; 2], bool) {
         .get(BACKEND)
         .expect("the backend")
         .pool_has_slot_for_test(&slot);
-    (second, [first, calls.load(Ordering::SeqCst)], kept)
+    (second, [first, calls.load(Ordering::SeqCst)], kept, noted)
 }
 
 #[tokio::test]
 async fn a_grant_revoked_between_bridge_rounds_sends_nothing_and_evicts_the_slot() {
-    let (second, calls, kept) = two_rounds(REVOKED).await;
+    let (second, calls, kept, _) = two_rounds(REVOKED).await;
     assert_eq!(calls[0], 1, "premise: the first round reached the peer");
     assert!(second.is_err(), "the second round was answered: {second:?}");
     assert_eq!(calls[1], 1, "the second round reached the peer");
@@ -194,9 +207,27 @@ async fn a_grant_revoked_between_bridge_rounds_sends_nothing_and_evicts_the_slot
 
 #[tokio::test]
 async fn a_grant_rotated_between_bridge_rounds_refuses_that_loan_and_keeps_the_slot() {
-    let (second, calls, kept) = two_rounds(ROTATED).await;
+    let (second, calls, kept, _) = two_rounds(ROTATED).await;
     assert_eq!(calls[0], 1, "premise: the first round reached the peer");
     assert!(second.is_err(), "the second round was answered: {second:?}");
     assert_eq!(calls[1], 1, "the second round reached the peer");
     assert!(kept, "a rotation evicted the caller's slot");
+}
+
+/// A later round refused at its send notes `unrecorded`, as the first
+/// round's dispatch would: the record never reads `default_allow`.
+#[tokio::test]
+async fn a_send_refused_on_a_later_bridged_round_notes_unrecorded() {
+    let (second, _, _, noted) = two_rounds(ROTATED).await;
+    assert!(
+        second
+            .as_ref()
+            .is_err_and(|e| e.contains("per-user send refused")),
+        "premise: the second round's send was refused: {second:?}"
+    );
+    assert_eq!(
+        noted,
+        Some(crate::security::decision_record::DecisionKind::Unrecorded),
+        "{second:?}"
+    );
 }

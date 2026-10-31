@@ -111,8 +111,8 @@ use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
     json_is_populated,
 };
-pub(crate) use stored_proof::SourcedOutcome;
 use stored_proof::TracedOutcome;
+pub(crate) use stored_proof::{Invoked, SourcedOutcome};
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
@@ -309,6 +309,8 @@ mod error_classification_tests;
 // ============================================================================
 
 #[cfg(test)]
+mod context_integrity_note_tests;
+#[cfg(test)]
 mod response_transform_tests;
 
 #[cfg(test)]
@@ -365,3 +367,5 @@ mod stage_boundary_tests;
 
 #[cfg(test)]
 mod plan_step_guard_tests;
+#[cfg(test)]
+mod presend_refusal_tests;

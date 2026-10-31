@@ -1,8 +1,8 @@
 diff --git a/src/gateway/router/authorization.rs b/src/gateway/router/authorization.rs
-index 820d0d934..e916c28a9 100644
+index b53414e13..458ef5f15 100644
 --- a/src/gateway/router/authorization.rs
 +++ b/src/gateway/router/authorization.rs
-@@ -321,7 +321,7 @@ pub(super) fn authorize_tool_target(
+@@ -325,7 +325,7 @@ pub(super) fn authorize_tool_target(
      cert_identity: Option<&CertIdentity>,
      target: ToolTarget<'_>,
  ) -> Result<(), AuthorizationError> {
@@ -11,7 +11,7 @@ index 820d0d934..e916c28a9 100644
          state,
          generation,
          client,
-@@ -329,7 +329,8 @@ pub(super) fn authorize_tool_target(
+@@ -333,7 +333,8 @@ pub(super) fn authorize_tool_target(
          cert_identity,
          target,
      )
@@ -20,4 +20,4 @@ index 820d0d934..e916c28a9 100644
 +    Ok(())
  }
  
- /// The HTTP invocation predicate, with its audit records deferred.
+ /// A -32600 refusal by `kind`, the shape every `decide_tool_target` gate uses.

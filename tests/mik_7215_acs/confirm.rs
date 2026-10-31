@@ -286,7 +286,7 @@ async fn ac_confirm_1a_a_refusal_is_excluded_from_both_accounting_arms() {
         ..mcp_gateway::config::AuthConfig::default()
     };
     let (state, _store_dir) = state_with(true, auth).await;
-    let accounting = Arc::clone(&state.auth_config);
+    let accounting = Arc::clone(state.live_config.generation().auth());
     let row17 = accounting
         .validate_token("admin-key")
         .expect("row17-client's key");

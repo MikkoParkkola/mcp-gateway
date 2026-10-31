@@ -10,6 +10,7 @@ use crate::events::FenceRead;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
 use crate::personal_accounts::identity::Principal;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
 
 impl MetaMcp {
@@ -333,6 +334,9 @@ impl MetaMcp {
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = async |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required || vault {
+                // The caller's identity standing (MIK-8914.API2A.13): no kind
+                // names it yet.
+                super::audit::note_refused_by(DecisionKind::Unrecorded, None);
                 // Refused either way; the helper logs a failed audit write.
                 Self::audit_refused_credential(audit_logger, &subject_id, server, audience, &msg)
                     .await;
@@ -376,7 +380,9 @@ impl MetaMcp {
         }
 
         let Some(principal) = principal else {
-            return refuse("the request carries no verified end-user identity".to_string()).await;
+            // The one refusal here that is a decision about the caller; the
+            // others are configuration the operator has not finished.
+            return refuse(NO_IDENTITY.into()).await.inspect_err(raise);
         };
         // An explicit account reference requires its own installed strategy.
         // A missing or stale install must never borrow an unrelated global
@@ -703,4 +709,13 @@ impl ResolvedDispatch {
     pub(super) fn minted(&self) -> bool {
         self.caller_credential.cache_binding.is_some() || self.caller_credential.attempted
     }
+}
+
+/// The required-identity denial's reason.
+const NO_IDENTITY: &str = "the request carries no verified end-user identity";
+
+/// The delivered answer is the gateway refusing the caller: raised while the
+/// cell still vouches for it, so a composite that goes on is not marked.
+fn raise(_: &Error) {
+    crate::gateway::delivery_facts::refused_while_vouched();
 }

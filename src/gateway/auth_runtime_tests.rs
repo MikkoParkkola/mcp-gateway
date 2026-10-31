@@ -159,12 +159,12 @@ async fn rejected_credentials_create_no_store_entry() {
     )
     .with_runtime(Arc::clone(&runtime));
     let state = AuthState {
-        auth_config: Arc::new(resolved),
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(resolved),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, Arc::default()),
     };
@@ -173,7 +173,12 @@ async fn rejected_credentials_create_no_store_entry() {
             "/protected",
             axum::routing::get(|| async { StatusCode::OK }),
         )
-        .layer(axum::middleware::from_fn_with_state(state, auth_middleware));
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
+        .layer(axum::Extension(state.live_config.generation()));
     let mut call = |bearer: &str| {
         let request = Request::builder()
             .uri("/protected")

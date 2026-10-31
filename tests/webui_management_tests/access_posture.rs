@@ -479,16 +479,18 @@ async fn a_reload_does_not_change_request_time_authentication() {
     )
     .unwrap();
 
-    let live_config = Arc::new(LiveConfig::new(startup.clone()));
-    let (mut state, _store) = make_app_state(None, Some(config_path.clone())).await;
-    {
-        let s = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
-        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(
+    // The shared live snapshot carries the startup auth, as a gateway's does.
+    let live_config = Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+        startup.clone(),
+        Arc::new(ResolvedAuthConfig::from_config(
             &startup.auth,
             crate::record_key::RECORD_KEY,
-        ));
-        s.live_config = Arc::clone(&live_config);
-    }
+        )),
+    ));
+    let (mut state, _store) = make_app_state(None, Some(config_path.clone())).await;
+    Arc::get_mut(&mut state)
+        .expect("test AppState should be uniquely owned")
+        .live_config = Arc::clone(&live_config);
     let router = create_router(Arc::clone(&state));
 
     let unauthenticated = || {

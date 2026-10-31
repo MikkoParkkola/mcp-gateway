@@ -171,8 +171,13 @@ impl MetaMcp {
         else {
             return AccountOutcome::Unjudged;
         };
-        if let ViewBinding::Bound(binding) = &view {
-            visible::memo::record_account_binding(server, account, binding);
+        match &view {
+            ViewBinding::Bound(binding) => {
+                visible::memo::record_account_binding(server, account, binding);
+            }
+            // A failed read overwrites an earlier binding: nothing is
+            // confirmed, so a held view reads cold for this request.
+            _ => visible::memo::record_account_unchecked(server, account),
         }
         let outcome = view_outcome(&view, |binding| {
             // A binding the isolation guard or the per-user slot rule would

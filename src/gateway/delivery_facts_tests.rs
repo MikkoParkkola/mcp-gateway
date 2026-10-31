@@ -96,6 +96,23 @@ async fn a_suspended_scan_writes_nothing_to_the_delivery() {
     .await;
 }
 
+/// A delivered authorization refusal records refused wherever it was built,
+/// whatever its code: an admin denial carries `INVALID_REQUEST` too.
+#[tokio::test]
+async fn a_delivered_forbidden_is_refused_whatever_its_code() {
+    for code in [-32001, crate::error::rpc_codes::INVALID_REQUEST] {
+        scope(async {
+            super::outlet(&crate::Error::Forbidden {
+                code,
+                status: 403,
+                message: "no".into(),
+            });
+            assert_eq!(recorded(false)["response_effect"], "refused", "{code}");
+        })
+        .await;
+    }
+}
+
 /// Every production site that reads an answer back out of a store, as
 /// `(needle, file, occurrences, why its delivery cannot state "delivered"
 /// with no findings)`. A served stored answer is not this request's, so it
@@ -287,7 +304,7 @@ enum TransformUse {
     Suspended,
 }
 
-/// Every production occurrence of the transform's three entry points.
+/// Every production occurrence of the transform's four entry points.
 const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
     (
         "apply_context_integrity(",
@@ -297,15 +314,21 @@ const TRANSFORM_CALLS: &[(&str, &str, usize, TransformUse)] = &[
     ),
     (
         "apply_context_integrity(",
-        "src/gateway/meta_mcp/invoke/policy.rs",
-        1,
-        TransformUse::Delivering,
-    ),
-    (
-        "apply_context_integrity(",
         "src/gateway/meta_mcp/invoke/relay.rs",
         1,
         TransformUse::Suspended,
+    ),
+    (
+        "context_integrity_outcome(",
+        "src/gateway/meta_mcp/invoke/budget.rs",
+        2,
+        TransformUse::Inside,
+    ),
+    (
+        "context_integrity_outcome(",
+        "src/gateway/meta_mcp/invoke/policy.rs",
+        1,
+        TransformUse::Delivering,
     ),
     (
         "context_integrity_delivered_result(",

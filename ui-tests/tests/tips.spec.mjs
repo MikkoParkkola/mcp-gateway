@@ -5,7 +5,7 @@
 // modules pass, and each planted fault fails. No browser needed.
 import { readFileSync, readdirSync } from 'node:fs';
 import { test, expect } from './base.mjs';
-import { SHELL_DIR, readCopy, readScreens, scanScreens, shapeProblems, pairingProblems } from './copy-check.mjs';
+import { SHELL_DIR, readCopy, readScreens, readShell, scanScreens, shapeProblems, pairingProblems } from './copy-check.mjs';
 
 test('C8 the real copy has the agreed shape', () => {
   expect(shapeProblems(readCopy())).toEqual([]);
@@ -14,6 +14,12 @@ test('C8 the real copy has the agreed shape', () => {
 test('C1 C2 the real screens and copy pair up by page and tab', () => {
   const scan = scanScreens(readScreens());
   expect(Object.keys(scan.tabs).length, 'the scan found no registered screen').toBeGreaterThan(0);
+  // The shell's own tooltips (the environment chip) are drawn too, though no screen draws them.
+  const shell = scanScreens([readShell()]);
+  expect(shell.tabs, 'the shell registers no screen').toEqual({});
+  expect([...shell.drawn].sort()).toEqual(['gateway.status.environment-from-hostname', 'gateway.status.environment-not-set']);
+  for (const id of shell.drawn) scan.drawn.add(id);
+  scan.nonLiteral += shell.nonLiteral;
   expect(pairingProblems(readCopy(), scan)).toEqual([]);
 });
 

@@ -309,6 +309,7 @@ fn reload_of(overlay: Arc<EnvOverlay>, secret_refs: &[&str]) -> EvaluatedReload 
         patch: ConfigPatch::default(),
         overlay,
         secret_refs: secret_refs.iter().map(ToString::to_string).collect(),
+        inputs: crate::config_reload::revision::RawInputs::default(),
     }
 }
 

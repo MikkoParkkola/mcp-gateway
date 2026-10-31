@@ -43,10 +43,12 @@ impl MetaMcp {
         // narrowing the report: a caller that asked for every session and got
         // one has no way to tell that it was scoped rather than empty.
         if (include_all_sessions || include_all_keys) && !caller.is_admin {
-            return Err(crate::Error::Config(
-                "include_all_sessions and include_all_keys are admin views and require an \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "include_all_sessions and include_all_keys are admin views and require an \
                  admin credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
 
@@ -58,10 +60,12 @@ impl MetaMcp {
             && !caller.is_admin
             && Some(requested) != session_id
         {
-            return Err(crate::Error::Config(
-                "reporting on another session is an admin view and requires an admin \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "reporting on another session is an admin view and requires an admin \
                  credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
         let target_session_id = requested.or(session_id);
@@ -477,3 +481,48 @@ mod cost_section_tests {
 #[cfg(test)]
 #[path = "admin_reload_tests.rs"]
 mod reload_tests;
+
+/// `gateway_cost_report` refusing a non-admin caller an admin view is the
+/// gateway refusing the call: it records refused.
+#[cfg(test)]
+mod cost_report_refusal_tests {
+    use std::sync::Arc;
+
+    use serde_json::{Value, json};
+
+    use crate::backend::BackendRegistry;
+    use crate::gateway::delivery_facts;
+    use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::test_callers::anonymous_caller;
+
+    /// The report for `args` from session `own`, within a delivery cell: the
+    /// answer and the effect the cell records.
+    async fn report_effect(args: Value) -> (crate::Result<Value>, Option<Value>) {
+        let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        delivery_facts::scope(async move {
+            let answer = meta
+                .get_cost_report(&args, Some("own"), &anonymous_caller())
+                .await;
+            let mut fields = serde_json::Map::new();
+            delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
+            (answer, fields.get("response_effect").cloned())
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn an_admin_view_refused_to_a_non_admin_records_refused() {
+        for args in [
+            json!({"include_all_sessions": true}),
+            json!({"include_all_keys": true}),
+            json!({"session_id": "someone-else"}),
+        ] {
+            let (answer, effect) = report_effect(args.clone()).await;
+            assert!(answer.is_err(), "premise: refused: {args} {answer:?}");
+            assert_eq!(effect, Some(json!("refused")), "{args}");
+        }
+        let (own, effect) = report_effect(json!({})).await;
+        assert!(own.is_ok(), "control: the caller's own report: {own:?}");
+        assert_ne!(effect, Some(json!("refused")), "control");
+    }
+}

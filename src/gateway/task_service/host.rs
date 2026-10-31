@@ -143,6 +143,31 @@ impl LiveHost {
         }
     }
 
+    /// K15: the captured HTTP identity as `generation`'s key table holds it
+    /// now, for queued or continued work about to dispatch. `Ok(None)` keeps
+    /// the captured one (not an API-key caller, or a stdio host, which holds
+    /// none). `Err` is the dispatch's answer: the key that admitted the work
+    /// is gone, expired, re-issued or demoted, and nothing is sent.
+    pub(crate) fn rejudge(
+        &self,
+        router: &OwnedRouterAuthorizer,
+        generation: &crate::config_reload::Generation,
+    ) -> Result<Option<OwnedRouterAuthorizer>, Box<JsonRpcResponse>> {
+        let Self::Http(_) = self else {
+            return Ok(None);
+        };
+        router
+            .rejudged(generation.auth(), crate::clock::utc_now().ok())
+            .map_err(|_| {
+                Box::new(JsonRpcResponse::error(
+                    Some(crate::protocol::RequestId::Number(0)),
+                    -32003,
+                    "The API key this task was created with is no longer valid: a config \
+                     reload removed, expired, re-issued or demoted it.",
+                ))
+            })
+    }
+
     /// The transport's own authorizer. `router` is the creating request's
     /// captured HTTP identity, which a stdio host ignores.
     pub(crate) fn authorizer<'a>(

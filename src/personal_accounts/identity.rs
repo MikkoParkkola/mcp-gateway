@@ -137,6 +137,34 @@ pub(crate) enum Principal<'a> {
     SoleOperator,
 }
 
+/// A [`Principal`] that owns its identity, for work that outlives the request
+/// that proved it (a spawned fill's publish check).
+#[derive(Clone, Debug)]
+pub(crate) enum OwnedPrincipal {
+    /// An identity provider verified this caller.
+    Verified(VerifiedIdentity),
+    /// The deployment asserted that exactly one human reaches it.
+    SoleOperator,
+}
+
+impl OwnedPrincipal {
+    /// Own `principal`'s identity.
+    pub(crate) fn of(principal: Principal<'_>) -> Self {
+        match principal {
+            Principal::Verified(identity) => Self::Verified(identity.clone()),
+            Principal::SoleOperator => Self::SoleOperator,
+        }
+    }
+
+    /// The borrowed [`Principal`] this one owns.
+    pub(crate) fn as_principal(&self) -> Principal<'_> {
+        match self {
+            Self::Verified(identity) => Principal::Verified(identity),
+            Self::SoleOperator => Principal::SoleOperator,
+        }
+    }
+}
+
 /// Two principals are the same iff they name the same authority and subject.
 ///
 /// Through [`Principal::parts`], not derived: a derive would compare a

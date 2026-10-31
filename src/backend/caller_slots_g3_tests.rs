@@ -279,3 +279,30 @@ async fn g3_cold_claim_keeps_a_warm_slot_and_a_revoked_view() {
         "control: the grant came back, so the view is claimed"
     );
 }
+
+/// Held-view lease release: an older claim whose fill ends superseded
+/// releases only its own generation. A newer claim that won after the older
+/// lease expired keeps its lease, so the next reader sees it as running.
+#[tokio::test(start_paused = true)]
+async fn g3_a_superseded_release_keeps_a_newer_claims_lease() {
+    let backend = per_user_backend("g3-release");
+    let super::ColdClaim::Won(older) = backend.claim_cold_view(ALPHA, Duration::ZERO, true) else {
+        panic!("premise: the first claim wins");
+    };
+    let super::ColdClaim::Won(newer) =
+        backend.claim_cold_view(ALPHA, Duration::from_secs(60), true)
+    else {
+        panic!("premise: the older lease has expired, so a newer claim wins");
+    };
+    assert_ne!(older, newer, "premise: two generations");
+
+    backend.release_cold_attempt(ALPHA, older);
+
+    assert!(
+        matches!(
+            backend.claim_cold_view(ALPHA, Duration::from_secs(60), true),
+            super::ColdClaim::Leased { .. }
+        ),
+        "an older claim's release dropped the newer claim's lease"
+    );
+}

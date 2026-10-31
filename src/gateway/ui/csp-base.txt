@@ -1,0 +1,1 @@
+default-src 'none'; script-src 'self'; style-src 'self' {frame}; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'

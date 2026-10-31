@@ -31,16 +31,55 @@ pub(super) fn identity_grant_sink_for(
     )))
 }
 
+/// What the startup audit served, for the config revision.
+pub(super) enum GrantsRead {
+    /// The audit did not read the file (no governance store): what the plain
+    /// load recorded stands.
+    NotRead,
+    /// The audit served the rows parsed from these bytes.
+    Served(crate::config_reload::revision::RawBytes),
+    /// The audit read nothing usable and serves no grants.
+    ServedNone,
+}
+
+impl GrantsRead {
+    /// Hand this to the startup inputs, for a session whose config is
+    /// published later.
+    pub(super) fn into_startup(self, env: &crate::config::LiveEnv) {
+        match self {
+            Self::NotRead => {}
+            Self::Served(bytes) => env.set_startup_grants(Some(bytes)),
+            Self::ServedNone => env.set_startup_grants(None),
+        }
+    }
+}
+
+/// The startup audit's sink, and what it served.
+pub(super) type StartupGrants = (
+    Option<Arc<crate::config_reload::IdentityGrantSink>>,
+    GrantsRead,
+);
+
 pub(super) async fn load_configured_identity_grants(
     config: &crate::config::IdentityGrantsConfig,
-) -> Result<Option<(PathBuf, crate::identity_grants::LocalIdentityGrantStore)>> {
+) -> Result<
+    Option<(
+        PathBuf,
+        crate::identity_grants::LocalIdentityGrantStore,
+        crate::config_reload::revision::RawBytes,
+    )>,
+> {
     if !config.enabled {
         return Ok(None);
     }
 
     let path = expand_home_path(&config.path);
-    match crate::identity_grants::load_identity_grants_file(&path).await {
-        Ok(grants) => Ok(Some((path, grants))),
+    match crate::identity_grants::read_identity_grants_file_with_bytes(&path).await {
+        Ok((file, bytes)) => Ok(Some((
+            path,
+            crate::identity_grants::LocalIdentityGrantStore::from_grants(file.grants),
+            bytes,
+        ))),
         Err(e) if config.fail_on_error => Err(Error::Config(e)),
         Err(e) => {
             // Bound outside the macro, so its head carries plain locals.
@@ -77,12 +116,12 @@ pub(super) async fn start_identity_grant_audit(
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
     store: Option<&Arc<dyn crate::control_plane::ControlPlaneStore>>,
     store_dir: &std::path::Path,
-) -> Result<Option<Arc<crate::config_reload::IdentityGrantSink>>> {
+) -> Result<StartupGrants> {
     let Some(sink) = identity_grant_sink_for(&config.security.identity_grants, meta_mcp) else {
-        return Ok(None);
+        return Ok((None, GrantsRead::NotRead));
     };
     let Some(store) = store else {
-        return Ok(Some(sink));
+        return Ok((Some(sink), GrantsRead::NotRead));
     };
     let path = expand_home_path(&config.security.identity_grants.path);
     let auditor = Arc::new(crate::config_reload::grant_audit::GrantAuditor::new(
@@ -110,12 +149,12 @@ pub(super) async fn start_identity_grant_audit(
         );
     };
     match outcome {
-        Ok(rows) => {
+        Ok((rows, bytes)) => {
             publish(rows);
             let sink = Arc::into_inner(sink)
                 .expect("the sink was just built")
                 .with_auditor(auditor);
-            Ok(Some(Arc::new(sink)))
+            Ok((Some(Arc::new(sink)), GrantsRead::Served(bytes)))
         }
         Err(StartupFailure::Unreadable(_)) => {
             // Tolerated (`fail_on_error: false`): the empty set was recorded
@@ -124,7 +163,7 @@ pub(super) async fn start_identity_grant_audit(
             let sink = Arc::into_inner(sink)
                 .expect("the sink was just built")
                 .with_auditor(auditor);
-            Ok(Some(Arc::new(sink)))
+            Ok((Some(Arc::new(sink)), GrantsRead::ServedNone))
         }
         Err(StartupFailure::Unrecorded(reason)) => {
             let shown_path = path.display();
@@ -132,7 +171,7 @@ pub(super) async fn start_identity_grant_audit(
             publish(Vec::new());
             // No sink: every reload this run leaves grants empty. The next
             // start recovers and snapshots first (design section 6 step 6).
-            Ok(None)
+            Ok((None, GrantsRead::ServedNone))
         }
     }
 }
@@ -157,13 +196,19 @@ async fn audit_startup(
     auditor: &crate::config_reload::grant_audit::GrantAuditor,
     path: &std::path::Path,
     fail_on_error: bool,
-) -> std::result::Result<Vec<crate::identity_grants::IdentityGrant>, StartupFailure> {
+) -> std::result::Result<
+    (
+        Vec<crate::identity_grants::IdentityGrant>,
+        crate::config_reload::revision::RawBytes,
+    ),
+    StartupFailure,
+> {
     use crate::config_reload::grant_audit::Recorded;
     let read = crate::identity_grants::journal::read_locked(path, STARTUP_LOCK_WAIT)
         .await
         .ok_or_else(|| "the grant journal lock stayed busy".to_string())?;
     let rows = match read.grants {
-        Ok(file) => file.grants,
+        Ok(file) => (file.grants, read.bytes.unwrap_or_default()),
         // Serve and record the empty set, but do not reconcile: an
         // unreadable file is not a removal. The recorded empty set becomes
         // the baseline, so a file later written directly reads as
@@ -180,11 +225,11 @@ async fn audit_startup(
             return Err(StartupFailure::Unreadable(reason));
         }
     };
-    let prepared = auditor.prepare(&rows, &read.journal).map_err(|r| r.0)?;
+    let prepared = auditor.prepare(&rows.0, &read.journal).map_err(|r| r.0)?;
     if let Recorded::Unrecorded(reason) = auditor.record(prepared) {
         return Err(reason.into());
     }
-    auditor.snapshot(&rows, snapshot_time()?)?;
+    auditor.snapshot(&rows.0, snapshot_time()?)?;
     drop(read.guard);
     Ok(rows)
 }
@@ -210,9 +255,9 @@ pub(super) async fn stdio_identity_grants(
     config: &crate::config::Config,
     config_path: Option<&std::path::Path>,
     meta_mcp: &crate::gateway::meta_mcp::MetaMcp,
-) -> Result<Option<Arc<crate::config_reload::IdentityGrantSink>>> {
+) -> Result<StartupGrants> {
     if !config.security.identity_grants.enabled {
-        return Ok(None);
+        return Ok((None, GrantsRead::NotRead));
     }
     let base = super::control_plane_base(config, config_path);
     let store = super::build_control_plane_store(config, &base)?;

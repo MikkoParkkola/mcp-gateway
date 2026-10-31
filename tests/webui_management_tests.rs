@@ -172,7 +172,6 @@ async fn make_app_state(
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: authorizer.auth_config,
         key_server: None,
         tool_policy,
         mtls_policy,
@@ -187,14 +186,10 @@ async fn make_app_state(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-            // Flags off, as this fixture set them on `AppState` before they
-            // moved into the published config (ADR-023).
-            let mut config = mcp_gateway::config::Config::default();
-            config.security.sanitize_input = false;
-            config.security.ssrf_protection = false;
-            config
-        })),
+        live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            mcp_gateway::gateway::test_helpers::flags_off(mcp_gateway::config::Config::default()),
+            Arc::clone(authorizer.live_config.generation().auth()),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(
@@ -209,12 +204,16 @@ async fn make_app_state(
 
 async fn make_app_state_with_auth_config(auth_config: &AuthConfig) -> (Arc<AppState>, TempDir) {
     let (mut state, store_dir) = make_app_state(None, None).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
-        auth_config,
-        crate::record_key::RECORD_KEY,
-    ));
+    {
+        let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
+        seat.live_config = std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            (*seat.live_config.get()).clone(),
+            Arc::new(ResolvedAuthConfig::from_config(
+                auth_config,
+                crate::record_key::RECORD_KEY,
+            )),
+        ));
+    }
     (state, store_dir)
 }
 
@@ -265,7 +264,6 @@ async fn make_app_state_with_reload(
             multiplexer,
             proxy_manager,
             streaming_config: config.streaming.clone(),
-            auth_config: authorizer.auth_config,
             key_server: None,
             tool_policy,
             mtls_policy,
@@ -280,14 +278,12 @@ async fn make_app_state_with_reload(
             agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: std::sync::Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-                // Flags off, as this fixture set them on `AppState` before they
-                // moved into the published config (ADR-023).
-                let mut config = mcp_gateway::config::Config::default();
-                config.security.sanitize_input = false;
-                config.security.ssrf_protection = false;
-                config
-            })),
+            live_config: std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+                mcp_gateway::gateway::test_helpers::flags_off(
+                    mcp_gateway::config::Config::default(),
+                ),
+                Arc::clone(authorizer.live_config.generation().auth()),
+            )),
             export_status: None,
             transparency_log: None,
             dashboard_bootstrap: std::sync::Arc::new(

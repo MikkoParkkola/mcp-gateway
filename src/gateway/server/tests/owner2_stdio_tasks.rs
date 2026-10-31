@@ -138,18 +138,15 @@ pub(crate) async fn fixture_on_with(
     let tool_policy = policy.map_or(built.tool_policy, Arc::new);
     let (tasks, expiry) = stdio_tasks::open(
         &config,
-        &crate::config::EnvOverlay::default(),
         &built.meta_mcp,
         &tool_policy,
-        (
-            &std::sync::Arc::new(
-                crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                    crate::gateway::record_principal::TEST_RECORD_KEY,
-                )
-                .expect("test key"),
-            ),
-            &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
-        ),
+        &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            config.clone(),
+            std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
+                &crate::config::EnvOverlay::default(),
+                std::sync::Arc::new(crate::gateway::record_principal::test_record_key()),
+            )),
+        )),
     )
     .await
     .expect("the stdio store opens");
@@ -589,11 +586,13 @@ pub(super) async fn reopen(
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 1,
                 crate::gateway::auth::AuthState {
-                    auth_config: Arc::new(auth_config),
                     key_server: None,
                     dashboard_bootstrap: Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
                     tls_enabled: false,
-                    live_config: Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
+                    live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
+                        config.clone(),
+                        Arc::new(auth_config),
+                    )),
                     agent_auth: crate::gateway::oauth::AgentAuthState::new(
                         false,
                         std::sync::Arc::default(),
@@ -768,18 +767,15 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     );
     let opened = stdio_tasks::open(
         &config,
-        &crate::config::EnvOverlay::default(),
         &fixture.meta,
         &fixture.policy,
-        (
-            &std::sync::Arc::new(
-                crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                    crate::gateway::record_principal::TEST_RECORD_KEY,
-                )
-                .expect("test key"),
-            ),
-            &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
-        ),
+        &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            config.clone(),
+            std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
+                &crate::config::EnvOverlay::default(),
+                std::sync::Arc::new(crate::gateway::record_principal::test_record_key()),
+            )),
+        )),
     )
     .await;
     assert!(

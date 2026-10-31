@@ -361,7 +361,10 @@ async fn build(
     if posture != crate::security::SecurityPosture::Standard {
         let mut config = crate::config::Config::default();
         config.security.posture = posture;
-        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+        state_mut.live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+            config,
+            std::sync::Arc::clone(state_mut.live_config.generation().auth()),
+        ));
     }
     let served = Arc::clone(&state);
     (

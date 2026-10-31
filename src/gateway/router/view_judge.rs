@@ -363,11 +363,12 @@ impl AppState {
     }
 
     /// A switched profile changes what its caller is shown, and the switch's
-    /// own answer is the notice: read the new view, to be recorded once the
-    /// answer is delivered. Hands `response` back with it.
+    /// own answer is the notice: re-check the caller's grant, then read the
+    /// new view, to be recorded once the answer is delivered. Hands `response` back with it.
     pub(super) async fn after_call(
         &self,
         (session_id, subject): (&str, &ViewSubject),
+        caller: crate::identity_propagation::CallerProof<'_>,
         params: Option<&serde_json::Value>,
         response: crate::protocol::JsonRpcResponse,
     ) -> (crate::protocol::JsonRpcResponse, PendingRefresh) {
@@ -376,7 +377,7 @@ impl AppState {
             .and_then(serde_json::Value::as_str)
             == Some("gateway_set_profile");
         if switched && response.error.is_none() {
-            let pending = self.begin_refresh(session_id, subject).await;
+            let pending = self.begin_listing(session_id, subject, caller).await;
             return (response, pending);
         }
         (response, PendingRefresh::default())

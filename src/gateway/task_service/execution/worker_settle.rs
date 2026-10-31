@@ -231,9 +231,12 @@ impl TaskExecutor {
 
 /// Whether a settlement stored backend output a relay receipt may be
 /// committed for: a completed result, or (MIK-7887.RECEIPT.1) an error the
-/// gateway established as the peer's. A bounded settlement stores neither.
+/// gateway established as the peer's. A bounded settlement stores neither,
+/// nor does a round refused before its backend (its answer is the gateway's).
 fn stored_backend_output(stored: &CommittedTask) -> bool {
-    (stored.task.status() == TaskStatus::Completed && !stored.output_free)
+    (stored.task.status() == TaskStatus::Completed
+        && !stored.output_free
+        && stored.error_author != Some(ErrorAuthor::Gateway))
         || stored.backend_error().is_some()
 }
 

@@ -255,6 +255,19 @@ impl Backend {
         }
     }
 
+    /// Drop `principal_id`'s claim `generation` outright, as its fill ends
+    /// with a result the grant has moved past: no retry backoff stands, so
+    /// the next reader claims afresh under the current grant, and the
+    /// listings waiting on it are woken. Only the claim's own lease.
+    pub(crate) fn release_cold_attempt(&self, principal_id: &str, generation: u64) {
+        let removed = self.caller_slots.remove_if(principal_id, |_, slot| {
+            matches!(slot, CallerSlot::ColdTried { generation: own, .. } if *own == generation)
+        });
+        if removed.is_some() {
+            self.caller_slot_stored.notify_waiters();
+        }
+    }
+
     /// Wait while `principal_id`'s cold lease has a lookup or fill running:
     /// until its winner (or any fill of the caller's own slot) stores, the
     /// attempt settles, or the lease ends.

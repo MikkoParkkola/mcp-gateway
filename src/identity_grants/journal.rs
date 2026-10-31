@@ -565,6 +565,8 @@ pub(crate) struct LockedRead {
     pub(crate) guard: Option<crate::fs_lock::ExclusiveFileLock>,
     /// The grant file, or the reason it was refused.
     pub(crate) grants: Result<IdentityGrantFile, String>,
+    /// The bytes `grants` was parsed from, for the config revision.
+    pub(crate) bytes: Option<crate::config_reload::revision::RawBytes>,
     /// The journal beside it.
     pub(crate) journal: crate::config_reload::grant_audit::JournalRead,
 }
@@ -629,6 +631,7 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
             {
                 return Some(LockedRead {
                     guard: None,
+                    bytes: None,
                     grants: Err(format!(
                         "grant journal lock {} cannot be taken: {error}",
                         lock.display()
@@ -645,7 +648,10 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
     if guard.is_some() {
         adopt_spelled_journal(spelled, grants).await;
     }
-    let file = super::read_identity_grants_file(grants).await;
+    let (file, bytes) = match super::read_identity_grants_file_with_bytes(grants).await {
+        Ok((file, bytes)) => (Ok(file), Some(bytes)),
+        Err(refusal) => (Err(refusal), None),
+    };
     let journal = journal_path(grants);
     let read = tokio::task::spawn_blocking(move || {
         crate::config::read_checked_bytes(&journal, crate::config::CheckedFile::IdentityGrants)
@@ -660,6 +666,7 @@ pub(crate) async fn read_locked(grants: &Path, wait: std::time::Duration) -> Opt
     Some(LockedRead {
         guard,
         grants: file,
+        bytes,
         journal,
     })
 }

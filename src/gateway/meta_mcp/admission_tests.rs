@@ -62,7 +62,11 @@ impl ToolAuthorizer for MutablePolicy {
             if self.revoked.load(Ordering::SeqCst)
                 && (target.server, target.tool) == self.denied_target
             {
-                Err(AuthorizationError::forbidden(-32003, "permission revoked"))
+                Err(AuthorizationError::forbidden(
+                    crate::security::decision_record::DecisionKind::Grant,
+                    -32003,
+                    "permission revoked",
+                ))
             } else {
                 Ok(())
             },

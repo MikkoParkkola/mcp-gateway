@@ -92,12 +92,12 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
     let seen: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
     let sink = Arc::clone(&seen);
     let state = AuthState {
-        auth_config: Arc::new(config),
         key_server: None,
         dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
         tls_enabled: false,
-        live_config: Arc::new(crate::config_reload::LiveConfig::new(
+        live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
             crate::config::Config::default(),
+            Arc::new(config),
         )),
         agent_auth: crate::gateway::oauth::AgentAuthState::new(false, std::sync::Arc::default()),
     };
@@ -115,9 +115,11 @@ async fn call_protected(config: ResolvedAuthConfig, bearer: &str) -> (StatusCode
             ),
         )
         .layer(axum::middleware::from_fn_with_state(
-            state,
+            state.clone(),
             super::auth_middleware,
-        ));
+        ))
+        // The pin the router puts on every request (ADR-023).
+        .layer(axum::Extension(state.live_config.generation()));
     let request = Request::builder()
         .uri("/protected")
         .header(header::AUTHORIZATION, format!("Bearer {bearer}"))

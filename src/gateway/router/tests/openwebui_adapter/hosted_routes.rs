@@ -122,7 +122,13 @@ async fn gateway(shape: Shape) -> Gateway {
         crate::gateway::record_principal::TEST_RECORD_KEY,
     ));
     let (mut state, _store) = test_router_app_state_with(StreamingConfig::default(), config).await;
-    Arc::get_mut(&mut state).unwrap().auth_config = auth;
+    {
+        let seat = Arc::get_mut(&mut state).unwrap();
+        seat.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*seat.live_config.get()).clone(),
+            auth,
+        ));
+    }
     let fixture =
         RevokeFixture::start(ACCOUNT, RESOURCE, &[], RevocationEndpoint::Configured).await;
     let router = create_router_with_accounts(state, None, Some(fixture.handles()));

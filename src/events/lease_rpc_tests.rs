@@ -85,12 +85,17 @@ fn fixture_with(yaml: &str) -> Fixture {
 
 /// Commit `principal`'s row on `backend`, observed as `subject`; its handle.
 fn subscribe(f: &Fixture, principal: &str, backend: &str, subject: &str) -> String {
+    subscribe_to(f, principal, backend, subject, "https://cb.test/hook")
+}
+
+/// [`subscribe`], with the row's callback at `url`.
+fn subscribe_to(f: &Fixture, principal: &str, backend: &str, subject: &str, url: &str) -> String {
     let now = crate::clock::utc_now().expect("clock");
     let mut row: crate::events::records::Subscription = serde_json::from_value(json!({
         "v": 1, "id": format!("sub_{principal}_{backend}"), "principal": principal,
-        "api_key": null, "url": "https://cb.test/hook",
+        "api_key": null, "url": url,
         "name": format!("backend.{backend}.tools_changed"), "arguments": {},
-        "secret": "whsec_x", "previous_secret": null, "previous_until": null,
+        "secret": format!("whsec_{}=", "A".repeat(43)), "previous_secret": null, "previous_until": null,
         "granted_at": now, "expires_at": now + crate::duration_bound::delta!(hours, 1), "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null
     }))
@@ -258,8 +263,8 @@ async fn a_token_without_exp_is_refused_with_its_reason() {
     );
 }
 
-/// L4 / LEASE-T3: the subscriber's last interest on the backend ends their
-/// lease; an interest that remains keeps it.
+/// L4 / LEASE-T3 / ISO-T6 (stop on the last subscriber): the subscriber's last
+/// interest on the backend ends their lease; an interest that remains keeps it.
 #[tokio::test]
 async fn the_last_interest_on_the_backend_wipes_the_lease() {
     use crate::events::EventSource;

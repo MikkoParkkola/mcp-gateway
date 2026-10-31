@@ -172,7 +172,12 @@ async fn gateway_seeded(
     let logger = Arc::new(crate::security::TransparencyLogger::open(Arc::new(log)).unwrap());
     {
         let state = Arc::get_mut(&mut state).unwrap();
-        state.auth_config = auth;
+        {
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                (*state.live_config.get()).clone(),
+                auth,
+            ));
+        }
         // Only a seeded gateway mints; the unseeded rows keep their audit
         // configuration as it was.
         if !seeds.is_empty() {

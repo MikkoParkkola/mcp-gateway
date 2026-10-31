@@ -128,6 +128,21 @@ fn matching_grant_allows_personal_capability_and_records_audit() {
     assert_eq!(evaluation.audit.subject, Some(alice()));
 }
 
+/// A grant naming the caller as its subject but another subject as its
+/// owner is someone else's grant: it does not allow the caller's call.
+#[test]
+fn a_grant_owned_by_another_subject_does_not_allow() {
+    let mut store = LocalIdentityGrantStore::new();
+    let mut owned_elsewhere = grant();
+    owned_elsewhere.owner = Some(bob());
+    store.upsert(owned_elsewhere);
+
+    let evaluation = store.evaluate(&personal_request(Some(alice())));
+
+    assert!(!evaluation.allowed);
+    assert_eq!(evaluation.reason, IdentityGrantDecisionReason::MissingGrant);
+}
+
 #[test]
 fn revoked_grant_is_not_accepted() {
     let mut store = LocalIdentityGrantStore::new();

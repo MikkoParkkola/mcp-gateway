@@ -44,7 +44,7 @@ async fn served_step() -> crate::Result<()> {
 async fn a_composite_ending_on_a_refused_step_records_refused() {
     let fields = recorded(async {
         let ended = refused_step().await;
-        composite_ended(ended.as_ref().err());
+        composite_ended(CompositeEnd::of_outcome(&ended));
     })
     .await;
     assert_eq!(fields["response_effect"], "refused", "{fields:?}");
@@ -57,7 +57,7 @@ async fn a_composite_ending_on_a_later_error_records_no_refused() {
     let past_then_ended = recorded(async {
         let _ = refused_step().await;
         step_absorbed();
-        composite_ended(Some(&crate::Error::Internal("timed out".into())));
+        composite_ended(CompositeEnd::Failed);
     })
     .await;
     assert!(
@@ -67,7 +67,7 @@ async fn a_composite_ending_on_a_later_error_records_no_refused() {
     let later_step_failed = recorded(async {
         let _ = refused_step().await;
         let ended = failed_step().await;
-        composite_ended(ended.as_ref().err());
+        composite_ended(CompositeEnd::of_outcome(&ended));
     })
     .await;
     assert!(
@@ -83,14 +83,14 @@ async fn a_composite_recovering_from_a_refused_step_records_no_refused() {
     let recovered = recorded(async {
         let _ = refused_step().await;
         let ended = served_step().await;
-        composite_ended(ended.as_ref().err());
+        composite_ended(CompositeEnd::of_outcome(&ended));
     })
     .await;
     assert!(recovered.get("response_effect").is_none(), "{recovered:?}");
     let then_failed = recorded(async {
         let _ = refused_step().await;
         let _ = served_step().await;
-        composite_ended(Some(&crate::Error::Internal("output mapping".into())));
+        composite_ended(CompositeEnd::Failed);
     })
     .await;
     assert!(

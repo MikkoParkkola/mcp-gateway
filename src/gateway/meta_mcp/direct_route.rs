@@ -209,7 +209,11 @@ impl MetaMcp {
     /// Passthrough backend is never indexed: its caller's credential reaches
     /// the gateway only on the direct route, so no name-only reader could
     /// select its slot (design R4.2).
-    pub(crate) fn remember_caller_slot(
+    ///
+    /// A publish that would change the index is first judged by the publish
+    /// gate against a fresh custody read, so a binding the grant has moved
+    /// past is never indexed; one the index already holds reads nothing.
+    pub(crate) async fn remember_caller_slot(
         &self,
         backend: &crate::backend::Backend,
         caller: crate::identity_propagation::CallerProof<'_>,
@@ -218,12 +222,35 @@ impl MetaMcp {
         let Some(binding) = binding else {
             return;
         };
-        if backend.identity_propagation_config().is_some_and(|idp| {
-            matches!(
-                idp.strategy,
-                crate::identity_propagation::PropagationStrategyKind::Passthrough
-            )
-        }) {
+        if is_passthrough(backend) {
+            return;
+        }
+        let Some(principal) = self.principal_for(backend, caller) else {
+            return;
+        };
+        let unchanged = backend
+            .caller_slot_binding(&principal.stable_actor_id())
+            .as_deref()
+            == Some(binding);
+        if !unchanged
+            && let Some(gate) = self.gate_inputs(backend, caller)
+            && gate.judge(backend, binding).await != super::publish_gate::Publish::Allow
+        {
+            return;
+        }
+        self.index_caller_slot(backend, caller, binding);
+    }
+
+    /// Index `binding` as `caller`'s slot with no currency check: the part of
+    /// [`Self::remember_caller_slot`] after its gate, and what a test's seed
+    /// uses.
+    fn index_caller_slot(
+        &self,
+        backend: &crate::backend::Backend,
+        caller: crate::identity_propagation::CallerProof<'_>,
+        binding: &str,
+    ) {
+        if is_passthrough(backend) {
             return;
         }
         if let Some(principal) = self.principal_for(backend, caller) {
@@ -245,7 +272,7 @@ impl MetaMcp {
     ) {
         let backend = self.backends.for_test().get(server).expect("the backend");
         backend.store_per_user_tools_for_test(binding, tools);
-        self.remember_caller_slot(&backend, caller, Some(binding));
+        self.index_caller_slot(&backend, caller, binding);
         assert!(
             backend
                 .indexed_bindings_for_test()
@@ -316,4 +343,14 @@ impl MetaMcp {
     ) -> Result<Value> {
         self.invoke_tool(args, session_id, caller).await
     }
+}
+
+/// Whether `backend` is a Passthrough one, which is never indexed.
+fn is_passthrough(backend: &crate::backend::Backend) -> bool {
+    backend.identity_propagation_config().is_some_and(|idp| {
+        matches!(
+            idp.strategy,
+            crate::identity_propagation::PropagationStrategyKind::Passthrough
+        )
+    })
 }

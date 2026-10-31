@@ -14,7 +14,7 @@ use crate::key_server::oidc::VerifiedIdentity;
 
 /// What a caller may read.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Access {
+pub(in crate::gateway::ui) enum Access {
     /// Every listed row.
     All,
     /// Only calls made under this verified `(issuer, subject)`.
@@ -23,14 +23,14 @@ pub(super) enum Access {
 
 /// Why a caller may not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Refused {
+pub(in crate::gateway::ui) enum Refused {
     /// No credential was presented: 401.
     Unauthenticated,
     /// A credential with no Activity role: 403.
     Forbidden,
 }
 
-pub(super) fn resolve(
+pub(in crate::gateway::ui) fn resolve(
     client: Option<&AuthenticatedClient>,
     identity: Option<&VerifiedIdentity>,
     mapping: &ControlPlaneRoleMappingConfig,

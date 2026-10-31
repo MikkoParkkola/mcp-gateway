@@ -85,19 +85,43 @@ impl CallTarget<'_> {
 }
 
 /// A refusal, carrying the code and status the client-facing envelope needs.
-#[derive(Debug, Clone)]
+///
+/// `kind` names the check that refused, for the decision record only: it is
+/// crate-private, never serialized, and left out of `Debug`, so no response
+/// body or log line can carry it and the wire stays exactly as it was.
+#[derive(Clone)]
 pub struct AuthorizationError {
     pub code: i32,
     pub status: StatusCode,
     pub message: String,
+    pub(crate) kind: crate::security::decision_record::DecisionKind,
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "kind is deliberately left out so no log line can carry it"
+)]
+impl std::fmt::Debug for AuthorizationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AuthorizationError")
+            .field("code", &self.code)
+            .field("status", &self.status)
+            .field("message", &self.message)
+            .finish()
+    }
 }
 
 impl AuthorizationError {
-    pub(crate) fn forbidden(code: i32, message: impl Into<String>) -> Self {
+    pub(crate) fn forbidden(
+        kind: crate::security::decision_record::DecisionKind,
+        code: i32,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             code,
             status: StatusCode::FORBIDDEN,
             message: message.into(),
+            kind,
         }
     }
 }
@@ -116,6 +140,7 @@ pub(crate) fn authorize_backend(
 ) -> Result<(), AuthorizationError> {
     match client {
         Some(client) if !client.can_access_backend(server) => Err(AuthorizationError::forbidden(
+            crate::security::decision_record::DecisionKind::BackendScope,
             -32003,
             client.backend_refusal(server),
         )),
@@ -338,6 +363,7 @@ impl ToolAuthorizer for DenyAll {
     }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         Decision::of(Err(AuthorizationError::forbidden(
+            crate::security::decision_record::DecisionKind::ToolPolicy,
             -32003,
             format!(
                 "denied by test authorizer: '{}' on '{}'",
@@ -377,6 +403,7 @@ impl ToolAuthorizer for DenyOne {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.tool == self.tool {
             return Decision::of(Err(AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
                 -32003,
                 format!("denied by test authorizer: '{}'", target.tool),
             )));
@@ -481,11 +508,23 @@ impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
         }
         Decision::of(
             crate::security::validate_tool_name(target.tool)
-                .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.clone()))
+                .map_err(|e| {
+                    AuthorizationError::forbidden(
+                        crate::security::decision_record::DecisionKind::Syntax,
+                        INVALID_REQUEST,
+                        e.clone(),
+                    )
+                })
                 .and_then(|()| {
                     self.tool_policy
                         .check(target.server, target.tool)
-                        .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
+                        .map_err(|e| {
+                            AuthorizationError::forbidden(
+                                crate::security::decision_record::DecisionKind::ToolPolicy,
+                                INVALID_REQUEST,
+                                e.to_string(),
+                            )
+                        })
                 }),
         )
     }

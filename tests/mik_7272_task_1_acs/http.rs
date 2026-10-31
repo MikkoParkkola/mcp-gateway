@@ -190,7 +190,7 @@ async fn state_in(
     // One registry, shared between the state the router reads and the
     // executor that publishes through it.
     let authorizer = auth_state(&config.auth, crate::record_key::RECORD_KEY);
-    let auth_config = Arc::clone(&authorizer.auth_config);
+    let auth_config = Arc::clone(authorizer.live_config.generation().auth());
     let subscriptions = Arc::new(SubscriptionRegistry::new(SUBSCRIPTION_CAPACITY, authorizer));
     let tasks_dir = store_root.join("tasks");
     let deadline = tokio::time::Instant::now() + fixture::BOUND;
@@ -236,7 +236,6 @@ async fn state_in(
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -251,14 +250,10 @@ async fn state_in(
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-            // Flags off, as this fixture set them on `AppState` before they
-            // moved into the published config (ADR-023).
-            let mut config = config.clone();
-            config.security.sanitize_input = false;
-            config.security.ssrf_protection = false;
-            config
-        })),
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
+            auth_config,
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

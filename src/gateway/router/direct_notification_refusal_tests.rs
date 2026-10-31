@@ -190,11 +190,16 @@ async fn gateway_with_auth(
     state_mut.meta_mcp = Arc::new(meta);
     let route_log = logger(&audit[1]);
     state_mut.transparency_log = Some(Arc::clone(&route_log));
-    state_mut.auth_config = Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
-        &auth,
-        crate::gateway::record_principal::TEST_RECORD_KEY,
-    ));
-    let auth = Arc::clone(&state_mut.auth_config);
+    {
+        state_mut.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*state_mut.live_config.get()).clone(),
+            Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &auth,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
+        ));
+    }
+    let auth = Arc::clone(state_mut.live_config.generation().auth());
     Gateway {
         router: create_router(state),
         auth,
