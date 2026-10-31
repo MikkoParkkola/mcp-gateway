@@ -163,16 +163,48 @@ pub(super) async fn start(
         callback: callback_tx,
         confirm_window: windows.confirm,
     };
+    let mut unless_linked = UnlessLinked {
+        backend: Arc::clone(backend),
+        attempt_id: attempt_id.clone(),
+        cancel: lead.cancel_token().clone(),
+        linked: false,
+    };
     tokio::spawn(run.drive(lead, sink, callback_rx, outcome_rx));
     match link_rx.await {
-        Ok(url) => Ok(Started::Link {
-            url,
-            attempt_id,
-            expires_at,
-        }),
+        Ok(url) => {
+            unless_linked.linked = true;
+            Ok(Started::Link {
+                url,
+                attempt_id,
+                expires_at,
+            })
+        }
         Err(_) => Err(Error::OAuth(
             "the sign-in ended before it had a link".to_owned(),
         )),
+    }
+}
+
+/// Cancels the attempt and clears its flow unless the start handed its link
+/// back: a request dropped before that has no handle left to cancel with.
+struct UnlessLinked {
+    backend: Arc<Backend>,
+    attempt_id: String,
+    cancel: tokio_util::sync::CancellationToken,
+    linked: bool,
+}
+
+impl Drop for UnlessLinked {
+    fn drop(&mut self) {
+        if self.linked {
+            return;
+        }
+        self.cancel.cancel();
+        self.backend.with_flow(|slot| {
+            if slot.as_ref().is_some_and(|f| f.attempt_id == self.attempt_id) {
+                slot.take();
+            }
+        });
     }
 }
 
