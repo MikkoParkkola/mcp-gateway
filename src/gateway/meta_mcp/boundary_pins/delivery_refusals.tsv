@@ -259,6 +259,7 @@ src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	Error::R
 src/gateway/ui/backend_ops.rs	add_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backend_ops.rs	update_backend	refuse_unresolved_secrets	1	no-record	admin UI
 src/gateway/ui/backends.rs	add_backend	add_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
+src/gateway/ui/discovery.rs	adopt_eligible	name_refusal	1	no-record	admin UI decision set: whether a find opens an adopt item, no call delivery
 src/gateway/ui/discovery.rs	body	name_refusal	1	no-record	admin UI discovery listing: drops managed finds from the radar count, no call delivery
 src/gateway/ui/discovery.rs	listed	name_refusal	1	no-record	admin UI discovery listing: labels a find's adopt refusals, no call delivery
 src/gateway/ui/discovery_adopt.rs	adopt_discovery	name_refusal	1	no-record	admin UI discovery adopt: refuses adopting a find whose name is taken, no call delivery

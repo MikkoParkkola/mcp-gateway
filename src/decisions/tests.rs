@@ -541,7 +541,7 @@ fn the_view_names_missing_and_partial_kinds_and_carries_the_snapshot_revision() 
     let mut set = ready();
     deny(&mut set, 1, &missing("stripe.charges", 1));
     let view = set.view().expect("ready");
-    assert_eq!(view.missing_kinds, vec!["adopt"]);
+    assert!(view.missing_kinds.is_empty(), "{:?}", view.missing_kinds);
     assert_eq!(view.partial_kinds, vec!["capability_changed"]);
     assert_eq!(Some((view.decisions.len(), view.revision)), set.snapshot());
     assert_eq!(DecisionSet::with_key(KEY).view(), None);

@@ -214,7 +214,7 @@ fn shadow_scan_collects_configs_processes_ports_and_gateway_registry() {
         report
             .assets
             .iter()
-            .any(|asset| asset.evidence.config_path.as_deref() == Some("/tmp/config.json"))
+            .any(|asset| asset.evidence.config_path.as_deref() == Some("config.json"))
     );
     assert!(
         report
