@@ -471,6 +471,12 @@ fn judgment(
     )
 }
 
+/// An mTLS rule's allow and deny scopes, as (backends, tools).
+type Rule = (
+    (&'static [&'static str], &'static [&'static str]),
+    (&'static [&'static str], &'static [&'static str]),
+);
+
 /// The judgment agrees with the listing it mirrors: for every caller the
 /// fixture models, a backend is listed by `gateway_list_servers` exactly when
 /// it is not hidden.
@@ -481,10 +487,6 @@ async fn listed_and_not_hidden_agree_for_every_caller() {
         display_name: "agent".to_string(),
         ..Default::default()
     };
-    type Rule = (
-        (&'static [&'static str], &'static [&'static str]),
-        (&'static [&'static str], &'static [&'static str]),
-    );
     let rules: [Rule; 4] = [
         ((&["*"], &["*"]), (&["beta"], &[])),
         ((&["*"], &["*"]), (&[], &["alpha_write"])),
