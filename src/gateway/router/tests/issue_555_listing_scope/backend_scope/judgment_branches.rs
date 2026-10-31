@@ -368,3 +368,66 @@ async fn a_backend_the_profile_admits_answers_as_without_a_profile() {
         );
     }
 }
+
+/// `beta` under the `nobeta` default profile, for a certificate whose rule
+/// admits everything, its upstream swapped for one that records each call:
+/// the router, the state and the recorder.
+async fn nobeta_recorded() -> (
+    axum::Router,
+    Arc<crate::gateway::router::AppState>,
+    Arc<super::super::Upstream>,
+) {
+    let (router, state) = with_mtls_tuned(
+        Auth::Off,
+        |meta| meta.with_profile_registry(nobeta_profiles()),
+        (&["*"], &["*"]),
+        (&[], &[]),
+    )
+    .await;
+    let upstream = Arc::new(super::super::Upstream {
+        tools: vec!["beta_tool"],
+        calls: parking_lot::Mutex::new(Vec::new()),
+    });
+    backend(&state, "beta")
+        .set_transport_for_test(Arc::clone(&upstream) as Arc<dyn crate::transport::Transport>);
+    (router, state, upstream)
+}
+
+/// A backend the profile hides passes the profile check only to meet the
+/// scoped lookup's miss, never a send: on `/mcp` (the invoke policy and the
+/// named-target admission) and on the per-backend route (its profile refusal
+/// and the same admission), warm and cold, it answers as an unregistered
+/// name and its upstream is sent nothing.
+#[tokio::test]
+async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
+    for cold in [false, true] {
+        let (router, state, upstream) = nobeta_recorded().await;
+        if cold {
+            go_cold(&state, "beta");
+        }
+        let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
+        let unregistered =
+            post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
+        assert_alike(
+            &format!("/mcp, cold {cold}"),
+            "beta",
+            &hidden,
+            &unregistered,
+        );
+        let call = json!({ "name": "beta_tool", "arguments": {} });
+        let hidden = post_cert_key(&router, "/mcp/beta", None, call.clone()).await;
+        let unregistered =
+            post_cert_key(&router, &format!("/mcp/{UNREGISTERED}"), None, call).await;
+        assert_alike(
+            &format!("per-backend route, cold {cold}"),
+            "beta",
+            &hidden,
+            &unregistered,
+        );
+        let sent = upstream.calls.lock().clone();
+        assert!(
+            sent.is_empty(),
+            "cold {cold}: the hidden backend was sent {sent:?}"
+        );
+    }
+}
