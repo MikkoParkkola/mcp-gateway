@@ -111,17 +111,16 @@ impl super::MetaMcp {
                     complete: true,
                 });
         };
+        // One read: the names, the truncation and the freshness all come from
+        // the same snapshot, already without the blocked tools the listing
+        // drops (as `get_cached_tools_snapshot` reads it).
         let (cached, truncated, _, fresh) = backend.cached_tools_view(None);
-        if cached.is_none() || !fresh {
-            return ListedCatalogue::NotHeld;
-        }
-        ListedCatalogue::Tools {
-            names: backend
-                .get_cached_tools_snapshot()
-                .iter()
-                .map(|t| t.name.clone())
-                .collect(),
-            complete: !truncated,
+        match cached {
+            Some(tools) if fresh => ListedCatalogue::Tools {
+                names: tools.iter().map(|t| t.name.clone()).collect(),
+                complete: !truncated,
+            },
+            _ => ListedCatalogue::NotHeld,
         }
     }
 }
