@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use super::*;
 use crate::gateway::auth::{AuthenticatedClient, anonymous_client};
 use crate::gateway::meta_mcp::hiding::ListedCatalogue;
+use crate::gateway::record_principal::InternalPrincipal;
 use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::router::caller_hiding::RouterHiding;
 use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
@@ -71,7 +72,9 @@ async fn agent_auth_with_no_agent_hides_a_held_backend() {
 async fn a_grant_refusal_is_the_grants_answer_not_a_hiding() {
     let (_, state) = with_mtls_state((&["*"], &["*"]), (&["beta"], &[])).await;
     let hides_beta = |backends: &str| {
+        // An anonymous caller limited by its grant: it presented no secret.
         let client = AuthenticatedClient {
+            principal: InternalPrincipal::new(String::new()),
             backends: vec![backends.to_string()],
             ..anonymous_client()
         };
