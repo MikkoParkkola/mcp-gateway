@@ -418,8 +418,10 @@ async fn a_notification_echoing_a_secret_is_scrubbed_before_it_is_published() {
          data: {{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{}}}}\n\n"
     );
     let body = futures::stream::iter(vec![Ok(bytes::Bytes::from(frames))]);
-    let (scoped, mut rx) =
-        notification_sink::scope(None, decode_sse_exchange(body, Some(&needles)));
+    let (scoped, mut rx) = crate::transport::notify_ingress::test_support::scope(
+        None,
+        decode_sse_exchange(body, Some(&needles)),
+    );
     scoped.await.expect("the response resolves the exchange");
     let first = rx
         .try_recv()

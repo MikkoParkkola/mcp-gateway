@@ -510,43 +510,51 @@ fn merge(a: Scrubbed, b: Scrubbed) -> Scrubbed {
 
 /// What a transport hands on for `answer`: its values removed, and the fixed
 /// refusal in its place when the set overflowed or an `error.code` is one of
-/// them.
+/// them. Run on the call's own task: an answer it changed is recorded as
+/// rewritten on that call's delivery (a no-op outside one).
 pub(crate) fn scrub_answer(
     needles: &NeedleSet,
     answer: crate::Result<JsonRpcResponse>,
 ) -> crate::Result<JsonRpcResponse> {
+    let (answer, outcome) = scrubbed_answer(needles, answer);
+    if matches!(outcome, Scrubbed::Redacted | Scrubbed::Refuse) {
+        use crate::gateway::delivery_facts::{ResponseEffect, raise};
+        raise(ResponseEffect::Rewritten);
+    }
+    answer
+}
+
+/// [`scrub_answer`]'s answer, and what the scrub did to it.
+fn scrubbed_answer(
+    needles: &NeedleSet,
+    answer: crate::Result<JsonRpcResponse>,
+) -> (crate::Result<JsonRpcResponse>, Scrubbed) {
     match answer {
         Ok(mut response) => match scrub_response_with(needles, &mut response) {
-            Scrubbed::Refuse => Err(refusal(needles)),
-            _ => Ok(response),
+            Scrubbed::Refuse => (Err(refusal(needles)), Scrubbed::Refuse),
+            outcome => (Ok(response), outcome),
         },
         Err(mut error) => match scrub_error(needles, &mut error) {
             // The retry classification is kept: a transient refusal stays
             // transient (design: envelope).
-            Scrubbed::Refuse => Err(match (refusal(needles), error) {
-                (
-                    crate::Error::JsonRpc { code, message, .. },
-                    crate::Error::JsonRpcRetryable { status, .. },
-                ) => crate::Error::JsonRpcRetryable {
-                    code,
-                    message,
-                    status,
-                    data: None,
-                },
-                (refused, _) => refused,
-            }),
-            _ => Err(error),
+            Scrubbed::Refuse => (
+                Err(match (refusal(needles), error) {
+                    (
+                        crate::Error::JsonRpc { code, message, .. },
+                        crate::Error::JsonRpcRetryable { status, .. },
+                    ) => crate::Error::JsonRpcRetryable {
+                        code,
+                        message,
+                        status,
+                        data: None,
+                    },
+                    (refused, _) => refused,
+                }),
+                Scrubbed::Refuse,
+            ),
+            outcome => (Err(error), outcome),
         },
     }
-}
-
-/// A response carrying the fixed refusal, under the answer's own `id` so the
-/// caller still gets its answer.
-pub(crate) fn refused_response(
-    needles: &NeedleSet,
-    id: Option<crate::protocol::RequestId>,
-) -> JsonRpcResponse {
-    JsonRpcResponse::error(id, REFUSAL_CODE, refusal_message(needles))
 }
 
 /// The fixed refusal an answer is replaced with; it names no value.

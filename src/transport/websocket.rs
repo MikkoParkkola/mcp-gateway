@@ -686,7 +686,7 @@ impl Transport for WebSocketTransport {
         // Finished, answered or failed: the transport's own timeout is not a
         // cancel (design Q1).
         cancel.disarm();
-        match outcome {
+        let answer = match outcome {
             Ok(Ok(Ok(response))) => Ok(response),
             Ok(Err(e)) => Err(e),
             Ok(Ok(Err(_))) => Err(Error::Transport(
@@ -695,6 +695,12 @@ impl Transport for WebSocketTransport {
             Err(_) => Err(Error::BackendTimeout(
                 "WebSocket request timed out".to_string(),
             )),
+        };
+        // Scrubbed on the call's own task (the reader routes the answer as
+        // sent), so a rewrite lands on this call's delivery record.
+        match self.inner.needles.get() {
+            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+            None => answer,
         }
     }
 

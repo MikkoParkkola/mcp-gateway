@@ -90,7 +90,7 @@ async fn a_previewed_backend_with_secret_rules_receives_no_injected_value() {
     assert_eq!(withheld.secrets, 3, "premise: the rules were present");
     let mut config = Config::default();
     config.security.ssrf_protection = false;
-    let generation = crate::config_reload::Generation::prepare(config).expect("generation");
+    let generation = crate::config_reload::LiveConfig::new(config).generation();
     let response = run_confirmed(&generation, "previewed", &backend, json!({})).await;
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let seen = seen.lock().clone();

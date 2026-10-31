@@ -288,21 +288,18 @@ impl StdioTransport {
         {
             return Ok(());
         }
-        if let Some(needles) = self.needles.get() {
-            use crate::security::needles::{Scrubbed, ingress_scrub, refused_response};
-            match ingress_scrub(needles, &mut message) {
-                Scrubbed::Withhold => return Ok(()),
-                Scrubbed::Refuse => {
-                    if let JsonRpcMessage::Response(response) = &message {
-                        message = JsonRpcMessage::Response(refused_response(
-                            needles,
-                            response.id.clone(),
-                        ));
-                    } else {
-                        return Ok(());
-                    }
-                }
-                Scrubbed::Clean | Scrubbed::Redacted => {}
+        // A notification is scrubbed here, before it is published. An answer
+        // goes to its call as sent: the call scrubs it on its own task, so a
+        // rewrite lands on that call's delivery record.
+        if let Some(needles) = self.needles.get()
+            && !matches!(message, JsonRpcMessage::Response(_))
+        {
+            use crate::security::needles::{Scrubbed, ingress_scrub};
+            if matches!(
+                ingress_scrub(needles, &mut message),
+                Scrubbed::Withhold | Scrubbed::Refuse
+            ) {
+                return Ok(());
             }
         }
         let response = match message {
@@ -434,7 +431,10 @@ impl Transport for StdioTransport {
         // The guards drop after this value: the pending entry and progress go.
         let outcome = self.exchange(message, rx, Some(&claim)).await;
         cancel.disarm();
-        outcome
+        match self.needles.get() {
+            Some(needles) => crate::security::needles::scrub_answer(needles, outcome),
+            None => outcome,
+        }
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {

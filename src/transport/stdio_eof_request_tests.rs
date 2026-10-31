@@ -371,3 +371,62 @@ fn an_unparsable_line_is_logged_by_length_only() {
     );
     assert!(!log.contains(NEEDLE), "the log quotes the line: {log}");
 }
+
+/// What a call's delivery record says about its answer, for a child that
+/// answers with `text`. The answer is read through a real stdio reader: the
+/// reader routes it to the call as sent and the call scrubs it on its own
+/// task, so the effect lands in this call's cell.
+async fn recorded_effect(text: &str) -> (serde_json::Value, String) {
+    let (_w, t) = started(&format!(
+        r#"read -r request
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"{text}"}}]}}}}\n' "$(id_of "$request")"
+while IFS= read -r l; do :; done"#
+    ))
+    .await;
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", ECHOED);
+    t.attach_needles(Arc::new(needles));
+    let mut fields = serde_json::Map::new();
+    let answer = crate::gateway::delivery_facts::scope(async {
+        let answer = tokio::time::timeout(Duration::from_secs(30), t.request("tools/call", None))
+            .await
+            .expect("answered")
+            .expect("an answer");
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        answer
+    })
+    .await;
+    let _ = t.close().await;
+    (
+        fields.get("response_effect").cloned().unwrap_or_default(),
+        serde_json::to_string(&answer).expect("answer serialises"),
+    )
+}
+
+/// An injected value the child echoes.
+const ECHOED: &str = "rewrite-secret-7d41";
+
+/// An answer the scrub changed is recorded as rewritten on the call's own
+/// delivery record, though the stdio reader that read it runs on another
+/// task.
+#[tokio::test]
+async fn a_redacted_answer_is_recorded_as_rewritten() {
+    let (effect, answer) = recorded_effect(&format!("echo {ECHOED}")).await;
+    assert!(!answer.contains(ECHOED), "premise: scrubbed: {answer}");
+    assert_eq!(effect, serde_json::json!("rewritten"), "{answer}");
+}
+
+/// Control: an answer the scrub left alone records no rewrite.
+#[tokio::test]
+async fn a_clean_answer_is_not_recorded_as_rewritten() {
+    let (effect, answer) = recorded_effect("nothing to hide").await;
+    assert!(
+        answer.contains("nothing to hide"),
+        "premise: answered: {answer}"
+    );
+    assert_ne!(effect, serde_json::json!("rewritten"), "{answer}");
+}
