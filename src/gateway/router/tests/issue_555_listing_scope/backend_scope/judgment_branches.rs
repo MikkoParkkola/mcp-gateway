@@ -14,6 +14,8 @@ use crate::gateway::router::OwnedRouterAuthorizer;
 use crate::gateway::router::caller_hiding::RouterHiding;
 use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
 
+mod caller_view_rows;
+
 /// A session profile that leaves `alpha` out hides it from a caller whose
 /// policy admits its tools, and the listing leaves it out too.
 #[tokio::test]
