@@ -167,7 +167,8 @@ pub(super) async fn send_with_retry(
             Some(clone) => (clone, attempt == MAX_SEND_ATTEMPTS),
             None => match request.take() {
                 Some(only) => (only, true),
-                None => unreachable!("the request is taken only for a final attempt"),
+                // Taken only for a final attempt, which always returns.
+                None => return Err(Error::Internal(format!("{label}: request already sent"))),
             },
         };
         let e = match timed_attempt(this).await {
