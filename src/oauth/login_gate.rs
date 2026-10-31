@@ -173,6 +173,12 @@ impl Lead {
         self.listeners.take()
     }
 
+    /// This login's attempt, whose `finished()` publishes how it ended.
+    #[cfg(feature = "webui")]
+    pub(crate) fn attempt(&self) -> Arc<Attempt> {
+        Arc::clone(&self.attempt)
+    }
+
     /// Move this login's end to `at`, for whoever asks how long it holds the
     /// gate.
     #[cfg(feature = "webui")]

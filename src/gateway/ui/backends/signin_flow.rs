@@ -11,7 +11,7 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use crate::backend::Backend;
-use crate::backend::sign_in_flow::{Flow, Phase};
+use crate::backend::sign_in_flow::{Flow, Outcome, Phase};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::oauth::client::sign_in::{PendingGrant, UiSink};
@@ -113,7 +113,7 @@ pub(super) async fn start(
     let deadline = Instant::now() + windows.start;
     lead.set_end(deadline);
     let attempt_id = new_attempt_id();
-    let ended = Arc::new(tokio::sync::Notify::new());
+    let (outcome_tx, outcome_rx) = oneshot::channel();
     let flow = Flow {
         owner,
         attempt_id: attempt_id.clone(),
@@ -124,7 +124,8 @@ pub(super) async fn start(
         held_since: None,
         wait_generation: 0,
         caller,
-        ended: Arc::clone(&ended),
+        outcome: Some(outcome_tx),
+        attempt: lead.attempt(),
         cancel: lead.cancel_token().clone(),
         client: Arc::clone(&client),
     };
@@ -139,14 +140,13 @@ pub(super) async fn start(
         client,
         attempt_id: attempt_id.clone(),
         deadline,
-        ended,
     };
     let sink = UiSink {
         link: link_tx,
         callback: callback_tx,
         confirm_window: windows.confirm,
     };
-    tokio::spawn(run.drive(lead, sink, callback_rx));
+    tokio::spawn(run.drive(lead, sink, callback_rx, outcome_rx));
     match link_rx.await {
         Ok(url) => Ok(Started::Link {
             url,
@@ -166,7 +166,6 @@ struct Run {
     client: Arc<OAuthClient>,
     attempt_id: String,
     deadline: Instant,
-    ended: Arc<tokio::sync::Notify>,
 }
 
 impl Run {
@@ -199,7 +198,13 @@ impl Run {
     }
 
     /// Run the login to its end, then wait out the confirm window.
-    async fn drive(self, lead: Lead, ui: UiSink, callback: oneshot::Receiver<()>) {
+    async fn drive(
+        self,
+        lead: Lead,
+        ui: UiSink,
+        callback: oneshot::Receiver<()>,
+        outcome: oneshot::Receiver<Outcome>,
+    ) {
         let mut lead = lead;
         let cancel = lead.cancel_token().clone();
         let listeners = lead.take_listeners_guard();
@@ -208,7 +213,7 @@ impl Run {
             .authorize_for_ui(&cancel, listeners, self.deadline, ui);
         let granted = self.watch_login(&lead, auth, callback).await;
         match granted {
-            Ok(grant) => self.hold(lead, grant).await,
+            Ok(grant) => self.hold(lead, grant, outcome).await,
             Err(error) => {
                 if let Some(flow) = self.take_flow() {
                     self.record_end(&flow, &error);
@@ -250,7 +255,12 @@ impl Run {
     }
 
     /// Keep the grant until a decision takes it or the window ends.
-    async fn hold(&self, lead: Lead, grant: crate::oauth::client::sign_in::PendingGrant) {
+    async fn hold(
+        &self,
+        lead: Lead,
+        grant: crate::oauth::client::sign_in::PendingGrant,
+        mut outcome: oneshot::Receiver<Outcome>,
+    ) {
         #[cfg(test)]
         self.backend.sign_in.hold_pause.pause().await;
         // Re-checked under the flow lock after the exchange. This covers an
@@ -268,24 +278,54 @@ impl Run {
             Some(flow.until)
         });
         let Some(until) = until else {
-            return lead.end(None);
+            return lead.end(Some(&self.cancelled()));
         };
-        tokio::select! {
-            () = self.ended.notified() => lead.end(None),
+        let cancel = lead.cancel_token().clone();
+        let end = tokio::select! {
+            biased;
+            decided = &mut outcome => decided,
+            () = cancel.cancelled() => match self.take_flow() {
+                // Still in the slot: nobody decided, the backend did.
+                Some(_) => Ok(Outcome::Cancelled),
+                // A confirm took it: its commit runs to completion, so wait
+                // for the outcome it reaches.
+                None => outcome.await,
+            },
             () = tokio::time::sleep_until(until) => {
                 #[cfg(test)]
                 self.backend.sign_in.expiry_pause.pause().await;
-                if let Some(flow) = self.take_flow() {
-                    let expired = Error::AuthorizationIncomplete {
-                        backend: self.backend.name.clone(),
-                        window_secs: self.backend.sign_in_windows().confirm.as_secs(),
-                    };
-                    self.record_end(&flow, &expired);
-                    lead.end(Some(&expired));
-                } else {
-                    lead.end(None);
+                match self.take_flow() {
+                    Some(flow) => {
+                        let expired = Error::AuthorizationIncomplete {
+                            backend: self.backend.name.clone(),
+                            window_secs: self.backend.sign_in_windows().confirm.as_secs(),
+                        };
+                        self.record_end(&flow, &expired);
+                        return lead.end(Some(&expired));
+                    }
+                    // A confirm took it and is still saving: its outcome
+                    // ends the login, not the clock.
+                    None => outcome.await,
                 }
             }
+        };
+        self.finish(lead, end);
+    }
+
+    /// End the login with what the decision was: success only after a
+    /// committed save.
+    fn finish(&self, lead: Lead, end: Result<Outcome, oneshot::error::RecvError>) {
+        match end {
+            Ok(Outcome::Confirmed(Ok(()))) => lead.end(None),
+            Ok(Outcome::Confirmed(Err(error))) => lead.end(Some(&error)),
+            // A decision channel that closed with nothing sent was dropped.
+            Ok(Outcome::Cancelled) | Err(_) => lead.end(Some(&self.cancelled())),
+        }
+    }
+
+    fn cancelled(&self) -> Error {
+        Error::AuthorizationCancelled {
+            backend: self.backend.name.clone(),
         }
     }
 
@@ -357,7 +397,9 @@ struct Taken {
     grant: crate::oauth::client::sign_in::PendingGrant,
     held_for: std::time::Duration,
     generation: u64,
-    ended: Arc<tokio::sync::Notify>,
+    until: Instant,
+    outcome: Option<oneshot::Sender<Outcome>>,
+    attempt: Arc<crate::oauth::login_gate::Attempt>,
     client: Arc<OAuthClient>,
     caller: Option<AuthenticatedClient>,
 }
@@ -385,13 +427,29 @@ fn take_for(backend: &Backend, owner: &str, attempt: &str) -> std::result::Resul
                 .held_since
                 .map_or_else(Default::default, |at| at.elapsed()),
             generation: flow.wait_generation,
-            ended: Arc::clone(&flow.ended),
+            until: flow.until,
+            outcome: flow.outcome.take(),
+            attempt: Arc::clone(&flow.attempt),
             client: Arc::clone(&flow.client),
             caller: flow.caller.clone(),
         };
         *slot = None;
         Ok(taken)
     })
+}
+
+/// Hand the flow task a decision's outcome and answer only once the gate
+/// reflects it: the task ends the lead with the outcome, and the attempt's
+/// `finished()` is published in the step that clears the gate.
+async fn settle(
+    attempt: &crate::oauth::login_gate::Attempt,
+    outcome: Option<oneshot::Sender<Outcome>>,
+    decided: Outcome,
+) {
+    if let Some(outcome) = outcome {
+        let _ = outcome.send(decided);
+    }
+    attempt.finished().await;
 }
 
 /// End the sign-in `owner` started as `attempt`, in any phase: discard what it
@@ -405,11 +463,13 @@ async fn cancel_flow(backend: &Backend, owner: &str, attempt: &str) -> Decided {
             .is_some_and(|f| same_owner(&f.owner, owner) && same_owner(&f.attempt_id, attempt));
         if theirs { slot.take() } else { None }
     });
-    let Some(flow) = ended else {
+    let Some(mut flow) = ended else {
         return Decided::NoSignIn;
     };
     flow.cancel.cancel();
-    release(backend, &flow.ended).await;
+    #[cfg(test)]
+    backend.sign_in.outcome_pause.pause().await;
+    settle(&flow.attempt, flow.outcome.take(), Outcome::Cancelled).await;
     Decided::Done
 }
 
@@ -432,34 +492,33 @@ pub(super) async fn decide(
         grant,
         held_for,
         generation,
-        ended,
+        until,
+        outcome,
+        attempt,
         client,
         caller,
     } = taken;
     #[cfg(test)]
     backend.sign_in.commit_pause.pause().await;
-    let cancel = tokio_util::sync::CancellationToken::new();
-    let by = Instant::now() + backend.sign_in_windows().confirm;
-    let saved = client.save_confirmed(grant, held_for, &cancel, by).await;
-    release(backend, &ended).await;
-    if saved.is_ok() {
+    // Once the confirm has taken the flow its commit runs to completion: a
+    // backend cancel that lands now waits for this outcome (`hold` waits for
+    // it), so the save takes a token nothing cancels, and ends at the flow's
+    // own `until`.
+    let never = tokio_util::sync::CancellationToken::new();
+    let saved = client.save_confirmed(grant, held_for, &never, until).await;
+    let ok = saved.is_ok();
+    if ok {
         backend.clear_auth_wait_if(generation);
-        Decided::Done
     } else {
         record_outcome(state, &backend.name, "failed", caller.as_ref());
-        Decided::SaveFailed
     }
-}
-
-/// Tell the flow's task a decision ended it, and let it hand the login gate
-/// back before the answer goes out, so the next start does not meet it.
-async fn release(backend: &Backend, ended: &tokio::sync::Notify) {
-    ended.notify_one();
-    for _ in 0..64 {
-        if !backend.login_gate.in_flight() {
-            break;
-        }
-        tokio::task::yield_now().await;
+    #[cfg(test)]
+    backend.sign_in.outcome_pause.pause().await;
+    settle(&attempt, outcome, Outcome::Confirmed(saved)).await;
+    if ok {
+        Decided::Done
+    } else {
+        Decided::SaveFailed
     }
 }
 

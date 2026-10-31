@@ -29,7 +29,10 @@ fn a_grant() -> PendingGrant {
 }
 
 /// A flow in `AwaitingCallback` with a far-off start deadline.
-fn seeded_flow(client: &Arc<crate::oauth::OAuthClient>) -> Flow {
+fn seeded_flow(
+    client: &Arc<crate::oauth::OAuthClient>,
+    attempt: &Arc<crate::oauth::login_gate::Attempt>,
+) -> Flow {
     Flow {
         owner: "owner".to_owned(),
         attempt_id: "probe".to_owned(),
@@ -40,7 +43,8 @@ fn seeded_flow(client: &Arc<crate::oauth::OAuthClient>) -> Flow {
         held_since: None,
         wait_generation: 0,
         caller: None,
-        ended: Arc::new(tokio::sync::Notify::new()),
+        outcome: None,
+        attempt: Arc::clone(attempt),
         cancel: tokio_util::sync::CancellationToken::new(),
         client: Arc::clone(client),
     }
@@ -67,10 +71,10 @@ async fn the_confirm_window_starts_even_when_the_login_is_already_done() {
     let oauth = Arc::new(client(dir.path(), None));
     let confirm = backend.sign_in_windows().confirm;
     for round in 0..64 {
-        backend.with_flow(|slot| *slot = Some(seeded_flow(&oauth)));
         let Begin::Lead(lead) = backend.login_gate.begin(None, None) else {
             panic!("round {round}: the gate was not free");
         };
+        backend.with_flow(|slot| *slot = Some(seeded_flow(&oauth, &lead.attempt())));
         let (signal, callback) = oneshot::channel();
         signal.send(()).expect("the receiver is alive");
         let run = Run {
@@ -79,7 +83,6 @@ async fn the_confirm_window_starts_even_when_the_login_is_already_done() {
             client: Arc::clone(&oauth),
             attempt_id: "probe".to_owned(),
             deadline: Instant::now() + OAUTH_AUTHORIZATION_WINDOW,
-            ended: Arc::new(tokio::sync::Notify::new()),
         };
 
         let result = run

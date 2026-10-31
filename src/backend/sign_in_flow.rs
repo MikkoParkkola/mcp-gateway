@@ -7,7 +7,6 @@
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use super::Backend;
@@ -51,6 +50,14 @@ impl Default for SignInWindows {
     }
 }
 
+/// How a decision on a held grant ended.
+pub(crate) enum Outcome {
+    /// The confirm's save finished, or failed with the error.
+    Confirmed(crate::Result<()>),
+    /// The owner cancelled.
+    Cancelled,
+}
+
 /// One sign-in in flight. Holds no link and no verifier.
 pub(crate) struct Flow {
     /// The keyed digest of the starting session's handle.
@@ -70,8 +77,12 @@ pub(crate) struct Flow {
     pub(crate) wait_generation: u64,
     /// The starting caller, for the records of the flow's later ends.
     pub(crate) caller: Option<AuthenticatedClient>,
-    /// Woken when a decision has ended the flow, so its task lets go.
-    pub(crate) ended: Arc<Notify>,
+    /// Where the decision that takes the flow sends its outcome. Dropped
+    /// unsent, the flow task reads it as a cancel.
+    pub(crate) outcome: Option<tokio::sync::oneshot::Sender<Outcome>>,
+    /// The login's attempt: its `finished()` is published in the step that
+    /// clears the gate, so a decision can answer only once the gate does.
+    pub(crate) attempt: Arc<crate::oauth::login_gate::Attempt>,
     /// Ends the login itself: cancelling it closes the callback listener and
     /// stops any exchange, so a callback that comes late reaches nothing.
     pub(crate) cancel: tokio_util::sync::CancellationToken,
