@@ -234,3 +234,29 @@ async fn a_profile_hidden_providers_capability_answers_as_an_unregistered_name()
 async fn a_profile_hidden_providers_admin_capability_answers_as_an_unregistered_name() {
     assert_profile_hidden_provider_alike("cap_callback").await;
 }
+
+/// A profile's backend deny refuses every tool by name, so it hides a cold
+/// backend too: the call answers as an unregistered name, not with the
+/// profile's refusal.
+#[tokio::test]
+async fn a_cold_backend_the_profile_leaves_out_answers_as_an_unregistered_name() {
+    let profiles = HashMap::from([(
+        "nobeta".to_string(),
+        RoutingProfileConfig {
+            deny_backends: Some(vec!["beta".to_string()]),
+            ..Default::default()
+        },
+    )]);
+    let (router, state) = with_mtls_tuned(
+        Auth::Off,
+        move |meta| meta.with_profile_registry(ProfileRegistry::from_config(&profiles, "nobeta")),
+        (&["*"], &["*"]),
+        (&[], &[]),
+    )
+    .await;
+    go_cold(&state, "beta");
+    assert!(judgment(&state, None, Some(&agent_cert())).hides("beta"));
+    let hidden = post_as_agent_cert(&router, "/mcp", invoke("beta", "beta_tool")).await;
+    let unregistered = post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, "beta_tool")).await;
+    assert_alike("cold, profile deny", "beta", &hidden, &unregistered);
+}
