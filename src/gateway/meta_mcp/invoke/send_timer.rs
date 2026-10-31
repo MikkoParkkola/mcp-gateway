@@ -39,9 +39,14 @@ impl SendTimer {
         }
     }
 
-    /// Note how the send that returned `result` ended, and hand it back.
+    /// Note how the send that returned `result` ended, and hand it back. A
+    /// failure that proves nothing reached the backend notes nothing.
     pub(crate) fn finish_with<T>(self, result: crate::Result<T>) -> crate::Result<T> {
-        self.finish(Self::end_of(&result));
+        if matches!(&result, Err(e) if never_sent(e)) {
+            self.discard();
+        } else {
+            self.finish(Self::end_of(&result));
+        }
         result
     }
 
@@ -74,6 +79,23 @@ impl Drop for SendTimer {
             super::audit::note_backend(elapsed(started), End::Cancelled);
         }
     }
+}
+
+/// Failures a transport raises before anything is written to the backend: no
+/// caller slot, an authorization that never completed, a connection that
+/// never opened (the stdio writer reports an unsent request this way), or
+/// shutdown. None of them is the backend's latency.
+fn never_sent(e: &crate::Error) -> bool {
+    matches!(
+        e,
+        crate::Error::IdentitySlotsExhausted { .. }
+            | crate::Error::AuthorizationCancelled { .. }
+            | crate::Error::AuthorizationIncomplete { .. }
+            | crate::Error::AuthorizationRequired { .. }
+            | crate::Error::AuthorizationPending { .. }
+            | crate::Error::TransportConnect(_)
+            | crate::Error::Shutdown
+    )
 }
 
 /// The send's time: the injected test duration when a row set one.
@@ -161,6 +183,34 @@ mod tests {
             None,
             "inert and discarded timers note nothing"
         );
+    }
+
+    /// Review F1: a transport failure that proves nothing was sent notes no
+    /// sample; a failure after the send notes one, Failed.
+    #[tokio::test]
+    async fn a_send_that_never_left_notes_nothing() {
+        seam::inject(Duration::from_millis(7));
+        let unsent = [
+            crate::Error::TransportConnect("stdout closed before anything was sent".into()),
+            crate::Error::IdentitySlotsExhausted {
+                backend: "alpha".into(),
+                limit: "backend",
+            },
+            crate::Error::Shutdown,
+        ];
+        for error in unsent {
+            let ((), notes) = with_dispatch_scope(async {
+                let _ = SendTimer::start().finish_with::<()>(Err(error));
+            })
+            .await;
+            assert_eq!(notes.backend_sample(), None);
+        }
+        let ((), notes) = with_dispatch_scope(async {
+            let _ = SendTimer::start().finish_with::<()>(Err(crate::Error::Transport("reset".into())));
+        })
+        .await;
+        seam::clear();
+        assert_eq!(notes.backend_sample(), Some((Duration::from_millis(7), End::Failed)));
     }
 
     /// Test plan row 26: a call's rounds (a bridged retry) add up into one
