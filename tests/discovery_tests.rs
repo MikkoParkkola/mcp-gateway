@@ -646,9 +646,10 @@ fn assert_handoff_surfaces_are_sanitized(handoff: &ShadowConsumerHandoff) {
         .unwrap();
     assert!(!remote_inventory.local_only);
     assert!(remote_inventory.confirmation_required);
+    // The endpoint is the origin only: a URL path can carry a token.
     assert_eq!(
         remote_inventory.endpoint.as_deref(),
-        Some("https://mcp.example.com/sse")
+        Some("https://mcp.example.com")
     );
 
     let serialized = serde_json::to_string(&handoff).unwrap();
