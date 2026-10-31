@@ -417,45 +417,48 @@ async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
             go_cold(&state, "beta");
         }
         for (name, tool) in [("beta", "beta_tool"), ("caps", "cap_open")] {
-            let hidden = post_as_agent_cert(&router, "/mcp", invoke(name, tool)).await;
-            let unregistered =
-                post_as_agent_cert(&router, "/mcp", invoke(UNREGISTERED, tool)).await;
-            assert!(
-                !hidden.1.contains("_context_integrity"),
-                "{name} ran: {}",
-                hidden.1
-            );
-            assert_alike(
-                &format!("/mcp {name}, cold {cold}"),
-                name,
-                &hidden,
-                &unregistered,
-            );
             let call = json!({ "name": tool, "arguments": {} });
-            let hidden = post_cert_key(&router, &format!("/mcp/{name}"), None, call.clone()).await;
-            let unregistered =
-                post_cert_key(&router, &format!("/mcp/{UNREGISTERED}"), None, call).await;
-            assert!(
-                !hidden.1.contains("_context_integrity"),
-                "{name} ran: {}",
-                hidden.1
-            );
-            assert_alike(
-                &format!("per-backend route {name}, cold {cold}"),
-                name,
-                &hidden,
-                &unregistered,
-            );
+            let routes = [
+                (
+                    "/mcp",
+                    "/mcp".to_string(),
+                    invoke(name, tool),
+                    invoke(UNREGISTERED, tool),
+                ),
+                (
+                    "per-backend route",
+                    format!("/mcp/{name}"),
+                    call.clone(),
+                    call,
+                ),
+            ];
+            for (route, uri, params, twin) in routes {
+                let before = executed();
+                let hidden = post_cert_key(&router, &uri, None, params).await;
+                assert_eq!(
+                    executed(),
+                    before,
+                    "{route} {name}, cold {cold}: a hidden capability ran: {}",
+                    hidden.1
+                );
+                let twin_uri = if route == "/mcp" {
+                    uri
+                } else {
+                    format!("/mcp/{UNREGISTERED}")
+                };
+                let unregistered = post_cert_key(&router, &twin_uri, None, twin).await;
+                assert_alike(
+                    &format!("{route} {name}, cold {cold}"),
+                    name,
+                    &hidden,
+                    &unregistered,
+                );
+            }
         }
         let sent = upstream.calls.lock().clone();
         assert!(
             sent.is_empty(),
             "cold {cold}: the hidden backend was sent {sent:?}"
-        );
-        assert_eq!(
-            crate::capability::CapabilityBackend::executed_for_test(),
-            0,
-            "cold {cold}: a hidden capability ran"
         );
     }
 }
@@ -547,32 +550,40 @@ async fn the_execution_count_sees_a_visible_capability_on_every_route() {
     let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
     let (caps, _dir) = caps_with_callback().await;
     state.meta_mcp.set_capabilities(caps);
+    // Every route's count is recorded, then judged together, so one route's
+    // miss cannot hide another's.
     let mut seen = executed();
-    let mut once = |route: &str| {
+    let mut counted = Vec::new();
+    let mut once = |route: &str, answer: &str| {
         let now = executed();
-        assert_eq!(
-            now,
-            seen + 1,
-            "{route}: a visible capability was not counted once"
-        );
+        counted.push((
+            route.to_string(),
+            now - seen,
+            answer.chars().take(300).collect::<String>(),
+        ));
         seen = now;
     };
-    post_as_agent_cert(&router, "/mcp", invoke("caps", "cap_open")).await;
-    once("/mcp gateway_invoke");
+    let (_, answer) = post_as_agent_cert(&router, "/mcp", invoke("caps", "cap_open")).await;
+    once("/mcp gateway_invoke", &answer);
     let chain = json!({"name": "gateway_execute", "arguments": {"chain": [
         {"tool": "caps:cap_open", "arguments": {}}
     ]}});
-    post_as_agent_cert(&router, "/mcp", chain).await;
-    once("gateway_execute chain step");
-    post_cert_key(
+    let (_, answer) = post_as_agent_cert(&router, "/mcp", chain).await;
+    once("gateway_execute chain step", &answer);
+    let (_, answer) = post_cert_key(
         &router,
         "/mcp/caps",
         None,
         json!({"name": "cap_open", "arguments": {}}),
     )
     .await;
-    once("per-backend route");
+    once("per-backend route", &answer);
     let id = submit_task(&router, "caps", "cap_open", "count-control").await;
-    settle_task(&router, &id).await;
-    once("task run");
+    let settled = settle_task(&router, &id).await;
+    once("task run", &settled.to_string());
+    let wrong: Vec<_> = counted.iter().filter(|(_, n, _)| *n != 1).collect();
+    assert!(
+        wrong.is_empty(),
+        "routes not counted exactly once: {wrong:#?}"
+    );
 }
