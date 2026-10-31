@@ -99,6 +99,13 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
+        // Every failure of a sent call: a web UI call answers "may have run",
+        // unless the backend cannot have acted.
+        #[cfg(feature = "webui")]
+        crate::gateway::ui_call::note_send_error(matches!(
+            e,
+            Error::BackendNotFound(_) | Error::ToolNotFound(_)
+        ));
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
         // returned as the refusal it is) or tells the caller whether a
@@ -133,6 +140,8 @@ impl MetaMcp {
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
         if e.is_pre_dispatch() {
+            // The backend never saw it: refused before its backend.
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
             if let Some(mut reservation) = idem_reservation.take() {
                 reservation.release();
             }
@@ -523,7 +532,12 @@ impl MetaMcp {
             return Err(unbindable_continuation(server, tool));
         }
         result = gated;
-        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        // A dispatch error the backend never saw, answered as a tool result,
+        // is the gateway's text: no receipt names the backend for it.
+        if super::audit::pre_send_now() != crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
+        {
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        }
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::super::response_security::chain_after_gates(
             effect,

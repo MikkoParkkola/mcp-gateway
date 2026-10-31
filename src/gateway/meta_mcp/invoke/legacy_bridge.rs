@@ -81,6 +81,7 @@ impl MetaMcp {
             // Boxed: the exchange runs in `run_input_bridge`'s frame, and one
             // allocation on the branch a legacy client with a pending question
             // takes is cheaper than a wider `invoke` frame on every dispatch.
+            let lent = caller_credential.lent();
             let account_refusal = parking_lot::Mutex::new(None);
             let relay_refused = parking_lot::Mutex::new(None);
             let recording = self.recording_channel(caller, session_id, (server, tool), trace_id);
@@ -100,7 +101,7 @@ impl MetaMcp {
                     caller_identity,
                     caller_proof,
                     credential_owner,
-                    headers: &caller_credential.headers,
+                    headers: &lent,
                     cache_binding: dispatch_binding,
                     account_credential: bridge_account_credential.take(),
                     api_key_name,
@@ -129,6 +130,10 @@ impl MetaMcp {
             *idem_reservation = held.into_inner();
             // A relay refusal answers first, before the parked and generic arms.
             if let Some(refused) = relay_refused.into_inner() {
+                // No call acted: refused before its backend.
+                super::audit::note_pre_send(
+                    crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+                );
                 if let Some(reservation) = idem_reservation.as_mut() {
                     reservation.release();
                 }
@@ -245,6 +250,12 @@ impl MetaMcp {
                 Err(round) if parked.is_some() => {
                     let refused = parked.take().expect("the arm's guard checked it");
                     let not_admitted = matches!(round, BridgeError::NotAdmitted { .. });
+                    if not_admitted {
+                        // Refused at its cold-slot list, before the backend.
+                        super::audit::note_pre_send(
+                            crate::gateway::meta_mcp::dispatch_log::PreSend::Refused,
+                        );
+                    }
                     match idem_reservation.as_mut() {
                         Some(reservation) if not_admitted => reservation.release(),
                         Some(reservation) => reservation.commit(&uncertain_side_effect()),

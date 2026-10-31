@@ -151,7 +151,7 @@ async fn recorded(state: Arc<AppState>, request: Request, next: Next) -> Respons
                 ..AuditEnvelope::ok(AuditWho::from_request(
                     client.as_ref(),
                     subject.as_ref(),
-                    state.auth_config.record_key(),
+                    state.live_config.generation().auth().record_key(),
                 ))
             };
             match log.append_admin_action("admin_ui", fields, &envelope) {
@@ -182,14 +182,30 @@ pub(super) fn record_admin_action(
     identity: Option<&VerifiedIdentity>,
     fields: serde_json::Map<String, serde_json::Value>,
 ) -> Option<Response> {
+    record_admin_action_as(state, surface, (client, identity), fields, StatusCode::OK)
+}
+
+/// [`record_admin_action`] for an action that ended with `status`, its
+/// outcome read as the layer reads its own: a record written after the
+/// request's answer (the web UI tool route's completion) says how it ended.
+pub(super) fn record_admin_action_as(
+    state: &AppState,
+    surface: &'static str,
+    (client, identity): (Option<&AuthenticatedClient>, Option<&VerifiedIdentity>),
+    fields: serde_json::Map<String, serde_json::Value>,
+    status: StatusCode,
+) -> Option<Response> {
     let log = state.transparency_log.as_ref()?;
     let subject =
         identity.and_then(|id| GrantSubject::checked(id.issuer.clone(), id.subject.clone(), None));
-    let envelope = AuditEnvelope::ok(AuditWho::from_request(
-        client,
-        subject.as_ref(),
-        state.auth_config.record_key(),
-    ));
+    let envelope = AuditEnvelope {
+        outcome: AuditOutcome::from_http_status(status, None),
+        ..AuditEnvelope::ok(AuditWho::from_request(
+            client,
+            subject.as_ref(),
+            state.live_config.generation().auth().record_key(),
+        ))
+    };
     log.append_admin_action(surface, fields, &envelope)
         .err()
         .map(|error| withheld(&error))

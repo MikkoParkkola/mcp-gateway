@@ -32,9 +32,9 @@ use crate::gateway::router::helpers::{
 };
 use crate::gateway::router::meta_refusal_audit::Refused;
 use crate::protocol::{JsonRpcResponse, RequestId};
-#[cfg(feature = "firewall")]
-use crate::security::firewall::FirewallAction;
 use crate::security::response_policy::ResponsePolicyTarget;
+#[cfg(feature = "firewall")]
+use crate::security::{firewall::FirewallAction, response_policy::RuleTarget};
 
 /// The `tools/call` arm. Writes the response targets and the owned execution
 /// the dispatcher's tail reads, and the signing context it prepares.
@@ -130,7 +130,7 @@ pub(super) async fn tools_call(
         client.as_ref(),
         grant_subject.as_ref(),
         session_id,
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     if retry.is_malformed() {
         // Neither a usable retry nor a fresh call. Running it as a fresh
@@ -155,7 +155,7 @@ pub(super) async fn tools_call(
             client.as_ref(),
             grant_subject.as_ref(),
             tool_name,
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         )
         .await
     {
@@ -322,10 +322,9 @@ pub(super) async fn tools_call(
             {
                 lifecycle.renew(control_identity.clone());
             }
-            let verdict = fw.check_request(
+            let verdict = fw.check_request_keyed(
                 session_id,
-                target.server,
-                target.tool,
+                RuleTarget::routed(target.server, target.tool, client.as_ref()),
                 target.arguments,
                 caller_name,
                 &control_identity,
@@ -418,7 +417,7 @@ pub(super) async fn tools_call(
             .map(|client| client.principal.storage_form()),
         record_principal: crate::gateway::auth::AuthenticatedClient::record_principal_of(
             client.as_ref(),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         authentication: crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
         credential_kind: crate::security::audit::CredentialKind::of(client.as_ref()),

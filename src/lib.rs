@@ -57,6 +57,9 @@ pub mod control_plane;
 pub mod cost_accounting;
 mod counters;
 mod debug_trust_roots;
+// The decision set serves only the web UI's routes and stream.
+#[cfg(feature = "webui")]
+mod decisions;
 #[doc(hidden)]
 pub mod discovery;
 mod duration_bound;
@@ -163,6 +166,8 @@ pub mod stats;
 pub(crate) mod test_day;
 #[cfg(test)]
 pub(crate) mod test_fixture_host;
+#[cfg(test)]
+pub(crate) mod test_late_write;
 #[cfg(test)]
 mod test_pause;
 #[cfg(test)]

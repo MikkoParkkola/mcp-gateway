@@ -20,12 +20,11 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{
-    admin_auth_required, config_path_unavailable, flat_error, structured_error,
-};
-use super::super::is_admin;
+use super::super::errors::{config_path_unavailable, flat_error, structured_error};
+use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
+use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text};
 use crate::config_reload::{
     Expected, FileRevision, RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced,
@@ -34,7 +33,6 @@ use crate::config_reload::{
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
 use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::secret_store::{
     Chosen, NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
@@ -150,38 +148,50 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
 /// literals were saved.
 type Slots = Vec<(bool, String)>;
 
-/// The writer's compute: inserts `backend` under `name`, each literal slot
-/// filled with its store reference, as a splice of the current bytes. Its
-/// refusals are fixed strings ([`MANAGED`], [`REFERENCES`], or
-/// [`edit_text`]'s), never anything read from the file.
+/// The secret slot of `name`'s literal `key`: under `headers` or `env`. Its
+/// display form is the secret step's field for that literal.
+pub(super) fn adopt_slot(name: &str, header: bool, key: &str) -> SlotId {
+    let map = if header { "headers" } else { "env" };
+    SlotId(
+        ["backends", name, map, key]
+            .map(|k| Segment::Key(k.to_owned()))
+            .to_vec(),
+    )
+}
+
+/// The writer's compute: inserts `backend` under `name`, each literal's value
+/// a slot the writer fills with its store reference once the entry exists,
+/// as a splice of the current bytes. Its refusals are fixed strings
+/// ([`MANAGED`], [`REFERENCES`], or [`edit_text`]'s), never anything read
+/// from the file.
 pub(super) fn compute(
     name: String,
     backend: crate::config::BackendConfig,
     slots: Slots,
-) -> impl FnOnce(&[u8], &[String]) -> Result<Vec<u8>, String> + Send {
-    move |bytes, references| {
-        if references.len() != slots.len() {
-            return Err(REFERENCES.to_owned());
-        }
+) -> impl FnOnce(&[u8]) -> Result<Template, String> + Send {
+    move |bytes| {
         let text = std::str::from_utf8(bytes).map_err(|_| "not utf-8".to_owned())?;
         let mut backend = backend;
-        for ((header, key), reference) in slots.iter().zip(references) {
+        let mut ids = Vec::with_capacity(slots.len());
+        for (header, key) in &slots {
+            let id = adopt_slot(&name, *header, key);
             let map = if *header {
                 &mut backend.headers
             } else {
                 &mut backend.env
             };
-            map.insert(key.clone(), reference.clone());
+            map.insert(key.clone(), Template::placeholder_for(&id));
+            ids.push(id);
         }
-        edit_text(text, |config| {
+        let spliced = edit_text(text, |config| {
             if config.backends.contains_key(&name) {
                 return Err(MANAGED);
             }
             config.backends.insert(name, backend);
             Ok(())
         })
-        .map(String::into_bytes)
-        .map_err(str::to_owned)
+        .map_err(str::to_owned)?;
+        Template::from_placeholders(spliced.into_bytes(), &ids).map_err(|_| REFERENCES.to_owned())
     }
 }
 
@@ -286,12 +296,11 @@ pub(super) fn found(
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
     Extension(cache): Extension<Arc<DiscoveryCache>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     body: Result<Json<AdoptBody>, JsonRejection>,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     // Every rejection gets the same fixed text: axum's own would quote the
     // body back.

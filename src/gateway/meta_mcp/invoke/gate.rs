@@ -258,7 +258,13 @@ impl MetaMcp {
     ) -> Shared {
         // Under `off` no call lists the catalogue: judged from what is held.
         let verdict = if backend.checks_membership() {
-            backend.catalogue_verdict(None, headers, tool).await
+            backend
+                .catalogue_verdict(
+                    None,
+                    crate::transport::LentCredential::unchecked(headers),
+                    tool,
+                )
+                .await
         } else {
             Ok(backend.held_verdict(None, tool))
         };
@@ -508,6 +514,11 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
+            // A decision about the caller the gate, judging the name alone,
+            // let through: the step records it (see is_authorization_refusal).
+            if is_authorization_refusal(&refusal) {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             // A playbook step keeps its neutral refusal (A3) and asks, as a
             // chain step does: the witness decides (MIK-8353 3d-2).
             super::nonce_settle::settle_pre_send(
@@ -712,7 +723,7 @@ impl MetaMcp {
                 tool,
                 // Never read: the gate checks only names the list lacks.
                 &Value::Null,
-                (None, headers),
+                (None, crate::transport::LentCredential::unchecked(headers)),
                 (scope, session_id),
                 lens,
             )
@@ -774,14 +785,23 @@ mod fill_tests;
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
 
+#[cfg(test)]
+#[path = "gate_refusal_kind_tests.rs"]
+mod refusal_kind_tests;
+
+/// Whether a refusal the dispatch-time policy check gave is an authorization
+/// decision about the caller (`Forbidden`, which a playbook step answers
+/// neutrally); an audit failure, an undefined capability or an absent name is
+/// not.
+fn is_authorization_refusal(error: &Error) -> bool {
+    matches!(error, Error::Forbidden { .. })
+}
+
 /// A name the gate answers as absent for `reason`: a policy reason (the
 /// caller may not invoke it, or its schema or description failed a check) is
 /// the gateway's refusal; a name a caller's own catalogue lacks is not.
 fn withheld_for(reason: Withholding) {
-    if matches!(
-        reason,
-        Withholding::Refused | Withholding::Schema | Withholding::Descriptor
-    ) {
+    if reason.is_policy() {
         crate::gateway::delivery_facts::withheld();
     }
 }

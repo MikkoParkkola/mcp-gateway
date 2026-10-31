@@ -149,6 +149,8 @@ impl SecretResolver {
         value: &str,
         other: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String> {
+        #[cfg(test)]
+        lookup_probe::hit();
         // One snapshot for the whole value: a reload between two placeholders
         // would otherwise splice a pre-reload half onto a post-reload half and
         // produce a credential that never existed in either generation.
@@ -271,6 +273,26 @@ impl SecretResolver {
 impl Default for SecretResolver {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Counts calls into the credential resolvers on this thread, so a row can
+/// show a code path made none. Test builds only.
+#[cfg(test)]
+pub(crate) mod lookup_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CALLS: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn hit() {
+        CALLS.with(|calls| calls.set(calls.get() + 1));
+    }
+
+    #[cfg(feature = "webui")]
+    pub(crate) fn calls() -> usize {
+        CALLS.with(Cell::get)
     }
 }
 

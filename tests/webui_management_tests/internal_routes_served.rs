@@ -17,7 +17,9 @@ const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
 const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
 const CAPABILITIES: &str = "tests/webui_management_tests/capabilities.rs";
+const UI_TOOL_CALL: &str = "src/gateway/router/ui_tool_call_tests.rs";
 const ADOPT_ROUTE: &str = "tests/discovery_adopt_route.rs";
+const DECISIONS_ROUTE: &str = "src/gateway/ui/decisions_tests.rs";
 const CP_WRITES: &[Citation] = &[(
     CP_AUTHORITY,
     "admin_grant_and_policy_writes_are_refused_and_point_at_config",
@@ -45,6 +47,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
     ),
     // The table's body names no find, so its admin answer is 422; this test
     // adopts real finds from a client file and pins the served 201.
+    // The table's fixture never starts the decision set, so its admin
+    // answer is 503; this test starts it over a real log and pins the 200.
+    (
+        "/ui/api/decisions",
+        Method::GET,
+        &[(
+            DECISIONS_ROUTE,
+            "an_admin_is_served_the_open_decisions_and_no_one_else",
+        )],
+    ),
     (
         "/ui/api/discovery/adopt",
         Method::POST,
@@ -59,6 +71,16 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             MUTATION,
             "test_reload_endpoint_returns_structured_outcome_for_profile_change",
+        )],
+    ),
+    // The table sends no body, so its admin answer is 400; this test sends a
+    // call and pins the served 200 with the tool's result and its receipt.
+    (
+        "/ui/api/tools/call",
+        Method::POST,
+        &[(
+            UI_TOOL_CALL,
+            "t1_a_declared_read_runs_and_returns_its_receipt",
         )],
     ),
     (
@@ -225,12 +247,16 @@ async fn writable() -> (
     write_owner_only(&config_path, crate::yaml::to_string(&initial).unwrap()).unwrap();
     let (mut state, live, _store) =
         make_app_state_with_reload(initial, None, config_path.clone()).await;
-    Arc::get_mut(&mut state)
-        .expect("test AppState should be uniquely owned")
-        .auth_config = Arc::new(ResolvedAuthConfig::from_config(
-        &auth_on(),
-        crate::record_key::RECORD_KEY,
-    ));
+    {
+        let seat = Arc::get_mut(&mut state).expect("test AppState should be uniquely owned");
+        seat.live_config = std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            (*seat.live_config.get()).clone(),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &auth_on(),
+                crate::record_key::RECORD_KEY,
+            )),
+        ));
+    }
     register_http_backend(&state, "docs");
     let gw = Gateway {
         router: create_router(Arc::clone(&state)),

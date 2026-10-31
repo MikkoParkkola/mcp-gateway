@@ -4,12 +4,16 @@
 //! invocation log and the governance log, newest first, as rows built from a
 //! per-kind allowlist.
 
-mod access;
+// Widened within the UI so the status report decides Activity access with
+// the resolver the routes use, not a copy of its role rules.
+pub(in crate::gateway::ui) mod access;
 mod csv;
 mod cursor;
 mod export;
 mod reader;
 mod receipt;
+/// The decision set's startup read of one record kind.
+pub(super) mod replay;
 mod rows;
 mod seek;
 
@@ -20,7 +24,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Extension, Json, Router};
+use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -29,9 +33,8 @@ use self::reader::{Limits, read_page};
 use self::rows::{FeedOutcome, Filter, kind_of, owned_by, row};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
-use crate::gateway::auth::AuthenticatedClient;
+use super::guard::Guard;
 use crate::gateway::routes;
-use crate::key_server::oidc::VerifiedIdentity;
 
 /// Rows per page unless the caller asks for fewer or more.
 const DEFAULT_LIMIT: usize = 50;
@@ -117,17 +120,12 @@ fn refused(r: Refused) -> Response {
 }
 
 /// The caller's access and the logs to read, or the refusal.
-fn admit(
-    state: &AppState,
-    client: Option<&Extension<AuthenticatedClient>>,
-    identity: Option<&Extension<VerifiedIdentity>>,
-) -> Result<(Access, Logs), Early> {
-    let access = access::resolve(
-        client.map(|Extension(c)| c),
-        identity.map(|Extension(i)| i),
-        &state.live_config.get().control_plane.role_mapping,
-    )
-    .map_err(|r| Box::new(refused(r)))?;
+fn admit(state: &AppState, guard: &Guard) -> Result<(Access, Logs), Early> {
+    let config = state.live_config.get();
+    let mapping = &config.control_plane.role_mapping;
+    let access = guard.admit_activity(|client, identity| {
+        access::resolve(client, identity, mapping).map_err(|r| Box::new(refused(r)))
+    })?;
     let logs = logs(state).ok_or_else(|| {
         Box::new(
             flat_error(StatusCode::NOT_FOUND, "no transparency log is configured").into_response(),
@@ -165,11 +163,10 @@ async fn blocking(read: impl FnOnce() -> Response + Send + 'static) -> Response 
 
 async fn list(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Query(query): Query<ListQuery>,
 ) -> Response {
-    match admit(&state, client.as_ref(), identity.as_ref()) {
+    match admit(&state, &guard) {
         Ok((access, logs)) => blocking(move || list_page(&logs, &access, &query)).await,
         Err(r) => *r,
     }
@@ -181,11 +178,10 @@ fn not_kept() -> Response {
 
 async fn receipt_route(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Path(id): Path<String>,
 ) -> Response {
-    let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
+    let (access, logs) = match admit(&state, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };
@@ -361,11 +357,10 @@ fn filters_sent(q: &ListQuery) -> Value {
 
 async fn export_route(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
-    identity: Option<Extension<VerifiedIdentity>>,
+    guard: Guard,
     Query(query): Query<ExportQuery>,
 ) -> Response {
-    let (access, logs) = match admit(&state, client.as_ref(), identity.as_ref()) {
+    let (access, logs) = match admit(&state, &guard) {
         Ok(admitted) => admitted,
         Err(r) => return *r,
     };

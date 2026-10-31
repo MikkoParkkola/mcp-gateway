@@ -7,6 +7,7 @@
 //! MIK-8475's cooldown precedes the lift, and the dispatch-effect carry
 //! precedes the cooldown, so a cooled, minted call keeps its nonce spent.
 
+use crate::gateway::meta_mcp::dispatch_log::PreSend;
 use std::sync::Arc;
 
 use super::caller_credential::CallerCredential;
@@ -63,6 +64,8 @@ impl MetaMcp {
             verified_identity,
             surface,
         } = input;
+        // Before any credential, replay, key or cache (see the method).
+        self.refuse_name_clash(server)?;
         let (backend, resolved) = match self
             .dispatch_resolution(
                 &self.scoped(caller.scope().authorizer.backend_grant()),
@@ -75,6 +78,8 @@ impl MetaMcp {
         {
             Ok(std::ops::ControlFlow::Continue(resolution)) => resolution,
             Ok(std::ops::ControlFlow::Break(answer)) => {
+                // The resolution answered for itself: nothing reached the backend.
+                super::audit::note_pre_send(PreSend::Refused);
                 return Ok(std::ops::ControlFlow::Break(TracedOutcome::Live(answer)));
             }
             Err(error) => {
@@ -82,6 +87,7 @@ impl MetaMcp {
                 // its witness kept: ask for the nonce back, settled when
                 // the call returns (MIK-8392 Busy parity).
                 super::nonce_settle::ask_if_transient(caller, &error);
+                super::audit::note_pre_send(PreSend::Refused);
                 return Err(error);
             }
         };
@@ -91,7 +97,8 @@ impl MetaMcp {
             resolved.minted(),
             resolved.account_credential.is_some(),
         ));
-        self.admit_after_credential((server, tool), session_id, trace_id)?;
+        self.admit_after_credential((server, tool), session_id, trace_id)
+            .inspect_err(|_| super::audit::note_pre_send(PreSend::Refused))?;
         // The lift (MIK-8392 STORED.2): proven live, before key/spend/redeem/relay act.
         let unproven = match self
             .lift_deferred((server, tool), &resolved, witness, session_id, caller)

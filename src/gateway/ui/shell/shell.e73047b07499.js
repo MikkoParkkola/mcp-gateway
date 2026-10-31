@@ -60,7 +60,9 @@ function sheet(href) {
         link.remove();
         fail(new Error(`stylesheet ${href} did not load`));
       });
-      document.head.append(link);
+      // After the shell's own stylesheet, at the end of the body, so a screen's
+      // rules still win ties with it, as they did when it was in the head.
+      document.body.append(link);
     });
     load.catch(() => sheets.delete(href));
     sheets.set(href, load);
@@ -160,7 +162,7 @@ export const GLOSSARY = {
     needs_sign_in: 'Needs sign-in',
     unmanaged: 'Unmanaged',
   },
-  stream: { stopped: 'Updates stopped', resumed: 'Updates resumed' },
+  stream: { live: 'Live', stopped: 'Updates stopped', unavailable: 'Updates unavailable', resumed: 'Updates resumed' },
 };
 
 const unlistedStates = new Set();
@@ -265,6 +267,11 @@ export function staleTitle(since) {
   return since instanceof Date && !Number.isNaN(since.getTime())
     ? `${GLOSSARY.stream.stopped} at ${stamp(since)} · reconnecting`
     : `${GLOSSARY.stream.stopped} · reconnecting`;
+}
+
+/** The stale title when the stream never opened: no time, since there never was one. */
+export function unavailableTitle() {
+  return `${GLOSSARY.stream.unavailable} · reconnecting`;
 }
 
 const STATE_COPY = {
@@ -1031,16 +1038,29 @@ const runTab = (spec, route, into) => {
   // Taken when the context is made: a screen holding on to it after the user moved
   // on, or after another identity signed in, announces nothing.
   const guard = { epoch: authEpoch, seq: renderSeq };
+  const show = screenBanner(into, route.page, guard);
+  // The live stream marks this page stale on a drop, through the same banner.
+  livePage = { into, show };
+  // Any banner call of the screen makes the slot its own: the stream no longer clears it.
+  const screenShow = (...args) => {
+    if (stream.banner?.into === into) stream.banner = null;
+    return show(...args);
+  };
+  // A page drawn while the stream is down gets the stale state once its tab has drawn.
+  const markStale = (drawn) => {
+    if (guardHolds(guard)) markPageStale({ into, show });
+    return drawn;
+  };
   return Promise.resolve().then(() => spec.tabs[route.tab](into, {
     object: route.object, tab: route.tab, api, state,
-    show: screenBanner(into, route.page, guard),
+    show: screenShow,
     // The title or subtitle a screen sets itself, e.g. a count. A kept one changes nothing
     // later: Retry reuses the render, so a failed attempt is told apart by its container.
     header: (fields) => { if (guardHolds(guard) && into.isConnected) setHeader(fields); },
     refreshCounts,
     announce: (text) => announce(text, { subject: `screen:${route.page}`, guard }),
     confirm: confirmAction,
-  }));
+  })).then(markStale);
 };
 
 /**
@@ -1079,7 +1099,7 @@ function screenBanner(into, page, guard) {
       return;
     }
     // The same banner again is no transition: leave it, say nothing.
-    if (kind && old?.dataset.state === kind && !opts.title) return;
+    if (kind && old?.dataset.state === kind && (!opts.title || old.querySelector('h2')?.textContent === opts.title)) return;
     old?.remove();
     // While stale, the tab's numbers are dimmed (CSS, [data-stale]).
     into.toggleAttribute('data-stale', kind === 'stale');
@@ -1088,7 +1108,7 @@ function screenBanner(into, page, guard) {
       if (old?.dataset.state === 'stale') announce(GLOSSARY.stream.resumed, { subject, guard });
       return;
     }
-    const built = kind === 'stale' ? { ...opts, title: staleTitle(opts.since) } : opts;
+    const built = kind === 'stale' ? { ...opts, title: opts.title ?? staleTitle(opts.since) } : opts;
     const node = bannerState(kind, built);
     node.dataset.banner = '';
     into.prepend(node);
@@ -1258,6 +1278,13 @@ function draw(seq, held = null) {
 const LOADING_MS = 300;
 /** Once shown, the loading state stays this long, so it never flickers. */
 const LOADING_MIN_MS = 400;
+/**
+ * The latest the other screens start to preload after first paint, idle or not.
+ * Two seconds: long enough that the preload stays out of the way of the first
+ * page's own reads and rendering, short enough that a busy device still has the
+ * other screens (and the palette's entries) well before a user moves on.
+ */
+const PRELOAD_DEADLINE_MS = 2000;
 
 /**
  * Show the loading state above `body`, and say it once, if this attempt has
@@ -1273,11 +1300,18 @@ function watchLoading(content, body, label, current) {
   let shownAt = 0;
   let withdraw = null;
   const guard = { epoch: authEpoch, seq: renderSeq };
+  // Marks the timer's start and the state's arrival where each happens, so a
+  // test can time the onset by the page's own clock. Only the latest attempt's
+  // pair is kept, so navigations and Retries do not pile marks up.
+  performance.clearMarks('ui-loading-armed');
+  performance.clearMarks('ui-loading-shown');
+  performance.mark('ui-loading-armed');
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
     if (!current() || body.hasChildNodes() || !body.isConnected) return;
     node = state('loading');
     content.insertBefore(node, body);
+    performance.mark('ui-loading-shown');
     shownAt = Date.now();
     withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
   }, LOADING_MS);
@@ -1383,6 +1417,186 @@ export async function refreshCounts() {
   COUNT_SEEN.value = next;
 }
 
+// ---------------------------------------------------------------- live stream
+
+/** Reconnect waits: one second at first, doubling to thirty at most. */
+const STREAM_WAIT_MS = { first: 1000, most: 30_000 };
+/** A frame, finished or not, over this many UTF-8 bytes ends the stream as a drop. */
+const STREAM_FRAME_MAX = 64 * 1024;
+/** Whether text is over the frame cap in UTF-8 bytes; it encodes only when the length cannot tell. */
+const overFrameMax = (text) => text.length > STREAM_FRAME_MAX
+  || (text.length * 3 > STREAM_FRAME_MAX && new TextEncoder().encode(text).length > STREAM_FRAME_MAX);
+
+/**
+ * The one live stream of this document, GET /ui/api/stream, read through
+ * fetch: an EventSource cannot send the bearer that api() sends for a key
+ * held in memory. `gen` changes on every open and close, so a read or timer
+ * left from an earlier one does nothing. `phase` is idle before any answer,
+ * open from a hello, dropped after an open stream ends (with `since`, when),
+ * and unavailable when the first connect failed, until the next hello.
+ */
+const STREAM_FRESH = { lastId: null, hintMs: 0, wait: STREAM_WAIT_MS.first, phase: 'idle', since: null, banner: null };
+const stream = { gen: 0, abort: null, timer: null, ...STREAM_FRESH };
+/** The page shown now and its banner, for the stale state on a drop. */
+let livePage = null;
+
+/** Open the stream for this identity, closing any earlier one first. */
+function openStream() {
+  closeStream();
+  connect(stream.gen);
+}
+
+/** Stop the connection and its timer; what it knew (last id, phase, banner) stays. */
+function suspendStream() {
+  stream.gen++;
+  stream.abort?.abort();
+  clearTimeout(stream.timer);
+  Object.assign(stream, { abort: null, timer: null });
+}
+
+/** Reconnect after a restore from the back/forward cache, resuming from the last id. */
+function resumeStream() {
+  suspendStream();
+  connect(stream.gen);
+}
+
+/** Close the stream on purpose: no stale state and no reconnect follow. */
+function closeStream() {
+  suspendStream();
+  Object.assign(stream, STREAM_FRESH);
+  drawStream();
+}
+
+/** Mark a page stale for the stream, only while no banner holds the slot; the top bar carries a drop either way. */
+function markPageStale(page) {
+  const down = streamStale();
+  if (!down || !page?.into.isConnected) return;
+  const current = () => page.into.querySelector(':scope > .state[data-banner]');
+  if (current()) return; // a banner of the screen, or one the stream set already
+  page.show('stale', down);
+  const node = current();
+  if (node?.dataset.state === 'stale') stream.banner = { node, show: page.show, into: page.into };
+}
+
+/** Take away the stale banner the stream set, and only while it is still the one showing. */
+function clearPageStale() {
+  const mine = stream.banner;
+  stream.banner = null;
+  if (mine?.node.isConnected && mine.into.querySelector(':scope > .state[data-banner]') === mine.node) mine.show(null);
+}
+
+/** The stale banner options while the stream is down, else null. */
+function streamStale() {
+  if (stream.phase === 'dropped') return { since: stream.since };
+  if (stream.phase === 'unavailable') return { title: unavailableTitle() };
+  return null;
+}
+
+/** The top bar indicator: hidden, open (the live word) or down (the stale title). */
+function drawStream() {
+  const node = document.querySelector('.top .stream');
+  const down = streamStale();
+  const kind = stream.phase === 'open' ? 'open' : down ? 'down' : null;
+  node.hidden = !kind;
+  if (kind) node.dataset.stream = kind;
+  else delete node.dataset.stream;
+  node.textContent = kind === 'open' ? GLOSSARY.stream.live : down ? (down.title ?? staleTitle(down.since)) : '';
+}
+
+async function connect(gen) {
+  const headers = new Headers();
+  if (bearer) headers.set('Authorization', `Bearer ${bearer}`);
+  if (stream.lastId) headers.set('Last-Event-ID', stream.lastId);
+  const abort = new AbortController();
+  stream.abort = abort;
+  const epoch = authEpoch;
+  let floorMs = 0;
+  try {
+    const reply = await fetch('/ui/api/stream', { credentials: 'same-origin', cache: 'no-store', headers, signal: abort.signal });
+    if (gen !== stream.gen) return;
+    // As api(): a 401 shows sign-in, unless a newer sign-in has happened since.
+    if (reply.status === 401) {
+      if (epoch === authEpoch) showSignIn();
+      return;
+    }
+    // A 404 is a gateway without the stream, or one not yet upgraded: ask again rarely.
+    if (reply.status === 404) floorMs = STREAM_WAIT_MS.most;
+    if (reply.status === 503) floorMs = (Number(reply.headers.get('Retry-After')) || 0) * 1000;
+    if (reply.ok && reply.body) await readStream(reply.body, gen);
+  } catch {
+    // No answer, or the read broke off; a close on purpose has moved `gen` on.
+  }
+  if (gen !== stream.gen) return;
+  // A drop of an open stream has a time; a first connect that failed has none.
+  if (stream.phase === 'open' || stream.phase === 'idle') {
+    Object.assign(stream, stream.phase === 'open' ? { phase: 'dropped', since: new Date() } : { phase: 'unavailable' });
+    drawStream();
+    markPageStale(livePage);
+  }
+  // The wait is the largest of the backoff, the hello retry hint and a Retry-After or 404 floor.
+  const wait = Math.max(stream.wait, stream.hintMs, floorMs);
+  stream.wait = Math.min(stream.wait * 2, STREAM_WAIT_MS.most);
+  stream.timer = setTimeout(() => { if (gen === stream.gen) connect(gen); }, wait);
+}
+
+/** Read SSE frames (blank-line separated) until the body ends. */
+async function readStream(body, gen) {
+  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done || gen !== stream.gen) return;
+    buffer += value;
+    const blocks = buffer.split(/\r?\n\r?\n/);
+    buffer = blocks.pop();
+    // Each finished frame is measured before it is parsed, and so is the unfinished rest.
+    for (const [i, block] of [...blocks, buffer].entries()) {
+      if (overFrameMax(block)) {
+        stream.abort?.abort(); // ends the connection; the caller treats it as a drop
+        return;
+      }
+      if (i < blocks.length) streamFrame(parseFrame(block));
+    }
+  }
+}
+
+/** One frame: its event (message when unnamed), id and joined data lines. Comments drop out. */
+function parseFrame(block) {
+  const frame = { event: 'message', id: null, retry: null, data: [] };
+  for (const line of block.split(/\r?\n/)) {
+    if (!line || line.startsWith(':')) continue;
+    const at = line.indexOf(':');
+    const field = at < 0 ? line : line.slice(0, at);
+    const value = at < 0 ? '' : line.slice(at + 1).replace(/^ /, '');
+    if (field === 'event') frame.event = value;
+    else if (field === 'id') frame.id = value;
+    else if (field === 'data') frame.data.push(value);
+    else if (field === 'retry' && /^\d+$/.test(value)) frame.retry = Number(value);
+  }
+  return { ...frame, data: frame.data.join('\n') };
+}
+
+function streamFrame(frame) {
+  if (frame.id) stream.lastId = frame.id;
+  if (frame.retry !== null) stream.hintMs = frame.retry; // the gateway jitters it on purpose
+  if (frame.event === 'hello') {
+    Object.assign(stream, { phase: 'open', since: null, wait: STREAM_WAIT_MS.first });
+    drawStream();
+    clearPageStale(); // only the banner the stream set; a screen keeps its own
+  }
+  // Hello on every connect, the status the page shows and an applied reload, for
+  // screens to follow. The To do count is not in a status frame, so refreshCounts()
+  // is not run here.
+  if (frame.event !== 'hello' && frame.event !== 'status' && frame.event !== 'reload') return;
+  let detail;
+  try {
+    detail = JSON.parse(frame.data);
+  } catch {
+    return;
+  }
+  dispatchEvent(new CustomEvent(`gateway-${frame.event}`, { detail }));
+}
+
 /** Read who is signed in; when auth is on and nobody is, ask for sign-in. */
 async function loadWho() {
   const epoch = authEpoch;
@@ -1410,6 +1624,55 @@ function showWho(auth) {
   const signedIn = Boolean(auth?.signed_in);
   document.querySelector('.top .who').textContent = signedIn ? (auth.admin ? 'Signed in · admin' : 'Signed in') : '';
   for (const b of document.querySelectorAll('.signout')) b.hidden = !signedIn;
+  showEnvironment(auth);
+}
+
+/** The sign-in whose environment chip is drawn or on its way; null while there is none. */
+let envEpoch = null;
+
+/**
+ * The environment chip: the gateway environment name, in the top bar of every
+ * page, for an admin key only. Read once per sign-in. Any refusal or failure
+ * (a 403 for another key, a 404 from a gateway without the route) leaves it
+ * out, silently: the chip is a hint, never an error. A name the gateway fell
+ * back to (the hostname, or its default) says so in a tooltip.
+ */
+async function showEnvironment(auth) {
+  const epoch = authEpoch;
+  if (envEpoch === epoch && auth?.admin === true) return;
+  document.querySelector('.top .envchip')?.remove();
+  envEpoch = null;
+  if (!auth?.signed_in || auth.admin !== true) return;
+  envEpoch = epoch;
+  let environment;
+  try {
+    ({ environment } = await api('/ui/api/gateway'));
+  } catch {
+    return;
+  }
+  const name = environment?.name;
+  if (epoch !== authEpoch || envEpoch !== epoch || typeof name !== 'string' || name === '') return;
+  const chip = document.createElement('span');
+  chip.className = 'env';
+  chip.setAttribute('role', 'img');
+  chip.setAttribute('aria-label', `Environment: ${name}`);
+  chip.textContent = name;
+  chip.title = name; // the whole name, also when the chip clips it
+  const wrap = document.createElement('span');
+  wrap.className = 'envchip';
+  wrap.append(chip);
+  document.querySelector('.top .mbrand').after(wrap);
+  const source = environment.source;
+  if (source !== 'hostname' && source !== 'default') return;
+  // The tooltip module and its stylesheet load only when a fallback name needs them.
+  let m;
+  try {
+    m = await import('/ui/assets/tooltip.fc459693146e.js');
+  } catch {
+    return;
+  }
+  if (!wrap.isConnected) return;
+  wrap.append(source === 'hostname' ? m.tip('gateway.status.environment-from-hostname') : m.tip('gateway.status.environment-not-set'));
 }
 
 /**
@@ -1486,6 +1749,7 @@ async function signOut() {
  * storage, a cookie or the URL), so a reload asks for it again.
  */
 function showSignIn() {
+  closeStream();
   if (document.body.classList.contains('signed-out')) return;
   closeMenu();
   paletteEl?.close(); // a modal palette would keep the key field inert
@@ -1579,6 +1843,7 @@ async function signIn(ev) {
   document.body.classList.remove('signed-out');
   showWho(auth);
   render();
+  openStream(); // a new identity: its own stream, with its own credentials
   refreshCounts();
   document.getElementById('content').focus({ preventScroll: true });
 }
@@ -1646,35 +1911,58 @@ function boot() {
   addEventListener('popstate', render);
   document.getElementById('signin-form').addEventListener('submit', signIn);
   for (const b of document.querySelectorAll('.signout')) b.addEventListener('click', signOut);
+  // Leaving keeps the last id and any stale state, so a restore resumes and its hello clears it.
+  addEventListener('pagehide', suspendStream);
+  addEventListener('pageshow', (ev) => {
+    if (ev.persisted && !document.body.classList.contains('signed-out')) resumeStream();
+  });
   document.querySelector('a.skip').addEventListener('click', (ev) => {
     ev.preventDefault();
     document.getElementById('content').focus();
   });
   render();
-  // The other screens load once the first paint is out, when the browser is idle,
-  // so the palette lists their actions and settings and a later visit is instant.
-  // Without paint timing they load after this first render instead; either way
-  // the rest of boot runs.
-  const preload = () => (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+  // Nothing the frame's first paint draws needs an /ui/api answer, so the boot reads
+  // and the live stream start once that paint is out: on a slow link they would
+  // otherwise take round trips from the stylesheet and fonts. A screen's own data
+  // read is its content and still starts at render. /ui/overview/status starts no
+  // /ui/api request before first paint (the first-paint budget's page); a screen that
+  // lands there reads after paint, or the budget's rows catch it.
+  // A signed-out user sees the sign-in prompt one paint later.
+  afterFirstPaint(() => {
+    openStream();
+    refreshCounts();
+    loadWho().then(() => {
+      // Only a browser still signed out is told; one with a session has nothing to fix.
+      // A key check the user has started owns the error line; a late startup
+      // answer must not write over it.
+      if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
+      const error = document.querySelector('.signin-error');
+      signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
+    });
+    // The other screens load after that, when the browser is idle, so the palette
+    // lists their actions and settings and a later visit is instant. The idle request
+    // carries a deadline: a browser that never sees the page as idle may otherwise
+    // hold the preload back indefinitely.
+    if (window.requestIdleCallback) window.requestIdleCallback(loadAllScreens, { timeout: PRELOAD_DEADLINE_MS });
+    else setTimeout(loadAllScreens, 50);
+  });
+}
+
+/**
+ * Run `fn` once the first contentful paint is out. Without paint timing, or when
+ * observing it throws, `fn` runs now, after the first render; either way it runs.
+ */
+function afterFirstPaint(fn) {
   try {
     if (!PerformanceObserver.supportedEntryTypes?.includes('paint')) throw new Error('no paint timing');
     new PerformanceObserver((list, observer) => {
       if (!list.getEntriesByName('first-contentful-paint').length) return;
       observer.disconnect();
-      preload();
+      fn();
     }).observe({ type: 'paint', buffered: true });
   } catch {
-    preload();
+    fn();
   }
-  refreshCounts();
-  loadWho().then(() => {
-    // Only a browser still signed out is told; one with a session has nothing to fix.
-    // A key check the user has started owns the error line; a late startup
-    // answer must not write over it.
-    if (!linkRefused || keyCheckStarted || !document.body.classList.contains('signed-out')) return;
-    const error = document.querySelector('.signin-error');
-    signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
-  });
 }
 
 document.addEventListener('DOMContentLoaded', boot);

@@ -258,7 +258,7 @@ pub(super) async fn read_envelope(
         &json_request,
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     reads.capture(state, &json_request, || caller.spend_key.clone());
 
@@ -477,7 +477,7 @@ pub(super) async fn events_lease(
             );
             let principal = crate::gateway::router::handlers::events::principal(
                 &owners.events,
-                state.auth_config.enabled,
+                state.live_config.generation().auth().enabled,
             );
             let token = caller
                 .inbound_headers
@@ -556,10 +556,10 @@ pub(super) async fn forward_notification(
     };
     match route
         .backend
-        .notify_with_headers(
+        .notify_with_headers_lent(
             &envelope.method,
             envelope.params,
-            &headers,
+            headers,
             binding.as_deref(),
         )
         .await

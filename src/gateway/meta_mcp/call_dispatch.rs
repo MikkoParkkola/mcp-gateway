@@ -275,9 +275,13 @@ impl MetaMcp {
             match destructive_confirmation_gate(&id, tool_name, &arguments, session_id, &caller)
                 .await
             {
-                GateOutcome::Refuse(response) => return *response,
+                GateOutcome::Refuse(response) => {
+                    super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
+                    return *response;
+                }
                 GateOutcome::RefuseUnasked(response) => {
                     invoke::ask_refund(&caller); // MIK-8353 3d
+                    super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
                     return *response;
                 }
                 GateOutcome::Proceed => false,
@@ -286,6 +290,7 @@ impl MetaMcp {
 
         // MIK-7698: nothing acts on a nonce the signing layer left unadmitted.
         if let Some(refusal) = self.refuse_unadmitted(&id, &caller) {
+            super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
             return refusal;
         }
         // A capability account has no route-stage verdict, so its busy
@@ -307,6 +312,14 @@ impl MetaMcp {
         }
         if let Some(answer) = Self::task_intake_transient(&caller, &id) {
             return answer;
+        }
+        // A web UI call never runs in a task worker: the worker is outside
+        // the UI call's scope, so its confirm gate and send record would not
+        // see it. Refused before the task exists.
+        #[cfg(feature = "webui")]
+        if caller.task.is_some() && crate::gateway::ui_call::refuses_task() {
+            invoke::ask_refund(&caller);
+            return error_response_preserving_status(id, &crate::gateway::ui_call::task_refused());
         }
         if let Some(intent) = caller.task.take() {
             // A `require` backend's answer must be a checked chain (inc3 R2).
@@ -441,7 +454,11 @@ impl MetaMcp {
             Some(MetaArm::Execute) => {
                 crate::gateway::delivery_facts::unvouched();
                 let result = self.code_mode_execute(&arguments, session_id, caller).await;
-                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                // A single-tool execute hands its step's tool error result on
+                // as it came: that is an ending in failure too.
+                crate::gateway::delivery_facts::composite_ended(
+                    crate::gateway::delivery_facts::CompositeEnd::of(&result),
+                );
                 result
             }
             Some(MetaArm::ListServers) => {
@@ -453,9 +470,15 @@ impl MetaMcp {
             Some(MetaArm::Invoke) => {
                 let trace_id = crate::gateway::trace::generate();
                 let invocation = Arc::<str>::from(trace_id.as_str());
-                let sourced = self
+                #[cfg(feature = "webui")]
+                crate::gateway::ui_call::note_trace(&trace_id);
+                let invoked = self
                     .invoke_tool_sourced(&arguments, session_id, caller, trace_id)
                     .await;
+                // This path skips the step funnel: the task worker's round
+                // still learns whether it was refused before its backend.
+                super::dispatch_log::note_round(invoked.pre_send);
+                let sourced = invoked.outcome;
                 match live_or_stored(sourced) {
                     ControlFlow::Continue((result, chain)) => {
                         (source, upstream) = chain;
@@ -472,7 +495,9 @@ impl MetaMcp {
             Some(MetaArm::RunPlaybook) => {
                 crate::gateway::delivery_facts::unvouched();
                 let result = self.run_playbook(&arguments, caller).await;
-                crate::gateway::delivery_facts::composite_ended(result.as_ref().err());
+                crate::gateway::delivery_facts::composite_ended(
+                    crate::gateway::delivery_facts::CompositeEnd::of(&result),
+                );
                 result
             }
             Some(MetaArm::KillServer) => self.kill_server(&arguments),
@@ -493,6 +518,7 @@ impl MetaMcp {
             None => {
                 // Settled when the call returns.
                 invoke::ask_refund(caller);
+                super::dispatch_log::note_round(super::dispatch_log::PreSend::Refused);
                 Err(self.no_such_meta_tool(tool_name, caller))
             }
         };

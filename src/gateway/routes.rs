@@ -43,6 +43,7 @@ owned_routes! {
     DASHBOARD_LOGOUT = "/dashboard/logout",
     UI_STATUS = "/ui/api/status",
     UI_TOOLS = "/ui/api/tools",
+    UI_TOOLS_CALL = "/ui/api/tools/call",
     UI_CONFIG = "/ui/api/config",
     UI_RELOAD = "/ui/api/reload",
     UI_DASHBOARD_LINK = "/ui/api/dashboard-link",
@@ -80,6 +81,8 @@ owned_routes! {
     UI_DISCOVERY = "/ui/api/discovery",
     /// One of those servers made a disabled backend.
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
+    /// The decisions an admin has open.
+    UI_DECISIONS = "/ui/api/decisions",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.

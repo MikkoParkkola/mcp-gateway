@@ -13,7 +13,7 @@ src/gateway/meta_mcp/builders.rs	enforce_oauth_isolation_for	Error::json_rpc	1
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	error_response_preserving_status	1
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	Error::json_rpc	1
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	JsonRpcResponse::error	1
-src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	error_response_preserving_status	3
+src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	error_response_preserving_status	4
 src/gateway/meta_mcp/call_dispatch.rs	route_retry_to_origin_backend	error_response_preserving_status	1
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	JsonRpcResponse::error	1
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	error_response_preserving_status	1
@@ -247,3 +247,4 @@ src/gateway/task_service/execution.rs	into_response	JsonRpcResponse::error	5
 src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	JsonRpcResponse::error	1
 src/gateway/task_service/execution/worker_inspect.rs	inspect_settled_pinned	delivery_refusal_error	1
 src/gateway/task_service/host.rs	readmit	JsonRpcResponse::error	1
+src/gateway/task_service/host.rs	rejudge	JsonRpcResponse::error	1

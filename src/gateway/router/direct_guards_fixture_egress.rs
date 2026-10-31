@@ -19,6 +19,31 @@ use super::{Fx, fixture_inner};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
+#[cfg(feature = "firewall")]
+thread_local! {
+    static FIREWALL_RULE_KEYS: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The rule for each backend tool, scoped to the cell's API keys.
+/// `send_message` is the A2A backend's one tool.
+#[cfg(feature = "firewall")]
+pub(super) fn firewall_rules(
+    action: crate::security::firewall::FirewallAction,
+) -> Vec<crate::security::firewall::FirewallRule> {
+    ["read", "send_message"]
+        .map(|tool| crate::security::firewall::FirewallRule {
+            tool_match: tool.to_string(),
+            action,
+            reason: None,
+            scan: Vec::new(),
+            servers: None,
+            keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
+            except: None,
+        })
+        .to_vec()
+}
+
 /// [`super::fixture_firewalled_with`] with `transport` answering for both backends
 /// in place of the scripted one (the egress matrix's planted backend).
 #[cfg(feature = "firewall")]
@@ -31,6 +56,22 @@ pub(crate) async fn fixture_firewalled_on(
     let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
     FIREWALL_RULE.with(|r| r.set(None));
     TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`super::fixture_firewalled_with`] whose `read` rule applies only to the
+/// API keys named in `keys`, by their configured names.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_keyed(
+    action: crate::security::firewall::FirewallAction,
+    keys: &[&str],
+) -> Fx {
+    let named = keys.iter().map(|k| (*k).to_owned()).collect();
+    FIREWALL_RULE.with(|r| r.set(Some(action)));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = Some(named));
+    let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = None);
     fx
 }
 

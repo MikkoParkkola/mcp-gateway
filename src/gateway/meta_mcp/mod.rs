@@ -93,6 +93,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
@@ -126,6 +127,9 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+/// The cold claim's retry backoff, for the rows that wait it out.
+#[cfg(test)]
+pub(crate) use task_replay::COLD_RETRY_BACKOFF;
 pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
@@ -185,6 +189,9 @@ pub struct MetaMcp {
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     /// The web UI's windowed call counters; set by the HTTP server.
     pub(super) counters: std::sync::OnceLock<Arc<crate::counters::CounterStore>>,
+    /// The web UI's open decisions; set by the HTTP server.
+    #[cfg(feature = "webui")]
+    pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
@@ -479,6 +486,10 @@ pub struct MetaMcp {
     /// Calls a client may cancel explicitly by its own request id (MIK-7642
     /// PR.C). Held here because both HTTP routes dispatch through this handler.
     pub(super) inflight_calls: Arc<crate::gateway::router::inflight_calls::InFlightCalls>,
+    /// Web UI tool calls running at once (U12): a call that answered at its
+    /// deadline keeps its permit until it ends.
+    #[cfg(feature = "webui")]
+    pub(super) ui_calls: Arc<tokio::sync::Semaphore>,
 }
 
 /// The session a request belongs to, if it has one.

@@ -19,7 +19,10 @@ use super::{Visibility, Withholding};
 #[derive(Default)]
 struct VisibilityMemo {
     visibility: Keyed<TargetKey, Visibility>,
-    carried_credential: Keyed<TargetKey, Carried>,
+    /// Boxed: a [`Carried`] is hundreds of bytes, and the map's smallest
+    /// table of them inline crosses the per-call allocation budget
+    /// (`http_nonce_alloc` ALLOC.2).
+    carried_credential: Keyed<TargetKey, Box<Carried>>,
     /// MIK-8361: the route stage's refusal code, for the call's one record.
     denial_code: Keyed<TargetKey, i32>,
     judged: parking_lot::Mutex<Judged>,
@@ -472,7 +475,7 @@ pub(crate) fn record_visibility(server: &str, tool: &str, judged: Visibility) ->
 pub(crate) fn carry_dispatch(server: &str, tool: &str, carried: Carried) {
     in_memo(|memo| {
         memo.carried_credential
-            .set(target_key(server, tool), carried);
+            .set(target_key(server, tool), Box::new(carried));
     });
 }
 
@@ -486,7 +489,9 @@ pub(crate) fn with_carried<R>(
 ) -> Option<R> {
     in_memo(|memo| {
         memo.carried_credential
-            .with(&target(server, tool) as &(dyn Pair + '_), read)
+            .with(&target(server, tool) as &(dyn Pair + '_), |carried| {
+                read(carried)
+            })
     })
     .flatten()
 }
@@ -497,6 +502,7 @@ pub(crate) fn take_carried(server: &str, tool: &str) -> Option<Carried> {
     in_memo(|memo| {
         memo.carried_credential
             .take(&target(server, tool) as &(dyn Pair + '_))
+            .map(|carried| *carried)
     })
     .flatten()
 }
@@ -562,13 +568,44 @@ pub(crate) fn absent_if_withheld(judged: Option<Visibility>, tool: &str) -> crat
 }
 
 /// Record that this request's account check of `(server, account)` did not
-/// complete, unless it did: an empty binding, which no held slot's binding
-/// equals, so a held view of that account reads as cold in this request.
+/// settle on a binding, overwriting any earlier read: an empty binding, which
+/// no held slot's binding equals, so a held view of that account reads as
+/// cold for the rest of this request. The one invalidation helper: a deadline
+/// cut, a failed pre-pass read, a failed re-check read and a failed publish
+/// read all write it.
 pub(crate) fn record_account_unchecked(server: &str, account: &DescriptorId) {
     in_memo(|memo| {
         memo.account_binding
-            .first(account_slot(server, account), String::new());
+            .set(account_slot(server, account), String::new());
     });
+}
+
+/// How a caller's held binding compares with this request's account read.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum HeldView {
+    /// The request's read gave exactly the held binding.
+    Current,
+    /// The request's read gave another binding, or none (the unchecked marker).
+    Stale,
+    /// The request read no binding for the account: nothing to judge by.
+    Unread,
+}
+
+/// The one rule for "is `held`, a caller's held binding on `server`, still the
+/// binding this request's account read gave". Listings, the stored-read claim
+/// and the re-check all decide through it.
+pub(crate) fn held_view_current(server: &str, account: &DescriptorId, held: &str) -> HeldView {
+    judge_held(account_binding(server, account).as_deref(), held)
+}
+
+/// [`held_view_current`] over a binding already in hand, for a reader that
+/// holds its own read rather than the request memo's.
+pub(crate) fn judge_held(read: Option<&str>, held: &str) -> HeldView {
+    match read {
+        Some(read) if read == held => HeldView::Current,
+        Some(_) => HeldView::Stale,
+        None => HeldView::Unread,
+    }
 }
 
 /// Keep the binding the pre-pass's view read gave `(server, account)`.
@@ -586,6 +623,19 @@ pub(crate) fn account_binding(server: &str, account: &DescriptorId) -> Option<St
             .get(&slot(server, account) as &(dyn Pair + '_))
     })
     .flatten()
+}
+
+/// Whether `held`, a caller's held slot binding on `server`, is still the
+/// binding the pre-pass's read of `account` gave. A rotated grant's slot is
+/// not current. With no account, or no read of it in this request, there is
+/// nothing to judge it by and the held slot stands. The one rule for the
+/// listings and the stored reads, so the two cannot drift.
+pub(crate) fn held_binding_current(
+    server: &str,
+    account: Option<&DescriptorId>,
+    held: &str,
+) -> bool {
+    account.is_none_or(|account| held_view_current(server, account, held) != HeldView::Stale)
 }
 
 /// Keep the live call's refusal for `(server, account)` in the open request;
@@ -709,72 +759,13 @@ pub(super) fn recorded_in_scope(server: &str, tool: &str) -> Scoped<Option<Visib
     in_memo(|memo| memo.recorded(server, tool)).map_or(Scoped::NoMemo, Scoped::InMemo)
 }
 
-/// MIK-8340 memo semantics (seats gpt-20261011T084206Z-14299 and
-/// kimi-20261011T084206Z-14300): first judgement wins within a scope, a
-/// nested scope reuses the outer memo, and outside any scope every read
-/// judges fresh.
-#[cfg(test)]
-mod memo_tests {
-    use super::{VISIBILITY_MEMO, Visibility, VisibilityMemo, Withholding, with_visibility_memo};
-
-    const WITHHELD: Visibility = Visibility::Withheld(Withholding::Schema);
-
-    /// What the open scope's memo holds for `(server, tool)`; panics outside
-    /// a scope (the rows below check that separately).
-    fn recorded(server: &str, tool: &str) -> Option<Visibility> {
-        VISIBILITY_MEMO
-            .try_with(|memo| memo.recorded(server, tool))
-            .expect("inside a visibility memo scope")
-    }
-
-    fn in_scope() -> bool {
-        VISIBILITY_MEMO.try_with(|_| ()).is_ok()
-    }
-
-    #[test]
-    fn the_first_judgement_wins() {
-        let memo = VisibilityMemo::default();
-        assert_eq!(memo.record("alpha", "read", WITHHELD), WITHHELD);
-        assert_eq!(memo.record("alpha", "read", Visibility::Visible), WITHHELD);
-        assert_eq!(memo.recorded("alpha", "read"), Some(WITHHELD));
-        assert_eq!(memo.recorded("alpha", "note"), None);
-    }
-
-    #[tokio::test]
-    async fn a_nested_scope_reuses_the_outer_memo() {
-        with_visibility_memo(async {
-            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
-            with_visibility_memo(async {
-                assert_eq!(recorded("alpha", "read"), Some(WITHHELD));
-            })
-            .await;
-        })
-        .await;
-    }
-
-    #[tokio::test]
-    async fn outside_a_scope_there_is_no_memo_and_scopes_do_not_leak() {
-        assert!(!in_scope(), "a memo outside any request scope");
-        with_visibility_memo(async {
-            VISIBILITY_MEMO.with(|memo| memo.record("alpha", "read", WITHHELD));
-        })
-        .await;
-        with_visibility_memo(async {
-            assert_eq!(
-                recorded("alpha", "read"),
-                None,
-                "a second request saw the first's memo"
-            );
-        })
-        .await;
-    }
-}
-
 #[cfg(test)]
 mod account_tests;
 #[cfg(test)]
 mod alloc_tests;
 #[cfg(test)]
 mod key_tests;
+#[cfg(test)]
+mod memo_tests;
 #[cfg(test)]
 mod semantics_tests;

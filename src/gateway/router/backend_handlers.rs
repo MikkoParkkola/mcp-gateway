@@ -24,6 +24,8 @@ use crate::mtls::CertIdentity;
 use crate::protocol::{JsonRpcResponse, RequestId};
 #[cfg(feature = "firewall")]
 use crate::security::firewall::FirewallAction;
+#[cfg(feature = "firewall")]
+use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::security::validate_tool_name;
 
 type BackendRejection = (StatusCode, Json<Value>);
@@ -174,10 +176,14 @@ async fn guard_tool_call(
         let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
         let session_id = format!("direct:{backend_name}");
         let control_identity = direct_control_identity(state, auth, &session_id);
-        let verdict = fw.check_request(
+        let target = RuleTarget {
+            server: ServerOf::Backend(backend_name),
+            tool: tool_name,
+            key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
+        };
+        let verdict = fw.check_request_keyed(
             &session_id,
-            backend_name,
-            tool_name,
+            target,
             arguments,
             caller_name,
             &control_identity,
@@ -231,8 +237,7 @@ async fn guard_tool_call(
     // Answered as absent, so neither the frame nor its outcome marks it: the
     // gateway refused this call, and the record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);
-    let lens = crate::backend::Lens::Withheld;
-    let answered = key_check::key_refusal(backend, ((None, &[]), failed), params, (id, lens));
+    let answered = key_check::withheld_refusal(backend, failed, params, id);
     // A withheld name is always answered (`Some`); were it not, it is still
     // never sent.
     Ok(Some(
@@ -704,7 +709,11 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
 
 fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_success(client);
+        state
+            .live_config
+            .generation()
+            .auth()
+            .record_client_success(client);
     }
 }
 
@@ -741,7 +750,11 @@ fn stamp_direct_provenance(
 
 fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_failure(client);
+        state
+            .live_config
+            .generation()
+            .auth()
+            .record_client_failure(client);
     }
 }
 

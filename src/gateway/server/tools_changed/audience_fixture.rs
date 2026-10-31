@@ -77,6 +77,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         }
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -446,8 +447,9 @@ impl World {
             // The security flags off, as every router fixture's generation
             // has them: the views read SSRF protection from the generation
             // (ADR-023), and on it hides the fixture's loopback backends.
-            st.live_config = Arc::new(crate::config_reload::LiveConfig::new(
+            st.live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(config),
+                std::sync::Arc::clone(st.live_config.generation().auth()),
             ));
             dir
         });

@@ -57,6 +57,8 @@
 /// A backend's `allowed_tools` narrowed between a task's intake and its run.
 #[cfg(feature = "firewall")]
 mod allowed_tools_task;
+#[cfg(feature = "firewall")]
+mod live_key_tasks;
 mod support;
 
 /// A gateway refusal inside a task worker's dispatch is tied to its task.
@@ -140,6 +142,9 @@ mod provide_input_guards;
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+/// A call refused before its backend is no call a backend ran.
+#[cfg(feature = "firewall")]
+mod refused_step_targets;
 mod replay_policy;
 /// No backend-planted gateway member in a task result or a replay.
 mod reserved_members_task;

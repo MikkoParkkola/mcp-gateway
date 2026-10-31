@@ -201,7 +201,9 @@ impl Backend {
         if fresh {
             self.shared_entry().resources_cache.invalidate_if(|_| true);
         }
-        let resources = self.get_resources_for_binding(None, &[]).await?;
+        let resources = self
+            .get_resources_for_binding_lent(None, crate::transport::LentCredential::default())
+            .await?;
         Ok(ResourceSnapshot {
             // A read cut by the page cap proves nothing about absence (§7).
             complete: !self

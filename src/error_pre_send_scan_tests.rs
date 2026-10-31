@@ -82,8 +82,44 @@ fn construction_offsets(clean: &str, name: &str) -> Vec<usize> {
         let before = b[..path_start]
             .iter()
             .rposition(|c| !c.is_ascii_whitespace());
-        let after_alt = before.is_some_and(|p| b[p] == b'|' && (p == 0 || b[p - 1] != b'|'));
+        // A pattern alternative's `|` follows whitespace (`A | B`, or a leading
+        // `| B` on its own line). A closure's parameter list ends in a `|` right
+        // after its last parameter (`|_| build()`), so a value built there is
+        // a construction, not a pattern. Text-based: this holds while rustfmt
+        // writes alternatives with a space, which CI enforces.
+        let after_alt =
+            before.is_some_and(|p| b[p] == b'|' && p > 0 && b[p - 1].is_ascii_whitespace());
         let open = next_non_ws(end).map(|p| end + p);
+        // A struct variant: `{ .. }`, an arm, an alternative or a `let`
+        // destructure is a pattern; anything else builds the value.
+        if let Some(brace) = open.filter(|p| b[*p] == b'{') {
+            let mut depth = 0usize;
+            let mut close = brace;
+            for (j, c) in b.iter().enumerate().skip(brace) {
+                match c {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = j;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let inner = clean[brace + 1..close].trim();
+            let rest = clean[close + 1..].trim_start();
+            let pattern = inner.ends_with("..")
+                || rest.starts_with("=>")
+                || (rest.starts_with('=') && !rest.starts_with("=="))
+                || (rest.starts_with('|') && !rest.starts_with("||"))
+                || after_alt;
+            if !pattern {
+                found.push(at);
+            }
+            continue;
+        }
         let Some(open) = open.filter(|p| b[*p] == b'(') else {
             found.push(at);
             continue;
@@ -434,6 +470,66 @@ fn the_sealed_transient_is_built_only_at_reviewed_pre_send_sites() {
          before anything reaches the backend: review every new or removed call \
          site (left: found, right: reviewed)"
     );
+}
+
+/// The items allowed to build `Error::AmbiguousBackend`, which
+/// `is_pre_dispatch` lists: the name clash is refused at resolve, before any
+/// credential, replay, idempotency key, cache or send. Keyed as above.
+const CLASH_SITES: &[(&str, usize)] = &[
+    // `ambiguous_backend`, called only by `MetaMcp::refuse_name_clash`, the
+    // first step of `resolve`.
+    ("gateway::meta_mcp::invoke::dispatch::ambiguous_backend", 1),
+];
+
+#[test]
+fn the_clash_refusal_is_built_only_at_reviewed_pre_send_sites() {
+    let allowed: BTreeMap<String, usize> = CLASH_SITES
+        .iter()
+        .map(|(item, count)| ((*item).to_string(), *count))
+        .collect();
+    assert_eq!(
+        construction_sites("Error::AmbiguousBackend"),
+        allowed,
+        "the clash refusal frees an idempotency key, so it may be built only \
+         before anything reaches the backend: review every new or removed call \
+         site (left: found, right: reviewed)"
+    );
+}
+
+/// A value built right after a closure's parameters is a construction: the
+/// closing `|` of `|_|` is not a pattern alternative.
+#[test]
+fn a_construction_after_a_closures_parameters_is_counted() {
+    let src = "fn f(r: Result<(), E>) -> Result<(), Error> {\n\
+               r.map_err(|_| crate::Error::BackendUnavailable(String::new()))\n\
+               }\n\
+               fn g(e: &Error) -> bool {\n\
+               matches!(e, Error::Transport(_)\n    | Error::BackendUnavailable(_))\n\
+               }\n";
+    assert_eq!(constructions(src), 1, "{src}");
+}
+
+/// A struct variant's patterns are not constructions; a built value is.
+#[test]
+fn the_scan_tells_a_struct_variant_built_from_its_patterns() {
+    let name = "Error::AmbiguousBackend";
+    let count = |src: &str| construction_offsets(src, name).len();
+    assert_eq!(count("Error::AmbiguousBackend { .. } => 1,"), 0);
+    assert_eq!(
+        count("matches!(e, Error::AmbiguousBackend { server, .. })"),
+        0
+    );
+    assert_eq!(
+        count("let Error::AmbiguousBackend { server, rule } = e else {};"),
+        0
+    );
+    assert_eq!(count("| Error::AmbiguousBackend { .. }"), 0);
+    assert_eq!(count("OfflineMigrationError::AmbiguousBackend { n: 1 }"), 0);
+    assert_eq!(
+        count("Error::AmbiguousBackend { server: s, rule: None }"),
+        1
+    );
+    assert_eq!(count("crate::Error::AmbiguousBackend { server, rule }"), 1);
 }
 
 /// The item key is the enclosing method or function, whatever file holds it.

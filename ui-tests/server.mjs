@@ -7,26 +7,35 @@
 //   /ui, /ui/classic       a stand-in for the classic page (fixtures/classic.html)
 //   /ui/assets/{file}      an asset from shell.rs's ASSETS table, by exact name
 //   /ui/api/{path}         fixtures/api/{path}.json for GET, else 404
-//   /ui/{*path}            the shell document, with the CSP read from shell.rs
+//   /ui/{*path}            the shell document, with the gateway's CSP
 //
-// The asset table and the CSP are parsed from shell.rs rather than copied, so
-// the tests cannot drift from what the gateway serves. Node stdlib only.
+// The asset table is parsed from shell.rs rather than copied, and the CSP is
+// built as shell.rs builds it: src/gateway/ui/csp-base.txt with the SHA-256 of
+// the document's inlined frame. Answers are gzip by the gateway's one rule,
+// src/gateway/ui/compression.json (tower-http's default predicate), so the
+// tests cannot drift from what the gateway serves. Node stdlib only.
 
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SHELL_DIR = join(HERE, '..', 'src', 'gateway', 'ui', 'shell');
-const SHELL_RS = readFileSync(join(HERE, '..', 'src', 'gateway', 'ui', 'shell.rs'), 'utf8');
+const UI_DIR = join(HERE, '..', 'src', 'gateway', 'ui');
+const SHELL_DIR = join(UI_DIR, 'shell');
+const SHELL_RS = readFileSync(join(UI_DIR, 'shell.rs'), 'utf8');
 const FIXTURES = join(HERE, 'fixtures');
+const CONTRACT = JSON.parse(readFileSync(join(UI_DIR, 'compression.json'), 'utf8'));
 
-/** The CSP constant, with Rust's `\` line continuations folded. */
-function parseCsp(src) {
-  const m = src.match(/const CSP: &str = "((?:[^"\\]|\\.)*)"/s);
-  if (!m) throw new Error('shell.rs: CSP constant not found');
-  return m[1].replace(/\\\n\s*/g, '');
+/** The policy shell.rs builds: the base with the inlined frame's hash source. */
+function buildCsp() {
+  const doc = readFileSync(join(SHELL_DIR, 'index.html'), 'utf8');
+  const m = doc.match(/<style id="frame">([\s\S]*?)<\/style>/);
+  if (!m) throw new Error('index.html: no <style id="frame">');
+  const digest = createHash('sha256').update(m[1], 'utf8').digest('base64');
+  return readFileSync(join(UI_DIR, 'csp-base.txt'), 'utf8').trim().replace('{frame}', `'sha256-${digest}'`);
 }
 
 /** Asset name to file, from the ASSETS table. */
@@ -39,9 +48,51 @@ function parseAssets(src) {
   return table;
 }
 
-const CSP = parseCsp(SHELL_RS);
+const CSP = buildCsp();
 const ASSETS = parseAssets(SHELL_RS);
 const TYPES = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', woff2: 'font/woff2', svg: 'image/svg+xml', png: 'image/png' };
+
+/** A q-value as tower-http parses it: "q=" then 0 or 1 with at most 3 decimals, else null. */
+function qvalue(param) {
+  const m = /^q=(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/i.exec(param);
+  return m ? Math.round(Number(m[1]) * 1000) : null;
+}
+
+/**
+ * Whether tower-http 0.7.1, built with gzip only, picks gzip for this Accept-Encoding
+ * (content_encoding.rs, preferred_encoding_with_wildcard). An entry with a bad q-value is
+ * dropped; "*" gives its q-value to gzip and identity when they are not listed; the highest
+ * q-value above 0 wins, and gzip wins a tie (it sorts after identity). compression.json's negotiation rows pin it.
+ */
+function acceptsGzip(header) {
+  const listed = [];
+  for (const part of (header ?? '').split(',')) {
+    const cut = part.indexOf(';');
+    const coding = (cut < 0 ? part : part.slice(0, cut)).trim();
+    const param = cut < 0 ? undefined : part.slice(cut + 1).trim();
+    if (!coding) continue;
+    const q = param === undefined ? 1000 : qvalue(param);
+    if (q !== null) listed.push([coding.toLowerCase(), q]);
+  }
+  const of = (names) => listed.filter(([c]) => names.includes(c)).map(([, q]) => q);
+  const wildcard = of(['*'])[0];
+  let gzip, identity;
+  if (wildcard === undefined) {
+    gzip = Math.max(-1, ...of(['gzip', 'x-gzip']));
+    identity = Math.max(-1, ...of(['identity']));
+  } else {
+    gzip = of(['gzip', 'x-gzip'])[0] ?? wildcard;
+    identity = of(['identity'])[0] ?? wildcard;
+  }
+  return gzip > 0 && gzip >= identity;
+}
+
+/** Whether the contract compresses this answer for this request. */
+function gzips(req, type, len) {
+  if (!acceptsGzip(req.headers['accept-encoding'])) return false;
+  const never = CONTRACT.never_prefixes.some((p) => type.startsWith(p)) && !CONTRACT.except_types.some((e) => type.startsWith(e));
+  return len >= CONTRACT.min_bytes && !never;
+}
 
 /** The shell document, plus the fixture pages when the test asked for them. */
 function shellDocument(req) {
@@ -52,13 +103,90 @@ function shellDocument(req) {
 
 function send(res, status, headers, body) {
   // Names the worktree this server reads, so a run can prove it reached its own.
-  res.writeHead(status, { ...headers, 'x-fixture-root': HERE });
-  res.end(body);
+  const out = { ...headers, 'x-fixture-root': HERE };
+  let bytes = Buffer.from(body ?? '');
+  if (gzips(res.req, headers['content-type'] ?? '', bytes.length)) {
+    bytes = gzipSync(bytes);
+    out['content-encoding'] = 'gzip';
+    out.vary = 'accept-encoding';
+  }
+  res.writeHead(status, out);
+  res.end(bytes);
+}
+
+// Test-only live stream (tests/shell-stream.spec.mjs). A request to
+// /ui/api/stream carrying the cookie fixture-stream=<channel> is held open and
+// driven through /__stream/<channel>/<verb>: setup (JSON: requireBearer, and
+// next, a list of {status, retryAfter} answers for the coming connects), send
+// (the raw body is written to the open stream), end (the open stream ends) and
+// log (every connect with its headers, and whether it has closed). Channels are
+// per test, since every worker shares this server. The log records whether
+// Authorization and a session cookie were sent, never their values. Without
+// the cookie the stream is held open and never says hello, so the shell stays
+// quiet and no reconnect timer runs in specs that do not drive it.
+const channels = new Map();
+const channel = (name) => {
+  if (!channels.has(name)) channels.set(name, { conns: [], open: null, next: [], requireBearer: null });
+  return channels.get(name);
+};
+
+function readBody(req) {
+  return new Promise((done) => {
+    const parts = [];
+    req.on('data', (c) => parts.push(c));
+    req.on('end', () => done(Buffer.concat(parts).toString('utf8')));
+  });
+}
+
+async function streamControl(req, res, name, verb) {
+  const ch = channel(name);
+  const body = await readBody(req);
+  if (verb === 'setup') Object.assign(ch, JSON.parse(body || '{}'));
+  else if (verb === 'send' && ch.open) ch.open.write(body);
+  else if (verb === 'end' && ch.open) { ch.open.end(); ch.open = null; }
+  else if (verb === 'log') return send(res, 200, { 'content-type': 'application/json' }, JSON.stringify(ch.conns));
+  else if (verb !== 'setup') return send(res, 409, {}, 'no open stream');
+  return send(res, 204, {}, '');
+}
+
+function streamOpen(req, res, name) {
+  const ch = channel(name);
+  const auth = req.headers.authorization ?? null;
+  const conn = { lastEventId: req.headers['last-event-id'] ?? null, authorization: auth !== null, sessionCookie: /(?:^|;\s*)mcp_gateway_session=/.test(req.headers.cookie ?? ''), status: 200, closed: false };
+  ch.conns.push(conn);
+  if (ch.requireBearer && auth !== `Bearer ${ch.requireBearer}`) {
+    conn.status = 401;
+    return send(res, 401, { 'content-type': 'application/json' }, '{}');
+  }
+  const scripted = ch.next.shift();
+  if (scripted) {
+    conn.status = scripted.status;
+    const headers = scripted.retryAfter ? { 'retry-after': String(scripted.retryAfter) } : {};
+    return send(res, scripted.status, headers, '');
+  }
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-fixture-root': HERE });
+  res.flushHeaders();
+  res.on('close', () => { conn.closed = true; if (ch.open === res) ch.open = null; });
+  ch.open = res;
 }
 
 function handle(req, res) {
   const path = new URL(req.url, 'http://fixture').pathname;
   const get = req.method === 'GET' || req.method === 'HEAD';
+  const control = path.match(/^\/__stream\/([\w-]+)\/(setup|send|end|log)$/);
+  if (control) return streamControl(req, res, control[1], control[2]);
+  // Test-only: a body of `len` bytes of this type, so a row can run the
+  // contract's boundary cases through the server's compression.
+  if (path === '/__compression' && get) {
+    const q = new URL(req.url, 'http://fixture').searchParams;
+    return send(res, 200, { 'content-type': q.get('type') ?? '' }, 'a'.repeat(Number(q.get('len') ?? 0)));
+  }
+  const held = (req.headers.cookie ?? '').match(/(?:^|;\s*)fixture-stream=([\w-]+)/);
+  if (path === '/ui/api/stream' && get) {
+    if (held) return streamOpen(req, res, held[1]);
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'x-fixture-root': HERE });
+    return res.flushHeaders(); // held open, never a hello
+  }
   if (path === '/ui' || path === '/ui/classic') {
     // axum's get() route: another method answers 405.
     if (!get) return send(res, 405, { allow: 'GET,HEAD' }, '');

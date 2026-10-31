@@ -132,14 +132,12 @@ pub(crate) fn meta_response_targets(
                 external_tool
             }
             .to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::NoBackend,
         }];
     }
     let mut targets: Vec<_> = targets
         .iter()
-        .map(|target| ResponsePolicyTarget {
-            server: target.server.clone(),
-            tool: target.tool.clone(),
-        })
+        .map(|target| ResponsePolicyTarget::routed(&target.server, &target.tool))
         .collect();
     targets.sort();
     targets.dedup();
@@ -346,7 +344,7 @@ impl super::MetaMcp {
         task_id: &str,
         result: &mut serde_json::Value,
     ) -> crate::Result<()> {
-        use super::invoke::egress::{Egress, EgressOutcome, firewall_result};
+        use super::invoke::egress::{Egress, EgressOutcome};
         let (server, tool) = targets.first().map_or(("gateway", "tasks/get"), |t| {
             (t.server.as_str(), t.tool.as_str())
         });
@@ -357,6 +355,7 @@ impl super::MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         // A task's result is a `tools/call` result: its content gates ran at
         // dispatch.
@@ -367,7 +366,7 @@ impl super::MetaMcp {
             api_key_name: None,
             firewall: self.firewall.as_deref(),
         };
-        if firewall_result(result, &at) == EgressOutcome::Refused {
+        if self.firewall_result(result, &at) == EgressOutcome::Refused {
             tracing::warn!(task_id, "Firewall: task result blocked");
             return Err(crate::Error::ResponseFirewallRefused);
         }
@@ -761,6 +760,8 @@ pub(crate) fn error_response_preserving_status(
             crate::Error::AuditUnavailable => Some(serde_json::json!({
                 crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
             })),
+            // Gateway-authored, so its fixed fields go out whole.
+            crate::Error::AmbiguousBackend { .. } => error.ambiguous_backend_data(),
             // A gateway-authored refusal may carry a recovery payload the
             // client needs: MRTR.9 names the capability an input request would
             // have required and MRTR.9a the mode, which is the difference

@@ -132,6 +132,9 @@ async fn firewall_app_state(
         action,
         reason: Some("meta response verdict regression".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await
 }
@@ -261,7 +264,11 @@ async fn state_with_firewalls_and_auth(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
@@ -276,7 +283,6 @@ async fn state_with_firewalls_and_auth(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -290,9 +296,7 @@ async fn state_with_firewalls_and_auth(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -435,12 +439,18 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             action: FirewallAction::Allow,
             reason: Some("permissive first target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: Some("credential-refusing later target".to_string()),
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -519,12 +529,18 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             action: FirewallAction::Allow,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
             action: FirewallAction::Block,
             reason: None,
             scan: Vec::new(),
+            servers: None,
+            keys: None,
+            except: None,
         },
     ])
     .await;
@@ -533,10 +549,12 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "alpha_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
         ResponsePolicyTarget {
             server: "demo".to_string(),
             tool: "zeta_echo".to_string(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         },
     ];
     let mut artifact = json!({
@@ -554,6 +572,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
                 external_tool: "gateway_execute",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             ResponseArtifactKind::FinalResponse,
             ResponseMutationPolicy::Redact,
@@ -604,6 +623,9 @@ async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -663,6 +685,9 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         action: FirewallAction::Block,
         reason: Some("split-wiring refusal".to_string()),
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 
@@ -691,6 +716,9 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         action: FirewallAction::Allow,
         reason: None,
         scan: Vec::new(),
+        servers: None,
+        keys: None,
+        except: None,
     }])
     .await;
 

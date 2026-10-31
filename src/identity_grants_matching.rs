@@ -49,6 +49,18 @@ impl GrantAgent {
             }
         }
     }
+
+    /// [`Self::matches`] for an agent spelled `source:id`, as a grant-decision
+    /// note records it (`OwnedProvenAgentId::qualified`).
+    #[cfg(feature = "webui")]
+    pub(super) fn matches_qualified(&self, agent: &str) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Exact(key) => agent
+                .split_once(':')
+                .is_some_and(|(source, id)| source == key.source.to_string() && id == key.id),
+        }
+    }
 }
 
 /// Why a grants file failed its typed parse; `yaml_error` is the fallback

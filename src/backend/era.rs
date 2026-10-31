@@ -16,7 +16,7 @@ use crate::Result;
 use crate::error::Error;
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::era::{EraObservation, PeerEra, ProbeOutcome, classify};
-use crate::transport::Transport;
+use crate::transport::{ResendPermission, Transport};
 
 /// Method a modern peer answers with its discovery document.
 const DISCOVER_METHOD: &str = "server/discover";
@@ -41,9 +41,25 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 /// otherwise lead a login, open the browser, and end it `Cancelled` when this
 /// bound drops the request, failing the start behind it. Meeting a lapsed
 /// token, the probe reads as silence instead.
-async fn probe(transport: &Arc<dyn Transport>, timeout: Duration) -> ProbeOutcome {
-    let request =
-        crate::oauth::login_gate::short_contention(transport.request(DISCOVER_METHOD, None));
+///
+/// `call` is the headers of the dispatch the probe runs inside, so a lent-only
+/// slot sends it as that dispatch's credential; a start's own probe has none.
+/// A probe is never resent after a session heal.
+async fn probe(
+    transport: &Arc<dyn Transport>,
+    timeout: Duration,
+    call: &[(String, String)],
+) -> ProbeOutcome {
+    // Its error is dropped below, so a refusal it meets is not the call's.
+    let request = crate::oauth::login_gate::short_contention(
+        crate::gateway::delivery_facts::discarded(transport.request_with_headers(
+            DISCOVER_METHOD,
+            None,
+            call,
+            None,
+            ResendPermission::Denied,
+        )),
+    );
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
@@ -258,13 +274,16 @@ impl Backend {
 
     /// A build-first restart's era probe of its candidate (MIK-8012): run
     /// without the slot cache's lock, so the transport still serving keeps its
-    /// verdict, and installed only when the candidate is published.
+    /// verdict, and installed only when the candidate is published. It sends
+    /// as `entry`'s starting dispatch, the start it belongs to.
     pub(super) async fn probe_candidate_era(
         &self,
         transport: &Arc<dyn Transport>,
+        entry: &PooledEntry,
     ) -> crate::protocol::era::DetachedProbe {
         let timeout = self.probe_timeout();
-        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout)).await
+        let call = entry.lender.start_call();
+        crate::protocol::era::EraCache::probe_detached(|| probe(transport, timeout, &call)).await
     }
 
     /// Resolve the era of a freshly started peer, probing at most once.
@@ -292,10 +311,12 @@ impl Backend {
         // detached re-probe of the old peer must not be able to land between them.
         // A revocation removes a per-user slot without its start lock, so the slot this
         // start serves may be retired before the discard or before the install (MIK-7643).
+        // The start's own probe, sent as the dispatch whose start this is.
+        let call = entry.lender.start_call();
         entry
             .era
             .restart_while_serving(
-                || probe(transport, timeout),
+                || probe(transport, timeout, &call),
                 |step| unless_retired(entry, step),
             )
             .await
@@ -317,11 +338,12 @@ impl Backend {
         method: &str,
         response: &JsonRpcResponse,
         transport: &Arc<dyn Transport>,
+        call: &[(String, String)],
     ) {
         let Some(error) = response.error.as_ref() else {
             return;
         };
-        self.reprobe_if_code_contradicts(method, error.code, transport)
+        self.reprobe_if_code_contradicts(method, error.code, transport, call)
             .await;
     }
 
@@ -334,6 +356,7 @@ impl Backend {
         method: &str,
         code: i32,
         transport: &Arc<dyn Transport>,
+        call: &[(String, String)],
     ) {
         // The slot this transport serves, found first: an answer that arrived over a transport
         // no slot holds any more is evidence about a peer that has been replaced, and must
@@ -365,22 +388,26 @@ impl Backend {
             return;
         }
 
-        let era = Arc::clone(&entry.era);
-        let transport = Arc::clone(transport);
-        let timeout = self.probe_timeout();
-        let reprobe = async move {
-            era.reprobe_with(
-                || probe(&transport, timeout),
-                |store| with_serving(&entry, &transport, store),
-            )
-            .await;
-        };
         // A lent-only slot sends only while a dispatch lends its credential,
         // and the answer that contradicted the era came to the dispatch now
         // running: its probe runs here, before that dispatch returns and its
         // loan ends. Detached, it would have no subscriber to send as.
         let lent_only = matches!(key, super::PoolKey::PerUser { .. })
             && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly;
+        let era = Arc::clone(&entry.era);
+        let transport = Arc::clone(transport);
+        let timeout = self.probe_timeout();
+        // Only the inline probe sends as the call. A detached probe of any
+        // other slot sends with the slot's own credential, as it always has:
+        // a caller's headers must not ride a probe that outlives its call.
+        let call = if lent_only { call.to_vec() } else { Vec::new() };
+        let reprobe = async move {
+            era.reprobe_with(
+                || probe(&transport, timeout, &call),
+                |store| with_serving(&entry, &transport, store),
+            )
+            .await;
+        };
         if lent_only {
             reprobe.await;
         } else {
@@ -496,6 +523,10 @@ fn note_removed_method_refused(backend: &str, method: &str) {
     )
     .increment(1);
 }
+
+#[cfg(test)]
+#[path = "era_discarded_probe_tests.rs"]
+mod discarded_probe_tests;
 
 #[cfg(test)]
 mod tests {

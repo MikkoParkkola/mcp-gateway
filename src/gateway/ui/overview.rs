@@ -31,11 +31,10 @@ use axum::extract::{Extension, State};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Map, Value, json};
 
-use super::{admin_auth_required, is_admin};
+use super::guard::Guard;
 use crate::backend::Backend;
 use crate::config_reload::refusals::{Refusal, RefusalCode, RefusalKind, startup_refusal};
 use crate::counters::{CounterStore, Filter, Metric, Query, Window};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::security::transparency_log::pager::{
     Tail, lines_newest_first, open_segment, tail_window_in,
@@ -87,11 +86,11 @@ fn clip_field(value: &Value) -> Value {
 /// here, and an unauthenticated caller never reaches it (401 upstream).
 pub(super) async fn overview(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     let mut body = Map::new();
     let mut degraded = Vec::new();
@@ -121,7 +120,7 @@ pub(super) async fn overview(
     let mut checklist = Map::new();
     checklist.insert(
         "has_key".into(),
-        (!state.auth_config.api_keys().is_empty()).into(),
+        (!generation.auth().api_keys().is_empty()).into(),
     );
     source.add_tool_tried(&mut checklist);
     body.insert("checklist".into(), checklist.into());

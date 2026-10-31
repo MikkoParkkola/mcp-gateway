@@ -165,7 +165,10 @@ impl MetaMcp {
             );
             return Ok(std::ops::ControlFlow::Break(TracedOutcome::Live(stored)));
         }
-        super::stored_proof::refuse_unproven(unproven, server)?; // FIX 1b: at most once
+        // FIX 1b: at most once. Refused before its backend.
+        super::stored_proof::refuse_unproven(unproven, server).inspect_err(|_| {
+            super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
+        })?;
         Ok(std::ops::ControlFlow::Continue(Keyed { caller_principal }))
     }
 
@@ -252,7 +255,23 @@ impl MetaMcp {
             backend.as_deref(),
             dispatch_binding.as_deref(),
         );
+        // U12: a web UI call runs only as the call the route checked, and a
+        // tool this slot did not declare read-only only when confirmed. Here
+        // the backend instance and the caller's binding are the dispatched
+        // ones, so a replaced backend or a cold per-user slot asks.
+        #[cfg(feature = "webui")]
+        if let Err(refusal) =
+            crate::gateway::ui_call::gate((server, tool), caller.credential_principal, read_only)
+        {
+            super::nonce_settle::settle_pre_send(
+                caller,
+                super::nonce_settle::PreSendExit::AskRefund,
+            );
+            return Err(refusal);
+        }
+        // A web UI call runs the tool itself: a stored answer is not a run.
         if read_only
+            && !crate::gateway::ui_call_runs_live()
             && let Some(cached) = self.serve_cached_response(
                 caller,
                 session_id,
