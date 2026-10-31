@@ -438,3 +438,88 @@ async fn a_task_on_a_hidden_account_capability_with_busy_custody_answers_as_an_u
         &unregistered,
     );
 }
+
+/// An admin's unconfirmed web UI call of `server`'s `cap_keyed`, the
+/// provider `caps` hidden from the admin's certificate since its key was
+/// revoked (it lists nothing, yet still defines `cap_keyed`, declared
+/// read-only): the status and the body.
+async fn ui_call_of(server: &str) -> (u16, String) {
+    use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
+    let admin = crate::config::ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(b"ui-admin")),
+        name: "ui-admin".to_string(),
+        backends: vec!["*".to_string()],
+        admin: true,
+        ..Default::default()
+    };
+    let auth = crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![admin],
+        ..Default::default()
+    };
+    let (mut state, _store) =
+        crate::gateway::router::tests::test_router_app_state_with_auth_and_config(
+            &auth,
+            crate::config::Config::default(),
+        )
+        .await;
+    let everything = ToolScopeConfig {
+        backends: vec!["*".to_string()],
+        tools: vec!["*".to_string()],
+    };
+    Arc::get_mut(&mut state)
+        .expect("state is unique")
+        .mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
+        enabled: true,
+        policies: vec![PolicyRuleConfig {
+            match_criteria: CertMatchConfig {
+                cn: Some("agent".to_string()),
+                ..Default::default()
+            },
+            allow: everything,
+            deny: ToolScopeConfig {
+                backends: Vec::new(),
+                tools: Vec::new(),
+            },
+        }],
+        ..Default::default()
+    }));
+    let (caps, env, _dir) = keyed_caps();
+    state.meta_mcp.set_capabilities(caps);
+    env.set(Arc::new(crate::config::EnvOverlay::none()));
+    assert!(
+        judgment(&state, None, Some(&agent_cert())).hides("caps"),
+        "premise: the provider is hidden"
+    );
+    let body = json!({"server": server, "tool": "cap_keyed", "arguments": {},
+                      "confirm_write": false});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ui/api/tools/call")
+        .header("authorization", "Bearer ui-admin")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("request");
+    request.extensions_mut().insert(agent_cert());
+    let response = crate::gateway::router::create_router(Arc::clone(&state))
+        .oneshot(request)
+        .await
+        .expect("answers");
+    let status = response.status().as_u16();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Site 2 (`invoke/pre_dispatch.rs`, the read-only declaration the web UI
+/// gate and the response cache read): an admin's web UI call of a hidden
+/// provider's read-only capability, without `confirm_write`, answers as the
+/// same call on an unregistered name: the hidden definition's `read_only`
+/// does not let it past the confirmation gate.
+#[tokio::test]
+async fn a_web_ui_call_on_a_hidden_provider_answers_as_an_unregistered_name() {
+    let hidden = ui_call_of("caps").await;
+    let unregistered = ui_call_of(UNREGISTERED).await;
+    assert_alike("web UI call", "caps", &hidden, &unregistered);
+}

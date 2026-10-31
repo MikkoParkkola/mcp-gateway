@@ -549,3 +549,5 @@ mod chain_key;
 mod withheld;
 #[path = "meta/writes.rs"]
 mod writes;
+#[path = "meta/hidden_provider.rs"]
+mod hidden_provider;
