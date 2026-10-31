@@ -74,10 +74,13 @@ fn a_backends_403_is_never_the_gateways_denial() {
     assert!(!bare.is_pre_dispatch(), "{bare:?}");
 }
 
-/// The same over real HTTP: a backend's 403 reached the backend, so with the
-/// gateway's own denial code in a JSON-RPC body it is the backend's
-/// `JsonRpc`, and with no body a `Transport` status error; neither is the
-/// gateway's denial, and neither reads as never sent.
+/// The same over real HTTP: a backend's 403 reached the backend. The
+/// transport answers a 401/403 with its typed status whatever the body says
+/// (so a managed account's refresh sees the status), so both a body carrying
+/// the gateway's own denial code and no body reach the caller as `Http` 403:
+/// never the gateway's denial, never read as never sent. This row cannot see
+/// `peer_refusal`, whose result the transport discards for a 403; the row
+/// above covers it.
 #[tokio::test]
 async fn a_backends_403_over_http_is_never_the_gateways_denial() {
     let (addr, hits, server) = spawn_fixed_response_server(
@@ -92,7 +95,7 @@ async fn a_backends_403_over_http_is_never_the_gateways_denial() {
         .await
         .expect_err("the backend answered 403");
     assert!(
-        matches!(error, Error::JsonRpc { code: -32003, .. }),
+        matches!(&error, Error::Http(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN)),
         "a -32003 body: {error:?}"
     );
     assert!(!error.is_pre_dispatch(), "{error:?}");
@@ -112,7 +115,7 @@ async fn a_backends_403_over_http_is_never_the_gateways_denial() {
         .await
         .expect_err("the backend answered 403");
     assert!(
-        matches!(&error, Error::Transport(text) if text.contains("403")),
+        matches!(&error, Error::Http(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN)),
         "no body: {error:?}"
     );
     assert!(!error.is_pre_dispatch(), "{error:?}");
