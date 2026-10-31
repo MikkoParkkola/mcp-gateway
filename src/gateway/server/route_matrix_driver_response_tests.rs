@@ -63,6 +63,8 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
                 servers: None,
                 keys: None,
                 except: None,
+                allowed_roots: None,
+                path_args: None,
             }];
         })
     });

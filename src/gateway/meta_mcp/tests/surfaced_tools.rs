@@ -544,6 +544,8 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

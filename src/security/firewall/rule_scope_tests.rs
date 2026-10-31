@@ -271,7 +271,7 @@ fn keyed(fw: &Firewall, key: KeyOf<'_>) -> FirewallAction {
         tool: "t",
         key,
     };
-    fw.check_request_keyed("s", target, &injected(), "caller", "caller")
+    fw.check_request_keyed("s", target, &injected(), "caller", "caller", None)
         .action
 }
 
@@ -299,6 +299,8 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
                 key,
             },
             &injected(),
+            super::ScanSubject::Arguments,
+            None,
         )
         .action
     };

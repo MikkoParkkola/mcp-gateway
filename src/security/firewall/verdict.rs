@@ -77,7 +77,9 @@ impl FirewallVerdict {
                 | ScanType::ShellInjection
                 | ScanType::PathTraversal
                 | ScanType::SqlInjection
-                | ScanType::MemoryPoisoning => true,
+                | ScanType::MemoryPoisoning
+                | ScanType::PathOutsideRoot
+                | ScanType::RootRefused => true,
             }
         })
     }
@@ -128,6 +130,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             keys: None,
             except: Vec::new(),
             reason: rule.reason.clone(),
+            root: None,
         };
     }
     CompiledRule {
@@ -147,6 +150,7 @@ pub(super) fn compile_rule(rule: &FirewallRule) -> CompiledRule {
             })
             .collect(),
         reason: rule.reason.clone(),
+        root: None,
     }
 }
 
@@ -232,7 +236,10 @@ pub(super) fn first_matching_rule_action(
     rules
         .iter()
         .find(|rule| {
-            rule_applies(rule, target, key)
+            // A root rule decides only its own findings, which arrive
+            // decided; it never resolves a content finding.
+            rule.root.is_none()
+                && rule_applies(rule, target, key)
                 && (rule.scans.is_empty() || rule.scans.contains(&scan_type))
         })
         .map(|rule| rule.action)
