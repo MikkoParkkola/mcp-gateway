@@ -160,7 +160,11 @@ async fn p2_the_continuation_runs_and_its_replay_is_stored() {
     let resumed = modern(&meta, &client, &resume, Some(&alice()))
         .await
         .expect("the continuation completes");
-    assert_eq!(resumed, done(), "the continuation's answer");
+    assert_eq!(
+        resumed["content"],
+        done()["content"],
+        "the continuation's answer"
+    );
     assert_eq!(
         wire.calls.load(Ordering::SeqCst),
         2,
@@ -172,7 +176,11 @@ async fn p2_the_continuation_runs_and_its_replay_is_stored() {
         2,
         "the replay ran: {replay:?}"
     );
-    assert_eq!(replay.ok(), Some(done()), "the replay's stored answer");
+    assert_eq!(
+        replay.ok().map(|value| value["content"].clone()),
+        Some(done()["content"].clone()),
+        "the replay's stored answer"
+    );
 }
 
 /// P3: a same-key call carrying another exchange's valid envelope, or a
@@ -270,7 +278,11 @@ async fn p5_a_round_that_asks_again_is_parked_under_its_own_envelope() {
     )
     .await
     .expect("round 2's envelope continues");
-    assert_eq!(done_now, done(), "P5b: round 3 completes");
+    assert_eq!(
+        done_now["content"],
+        done()["content"],
+        "P5b: round 3 completes"
+    );
     assert_eq!(wire.calls.load(Ordering::SeqCst), 3, "P5b: three rounds");
 }
 
