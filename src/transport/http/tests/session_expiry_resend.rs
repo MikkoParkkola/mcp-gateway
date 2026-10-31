@@ -43,13 +43,41 @@ fn respond(mut stream: &std::net::TcpStream, status: &str, extra: &str, body: &s
     stream.write_all(reply.as_bytes()).expect("write the reply");
 }
 
+/// A listening socket on a loopback port, and a second socket bound to the
+/// same port that never listens (both `SO_REUSEPORT`). Closing the listener
+/// leaves the port held by its twin, so no other socket can take it, and a
+/// connection to it is refused: no listening socket, no reuse.
+fn held_listener() -> (std::net::TcpListener, tokio::net::TcpSocket) {
+    let listening = tokio::net::TcpSocket::new_v4().expect("a socket");
+    listening.set_reuseport(true).expect("reuse the port");
+    listening
+        .bind("127.0.0.1:0".parse().expect("an address"))
+        .expect("bind");
+    let port = listening.local_addr().expect("its address");
+    let holder = tokio::net::TcpSocket::new_v4().expect("a socket");
+    holder.set_reuseport(true).expect("reuse the port");
+    holder.bind(port).expect("hold the port");
+    let listener = listening
+        .listen(16)
+        .expect("listen")
+        .into_std()
+        .expect("a std listener");
+    listener.set_nonblocking(false).expect("blocking accepts");
+    (listener, holder)
+}
+
 /// A server that answers the stale session's request with 404 (expired),
 /// re-initialises, and closes its own listener when the client confirms the
 /// new session (`notifications/initialized`) and before answering it. Every
 /// reply closes its connection, so the resend must connect again, and is
-/// refused: deterministic, no race.
-fn expiring_server() -> (String, std::sync::mpsc::Receiver<usize>) {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+/// refused: the port stays held by the returned socket, so nothing else can
+/// answer it. Keep that socket until the resend has failed.
+fn expiring_server() -> (
+    String,
+    std::sync::mpsc::Receiver<usize>,
+    tokio::net::TcpSocket,
+) {
+    let (listener, holder) = held_listener();
     let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
     let (done, served_count) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -85,48 +113,23 @@ fn expiring_server() -> (String, std::sync::mpsc::Receiver<usize>) {
         }
         let _ = done.send(served);
     });
-    (url, served_count)
+    (url, served_count, holder)
 }
 
 /// R22: the stale session's request reached the server (404), the session
 /// was healed, and the resend never connected. The transport answers a
 /// failure that may have run (`Transport`), with the connect cause kept, not
 /// the never-sent `TransportConnect` that would release the caller's key.
-///
-/// The freed port can be bound by a test running in parallel before the
-/// resend connects; that resend then meets a stranger, not a refusal. Every
-/// run must still read may-have-run; the scenario runs again until one resend
-/// met the refusal this row is about.
 #[tokio::test]
 async fn a_resend_that_never_connected_after_an_expired_session_may_have_run() {
-    for _ in 0..3 {
-        // A resend answered at all met a stranger on the freed port.
-        let Some(error) = resend_after_expiry().await else {
-            continue;
-        };
-        assert!(
-            matches!(error, crate::Error::Transport(_)),
-            "a resend after a sent request read as never sent: {error:?}"
-        );
-        assert!(!error.is_pre_dispatch(), "{error:?}");
-        if error
-            .to_string()
-            .contains("after the expired session's request was sent")
-        {
-            return;
-        }
-    }
-    panic!("no run's resend met a refused connection");
-}
-
-/// One run: a session that expires, heals, and whose resend is refused;
-/// `None` when the resend was answered.
-async fn resend_after_expiry() -> Option<crate::Error> {
-    let (url, served_count) = expiring_server();
+    let (url, served_count, _held) = expiring_server();
     let transport = make_transport(&url);
     *transport.message_url.write() = Some(url.clone());
     set_default_session(&transport, "stale-session");
-    let error = transport.request("tools/list", None).await.err();
+    let error = transport
+        .request("tools/list", None)
+        .await
+        .expect_err("the resend could not connect");
     // Bounded, so a server left waiting on a connection that never came fails
     // the row instead of hanging it.
     let served = served_count
@@ -141,5 +144,15 @@ async fn resend_after_expiry() -> Option<crate::Error> {
         Some(FRESH),
         "premise: the session was healed"
     );
-    error
+    assert!(
+        matches!(error, crate::Error::Transport(_)),
+        "a resend after a sent request read as never sent: {error:?}"
+    );
+    assert!(!error.is_pre_dispatch(), "{error:?}");
+    assert!(
+        error
+            .to_string()
+            .contains("after the expired session's request was sent"),
+        "{error}"
+    );
 }

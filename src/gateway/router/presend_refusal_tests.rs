@@ -77,13 +77,15 @@ async fn a_direct_call_refused_in_its_send_releases_its_key() {
     );
 }
 
-/// R10b: refused in its send, a signed call gives its nonce back. The tool
-/// list is warmed first, as in R24: a cold schema fill is itself a request to
-/// the backend, which keeps the nonce. Read through the same nonce again: a
-/// kept nonce refuses it as a replay; a returned one lets it reach the send
-/// again, which refuses it for the rule.
+/// R10b: refused in its send, a signed call keeps its nonce spent, as every
+/// failure the direct route answers at its failure site does (MIK-8379 D4:
+/// the direct route gives the nonce answer `/mcp` gives for each
+/// pre-dispatch class, which is keep; a narrow pre-start refund class is
+/// rejected). The tool list is warmed first, so the keep comes from the
+/// failure site, not from a cold schema fill. Read through the same nonce
+/// again: it is refused as a replay and never reaches the send.
 #[tokio::test]
-async fn a_signed_direct_call_refused_in_its_send_gives_its_nonce_back() {
+async fn a_signed_direct_call_refused_in_its_send_keeps_its_nonce() {
     let fx = fixture_signed_with_secrets(vec![query_rule()]).await;
     let target = fx.state.backends.get("alpha").expect("fixture backend");
     target.get_tools_shared().await.expect("warm the tool list");
@@ -101,11 +103,7 @@ async fn a_signed_direct_call_refused_in_its_send_gives_its_nonce_back() {
     assert_eq!(target.list_fills(), fills, "premise: no fill");
     let (_, again) = signed_call(&fx, who, "alpha-presend-n1", json!({})).await;
     assert!(
-        !again.to_string().to_lowercase().contains("replay"),
-        "the nonce was kept after a call refused in its send: {again}"
-    );
-    assert!(
-        message(&again).contains("secret rule 'api'"),
-        "the second call did not reach the send: {again}"
+        again.to_string().to_lowercase().contains("replay"),
+        "the nonce was given back after a call refused in its send: {again}"
     );
 }
