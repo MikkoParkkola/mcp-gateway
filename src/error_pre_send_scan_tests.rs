@@ -549,6 +549,12 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         "gateway::meta_mcp::invoke::chokepoint::MetaMcp::rescan_outbound",
         2,
     ),
+    // The dispatch-time recheck of target authorization, grants and the
+    // admin-capability rule: nothing was sent.
+    (
+        "gateway::meta_mcp::invoke::chokepoint::MetaMcp::recheck_target",
+        1,
+    ),
     (
         "gateway::meta_mcp::invoke::chokepoint::MetaMcp::route_request_scan",
         2,
@@ -556,6 +562,16 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
     // The call-level policy, judged before dispatch.
     (
         "gateway::meta_mcp::invoke::gate::MetaMcp::check_call_level_policy",
+        1,
+    ),
+    // The invocation policy, before dispatch.
+    (
+        "gateway::meta_mcp::invoke::policy::MetaMcp::authorize_invocation",
+        1,
+    ),
+    // The relay check on a call's egress, before secret injection and send.
+    (
+        "gateway::meta_mcp::invoke::relay::MetaMcp::relay_refusal",
         1,
     ),
     // A relayed catalogue the caller may not read, before any call.
@@ -583,6 +599,11 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
     // An admin-only capability refused to a non-admin, before dispatch.
     (
         "gateway::meta_mcp::visibility::MetaMcp::admin_capability_rule",
+        1,
+    ),
+    // The visibility check before identity grants: no send.
+    (
+        "gateway::meta_mcp::visibility::MetaMcp::may_invoke_before_grants",
         1,
     ),
     // A match pattern wrapped in `Err(..)`, which the scan counts: no value is
