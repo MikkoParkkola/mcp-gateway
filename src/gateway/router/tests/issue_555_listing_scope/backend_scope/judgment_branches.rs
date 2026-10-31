@@ -418,7 +418,7 @@ async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
         }
         for (name, tool) in [("beta", "beta_tool"), ("caps", "cap_open")] {
             let call = json!({ "name": tool, "arguments": {} });
-            let routes = [
+            let cases = [
                 (
                     "/mcp",
                     "/mcp".to_string(),
@@ -432,7 +432,7 @@ async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
                     call,
                 ),
             ];
-            for (route, uri, params, twin) in routes {
+            for (route, uri, params, twin) in cases {
                 let before = executed();
                 let hidden = post_cert_key(&router, &uri, None, params).await;
                 assert_eq!(
@@ -620,9 +620,22 @@ async fn search_lists_no_tool_of_a_hidden_provider() {
             json!({ "name": "gateway_search", "arguments": { "query": query } }),
         )
         .await;
+        // The matches only: the answer also echoes the query.
+        let matches = payload(&serde_json::from_str(&body).expect("json"))["matches"].clone();
+        let named: Vec<String> = matches
+            .as_array()
+            .unwrap_or_else(|| panic!("matches array: {body}"))
+            .iter()
+            .filter_map(|m| {
+                m["tool"]
+                    .as_str()
+                    .or_else(|| m["name"].as_str())
+                    .map(str::to_string)
+            })
+            .collect();
         for name in ["cap_open", "cap_callback"] {
             assert!(
-                !body.contains(name),
+                !named.iter().any(|n| n.contains(name)),
                 "search for {query:?} lists the hidden provider's {name}: {body}"
             );
         }
