@@ -13,6 +13,13 @@ impl OAuthClient {
     ///
     /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
+        // A sign-in confirmed elsewhere since this client last adopted: the
+        // cache may be an older token, so take the stored one first.
+        if self.install_stale()
+            && let Some(access) = self.adopt_installed()
+        {
+            return Ok(access);
+        }
         // Check if we have a valid cached token
         {
             let token = self.current_token.read();
@@ -51,6 +58,9 @@ impl OAuthClient {
     /// The cached access token, if it is unexpired: one read of the cell, so
     /// no expiry can land between the check and the copy (MIK-8339).
     pub(crate) fn live_token(&self) -> Option<String> {
+        if self.install_stale() {
+            return None;
+        }
         self.current_token
             .read()
             .as_ref()
@@ -82,6 +92,11 @@ impl OAuthClient {
         deadline: tokio::time::Instant,
     ) -> Result<String> {
         if let Some(access) = self.live_token() {
+            return Ok(access);
+        }
+        if self.install_stale()
+            && let Some(access) = self.adopt_installed()
+        {
             return Ok(access);
         }
         let cancelled = || Error::AuthorizationCancelled {

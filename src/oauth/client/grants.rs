@@ -540,6 +540,11 @@ impl OAuthClient {
             .await?;
         *self.current_token.write() = Some(token);
         self.publish_sign_in();
+        // The file is durable: tell every client of this backend.
+        if let Some(status) = &self.sign_in_status {
+            self.installed_seen
+                .store(status.bump_installed(), std::sync::atomic::Ordering::SeqCst);
+        }
         Ok(())
     }
 

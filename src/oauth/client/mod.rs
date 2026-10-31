@@ -64,6 +64,9 @@ pub struct OAuthClient {
     /// one.
     sign_in_status: Option<Arc<sign_in::SignInStatus>>,
 
+    /// The status cell's installed count this client last adopted.
+    installed_seen: std::sync::atomic::AtomicU64,
+
     /// Where a test holds a login at the top of its client registration.
     #[cfg(all(test, feature = "webui"))]
     pub(crate) registration_pause: crate::test_pause::Slot,
@@ -239,6 +242,7 @@ impl OAuthClient {
             token_refresh_buffer_secs: cfg.token_refresh_buffer_secs,
             destination: crate::security::ssrf::DestinationPolicy::Configured,
             sign_in_status: None,
+            installed_seen: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, feature = "webui"))]
             registration_pause: crate::test_pause::Slot::default(),
         }

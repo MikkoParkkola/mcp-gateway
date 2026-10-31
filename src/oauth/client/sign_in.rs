@@ -82,6 +82,9 @@ impl SignIn {
 #[derive(Debug)]
 pub(crate) struct SignInStatus {
     cell: parking_lot::Mutex<SignIn>,
+    /// Bumped once a confirmed sign-in is durable in storage, so a client
+    /// holding an older token knows to adopt the new one.
+    installed: std::sync::atomic::AtomicU64,
 }
 
 impl SignInStatus {
@@ -89,7 +92,21 @@ impl SignInStatus {
     pub(crate) fn new(initial: SignIn) -> Self {
         Self {
             cell: parking_lot::Mutex::new(initial),
+            installed: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// How many confirmed sign-ins have been installed.
+    pub(crate) fn installed(&self) -> u64 {
+        self.installed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Record a confirmed sign-in, returning the new count.
+    #[cfg(feature = "webui")]
+    pub(crate) fn bump_installed(&self) -> u64 {
+        self.installed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1
     }
 
     /// Replace the value.
@@ -223,8 +240,47 @@ pub(super) fn split_hook(
 impl OAuthClient {
     /// This client publishing its backend's sign-in to `status`.
     pub(crate) fn with_sign_in_status(mut self, status: Arc<SignInStatus>) -> Self {
+        self.installed_seen
+            .store(status.installed(), std::sync::atomic::Ordering::SeqCst);
         self.sign_in_status = Some(status);
         self
+    }
+
+    /// Whether a sign-in was confirmed since this client last adopted from
+    /// storage: its cached token may be an older one.
+    pub(super) fn install_stale(&self) -> bool {
+        self.sign_in_status.as_ref().is_some_and(|status| {
+            status.installed()
+                != self
+                    .installed_seen
+                    .load(std::sync::atomic::Ordering::SeqCst)
+        })
+    }
+
+    /// Take the confirmed token from storage. The counter is sampled before
+    /// storage is read and recorded only after the adopt succeeded; if it
+    /// moved meanwhile, adopt again. A token inside the expiry buffer cannot
+    /// be adopted as live, but is still loaded so a refresh can use its
+    /// refresh token; `None` then.
+    pub(super) fn adopt_installed(&self) -> Option<String> {
+        let status = self.sign_in_status.as_ref()?;
+        loop {
+            let sampled = status.installed();
+            let adopted = self.adopt_stored_login();
+            if adopted.is_none()
+                && let Some(stored) = self
+                    .credential_key()
+                    .ok()
+                    .and_then(|key| self.storage.load(&key, &self.resource_url))
+            {
+                *self.current_token.write() = Some(stored);
+            }
+            self.installed_seen
+                .store(sampled, std::sync::atomic::Ordering::SeqCst);
+            if status.installed() == sampled {
+                return adopted;
+            }
+        }
     }
 
     /// Evaluate the token state and write it to the status cell: one token
