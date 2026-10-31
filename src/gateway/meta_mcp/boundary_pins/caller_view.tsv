@@ -1,5 +1,5 @@
 # file	calls	class	reason
-src/gateway/meta_mcp/accessors.rs	1	by-design	caller_capabilities() itself: the one filter every call path reads through
+src/gateway/meta_mcp/accessors.rs	2	by-design	get_capabilities() defined, and caller_capabilities() reading it: the one filter every call path reads through
 src/gateway/meta_mcp/hiding.rs	1	by-design	the hiding judgment's own catalogue read: it judges the provider, so it cannot read the view it feeds
 src/gateway/router/caller_hiding.rs	1	by-design	the hiding judgment's registration check: a hidden provider is still registered
 src/gateway/meta_mcp/scoped_backends.rs	1	by-design	the scoped view's registration name: absence() and scoped_get() judge hiding after it
@@ -24,4 +24,3 @@ src/gateway/router/watch_poll.rs	1	not-a-call-path	watch catalogue generation
 src/gateway/server/run.rs	2	not-a-call-path	startup and reload wiring
 src/gateway/server/stdio_loop.rs	1	not-a-call-path	stdio listing watch startup
 src/gateway/server/stdio_startup.rs	1	not-a-call-path	stdio reload wiring
-src/gateway/meta_mcp/boundary_pins/caller_view.rs	1	not-a-call-path	this scan's own needle string

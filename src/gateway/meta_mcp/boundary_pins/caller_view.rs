@@ -2,17 +2,19 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A call's path reads the capability provider as its caller sees it
 //! (`MetaMcp::caller_capabilities`), so a provider hidden from the caller is
-//! treated as an unregistered name. Every unfiltered `get_capabilities()`
-//! read in production code is listed in `caller_view.tsv` with its class and
-//! reason, by file and exact count: a new read, or one more in a listed
-//! file, fails until it is classified. Test files are not scanned; an inline
-//! test module's reads count toward its file.
+//! treated as an unregistered name. Every unfiltered read of the provider in
+//! production code is listed in `caller_view.tsv` with its class and reason,
+//! by file and exact count: a new read, or one more in a listed file, fails
+//! until it is classified. The needle is the name and its opening
+//! parenthesis, so a method call, a qualified path call and a reformatted
+//! call all count (the definition counts too). Test files are not scanned;
+//! an inline test module's reads count toward its file.
 
 use std::collections::BTreeMap;
 
 use super::packaged::crate_root;
 
-const NEEDLE: &str = ".get_capabilities()";
+const NEEDLE: &str = concat!("get_capabilities", "(");
 
 /// Production `.rs` files under `src`, as paths relative to the crate root.
 fn production_files(root: &std::path::Path) -> Vec<String> {
@@ -78,7 +80,7 @@ fn every_unfiltered_capability_read_is_classified() {
     for (file, n) in &found {
         match listed.get(file) {
             None => problems.push(format!(
-                "{file}: {n} unfiltered get_capabilities() read(s) not in caller_view.tsv; \
+                "{file}: {n} unfiltered provider read(s) not in caller_view.tsv; \
                  a call path reads caller_capabilities()"
             )),
             Some((want, _)) if want != n => {
