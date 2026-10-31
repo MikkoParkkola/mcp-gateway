@@ -315,6 +315,7 @@ src/gateway/meta_mcp/invoke/intake.rs	intake	http_invoke_tiny	on the HTTP gatewa
 src/gateway/meta_mcp/invoke/keys.rs	admit_keys	http_invoke_tiny	on the HTTP gateway_invoke path (S4, MIK-8488)
 src/gateway/meta_mcp/invoke/keys.rs	pre_send	http_invoke_tiny	on the HTTP gateway_invoke path (S5, MIK-8488)
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	http_invoke_tiny	checked on every invoke; bridges only a legacy interim ask
+src/gateway/meta_mcp/invoke/legacy_bridge.rs	settle_bridged	-	on-path, untimed: failed legacy bridged rounds only; the timed backend answers at once
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_refused_submit	-	on-path, untimed: task submit outcomes only (the refund is asked on a refusal); the timed rows carry no task member
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_if_transient	-	on-path, untimed: busy-custody refusals only; the timed rows succeed
 src/gateway/meta_mcp/invoke/nonce_settle.rs	ask_refund	-	on-path, untimed: signed calls refused before dispatch only; the timed rows are unsigned
@@ -348,6 +349,7 @@ src/gateway/meta_mcp/invoke/post_dispatch.rs	attach_tool_error_recovery	http_inv
 src/gateway/meta_mcp/invoke/post_dispatch.rs	deliver	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/post_dispatch.rs	inject_cost_advice	http_invoke_tiny	on the HTTP gateway_invoke path (cost-governance builds)
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_dispatch_error	-	on-path, untimed: dispatch errors only; the timed rows succeed
+src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_unsent	-	on-path, untimed: dispatch errors that sent nothing only; the timed rows succeed
 src/gateway/meta_mcp/invoke/post_dispatch.rs	refuse_unbindable	-	on-path, untimed: continuations this caller cannot bind only; the timed backend asks nothing
 src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_round	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/post_dispatch.rs	store_response	-	on-path, untimed: only read-only-declared tools may be stored; the timed tool declares no read-only hint

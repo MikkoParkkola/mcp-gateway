@@ -5,6 +5,8 @@ use serde_json::json;
 use super::Gateway;
 use crate::protocol::JsonRpcNotification;
 use crate::transport::notification_sink;
+use crate::transport::notify_ingress::in_backend;
+use crate::transport::notify_ingress::test_support::BACKEND;
 
 /// The read judge of a gateway with the verdict off.
 fn plain_reads() -> crate::gateway::outbound::StdioReads {
@@ -14,6 +16,10 @@ fn plain_reads() -> crate::gateway::outbound::StdioReads {
         None,
     )
 }
+
+/// How long a row waits for a frame before failing by name: the test holds
+/// the queue's sender, so a withheld frame would otherwise wait forever.
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(30);
 
 fn progress(token: &str) -> JsonRpcNotification {
     JsonRpcNotification {
@@ -35,7 +41,8 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
 
     let dispatch = tokio::spawn(async move {
         Gateway::dispatch_streaming_notifications(
-            async move {
+            // Published as a backend's call would, from inside its scope.
+            in_backend(BACKEND.into(), async move {
                 notification_sink::publish(vec![progress("gw-1")]);
                 // Park the dispatch. Reading the notification below can
                 // only succeed if it was queued for the single writer while
@@ -43,7 +50,7 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
                 // deadlocks here instead of passing.
                 let _permit = dispatch_gate.acquire().await.unwrap();
                 "result"
-            },
+            }),
             &writer,
             &plain_reads(),
             None,
@@ -52,9 +59,9 @@ async fn a_notification_is_written_before_its_dispatch_returns() {
         .0
     });
 
-    let first = queue
-        .recv()
+    let first = tokio::time::timeout(HANG_GUARD, queue.recv())
         .await
+        .expect("the progress notification never reached the writer queue")
         .expect("nothing was queued")
         .stdio_value()
         .map(std::borrow::Cow::into_owned)
@@ -94,17 +101,17 @@ async fn a_dispatch_runs_inside_a_notification_scope() {
 async fn a_late_notification_is_drained_before_the_response() {
     let (writer, mut queue) = tokio::sync::mpsc::channel(super::STDOUT_QUEUE_DEPTH);
     Gateway::dispatch_streaming_notifications(
-        async {
+        in_backend(BACKEND.into(), async {
             notification_sink::publish(vec![progress("gw-late")]);
-        },
+        }),
         &writer,
         &plain_reads(),
         None,
     )
     .await;
-    let late = queue
-        .recv()
+    let late = tokio::time::timeout(HANG_GUARD, queue.recv())
         .await
+        .expect("the late gw-late notification never reached the writer queue")
         .expect("the late notification was dropped")
         .stdio_value()
         .map(std::borrow::Cow::into_owned)
