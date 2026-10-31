@@ -19,8 +19,8 @@ mod handshake_and_session;
 /// build_mcp_headers: the header builder and the close headers.
 mod headers;
 
-/// A backend's 403 over real HTTP, and a resend the lender refuses after an
-/// expired session (Unix only: they use the resend row's held port).
+/// A resend the lender refuses after an expired session (Unix only: it uses
+/// the resend row's held port).
 #[cfg(unix)]
 mod refusal_over_http;
 /// Session expiry, re-initialise and retry (MIK-5982), and per-call headers.

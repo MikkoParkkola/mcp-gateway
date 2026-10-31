@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::protocol::RequestId;
+use std::sync::atomic::Ordering;
 
 fn error_body(id: i64) -> String {
     serde_json::json!({
@@ -71,4 +72,54 @@ fn a_backends_403_is_never_the_gateways_denial() {
         "{bare:?}"
     );
     assert!(!bare.is_pre_dispatch(), "{bare:?}");
+}
+
+/// The same over real HTTP: a backend's 403 reached the backend, so with the
+/// gateway's own denial code in a JSON-RPC body it is the backend's
+/// `JsonRpc`, and with no body a `Transport` status error; neither is the
+/// gateway's denial, and neither reads as never sent.
+#[tokio::test]
+async fn a_backends_403_over_http_is_never_the_gateways_denial() {
+    let (addr, hits, server) = spawn_fixed_response_server(
+        axum::http::StatusCode::FORBIDDEN,
+        r#"{"jsonrpc":"2.0","id":{id},"error":{"code":-32003,"message":"not permitted"}}"#,
+    )
+    .await;
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    let error = transport
+        .request("tools/call", Some(serde_json::json!({"name": "write"})))
+        .await
+        .expect_err("the backend answered 403");
+    assert!(
+        matches!(error, Error::JsonRpc { code: -32003, .. }),
+        "a -32003 body: {error:?}"
+    );
+    assert!(!error.is_pre_dispatch(), "{error:?}");
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "premise: it reached the backend"
+    );
+    server.abort();
+
+    let (addr, hits, server) =
+        spawn_fixed_response_server(axum::http::StatusCode::FORBIDDEN, "").await;
+    let transport = make_transport(&format!("http://{addr}/mcp"));
+    *transport.message_url.write() = Some(format!("http://{addr}/mcp"));
+    let error = transport
+        .request("tools/call", Some(serde_json::json!({"name": "write"})))
+        .await
+        .expect_err("the backend answered 403");
+    assert!(
+        matches!(&error, Error::Transport(text) if text.contains("403")),
+        "no body: {error:?}"
+    );
+    assert!(!error.is_pre_dispatch(), "{error:?}");
+    assert_eq!(
+        hits.load(Ordering::Relaxed),
+        1,
+        "premise: it reached the backend"
+    );
+    server.abort();
 }

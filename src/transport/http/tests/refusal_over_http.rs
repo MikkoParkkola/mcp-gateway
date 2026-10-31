@@ -1,84 +1,14 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A refusal over real HTTP: a backend's 403 is the backend's answer, never
-//! the gateway's denial, and a lent-only resend the gateway refuses after an
-//! expired session may have run. Both use the resend row's loopback helpers.
+//! A lent-only resend the gateway refuses after an expired session may have
+//! run. Built on the resend row's loopback helpers, which hold their port.
 
 use super::session_expiry_resend::{held_listener, read_request, respond};
 use super::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const FRESH: &str = "fresh-session-after-refusal";
-
-/// A server that answers each `tools/call` with the next of `replies` (status
-/// and JSON-RPC error body, or no body), echoing the request id; the port
-/// stays held by the returned socket. The count is sent once all replies are
-/// out.
-fn answering(
-    replies: Vec<(&'static str, Option<Value>)>,
-) -> (
-    String,
-    std::sync::mpsc::Receiver<usize>,
-    tokio::net::TcpSocket,
-) {
-    let (listener, holder) = held_listener();
-    let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
-    let (done, served_count) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut served = 0usize;
-        for (status, error) in replies {
-            let (stream, _) = listener.accept().expect("accept");
-            let (_, _, body) = read_request(&stream);
-            served += 1;
-            let reply = error.map_or_else(String::new, |error| {
-                json!({"jsonrpc": "2.0", "id": body["id"], "error": error}).to_string()
-            });
-            respond(&stream, status, "", &reply);
-        }
-        let _ = done.send(served);
-    });
-    (url, served_count, holder)
-}
-
-/// A backend's 403, with a JSON-RPC body carrying the gateway's own denial
-/// code (-32003) and with no body, shaped by the real HTTP stack: it reached
-/// the backend, so it is never the gateway's denial and never reads as never
-/// sent.
-#[tokio::test]
-async fn a_backends_403_over_http_is_never_the_gateways_denial() {
-    let (url, served_count, _held) = answering(vec![
-        (
-            "403 Forbidden",
-            Some(json!({"code": -32003, "message": "not permitted"})),
-        ),
-        ("403 Forbidden", None),
-    ]);
-    let transport = make_transport(&url);
-    *transport.message_url.write() = Some(url.clone());
-    set_default_session(&transport, "live-session");
-    for what in ["a -32003 body", "no body"] {
-        let error = transport
-            .request(
-                "tools/call",
-                Some(json!({"name": "write", "arguments": {}})),
-            )
-            .await
-            .expect_err("the backend answered 403");
-        assert!(
-            !matches!(
-                error,
-                crate::Error::Forbidden { .. } | crate::Error::GatewayRefused { .. }
-            ),
-            "{what}: a backend's 403 read as the gateway's refusal: {error:?}"
-        );
-        assert!(!error.is_pre_dispatch(), "{what}: {error:?}");
-    }
-    let served = served_count
-        .recv_timeout(Duration::from_secs(30))
-        .expect("both calls reached the backend");
-    assert_eq!(served, 2, "premise: each call reached the backend");
-}
 
 /// A server that answers the stale session's request with 404 (expired),
 /// re-initialises, sets `healed` and stops listening once the client
