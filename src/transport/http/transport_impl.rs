@@ -169,9 +169,12 @@ impl Transport for HttpTransport {
                     method = %method,
                     "Backend session expired; re-initializing and retrying once"
                 );
+                // The first request reached the server, so a never-sent error from
+                // the resend no longer proves nothing ran.
                 return self
                     .send_request_with_headers(&request, extra_headers, identity_key, era)
-                    .await;
+                    .await
+                    .map_err(|e| e.after_a_send("after the expired session's request was sent"));
             }
 
             result

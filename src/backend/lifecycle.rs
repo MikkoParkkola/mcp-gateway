@@ -75,6 +75,7 @@ impl Backend {
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
+            notify_origin: Arc::from(name),
             config,
             runtime_plan,
             pool: Arc::new({

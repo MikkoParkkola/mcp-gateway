@@ -560,6 +560,17 @@ impl Error {
         }
     }
 
+    /// This error after an earlier send of the call reached the backend: a
+    /// pre-dispatch one may have run, so it becomes `Transport` (cause kept).
+    #[must_use]
+    pub(crate) fn after_a_send(self, context: &str) -> Self {
+        if self.is_pre_dispatch() {
+            Self::Transport(format!("{context}: {self}"))
+        } else {
+            self
+        }
+    }
+
     /// True only for failures the gateway can prove it raised *before* the
     /// request reached the backend.
     ///
