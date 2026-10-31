@@ -90,8 +90,8 @@ impl crate::transport::Transport for Disconnected {
 
 /// R12b: the managed slot's catalogue is warm; the slot is then cold, and its
 /// start meets a 401. The keyed call reads refused before its backend, no
-/// tools/call reaches the peer, and the same key is not answered from a
-/// stored entry (it was released).
+/// tools/call reaches the peer, and its key is released: the idempotency
+/// store holds no entry for it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
     let custody = custody_with_steps(
@@ -115,10 +115,8 @@ async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
             };
         },
     );
-    meta.enable_idempotency(
-        Arc::new(crate::idempotency::IdempotencyCache::new()),
-        std::time::Duration::from_secs(300),
-    );
+    let keys = Arc::new(crate::idempotency::IdempotencyCache::new());
+    meta.enable_idempotency(Arc::clone(&keys), std::time::Duration::from_secs(300));
     let alice = identity("alice");
     // Warm the catalogue through the seeded slot, so the keyed call lists
     // nothing and its own start is what meets the 401.
@@ -144,6 +142,8 @@ async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
     let mut caller = caller_as(Some(&alice), None);
     caller.retry = &retry;
     let call = json!({"server": "mail", "tool": "read", "arguments": {"folder": "inbox"}});
+    // The warm call carried no key, so nothing it stored is this call's.
+    let entries_before = keys.len();
 
     let first = crate::gateway::delivery_facts::scope(Box::pin(meta.invoke_tool_sourced(
         &call,
@@ -166,23 +166,19 @@ async fn a_managed_start_refused_with_401_is_refused_before_its_backend() {
         "a start refused with 401 read as a dispatched call"
     );
 
-    let again = crate::gateway::delivery_facts::scope(Box::pin(meta.invoke_tool_sourced(
-        &call,
-        Some("fixture-session"),
-        &caller,
-        "t".to_owned(),
-    )))
-    .await;
-    // A kept key would answer the stored may-have-run entry (the side effect
-    // marker the early return commits), as a live value.
-    let replayed = matches!(
-        &again.outcome,
-        Ok(crate::gateway::meta_mcp::invoke::SourcedOutcome::Live((value, _, _)))
-            if value.to_string().contains("Side effect executed")
+    // The key, read where it lives: a released key leaves no entry; a kept
+    // one is committed with the side-effect marker the early return stores.
+    assert_eq!(
+        keys.len(),
+        entries_before,
+        "the key was kept for a start refused with 401: {:?}",
+        keys.completed_values_for_test()
     );
     assert!(
-        !replayed,
-        "the same key was answered from the stored failure: {:?}",
-        methods.lock()
+        !keys
+            .completed_values_for_test()
+            .iter()
+            .any(|value| value.to_string().contains("Side effect executed")),
+        "the key was committed as may-have-run"
     );
 }
