@@ -80,7 +80,6 @@ impl LiveHost {
                 let caller = crate::gateway::router::caller_hiding::RouterHiding::caller(
                     Arc::clone(state),
                     owned.authorizer().clone(),
-                    owned.verified_identity().cloned(),
                     owned.session_id().map(str::to_owned),
                 );
                 crate::gateway::meta_mcp::hiding::with_caller(caller, run).await

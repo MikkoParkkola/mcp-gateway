@@ -510,7 +510,6 @@ async fn backend_handler_inner(
             caller.oauth_agent_identity.as_ref(),
             caller.cert_identity.as_ref(),
         ),
-        caller.verified_identity.clone(),
         None,
     ));
     let mut envelope =

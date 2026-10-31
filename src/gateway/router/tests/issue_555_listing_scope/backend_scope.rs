@@ -239,6 +239,14 @@ async fn with_mtls_denying_beta() -> axum::Router {
 /// The fixture under one mTLS rule for the `agent` certificate: `allow` and
 /// `deny` as (backends, tools).
 async fn with_mtls(allow: (&[&str], &[&str]), deny: (&[&str], &[&str])) -> axum::Router {
+    with_mtls_state(allow, deny).await.0
+}
+
+/// [`with_mtls`], with the state it serves.
+async fn with_mtls_state(
+    allow: (&[&str], &[&str]),
+    deny: (&[&str], &[&str]),
+) -> (axum::Router, Arc<crate::gateway::router::AppState>) {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
     let owned = |names: &[&str]| names.iter().map(|n| (*n).to_string()).collect::<Vec<_>>();
     let Fixture {
@@ -266,7 +274,7 @@ async fn with_mtls(allow: (&[&str], &[&str]), deny: (&[&str], &[&str])) -> axum:
         policies: vec![rule],
         ..Default::default()
     }));
-    super::create_router(state)
+    (super::create_router(Arc::clone(&state)), state)
 }
 
 /// `tools/call` of `params` on `uri`, presenting the `agent` certificate.
@@ -446,4 +454,80 @@ async fn mtls_visible_backend_refused_tool_keeps_its_answer() {
         body.contains("the backend does not list a tool named `alpha_write`"),
         "a visible backend's refused tool changed its answer: {body}"
     );
+}
+
+/// The hiding judgment for the `agent` certificate, or for an agent scoped to
+/// `alpha`, on `state`.
+fn judgment(
+    state: &Arc<crate::gateway::router::AppState>,
+    agent: Option<&crate::gateway::oauth::OAuthAgentIdentity>,
+    cert: Option<&crate::mtls::CertIdentity>,
+) -> Arc<dyn crate::gateway::meta_mcp::hiding::CallerHiding> {
+    crate::gateway::router::caller_hiding::RouterHiding::caller(
+        Arc::clone(state),
+        crate::gateway::router::OwnedRouterAuthorizer::capture(None, agent, cert),
+        None,
+        None,
+    )
+}
+
+/// The judgment agrees with the listing it mirrors: for every caller the
+/// fixture models, a backend is listed by `gateway_list_servers` exactly when
+/// it is not hidden.
+#[tokio::test]
+async fn listed_and_not_hidden_agree_for_every_caller() {
+    let cert = crate::mtls::CertIdentity {
+        common_name: Some("agent".to_string()),
+        display_name: "agent".to_string(),
+        ..Default::default()
+    };
+    type Rule = (
+        (&'static [&'static str], &'static [&'static str]),
+        (&'static [&'static str], &'static [&'static str]),
+    );
+    let rules: [Rule; 4] = [
+        ((&["*"], &["*"]), (&["beta"], &[])),
+        ((&["*"], &["*"]), (&[], &["alpha_write"])),
+        ((&["*"], &["ghost_tool"]), (&[], &[])),
+        ((&["alpha", "caps"], &["*"]), (&[], &[])),
+    ];
+    for (allow, deny) in rules {
+        let (router, state) = with_mtls_state(allow, deny).await;
+        let (_, body) = post_as_agent_cert(
+            &router,
+            "/mcp",
+            json!({ "name": "gateway_list_servers", "arguments": {} }),
+        )
+        .await;
+        let listed = server_names(&serde_json::from_str(&body).expect("json"));
+        let hiding = judgment(&state, None, Some(&cert));
+        for server in ["alpha", "beta", "caps"] {
+            assert_eq!(
+                listed.iter().any(|n| n == server),
+                !hiding.hides(server),
+                "mtls allow {allow:?} deny {deny:?}: {server} (listed {listed:?})"
+            );
+        }
+    }
+
+    let registry = Arc::new(crate::gateway::oauth::AgentRegistry::new());
+    let token = super::direct_route::agent_token(&registry);
+    let f = with_agent_auth(registry).await;
+    let listed =
+        server_names(&call_tool(&f.router, Some(&token), "gateway_list_servers", json!({})).await);
+    let agent = crate::gateway::oauth::OAuthAgentIdentity {
+        client_id: "a3-agent".to_string(),
+        agent_name: "a3-agent".to_string(),
+        scopes: vec![crate::gateway::oauth::Scope::parse("tools:alpha:*").expect("scope")],
+        raw_scopes: vec!["tools:alpha:*".to_string()],
+        quota_principal: None,
+    };
+    let hiding = judgment(&f.state, Some(&agent), None);
+    for server in ["alpha", "beta", "caps"] {
+        assert_eq!(
+            listed.iter().any(|n| n == server),
+            !hiding.hides(server),
+            "agent scoped to alpha: {server} (listed {listed:?})"
+        );
+    }
 }

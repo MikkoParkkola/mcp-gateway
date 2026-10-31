@@ -167,11 +167,6 @@ impl OwnedCallerContext {
         self.session_id.as_deref()
     }
 
-    /// What the caller proved at submit, to find its own catalogue slot.
-    pub(crate) fn verified_identity(&self) -> Option<&VerifiedIdentity> {
-        self.verified_identity.as_ref()
-    }
-
     /// Hold the caller key for the length of one backend call, so an idle
     /// sweep cannot reclaim it under a call that outlasts `IDLE_TTL`
     /// (MIK-7828.FIX.2). Only an HTTP host tracks caller keys.

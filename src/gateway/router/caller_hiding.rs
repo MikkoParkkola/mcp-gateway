@@ -5,45 +5,37 @@
 //! (`meta_mcp::hiding`).
 //!
 //! It applies the predicate listings apply (the session profile, then
-//! [`super::authorization::admits_some_tool`]) to the catalogue the caller
-//! would be shown (`MetaMcp::caller_catalogue`: its own slot on a per-user
-//! backend), read from the registry directly, never through the caller's
-//! scoped view the judgment feeds. A decision that would rest on a catalogue
-//! not held now is no decision: the backend is hidden only if its name alone
-//! refuses it.
+//! [`super::authorization::admits_some_tool`]) to the catalogue listings read
+//! (`MetaMcp::listed_catalogue`), from the registry directly, never through
+//! the caller's scoped view the judgment feeds. A decision that would rest on
+//! a catalogue not held now is no decision: the backend is hidden only if its
+//! name alone refuses it.
 
 use std::sync::Arc;
 
 use super::AppState;
 use super::authorization::{OwnedRouterAuthorizer, admits_some_tool};
-use crate::gateway::meta_mcp::hiding::{CallerCatalogue, CallerHiding};
+use crate::gateway::meta_mcp::hiding::{CallerHiding, ListedCatalogue};
 use crate::gateway::meta_mcp::scoped_backends::Unscoped;
 use crate::gateway::oauth::scopes::Action;
-use crate::identity_propagation::{CallerProof, CallerProvenance};
-use crate::key_server::oidc::VerifiedIdentity;
 
 /// One caller's identity, as a hiding judgment.
 pub(crate) struct RouterHiding {
     state: Arc<AppState>,
     authorizer: OwnedRouterAuthorizer,
-    /// What the caller proved, to find its own slot on a per-user backend.
-    verified: Option<VerifiedIdentity>,
     session_id: Option<String>,
 }
 
 impl RouterHiding {
-    /// The judgment for `authorizer`'s caller, who proved `verified` and
-    /// whose session is `session_id`.
+    /// The judgment for `authorizer`'s caller, whose session is `session_id`.
     pub(crate) fn caller(
         state: Arc<AppState>,
         authorizer: OwnedRouterAuthorizer,
-        verified: Option<VerifiedIdentity>,
         session_id: Option<String>,
     ) -> Arc<dyn CallerHiding> {
         Arc::new(Self {
             state,
             authorizer,
-            verified,
             session_id,
         })
     }
@@ -73,16 +65,11 @@ impl CallerHiding for RouterHiding {
         if crate::gateway::authz::authorize_backend(client, server).is_err() {
             return false;
         }
-        let caller = CallerProof::new(
-            self.verified.as_ref(),
-            CallerProvenance::classify(client.map(|c| c.principal.storage_form())),
-        );
-        let (names, complete) = match state.meta_mcp.caller_catalogue(server, caller) {
-            CallerCatalogue::NoView => return true,
-            CallerCatalogue::Unknown => {
+        let (names, complete) = match state.meta_mcp.listed_catalogue(server) {
+            ListedCatalogue::NotHeld => {
                 return self.registered(server) && refused_by_name(state, (agent, cert), server);
             }
-            CallerCatalogue::Tools { names, complete } => (names, complete),
+            ListedCatalogue::Tools { names, complete } => (names, complete),
         };
         if agent.is_none() && state.agent_auth.enabled {
             // Agent auth with no validated agent admits no backend.
