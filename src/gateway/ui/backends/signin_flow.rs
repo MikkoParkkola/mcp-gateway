@@ -52,6 +52,8 @@ pub(super) enum Started {
         expires_at: std::time::SystemTime,
         retry_after_secs: u64,
     },
+    /// The backend was restarted or stopped while the start was discovering.
+    Cancelled,
 }
 
 /// A random, URL-safe attempt id.
@@ -105,11 +107,27 @@ pub(super) async fn start(
     if backend.with_flow(|slot| slot.is_some()) {
         return Ok(in_progress(backend));
     }
-    let client = backend.sign_in_client().await?;
-    let Begin::Lead(lead) = backend.login_gate.begin(None, None) else {
-        return Ok(in_progress(backend));
-    };
     let windows = backend.sign_in_windows();
+    // Admission first: the gate's epoch is read before anything slow, so a
+    // restart during discovery is seen, and discovery ends at the start window.
+    let epoch = backend.login_gate.epoch();
+    let discovered = tokio::select! {
+        biased;
+        () = backend.login_gate.revoked_since(epoch) => return Ok(Started::Cancelled),
+        () = tokio::time::sleep(windows.start) => {
+            return Err(Error::AuthorizationIncomplete {
+                backend: backend.name.clone(),
+                window_secs: windows.start.as_secs(),
+            });
+        }
+        client = backend.sign_in_client() => client,
+    };
+    let client = discovered?;
+    let lead = match backend.login_gate.begin(Some(epoch), None) {
+        Begin::Lead(lead) => lead,
+        Begin::Refused => return Ok(Started::Cancelled),
+        _ => return Ok(in_progress(backend)),
+    };
     let deadline = Instant::now() + windows.start;
     lead.set_end(deadline);
     let attempt_id = new_attempt_id();

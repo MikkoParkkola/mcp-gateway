@@ -206,6 +206,15 @@ pub(super) async fn start_sign_in(
             expires_at,
             retry_after_secs,
         }) => (in_progress(holder, expires_at, retry_after_secs), "refused"),
+        Ok(Started::Cancelled) => (
+            structured_error(
+                StatusCode::CONFLICT,
+                "sign_in_cancelled",
+                "the backend was restarted; start the sign-in again",
+            )
+            .into_response(),
+            "refused",
+        ),
         Err(_) => (
             structured_error(
                 StatusCode::BAD_GATEWAY,
