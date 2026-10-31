@@ -449,6 +449,27 @@ pub(super) fn owned_session<'a>(
         .filter(|id| state.multiplexer.touch_if_owned(id, &owner))
 }
 
+/// Records `caller`, under its owned `session`, as this request's hiding
+/// judgment (`meta_mcp::hiding`), before any read of the scoped view.
+pub(super) fn record_hiding_caller(
+    state: std::sync::Arc<AppState>,
+    caller: &Caller,
+    session: Option<&str>,
+) {
+    crate::gateway::meta_mcp::hiding::record_caller(
+        super::super::caller_hiding::RouterHiding::caller(
+            state,
+            super::super::OwnedRouterAuthorizer::capture(
+                caller.client.as_ref(),
+                caller.oauth_agent_identity.as_ref(),
+                caller.cert_identity.as_ref(),
+            ),
+            caller.verified_identity.clone(),
+            session.map(str::to_owned),
+        ),
+    );
+}
+
 /// Stage 3: find the backend and apply the admin gate, under the caller's
 /// owned session ([`owned_session`]).
 pub(super) fn route<'a>(

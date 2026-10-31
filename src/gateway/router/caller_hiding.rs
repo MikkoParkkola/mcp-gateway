@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use super::AppState;
 use super::authorization::OwnedRouterAuthorizer;
+use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::hiding::{CallerHiding, CallerSlot, ListedCatalogue};
 use crate::gateway::meta_mcp::scoped_backends::Unscoped;
 use crate::gateway::oauth::scopes::Action;
@@ -27,6 +28,14 @@ use crate::gateway::oauth::{OAuthAgentIdentity, check_scopes};
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::{CertIdentity, PolicyDecision};
+
+/// A caller's client, agent identity and certificate, as its authorizer
+/// holds them.
+pub(super) type CallerParts<'a> = (
+    Option<&'a AuthenticatedClient>,
+    Option<&'a OAuthAgentIdentity>,
+    Option<&'a CertIdentity>,
+);
 
 /// One caller's identity, as a hiding judgment.
 pub(crate) struct RouterHiding {

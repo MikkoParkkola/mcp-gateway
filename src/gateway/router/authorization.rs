@@ -8,7 +8,7 @@ use tracing::warn;
 
 use super::AppState;
 use super::backend_choke::backend_for;
-use super::caller_hiding::admits_some_tool;
+use super::caller_hiding::{CallerParts, admits_some_tool};
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
@@ -737,13 +737,7 @@ impl OwnedRouterAuthorizer {
     }
 
     /// The caller's client, agent identity and certificate.
-    pub(super) fn parts(
-        &self,
-    ) -> (
-        Option<&AuthenticatedClient>,
-        Option<&OAuthAgentIdentity>,
-        Option<&CertIdentity>,
-    ) {
+    pub(super) fn parts(&self) -> CallerParts<'_> {
         (
             self.client.as_ref(),
             self.oauth_agent_identity.as_ref(),

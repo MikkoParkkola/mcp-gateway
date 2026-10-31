@@ -523,16 +523,7 @@ async fn backend_handler_inner(
     // is routed under.
     let session = direct_caller::owned_session(state, &caller, key);
     // Before the absence stage and the backend lookup read the scoped view.
-    crate::gateway::meta_mcp::hiding::record_caller(super::caller_hiding::RouterHiding::caller(
-        shared,
-        super::OwnedRouterAuthorizer::capture(
-            caller.client.as_ref(),
-            caller.oauth_agent_identity.as_ref(),
-            caller.cert_identity.as_ref(),
-        ),
-        caller.verified_identity.clone(),
-        session.map(str::to_owned),
-    ));
+    direct_caller::record_hiding_caller(shared, &caller, session);
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,
