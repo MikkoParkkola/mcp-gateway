@@ -652,7 +652,8 @@ fn settle_direct_idempotency(
 /// itself — an open circuit, an unknown backend or tool — carries no such
 /// ambiguity: nothing ran, so caching it for the entry's whole lifetime would
 /// deny the caller a retry of work that provably never happened. See
-/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight. A
+/// [`crate::Error::is_pre_dispatch`] for why that allowlist stays tight, and
+/// `delivery_facts::unsent` for the send count that must also be empty. A
 /// lost round stores the uncertainty notice under the first caller's code
 /// (MIK-7979), the same sentence the meta route stores.
 fn settle_direct_failure(
@@ -666,7 +667,7 @@ fn settle_direct_failure(
     // The lease (7b) follows 7a: a pre-dispatch failure was withdrawn and
     // releases on drop; a lost round stays uncertain, as 7a's notice does;
     // otherwise it settles on the answer 7a stores.
-    if error.is_pre_dispatch() {
+    if crate::gateway::delivery_facts::unsent(error) {
         if let Some(reservation) = reservation {
             reservation.release();
         }
@@ -709,7 +710,11 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
 
 fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_success(client);
+        state
+            .live_config
+            .generation()
+            .auth()
+            .record_client_success(client);
     }
 }
 
@@ -746,7 +751,11 @@ fn stamp_direct_provenance(
 
 fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
     if let Some(client) = client {
-        state.auth_config.record_client_failure(client);
+        state
+            .live_config
+            .generation()
+            .auth()
+            .record_client_failure(client);
     }
 }
 

@@ -447,10 +447,16 @@ async fn the_other_scopes_cannot_widen_the_selection() {
             api_keys: vec![open],
             ..super::admin_auth_config()
         };
-        state.auth_config = Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
-            &auth,
-            crate::record_key::RECORD_KEY,
-        ));
+        {
+            state.live_config =
+                std::sync::Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+                    (*state.live_config.get()).clone(),
+                    Arc::new(mcp_gateway::gateway::auth::ResolvedAuthConfig::from_config(
+                        &auth,
+                        crate::record_key::RECORD_KEY,
+                    )),
+                ));
+        }
         state.meta_mcp_enabled = true;
     })
     .await;

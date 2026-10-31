@@ -172,6 +172,17 @@ pub(crate) async fn fixture_with_secrets(
     fx
 }
 
+/// [`fixture_with_secrets`] with message signing armed and a nonce required,
+/// so a row can read what a refused call does with its nonce.
+pub(crate) async fn fixture_signed_with_secrets(
+    rules: Vec<crate::secret_injection::CredentialRule>,
+) -> Fx {
+    SECRETS.with(|s| *s.borrow_mut() = rules);
+    let fx = Box::pin(super::fixture_hardened_signed(Answer::Ok, true)).await;
+    SECRETS.with(|s| s.borrow_mut().clear());
+    fx
+}
+
 #[cfg(feature = "firewall")]
 impl Fx {
     /// The directory the fixture's gateway writes its stores under.

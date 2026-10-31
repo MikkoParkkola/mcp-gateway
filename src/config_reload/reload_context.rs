@@ -74,6 +74,15 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
     crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
 ];
 
+/// A refused preparation's answer: the reason, and that the reload changed
+/// nothing.
+fn nothing_published(reason: &str) -> String {
+    format!(
+        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+         configuration was published."
+    )
+}
+
 /// Startup-only environment keys a restart would read differently.
 ///
 /// Two kinds, and neither is visible in the config diff:
@@ -690,12 +699,8 @@ impl ReloadContext {
         self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
-            format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            )
-        })?);
+        let prepared = self.live_config.prepare(new_config, &overlay);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(

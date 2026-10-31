@@ -13,7 +13,7 @@ use axum::{
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
-use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+use super::auth::{AuthState, auth_middleware};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
@@ -172,6 +172,10 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(all(test, feature = "webui"))]
+mod live_keys_dashboard_tests;
+#[cfg(test)]
+mod live_keys_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -189,6 +193,9 @@ mod mik8154_lease_rows_tests;
 mod overview_sources_tests;
 #[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A call refused in its own send releases its key on the direct route.
+#[cfg(test)]
+mod presend_refusal_tests;
 /// A backend's protocol directives reach the client only where allowed.
 #[cfg(test)]
 mod protocol_member_scope_tests;
@@ -206,6 +213,9 @@ mod u17_ui_shell_tests;
 /// The web UI API's access answers per path, method and caller, pinned.
 #[cfg(all(test, feature = "webui"))]
 mod ui_access_matrix_tests;
+/// The web UI compressed by the router's one rule.
+#[cfg(all(test, feature = "webui"))]
+mod ui_compression_tests;
 /// U3: the UI live stream.
 #[cfg(all(test, feature = "webui"))]
 mod ui_stream_tests;
@@ -391,8 +401,6 @@ pub struct AppState {
     pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
-    /// Authentication configuration (static keys)
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Single-use value that opens the dashboard from the link `serve` prints.
     pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Listeners on open `subscriptions/listen` streams.
@@ -534,7 +542,6 @@ async fn readyz(
 /// from the request that opened it.
 pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
-        auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
@@ -728,7 +735,7 @@ pub(crate) fn create_router_with_accounts(
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .merge(unauthenticated_routes())
         .layer(CatchPanicLayer::new())
-        .layer(CompressionLayer::new())
+        .layer(compression())
         // Method and route only (#1529). Routes merged below are outside it.
         .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
         .with_state(state);
@@ -750,10 +757,11 @@ pub(crate) fn create_router_with_accounts(
         app = app.merge(metrics_route(&startup_config));
     }
 
-    // Merge web UI HTML route (unauthenticated — static HTML, no data)
+    // Merge web UI HTML route (unauthenticated — static HTML, no data). Outside
+    // the TraceLayer as before, but compressed by the same one rule as the rest.
     #[cfg(feature = "webui")]
     {
-        app = app.merge(super::ui::html_router());
+        app = app.merge(super::ui::html_router().layer(compression()));
     }
 
     if let Some(extra) = extra {
@@ -791,6 +799,12 @@ pub(crate) fn create_router_with_accounts(
     app.layer(middleware::from_fn_with_state(pin_source, pin_generation))
 }
 
+/// The gateway's one compression rule, tower-http's default predicate, and
+/// `src/gateway/ui/compression.json` writes it down for the fixture server.
+pub(crate) fn compression() -> CompressionLayer {
+    CompressionLayer::new()
+}
+
 /// Pin the published generation on a request before anything else runs. Every
 /// later judgement on the request reads this one, so a reload that publishes
 /// mid-request never mixes two configurations into one answer.
@@ -801,6 +815,14 @@ async fn pin_generation(
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
     next.run(request).await
+}
+
+impl AppState {
+    /// The process's record key: resolved once at startup, the same in every
+    /// generation, so any generation's copy is this one.
+    pub(crate) fn record_key(&self) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
+        self.live_config.generation().auth().shared_record_key()
+    }
 }
 
 /// The refusal for a request that reached a reader without a pinned

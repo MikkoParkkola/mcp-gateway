@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use super::Backend;
 use crate::failsafe::{RetryPolicy, with_retry_unless};
+use crate::gateway::delivery_facts::{before_send as presend, counted_send, refused_before_send};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
@@ -17,7 +18,7 @@ use crate::{Error, Result};
 
 /// Which transport entry point one outbound request takes, and how many times.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Attempts {
+pub(super) enum Attempts {
     /// The ordinary path: the slot's retry policy decides.
     WithRetry,
     /// The upstream-tasks declaration, sent exactly once. A duplicate would
@@ -226,7 +227,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -287,7 +288,7 @@ impl Backend {
         extra_headers: crate::transport::LentCredential,
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
-        self.request_attempted(
+        self.send_in_scope(
             method,
             params,
             extra_headers,
@@ -297,7 +298,7 @@ impl Backend {
         .await
     }
 
-    async fn request_attempted(
+    pub(super) async fn request_attempted(
         &self,
         method: &str,
         params: Option<Value>,
@@ -311,7 +312,7 @@ impl Backend {
         // send by an instance other than the one an exempt call was judged on
         // (MIK-8154 F2: a reload; nothing sent, so "unavailable") stop here.
         if let Some(refusal) = self.blocked_call_refusal(method, params.as_ref(), identity_key) {
-            return Err(refusal);
+            return Err(refused_before_send(refusal));
         }
 
         // MIK-7272.SUB.2b / ADR-014 §2: never hand a backend the client's own
@@ -327,7 +328,7 @@ impl Backend {
         // rules or the mirror add anything: a slot's start lends only that.
         let credential = extra_headers;
         let (params, extra_headers, injects) =
-            self.outbound(method, params, &credential.headers, identity_key)?;
+            presend(self.outbound(method, params, &credential.headers, identity_key))?;
 
         // Derive the per-identity pool slot FIRST (MIK-6735 fix 1, adversarial
         // review of commit bfd62b91). Each slot owns its own circuit breaker +
@@ -341,39 +342,38 @@ impl Backend {
         // identified request gets its own transport/session/failsafe so users
         // never collide (IDP.7).
         let key = self.pool_key_for(identity_key);
-        let entry = self.pooled_entry(&key)?;
+        let entry = presend(self.pooled_entry(&key))?;
 
         // Check THIS slot's failsafe, not the backend's.
-        entry.failsafe.admit(&self.name).inspect_err(|e| {
+        presend(entry.failsafe.admit(&self.name)).inspect_err(|e| {
             tracing::warn!(backend = %self.name, "Request rejected: {e}");
         })?;
 
-        // Acquire semaphore
-        let _permit = self.semaphore.acquire().await.map_err(|_| {
+        let _permit = presend(self.semaphore.acquire().await.map_err(|_| {
             tracing::warn!("Concurrency limit reached");
             Error::BackendUnavailable("Concurrency limit reached".to_string())
-        })?;
+        }))?;
 
         self.request_count.fetch_add(1, Ordering::Relaxed);
 
         // Mark CLIENT activity for the idle clock, and hold this slot safe from
         // being stopped for the whole request. Released when the guard drops.
-        let activity = self.begin_activity(&key)?;
+        let activity = presend(self.begin_activity(&key))?;
         // The entry just claimed, which the idle reaper cannot take while this
         // request holds it. The one captured above may already be evicted, and
         // the start and dispatch outcomes belong to the slot actually used (#2261).
         let entry = std::sync::Arc::clone(activity.entry());
         // This dispatch's credential is what a lent-only slot sends as, its
         // start included, for as long as the dispatch runs.
-        let loan = self.lend_to_slot(&key, &entry, &credential)?;
+        let loan = presend(self.lend_to_slot(&key, &entry, &credential))?;
 
         // Ensure this slot's transport is live. The start sends no call's
         // headers, so a lent-only slot sends it as this dispatch's loan.
         let transport = {
             let _starting = loan.as_ref().map(|held| entry.lender.starting(held.id()));
-            self.start_judged(&key, &entry, start_time, method).await?
+            presend(self.start_judged(&key, &entry, start_time, method).await)?
         };
-        self.refuse_unredacted(injects, transport.as_ref())?;
+        presend(self.refuse_unredacted(injects, transport.as_ref()))?;
 
         // Execute with retry
         let name = self.name.clone();
@@ -385,7 +385,7 @@ impl Backend {
             let transport = std::sync::Arc::clone(&transport);
             let method = method.to_string();
             let identity_key = identity_key.clone();
-            async move {
+            counted_send(async move {
                 match attempts {
                     Attempts::WithRetry => {
                         transport
@@ -409,7 +409,7 @@ impl Backend {
                             .await
                     }
                 }
-            }
+            })
         };
         // A call sent at most once (as `with_retry` sends under a disabled
         // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
@@ -596,7 +596,7 @@ impl Backend {
     /// Returns an error if the backend is unavailable, the concurrency limit
     /// is reached, or the notification cannot be sent.
     pub async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::default(),
@@ -635,7 +635,7 @@ impl Backend {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
-        self.notify_with_headers_lent(
+        self.notify_in_scope(
             method,
             params,
             crate::transport::LentCredential::unchecked(extra_headers),
@@ -776,6 +776,9 @@ fn substitute_progress_token(params: Option<Value>) -> Option<Value> {
 #[path = "ops_secret_outbound.rs"]
 mod secret_outbound;
 
+#[cfg(test)]
+#[path = "ops_presend_pin_tests.rs"]
+mod presend_pin_tests;
 #[cfg(test)]
 #[path = "progress_token_substitution_tests.rs"]
 mod progress_token_substitution_tests;

@@ -6,6 +6,7 @@ mod command_split;
 mod http;
 mod lender;
 pub(crate) mod notification_sink;
+pub(crate) mod notify_ingress;
 mod stdio;
 pub(crate) mod submit_mark;
 pub(crate) mod upstream_tap;

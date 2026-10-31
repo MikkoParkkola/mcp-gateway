@@ -6,7 +6,6 @@
 //! criteria for the decoder, written before it.
 
 use super::sse_decoder::{MAX_PENDING_SSE_BYTES, SseDecoder, SseEvent, decode_sse_exchange};
-use crate::transport::notification_sink;
 
 /// Decode a whole body in one push plus a finish.
 fn decode_all(body: &[u8]) -> Vec<SseEvent> {
@@ -258,7 +257,10 @@ async fn a_notification_arrives_before_the_response_frame() {
         }
     });
 
-    let (scoped, mut rx) = notification_sink::scope(None, decode_sse_exchange(body, None));
+    let (scoped, mut rx) = crate::transport::notify_ingress::test_support::scope(
+        None,
+        decode_sse_exchange(body, None),
+    );
     tokio::pin!(scoped);
 
     let early = tokio::time::timeout(std::time::Duration::from_secs(5), async {

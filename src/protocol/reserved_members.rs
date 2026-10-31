@@ -431,4 +431,47 @@ pub(crate) mod test_support {
             "{route}: the backend's own member was lost: {text}"
         );
     }
+
+    /// A backend `notifications/progress` frame carrying `token`, two
+    /// gateway-only members, two scoped members a notification never
+    /// carries, and members of the backend's own.
+    pub(crate) fn planted_progress(token: &str) -> Value {
+        json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/progress",
+            "params": {
+                "progressToken": token,
+                "progress": 1,
+                "_security_findings": ["FORGED-1"],
+                "_meta": {
+                    "io.mcp-gateway/executionOutcome": "FORGED-9",
+                    "vendor.example/kept": "KEPT-BY-BACKEND",
+                },
+                "taskId": "FORGED-TASK",
+                "ttlMs": 60000,
+                "requestState": "FORGED-STATE",
+                "cacheScope": "private",
+                "backend_field": "KEPT-BY-BACKEND",
+            },
+        })
+    }
+
+    /// The `params` the client received from [`planted_progress`]: no planted
+    /// member, the scoped ones removed, the token, the progress and the
+    /// backend's own members unchanged.
+    pub(crate) fn assert_progress_stripped(route: &str, token: &str, params: &Value) {
+        assert_nothing_forged(route, params);
+        for member in ["taskId", "ttlMs", "requestState", "cacheScope"] {
+            assert!(
+                params.get(member).is_none(),
+                "{route}: a scoped `{member}` reached the client on a notification: {params}"
+            );
+        }
+        assert_eq!(params["progressToken"], token, "{route}: token changed");
+        assert_eq!(params["progress"], 1, "{route}: progress changed");
+        assert_eq!(
+            params["_meta"]["vendor.example/kept"], "KEPT-BY-BACKEND",
+            "{route}: a backend `_meta` entry was lost: {params}"
+        );
+    }
 }

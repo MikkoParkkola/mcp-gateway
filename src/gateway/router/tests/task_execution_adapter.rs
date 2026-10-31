@@ -57,6 +57,8 @@
 /// A backend's `allowed_tools` narrowed between a task's intake and its run.
 #[cfg(feature = "firewall")]
 mod allowed_tools_task;
+#[cfg(feature = "firewall")]
+mod live_key_tasks;
 mod support;
 
 /// A gateway refusal inside a task worker's dispatch is tied to its task.
@@ -132,6 +134,9 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+/// A call refused in its own send is no call a backend ran (tasks, plans).
+#[cfg(feature = "firewall")]
+mod presend_refused_send;
 mod proven_subject_admission;
 /// MIK-8398 C1d: a task the worker runs stores a sealed result.
 mod provenance_seal;

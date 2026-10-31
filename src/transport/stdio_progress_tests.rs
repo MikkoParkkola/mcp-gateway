@@ -14,7 +14,7 @@ use super::*;
 async fn a_message_stamped_with_a_registered_progress_token_is_not_delivered() {
     let transport = make_transport("cat");
     let stamped = r#"{"jsonrpc":"2.0","method":"notifications/message","params":{"progressToken":"tok-a","level":"debug","data":"x"}}"#;
-    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         let _ = transport.register_progress_token("tok-a");
         transport
             .handle_response(stamped)
@@ -43,16 +43,17 @@ async fn stdio_routes_a_progress_notification_to_only_the_call_that_supplied_the
     let transport = std::sync::Arc::new(make_transport("cat"));
     let reader = std::sync::Arc::clone(&transport);
 
-    let (call, mut tok_b_rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut tok_b_rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         // tok-a's caller gets its own scope, so a misroute is visible. Both
         // registrations in one scope share a sender, and a frame delivered
         // to the wrong destination then arrives on the right receiver --
         // the isolation this row exists to prove would be unfalsifiable.
         // The sender is cloned into the map at registration, so it outlives
         // the scope that supplied it.
-        let (tok_a_call, tok_a_rx) = crate::transport::notification_sink::scope(None, async {
-            let _ = transport.register_progress_token("tok-a");
-        });
+        let (tok_a_call, tok_a_rx) =
+            crate::transport::notify_ingress::test_support::scope(None, async {
+                let _ = transport.register_progress_token("tok-a");
+            });
         tok_a_call.await;
 
         let _ = transport.register_progress_token("tok-b");
@@ -103,11 +104,11 @@ async fn stdio_refuses_to_reroute_a_progress_token_that_is_already_live() {
     // a refused insert from an overwriting one -- both would deliver to
     // the same receiver.
     let (incumbent_call, mut incumbent_rx) =
-        crate::transport::notification_sink::scope(None, async {
+        crate::transport::notify_ingress::test_support::scope(None, async {
             let _owner = ProgressRegistrationGuard::register(&transport, "tok-a");
 
             let (newcomer_call, mut newcomer_rx) =
-                crate::transport::notification_sink::scope(None, async {
+                crate::transport::notify_ingress::test_support::scope(None, async {
                     let refused = ProgressRegistrationGuard::register(&transport, "tok-a");
                     assert!(
                         !refused.owns_registration,
@@ -182,7 +183,7 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     let t = make_transport("cat");
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-live" } });
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let token = request_progress_token(Some(&params)).expect("token");
         let _ = t.register_progress_token(&token);
         t.handle_response(&progress_line("tok-live", 3)).unwrap();
@@ -193,13 +194,33 @@ async fn stdio_delivers_a_notification_into_the_callers_sink() {
     assert_eq!(drained[0].method, "notifications/progress");
 }
 
+/// stdio in-call: the reader task's delivery strips what
+/// the backend planted, as the batched path does.
+#[tokio::test]
+async fn stdio_delivery_strips_what_a_backend_planted_on_a_progress_frame() {
+    use crate::protocol::reserved_members::test_support::{
+        assert_progress_stripped, planted_progress,
+    };
+    let t = make_transport("cat");
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
+        let _ = t.register_progress_token("tok-live");
+        t.handle_response(&planted_progress("tok-live").to_string())
+            .unwrap();
+    })
+    .await;
+
+    assert_eq!(drained.len(), 1, "the progress frame must arrive");
+    let params = drained[0].params.as_ref().expect("params");
+    assert_progress_stripped("stdio in-call", "tok-live", params);
+}
+
 /// Negative control for stdio: a notification whose token nobody registered
 /// reaches no sink, even with a call in flight that has one.
 #[tokio::test]
 async fn stdio_never_attributes_a_stray_token_to_an_open_call() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let _ = t.register_progress_token("tok-mine");
         t.handle_response(&progress_line("tok-stray", 1)).unwrap();
     })
@@ -219,7 +240,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
     let t = make_transport("cat"); // never connected: the write fails
     let params = serde_json::json!({ "_meta": { "progressToken": "tok-leak" } });
 
-    let (result, drained) = crate::transport::notification_sink::collect(None, async {
+    let (result, drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         t.request("tools/call", Some(params)).await
     })
     .await;
@@ -247,7 +268,7 @@ async fn stdio_request_retires_its_registration_even_when_the_write_fails() {
 async fn a_dropped_progress_registration_retires_its_destination() {
     // GIVEN a registration holding one captured notification.
     let t = make_transport("cat");
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let guard = ProgressRegistrationGuard::register(&t, "tok-cancel");
         t.handle_response(&progress_line("tok-cancel", 1)).unwrap();
 
@@ -275,7 +296,7 @@ async fn a_dropped_progress_registration_retires_its_destination() {
 async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
     let t = make_transport("cat");
 
-    let ((), drained) = crate::transport::notification_sink::collect(None, async {
+    let ((), drained) = crate::transport::notify_ingress::test_support::collect(None, async {
         let _ = t.register_progress_token("tok-a");
         t.handle_response(&progress_line("tok-stray", 3)).unwrap();
     })
