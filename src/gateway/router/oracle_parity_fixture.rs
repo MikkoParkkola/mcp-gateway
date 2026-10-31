@@ -342,7 +342,9 @@ impl Twin {
         let denied = self
             .fx
             .state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .api_keys()
             .iter()
             .find(|k| k.name == self.side.key(self.reason))

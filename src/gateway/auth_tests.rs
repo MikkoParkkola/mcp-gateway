@@ -592,12 +592,12 @@ fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthStat
     let printed = bootstrap.peek().expect("a value is issued at startup");
     (
         AuthState {
-            auth_config: Arc::new(config),
             key_server: None,
             dashboard_bootstrap: bootstrap,
             tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                Arc::new(config),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,
@@ -634,7 +634,7 @@ fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
         ))))
         .body(Body::empty())
         .expect("request builds");
-    try_dashboard_bootstrap(state, &request)
+    try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
         .expect("a bootstrap link is always answered here")
         .status()
 }
@@ -680,7 +680,9 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     let (state, _) = bootstrap_state(None, vec![admin_key(false)]);
     assert!(
         state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key("ops", stored.storage_form())
             .is_some()
     );
@@ -689,7 +691,9 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     let (state, _) = bootstrap_state(None, vec![reissued]);
     assert!(
         state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key("ops", stored.storage_form())
             .is_none()
     );
