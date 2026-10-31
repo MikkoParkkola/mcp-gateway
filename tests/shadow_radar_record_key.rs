@@ -28,7 +28,11 @@ fn write(path: &Path, text: &str) {
 
 /// A home naming one HTTP server in Cursor's config, and a gateway config.
 fn home(gateway: &str) -> tempfile::TempDir {
-    let home = tempfile::tempdir().expect("home");
+    home_in(tempfile::tempdir().expect("home"), gateway)
+}
+
+/// [`home`] in `home`, which may already hold files the config names.
+fn home_in(home: tempfile::TempDir, gateway: &str) -> tempfile::TempDir {
     write(
         &home.path().join(".cursor/mcp.json"),
         &serde_json::json!({"mcpServers": {
@@ -77,9 +81,15 @@ fn files(dir: &Path) -> BTreeSet<PathBuf> {
 /// One `cap discover --shadow --format json` run: the find's asset id and
 /// the whole stdout.
 fn shadow_run(home: &Path) -> (String, String) {
+    shadow_run_with(home, &[])
+}
+
+/// [`shadow_run`] with `vars` set in the child's environment.
+fn shadow_run_with(home: &Path, vars: &[(&str, &str)]) -> (String, String) {
     let out = gateway_bin::command(home, gateway_bin::Inherit::Nothing)
         .current_dir(home)
         .env("MCP_GATEWAY_CONFIG_DIR", data_dir(home))
+        .envs(vars.iter().copied())
         .args([
             "cap",
             "discover",
@@ -109,7 +119,8 @@ fn shadow_run(home: &Path) -> (String, String) {
     (id, stdout)
 }
 
-fn doctor_run(home: &Path) {
+/// One `doctor --format json` run: its stdout.
+fn doctor_run(home: &Path) -> String {
     let out = gateway_bin::command(home, gateway_bin::Inherit::Nothing)
         .current_dir(home)
         .env("MCP_GATEWAY_CONFIG_DIR", data_dir(home))
@@ -119,8 +130,8 @@ fn doctor_run(home: &Path) {
         .args(["--format", "json"])
         .output()
         .expect("the built binary runs");
-    // Doctor exits non-zero on findings; only its writes are judged here.
-    drop(out);
+    // Doctor exits non-zero on findings: its status is not judged here.
+    String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
 #[test]
@@ -129,7 +140,7 @@ fn with_no_key_the_cli_writes_none_and_says_its_ids_are_for_this_run() {
     let before = files(home.path());
     let (first, stdout) = shadow_run(home.path());
     let (second, _) = shadow_run(home.path());
-    doctor_run(home.path());
+    let doctor = doctor_run(home.path());
     let key = data_dir(home.path()).join("record-principal.key");
     if let Ok(meta) = std::fs::metadata(&key) {
         panic!("a read command created the key file ({} bytes)", meta.len());
@@ -140,6 +151,10 @@ fn with_no_key_the_cli_writes_none_and_says_its_ids_are_for_this_run() {
             .to_ascii_lowercase()
             .contains("this run only: no record key was found"),
         "no note that no key was found: {stdout}"
+    );
+    assert!(
+        doctor.to_ascii_lowercase().contains("this run only"),
+        "doctor's findings carry no note that their ids are for this run: {doctor}"
     );
     assert_ne!(first, second, "ids from a one-run key held across runs");
 }
@@ -187,5 +202,43 @@ fn with_a_configured_key_the_ids_hold_and_nothing_is_written() {
     doctor_run(home.path());
     assert_eq!(files(home.path()), before, "a read command wrote a file");
     assert_eq!(first, second, "ids from the configured key changed");
+    assert!(!stdout.contains(KEY), "the key reached the output");
+}
+
+/// A key named through the config's env files resolves as the gateway
+/// resolves it: the ids equal those under the same key given literally, no
+/// note says they are for one run, and the env file wins over a process
+/// variable of the same name, as it does for the gateway.
+#[test]
+fn a_key_named_through_an_env_file_is_the_gateways_key() {
+    let literal = home(&format!(
+        "backends: {{}}\nsecurity:\n  record_principal_key: \"{KEY}\"\n"
+    ));
+    let (expected, _) = shadow_run(literal.path());
+
+    let named = tempfile::tempdir().expect("home");
+    let env_file = named.path().join("keys.env");
+    write(&env_file, &format!("R12_RECORD_KEY={KEY}\n"));
+    let gateway = format!(
+        "env_files:\n  - \"{}\"\nbackends: {{}}\nsecurity:\n  record_principal_key: \"env:R12_RECORD_KEY\"\n",
+        env_file.display()
+    );
+    let named = home_in(named, &gateway);
+    let before = files(named.path());
+    let (from_file, stdout) = shadow_run(named.path());
+    assert_eq!(from_file, expected, "the env-file key is not the gateway's");
+    assert!(
+        !stdout.to_ascii_lowercase().contains("this run only"),
+        "an env-file key read as no key: {stdout}"
+    );
+    let (overridden, _) = shadow_run_with(
+        named.path(),
+        &[(
+            "R12_RECORD_KEY",
+            "a-process-value-the-env-file-overrides-0123456789",
+        )],
+    );
+    assert_eq!(overridden, expected, "a process variable beat the env file");
+    assert_eq!(files(named.path()), before, "a read command wrote a file");
     assert!(!stdout.contains(KEY), "the key reached the output");
 }

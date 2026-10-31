@@ -83,9 +83,10 @@ impl RecordPrincipalKey {
     }
 }
 
-/// The record key, only read: the configured reference, else the key file in
-/// `data_dir`. `Ok(None)` when neither is there: a reader that must create
-/// nothing never falls back to creating it.
+/// The record key, only read: the configured reference, resolved through
+/// `overlay` as the gateway resolves it, else the key file in `data_dir`.
+/// `Ok(None)` when neither is there: a reader that must create nothing never
+/// falls back to creating it.
 ///
 /// # Errors
 ///
@@ -93,12 +94,12 @@ impl RecordPrincipalKey {
 /// or is not a key.
 pub(crate) fn read_key(
     configured: Option<&str>,
+    overlay: &crate::config::EnvOverlay,
     data_dir: &Path,
 ) -> crate::Result<Option<RecordPrincipalKey>> {
-    let overlay = crate::config::EnvOverlay::none();
     let text = crate::config::read_record_key_text(
         configured,
-        &overlay,
+        overlay,
         &data_dir.join(KEY_FILE),
         KEY_FIELD,
     )?;

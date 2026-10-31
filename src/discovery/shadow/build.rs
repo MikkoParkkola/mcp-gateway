@@ -40,17 +40,22 @@ impl ShadowScanReport {
                 )),
             )
         };
-        let (key, ids_note) = match crate::gateway::record_principal::read_key(configured, data_dir)
-        {
-            Ok(Some(key)) => (key, None),
-            Ok(None) => one_run("no record key was found"),
-            Err(e) => {
-                // The error names the key file's full path: the log has it,
-                // the report does not.
-                tracing::warn!(error = %e, "the record key could not be read");
-                one_run("the record key could not be read (see the log)")
-            }
-        };
+        // The config's own env files, as the gateway resolves its key.
+        let overlay = config.map_or_else(
+            crate::config::EnvOverlay::none,
+            crate::config::Config::env_overlay,
+        );
+        let (key, ids_note) =
+            match crate::gateway::record_principal::read_key(configured, &overlay, data_dir) {
+                Ok(Some(key)) => (key, None),
+                Ok(None) => one_run("no record key was found"),
+                Err(e) => {
+                    // The error names the key file's full path: the log has it,
+                    // the report does not.
+                    tracing::warn!(error = %e, "the record key could not be read");
+                    one_run("the record key could not be read (see the log)")
+                }
+            };
         let mut report =
             Self::from_discovered_keyed(discovered, registered_names, gateway_config_path, &key);
         report.ids_note = ids_note;
