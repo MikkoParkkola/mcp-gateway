@@ -61,7 +61,7 @@ pub(crate) fn bin_of(elapsed: Duration) -> u8 {
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    reason = "at most 1.25^62 ms, about 1.6 million"
+    reason = "at most 1.25^62 ms, about 1.02 million (17 minutes)"
 )]
 pub(crate) fn bin_ms(bin: u8) -> u64 {
     match bin {
