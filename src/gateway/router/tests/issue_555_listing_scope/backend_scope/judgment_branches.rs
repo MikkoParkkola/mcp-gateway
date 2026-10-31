@@ -412,7 +412,7 @@ async fn hidden_recorded() -> (
 #[tokio::test]
 async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
     for cold in [false, true] {
-        let (router, state, upstream, (caps, _dir)) = hidden_recorded().await;
+        let (router, state, upstream, _caps) = hidden_recorded().await;
         if cold {
             go_cold(&state, "beta");
         }
@@ -453,7 +453,7 @@ async fn a_profile_hidden_backend_is_sent_nothing_on_either_route() {
             "cold {cold}: the hidden backend was sent {sent:?}"
         );
         assert_eq!(
-            caps.executed_for_test(),
+            crate::capability::CapabilityBackend::executed_for_test(),
             0,
             "cold {cold}: a hidden capability ran"
         );
