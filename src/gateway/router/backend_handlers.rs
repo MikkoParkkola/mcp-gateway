@@ -14,7 +14,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::AppState;
-use super::authorization::{ToolTarget, authorize_tool_target};
+use super::authorization::ToolTarget;
 use super::direct_guards::refusal;
 use super::helpers::{bodiless_accepted, build_http_error_response};
 use crate::gateway::auth::AuthenticatedClient;
@@ -131,10 +131,18 @@ async fn guard_tool_call(
 ) -> Result<Option<BackendRejection>, BackendRejection> {
     let named = params.and_then(|params| Some((params, params.get("name")?.as_str()?)));
     let Some((params, tool_name)) = named.filter(|(_, tool)| !tool.is_empty()) else {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(unnamed_call(id));
     };
 
     if let Err(e) = validate_tool_name(tool_name) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool name rejected by validation");
         return Err(backend_security_error(id, &e));
     }
@@ -145,73 +153,28 @@ async fn guard_tool_call(
         tool: tool_name,
         arguments,
     };
-    let withheld_code = authorize_tool_target(
-        state,
-        auth.generation,
-        auth.client,
-        auth.oauth_agent_identity,
-        auth.cert_identity,
-        target,
-    )
-    .err()
-    .map(|refusal| refusal.code)
-    .or_else(|| {
-        state
-            .meta_mcp
-            .profile_refusal(backend_name, tool_name, session_id)
-            .map(|refusal| refusal.to_rpc_code())
-    });
-    // A name its description withholds is the gate's too, judged here before
-    // any credential (MIK-8356's caller verdict leaves it to the gate).
-    let withheld =
-        withheld_code.is_some() || backend.blocked_tool_refusal(None, tool_name).is_some();
+    let (withheld_code, withheld) =
+        direct_preflight::withheld_verdict(state, auth, target, (backend, session_id));
     if let Some(code) = withheld_code {
         // The call's one record names it (MIK-8361).
-        crate::gateway::meta_mcp::visible::memo::note_denial_code(backend_name, tool_name, code);
+        crate::gateway::meta_mcp::visible::memo::note_denial_code(
+            backend_name,
+            tool_name,
+            code,
+            crate::gateway::meta_mcp::invoke::audit::take_refusal_kind(),
+        );
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
     #[cfg(feature = "firewall")]
-    if let Some(ref fw) = state.firewall {
-        let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
-        let session_id = format!("direct:{backend_name}");
-        let control_identity = direct_control_identity(state, auth, &session_id);
-        let target = RuleTarget {
-            server: ServerOf::Backend(backend_name),
-            tool: tool_name,
-            key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
-        };
-        let verdict = fw.check_request_keyed(
-            &session_id,
-            target,
-            arguments,
-            caller_name,
-            &control_identity,
-        );
-        if verdict.action == FirewallAction::Warn {
-            warn!(
-                backend = %backend_name,
-                tool = %tool_name,
-                findings = verdict.findings.len(),
-                "Firewall: direct backend request warning"
-            );
-        }
-        if let Some((code, message)) = verdict.request_refusal() {
-            crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
-            // The shared wording's code, ASI10's -32002 included, with this
-            // route's own HTTP status (403).
-            return Err(backend_security_error_with_status(
-                id,
-                code,
-                &message,
-                StatusCode::FORBIDDEN,
-            ));
-        }
-        let target = (backend_name, tool_name);
-        let audit = (session_id.as_str(), caller_name);
-        if let Some(refusal) = relay_refusal(fw, auth, id, target, params, audit) {
-            return Err(refusal);
-        }
+    if let Some(rejection) = firewall_refusal(
+        state,
+        auth,
+        id,
+        (backend_name, tool_name),
+        (params, arguments),
+    ) {
+        return Err(rejection);
     }
 
     // The kill switch says nothing about the name, so it is answered alike
@@ -245,6 +208,60 @@ async fn guard_tool_call(
             .await
             .unwrap_or(key_check::absent_response(id, tool_name)),
     ))
+}
+
+/// The request firewall and the relay rule for a direct call, for a withheld
+/// and a missing name alike: the refusal to answer with, if either refuses.
+#[cfg(feature = "firewall")]
+fn firewall_refusal(
+    state: &AppState,
+    auth: BackendAuthContext<'_>,
+    id: &RequestId,
+    (backend_name, tool_name): (&str, &str),
+    (params, arguments): (&Value, &Value),
+) -> Option<BackendRejection> {
+    let fw = state.firewall.as_ref()?;
+    let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
+    let session_id = format!("direct:{backend_name}");
+    let control_identity = direct_control_identity(state, auth, &session_id);
+    let target = RuleTarget {
+        server: ServerOf::Backend(backend_name),
+        tool: tool_name,
+        key: KeyOf::of_client(auth.client.and_then(AuthenticatedClient::api_key_identity)),
+    };
+    let verdict = fw.check_request_keyed(
+        &session_id,
+        target,
+        arguments,
+        caller_name,
+        &control_identity,
+    );
+    if verdict.action == FirewallAction::Warn {
+        warn!(
+            backend = %backend_name,
+            tool = %tool_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct backend request warning"
+        );
+    }
+    if let Some((code, message)) = verdict.request_refusal() {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
+        crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
+        // The shared wording's code, ASI10's -32002 included, with this
+        // route's own HTTP status (403).
+        return Some(backend_security_error_with_status(
+            id,
+            code,
+            &message,
+            StatusCode::FORBIDDEN,
+        ));
+    }
+    let target = (backend_name, tool_name);
+    let audit = (session_id.as_str(), caller_name);
+    relay_refusal(fw, auth, id, target, params, audit)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).

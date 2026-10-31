@@ -162,3 +162,26 @@ async fn a_replayed_stored_failure_is_noted_as_served() {
         vec![("alpha".to_owned(), "read".to_owned())]
     );
 }
+
+/// MIK-8914.API2A.13: a chain-refused call notes no kind, since none names
+/// that check before PR2, so its record reads `unrecorded`, never an allow.
+#[tokio::test]
+async fn a_chain_refusal_records_unrecorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = chained_meta(&dir);
+    let who = api_key_caller();
+    let caller = context(&AllowAll, &who);
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let _ = meta
+        .invoke_tool(&args, None, &caller)
+        .await
+        .expect_err("premise: the chain check refuses the unchained answer");
+    let all = records(&dir);
+    assert_eq!(all.len(), 1, "{all:?}");
+    assert_eq!(
+        all[0]["decision"]["kind"],
+        json!("unrecorded"),
+        "{}",
+        all[0]
+    );
+}

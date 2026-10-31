@@ -64,6 +64,7 @@ src/gateway/server/events_wiring.rs	mint	-	off-path: the events hub's per-user l
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call
+src/gateway/server/identity_grants.rs	into_startup	-	startup grants into the startup revision inputs, before serving
 src/gateway/server/identity_grants.rs	load_configured_identity_grants	-	startup identity-grant loading, before serving
 src/gateway/server/identity_grants.rs	snapshot_time	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	-	startup identity-grant audit, before serving

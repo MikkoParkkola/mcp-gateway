@@ -288,3 +288,28 @@ fn the_loader_refuses_an_unusable_list() {
         config(good).unwrap_or_else(|e| panic!("{good:?}: {e}"));
     }
 }
+
+/// A blocked tool's decision record names the check that blocked it: the
+/// backend's `allowed_tools` list or the descriptor check, never one for the
+/// other, though both refuse through the same gate.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_blocked_tool_records_the_check_that_blocked_it() {
+    use crate::security::decision_record::DecisionKind;
+    let backend = backend("http://127.0.0.1:9/mcp", Some(&["kept*"]));
+    backend.block_descriptor_for_test("kept_poisoned");
+    assert!(backend.blocked_tool_refusal(None, "dropped").is_some());
+    assert_eq!(
+        backend.blocked_tool_kind("dropped"),
+        DecisionKind::AllowedTools
+    );
+    assert!(
+        backend
+            .blocked_tool_refusal(None, "kept_poisoned")
+            .is_some()
+    );
+    assert_eq!(
+        backend.blocked_tool_kind("kept_poisoned"),
+        DecisionKind::DescriptorBlock
+    );
+}
