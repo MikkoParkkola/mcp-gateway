@@ -434,3 +434,7 @@ fn a_lost_round_leaves_an_already_settled_key_alone() {
 
 #[path = "cancel_settles_relay_tests.rs"]
 mod relay;
+
+// An input-required round keeps its key for its continuation.
+#[path = "parked_key_tests.rs"]
+mod parked;
