@@ -5,7 +5,7 @@
 //! (`meta_mcp::hiding`).
 //!
 //! It applies the predicate listings apply (the session profile, then
-//! [`super::authorization::admits_some_tool`]) to the catalogue listings read
+//! [`admits_some_tool`]) to the catalogue listings read
 //! (`MetaMcp::listed_catalogue`), from the registry directly, never through
 //! the caller's scoped view the judgment feeds. A decision that would rest on
 //! a catalogue not held now is no decision: the backend is hidden only if its
@@ -19,12 +19,14 @@
 use std::sync::Arc;
 
 use super::AppState;
-use super::authorization::{OwnedRouterAuthorizer, admits_some_tool};
+use super::authorization::OwnedRouterAuthorizer;
 use crate::gateway::meta_mcp::hiding::{CallerHiding, CallerSlot, ListedCatalogue};
 use crate::gateway::meta_mcp::scoped_backends::Unscoped;
 use crate::gateway::oauth::scopes::Action;
+use crate::gateway::oauth::{OAuthAgentIdentity, check_scopes};
 use crate::identity_propagation::{CallerProof, CallerProvenance};
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::mtls::{CertIdentity, PolicyDecision};
 
 /// One caller's identity, as a hiding judgment.
 pub(crate) struct RouterHiding {
@@ -153,4 +155,23 @@ fn refused_by_name(
                 .any(|scope| scope.may_grant_on(server, &Action::Execute))
         });
     by_mtls || by_agent
+}
+
+/// Whether some tool of `tools` passes the agent's scopes and the mTLS policy
+/// on `server`: the backend admission check's test (`authorization.rs`),
+/// shared with this judgment, which reads `tools` unfiltered so it cannot
+/// re-enter the caller's view.
+pub(super) fn admits_some_tool(
+    state: &AppState,
+    (agent, cert_identity): (Option<&OAuthAgentIdentity>, Option<&CertIdentity>),
+    server: &str,
+    tools: &[String],
+) -> bool {
+    let mtls = !state.mtls_policy.is_empty();
+    tools.iter().any(|tool| {
+        agent.is_none_or(|id| {
+            check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
+        }) && (!mtls
+            || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
+    })
 }

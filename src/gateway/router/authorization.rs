@@ -8,6 +8,7 @@ use tracing::warn;
 
 use super::AppState;
 use super::backend_choke::backend_for;
+use super::caller_hiding::admits_some_tool;
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
@@ -492,31 +493,8 @@ fn backend_admitted(
     if agent.is_none() && !mtls {
         return true;
     }
-    admits_some_tool(
-        state,
-        (agent, cert_identity),
-        server,
-        &backend_tool_names(state, client, server),
-    )
-}
-
-/// Whether some tool of `tools` passes the agent's scopes and the mTLS policy
-/// on `server`: [`backend_admitted`]'s test, shared with the hiding judgment
-/// (`caller_hiding`), which reads `tools` unfiltered so it cannot re-enter
-/// the caller's view.
-pub(super) fn admits_some_tool(
-    state: &AppState,
-    (agent, cert_identity): (Option<&OAuthAgentIdentity>, Option<&CertIdentity>),
-    server: &str,
-    tools: &[String],
-) -> bool {
-    let mtls = !state.mtls_policy.is_empty();
-    tools.iter().any(|tool| {
-        agent.is_none_or(|id| {
-            check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
-        }) && (!mtls
-            || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
-    })
+    let tools = backend_tool_names(state, client, server);
+    admits_some_tool(state, (agent, cert_identity), server, &tools)
 }
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
