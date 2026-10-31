@@ -227,11 +227,15 @@ fn every_way_into_the_sink_is_classified() {
     walk(&root.join("src"), &mut files);
     let mut found = std::collections::BTreeMap::new();
     for path in files {
+        // Joined with `/` on every OS, so the keys and the exclusions below
+        // read the same on Windows as on Unix.
         let rel = path
             .strip_prefix(root)
             .unwrap_or(&path)
-            .display()
-            .to_string();
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
