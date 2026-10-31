@@ -154,7 +154,7 @@ async fn a_stored_result_of_a_provider_hidden_since_answers_as_one_removed() {
     );
 }
 
-/// Playbook `pb`: `beta_tool` on `beta`, then `alpha_write` on `alpha`, under
+/// Playbook `pb`: `beta_tool` on `beta`, then `alpha_read` on `alpha`, under
 /// a certificate rule that refuses `deny_tools` by name, with `alpha` and
 /// `beta` swapped for recorders. Runs `pb` as a plain call with no API key:
 /// the whole answer and every tool each backend was sent.
@@ -163,7 +163,7 @@ async fn run_two_step_playbook(deny_tools: &[&str]) -> (Value, Vec<String>) {
         "playbook": "1.0", "name": "pb", "description": "two steps",
         "steps": [
             {"name": "s0", "tool": "beta_tool", "server": "beta", "arguments": {}},
-            {"name": "s1", "tool": "alpha_write", "server": "alpha", "arguments": {}},
+            {"name": "s1", "tool": "alpha_read", "server": "alpha", "arguments": {}},
         ]
     }))
     .expect("the playbook deserialises");
@@ -213,13 +213,13 @@ async fn run_two_step_playbook(deny_tools: &[&str]) -> (Value, Vec<String>) {
 }
 
 /// An unkeyed caller's playbook whose second step the route stage refuses
-/// (`alpha_write`, refused by name on a backend still visible through
-/// `alpha_read`) is refused with the neutral step refusal before any step
+/// (`alpha_read`, refused by name on a backend still visible through
+/// `alpha_write`) is refused with the neutral step refusal before any step
 /// runs: the first step's backend is sent nothing. Control: with nothing
 /// refused, the same playbook sends both steps, so the zero is not vacuous.
 #[tokio::test]
 async fn an_unkeyed_playbook_with_a_refused_later_step_runs_no_step() {
-    let (refused, sent) = run_two_step_playbook(&["alpha_write"]).await;
+    let (refused, sent) = run_two_step_playbook(&["alpha_read"]).await;
     assert_eq!(
         (
             refused.pointer("/error/code").cloned(),
@@ -236,7 +236,7 @@ async fn an_unkeyed_playbook_with_a_refused_later_step_runs_no_step() {
     let (ran, sent) = run_two_step_playbook(&[]).await;
     assert_eq!(
         sent,
-        ["beta_tool", "alpha_write"],
+        ["beta_tool", "alpha_read"],
         "control: a permitted playbook did not send both steps: {ran}"
     );
 }
