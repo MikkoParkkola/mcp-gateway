@@ -126,12 +126,12 @@ impl Writers {
         #[cfg(test)]
         let spawner = self.spawner.clone();
         #[cfg(test)]
-        let live = self.seam_path.as_deref().map(stall_seam::live);
+        let counted = self.seam_path.as_deref().map(stall_seam::live);
         let thread = move || {
             let _running = Running(writers);
             // Dropped before `_running`, so a drained saver leaves none live.
             #[cfg(test)]
-            let _live = live;
+            let _live = counted;
             #[cfg(test)]
             crate::test_late_write::writing_for(spawner);
             work();
@@ -271,12 +271,12 @@ pub(super) async fn start_window_saver(
         #[cfg(test)]
         let drain_seam_path = seam_path.clone();
         #[cfg(test)]
-        let live = stall_seam::live(&seam_path);
+        let counted = stall_seam::live(&seam_path);
         let close: super::persistence::ShutdownSave = (
             "protocol-revision window seal",
             Box::new(move || {
                 #[cfg(test)]
-                let _live = live;
+                let _live = counted;
                 let seal = || {
                     let mut held = sink
                         .lock()

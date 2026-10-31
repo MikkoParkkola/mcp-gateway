@@ -93,9 +93,10 @@ impl Rig {
 impl Drop for Rig {
     fn drop(&mut self) {
         let live = stall_seam::live_under(self.dir.path());
-        if live > 0 && !std::thread::panicking() {
-            panic!("{live} saver write(s) outlived the test that started them");
-        }
+        assert!(
+            live == 0 || std::thread::panicking(),
+            "{live} saver write(s) outlived the test that started them"
+        );
     }
 }
 
