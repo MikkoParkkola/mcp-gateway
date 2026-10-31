@@ -42,6 +42,7 @@ async fn t4_stdio_fresh_same_key_call_after_a_question_is_refused() {
     let again = stdio_send(&gateway_meta, params).await;
     println!("stdio fresh same-key call: {again}");
     assert_eq!(calls.load(Ordering::SeqCst), 1, "stdio ran the tool again");
+    assert_eq!(again["error"]["code"], 409, "{again}");
     assert!(
         again
             .to_string()

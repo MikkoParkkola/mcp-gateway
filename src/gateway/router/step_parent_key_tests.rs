@@ -60,9 +60,14 @@ fn dispatched(fx: &Fx) -> usize {
     fx.calls.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// The parent call, then a fresh call under the same key; the backend count
-/// after the second.
-async fn parent_then_retry(fx: &Fx, label: &str, name: &str, arguments: Value) -> usize {
+/// The parent call, then a fresh call under the same key: the backend count
+/// after the second, and both answers.
+async fn parent_then_retry(
+    fx: &Fx,
+    label: &str,
+    name: &str,
+    arguments: Value,
+) -> (usize, Value, (StatusCode, Value)) {
     let (status, first) = call(fx, name, arguments.clone(), "k-step").await;
     println!("{label} first: {status} {first}");
     assert_eq!(
@@ -74,7 +79,19 @@ async fn parent_then_retry(fx: &Fx, label: &str, name: &str, arguments: Value) -
     let count = dispatched(fx);
     println!("{label} fresh same-key call: {status} {again}");
     println!("{label} backend count: {count}");
-    count
+    (count, first, (status, again))
+}
+
+/// The answer the parent's outer entry gives a fresh same-key call after an
+/// input-required answer: unavailable, with HTTP 409.
+fn assert_unavailable(label: &str, (status, again): &(StatusCode, Value)) {
+    assert_eq!(*status, StatusCode::CONFLICT, "{label}: {again}");
+    assert!(
+        again
+            .to_string()
+            .contains("Secured execution result is unavailable"),
+        "{label}: {again}"
+    );
 }
 
 /// A plan of one `alpha/read` step whose backend asks.
@@ -91,7 +108,7 @@ async fn a_plan_step_that_asks_does_not_run_again_under_the_parent_key() {
         meta.set_playbook_engine(engine);
     })
     .await;
-    let count = parent_then_retry(
+    let (count, first, (status, again)) = parent_then_retry(
         &fx,
         "plan",
         "gateway_run_playbook",
@@ -99,13 +116,20 @@ async fn a_plan_step_that_asks_does_not_run_again_under_the_parent_key() {
     )
     .await;
     assert_eq!(count, 1, "the plan step ran again under the parent's key");
+    // A run carries no continuation: it completes with the question inside
+    // its report, and the parent's entry replays that report.
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(
+        again["result"]["content"], first["result"]["content"],
+        "not the stored report"
+    );
 }
 
 /// A Code Mode chain of one `alpha:read` step whose backend asks.
 #[tokio::test]
 async fn a_chain_step_that_asks_does_not_run_again_under_the_parent_key() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let count = parent_then_retry(
+    let (count, _, again) = parent_then_retry(
         &fx,
         "chain",
         "gateway_execute",
@@ -113,13 +137,14 @@ async fn a_chain_step_that_asks_does_not_run_again_under_the_parent_key() {
     )
     .await;
     assert_eq!(count, 1, "the chain step ran again under the parent's key");
+    assert_unavailable("chain", &again);
 }
 
 /// A Code Mode single-tool call of `alpha:read` whose backend asks.
 #[tokio::test]
 async fn a_code_mode_call_that_asks_does_not_run_again_under_the_parent_key() {
     let fx = fixture(Answer::AskOnce, |_| {}).await;
-    let count = parent_then_retry(
+    let (count, _, again) = parent_then_retry(
         &fx,
         "code mode",
         "gateway_execute",
@@ -130,4 +155,5 @@ async fn a_code_mode_call_that_asks_does_not_run_again_under_the_parent_key() {
         count, 1,
         "the Code Mode call ran again under the parent's key"
     );
+    assert_unavailable("code mode", &again);
 }
