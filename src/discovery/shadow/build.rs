@@ -14,6 +14,19 @@ use super::{
 };
 
 impl ShadowScanReport {
+    /// [`Self::from_discovered`] with asset ids keyed by `key`, finds
+    /// de-duplicated by name (client config first). Red rows only: the key and
+    /// the de-duplication are not applied yet.
+    #[cfg(test)]
+    pub(crate) fn from_discovered_keyed(
+        discovered: &[DiscoveredServer],
+        registered_names: &HashSet<String>,
+        gateway_config_path: Option<&Path>,
+        _key: &crate::gateway::record_principal::RecordPrincipalKey,
+    ) -> Self {
+        Self::from_discovered(discovered, registered_names, gateway_config_path)
+    }
+
     /// Build a passive local report from discovered servers.
     #[must_use]
     pub fn from_discovered(
