@@ -107,6 +107,15 @@ impl RouterHiding {
         if crate::gateway::authz::authorize_backend(client, server).is_err() {
             return false;
         }
+        // A profile's backend deny refuses every tool by name, so it hides the
+        // backend whatever is held of its catalogue: warm, cold or truncated.
+        if !state
+            .meta_mcp
+            .active_profile(self.session_id.as_deref())
+            .backend_allowed(server)
+        {
+            return self.registered(server);
+        }
         let (names, complete) = match state.meta_mcp.listed_catalogue(server) {
             ListedCatalogue::NotHeld => {
                 return self.registered(server) && refused_by_name(state, (agent, cert), server);
@@ -117,11 +126,7 @@ impl RouterHiding {
             // Agent auth with no validated agent admits no backend.
             return true;
         }
-        let profile_allows = state
-            .meta_mcp
-            .active_profile(self.session_id.as_deref())
-            .backend_allowed(server);
-        if profile_allows && admits_some_tool(state, (agent, cert), server, &names) {
+        if admits_some_tool(state, (agent, cert), server, &names) {
             return false;
         }
         // A truncated catalogue proves nothing about the tools it lacks.
