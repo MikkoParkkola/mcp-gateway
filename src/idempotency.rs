@@ -30,17 +30,13 @@ use crate::{Error, Result};
 pub(crate) mod admission;
 mod guard;
 mod key;
-mod parked;
 mod reservation;
 // #1962: `disarm`, kept out of this file's size baseline.
 mod reservation_arm;
-pub(crate) use guard::enforce_claimed;
 pub use guard::{
     FIREWALL_REFUSAL_MARKER, GuardOutcome, cached_error_parts, enforce, spawn_cleanup_task,
 };
 pub use key::derive_key;
-pub use parked::Park;
-pub(crate) use parked::claim_of;
 pub use reservation::IdempotencyReservation;
 use reservation::OnDrop;
 
@@ -107,8 +103,6 @@ pub enum IdempotencyState {
     /// hand the caller's retry a clean key for a mutation that may already have
     /// committed (ADR-012).
     Failed(Value, Instant),
-    /// An input-required round's key, held for its continuation.
-    Parked(Park),
 }
 
 impl IdempotencyState {
@@ -126,7 +120,6 @@ impl IdempotencyState {
             Self::Completed(_, stored) | Self::Failed(_, stored) => {
                 stored.elapsed() > COMPLETED_TTL
             }
-            Self::Parked(park) => !parked::is_live(park, Instant::now()),
         }
     }
 
@@ -224,9 +217,6 @@ struct Entry {
     /// Extra in-flight age from [`IdempotencyCache::age_in_flight`]; added,
     /// never subtracted from an `Instant`, so it cannot underflow (MIK-8070).
     aged: Duration,
-    /// Matches any fingerprint starting with `fingerprint`: a parked key and
-    /// the may-have-run entry it becomes answer every round of one exchange.
-    bound_to_base: bool,
 }
 
 impl Entry {
@@ -238,7 +228,6 @@ impl Entry {
             read: None,
             writes: WriteRecord::default(),
             aged: Duration::ZERO,
-            bound_to_base: false,
         }
     }
 
@@ -251,7 +240,6 @@ impl Entry {
             read: None,
             writes: WriteRecord::default(),
             aged: Duration::ZERO,
-            bound_to_base: false,
         }
     }
 
@@ -265,9 +253,7 @@ impl Entry {
 
     /// Whether `fingerprint` is the request this entry was admitted for.
     fn matches(&self, fingerprint: &str) -> bool {
-        self.fingerprint.is_empty()
-            || self.fingerprint == fingerprint
-            || (self.bound_to_base && fingerprint.starts_with(&self.fingerprint))
+        self.fingerprint.is_empty() || self.fingerprint == fingerprint
     }
 }
 
@@ -293,10 +279,6 @@ pub(crate) enum CacheEntryStatus {
     ExpiredCompleted,
     LiveFailed,
     ExpiredFailed,
-    /// A parked key still waiting for its continuation.
-    LiveParked,
-    /// A parked key past its deadline: answered as may-have-run, never freed.
-    ExpiredParked,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,11 +307,6 @@ pub(crate) fn decide_check_plan(status: CacheEntryStatus) -> (CheckPlan, bool) {
         // A terminal entry ages out on the clock; no owner can still be using it.
         CacheEntryStatus::ExpiredCompleted | CacheEntryStatus::ExpiredFailed => {
             (CheckPlan::Proceed, true)
-        }
-        // Admission decides a parked key itself, before this plan; any other
-        // reader treats it as held, never as free.
-        CacheEntryStatus::LiveParked | CacheEntryStatus::ExpiredParked => {
-            (CheckPlan::InFlight, false)
         }
     }
 }
@@ -386,10 +363,6 @@ fn classify(entry: &Entry, now: Instant) -> CacheEntryStatus {
             CacheEntryStatus::LiveFailed
         }
         IdempotencyState::Failed(_, _) => CacheEntryStatus::ExpiredFailed,
-        IdempotencyState::Parked(park) if parked::is_live(park, now) => {
-            CacheEntryStatus::LiveParked
-        }
-        IdempotencyState::Parked(_) => CacheEntryStatus::ExpiredParked,
     }
 }
 
@@ -481,7 +454,6 @@ impl IdempotencyCache {
         &self,
         key: &str,
         fingerprint: &str,
-        claim: Option<&str>,
         owner: &Arc<OwnerToken>,
     ) -> AdmitOutcome {
         // `DashMap::len` read-locks every shard, so it must be read *before*
@@ -492,11 +464,6 @@ impl IdempotencyCache {
         let now = self.now();
 
         match self.entries.entry(key.to_string()) {
-            MapEntry::Occupied(occupied)
-                if matches!(occupied.get().state, IdempotencyState::Parked(_)) =>
-            {
-                parked::admit(occupied, fingerprint, claim, owner, now)
-            }
             MapEntry::Occupied(mut occupied) => {
                 // Before the state: a live entry for another request must be
                 // refused whether it is in flight or already completed, and a
@@ -641,12 +608,8 @@ impl IdempotencyCache {
     pub fn evict_expired(&self) {
         let before = self.entries.len();
         let now = self.now();
-        self.entries.retain(|_, entry| {
-            // An expired park becomes its may-have-run entry here, under
-            // the shard lock this pass holds, never freed.
-            parked::settle_if_expired(entry, now);
-            !is_reclaimable(classify(entry, now))
-        });
+        self.entries
+            .retain(|_, entry| !is_reclaimable(classify(entry, now)));
         let count = before.saturating_sub(self.entries.len());
         if count > 0 {
             debug!(count, "Evicted stale idempotency entries");

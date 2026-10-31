@@ -83,13 +83,9 @@ impl MetaMcp {
             .cloned()
             .unwrap_or(Value::Null);
         let base = crate::idempotency::derive_key(&format!("{server}:{tool}"), &arguments);
-        let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-        let claim = retry
-            .is_retry()
-            .then(|| crate::idempotency::claim_of(retry.request_state.as_deref()))
-            .flatten();
-        let fingerprint = format!("{base}{}", retry.key_discriminator());
-        crate::idempotency::enforce_claimed(cache, &key, &fingerprint, claim.as_deref()).map(Some)
+        let discriminator =
+            crate::protocol::mrtr::RetryFields::from_params(params).key_discriminator();
+        crate::idempotency::enforce(cache, &key, &format!("{base}{discriminator}")).map(Some)
     }
 
     /// Stage 7b on the direct route (MIK-8154.LEASE.1, gap 11): the shared

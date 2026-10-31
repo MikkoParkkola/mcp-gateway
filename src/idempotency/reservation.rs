@@ -31,8 +31,6 @@ pub struct IdempotencyReservation {
     /// entry is gone stays bound to this request instead of matching any.
     fingerprint: String,
     pub(super) settled: bool,
-    /// Parked for a continuation: no later completion may overwrite the park.
-    parked: bool,
     pub(super) on_drop: OnDrop,
     /// The liveness token this reservation keeps alive. Held, never read: the
     /// cache entry's weak handle goes dead when this field is dropped, which
@@ -73,7 +71,6 @@ impl IdempotencyReservation {
             key: key.to_string(),
             fingerprint: fingerprint.to_string(),
             settled: false,
-            parked: false,
             on_drop: OnDrop::Release,
             _owner: owner,
         }
@@ -109,40 +106,9 @@ impl IdempotencyReservation {
         result: &Value,
         read: (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
-        // Parked for a continuation: nothing later may overwrite the park,
-        // least of all a non-final result, which would free the key.
-        if self.parked {
-            return false;
-        }
         self.settled = true;
         self.cache
             .mark_completed_read(&self.key, result.clone(), &self.fingerprint, read)
-    }
-
-    /// Park the key for the continuation of `envelope`, the envelope minted
-    /// for the input-required round this reservation's call answered.
-    /// `deadlines` are the envelope's `(issued_at, expires_at)`;
-    /// `expired_answer` is what the key answers once the park expires.
-    /// Returns `false`, changing nothing, once the reservation is settled.
-    pub(crate) fn park(
-        &mut self,
-        envelope: &str,
-        deadlines: (u64, u64),
-        expired_answer: Value,
-    ) -> bool {
-        if self.settled {
-            return false;
-        }
-        self.settled = true;
-        self.parked = true;
-        self.cache.park(
-            &self.key,
-            &self.fingerprint,
-            envelope,
-            deadlines,
-            expired_answer,
-        );
-        true
     }
 
     /// Record that the protected side effect has committed.

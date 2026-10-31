@@ -14,10 +14,7 @@ use tracing::{debug, warn};
 use super::continuation::unbindable_continuation;
 use super::send::{Call, Dispatched};
 use super::{GuardedValue, TracedOutcome};
-use super::{
-    INVOKE_TARGET, classify_from_detail, dispatch_error_result, uncertain_side_effect,
-    withheld_side_effect,
-};
+use super::{INVOKE_TARGET, classify_from_detail, dispatch_error_result, withheld_side_effect};
 use super::{LostRoundRoute, settle_lost_round};
 use super::{continuation, dispatch_guards, gateway_writes, undeclared_gate, worker_clock};
 #[cfg(feature = "cost-governance")]
@@ -282,8 +279,6 @@ impl MetaMcp {
 pub(super) struct Settled {
     pub(super) stopped_to_ask: bool,
     pub(super) withheld: Option<(super::worker_clock::Binding, Option<String>)>,
-    /// The continuation minted for this round, if one was sealed into it.
-    pub(super) envelope: Option<String>,
 }
 
 impl MetaMcp {
@@ -361,17 +356,9 @@ impl MetaMcp {
         // state. Those are unusable, not finished, and settling one would write
         // "side effect executed" over a backend that stopped to ask. Keying on
         // the classification would exempt exactly the shapes it rejects.
-        //
-        // A backend that stopped to ask still received the call. Its key is
-        // armed to commit may-have-run, never freed: delivery parks it for the
-        // continuation when the answer carries a minted envelope, and every
-        // other exit (a refusal, a replaced round, a drop) commits the notice,
-        // except the undeclared-question refusal below, which frees it: a
-        // client that declares the capability and retries under the same key
-        // runs, a re-run of round 1 the release line accepts.
         if let Some(reservation) = idem_reservation.as_mut() {
             if stopped_to_ask {
-                reservation.commit(&uncertain_side_effect());
+                reservation.disarm();
             } else {
                 reservation.commit(&withheld_side_effect());
             }
@@ -383,14 +370,8 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id).inspect_err(
-            |_| {
-                crate::gateway::delivery_facts::refused_while_vouched();
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.disarm();
-                }
-            },
-        )?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
@@ -433,7 +414,6 @@ impl MetaMcp {
         // happen. Its slot is held in this request's scope: released with the
         // scope unless the answer carrying it is handed off (MIK-8176).
         let mut withheld = None;
-        let mut envelope_minted = None;
         if let Some(interim) = interim {
             // The caller the slot is charged to (MIK-8293); a caller no
             // quota key names is refused like an unbindable one.
@@ -453,7 +433,6 @@ impl MetaMcp {
             {
                 worker_clock::Minted::Sealed(envelope) => {
                     result["requestState"] = json!(&envelope);
-                    envelope_minted = Some(envelope);
                     // MIK-7994: the envelope is the gateway's text, up to 8 KiB, and
                     // must not take the receipt's capped budget from the backend's
                     // prompt. Noted at the value layer: `tool_value` still reads
@@ -481,7 +460,6 @@ impl MetaMcp {
         Ok(ControlFlow::Continue(Settled {
             stopped_to_ask,
             withheld,
-            envelope: envelope_minted,
         }))
     }
 
@@ -530,7 +508,6 @@ impl MetaMcp {
         let Settled {
             stopped_to_ask,
             withheld,
-            envelope,
         } = settled;
         let api_key_name = caller.api_key_name;
         let call = dispatch_guards::BackendCall {
@@ -588,12 +565,6 @@ impl MetaMcp {
             );
         }
 
-        // A backend that stopped to ask never reaches ordinary completion: its
-        // key is parked for the continuation the answer carries, or, with no
-        // envelope left in the answer, dropped to commit may-have-run.
-        if stopped_to_ask && let Some(mut reservation) = idem_reservation.take() {
-            self.park_for_continuation(&mut reservation, envelope.as_deref(), &result);
-        }
         if let Some(reservation) = idem_reservation.as_mut()
             && reservation.complete_read(&result, (self.dispatch_reading(args), written))
         {
@@ -648,35 +619,6 @@ impl MetaMcp {
         } else {
             sealed
         }))
-    }
-}
-
-impl MetaMcp {
-    /// Park `reservation` for the continuation of `envelope` when the answer
-    /// going out still carries it, after every gate. Otherwise (no envelope,
-    /// or a gate replaced the round) nothing parks, and the reservation, armed
-    /// may-have-run, commits that on drop.
-    fn park_for_continuation(
-        &self,
-        reservation: &mut IdempotencyReservation,
-        envelope: Option<&str>,
-        result: &Value,
-    ) {
-        let Some(envelope) = envelope else {
-            return;
-        };
-        if result.get("requestState").and_then(Value::as_str) != Some(envelope) {
-            return;
-        }
-        // The envelope's own deadlines, read from the envelope just minted.
-        let Ok(payload) = self.continuation.keyring().open_now(envelope) else {
-            return;
-        };
-        reservation.park(
-            envelope,
-            (payload.issued_at, payload.expires_at),
-            uncertain_side_effect(),
-        );
     }
 }
 
