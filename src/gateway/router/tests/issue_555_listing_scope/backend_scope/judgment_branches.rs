@@ -601,3 +601,30 @@ async fn the_execution_count_sees_a_visible_capability_on_every_route() {
         "routes not counted exactly once: {wrong:#?}"
     );
 }
+
+/// Search lists no tool of a provider the caller's rule hides by name (its
+/// allow list leaves `caps` out), as it lists none of an unregistered name.
+#[tokio::test]
+async fn search_lists_no_tool_of_a_hidden_provider() {
+    let (router, state) = with_mtls_state((&["alpha", "beta"], &["*"]), (&[], &[])).await;
+    let (caps, _dir) = caps_with_callback().await;
+    state.meta_mcp.set_capabilities(caps);
+    assert!(
+        judgment(&state, None, Some(&agent_cert())).hides("caps"),
+        "premise: the rule hides the provider"
+    );
+    for query in ["cap", "cap_open", "callback"] {
+        let (_, body) = post_as_agent_cert(
+            &router,
+            "/mcp",
+            json!({ "name": "gateway_search", "arguments": { "query": query } }),
+        )
+        .await;
+        for name in ["cap_open", "cap_callback"] {
+            assert!(
+                !body.contains(name),
+                "search for {query:?} lists the hidden provider's {name}: {body}"
+            );
+        }
+    }
+}
