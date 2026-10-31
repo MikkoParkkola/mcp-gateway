@@ -13,18 +13,21 @@ use crate::routing_profile::{ProfileRegistry, RoutingProfileConfig};
 /// A name no backend or provider registers.
 const UNREGISTERED: &str = "gamma";
 
-fn agent_cert() -> crate::mtls::CertIdentity {
+/// The certificate the holder of bearer `who` presents: each caller its own,
+/// so a certificate subject never makes the two callers one principal.
+fn cert_of(who: &str) -> crate::mtls::CertIdentity {
+    let name = format!("agent-{who}");
     crate::mtls::CertIdentity {
-        common_name: Some("agent".to_string()),
-        display_name: "agent".to_string(),
+        common_name: Some(name.clone()),
+        display_name: name,
         ..Default::default()
     }
 }
 
 /// The relay fixture (detection blocking, `alpha:read` its source) with two
 /// unscoped keys, `a` (alice) and `b` (bob), and the provider `caps`
-/// (`cap_open`) under a default profile that leaves it out, for a certificate
-/// whose rule admits everything: `caps` is hidden from either caller
+/// (`cap_open`) under a default profile that leaves it out, for certificates
+/// whose rules admit everything: `caps` is hidden from either caller
 /// presenting it, and nothing refuses it before the route stage.
 async fn hidden_provider_fixture() -> Fixture {
     use crate::mtls::config::{CertMatchConfig, MtlsConfig, PolicyRuleConfig, ToolScopeConfig};
@@ -109,23 +112,23 @@ async fn hidden_provider_fixture() -> Fixture {
     meta.set_capabilities(caps);
     state_mut.firewall = Some(firewall);
     state_mut.meta_mcp = Arc::new(meta);
-    let everything = ToolScopeConfig {
-        backends: vec!["*".to_string()],
-        tools: vec!["*".to_string()],
+    let admit_all = |who: &str| PolicyRuleConfig {
+        match_criteria: CertMatchConfig {
+            cn: cert_of(who).common_name,
+            ..Default::default()
+        },
+        allow: ToolScopeConfig {
+            backends: vec!["*".to_string()],
+            tools: vec!["*".to_string()],
+        },
+        deny: ToolScopeConfig {
+            backends: Vec::new(),
+            tools: Vec::new(),
+        },
     };
     state_mut.mtls_policy = Arc::new(crate::mtls::MtlsPolicy::from_config(&MtlsConfig {
         enabled: true,
-        policies: vec![PolicyRuleConfig {
-            match_criteria: CertMatchConfig {
-                cn: Some("agent".to_string()),
-                ..Default::default()
-            },
-            allow: everything,
-            deny: ToolScopeConfig {
-                backends: Vec::new(),
-                tools: Vec::new(),
-            },
-        }],
+        policies: vec![admit_all("a"), admit_all("b")],
         ..Default::default()
     }));
     Fixture {
@@ -141,7 +144,7 @@ async fn hidden_provider_fixture() -> Fixture {
 }
 
 /// One modern `gateway_invoke` of `server:tool` with `arguments`, as bearer
-/// `who` presenting the `agent` certificate, `extra` merged into `_meta`.
+/// `who` presenting its own certificate ([`cert_of`]), `extra` merged into `_meta`.
 async fn invoke_as_agent(
     fx: &Fixture,
     who: &str,
@@ -163,7 +166,7 @@ async fn invoke_as_agent(
         .header("authorization", format!("Bearer {who}"))
         .body(axum::body::Body::from(body.to_string()))
         .expect("request");
-    request.extensions_mut().insert(agent_cert());
+    request.extensions_mut().insert(cert_of(who));
     let response = create_router(Arc::clone(&fx.state))
         .oneshot(request)
         .await
