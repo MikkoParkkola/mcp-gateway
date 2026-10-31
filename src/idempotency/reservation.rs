@@ -31,6 +31,8 @@ pub struct IdempotencyReservation {
     /// entry is gone stays bound to this request instead of matching any.
     fingerprint: String,
     pub(super) settled: bool,
+    /// Parked for a continuation: no later completion may overwrite the park.
+    parked: bool,
     pub(super) on_drop: OnDrop,
     /// The liveness token this reservation keeps alive. Held, never read: the
     /// cache entry's weak handle goes dead when this field is dropped, which
@@ -71,6 +73,7 @@ impl IdempotencyReservation {
             key: key.to_string(),
             fingerprint: fingerprint.to_string(),
             settled: false,
+            parked: false,
             on_drop: OnDrop::Release,
             _owner: owner,
         }
@@ -106,9 +109,9 @@ impl IdempotencyReservation {
         result: &Value,
         read: (Option<ReadAttribution>, WriteRecord),
     ) -> bool {
-        // Settled already (parked for a continuation, or failed): nothing
-        // later may overwrite that, least of all with a non-final result.
-        if self.settled {
+        // Parked for a continuation: nothing later may overwrite the park,
+        // least of all a non-final result, which would free the key.
+        if self.parked {
             return false;
         }
         self.settled = true;
@@ -131,6 +134,7 @@ impl IdempotencyReservation {
             return false;
         }
         self.settled = true;
+        self.parked = true;
         self.cache.park(
             &self.key,
             &self.fingerprint,
