@@ -154,6 +154,64 @@ async fn a_stored_result_of_a_provider_hidden_since_answers_as_one_removed() {
     );
 }
 
+/// A task of `cap_keyed` on `caps` submitted while its key is set, with
+/// `after` landing as the worker starts its dispatch (`None` changes
+/// nothing): the settled `tasks/get` (task id, trace ids and instants
+/// masked) and the capability executions the run made.
+#[cfg(feature = "firewall")]
+async fn keyed_run(after: Option<AfterRun>, key: &str) -> (String, usize) {
+    let (router, state) = with_mtls_state((&["*"], &["*"]), (&[], &[])).await;
+    let (caps, env, _dir) = keyed_caps();
+    state.meta_mcp.set_capabilities(caps);
+    assert!(
+        !judgment(&state, None, Some(&agent_cert())).hides("caps"),
+        "premise: the provider is visible at submit"
+    );
+    let hook_state = Arc::clone(&state);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || match after {
+        Some(AfterRun::Hide) => env.set(Arc::new(crate::config::EnvOverlay::none())),
+        Some(AfterRun::Unregister) => hook_state.meta_mcp.set_capabilities(Arc::new(
+            crate::capability::CapabilityBackend::new(
+                "other",
+                Arc::new(crate::capability::CapabilityExecutor::new()),
+            ),
+        )),
+        None => {}
+    });
+    let before = executed();
+    let id = submit_task(&router, "caps", "cap_keyed", key).await;
+    let settled = settle_task(&router, &id).await.to_string();
+    let ran = executed() - before;
+    let trace = regex::Regex::new(r"gw-[0-9a-f-]{36}").expect("pattern");
+    let instant = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z").expect("pattern");
+    let masked = trace
+        .replace_all(&settled.replace(id.as_str(), "TASK"), "gw-ID")
+        .into_owned();
+    (instant.replace_all(&masked, "AT").into_owned(), ran)
+}
+
+/// The task worker judges hiding as its caller at run time: a provider whose
+/// key is revoked between the submit and the run lists no tool, so it is
+/// hidden from the caller, and the run settles byte for byte as one whose
+/// provider was removed at the same point, with nothing executed. Control:
+/// with nothing changed, the run executes the capability.
+#[cfg(feature = "firewall")]
+#[tokio::test]
+async fn a_task_whose_provider_is_hidden_before_its_run_settles_as_one_removed() {
+    let (control, control_ran) = keyed_run(None, "keyed-run-c").await;
+    assert!(
+        control_ran > 0 && control.contains(MARKER),
+        "control: the visible provider's run did not execute: {control}"
+    );
+    let (hidden, hidden_ran) = keyed_run(Some(AfterRun::Hide), "keyed-run-h").await;
+    let (removed, _) = keyed_run(Some(AfterRun::Unregister), "keyed-run-r").await;
+    assert_eq!(hidden_ran, 0, "the hidden provider ran: {hidden}");
+    assert_eq!(
+        hidden, removed,
+        "a task whose provider was hidden before its run settles unlike a removed one"
+    );
+}
+
 /// Playbook `pb`: `beta_tool` on `beta`, then `alpha_read` on `alpha`, under
 /// a certificate rule that refuses `deny_tools` by name, with `alpha` and
 /// `beta` swapped for recorders. Runs `pb` as a plain call with no API key:
