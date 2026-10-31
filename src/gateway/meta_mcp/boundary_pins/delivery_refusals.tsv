@@ -93,6 +93,7 @@ src/gateway/meta_mcp/grant_audit.rs	check_or_stamp	refuse_withheld	1	composite-o
 src/gateway/meta_mcp/grant_audit.rs	note_grant_decision	refuse_late	1	not-a-decision	an audit-integrity refusal: a grant decision after the answer's record
 src/gateway/meta_mcp/invoke/admin.rs	run_playbook	refuse_unattested_plan	1	recorded	sealed refusal, recorded at the outlet
 src/gateway/meta_mcp/invoke/audit_decision.rs	decided	Refused::of	1	not-delivered	audit row: the decision object of a call record
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	note_send_refusal	1	not-delivered	a decision note for the record (kind unrecorded); the error it reads is answered unchanged
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_if_killed	2	recorded	the bridged kill switch, raised while vouched
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	refuse_relaying_round	1	recorded	bridged relay block, raised while vouched inside it
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	undeclared_key_refusal	1	recorded	bridged round undeclared key; raised while vouched where it ends the exchange
