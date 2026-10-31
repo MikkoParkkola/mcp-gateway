@@ -157,3 +157,90 @@ async fn a_stored_result_of_a_provider_hidden_since_answers_as_one_removed() {
         "a hidden provider's stored result answers unlike a removed one's"
     );
 }
+
+/// Playbook `pb`: `beta_tool` on `beta`, then `alpha_write` on `alpha`, under
+/// a certificate rule that refuses `deny_tools` by name, with `alpha` and
+/// `beta` swapped for recorders. Runs `pb` as a plain call with no API key:
+/// the whole answer and every tool each backend was sent.
+async fn run_two_step_playbook(deny_tools: &[&str]) -> (Value, Vec<String>) {
+    let definition: crate::playbook::PlaybookDefinition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "pb", "description": "two steps",
+        "steps": [
+            {"name": "s0", "tool": "beta_tool", "server": "beta", "arguments": {}},
+            {"name": "s1", "tool": "alpha_write", "server": "alpha", "arguments": {}},
+        ]
+    }))
+    .expect("the playbook deserialises");
+    let (router, state) = with_mtls_tuned(
+        Auth::Off,
+        move |meta| {
+            let mut engine = crate::playbook::PlaybookEngine::new();
+            engine.register(definition);
+            meta.set_playbook_engine(engine);
+            meta
+        },
+        (&["*"], &["*"]),
+        (&[], deny_tools),
+    )
+    .await;
+    let mut recorders = Vec::new();
+    for (name, tools) in [
+        ("alpha", vec!["alpha_read", "alpha_write"]),
+        ("beta", vec!["beta_tool"]),
+    ] {
+        let upstream = Arc::new(super::super::super::Upstream {
+            tools,
+            calls: parking_lot::Mutex::new(Vec::new()),
+        });
+        backend(&state, name)
+            .set_transport_for_test(Arc::clone(&upstream) as Arc<dyn crate::transport::Transport>);
+        recorders.push(upstream);
+    }
+    for name in ["alpha", "beta"] {
+        assert!(
+            !judgment(&state, None, Some(&agent_cert())).hides(name),
+            "premise: {name} is visible"
+        );
+    }
+    let (_, body) = post_cert_key(
+        &router,
+        "/mcp",
+        None,
+        json!({"name": "gateway_run_playbook", "arguments": {"name": "pb", "arguments": {}}}),
+    )
+    .await;
+    let sent = recorders
+        .iter()
+        .flat_map(|upstream| upstream.calls.lock().clone())
+        .collect();
+    (serde_json::from_str(&body).expect("json"), sent)
+}
+
+/// An unkeyed caller's playbook whose second step the route stage refuses
+/// (`alpha_write`, refused by name on a backend still visible through
+/// `alpha_read`) is refused with the neutral step refusal before any step
+/// runs: the first step's backend is sent nothing. Control: with nothing
+/// refused, the same playbook sends both steps, so the zero is not vacuous.
+#[tokio::test]
+async fn an_unkeyed_playbook_with_a_refused_later_step_runs_no_step() {
+    let (refused, sent) = run_two_step_playbook(&["alpha_write"]).await;
+    assert_eq!(
+        (
+            refused.pointer("/error/code").cloned(),
+            refused.pointer("/error/message").cloned(),
+            sent,
+        ),
+        (
+            Some(json!(-32003)),
+            Some(json!("step not permitted for this caller")),
+            Vec::<String>::new(),
+        ),
+        "a refused later step was not refused before step 1 ran: {refused}"
+    );
+    let (ran, sent) = run_two_step_playbook(&[]).await;
+    assert_eq!(
+        sent,
+        ["beta_tool", "alpha_write"],
+        "control: a permitted playbook did not send both steps: {ran}"
+    );
+}
