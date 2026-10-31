@@ -20,7 +20,7 @@ use crate::gateway::meta_mcp::admission::SyncLease;
 use crate::gateway::meta_mcp::signing::SigningInvocationContext;
 use crate::gateway::meta_mcp::{
     InvokeScope, MetaMcpCallerContext, STEP_NOT_PERMITTED, STEP_NOT_PERMITTED_CODE,
-    STEP_NOT_PERMITTED_STATUS, error_response_preserving_status,
+    STEP_NOT_PERMITTED_STATUS, error_response_preserving_status, invoke::audit, visible::memo,
 };
 use crate::gateway::router::AppState;
 use crate::gateway::router::authorization::{
@@ -130,7 +130,7 @@ pub(super) async fn tools_call(
         client.as_ref(),
         grant_subject.as_ref(),
         session_id,
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     if retry.is_malformed() {
         // Neither a usable retry nor a fresh call. Running it as a fresh
@@ -155,7 +155,7 @@ pub(super) async fn tools_call(
             client.as_ref(),
             grant_subject.as_ref(),
             tool_name,
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         )
         .await
     {
@@ -234,11 +234,8 @@ pub(super) async fn tools_call(
                     // it, as a missing target's does; a surfaced name's
                     // missing twin writes none, so the route records it.
                     if state.meta_mcp.exposes_meta_tool(tool_name) {
-                        crate::gateway::meta_mcp::visible::memo::note_denial_code(
-                            checked.server,
-                            checked.tool,
-                            code,
-                        );
+                        let kind = audit::take_refusal_kind();
+                        memo::note_denial_code(checked.server, checked.tool, code, kind);
                     } else {
                         let trace = refused.note_withheld(state, checked, code).await;
                         // Only a call with no other target is answered for
@@ -339,6 +336,8 @@ pub(super) async fn tools_call(
                 );
             }
             if let Some((code, reason)) = verdict.request_refusal() {
+                use crate::security::decision_record::DecisionKind;
+                audit::note_refused_by(DecisionKind::Firewall, None);
                 // A content finding about a step names the definition: it
                 // answers as every other step refusal does (A3).
                 if index >= request_targets && verdict.refusal_words_content() {
@@ -418,7 +417,7 @@ pub(super) async fn tools_call(
             .map(|client| client.principal.storage_form()),
         record_principal: crate::gateway::auth::AuthenticatedClient::record_principal_of(
             client.as_ref(),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         authentication: crate::gateway::meta_mcp::Authentication::of(client.as_ref()),
         credential_kind: crate::security::audit::CredentialKind::of(client.as_ref()),

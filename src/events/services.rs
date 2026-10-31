@@ -293,7 +293,10 @@ impl Services {
                         mono: std::time::Instant::now(),
                         wall: std::time::SystemTime::from(now),
                     };
-                    dashboard.live_digest(session_sha256, now, &limits)
+                    // No request here: the key table current at delivery
+                    // judges the session's minting key (K13).
+                    let generation = self.live.generation();
+                    dashboard.live_digest(session_sha256, now, &limits, generation.auth())
                 })
             }
         }
@@ -603,6 +606,9 @@ impl Services {
                     &body_hash,
                     None,
                     extra,
+                    // A delivery its subscription made, not a call any gate
+                    // decided: it carries no decision object.
+                    None,
                 )
             })
             .await;

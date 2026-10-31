@@ -38,14 +38,15 @@ const MESSAGE: &str = r#"{"jsonrpc":"2.0","method":"notifications/message","para
 async fn http_forwards_both_notification_methods_to_the_callers_sink() {
     let body = sse_body(&[PROGRESS, MESSAGE], 1);
 
-    let (response, notifications) = crate::transport::notification_sink::collect(None, async {
-        // ADR-014 §4: a relayed `notifications/message` reaches the caller
-        // only if the caller declared a level, so the request this row is
-        // about declares one. What the row asserts is unchanged.
-        crate::transport::notification_sink::set_request_log_level(Some("debug"));
-        sse_decoder::decode_sse_exchange(sse_stream(body)).await
-    })
-    .await;
+    let (response, notifications) =
+        crate::transport::notify_ingress::test_support::collect(None, async {
+            // ADR-014 §4: a relayed `notifications/message` reaches the caller
+            // only if the caller declared a level, so the request this row is
+            // about declares one. What the row asserts is unchanged.
+            crate::transport::notification_sink::set_request_log_level(Some("debug"));
+            sse_decoder::decode_sse_exchange(sse_stream(body)).await
+        })
+        .await;
 
     assert!(response.is_ok(), "the caller still gets its result");
     assert_eq!(notifications.len(), 2);
@@ -71,7 +72,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
         2,
     );
 
-    let left = tokio::spawn(crate::transport::notification_sink::collect(
+    let left = tokio::spawn(crate::transport::notify_ingress::test_support::collect(
         None,
         async move {
             // ADR-014 §4: a relayed `notifications/message` reaches the caller
@@ -84,7 +85,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
                 .map(|_| ())
         },
     ));
-    let right = tokio::spawn(crate::transport::notification_sink::collect(
+    let right = tokio::spawn(crate::transport::notify_ingress::test_support::collect(
         None,
         async move {
             // ADR-014 §4: a relayed `notifications/message` reaches the caller
@@ -110,7 +111,7 @@ async fn http_never_crosses_a_notification_between_two_calls_in_flight() {
 /// the `Accept`-negotiated stream is a conforming answer either way.
 #[tokio::test]
 async fn http_leaves_the_sink_empty_when_the_backend_raises_nothing() {
-    let (response, notifications) = crate::transport::notification_sink::collect(
+    let (response, notifications) = crate::transport::notify_ingress::test_support::collect(
         None,
         sse_decoder::decode_sse_exchange(sse_stream(sse_body(&[], 1))),
     )

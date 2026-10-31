@@ -93,6 +93,7 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(in crate::gateway::meta_mcp) mod publish_gate;
 pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
@@ -126,6 +127,9 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+/// The cold claim's retry backoff, for the rows that wait it out.
+#[cfg(test)]
+pub(crate) use task_replay::COLD_RETRY_BACKOFF;
 pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
@@ -234,6 +238,9 @@ pub struct MetaMcp {
     session_lifecycle:
         std::sync::OnceLock<std::sync::Weak<crate::gateway::session_lifecycle::SessionLifecycle>>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// The live config built at startup, with or without a config file, so
+    /// every record names a revision (a reload context shares the same one).
+    pub(super) startup_live_config: std::sync::OnceLock<Arc<crate::config_reload::LiveConfig>>,
     /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
     /// at least one backend is configured for propagation; the dispatch path
     /// uses it to mint a per-user credential for such backends. `None` disables

@@ -31,6 +31,7 @@ use std::sync::Arc;
 
 use crate::gateway::outbound::{OutboundFrame, StreamJudge};
 use crate::protocol::{JsonRpcNotification, LoggingLevel};
+use crate::transport::notify_ingress::{Ingress, Origin, ingress_notification};
 
 /// Notifications one in-flight request may have outstanding before the sink
 /// starts shedding them (ADR-014 §5 overflow policy).
@@ -203,6 +204,12 @@ pub(crate) async fn collect<F: Future>(
 /// stalling a backend response to buffer a progress update inverts the
 /// priority the notification exists to serve.
 pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
+    publish_as(&Origin::ambient(), notifications);
+}
+
+/// [`publish`] for a sender that declares itself: `emit_log`'s lines are the
+/// gateway's, not a transport's with its sender missing.
+fn publish_as(origin: &Origin, notifications: Vec<JsonRpcNotification>) {
     if notifications.is_empty() {
         return;
     }
@@ -213,7 +220,7 @@ pub(crate) fn publish(notifications: Vec<JsonRpcNotification>) {
             }
             // Screened as the backend sent it, before the caller's own token
             // is put back: the screen judges backend text, not the caller's.
-            if !admitted(tx, &mut notification) {
+            if !admitted(tx, origin, &mut notification) {
                 continue;
             }
             translate_back(&mut notification);
@@ -247,12 +254,15 @@ fn send_or_count(sink: &Sink, notification: JsonRpcNotification) {
     }
 }
 
-/// Whether `sink`'s screen admits `notification` (a screened-out one is
-/// withheld, not shed: it is not counted as overflow).
-fn admitted(sink: &Sink, notification: &mut JsonRpcNotification) -> bool {
-    sink.screen
-        .as_ref()
-        .is_none_or(|screen| screen.admit(notification))
+/// Whether `notification` passes ingress (`notify_ingress`, on every sink
+/// kind) and then `sink`'s screen. A withheld one is not shed: it is not
+/// counted as overflow.
+fn admitted(sink: &Sink, origin: &Origin, notification: &mut JsonRpcNotification) -> bool {
+    ingress_notification(origin, notification) == Ingress::Deliver
+        && sink
+            .screen
+            .as_ref()
+            .is_none_or(|screen| screen.admit(notification))
 }
 
 /// Where one in-flight request's notifications go, in a form that survives
@@ -275,6 +285,8 @@ fn admitted(sink: &Sink, notification: &mut JsonRpcNotification) -> bool {
 pub(crate) struct DeliveryHandle {
     sink: Option<Sink>,
     client_token: Option<Value>,
+    /// Who the reader task's frames come from, read on the caller's task.
+    origin: Origin,
 }
 
 impl DeliveryHandle {
@@ -287,6 +299,7 @@ impl DeliveryHandle {
     pub(crate) fn capture(minted: &str) -> Self {
         Self {
             sink: SINK.try_with(Clone::clone).ok(),
+            origin: Origin::ambient(),
             client_token: TRANSLATIONS
                 .try_with(|cell| {
                     cell.borrow()
@@ -308,7 +321,7 @@ impl DeliveryHandle {
         let Some(sink) = self.sink.as_ref() else {
             return;
         };
-        if !admitted(sink, &mut notification) {
+        if !admitted(sink, &self.origin, &mut notification) {
             return;
         }
         if let Some(client) = self.client_token.clone()
@@ -372,11 +385,14 @@ pub(crate) fn emit_log(level: LoggingLevel, logger: &str, data: impl FnOnce() ->
     if !declared_level_admits(level) {
         return;
     }
-    publish(vec![JsonRpcNotification {
-        jsonrpc: "2.0".to_string(),
-        method: "notifications/message".to_string(),
-        params: Some(json!({ "level": level, "logger": logger, "data": data() })),
-    }]);
+    publish_as(
+        &Origin::gateway_line(),
+        vec![JsonRpcNotification {
+            jsonrpc: "2.0".to_string(),
+            method: "notifications/message".to_string(),
+            params: Some(json!({ "level": level, "logger": logger, "data": data() })),
+        }],
+    );
 }
 
 /// One filter, both producers (ADR-014 §4): a relayed `notifications/message`

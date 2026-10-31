@@ -355,14 +355,19 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         drop(admission);
         let error = match dispatched {
             Ok(value) => {
-                // Asked again: the backend has not acted on this round.
+                // Asked again, inside this one legacy call: no client
+                // continuation receives the key, and stopping to ask does not
+                // prove the backend has not acted, so a drop from here on
+                // settles as may-have-run.
                 if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
-                    arm(self.reservation, false);
+                    arm(self.reservation, true);
                 }
                 return Ok(value);
             }
             Err(error) => error,
         };
+        // A later round's send can be refused as the first one's can.
+        super::audit::note_send_refusal(&error);
         // A11-c: a 401 on a managed credential forces at most one refresh.
         let classified = classify_bridged_dispatch_error(&error);
         if matches!(
@@ -376,7 +381,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         if let Some(managed) = self.managed
             && is_upstream_unauthorized(&error)
         {
-            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
+            *self.account_refusal.lock() =
+                Some(super::audit::after_upstream_401(managed, error).await);
         }
         Err(classified)
     }

@@ -17,6 +17,7 @@ use crate::gateway::oauth::{
     Action, OAuthAgentIdentity, check_scopes, record_agent_scope_decision,
 };
 use crate::mtls::{CertIdentity, PolicyDecision};
+use crate::security::decision_record::DecisionKind;
 use crate::security::validate_tool_name;
 
 /// Whether `request` is exempt from sanitization (MIK-8154 SAN.1, option (a)):
@@ -240,6 +241,7 @@ pub(super) async fn require_admin_tool_access(
         Ok(())
     } else {
         Err(AuthorizationError::forbidden(
+            DecisionKind::AdminCapability,
             INVALID_REQUEST,
             format!("Tool '{tool_name}' requires admin access"),
         ))
@@ -256,6 +258,7 @@ pub(super) async fn require_admin_tool_access(
         code: error.to_rpc_code(),
         status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
         message: error.to_string(),
+        kind: DecisionKind::AdminCapability,
     };
     log.admit().await.map_err(unavailable)?;
     let outcome = match &verdict {
@@ -298,6 +301,7 @@ pub(super) fn require_admin_log_level(
         return Ok(());
     }
     let e = AuthorizationError::forbidden(
+        DecisionKind::AdminCapability,
         INVALID_REQUEST,
         "logging/setLevel sets backend log levels for every user of the gateway and \
          requires admin access; to receive fewer messages, declare a level in the \
@@ -332,6 +336,11 @@ pub(super) fn authorize_tool_target(
     .emit(Emit::Audit)
 }
 
+/// A -32600 refusal by `kind`, the shape every `decide_tool_target` gate uses.
+fn refused(kind: DecisionKind, message: impl Into<String>) -> AuthorizationError {
+    AuthorizationError::forbidden(kind, INVALID_REQUEST, message)
+}
+
 /// The HTTP invocation predicate, with its audit records deferred.
 ///
 /// The one definition of what an HTTP caller may invoke: the router pre-check,
@@ -349,19 +358,19 @@ pub(super) fn decide_tool_target<'a>(
         return Decision::of(Ok(()));
     }
     let early = validate_tool_name(target.tool)
-        .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.clone()))
+        .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
         .and_then(|()| {
             state
                 .tool_policy
                 .check(target.server, target.tool)
-                .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()))
+                .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
         })
         .and_then(|()| {
             client.map_or(Ok(()), |client| {
                 client
                     .check_tool_scope(target.server, target.tool)
-                    .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e))
+                    .map_err(|e| refused(DecisionKind::ClientToolScope, e))
             })
         });
     if let Err(e) = early {
@@ -374,8 +383,8 @@ pub(super) fn decide_tool_target<'a>(
             .evaluate(cert_identity, target.server, target.tool)
             == PolicyDecision::Deny
     {
-        let refusal = AuthorizationError::forbidden(
-            INVALID_REQUEST,
+        let refusal = refused(
+            DecisionKind::Mtls,
             format!(
                 "Tool '{}' on server '{}' is blocked by certificate policy",
                 target.tool, target.server
@@ -396,8 +405,8 @@ pub(super) fn decide_tool_target<'a>(
     let mut agent_record: Option<(&OAuthAgentIdentity, Result<(), String>)> = None;
     if state.agent_auth.enabled {
         let Some(identity) = oauth_agent_identity else {
-            return Decision::of(Err(AuthorizationError::forbidden(
-                INVALID_REQUEST,
+            return Decision::of(Err(refused(
+                DecisionKind::AgentScope,
                 "Agent authentication is enabled but no validated agent identity was found",
             )));
         };
@@ -409,7 +418,7 @@ pub(super) fn decide_tool_target<'a>(
             &Action::Execute,
         );
         if let Err(reason) = &verdict {
-            let refusal = AuthorizationError::forbidden(INVALID_REQUEST, reason.clone());
+            let refusal = refused(DecisionKind::AgentScope, reason.clone());
             return Decision::recorded(Err(refusal), move || {
                 record_agent_scope_decision(
                     identity,
@@ -442,7 +451,7 @@ pub(super) fn decide_tool_target<'a>(
         verdict = backend
             .destination()
             .check_configured_url(url)
-            .map_err(|e| AuthorizationError::forbidden(INVALID_REQUEST, e.to_string()));
+            .map_err(|e| refused(DecisionKind::Ssrf, e.to_string()));
     }
 
     // The agent allow record is written even when SSRF then refuses, exactly
@@ -747,4 +756,43 @@ impl OwnedRouterAuthorizer {
             principal: self.principal.clone(),
         }
     }
+
+    /// K15: this captured caller as `keys` now holds it, for queued or
+    /// continued work about to dispatch. An API-key caller is rebuilt from its
+    /// key's current entry, so a narrowed scope applies; `Err` when the key
+    /// is gone, expired, re-issued (another digest) or no longer admin as it
+    /// was at admission, or `at` is `None` (a wall clock that cannot be
+    /// read cannot date the key: fail closed). `Ok(None)`: not an API-key
+    /// caller, nothing to redo.
+    pub(crate) fn rejudged(
+        &self,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+        at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<Option<Self>, KeyGone> {
+        let Some(client) = &self.client else {
+            return Ok(None);
+        };
+        let Some(name) = client.api_key_identity() else {
+            return Ok(None);
+        };
+        let fresh = at
+            .and_then(|at| keys.client_for_key_at(name, client.principal.storage_form(), at))
+            // The same credential, not only the same name and principal: a
+            // key re-issued under an explicit principal keeps both, and its
+            // old secret's work must not run.
+            .filter(|fresh| fresh.quota_principal == client.quota_principal)
+            .filter(|fresh| fresh.admin || !client.admin)
+            .ok_or(KeyGone)?;
+        Ok(Some(Self {
+            client: Some(fresh),
+            oauth_agent_identity: self.oauth_agent_identity.clone(),
+            cert_identity: self.cert_identity.clone(),
+            principal: self.principal.clone(),
+        }))
+    }
 }
+
+/// The API key queued or continued work was admitted under is no longer
+/// valid as it was (K15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct KeyGone;

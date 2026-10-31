@@ -50,13 +50,16 @@ async fn probe(
     timeout: Duration,
     call: &[(String, String)],
 ) -> ProbeOutcome {
-    let request = crate::oauth::login_gate::short_contention(transport.request_with_headers(
-        DISCOVER_METHOD,
-        None,
-        call,
-        None,
-        ResendPermission::Denied,
-    ));
+    // Its error is dropped below, so a refusal it meets is not the call's.
+    let request = crate::oauth::login_gate::short_contention(
+        crate::gateway::delivery_facts::discarded(transport.request_with_headers(
+            DISCOVER_METHOD,
+            None,
+            call,
+            None,
+            ResendPermission::Denied,
+        )),
+    );
     match tokio::time::timeout(timeout, request).await {
         Ok(Ok(response)) => outcome_of(response),
         Ok(Err(_)) | Err(_) => ProbeOutcome::NoAnswer,
@@ -520,6 +523,10 @@ fn note_removed_method_refused(backend: &str, method: &str) {
     )
     .increment(1);
 }
+
+#[cfg(test)]
+#[path = "era_discarded_probe_tests.rs"]
+mod discarded_probe_tests;
 
 #[cfg(test)]
 mod tests {

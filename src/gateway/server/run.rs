@@ -180,35 +180,48 @@ impl Gateway {
             Arc::clone(&record_key),
         )?);
 
-        // Live config handle: shared by the hot-reload watcher (which swaps it
-        // on every applied reload) and AppState (which reads control-plane role
-        // mapping through it, so a reload takes effect without restart —
-        // MIK-6702). Created unconditionally; without a config path it simply
-        // never changes.
-        let live_config = Arc::new(
-            LiveConfig::new(self.config.clone())
-                .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch)),
-        );
-
-        // SIEM evidence-export background task (MIK-6703). None when disabled.
         // The control-plane base, resolved once: the export task, the store
         // and the admin API all name this directory.
         let control_plane_base = control_plane_base(&self.config, self.config_path.as_deref());
-        let export_status =
-            spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
-
-        // Reload context into meta_mcp before AppState; the watcher starts after
-        // `create_router`, so the bind-origin snapshot sees the bound config
-        // (MIK-6750 r4). ONE grant sink for meta-tool and watcher (its mutex
-        // serializes grant reloads), built after the store it records into.
+        // ONE grant sink for meta-tool and watcher (its mutex serializes grant
+        // reloads), built after the store it records into. Audited before the
+        // live config exists, so the served grants are in the startup inputs:
+        // the running revision names the grants this process serves.
         let control_plane_store = build_control_plane_store(&self.config, &control_plane_base)?;
-        let identity_grant_sink = identity_grants::start_identity_grant_audit(
+        let (identity_grant_sink, grants_read) = identity_grants::start_identity_grant_audit(
             &self.config,
             &meta_mcp,
             control_plane_store.as_ref(),
             &control_plane_base.path,
         )
         .await?;
+        grants_read.into_startup(&self.env);
+
+        // Live config handle: shared by the hot-reload watcher (which swaps it
+        // on every applied reload) and AppState (which reads control-plane role
+        // mapping through it, so a reload takes effect without restart —
+        // MIK-6702). Created unconditionally; without a config path it simply
+        // never changes.
+        // Its generations carry the key table: the startup one is the auth
+        // resolved above, so the startup keys authenticate from the first
+        // request, and every reload rebuilds the key list over it.
+        let live_config = Arc::new(
+            LiveConfig::from_prepared(crate::config_reload::Generation::prepare_startup(
+                self.config.clone(),
+                Arc::clone(&auth_config),
+            ))
+            .with_policy_epoch(Arc::clone(&meta_mcp.policy_epoch))
+            .with_startup_revision(&record_key, self.env.take_startup_inputs()),
+        );
+        meta_mcp.set_live_config(Arc::clone(&live_config));
+
+        // SIEM evidence-export background task (MIK-6703). None when disabled.
+        let export_status =
+            spawn_export_task(&self.config, &control_plane_base, shutdown_tx.subscribe());
+
+        // Reload context into meta_mcp before AppState; the watcher starts after
+        // `create_router`, so the bind-origin snapshot sees the bound config
+        // (MIK-6750 r4).
         if let Some(path) = self.reload_path() {
             // Ends this context's reload waits on shutdown (#1808): axum's
             // graceful shutdown waits for every handler, and an admin or
@@ -331,7 +344,6 @@ impl Gateway {
             crate::gateway::subscription_registry::SubscriptionRegistry::new(
                 crate::gateway::subscription_registry::DEFAULT_MAX_LISTENERS,
                 crate::gateway::auth::AuthState {
-                    auth_config: Arc::clone(&auth_config),
                     key_server: key_server.clone(),
                     dashboard_bootstrap: Arc::clone(&dashboard_bootstrap),
                     // Only the session cookie reads this; re-validation sets none.
@@ -439,7 +451,6 @@ impl Gateway {
             multiplexer: Arc::clone(&multiplexer),
             proxy_manager,
             streaming_config: self.config.streaming.clone(),
-            auth_config,
             key_server,
             tool_policy,
             mtls_policy,
@@ -590,6 +601,10 @@ impl Gateway {
             #[cfg(test)]
             if let Some(every) = self.test_seams.window_save_every() {
                 settings.every = every;
+            }
+            #[cfg(test)]
+            {
+                settings.spawner = self.test_seams.spawner();
             }
             window_saver::start_window_saver(
                 self.config.server.protocol_revision_window,

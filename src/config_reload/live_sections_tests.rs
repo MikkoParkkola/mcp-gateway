@@ -7,6 +7,8 @@
 //! reload must leave that report, and every other setting in its section must
 //! stay in it, alone or in a combined edit.
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::{LiveConfig, compute_diff};
@@ -455,10 +457,10 @@ async fn f7_a_malformed_file_leaves_the_running_generation() {
 #[cfg(feature = "firewall")]
 #[test]
 fn each_generation_compiles_its_own_firewall_policy() {
-    let running = super::Generation::of(Config::default());
+    let running = LiveConfig::new(Config::default()).generation();
     let mut config = Config::default();
     config.security.firewall.credential_redaction = false;
-    let wanted = super::Generation::of(config);
+    let wanted = super::Generation::following(config, Arc::clone(running.auth()), &running);
     assert!(running.firewall_policy().redacts(), "the default redacts");
     assert!(
         !wanted.firewall_policy().redacts(),
@@ -473,11 +475,11 @@ fn each_generation_compiles_its_own_firewall_policy() {
 #[test]
 fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
     use crate::security::firewall::CollusionAction;
-    let startup = super::Generation::of(Config::default());
+    let startup = LiveConfig::new(Config::default()).generation();
     assert_eq!(startup.collusion_view().action(), CollusionAction::Off);
     let mut block = Config::default();
     block.security.firewall.collusion.action = CollusionAction::Block;
-    let live = super::Generation::after(block, &startup);
+    let live = super::Generation::following(block, Arc::clone(startup.auth()), &startup);
     assert_eq!(
         live.collusion_view().action(),
         CollusionAction::Block,
@@ -486,7 +488,7 @@ fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
     let mut held = Config::default();
     held.security.firewall.collusion.action = CollusionAction::Observe;
     held.security.firewall.collusion.window_secs += 1;
-    let next = super::Generation::after(held, &live);
+    let next = super::Generation::following(held, Arc::clone(live.auth()), &live);
     assert_eq!(
         next.collusion_view().action(),
         CollusionAction::Block,

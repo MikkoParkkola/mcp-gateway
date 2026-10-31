@@ -36,6 +36,8 @@ pub(super) struct EvaluatedReload {
     pub(super) overlay: Arc<EnvOverlay>,
     /// Every `env:NAME` the config references, resolved or not.
     pub(super) secret_refs: std::collections::BTreeSet<String>,
+    /// What this evaluation read; digested when it is published.
+    pub(super) inputs: super::revision::RawInputs,
 }
 
 pub(super) fn load_config_patch(
@@ -57,6 +59,7 @@ pub(super) fn load_config_patch(
         patch,
         overlay: evaluated.overlay,
         secret_refs: evaluated.secret_refs,
+        inputs: evaluated.inputs,
     })
 }
 
@@ -73,6 +76,15 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
     crate::trust::provenance_public::PROVENANCE_SEED_ENV,
     crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
 ];
+
+/// A refused preparation's answer: the reason, and that the reload changed
+/// nothing.
+fn nothing_published(reason: &str) -> String {
+    format!(
+        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+         configuration was published."
+    )
+}
 
 /// Startup-only environment keys a restart would read differently.
 ///
@@ -627,6 +639,31 @@ impl ReloadContext {
         self.refuse_capability_name_clash(patch)
     }
 
+    /// A refusal when `evaluated` changes a security field only a restart
+    /// applies: message signing, the signature chain or the record key.
+    fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
+        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
+        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
+        let signing = (running.message_signing)
+            .restart_changed_field(&proposed.security.message_signing, env, overlay)
+            .map_err(|error| error.to_string())?;
+        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
+        let chain =
+            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
+        // MIK-8697: the record key keys every record and subscription handle
+        // for the process's lifetime, so a changed reference waits for a restart.
+        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
+            .then(|| "record_principal_key".to_owned());
+        let field = (signing.map(|f| format!("message_signing.{f}")))
+            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
+            .or(record_key);
+        field.map_or(Ok(()), |field| {
+            Err(format!(
+                "config reload refused: security.{field} requires restart"
+            ))
+        })
+    }
+
     async fn reload_transaction(
         &self,
         path: &std::path::Path,
@@ -641,27 +678,7 @@ impl ReloadContext {
         {
             return Err(refusal);
         }
-        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
-        let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
-            (self.env.startup(), &evaluated.overlay);
-        let signing = (running.message_signing)
-            .restart_changed_field(&proposed.security.message_signing, env, overlay)
-            .map_err(|error| error.to_string())?;
-        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
-        let chain =
-            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
-        // MIK-8697: the record key keys every record and subscription handle
-        // for the process's lifetime, so a changed reference waits for a restart.
-        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
-            .then(|| "record_principal_key".to_owned());
-        if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
-            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
-            .or(record_key)
-        {
-            return Err(format!(
-                "config reload refused: security.{field} requires restart"
-            ));
-        }
+        self.restart_only_refusal(&evaluated)?;
         // Measured against the overlay startup captured, so a requirement stays
         // reported on every reload until the process actually restarts.
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
@@ -669,6 +686,7 @@ impl ReloadContext {
             config: new_config,
             patch,
             overlay,
+            inputs,
             ..
         } = evaluated;
 
@@ -677,6 +695,8 @@ impl ReloadContext {
             // overlay is published even here — a resolver reading the old one
             // would serve a value the operator has already replaced.
             self.publish_overlay(overlay);
+            // The same rotation changes what the config was built from.
+            self.live_config.set_inputs(inputs, &env_restart_keys);
             // No difference from the published snapshot does not mean nothing is
             // outstanding: a restart-only edit was published on an earlier
             // reload and the running process still has not applied it.
@@ -690,12 +710,8 @@ impl ReloadContext {
         self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        let generation = Arc::new(super::Generation::prepare(new_config, &self.live_config.generation()).map_err(|reason| {
-            format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            )
-        })?);
+        let prepared = self.live_config.prepare(new_config, &overlay);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
@@ -716,7 +732,8 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config.publish(Arc::clone(&generation));
+        self.live_config
+            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys);
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());

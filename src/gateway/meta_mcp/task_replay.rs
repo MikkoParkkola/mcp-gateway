@@ -272,7 +272,8 @@ impl MetaMcp {
         else {
             return None;
         };
-        let attempt = super::invoke::ColdAttempt::new(backend, id, generation);
+        let gate = self.gate_inputs(&backend, caller);
+        let attempt = super::invoke::ColdAttempt::new(backend, id, generation, gate);
         self.resolve_cold_view((server, tool), attempt, caller)
             .await
     }
@@ -340,7 +341,8 @@ impl MetaMcp {
         {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
-            if self.may_invoke(server, tool, scope, session_id).is_err() {
+            if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+                super::invoke::audit::note_refused_by(kind, None);
                 return true;
             }
             let call = super::invoke::dispatch_guards::BackendCall {
@@ -402,9 +404,12 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        if backend.is_blocked_tool(tool)
-            || self.may_invoke(server, tool, scope, session_id).is_err()
-        {
+        if backend.is_blocked_tool(tool) {
+            super::invoke::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
+            return true;
+        }
+        if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+            super::invoke::audit::note_refused_by(kind, None);
             return true;
         }
         let call = super::invoke::dispatch_guards::BackendCall {
@@ -474,7 +479,7 @@ impl MetaMcp {
 /// another reader may try (MIK-8392 B'): the idle reaper's own sweep, so a
 /// cold state outlasts eviction by at most one sweep, and an outage costs at
 /// most one resolution per caller per backend per minute.
-const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Which stored delivery is judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

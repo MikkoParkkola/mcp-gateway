@@ -60,9 +60,12 @@ struct Record<'a> {
 
 /// The invocation fields an `extra` key may not name, whether or not this
 /// call's record carries them.
-const INVOCATION_FIELDS: [&str; 9] = [
+const INVOCATION_FIELDS: [&str; 10] = [
     "caller",
     "correlation_source",
+    // Written only by the writer, from its own argument: a caller's
+    // attribution can never forge or overwrite the decision.
+    crate::security::decision_record::FIELD,
     "request_hash",
     "response_hash",
     "route",
@@ -81,6 +84,10 @@ impl TransparencyLogger {
     /// As [`Self::log_invocation_correlated`], and when an `extra` key is a
     /// chain, envelope or invocation field: attribution never overwrites what
     /// the record says about the call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the record's parts, each owned by a different stage of the call"
+    )]
     pub(crate) fn log_invocation_attributed(
         &self,
         key: CorrelationKey<'_>,
@@ -89,6 +96,7 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: Option<&str>,
         extra: Map<String, Value>,
+        decision: Option<&crate::security::decision_record::Decision>,
     ) -> io::Result<()> {
         let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
         let record = Record {
@@ -98,7 +106,14 @@ impl TransparencyLogger {
             server: target.server,
             tool: target.tool,
         };
-        self.append_record(record, envelope, request_hash, response_hash, extra)
+        self.append_record(
+            record,
+            envelope,
+            request_hash,
+            response_hash,
+            extra,
+            decision,
+        )
     }
 
     /// The settlement record of a task: route `task_recovery` for a recovered
@@ -134,7 +149,9 @@ impl TransparencyLogger {
             server,
             tool: Some(tool),
         };
-        self.append_record(record, envelope, request_hash, response_hash, extra)
+        // A settlement carries no decision of its own: the submission record
+        // it joins by `task_id` holds the one the call was decided by.
+        self.append_record(record, envelope, request_hash, response_hash, extra, None)
     }
 
     fn append_record(
@@ -144,6 +161,7 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: Option<&str>,
         mut extra: Map<String, Value>,
+        decision: Option<&crate::security::decision_record::Decision>,
     ) -> io::Result<()> {
         Self::reject_reserved_keys(&extra)?;
         // MIK-7646: the overflow count is derived here alone, never supplied.
@@ -185,6 +203,12 @@ impl TransparencyLogger {
             )));
         }
         fields.extend(extra);
+        if let Some(decision) = decision {
+            fields.insert(
+                crate::security::decision_record::FIELD.into(),
+                serde_json::to_value(decision).map_err(io::Error::other)?,
+            );
+        }
 
         self.append_core(fields, envelope, false).map(|_| ())
     }

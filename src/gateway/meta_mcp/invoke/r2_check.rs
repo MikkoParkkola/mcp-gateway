@@ -95,7 +95,8 @@ impl MetaMcp {
             .await;
         // An F13 fill stores this caller's catalogue: index its slot
         // (MIK-8356 R3.5). A slot left unfilled is not recorded.
-        self.remember_caller_slot(backend, scope.caller, identity_key);
+        self.remember_caller_slot(backend, scope.caller, identity_key)
+            .await;
         let answer = text?;
         // F13 text A (the backend's complete list lacks the tool) is a miss.
         // It keeps the design's exact wording on both routes; on this route
@@ -186,7 +187,7 @@ impl MetaMcp {
     ) -> std::result::Result<(Value, Error), Error> {
         let error = match managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
+                super::audit::after_upstream_401(managed, error).await
             }
             _ => error,
         };

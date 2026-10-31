@@ -1,12 +1,47 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The status payload `GET /ui/api/status` answers and the live stream sends:
-//! one builder, so the two cannot drift.
+//! `GET /ui/api/status`, shaped by who is asking, with the caller's `access`
+//! report; its payload is the one the live stream sends: one builder, so the
+//! two cannot drift.
 
+use std::sync::Arc;
+
+use axum::Json;
+use axum::extract::{Extension, State};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{AppState, call_windows};
+use super::guard::Guard;
+use super::{AppState, access_report, auth_facts, call_windows, is_admin};
+
+/// `GET /ui/api/status` — JSON snapshot of gateway health.
+pub(super) async fn status(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
+) -> Json<Value> {
+    // Open to every caller that reaches it; the answer is shaped by caller.
+    let _ = guard.admit();
+    let access = access_report::report(
+        &state,
+        &generation,
+        guard.client.as_ref(),
+        guard.identity.as_ref(),
+    );
+    let client = guard.client;
+    let view = if is_admin(client.as_ref()) {
+        StatusView::Full
+    } else {
+        StatusView::CountsOnly
+    };
+    let mut body = status_body(&state, view);
+    body["auth"] = auth_facts(&state, client.as_ref());
+    // An auth-on caller with no credential gets no `access` member at all.
+    if let Some(access) = access {
+        body["access"] = access;
+    }
+    Json(body)
+}
 
 /// Which of the two views a caller gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

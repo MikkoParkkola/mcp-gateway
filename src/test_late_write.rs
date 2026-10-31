@@ -27,12 +27,32 @@ pub(crate) struct Creator(String);
 
 impl Default for Creator {
     fn default() -> Self {
-        let name = std::thread::current().name().map(str::to_owned);
+        let name = SPAWNER
+            .with(|spawner| spawner.borrow().clone())
+            .or_else(|| std::thread::current().name().map(str::to_owned));
         Self(attributed(name.as_deref()))
     }
 }
 
+std::thread_local! {
+    /// The test a writer thread works for, when that thread is not the
+    /// test's own (see [`writing_for`]).
+    static SPAWNER: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// On a writer thread spawned for a test's code (not the test's own thread):
+/// attribute the writers built here to `spawner`, the name captured on the
+/// test's thread, instead of this thread's own name.
+pub(crate) fn writing_for(spawner: Option<String>) {
+    SPAWNER.with(|slot| *slot.borrow_mut() = spawner);
+}
+
 impl Creator {
+    /// The test this writer is attributed to.
+    pub(crate) fn name(&self) -> &str {
+        &self.0
+    }
+
     /// Report a `kind` write about to land while `witness` is gone.
     pub(crate) fn witness(&self, kind: &str, witness: &Path) {
         let gone = matches!(

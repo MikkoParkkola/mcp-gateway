@@ -53,10 +53,11 @@ impl DirectFailure<'_> {
     ) -> (StatusCode, Json<Value>) {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
+                crate::gateway::meta_mcp::invoke::audit::after_upstream_401(managed, error).await
             }
             _ => error,
         };
+        crate::gateway::meta_mcp::invoke::audit::note_send_refusal(&error);
         // A full slot table says nothing about this caller (#2300).
         if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
             record_client_failure(self.state, self.client);
@@ -106,6 +107,16 @@ impl DirectFailure<'_> {
                 .direct_refusal(Some(self.id), text, Some(error), self.identity)
                 .await;
         }
-        build_http_response(&Egressed::of(response), StatusCode::INTERNAL_SERVER_ERROR)
+        // An authorization refusal raised at the send (a lent-only slot the
+        // call brought no credential for) is the gateway's decision: answered
+        // with its own status, as on the meta route, so the direct recorder
+        // classes it denied and records it refused.
+        let status = match &error {
+            crate::Error::Forbidden { status, .. } => {
+                StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)
+            }
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        build_http_response(&Egressed::of(response), status)
     }
 }

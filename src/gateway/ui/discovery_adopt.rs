@@ -20,10 +20,8 @@ use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::super::errors::{
-    admin_auth_required, config_path_unavailable, flat_error, structured_error,
-};
-use super::super::is_admin;
+use super::super::errors::{config_path_unavailable, flat_error, structured_error};
+use super::super::guard::Guard;
 use super::{Gateway, name_refusal, read_gateway};
 use crate::config::SecretStoreChoice;
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
@@ -35,7 +33,6 @@ use crate::config_reload::{
 use crate::discovery::DiscoveredServer;
 use crate::discovery::adopt::{AdoptRefusal, Adoption, Literal, adoption, refusals};
 use crate::discovery::listing::{DiscoveryCache, ScanTimedOut};
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::secret_store::{
     Chosen, NewSecretOwned, SaveError, SecretStore, StoreError, Vault, choose_store,
@@ -299,12 +296,11 @@ pub(super) fn found(
 pub(super) async fn adopt_discovery(
     State(state): State<Arc<AppState>>,
     Extension(cache): Extension<Arc<DiscoveryCache>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     body: Result<Json<AdoptBody>, JsonRejection>,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     // Every rejection gets the same fixed text: axum's own would quote the
     // body back.

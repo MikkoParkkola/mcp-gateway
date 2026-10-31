@@ -22,7 +22,11 @@ use crate::gateway::meta_mcp::visible::{
     Visibility, Withholding, absent::absent_name, memo::note_denial_code, memo::record_visibility,
     memo::recorded_visibility,
 };
+use crate::identity_propagation::CallerProof;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
+
+mod fill_marks;
 
 /// What a shared catalogue says about a name the caller's policy allows.
 enum Shared {
@@ -317,58 +321,6 @@ impl MetaMcp {
         (invisible, RefundWitness::carry(witness, filled))
     }
 
-    /// Each named backend's fill count plus the registry's membership epoch,
-    /// for [`Self::filled_since`], read in one call under the registry's
-    /// membership lock. No instance is held: the lock serializes the marks
-    /// against every add, replace or remove, so an unmoved epoch means every
-    /// target is the same instance as at the mark and its count compares
-    /// soundly.
-    fn fill_marks<'s>(&self, servers: impl Iterator<Item = &'s str>) -> (u64, Vec<Option<u64>>) {
-        self.backends.membership_for(
-            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-            |membership| {
-                let fills = servers
-                    .map(|server| {
-                        self.backends
-                            .get_for(
-                                crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-                                server,
-                            )
-                            .map(|backend| backend.list_fills())
-                    })
-                    .collect();
-                (membership, fills)
-            },
-        )
-    }
-
-    /// Whether a named backend filled since `marks`: any count changed OR
-    /// the epoch changed counts as a fill, so the nonce stays spent. The
-    /// counts and the epoch are read in one call under the registry's
-    /// membership lock, so the snapshot and the final read agree with the
-    /// map; only reloads pay this, and equal marks prove nothing acted.
-    fn filled_since<'s>(
-        &self,
-        (membership, marks): &(u64, Vec<Option<u64>>),
-        servers: impl Iterator<Item = &'s str>,
-    ) -> bool {
-        self.backends.membership_for(
-            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-            |epoch| {
-                let counts_changed = marks.iter().zip(servers).any(|(mark, server)| {
-                    self.backends
-                        .get_for(
-                            crate::gateway::meta_mcp::scoped_backends::Unscoped::Discovery,
-                            server,
-                        )
-                        .map(|backend| backend.list_fills())
-                        != *mark
-                });
-                counts_changed || epoch != *membership
-            },
-        )
-    }
-
     /// The route stage's judgement of one requested backend target: whether
     /// the caller cannot see it (withheld, or lacked by a complete list).
     /// Recorded in the request's memo, so the meta gate answers it absent
@@ -514,6 +466,11 @@ impl MetaMcp {
         refusal: Error,
     ) -> Result<GuardedValue> {
         if crate::playbook::current_step().is_some() {
+            // A decision about the caller the gate, judging the name alone,
+            // let through: the step records it (see is_authorization_refusal).
+            if is_authorization_refusal(&refusal) {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             // A playbook step keeps its neutral refusal (A3) and asks, as a
             // chain step does: the witness decides (MIK-8353 3d-2).
             super::nonce_settle::settle_pre_send(
@@ -553,9 +510,12 @@ impl MetaMcp {
         crate::gateway::meta_mcp::visible::memo::record_absent(server, tool);
         let scoped = self.scoped(caller.scope().authorizer.backend_grant());
         if scoped.absence(server) == Some(Absence::OutOfScope) {
-            note_denial_code(server, tool, -32003);
+            note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
+        } else {
+            // Not out of scope: the name matches nothing.
+            super::audit::note_refused_by(DecisionKind::NotFound, None);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
@@ -596,6 +556,51 @@ impl MetaMcp {
             .await
     }
 
+    /// [`Self::named_gate_answer`] on a backend that keeps a catalogue per
+    /// caller: `None` hands the name to MIK-8356's caller-slot check.
+    async fn per_user_withheld_answer(
+        &self,
+        (server, tool): (&str, &str),
+        backend: &Backend,
+        refused: bool,
+        caller: &MetaMcpCallerContext<'_>,
+        session_id: Option<&str>,
+    ) -> Option<Result<GuardedValue>> {
+        let scope = caller.scope();
+        // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
+        // answers -32601 at once, with no fill and no credential; every
+        // other name is MIK-8356's caller-slot check's.
+        let reason = if refused {
+            Withholding::Refused
+        } else {
+            match self.tool_visible_to(server, tool, scope, session_id) {
+                Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
+                _ => return None,
+            }
+        };
+        self.record_withheld(server, tool, reason, caller, session_id)
+            .await;
+        withheld_for(reason);
+        // Ruling B (A5): a caller with no view of this backend cannot
+        // tell names apart, so a withheld name it names gets the connect
+        // offer a missing one gets; -32601 at once is for a caller with a
+        // view. Resolution mints nothing without a grant.
+        let proof = CallerProof::new(caller.verified_identity, caller.provenance());
+        if self.has_no_view_for(backend, proof).await
+            && let Err(offer) = self
+                .resolve_dispatch(
+                    (server, tool),
+                    Some(backend),
+                    proof,
+                    caller.verified_identity,
+                )
+                .await
+        {
+            return Some(Err(offer));
+        }
+        Some(Err(absent_name(tool)))
+    }
+
     /// The lens the key check reads a named tool under: withheld when the
     /// gate judged it so (recorded, and raised for a policy reason); as
     /// listed for a miss or a fill that failed, which the check below meets
@@ -627,13 +632,14 @@ impl MetaMcp {
     ) -> Option<Result<GuardedValue>> {
         let scope = caller.scope();
         // Policy, profile, admin rule, grants: known without a catalogue.
-        let refusal = self.may_invoke(server, tool, scope, session_id).err();
-        let refused = refusal.is_some();
-        if let Some(refusal) = &refusal {
-            // The call's one record names it (MIK-8361); a code the route
-            // stage kept first stands.
-            note_denial_code(server, tool, refusal.to_rpc_code());
-        }
+        let refused = self
+            .may_invoke_explained(server, tool, scope, session_id)
+            .inspect_err(|(refusal, kind)| {
+                // The call's one record names it (MIK-8361); a code the route
+                // stage kept first stands.
+                note_denial_code(server, tool, refusal.to_rpc_code(), Some(*kind));
+            })
+            .is_err();
         if let Some(cap) = self.get_capabilities()
             && server == cap.name
         {
@@ -657,41 +663,9 @@ impl MetaMcp {
             return Some(Err(refusal));
         }
         if backend.keeps_per_user_catalogues() {
-            // Lead ruling (8356 x 8361): a policy- or descriptor-withheld name
-            // answers -32601 at once, with no fill and no credential; every
-            // other name is MIK-8356's caller-slot check's.
-            let reason = if refused {
-                Withholding::Refused
-            } else {
-                match self.tool_visible_to(server, tool, scope, session_id) {
-                    Visibility::Withheld(reason) if reason.is_backend_gate() => reason,
-                    _ => return None,
-                }
-            };
-            self.record_withheld(server, tool, reason, caller, session_id)
+            return self
+                .per_user_withheld_answer((server, tool), &backend, refused, caller, session_id)
                 .await;
-            withheld_for(reason);
-            // Ruling B (A5): a caller with no view of this backend cannot
-            // tell names apart, so a withheld name it names gets the connect
-            // offer a missing one gets; -32601 at once is for a caller with a
-            // view. Resolution mints nothing without a grant.
-            let proof = crate::identity_propagation::CallerProof::new(
-                caller.verified_identity,
-                caller.provenance(),
-            );
-            if self.has_no_view_for(&backend, proof).await
-                && let Err(offer) = self
-                    .resolve_dispatch(
-                        (server, tool),
-                        Some(&backend),
-                        proof,
-                        caller.verified_identity,
-                    )
-                    .await
-            {
-                return Some(Err(offer));
-            }
-            return Some(Err(absent_name(tool)));
         }
         let headers = backend.gate_headers();
         // One judgement per request: a verdict the route stage recorded
@@ -780,14 +754,23 @@ mod fill_tests;
 #[path = "gate_call_level_tests.rs"]
 mod call_level_tests;
 
+#[cfg(test)]
+#[path = "gate_refusal_kind_tests.rs"]
+mod refusal_kind_tests;
+
+/// Whether a refusal the dispatch-time policy check gave is an authorization
+/// decision about the caller (`Forbidden`, which a playbook step answers
+/// neutrally); an audit failure, an undefined capability or an absent name is
+/// not.
+fn is_authorization_refusal(error: &Error) -> bool {
+    matches!(error, Error::Forbidden { .. })
+}
+
 /// A name the gate answers as absent for `reason`: a policy reason (the
 /// caller may not invoke it, or its schema or description failed a check) is
 /// the gateway's refusal; a name a caller's own catalogue lacks is not.
 fn withheld_for(reason: Withholding) {
-    if matches!(
-        reason,
-        Withholding::Refused | Withholding::Schema | Withholding::Descriptor
-    ) {
+    if reason.is_policy() {
         crate::gateway::delivery_facts::withheld();
     }
 }

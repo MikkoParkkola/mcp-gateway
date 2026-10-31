@@ -458,7 +458,7 @@ impl MetaMcp {
                     Some(managed)
                         if crate::security::http_diagnostics::is_upstream_unauthorized(&error) =>
                     {
-                        managed.after_upstream_401(error).await
+                        super::audit::after_upstream_401(managed, error).await
                     }
                     _ => error,
                 };
@@ -493,7 +493,7 @@ impl MetaMcp {
         proof: CallerProof<'_>,
     ) -> crate::Result<SlotJudgement> {
         let verdict = backend.catalogue_verdict(binding, headers, tool).await;
-        self.remember_caller_slot(backend, proof, binding);
+        self.remember_caller_slot(backend, proof, binding).await;
         let (recorded, judgement) = match verdict? {
             CatalogueVerdict::Offers => (Some(Visibility::Visible), SlotJudgement::Offered),
             CatalogueVerdict::Withholds => {
@@ -581,6 +581,9 @@ pub(in crate::gateway::meta_mcp) struct ColdAttempt {
     backend: std::sync::Arc<Backend>,
     principal_id: String,
     generation: u64,
+    /// What the publish gate reads the grant with, captured when the claim
+    /// was won; `None` on a backend with no managed account.
+    gate: Option<crate::gateway::meta_mcp::publish_gate::GateInputs>,
 }
 
 impl ColdAttempt {
@@ -589,12 +592,32 @@ impl ColdAttempt {
         backend: std::sync::Arc<Backend>,
         principal_id: String,
         generation: u64,
+        gate: Option<crate::gateway::meta_mcp::publish_gate::GateInputs>,
     ) -> Self {
         Self {
             backend,
             principal_id,
             generation,
+            gate,
         }
+    }
+
+    /// Whether the publish gate lets `binding` be indexed now: a fresh
+    /// custody read must still give it. No gate inputs, nothing to read. A
+    /// result the grant has moved past also drops the claim's lease, so the
+    /// next reader fills under the current grant instead of waiting out a
+    /// backoff.
+    async fn gate_allows(&self, binding: &str) -> bool {
+        use crate::gateway::meta_mcp::publish_gate::Publish;
+        let Some(gate) = &self.gate else {
+            return true;
+        };
+        let judged = gate.judge(&self.backend, binding).await;
+        if judged == Publish::Superseded {
+            self.backend
+                .release_cold_attempt(&self.principal_id, self.generation);
+        }
+        judged == Publish::Allow
     }
 }
 
@@ -640,7 +663,7 @@ impl ColdFill {
         let filled = backend
             .tools_for_check(Some(&binding), headers, false)
             .await;
-        if filled.is_ok() {
+        if filled.is_ok() && attempt.gate_allows(&binding).await {
             backend.publish_cold_view(&attempt.principal_id, attempt.generation, &binding);
         }
     }

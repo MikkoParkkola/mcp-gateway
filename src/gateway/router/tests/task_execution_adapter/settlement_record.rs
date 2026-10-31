@@ -318,10 +318,15 @@ async fn fixture(setup: Setup, path: Path) -> Fixture {
             .expect("a long enough key"),
     );
     meta.set_record_key(Arc::clone(&key));
-    app.auth_config = Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
-        &two_principal_auth(),
-        setup.record_key,
-    ));
+    {
+        app.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*app.live_config.get()).clone(),
+            Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &two_principal_auth(),
+                setup.record_key,
+            )),
+        ));
+    }
     app.meta_mcp = Arc::new(meta);
     Fixture {
         state: Arc::new(app),

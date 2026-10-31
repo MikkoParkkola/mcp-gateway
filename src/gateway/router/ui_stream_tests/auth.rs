@@ -169,3 +169,37 @@ async fn a_credential_check_that_never_answers_ends_the_stream_within_its_deadli
     let bound = Duration::from_secs(5);
     assert!(s.ended_within(bound).await, "ended within {bound:?}");
 }
+
+/// A non-admin key's first status frame is the counts-only view, key for
+/// key: none of the full view's fields (server rows, tool count, totals,
+/// call windows) reach it, as `GET /ui/api/status` withholds them too.
+#[tokio::test]
+async fn a_non_admin_stream_status_frame_has_only_the_counts_view_keys() {
+    let (state, _dir) = fixture().await;
+    let mut s = open(&state, request(STREAM, Who::Bearer(KEY), None)).await;
+    assert_eq!(s.status, StatusCode::OK);
+    assert_eq!(
+        s.until("hello").await.json()["kinds"],
+        serde_json::json!(["status"])
+    );
+    let status = s.until("status").await.json();
+    let mut keys: Vec<&str> = status
+        .as_object()
+        .expect("a status frame is an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "auth",
+            "degraded_count",
+            "healthy_count",
+            "server_count",
+            "uptime_secs",
+            "version"
+        ],
+        "{status}"
+    );
+}

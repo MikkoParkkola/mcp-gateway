@@ -73,11 +73,13 @@ async fn fixture_scoped(excluded_scope: &'static str) -> Gateway {
         Surfaced::Yes,
         (|_| {}, |_| {}),
         |state| {
-            state.auth_config =
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                (*state.live_config.get()).clone(),
                 std::sync::Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
                     &auth(excluded_scope),
                     crate::gateway::record_principal::TEST_RECORD_KEY,
-                ));
+                )),
+            ));
         },
     )
     .await
