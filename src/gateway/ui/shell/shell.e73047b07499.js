@@ -1278,6 +1278,13 @@ function draw(seq, held = null) {
 const LOADING_MS = 300;
 /** Once shown, the loading state stays this long, so it never flickers. */
 const LOADING_MIN_MS = 400;
+/**
+ * The latest the other screens start to preload after first paint, idle or not.
+ * Two seconds: long enough that the preload stays out of the way of the first
+ * page's own reads and rendering, short enough that a busy device still has the
+ * other screens (and the palette's entries) well before a user moves on.
+ */
+const PRELOAD_DEADLINE_MS = 2000;
 
 /**
  * Show the loading state above `body`, and say it once, if this attempt has
@@ -1293,11 +1300,18 @@ function watchLoading(content, body, label, current) {
   let shownAt = 0;
   let withdraw = null;
   const guard = { epoch: authEpoch, seq: renderSeq };
+  // Marks the timer's start and the state's arrival where each happens, so a
+  // test can time the onset by the page's own clock. Only the latest attempt's
+  // pair is kept, so navigations and Retries do not pile marks up.
+  performance.clearMarks('ui-loading-armed');
+  performance.clearMarks('ui-loading-shown');
+  performance.mark('ui-loading-armed');
   const timer = setTimeout(() => {
     // A screen that drew anything, even its own loading state, has said enough.
     if (!current() || body.hasChildNodes() || !body.isConnected) return;
     node = state('loading');
     content.insertBefore(node, body);
+    performance.mark('ui-loading-shown');
     shownAt = Date.now();
     withdraw = announce(`Loading ${label}`, { subject: 'page', guard });
   }, LOADING_MS);
@@ -1926,8 +1940,11 @@ function boot() {
       signinMessage(error, 'That sign-in link or code did not work. It may be wrong, already used or expired. Run `mcp-gateway dashboard-link` on the gateway’s machine for a new one.', { subject: 'signin-link' });
     });
     // The other screens load after that, when the browser is idle, so the palette
-    // lists their actions and settings and a later visit is instant.
-    (window.requestIdleCallback ?? ((fn) => setTimeout(fn, 50)))(loadAllScreens);
+    // lists their actions and settings and a later visit is instant. The idle request
+    // carries a deadline: a browser that never sees the page as idle may otherwise
+    // hold the preload back indefinitely.
+    if (window.requestIdleCallback) window.requestIdleCallback(loadAllScreens, { timeout: PRELOAD_DEADLINE_MS });
+    else setTimeout(loadAllScreens, 50);
   });
 }
 

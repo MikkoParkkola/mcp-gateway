@@ -7,7 +7,7 @@
 // once per render. Every server-supplied string goes in with textContent.
 // The shell is imported by its exact hashed name, so this page registers in
 // the same module instance the document loaded.
-import { register } from '/ui/assets/shell.7cd3d7ed7a24.js';
+import { register } from '/ui/assets/shell.e73047b07499.js';
 
 /** One element: attributes set through setAttribute, children appended as nodes or text. */
 function h(tag, attrs = {}, ...children) {
