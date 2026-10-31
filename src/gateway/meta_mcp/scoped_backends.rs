@@ -179,11 +179,9 @@ impl MetaMcp {
         ScopedBackends {
             registry: &self.backends.0,
             grant,
-            // A provider hidden from the caller is not this view's.
-            capability: self
-                .get_capabilities()
-                .map(|cap| cap.name.clone())
-                .filter(|name| !super::hiding::hidden(name)),
+            // Hidden from the caller, it is still absent: `absence` judges
+            // hiding after this registration check.
+            capability: self.get_capabilities().map(|cap| cap.name.clone()),
         }
     }
     /// The view of a caller with no scope, for tests that judge a target
