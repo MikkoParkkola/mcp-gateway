@@ -179,6 +179,9 @@ pub struct CapabilityBackend {
     listing: parking_lot::Mutex<Option<Vec<String>>>,
     /// Wakes the listing watch when the catalogue changes.
     listing_wake: tokio::sync::Notify,
+    /// Calls that reached `call_tool_with_context` (rows proving none ran).
+    #[cfg(test)]
+    executed: std::sync::atomic::AtomicUsize,
 }
 
 /// Record of a detected rug-pull event for a single capability.
@@ -212,6 +215,8 @@ impl CapabilityBackend {
             catalogue_generation: std::sync::atomic::AtomicU64::new(0),
             listing: parking_lot::Mutex::new(None),
             listing_wake: tokio::sync::Notify::new(),
+            #[cfg(test)]
+            executed: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -590,6 +595,9 @@ impl CapabilityBackend {
         mut context: CapabilityExecutionContext,
     ) -> Result<ToolsCallResult> {
         debug!(capability = %name, "Executing capability");
+        #[cfg(test)]
+        self.executed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
         // O(1) lookup; clone releases the read lock before the async executor call.
         let (capability, generation) = self

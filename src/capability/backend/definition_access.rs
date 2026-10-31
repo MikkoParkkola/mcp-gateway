@@ -6,6 +6,12 @@ use super::CapabilityBackend;
 use crate::capability::CapabilityDefinition;
 
 impl CapabilityBackend {
+    /// How many calls reached `call_tool_with_context`.
+    #[cfg(test)]
+    pub(crate) fn executed_for_test(&self) -> usize {
+        self.executed.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// Run `f` on a capability by name without cloning it. Per-tool
     /// visibility checks call this for every tool on every `initialize` and
     /// `tools/list`, where a clone per call was the #2110 p99 regression.
