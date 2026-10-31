@@ -385,7 +385,8 @@ async fn an_unbound_callers_hidden_account_capability_answers_as_an_unregistered
 }
 
 /// What a task-augmented call on `server` shows the caller: the refusal at
-/// intake, or the task's settled `tasks/get`, task and trace ids masked.
+/// intake, or the submit and the task's settled `tasks/get`, the task id and
+/// the timestamps masked (`assert_alike` masks trace ids).
 async fn account_task_answer(server: &str) -> (u16, String) {
     let account = CapabilityAccount::start(false).await;
     let (router, _state, _store) = account_provider_hidden(&account).await;
@@ -416,10 +417,10 @@ async fn account_task_answer(server: &str) -> (u16, String) {
     .await
     .expect("the task never settled");
     assert_eq!(account.peer_requests(), 0, "{server}: the vendor was sent");
-    (
-        settled.0,
-        format!("submitted {} settled {}", submitted.1, settled.1).replace(id, "TASK"),
-    )
+    // The two tasks are made at different instants.
+    let instant = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T[0-9:.]+Z").expect("pattern");
+    let shown = format!("submitted {} settled {}", submitted.1, settled.1).replace(id, "TASK");
+    (settled.0, instant.replace_all(&shown, "AT").into_owned())
 }
 
 /// Site 1 (`account_outcome.rs`, the capability account a task intake
