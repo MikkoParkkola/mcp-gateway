@@ -329,7 +329,7 @@ fn with_needle() -> std::sync::Arc<StdioTransport> {
 #[tokio::test]
 async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
     let transport = with_needle();
-    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         let _ = transport.register_progress_token(NEEDLE);
         transport
             .handle_response(&progress_line(NEEDLE, 1))

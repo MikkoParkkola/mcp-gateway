@@ -322,7 +322,7 @@ src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capa
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate
-src/security/needles.rs	scrub_answer	refusal	2	not-a-decision	a backend answer that holds a value the gateway injected is replaced: a property of the backend's answer, not a decision about the caller (as refuse_secret_target)
+src/security/needles.rs	scrubbed_answer	refusal	2	not-a-decision	a backend answer that holds a value the gateway injected is replaced: a property of the backend's answer, not a decision about the caller (as refuse_secret_target)
 src/security/ssrf/destination.rs	check_literal	literal_refusal	1	feeds	the SSRF literal-address refusal its callers deliver
 src/security/ssrf/redirect.rs	ssrf_redirect_policy	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/budget.rs	charge	response_refusal	1	no-record	the start-once preview only (budget.rs: only the preview attaches a budget)

@@ -35,7 +35,7 @@ async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
     let frame = json!({"jsonrpc": "2.0", "method": "notifications/progress",
         "params": {"progressToken": NEEDLE, "progress": 1}})
     .to_string();
-    let (call, mut rx) = crate::transport::notification_sink::scope(None, async {
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
         let _registration = ProgressRegistration::register(
             &t.inner.progress_destinations,
             Some(&json!({"_meta": {"progressToken": NEEDLE}})),
