@@ -239,6 +239,20 @@ fn grants_reader() -> GrantsReader {
 /// Returns an error if the file cannot be read, parsed, or uses an unsupported
 /// schema version.
 pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile, String> {
+    read_identity_grants_file_with_bytes(path)
+        .await
+        .map(|(file, _)| file)
+}
+
+/// [`read_identity_grants_file`], with the bytes it parsed: the config
+/// revision names the grants by these, never by a second read.
+///
+/// # Errors
+///
+/// As [`read_identity_grants_file`].
+pub(crate) async fn read_identity_grants_file_with_bytes(
+    path: &Path,
+) -> Result<(IdentityGrantFile, crate::config_reload::revision::RawBytes), String> {
     // Mode-checked off the runtime (F18 I3): readable, not writable, by others.
     let (owned, what) = (
         path.to_path_buf(),
@@ -266,7 +280,7 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         ));
     }
 
-    Ok(file)
+    Ok((file, content.into_bytes()))
 }
 
 /// Replace the identity-grants file at `path` atomically.

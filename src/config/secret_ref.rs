@@ -229,6 +229,14 @@ pub(crate) fn has_literal_default(text: &str) -> bool {
         .any(|caps| caps.get(2).is_some_and(|default| !default.is_empty()))
 }
 
+/// The `${NAME}` names `text` references, in order.
+pub(super) fn template_names(text: &str) -> impl Iterator<Item = &str> {
+    TEMPLATE
+        .captures_iter(text)
+        .filter_map(|caps| caps.get(1))
+        .map(|name| name.as_str())
+}
+
 /// Expands every `${VAR}` in `text`. As in POSIX `${VAR:-default}`, a variable
 /// that is unset or empty takes the default; with no default it is refused.
 /// `${VAR:-}` is the explicit way to allow empty.
