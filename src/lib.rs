@@ -305,3 +305,7 @@ pub(crate) mod test_fifo;
 
 #[cfg(test)]
 pub(crate) mod test_symlink;
+
+// Every caller is a firewall-gated test (allowed-root rows).
+#[cfg(all(test, feature = "firewall"))]
+pub(crate) mod test_tempdir;

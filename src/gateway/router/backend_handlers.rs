@@ -187,15 +187,9 @@ async fn guard_tool_call(
             arguments,
             caller_name,
             &control_identity,
+            Some(backend),
         );
-        if verdict.action == FirewallAction::Warn {
-            warn!(
-                backend = %backend_name,
-                tool = %tool_name,
-                findings = verdict.findings.len(),
-                "Firewall: direct backend request warning"
-            );
-        }
+        warn_on_firewall_warning(&verdict, backend_name, tool_name);
         if let Some((code, message)) = verdict.request_refusal() {
             crate::gateway::meta_mcp::invoke::audit::counting::note_request_firewall();
             // The shared wording's code, ASI10's -32002 included, with this
@@ -803,3 +797,20 @@ mod direct_audit_subject_tests;
 
 #[cfg(test)]
 mod direct_unpinned_tests;
+
+/// Logs a direct call the request firewall let through with a warning.
+#[cfg(feature = "firewall")]
+fn warn_on_firewall_warning(
+    verdict: &crate::security::firewall::FirewallVerdict,
+    backend_name: &str,
+    tool_name: &str,
+) {
+    if verdict.action == FirewallAction::Warn {
+        warn!(
+            backend = %backend_name,
+            tool = %tool_name,
+            findings = verdict.findings.len(),
+            "Firewall: direct backend request warning"
+        );
+    }
+}
