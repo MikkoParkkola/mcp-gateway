@@ -327,6 +327,7 @@ impl ShadowAsset {
     /// This asset as a report naming `gateway_config` shows it: the parts a
     /// scan-time row leaves out, because the cache that holds it serves every
     /// report, set here alone.
+    #[cfg(feature = "webui")]
     pub(crate) fn with_gateway_config(mut self, gateway_config: Option<&str>) -> Self {
         self.evidence.gateway_config = gateway_config.map(ToOwned::to_owned);
         self.remediation.dry_run_command = Some(format_shadow_command(gateway_config, false));

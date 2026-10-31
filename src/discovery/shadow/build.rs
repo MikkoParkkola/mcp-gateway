@@ -77,6 +77,7 @@ impl ShadowScanReport {
     /// discovery cache classified at scan time, plus `others` (the
     /// environment's and processes' finds), each name once, a client file's
     /// first.
+    #[cfg(feature = "webui")]
     pub(crate) fn from_cached_and_found(
         client: Vec<ShadowAsset>,
         others: &[DiscoveredServer],

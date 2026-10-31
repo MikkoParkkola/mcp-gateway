@@ -254,6 +254,7 @@ impl AutoDiscovery {
     /// name, without the client config files the shared discovery cache
     /// reads. Environment finds first, as [`Self::discover_all`] orders them;
     /// a failed scan is logged and the other's finds still answer, as there.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) async fn discover_non_client(&self) -> Vec<DiscoveredServer> {
         let mut servers = self.config_scanner.scan_environment().unwrap_or_else(|e| {
             tracing::warn!("Environment scan failed: {e}");

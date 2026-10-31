@@ -214,7 +214,11 @@ pub(super) async fn local_shadow_radar(state: &AppState) -> ControlPlaneShadowRa
         None => AutoDiscovery::new(),
     };
     let others = discovery.discover_non_client().await;
-    let client = listing.finds.iter().map(|find| find.radar.clone()).collect();
+    let client = listing
+        .finds
+        .iter()
+        .map(|find| find.radar.clone())
+        .collect();
     let report = ShadowScanReport::from_cached_and_found(
         client,
         &others,

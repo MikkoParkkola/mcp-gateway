@@ -246,6 +246,7 @@ impl MetaMcp {
     /// # Panics
     ///
     /// As [`Self::record_key`].
+    #[cfg(feature = "webui")]
     pub(crate) fn record_key_shared(
         &self,
     ) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
@@ -253,7 +254,9 @@ impl MetaMcp {
             self.record_key
                 .as_ref()
                 // invariant: build_meta_mcp installed the key (G-META).
-                .expect("the record key is installed by build_meta_mcp before any record is written"),
+                .expect(
+                    "the record key is installed by build_meta_mcp before any record is written",
+                ),
         )
     }
 
