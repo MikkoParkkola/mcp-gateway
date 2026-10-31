@@ -106,6 +106,25 @@ impl Gw {
 
     /// As [`Gw::over`], with the callback server on `callback_host`.
     pub(super) async fn over_on(issuer: String, forms: Forms, callback_host: &str) -> Self {
+        let store = tempfile::tempdir().expect("token store");
+        Self::build(issuer, forms, callback_host, store).await
+    }
+
+    /// A gateway process started again over the same issuer and token store:
+    /// everything in memory is new, everything on disk is what `self` left.
+    /// `self` is dropped first.
+    pub(super) async fn restarted(self) -> Self {
+        let (issuer, forms) = (self.issuer.clone(), Arc::clone(&self.forms));
+        let Self { store, .. } = self;
+        Self::build(issuer, forms, "127.0.0.1", store).await
+    }
+
+    async fn build(
+        issuer: String,
+        forms: Forms,
+        callback_host: &str,
+        store: tempfile::TempDir,
+    ) -> Self {
         let auth = AuthConfig {
             enabled: true,
             api_keys: vec![api_key(ADMIN_KEY, true), api_key(STANDARD_KEY, false)],
@@ -113,7 +132,6 @@ impl Gw {
         };
         let (mut state, fixture) =
             crate::gateway::router::tests::audience_state(&auth, (None, None), |m| m).await;
-        let store = tempfile::tempdir().expect("token store");
         let log = Arc::new(
             crate::security::TransparencyLogger::open(Arc::new(
                 crate::security::transparency_log::TransparencyLogConfig {

@@ -39,6 +39,18 @@ async fn settle() {
     }
 }
 
+/// Wait, bounded, until the token endpoint has seen an exchange.
+async fn wait_for_exchange(forms: &super::fixture::Forms) {
+    let began = std::time::Instant::now();
+    while forms.lock().unwrap().is_empty() {
+        assert!(
+            began.elapsed() < crate::test_wait::HANG_BOUND,
+            "no exchange"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 /// Run a sign-in to `end`. Returns the sinks it wrote (name and text) and the
 /// secrets that must be in none of them.
 async fn run(end: End) -> (Vec<(&'static str, String)>, Vec<String>) {
@@ -49,11 +61,22 @@ async fn run(end: End) -> (Vec<(&'static str, String)>, Vec<String>) {
     let reply = gw.start(&owner).await;
     let (url, attempt) = Gw::link(&reply);
     let page = gw.approve(&url).await;
+    // The exchange runs after the callback page answers: wait for it, so no
+    // case below can pass without an exchange having happened.
     match end {
-        End::Confirmed => drop(gw.confirm(&owner, &attempt, "confirm").await),
-        End::Cancelled => drop(gw.confirm(&owner, &attempt, "cancel").await),
+        End::FailedExchange => wait_for_exchange(&forms).await,
+        _ => gw.wait_until_held().await,
+    }
+    match end {
+        End::Confirmed => {
+            let reply = gw.confirm(&owner, &attempt, "confirm").await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
+        End::Cancelled => {
+            let reply = gw.confirm(&owner, &attempt, "cancel").await;
+            assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        }
         End::Expired => {
-            gw.wait_until_held().await;
             tokio::time::pause();
             tokio::time::advance(Duration::from_secs(61)).await;
         }
@@ -73,13 +96,14 @@ async fn run(end: End) -> (Vec<(&'static str, String)>, Vec<String>) {
         .lock()
         .unwrap()
         .first()
-        .and_then(|f| f.get("code_verifier").cloned());
+        .and_then(|f| f.get("code_verifier").cloned())
+        .expect("an exchange was sent, and it carried a verifier");
     let secrets = [
         Some(url),
         Some(state),
         Some(CODE.to_owned()),
         Some(TOKEN.to_owned()),
-        verifier,
+        Some(verifier),
     ];
     let sinks = vec![
         ("the callback page", page),

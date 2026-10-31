@@ -344,16 +344,36 @@ async fn a_failed_save_discards_the_pending_token() {
     assert_refusal(&retry, StatusCode::NOT_FOUND, "no_sign_in");
 }
 
-// R15: the pending token lives in memory only, so a new process has none.
+// R15: the pending token lives in memory only. The first gateway's flow is
+// ended through its own cancel, then a second gateway starts over the same
+// issuer and token store. It has no flow, the store holds no token file, and
+// the old attempt gets 404. Red if the grant were written at the callback,
+// since the file would be there. Expected green on the current code.
 #[tokio::test]
 async fn restart_drops_the_pending_token() {
     let first = Gw::new().await;
     let attempt = approved(&first, &first.session()).await;
-    drop(first);
+    first
+        .backend
+        .with_flow(|slot| slot.as_ref().map(|flow| flow.cancel.cancel()))
+        .expect("the flow is pending");
+    let dir = first.store.path().to_path_buf();
 
-    let second = Gw::new().await;
+    let second = first.restarted().await;
+
+    assert_eq!(second.store.path(), dir, "the same token store");
+    let files = std::fs::read_dir(&dir)
+        .expect("the store reads")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .ends_with("_tokens.json")
+        })
+        .count();
+    assert_eq!(files, 0, "no token file was written at the callback");
     let reply = second.confirm(&second.session(), &attempt, "confirm").await;
-
     assert_refusal(&reply, StatusCode::NOT_FOUND, "no_sign_in");
     assert!(second.saved().is_none());
     assert!(second.row().await["sign_in_flow"].is_null());

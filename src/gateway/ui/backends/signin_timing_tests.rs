@@ -293,3 +293,32 @@ async fn a_late_confirm_is_refused_before_the_expiry_task_runs() {
     assert_eq!(reply.json()["error"], "no_sign_in");
     assert!(gw.saved().is_none(), "the late confirm saved nothing");
 }
+
+// A command-line login holds the gate under its own short deadline, and the
+// 409 reports that deadline's remainder, not the gate's begin-plus-300 s.
+// Red today: the gate records `begin + 300 s` whatever deadline the stages use.
+#[tokio::test]
+async fn a_cli_held_gate_reports_the_effective_deadline() {
+    use crate::oauth::client::authorize_tests::client;
+    let gw = Gw::new().await;
+    let short = tokio::time::Instant::now() + Duration::from_secs(20);
+    let cli = client(gw.store.path(), Some(&gw.issuer))
+        .with_login_gate(Arc::clone(&gw.backend.login_gate))
+        .with_open_browser(Arc::new(|_: &str| true));
+    tokio::spawn(async move {
+        cli.authorize_shared_with(true, None, None, Some(short))
+            .await
+    });
+    let began = std::time::Instant::now();
+    while !gw.backend.login_gate.in_flight() && began.elapsed() < crate::test_wait::HANG_BOUND {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let body = gw.start(&gw.session()).await.json();
+
+    assert_eq!(body["owner"], "gateway", "{body}");
+    assert!(
+        secs(&body) <= 20,
+        "the hint follows the login's own deadline: {body}"
+    );
+}
