@@ -262,3 +262,130 @@ async fn a_send_its_recheck_refuses_answers_403_and_records_refused() {
     };
     assert_eq!(invocation["decision"]["kind"], "unrecorded", "{invocation}");
 }
+
+/// POST a meta-route `gateway_invoke` of [`BACKEND`]'s [`TOOL`] as the same
+/// verified caller; returns the status and the parsed answer.
+async fn invoke(router: &axum::Router) -> (axum::http::StatusCode, Value) {
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "gateway_invoke",
+                   "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}},
+                   "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                             "io.modelcontextprotocol/clientCapabilities": {}}}});
+    let mut request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "tools/call")
+        .header("mcp-name", "gateway_invoke")
+        .body(axum::body::Body::from(body.to_string()))
+        .expect("a request");
+    request.extensions_mut().insert(VerifiedIdentity {
+        subject: "alpha".to_string(),
+        email: "alpha@example.invalid".to_string(),
+        name: None,
+        groups: vec![],
+        issuer: "https://issuer.example.invalid".to_string(),
+    });
+    let response = router.clone().oneshot(request).await.expect("an answer");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap_or_default();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+/// The one delivery record and the one invocation record the log holds.
+fn records(log_dir: &tempfile::TempDir) -> (Value, Value) {
+    let raw = std::fs::read_to_string(log_dir.path().join("audit.jsonl")).unwrap_or_default();
+    let entries: Vec<Value> = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("log line is JSON"))
+        .collect();
+    let delivered: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| entry["event"] == "response_delivery_attempt")
+        .collect();
+    let invocations: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| {
+            entry.get("tool").is_some() && entry["event"] != "response_delivery_attempt"
+        })
+        .collect();
+    let ([delivery], [invocation]) = (delivered.as_slice(), invocations.as_slice()) else {
+        panic!("premise: one delivery and one invocation record: {entries:?}");
+    };
+    ((*delivery).clone(), (*invocation).clone())
+}
+
+/// The meta route answers a lend refusal as the refusal it is: the
+/// JSON-RPC error the direct route gives, with no tool result, no recovery
+/// hint and nothing suggesting a retry, recorded refused.
+async fn assert_meta_refusal(mint: FixedMint, premise: &str) {
+    let (url, calls) = peer().await;
+    let (router, dirs) = gateway(url, mint).await;
+    let (status, answer) = invoke(&router).await;
+    let text = answer.to_string();
+    assert!(
+        text.contains(premise),
+        "premise: the lender's refusal: {status} {answer}"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(
+        answer["error"]["code"], -32001,
+        "answered as a refusal, not a tool result: {status} {answer}"
+    );
+    assert!(answer.get("result").is_none(), "{answer}");
+    assert!(
+        !text.contains("_recovery") && !text.contains("retrying once is safe"),
+        "no retry is suggested: {answer}"
+    );
+    let (delivery, invocation) = records(&dirs.0);
+    assert_eq!(delivery["response_effect"], "refused", "{delivery}");
+    assert_eq!(invocation["decision"]["kind"], "unrecorded", "{invocation}");
+}
+
+/// LEND.1-3: a lent-only call carrying no credential, on the meta route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_meta_call_carrying_no_credential_is_answered_as_a_refusal() {
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    assert_meta_refusal(mint, "this call carried none").await;
+}
+
+/// LEND.1-3: a send its per-send recheck refuses, on the meta route.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_meta_send_its_recheck_refuses_is_answered_as_a_refusal() {
+    let mint = FixedMint {
+        headers: vec![("Authorization".to_string(), "Bearer lapsed".to_string())],
+        expires_at: 1,
+    };
+    assert_meta_refusal(mint, "per-user send refused").await;
+}
+
+/// LEND.2 on the direct route: its 403 suggests no retry (a control).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_direct_lend_refusal_suggests_no_retry() {
+    let (url, _calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs) = gateway(url, mint).await;
+    let (status, answer) = call(&router).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "premise: {answer}"
+    );
+    let text = answer.to_string();
+    assert!(
+        !text.contains("_recovery") && !text.contains("retrying once is safe"),
+        "no retry is suggested: {answer}"
+    );
+}
