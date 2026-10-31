@@ -1,0 +1,1 @@
+src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	1	critical	d	withheld_verdict	Decides whether a direct-route caller may see a target: the authorizer's refusal code, the routing profile and a description block; a mistake would answer a withheld tool as present or dispatch it.

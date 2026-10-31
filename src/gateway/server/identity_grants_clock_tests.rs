@@ -15,7 +15,7 @@ async fn start_on_an_unreadable_clock(dir: &Path) -> Started {
     let meta = gateway.build_meta_mcp().await.expect("meta").meta_mcp;
     let store = build_control_plane_store(&config, &base).expect("store");
     let clock = crate::clock::test_clock::before_epoch();
-    let sink = start_identity_grant_audit(&config, &meta, store.as_ref(), &base.path)
+    let (sink, _) = start_identity_grant_audit(&config, &meta, store.as_ref(), &base.path)
         .await
         .expect("an unrecorded start is not a config error");
     drop(clock);

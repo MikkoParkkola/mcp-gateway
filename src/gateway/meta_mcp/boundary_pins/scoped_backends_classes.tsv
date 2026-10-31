@@ -24,13 +24,13 @@ src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	scoped_get	
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	defers_error_rate_cooldown	scoped_get	scoped
 # expand_targets: reads backend names only, to expand a firewall rule target that names no backend; evaluates nothing, never dispatches to or contacts a backend, resolves no credential (POLICY.2).
 src/gateway/meta_mcp/invoke/egress.rs	expand_targets	all_for	Visibility
-src/gateway/meta_mcp/invoke/gate.rs	fill_marks	get_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	fill_marks	membership_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	filled_since	get_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	filled_since	membership_for	Discovery
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	scoped_get	scoped
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	get_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	membership_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	get_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	membership_for	Discovery
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	scoped_get	scoped
 src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	get_for	Background

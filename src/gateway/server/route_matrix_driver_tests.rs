@@ -585,3 +585,6 @@ pub(crate) async fn stdio_keyed_calls() -> ([Value; 3], usize) {
     ];
     (answers, calls.load(Ordering::SeqCst))
 }
+
+#[path = "stdio_question_key_tests.rs"]
+mod stdio_question_key;

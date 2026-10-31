@@ -49,6 +49,10 @@ module = "src/security/audit.rs"
 reason = "the audit envelope's types (who, outcome, credential kind); it shapes records and refuses nothing"
 
 [[coverage.not_a_control]]
+module = "src/security/decision_record.rs"
+reason = "the decision object a record carries (which check decided, config revision); it records a verdict, it refuses no request"
+
+[[coverage.not_a_control]]
 module = "src/security/response_policy.rs"
 reason = "server-owned correlation shared by the response path and the transport adapters; a helper, not a gate"
 
