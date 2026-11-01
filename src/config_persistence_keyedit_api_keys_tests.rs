@@ -77,12 +77,21 @@ fn a_first_key_on_inits_file_creates_the_list() {
     );
     keeps_every_line(INIT_AUTH, &out);
     let doc = loaded(&out);
-    assert_eq!(doc["auth"]["api_keys"][0]["name"], "ops", "{out}");
     assert_eq!(
-        doc["auth"]["api_keys"][0]["key_sha256"], "sha256:aa",
+        doc["auth"]["api_keys"][0]["name"].as_str(),
+        Some("ops"),
         "{out}"
     );
-    assert_eq!(doc["auth"]["bearer_token"], "init-token", "{out}");
+    assert_eq!(
+        doc["auth"]["api_keys"][0]["key_sha256"].as_str(),
+        Some("sha256:aa"),
+        "{out}"
+    );
+    assert_eq!(
+        doc["auth"]["bearer_token"].as_str(),
+        Some("init-token"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -93,8 +102,16 @@ fn a_second_key_is_appended() {
     );
     keeps_every_line(ONE_KEY, &out);
     let doc = loaded(&out);
-    assert_eq!(doc["auth"]["api_keys"][0]["name"], "ops", "{out}");
-    assert_eq!(doc["auth"]["api_keys"][1]["name"], "ci", "{out}");
+    assert_eq!(
+        doc["auth"]["api_keys"][0]["name"].as_str(),
+        Some("ops"),
+        "{out}"
+    );
+    assert_eq!(
+        doc["auth"]["api_keys"][1]["name"].as_str(),
+        Some("ci"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -110,9 +127,17 @@ fn a_rotation_adds_fields_to_an_existing_key() {
     );
     let doc = loaded(&out);
     let key = &doc["auth"]["api_keys"][0];
-    assert_eq!(key["key_sha256"], "sha256:cc", "{out}");
-    assert_eq!(key["previous_key_sha256"], "sha256:aa", "{out}");
-    assert_eq!(key["previous_expires_at"], "2026-12-01T00:00:00Z", "{out}");
+    assert_eq!(key["key_sha256"].as_str(), Some("sha256:cc"), "{out}");
+    assert_eq!(
+        key["previous_key_sha256"].as_str(),
+        Some("sha256:aa"),
+        "{out}"
+    );
+    assert_eq!(
+        key["previous_expires_at"].as_str(),
+        Some("2026-12-01T00:00:00Z"),
+        "{out}"
+    );
 }
 
 #[test]
@@ -128,7 +153,7 @@ fn a_rotation_field_is_removed_from_a_key() {
     let key = &doc["auth"]["api_keys"][0];
     assert!(key.get("previous_key_sha256").is_none(), "{out}");
     assert!(key.get("previous_expires_at").is_none(), "{out}");
-    assert_eq!(key["name"], "ops", "{out}");
+    assert_eq!(key["name"].as_str(), Some("ops"), "{out}");
     assert!(out.contains("# keys below"), "{out}");
 }
 
