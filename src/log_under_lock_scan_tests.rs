@@ -9,7 +9,7 @@
 //! a guard-typed parameter is held for the whole body. An acquisition is a
 //! zero-argument `lock`/`read`/`write` call (and their `try_`, `blocking_`
 //! and `_owned` forms), a call to a function returning a guard type, or a
-//! DashMap entry reference, seen through `?`, `.await`, `unwrap`, `expect`,
+//! `DashMap` entry reference, seen through `?`, `.await`, `unwrap`, `expect`,
 //! `ok`, `map_err`, `unwrap_or_else`, `timeout`/`timeout_at`, a block's
 //! result, a `match` or `if` whose arm yields one, `Some(..)` and moves.
 
@@ -43,10 +43,10 @@ const ACQUIRE: &[&str] = &[
 /// Wrappers an acquisition is seen through.
 const PEEL: &[&str] = &["unwrap", "expect", "ok", "map_err", "unwrap_or_else"];
 
-/// DashMap calls that return a reference holding a shard lock.
+/// `DashMap` calls that return a reference holding a shard lock.
 const DASHMAP_REFS: &[&str] = &["get", "get_mut", "entry", "iter", "iter_mut"];
 
-/// Guard types from std, parking_lot and tokio.
+/// Guard types from std, `parking_lot` and tokio.
 const GUARD_TYPES: &[&str] = &[
     "MutexGuard",
     "RwLockReadGuard",
@@ -670,7 +670,7 @@ fn g1_no_production_code_logs_while_holding_a_lock_guard() {
 }
 
 /// G4: the callee-locked callback rule holds on its real target, the tools
-/// cache's `replace` in input_keys.rs, which no lexical guard binding shows.
+/// cache's `replace` in `input_keys.rs`, which no lexical guard binding shows.
 #[test]
 fn g4_no_log_line_in_a_callback_the_callee_runs_under_its_lock() {
     let files = production_files();

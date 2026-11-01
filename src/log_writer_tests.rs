@@ -256,7 +256,7 @@ fn l1d2_the_flush_keeps_one_deadline_and_waits_only_for_what_is_left() {
 
     // Sendable at the last step before expiry: the wait gets only what is left.
     let tries = std::cell::Cell::new(0);
-    let send = || {
+    let scripted_send = || {
         tries.set(tries.get() + 1);
         if tries.get() < 3 {
             Sent::Full
@@ -266,7 +266,7 @@ fn l1d2_the_flush_keeps_one_deadline_and_waits_only_for_what_is_left() {
     };
     let sent = flush_until(
         deadline,
-        send,
+        scripted_send,
         |d| {
             waited.set(Some(d));
             true

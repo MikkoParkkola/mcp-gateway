@@ -281,7 +281,11 @@ impl Out<'_> {
 
 /// The writer's own line about dropped lines, in one fixed shape per format.
 pub(crate) fn notice_line(dropped: u64, format: NoticeFormat) -> String {
-    let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    // A clock that cannot be read still gets the notice out, dated at the
+    // epoch: the drop count matters more than when it was reported.
+    let ts = crate::clock::utc_now()
+        .unwrap_or(chrono::DateTime::UNIX_EPOCH)
+        .to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
     match format {
         NoticeFormat::Json => format!(
             "{{\"timestamp\":\"{ts}\",\"level\":\"WARN\",\"target\":\"mcp_gateway::log\",\"message\":\"dropped log lines while stderr was not draining\",\"dropped\":{dropped}}}\n"
