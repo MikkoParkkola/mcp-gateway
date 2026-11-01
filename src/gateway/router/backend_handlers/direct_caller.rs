@@ -10,7 +10,7 @@ use crate::error::rpc_codes::{INVALID_REQUEST, PARSE_ERROR};
 use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use crate::security::decision_record::DecisionKind;
-use axum::{Json, http::HeaderMap, http::StatusCode};
+use axum::{http::HeaderMap, http::StatusCode};
 use serde_json::Value;
 
 use super::super::AppState;
@@ -18,13 +18,13 @@ use super::super::authorization::{refusal_principal, slot_principal};
 use super::super::hardened_identity::hardened_identity_refusal;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::OAuthAgentIdentity;
-use crate::gateway::router::helpers::build_http_error_response;
+use crate::gateway::router::helpers::{RpcHttp, build_http_error_response};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
 /// A refusal already shaped as the route's HTTP answer.
-pub(super) type Rejection = (StatusCode, Json<Value>);
+pub(super) type Rejection = RpcHttp;
 
 /// Everything the route learns about the caller before the body is read.
 pub(super) struct Caller {
@@ -135,9 +135,9 @@ pub(super) async fn resolve_caller(
     // Fail closed: a reader never falls back to the current generation.
     let generation =
         crate::gateway::router::pinned_generation(request.extensions()).ok_or_else(|| {
-            (
+            RpcHttp::gateway(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": crate::gateway::router::UNPINNED })),
+                serde_json::json!({ "error": crate::gateway::router::UNPINNED }),
             )
         })?;
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
@@ -570,9 +570,9 @@ pub(super) async fn events_lease(
             crate::protocol::JsonRpcResponse::error(Some(id), code, message)
         }
     };
-    (
+    RpcHttp::gateway(
         StatusCode::OK,
-        Json(serde_json::to_value(reply).unwrap_or(Value::Null)),
+        serde_json::to_value(reply).unwrap_or(Value::Null),
     )
 }
 
@@ -604,7 +604,7 @@ pub(super) async fn forward_notification(
             .and_then(|id| explicit_cancel_key(name, caller, route.session_id, id))
             .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
         tracing::debug!(backend = %name, aborted, "Client cancel never forwarded");
-        return (StatusCode::ACCEPTED, Json(serde_json::json!({})));
+        return RpcHttp::gateway(StatusCode::ACCEPTED, serde_json::json!({}));
     }
     let Ok(super::notification_key::Resolved { headers, binding }) =
         super::notification_key::resolve(
@@ -622,7 +622,7 @@ pub(super) async fn forward_notification(
         // Refused as this caller's request would be (#2240): nothing is
         // forwarded, and the client breaker is untouched, as for
         // `direct_refusal`. `{}` is what an accepted notification gets.
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({})));
+        return RpcHttp::gateway(StatusCode::FORBIDDEN, serde_json::json!({}));
     };
     match route
         .backend
@@ -636,20 +636,19 @@ pub(super) async fn forward_notification(
     {
         Ok(()) => {
             super::record_client_success(state, caller.client.as_ref());
-            (StatusCode::ACCEPTED, Json(serde_json::json!({})))
+            RpcHttp::gateway(StatusCode::ACCEPTED, serde_json::json!({}))
         }
         // No free caller slot (#2300): dropped, counted at admission, and
         // answered with no JSON-RPC body, as a notification must be.
         Err(e @ crate::Error::IdentitySlotsExhausted { .. }) => {
             tracing::warn!(backend = %name, error = %e, "Notification dropped");
-            (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({})))
+            RpcHttp::gateway(StatusCode::TOO_MANY_REQUESTS, serde_json::json!({}))
         }
         Err(e) => {
             super::record_client_failure(state, caller.client.as_ref());
             // The code only: the error's text can be the backend's.
             tracing::error!(backend = %name, code = e.to_rpc_code(), "Backend notification failed");
-            let mut response =
-                crate::protocol::JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
+            let mut response = crate::protocol::JsonRpcResponse::of_error(None, &e);
             let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
                 server: name,
                 tool: &envelope.method,

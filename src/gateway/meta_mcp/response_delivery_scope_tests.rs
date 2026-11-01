@@ -44,7 +44,7 @@ fn an_already_inspected_public_response_is_clamped_without_a_second_scan() {
 
     // A frame an earlier exit already screened carries the egress mark.
     let mut screened = public_response(INJECTION);
-    screened.egress_scanned = true;
+    screened.wire_meta.egress_scanned = true;
     let delivered = runtime.block_on(
         fixture
             .meta

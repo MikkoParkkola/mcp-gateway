@@ -358,7 +358,7 @@ impl MetaMcp {
         reason = "the call sits beside the other relay steps on the Meta-MCP"
     )]
     pub(crate) fn settle_relay_receipts(&self, response: &crate::protocol::JsonRpcResponse) {
-        let delivers = response.error.is_none() && !response.delivery_refusal;
+        let delivers = response.error.is_none() && !response.wire_meta.delivery_refusal;
         let _ = RELAY_DELIVERS.try_with(|flag| flag.set(delivers));
     }
 
