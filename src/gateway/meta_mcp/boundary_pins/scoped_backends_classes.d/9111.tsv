@@ -1,0 +1,3 @@
+src/gateway/meta_mcp/hiding.rs	listed_catalogue	get_for	Visibility
+src/gateway/router/caller_hiding.rs	registered	get_for	Visibility
+src/gateway/meta_mcp/hiding.rs	caller_slot	get_for	Visibility
