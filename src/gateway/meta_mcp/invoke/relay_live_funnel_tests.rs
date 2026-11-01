@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use serde_json::json;
 
-use super::live::{LiveMeta, bob_refused, live_meta, plan_body, stage_plan, sync_key};
+use super::live::{LiveMeta, live_meta, plan_body, stage_plan, sync_key};
 use super::text_result;
 use crate::config_reload::LiveConfig;
 use crate::security::firewall::CollusionAction::{Block, Off};
