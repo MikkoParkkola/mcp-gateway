@@ -17,6 +17,8 @@ use super::holders::{MAX_RECORDS_PER_CALLER, OVERFLOW_BYTES_TOTAL, OVERFLOW_PAIR
 use super::{CollusionDetector, RelayAction, RelayParams};
 use crate::config_reload::Generation;
 use crate::security::firewall::CollusionAction::Block;
+#[cfg(feature = "metrics")]
+use crate::security::firewall::collusion_live_rig::bound_count;
 use crate::security::firewall::collusion_live_rig::{Rig, config, flow, one_fp, two_fp};
 
 const EGRESS: &str = "alpha:send";
@@ -422,9 +424,25 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
     let g1 = rig.generation();
     fill_cap(&rig, &g1, "carol", text, now);
     let before = detector(&rig).capped();
+    #[cfg(feature = "metrics")]
+    let (dropped, overflowed) = (
+        bound_count("record_dropped"),
+        bound_count("record_overflow"),
+    );
     record(&rig, &g1, ("src:s", "carol"), text, now);
     record(&rig, &g1, ("src:p", "carol"), text, now);
     let counted = detector(&rig).capped() - before;
+    #[cfg(feature = "metrics")]
+    {
+        assert!(
+            bound_count("record_dropped") > dropped,
+            "O5.2a: the dropped record was not counted as record_dropped"
+        );
+        assert!(
+            bound_count("record_overflow") > overflowed,
+            "O5.2a: the overflowed record was not counted as record_overflow"
+        );
+    }
     (rig, counted)
 }
 
@@ -439,8 +457,9 @@ fn o5_2a_retention_uses_the_recording_generations_lists() {
         [("src:p".to_string(), false)],
         "O5.2a: carol's overflow pair is not (src:p, non-inferred)"
     );
-    // `capped` counts drops and overflows together, so the plan's
-    // `record_dropped` +1 reads here as one drop plus one overflow.
+    // `capped` is the exact per-detector total of drops and overflows
+    // together; the dropped count is visible separately as the metric's
+    // `bound` label (asserted above).
     assert_eq!(counted, 2, "one drop and one overflow, one fingerprint");
 }
 
@@ -456,8 +475,8 @@ fn o5_2a_counts_per_fingerprint_not_per_delivery() {
         [("src:p".to_string(), false)],
         "O5.2a (two fingerprints): carol's overflow pair is not (src:p, non-inferred)"
     );
-    // `capped` counts drops and overflows together: one of each, per
-    // fingerprint.
+    // `capped` is the exact per-detector total of drops and overflows: one
+    // of each per fingerprint; the metric's `bound` label separates them.
     assert_eq!(
         counted, 4,
         "one drop and one overflow, two fingerprints each"

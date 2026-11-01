@@ -313,3 +313,16 @@ pub(crate) fn one_fp(i: u64) -> String {
 pub(crate) fn two_fp(i: u64) -> String {
     format!("{i:0>48}9")
 }
+
+/// The value of `mcp_gateway_collusion_capacity_total{bound}`, 0 while absent.
+/// The series is process-global and only grows, so a row reads "grew", never
+/// an exact delta.
+#[cfg(feature = "metrics")]
+pub(crate) fn bound_count(bound: &str) -> u64 {
+    crate::metrics::install();
+    let prefix = format!("mcp_gateway_collusion_capacity_total{{bound=\"{bound}\"}} ");
+    crate::metrics::render()
+        .lines()
+        .find_map(|l| l.strip_prefix(&prefix).and_then(|v| v.trim().parse().ok()))
+        .unwrap_or(0)
+}

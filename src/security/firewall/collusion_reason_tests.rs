@@ -269,12 +269,7 @@ fn an_expired_sketch_is_not_lost() {
 /// Counters only grow, so a row reads "grew" and other rows cannot fail it.
 #[cfg(feature = "metrics")]
 fn bound_count(bound: &str) -> u64 {
-    crate::metrics::install();
-    let prefix = format!("mcp_gateway_collusion_capacity_total{{bound=\"{bound}\"}} ");
-    crate::metrics::render()
-        .lines()
-        .find_map(|l| l.strip_prefix(&prefix).and_then(|v| v.trim().parse().ok()))
-        .unwrap_or(0)
+    crate::security::firewall::collusion_live_rig::bound_count(bound)
 }
 
 /// `MIK-8201.VIS.1`: `event` grows the `bound` series.

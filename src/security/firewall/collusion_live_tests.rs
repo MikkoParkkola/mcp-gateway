@@ -508,6 +508,8 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
     let alice = super::RelayCaller::Keyed("alice");
     let detector = rig.firewall.collusion_detector().expect("block runs one");
     let before = detector.capped();
+    #[cfg(feature = "metrics")]
+    let dropped = super::collusion_live_rig::bound_count("record_dropped");
     rig.firewall
         .record_digest(alice, "alpha", "read", &replayed, &g1);
     let verdict = rig.relays("bob", SEND, &text, &g1);
