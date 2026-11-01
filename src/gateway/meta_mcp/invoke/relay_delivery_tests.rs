@@ -347,7 +347,7 @@ async fn a_native_pretty_printed_json_text_keeps_its_numbers() {
             meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, &text),
         "the numbers lost their receipt"

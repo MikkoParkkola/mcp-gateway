@@ -253,6 +253,26 @@ fn cap<'a>(n: usize, at: &dyn Fn(usize) -> View<'a>) -> (Vec<Segment>, bool) {
 }
 
 impl DeliveryDigest {
+    /// The source identity and inferred fact this digest stages (tests
+    /// only). The stub carries one combined bit and no identity.
+    #[cfg(test)]
+    pub(crate) fn facts_for_test(&self) -> (Option<std::sync::Arc<str>>, bool) {
+        (None, self.sensitive)
+    }
+
+    /// Each contributing source with its inferred fact (tests only). The
+    /// stub gives every contributor the one combined bit.
+    #[cfg(test)]
+    pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
+        let sources = self.seam_sources.as_deref()?;
+        Some(
+            sources
+                .iter()
+                .map(|s| (std::sync::Arc::from(s.as_str()), self.sensitive))
+                .collect(),
+        )
+    }
+
     /// [`Self::of_parts`] with every leaf a value (tests only).
     #[cfg(test)]
     pub(super) fn of_leaves(leaves: &[&str], sensitive: bool) -> (Self, bool) {

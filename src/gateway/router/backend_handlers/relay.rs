@@ -64,6 +64,7 @@ pub(super) fn relay_refusal(
     // it is not content the caller sent, so it is not scanned (MIK-7832).
     let scanned = without_progress_token(params);
     let message = fw.relay_block_message(
+        auth.generation.collusion_view(),
         caller,
         (backend, tool),
         scanned.as_ref().unwrap_or(params),
@@ -183,7 +184,11 @@ pub(super) fn stage_direct_catalogue(
 #[cfg(feature = "firewall")]
 pub(super) fn commit_direct_receipts(state: &AppState, delivered: bool) {
     if let Some(fw) = state.firewall.as_ref() {
-        crate::gateway::meta_mcp::invoke::relay::commit_with(fw, delivered);
+        crate::gateway::meta_mcp::invoke::relay::commit_with(
+            fw,
+            delivered,
+            &state.live_config.generation(),
+        );
     }
 }
 

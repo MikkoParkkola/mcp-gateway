@@ -48,7 +48,7 @@ async fn a_rewritten_slotless_envelope_keeps_the_stored_receipt() {
             meta.restage_if_changed(snapshot, Some(&after), AnswerShape::of("tasks/get"));
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "the stored slot lost its receipt"
@@ -164,7 +164,7 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
             meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "the backend's text lost its receipt"
@@ -191,7 +191,7 @@ async fn a_stored_result_receipts_only_what_the_backend_wrote() {
             meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
         })
         .await;
-    staged.commit(true);
+    staged.commit(true, &firewall.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, BACKEND_ADVICE),
         "a backend member the gateway did not write lost its receipt"

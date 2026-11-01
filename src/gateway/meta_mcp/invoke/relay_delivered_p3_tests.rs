@@ -103,7 +103,13 @@ fn keep_over_bound_beside(fw: &Firewall, parts: &[String], outside: &[String], s
         keep_plan_receipts(fw, &mut receipts, &answer);
     });
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
 }
 
@@ -118,6 +124,7 @@ fn reported_after_carol(fw: &Firewall, who: &str, text: &str) -> bool {
     );
     let params = json!({"name": "send", "arguments": {"body": text}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "alpha",
         "send",
@@ -221,7 +228,13 @@ fn keep_steps_over_bound(fw: &Firewall, steps: &[&[String]]) {
     let answer = json!({ "parts": items, "pad": pad(1_200 * 1024) });
     with_plan_members(members, || keep_plan_receipts(fw, &mut receipts, &answer));
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
 }
 
@@ -294,7 +307,13 @@ fn a_key_delivered_as_a_value_gets_no_seam_on_an_over_bound_answer() {
         keep_plan_receipts(&fw, &mut receipts, &answer);
     });
     for r in &receipts {
-        fw.record_digest(RelayCaller::Keyed("key-a"), &r.server, &r.tool, &r.digest);
+        fw.record_digest(
+            RelayCaller::Keyed("key-a"),
+            &r.server,
+            &r.tool,
+            &r.digest,
+            &fw.paired_generation_for_test(),
+        );
     }
     let joined = format!("{}{}", parts[0], parts[2]);
     assert!(

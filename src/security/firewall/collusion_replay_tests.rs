@@ -41,6 +41,7 @@ fn firewall() -> Firewall {
 fn egress(fw: &Firewall, who: &str) -> FirewallVerdict {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "alpha",
         "send",
@@ -100,7 +101,13 @@ fn g31_a_replayed_receipt_records_what_the_original_held() {
         "premise: the receipt holds evidence"
     );
 
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &digest);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &digest,
+        &fw.paired_generation_for_test(),
+    );
     assert!(
         digest.recorded.load(Ordering::Relaxed),
         "premise: recorded once"
@@ -131,7 +138,13 @@ fn g31_a_replayed_receipt_records_what_the_original_held() {
         "the replay holds exactly the original's fingerprints"
     );
     assert_eq!(replayed.is_sensitive(), digest.is_sensitive());
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &replayed);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &replayed,
+        &fw.paired_generation_for_test(),
+    );
     assert!(
         !egress(&fw, "bob").findings.is_empty(),
         "the replay recorded: bob carrying the text is refused again"
@@ -559,6 +572,7 @@ fn d25_a_still_staged_step_yields_no_snapshot_and_no_entry() {
         Vec::new(),
         "",
         hour(),
+        &fw.paired_generation_for_test(),
     );
     assert!(
         fw.replay_digests(&task_key("task-d25", 1)).is_none(),
@@ -584,6 +598,7 @@ fn a_ttl_less_tasks_entry_expires_after_24h_on_the_relay_clock_not_before() {
         Vec::new(),
         "",
         Duration::from_secs(crate::idempotency::admission::RETENTION_SECS),
+        &fw.paired_generation_for_test(),
     );
     assert!(
         fw.replay_digests(&task_key("task-24h", 3)).is_some(),

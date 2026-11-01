@@ -662,7 +662,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         let (answer, staged) = meta
             .collecting_staged(meta.invoke_tool(&args_for(None), None, &ctx))
             .await;
-        staged.commit(true);
+        staged.commit(true, &firewall.paired_generation_for_test());
         answers.push(answer.expect("answered"));
     }
     assert_eq!(
@@ -681,6 +681,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
     );
     let params = json!({"name": "read", "arguments": {"text": notice}});
     let verdict = firewall.check_relay(
+        firewall.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",
@@ -701,6 +702,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         &answers[1],
     );
     let verdict = firewall.check_relay(
+        firewall.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",

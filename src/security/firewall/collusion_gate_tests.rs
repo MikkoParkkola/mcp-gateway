@@ -468,7 +468,14 @@ fn delivered(fw: &Firewall, who: &str) {
 
 fn egress(fw: &Firewall, caller: RelayCaller<'_>) -> FirewallVerdict {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    fw.check_relay(caller, "alpha", "send", &params, ("direct:alpha", "bob"))
+    fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
+        caller,
+        "alpha",
+        "send",
+        &params,
+        ("direct:alpha", "bob"),
+    )
 }
 
 /// B6: under `observe` a relay is a `Warn` verdict with one digest-only
@@ -530,6 +537,7 @@ fn flow(source: &str, egress: &str) -> AllowedFlow {
 fn egress_via(fw: &Firewall, (server, tool): (&str, &str)) -> FirewallVerdict {
     let params = json!({"name": tool, "arguments": {"text": PROSE}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("bob"),
         server,
         tool,
@@ -733,6 +741,7 @@ fn observed_relay_warnings(
     let mut message = None;
     let records = crate::test_log_capture::records(|| {
         message = fw.relay_block_message(
+            fw.paired_generation_for_test().collusion_view(),
             RelayCaller::Keyed(caller),
             ("alpha", "send"),
             &params,

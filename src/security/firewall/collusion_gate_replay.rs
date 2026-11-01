@@ -56,7 +56,9 @@ impl Firewall {
         calls: ReplayCalls,
         answer_digest: &str,
         retention: Duration,
+        generation: &crate::config_reload::Generation,
     ) {
+        let _ = generation; // used by the fix
         if self.relay_detector().is_none() {
             return;
         }

@@ -87,19 +87,19 @@ impl StagedReceipts {
         not(feature = "firewall"),
         allow(clippy::needless_pass_by_value, clippy::unused_self)
     )]
-    pub(crate) fn commit(self, delivered: bool) {
+    pub(crate) fn commit(self, delivered: bool, generation: &crate::config_reload::Generation) {
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
             // Snapshot before recording, exactly what
             // `record_digest` gets below.
-            replay::capture_commit(fw, self.capture, &self.receipts, self.calls);
+            replay::capture_commit(fw, self.capture, &self.receipts, self.calls, generation);
             for r in self.receipts.into_iter().filter(|r| !r.pending_retain) {
                 let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-                fw.record_digest(caller, &r.server, &r.tool, &r.digest);
+                fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
             }
         }
         #[cfg(not(feature = "firewall"))]
-        let _ = delivered;
+        let _ = (delivered, generation);
     }
 }
 
@@ -154,7 +154,10 @@ impl DeferredReceipts {
     /// Record what was staged when the answer went out as built.
     pub(crate) fn commit(&self, written: bool) {
         if let Some(staged) = self.staged.lock().take() {
-            staged.commit(written && self.eligible);
+            staged.commit(
+                written && self.eligible,
+                &crate::config_reload::Generation::placeholder(),
+            );
         }
     }
 }
@@ -223,7 +226,11 @@ pub(crate) fn take_staged_for_test() -> Vec<Value> {
 
 /// Record every staged receipt into `fw` when `delivered`; drop them either way.
 #[cfg(feature = "firewall")]
-pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: bool) {
+pub(crate) fn commit_with(
+    fw: &crate::security::firewall::Firewall,
+    delivered: bool,
+    generation: &crate::config_reload::Generation,
+) {
     let receipts = RELAY_RECEIPTS
         .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
         .unwrap_or_default();
@@ -233,10 +240,10 @@ pub(crate) fn commit_with(fw: &crate::security::firewall::Firewall, delivered: b
     }
     // Snapshot before recording, exactly what
     // `record_digest` gets below.
-    replay::capture_commit(fw, capture, &receipts, calls);
+    replay::capture_commit(fw, capture, &receipts, calls, generation);
     for r in receipts.into_iter().filter(|r| !r.pending_retain) {
         let caller = crate::security::firewall::RelayCaller::new(&r.key, r.keyed);
-        fw.record_digest(caller, &r.server, &r.tool, &r.digest);
+        fw.record_digest(caller, &r.server, &r.tool, &r.digest, generation);
     }
 }
 

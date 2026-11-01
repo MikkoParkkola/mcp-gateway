@@ -52,6 +52,7 @@ pub(super) fn deliver(fw: &Firewall, who: &str, text: &str) {
 pub(super) fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "beta",
         "send",
@@ -106,7 +107,13 @@ fn deliver_step(fw: &Firewall, step: &Value, staged: usize, answer: &Value) -> b
         return false;
     };
     let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
     true
 }
 
@@ -323,7 +330,13 @@ fn same_source_steps_of_one_plan_hold_distinct_positions() {
             .delivered_for_plan(&answer, Some(&staged))
             .expect("premise: the answer is under the bound");
         let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+        fw.record_digest(
+            RelayCaller::Keyed("alice"),
+            "alpha",
+            "read",
+            &kept,
+            &fw.paired_generation_for_test(),
+        );
     }
     let mut live = detector.live_sketch_positions(SOURCE, "alice");
     live.sort_unstable();
@@ -436,6 +449,7 @@ fn an_overfull_selection_abandons_the_sketch() {
 pub(super) fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "beta",
         "send",
@@ -549,7 +563,13 @@ fn an_omitted_steps_reservation_is_released() {
         .delivered_for_plan(&answer, None)
         .expect("under the bound");
     let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
     drop(kept);
     let held = fw.collusion_detector().expect("on").sketch_bytes_held();
     assert_eq!(held, before, "an omitted step's reservation leaked");

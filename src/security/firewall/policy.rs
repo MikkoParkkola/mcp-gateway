@@ -69,6 +69,32 @@ impl CollusionView {
         }
     }
 
+    /// Whether `source` is listed under `sources`.
+    #[cfg(test)]
+    pub(crate) fn lists(&self, source: &str) -> bool {
+        self.sources.iter().any(|p| p.matches(source))
+    }
+
+    /// The `allowed_flows` entries (bit each) whose source matches `target`.
+    #[cfg(test)]
+    pub(crate) fn source_flows(&self, target: &str) -> u64 {
+        Self::mask(self.flows.iter().map(|(source, _)| source), target)
+    }
+
+    /// The `allowed_flows` entries (bit each) whose egress matches `target`.
+    #[cfg(test)]
+    pub(crate) fn egress_flows(&self, target: &str) -> u64 {
+        Self::mask(self.flows.iter().map(|(_, egress)| egress), target)
+    }
+
+    #[cfg(test)]
+    fn mask<'a>(patterns: impl Iterator<Item = &'a glob::Pattern>, target: &str) -> u64 {
+        patterns
+            .enumerate()
+            .filter(|(_, pattern)| pattern.matches(target))
+            .fold(0, |mask, (bit, _)| mask | (1 << bit))
+    }
+
     /// What relay detection does under this view.
     #[cfg_attr(
         not(test),

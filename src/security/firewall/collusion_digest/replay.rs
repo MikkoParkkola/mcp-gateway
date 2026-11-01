@@ -90,6 +90,19 @@ pub(crate) struct ReplayReceipt {
 }
 
 impl ReplayReceipt {
+    /// Each contributing source with its inferred fact (tests only). The
+    /// stub gives every contributor the one combined bit.
+    #[cfg(test)]
+    pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
+        let sources = self.seam_sources.as_deref()?;
+        Some(
+            sources
+                .iter()
+                .map(|s| (std::sync::Arc::from(s.as_str()), self.sensitive))
+                .collect(),
+        )
+    }
+
     /// Its real byte size in the store's accounting: fingerprint bytes plus
     /// text bytes plus [`REPLAY_ITEM_OVERHEAD`] per item held.
     pub(in super::super) fn bytes(&self) -> usize {

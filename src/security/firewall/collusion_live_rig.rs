@@ -9,7 +9,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::config_reload::LiveConfig;
+use crate::config::Config;
+use crate::config_reload::{Generation, LiveConfig};
 use crate::gateway::router::AppState;
 
 use super::{Firewall, FirewallConfig};
@@ -54,4 +55,15 @@ pub(crate) fn pair_state_with_meta(state: &mut Arc<AppState>) {
 /// moves it.
 pub(crate) fn freeze(firewall: &Firewall) {
     firewall.advance_collusion_clock_for_test(Duration::ZERO);
+}
+
+impl Firewall {
+    /// The generation a gateway would publish for the configuration this
+    /// firewall was built from: its view and its action agree with the
+    /// firewall, for a test that judges a call under "the" generation.
+    pub(crate) fn paired_generation_for_test(&self) -> Arc<Generation> {
+        let mut config = Config::default();
+        config.security.firewall = self.config.clone();
+        LiveConfig::new(config).generation()
+    }
 }

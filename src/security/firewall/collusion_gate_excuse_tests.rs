@@ -52,6 +52,7 @@ fn deliver(fw: &Firewall, who: &str, tool: &str, text: &str) {
 fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "beta",
         "send",
@@ -145,7 +146,13 @@ fn a_plan_step_cut_at_staging_excuses_nothing() {
     let digest = fw
         .receipt_digest("alpha", "read", &step, Some(&staged))
         .expect("relay detection is on");
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &digest);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &digest,
+        &fw.paired_generation_for_test(),
+    );
     assert!(
         relays(&fw, "alice", P),
         "a step cut at staging excused text its answer never delivered"
@@ -165,7 +172,13 @@ fn deliver_plan_step(fw: &Firewall, answer: &serde_json::Value) {
         .delivered_for_plan(answer, None)
         .expect("under the bound");
     let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
 }
 
 /// `MIK-8066` (E5): text a plan step carried but the plan's answer left

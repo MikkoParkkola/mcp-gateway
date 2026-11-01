@@ -69,6 +69,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
 fn relayed_by_bob(fw: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     !fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("bob"),
         "alpha",
         "send",
@@ -158,6 +159,7 @@ fn store_entry(
         calls,
         "",
         Duration::from_secs(3600),
+        &fw.paired_generation_for_test(),
     );
 }
 
@@ -188,8 +190,8 @@ fn summary(server: &str, tool: &str, step: Option<u32>) -> Summary {
     (server.to_owned(), tool.to_owned(), step, false, true)
 }
 
-/// G2: `commit_with(fw, false)` records nothing; `commit_with(fw,
-/// true)` records the staged replay receipts. The same staged task
+/// G2: `commit_with(fw, false, &fw.paired_generation_for_test())` records nothing; `commit_with(fw,
+/// true, &fw.paired_generation_for_test())` records the staged replay receipts. The same staged task
 /// replay is committed both ways, and only the delivered one makes
 /// bob's relay of the step's text refusable.
 /// Mutant killed: commit regardless of delivery (bob would already
@@ -215,7 +217,7 @@ async fn g2_an_undelivered_commit_records_no_replayed_receipt() {
             1,
             "premise: the replay staged its receipt"
         );
-        commit_with(&fw, false);
+        commit_with(&fw, false, &fw.paired_generation_for_test());
     })
     .await;
     assert!(
@@ -224,7 +226,7 @@ async fn g2_an_undelivered_commit_records_no_replayed_receipt() {
     );
     collecting(async {
         stage_task_replay(&meta, alice, &stored);
-        commit_with(&fw, true);
+        commit_with(&fw, true, &fw.paired_generation_for_test());
     })
     .await;
     assert!(
@@ -433,7 +435,7 @@ async fn n2_an_inner_receipt_holds_no_fingerprint_of_the_other_inner_text() {
                 receipts.borrow_mut().retain(|r| r.server == kept);
             });
             assert!(kept_only.is_ok(), "premise: inside a collector");
-            commit_with(&fw, true);
+            commit_with(&fw, true, &fw.paired_generation_for_test());
         })
         .await;
         assert!(
@@ -512,7 +514,7 @@ async fn g10_a_non_completed_multi_target_read_stages_nothing() {
                 meta.stage_stored_receipt(RelayKey::new("alice", true), None, &stored);
             })
             .await;
-        staged.commit(true);
+        staged.commit(true, &fw.paired_generation_for_test());
         assert_eq!(
             relayed_by_bob(&fw, PROSE),
             renews,

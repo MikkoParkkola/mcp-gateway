@@ -29,7 +29,13 @@ impl Firewall {
         result: &Value,
     ) {
         if let Some(digest) = self.delivery_digest(server, tool, result) {
-            self.record_digest(caller, server, tool, &digest);
+            self.record_digest(
+                caller,
+                server,
+                tool,
+                &digest,
+                &self.paired_generation_for_test(),
+            );
         }
     }
 
@@ -231,7 +237,9 @@ impl Firewall {
         server: &str,
         tool: &str,
         digest: &DeliveryDigest,
+        generation: &crate::config_reload::Generation,
     ) {
+        let _ = generation; // used by the fix
         let Some(detector) = self.relay_detector() else {
             return;
         };

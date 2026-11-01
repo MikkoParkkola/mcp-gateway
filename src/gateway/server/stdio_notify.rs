@@ -142,7 +142,7 @@ impl Gateway {
                         )
                         .await,
                     ),
-                    None => staged.commit(false),
+                    None => staged.commit(false, &crate::config_reload::Generation::placeholder()),
                 }
             })
             .await;

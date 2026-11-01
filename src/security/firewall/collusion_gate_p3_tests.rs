@@ -27,7 +27,13 @@ fn deliver_plan_for(fw: &Firewall, caller: &str, steps: &[Value], answer: &Value
     };
     for digest in digests {
         let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-        fw.record_digest(RelayCaller::Keyed(caller), "alpha", "read", &kept);
+        fw.record_digest(
+            RelayCaller::Keyed(caller),
+            "alpha",
+            "read",
+            &kept,
+            &fw.paired_generation_for_test(),
+        );
     }
     true
 }
@@ -127,7 +133,13 @@ fn a_capped_step_without_attachments_keeps_only_its_delivered_head() {
     if let Some(delivered) = fw.delivered_for_plan(&answer, Some(&staged)) {
         for digest in digests {
             let kept = fw.cap_kept(fw.retain_delivered(digest, &delivered, None));
-            fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+            fw.record_digest(
+                RelayCaller::Keyed("alice"),
+                "alpha",
+                "read",
+                &kept,
+                &fw.paired_generation_for_test(),
+            );
         }
     }
     let tail = &text[90_000..92_000];
@@ -335,7 +347,13 @@ fn views_are_admitted_while_the_view_budget_has_room() {
     for (i, (digest, d)) in digests.into_iter().zip(&delivered).enumerate() {
         if let (Some(digest), Some(d)) = (digest, d) {
             let kept = fw.cap_kept(fw.retain_delivered(digest, d, None));
-            fw.record_digest(RelayCaller::Keyed(&callers[i]), "alpha", "read", &kept);
+            fw.record_digest(
+                RelayCaller::Keyed(&callers[i]),
+                "alpha",
+                "read",
+                &kept,
+                &fw.paired_generation_for_test(),
+            );
         }
     }
     drop(delivered);
@@ -424,7 +442,13 @@ fn a_step_evidence_charge_survives_an_abandoned_sketch_until_recorded() {
     );
     for digest in kept {
         let capped = fw.cap_kept(digest);
-        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &capped);
+        fw.record_digest(
+            RelayCaller::Keyed("alice"),
+            "alpha",
+            "read",
+            &capped,
+            &fw.paired_generation_for_test(),
+        );
     }
     assert_eq!(
         detector.evidence_charge_bytes(),
@@ -458,7 +482,13 @@ fn short_leaf_step_kept_through_a_view(fw: &Firewall, times: usize) -> String {
         kept = fw.retain_delivered(kept, &delivered, None);
     }
     let kept = fw.cap_kept(kept);
-    fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", &kept);
+    fw.record_digest(
+        RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &kept,
+        &fw.paired_generation_for_test(),
+    );
     leaves[5..35].concat()
 }
 
@@ -604,7 +634,13 @@ fn view_cuts_past_the_budget_are_refused_and_marked_lost() {
     );
     drop(delivered);
     for digest in &kept {
-        fw.record_digest(RelayCaller::Keyed("alice"), "alpha", "read", digest);
+        fw.record_digest(
+            RelayCaller::Keyed("alice"),
+            "alpha",
+            "read",
+            digest,
+            &fw.paired_generation_for_test(),
+        );
     }
     assert!(
         detector.excuse_lost(SOURCE, "alice"),

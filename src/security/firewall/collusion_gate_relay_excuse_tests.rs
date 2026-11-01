@@ -59,6 +59,7 @@ fn reported_args(fw: &Firewall, who: &str, arguments: &Value) -> bool {
         "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28"},
     });
     let verdict = fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "alpha",
         "send",

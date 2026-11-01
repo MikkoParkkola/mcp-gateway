@@ -35,6 +35,7 @@ fn deliver(fw: &Firewall, who: &str, tool: &str, text: &str) {
 fn relay_description(fw: &Firewall, who: &str, text: &str) -> Option<String> {
     let params = json!({"name": "send", "arguments": {"text": text}});
     fw.check_relay(
+        fw.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed(who),
         "beta",
         "send",

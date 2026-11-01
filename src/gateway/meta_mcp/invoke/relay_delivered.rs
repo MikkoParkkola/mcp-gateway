@@ -32,7 +32,9 @@ impl MetaMcp {
             Some(crate::gateway::input_bridge::DeliveryCommit::new(
                 move || {
                     let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
-                    fw.record_digest(caller, &server, &tool, &digest);
+                    // Read when delivery is confirmed, not when built.
+                    let generation = crate::config_reload::Generation::placeholder();
+                    fw.record_digest(caller, &server, &tool, &digest, &generation);
                 },
             ))
         }

@@ -309,11 +309,14 @@ impl Gateway {
             // No frame is judged here: recorded and settled as built, and the
             // receipts follow the frame as `judge_and_commit` has them follow it.
             let Some(answer) = answer else {
-                staged.commit(false);
+                staged.commit(false, &crate::config_reload::Generation::placeholder());
                 return None;
             };
             let frame = answer.delivered_unjudged(meta_mcp, session_id).await;
-            staged.commit(frame.delivers_result());
+            staged.commit(
+                frame.delivers_result(),
+                &crate::config_reload::Generation::placeholder(),
+            );
             frame.stdio_value().map(std::borrow::Cow::into_owned)
         })
         .await

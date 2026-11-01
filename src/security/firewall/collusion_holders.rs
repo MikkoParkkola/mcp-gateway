@@ -23,6 +23,25 @@ use super::{Copies, Holder};
 pub(super) const INLINE_RECORDS: usize = 8;
 /// Records one caller keeps for one fingerprint.
 pub(super) const MAX_RECORDS_PER_CALLER: usize = 64;
+/// Overflow pairs one caller keeps for one fingerprint: past it the caller's
+/// overflow is unattributed. Published for the rows; given meaning by the fix.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "bounds the overflow pairs in the fix")
+)]
+pub(super) const OVERFLOW_PAIRS_PER_CALLER: usize = 16;
+/// Bytes of overflow pairs one caller keeps for one fingerprint.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "bounds the overflow pairs in the fix")
+)]
+pub(super) const OVERFLOW_BYTES_PER_CALLER: usize = 4 * 1024;
+/// Bytes of overflow pairs across every caller and fingerprint.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "bounds the overflow pairs in the fix")
+)]
+pub(super) const OVERFLOW_BYTES_TOTAL: usize = 1024 * 1024;
 /// Records past [`INLINE_RECORDS`], across every fingerprint. At most
 /// 65,536 x `size_of::<Holder>()` bytes (asserted by a unit row).
 pub(super) const EXTRA_RECORD_POOL: usize = 65_536;
@@ -153,6 +172,12 @@ impl Tracked {
             Some((_, at)) => *at = (*at).max(now),
             None => self.callers.push((principal, now)),
         }
+    }
+
+    /// Whether `principal` holds any overflow (tests only).
+    #[cfg(test)]
+    pub(super) fn has_overflow(&self, principal: u64) -> bool {
+        self.overflow.iter().any(|(p, _)| *p == principal)
     }
 
     /// Whether `principal`'s own sensitive copy is held only as overflow at

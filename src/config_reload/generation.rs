@@ -143,15 +143,19 @@ impl Generation {
         &self.firewall
     }
 
+    /// A default generation for a caller that has not yet captured the one
+    /// current at delivery or at the witness check (replaced by that capture
+    /// in the fix).
+    #[cfg(feature = "firewall")]
+    #[must_use]
+    pub(crate) fn placeholder() -> Arc<Self> {
+        static DEFAULT: std::sync::LazyLock<Arc<Generation>> =
+            std::sync::LazyLock::new(|| super::LiveConfig::new(Config::default()).generation());
+        Arc::clone(&DEFAULT)
+    }
+
     /// The collusion fields in effect under this generation.
     #[cfg(feature = "firewall")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the relay gate once it judges under the witness's generation"
-        )
-    )]
     #[must_use]
     pub(crate) fn collusion_view(&self) -> &crate::security::firewall::CollusionView {
         &self.collusion

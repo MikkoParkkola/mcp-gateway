@@ -86,7 +86,9 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
+        let generation = crate::config_reload::Generation::placeholder();
         let message = fw.relay_block_message(
+            generation.collusion_view(),
             who,
             (backend, method),
             params,

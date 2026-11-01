@@ -118,13 +118,20 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            fw.relay_block_message(caller, (server, tool), &params, audit)
-                .inspect(|_| super::audit::note_refused_by(DecisionKind::Firewall, None))
-                .map(|message| crate::Error::Forbidden {
-                    code: -32002,
-                    status: 403,
-                    message,
-                })
+            let generation = crate::config_reload::Generation::placeholder();
+            fw.relay_block_message(
+                generation.collusion_view(),
+                caller,
+                (server, tool),
+                &params,
+                audit,
+            )
+            .inspect(|_| super::audit::note_refused_by(DecisionKind::Firewall, None))
+            .map(|message| crate::Error::Forbidden {
+                code: -32002,
+                status: 403,
+                message,
+            })
         }
         #[cfg(not(feature = "firewall"))]
         {
@@ -367,7 +374,11 @@ impl MetaMcp {
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if let Some(fw) = self.firewall.as_deref() {
-            commit_with(fw, delivered);
+            commit_with(
+                fw,
+                delivered,
+                &crate::config_reload::Generation::placeholder(),
+            );
             return;
         }
         let _ = delivered;

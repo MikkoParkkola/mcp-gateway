@@ -285,6 +285,7 @@ async fn staged_request(
 fn http_relay_refused(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     let verdict = firewall.check_relay(
+        firewall.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("http-caller"),
         "alpha",
         "send",
@@ -604,6 +605,7 @@ async fn stdio_catalogue_is_inside_relay_detection() {
     assert!(read.get("error").is_none(), "base: {read}");
     let params = json!({"name": "send", "arguments": {"text": THIRD}});
     let sent = firewall.check_relay(
+        firewall.paired_generation_for_test().collusion_view(),
         RelayCaller::Keyed("http-caller"),
         "alpha",
         "send",

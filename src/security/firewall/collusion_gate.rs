@@ -359,12 +359,14 @@ impl Firewall {
     /// forwarded params counts, `_meta` included. Findings are audited.
     pub(crate) fn check_relay(
         &self,
+        view: &super::CollusionView,
         caller: RelayCaller<'_>,
         server: &str,
         tool: &str,
         params: &Value,
         audit: (&str, &str),
     ) -> FirewallVerdict {
+        let _ = view; // used by the fix
         let Some(detector) = self.relay_detector() else {
             return FirewallVerdict::allow();
         };
@@ -433,12 +435,13 @@ impl Firewall {
     /// observed relay (`Warn`) is logged here and the call goes.
     pub(crate) fn relay_block_message(
         &self,
+        view: &super::CollusionView,
         caller: RelayCaller<'_>,
         (server, tool): (&str, &str),
         params: &Value,
         audit: (&str, &str),
     ) -> Option<String> {
-        let verdict = self.check_relay(caller, server, tool, params, audit);
+        let verdict = self.check_relay(view, caller, server, tool, params, audit);
         if verdict.action == FirewallAction::Warn {
             tracing::warn!(server, tool, "Firewall: relay observed");
         }
