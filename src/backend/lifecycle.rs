@@ -415,6 +415,7 @@ impl Backend {
         if self.destination() == built_under {
             return Ok(());
         }
+        drop(_pairing);
         debug!(backend = %self.name, "Not connecting: the destination policy changed while it was starting");
         Err(Error::BackendUnavailable(self.name.clone()))
     }

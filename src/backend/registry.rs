@@ -318,6 +318,7 @@ impl BackendRegistry {
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
+            drop(stopping);
             warn!(
                 backend = %backend.name,
                 "Refusing to register a backend during shutdown; it would never be stopped"
@@ -329,6 +330,8 @@ impl BackendRegistry {
             // start publishes between them.
             let _publishing = backend.replaced_transport_cleanups.lock();
             if backend.started_unpinned() {
+                drop(_publishing);
+                drop(stopping);
                 warn!(
                     backend = %backend.name,
                     "Refusing to register a backend that connected before this registry's \

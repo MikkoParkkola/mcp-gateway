@@ -48,6 +48,7 @@ impl Backend {
         // its shutdown signal between ticks, so a probe already in flight can
         // reach this point during teardown.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(_lifecycle);
             debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
             return Ok(RestartOutcome::SkippedStopping);
         }
@@ -88,6 +89,8 @@ impl Backend {
         // rather than hang forever. Correctness must not depend on having won
         // the lock, only on this flag.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(_guard);
+            drop(_lifecycle);
             debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
             return Ok(RestartOutcome::SkippedStopping);
         }
