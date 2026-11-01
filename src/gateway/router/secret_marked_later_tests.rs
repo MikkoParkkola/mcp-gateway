@@ -9,7 +9,9 @@
 use serde_json::json;
 use std::sync::Arc;
 
-use super::direct_guards_fixture::{fixture_with_secrets_over_http, initialize, post_meta_invoke};
+use super::direct_guards_fixture::{
+    fixture_with_secrets_over_http, initialize, post_direct, post_meta_invoke,
+};
 use super::secret_echo_tests::{Calls, Reply, echo_server};
 use super::secret_injection_direct_tests::{finished_task, submit_task};
 
@@ -82,5 +84,43 @@ async fn answers_kept_before_a_value_was_marked_are_redacted_when_served() {
         calls.lock().len(),
         sent,
         "premise: every answer came from a store"
+    );
+}
+
+/// The direct route: a keyed call's stored answer, served again by its key
+/// after the value it holds was marked, is redacted, and the backend is not
+/// called again.
+#[tokio::test]
+async fn a_direct_route_keyed_repeat_is_redacted_when_served() {
+    let calls = Calls::default();
+    let url = echo_server(Arc::clone(&calls), Reply::Echo).await;
+    let fx = fixture_with_secrets_over_http(Vec::new(), url).await;
+    let session = initialize(&fx, "k-std").await;
+    let call = || {
+        post_direct(
+            &fx,
+            "alpha",
+            "k-std",
+            "read",
+            json!({}),
+            Some("idem-direct-marked"),
+            Some(&session),
+        )
+    };
+    let (_, first) = call().await;
+    assert!(
+        first.to_string().contains(MARKED),
+        "premise: kept while plain: {first}"
+    );
+    let sent = calls.lock().len();
+
+    fx.state.backends.mark_for_test("alpha", MARKED);
+
+    let (_, repeat) = call().await;
+    redacted(&repeat, "the direct route's stored answer");
+    assert_eq!(
+        calls.lock().len(),
+        sent,
+        "premise: the repeat came from a store"
     );
 }
