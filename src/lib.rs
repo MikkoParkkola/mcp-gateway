@@ -92,6 +92,7 @@ pub mod kill_switch;
 pub mod kubernetes;
 pub(crate) mod local_day;
 mod log_escape;
+mod log_writer;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
@@ -257,33 +258,53 @@ fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
 /// clients (see issue #224). Writing to stderr is also correct for the HTTP
 /// server mode, where supervisors (systemd, Docker) capture stderr normally.
 ///
+/// Lines go through a bounded queue to one writer thread
+/// ([`log_writer`]): a stderr that stops draining drops and counts lines
+/// instead of blocking the thread that logs. Keep the returned guard alive
+/// for the life of the process and drop it last: dropping it flushes the
+/// queue, waiting at most [`log_writer::LOG_FLUSH_DEADLINE`].
+///
 /// # Errors
 ///
-/// This function currently always succeeds but returns `Result` for
-/// forward compatibility with fallible tracing configurations.
+/// Fails when the writer thread cannot be started.
 #[doc(hidden)]
-pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
+pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<impl Sized + use<>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let filter = cap_handshake_logging(filter);
+    let notice = match format {
+        Some("json") => log_writer::NoticeFormat::Json,
+        _ => log_writer::NoticeFormat::Text,
+    };
+    let (writer, flush) = log_writer::spawn(
+        Box::new(std::io::stderr()),
+        log_writer::LOG_QUEUE_LINES,
+        log_writer::LOG_QUEUE_BYTES,
+        notice,
+    )
+    .map_err(|e| Error::Internal(format!("cannot start the log writer thread: {e}")))?;
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(log_layer(notice, writer))
+        .init();
+    Ok(flush)
+}
 
-    let subscriber = tracing_subscriber::registry().with(filter);
-
+/// The one fmt layer: JSON, or text through [`log_escape::escaping`], written
+/// by `writer`. Shared with the tests so they run the production pipeline.
+fn log_layer<S, W>(
+    format: log_writer::NoticeFormat,
+    writer: W,
+) -> Box<dyn tracing_subscriber::Layer<S> + Send + Sync>
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    W: for<'w> tracing_subscriber::fmt::MakeWriter<'w> + Send + Sync + 'static,
+{
     match format {
-        Some("json") => {
-            subscriber
-                .with(fmt::layer().json().with_writer(std::io::stderr))
-                .init();
-        }
-        _ => {
-            subscriber
-                .with(log_escape::escaping(
-                    fmt::layer().with_writer(std::io::stderr),
-                ))
-                .init();
+        log_writer::NoticeFormat::Json => Box::new(fmt::layer().json().with_writer(writer)),
+        log_writer::NoticeFormat::Text => {
+            Box::new(log_escape::escaping(fmt::layer().with_writer(writer)))
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
