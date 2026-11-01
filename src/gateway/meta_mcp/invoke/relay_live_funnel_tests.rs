@@ -61,7 +61,10 @@ async fn r4_3a_a1_the_http_funnel_records_under_the_captured_generation() {
         lm.firewall().replay_digests(&sync_key()).is_some(),
         "R4.3a a1: no snapshot under the captured `block`"
     );
-    assert!(bob_refused(&lm), "R4.3a a1: nothing was recorded");
+    assert!(
+        bob_refused_with(&lm, &one_fp(0)),
+        "R4.3a a1: nothing was recorded"
+    );
     assert!(ran, "R4.3a a1: the capture hook never ran");
 }
 
