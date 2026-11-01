@@ -81,12 +81,11 @@ impl MetaMcp {
         judge: impl FnOnce(&crate::cost_accounting::config::CostGovernanceConfig) -> R,
     ) -> R {
         let live;
-        let generation = match pinned {
-            Some(generation) => Some(generation),
-            None => {
-                live = self.live_config().map(|live| live.generation());
-                live.as_deref()
-            }
+        let generation = if pinned.is_some() {
+            pinned
+        } else {
+            live = self.live_config().map(|live| live.generation());
+            live.as_deref()
         };
         judge(enforcer.governance(generation))
     }
