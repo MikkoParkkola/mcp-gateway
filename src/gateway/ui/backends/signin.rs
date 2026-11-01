@@ -177,6 +177,10 @@ pub(in crate::gateway::ui) fn with_time(
 }
 
 /// `POST /ui/api/backends/:name/signin` — start a sign-in.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "extractors: the state, the pinned generation, the guard, the caller, the path, the request line and headers, and the body"
+)]
 pub(super) async fn start_sign_in(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
@@ -286,13 +290,11 @@ pub(super) async fn confirm_sign_in(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     guard: Guard,
-    client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }

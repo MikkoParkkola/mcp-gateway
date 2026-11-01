@@ -59,6 +59,7 @@ fn is_cancelled(error: &Error) -> bool {
     matches!(error, Error::AuthorizationCancelled { .. })
 }
 
+#[cfg(unix)]
 fn is_no_token(error: &Error) -> bool {
     error.to_string().contains("stored no token")
 }

@@ -235,6 +235,7 @@ fn url_host(host: &str, loopback_ip: Option<IpAddr>) -> String {
 ///
 /// This allows the caller to get the callback URL before waiting for the
 /// callback, which is necessary to build the authorization URL correctly.
+#[cfg(test)]
 pub async fn start_callback_server(
     expected_state: String,
     host: Option<&str>,

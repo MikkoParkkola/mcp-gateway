@@ -594,6 +594,42 @@ impl OAuthClient {
         }
     }
 
+    /// The client id a login registers (or reuses) with the callback URL it
+    /// bound. A cancel or the deadline during registration ends it there, and
+    /// a cancel that lands as registration completes still wins; the caller
+    /// closes the listener on an error.
+    async fn register_for_login(
+        &self,
+        cancel: &tokio_util::sync::CancellationToken,
+        deadline: Option<tokio::time::Instant>,
+        callback_url: &str,
+    ) -> Result<String> {
+        let cancelled = || Error::AuthorizationCancelled {
+            backend: self.backend_name().to_string(),
+        };
+        // A registration that observes the cancel, as the real one does: the
+        // pause ends when the login is cancelled.
+        #[cfg(all(test, feature = "webui"))]
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {}
+            () = self.registration_pause.pause() => {}
+        }
+        let registered = tokio::select! {
+            biased;
+            () = cancel.cancelled() => Err(cancelled()),
+            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
+            registered = self.ensure_client_id_with_redirect(callback_url) => registered,
+        };
+        registered.and_then(|id| {
+            if cancel.is_cancelled() {
+                Err(cancelled())
+            } else {
+                Ok(id)
+            }
+        })
+    }
+
     /// Everything of a login up to and including the redemption of its code:
     /// the callback server, PKCE, the link, the callback and the exchange. It
     /// saves nothing; the caller decides what to do with the token.
@@ -639,31 +675,9 @@ impl OAuthClient {
             backend: self.backend_name().to_string(),
         };
 
-        // A registration that observes the cancel, as the real one does: the
-        // pause ends when the login is cancelled.
-        #[cfg(all(test, feature = "webui"))]
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {}
-            () = self.registration_pause.pause() => {}
-        }
-        // Now ensure we have a client ID, passing the actual callback URL for
-        // registration. A cancel during registration ends it there: no
-        // browser opens, and the listener is closed before this returns.
-        let registered = tokio::select! {
-            biased;
-            () = cancel.cancelled() => Err(cancelled()),
-            () = crate::oauth::login_gate::past(deadline) => Err(self.incomplete()),
-            registered = self.ensure_client_id_with_redirect(&callback_url) => registered,
-        };
-        // A cancel that lands as registration completes still wins.
-        let registered = registered.and_then(|id| {
-            if cancel.is_cancelled() {
-                Err(cancelled())
-            } else {
-                Ok(id)
-            }
-        });
+        let registered = self
+            .register_for_login(cancel, deadline, &callback_url)
+            .await;
         let client_id = match registered {
             Ok(client_id) => client_id,
             Err(e) => {

@@ -81,6 +81,13 @@ impl SignIn {
 /// What the cell keeps: a fixed status, or the secret-free facts of a held
 /// token, classified against the clock each time the cell is read.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(
+    not(any(test, feature = "webui")),
+    expect(
+        dead_code,
+        reason = "only the web UI read (`snapshot`) classifies what the cell keeps"
+    )
+)]
 enum Stored {
     Fixed(SignIn),
     Held {

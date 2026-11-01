@@ -28,3 +28,4 @@ src/oauth/client/sign_in.rs	installed	1	Reads the confirmed-sign-in count.
 src/oauth/client/sign_in.rs	bump_installed	1	Counts a confirmed sign-in once its file is durable.
 src/oauth/client/sign_in.rs	set_held	1	Stores a held token's expiry and refreshability for the status; it gates no request.
 src/oauth/login_gate.rs	attempt	1	Hands out the login attempt whose finish a decision awaits.
+src/oauth/client/grants.rs	register_for_login	1	Registers the login's client id, ending at a cancel or the deadline; the issuer check stays in issue_token.
