@@ -105,11 +105,10 @@ impl MetaMcp {
         scope: InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> std::result::Result<(), (Error, crate::security::decision_record::DecisionKind)> {
-        self.active_profile(session_id)
-            .check(server, tool)
-            .map_err(|refusal| {
+        self.caller_profile_check(session_id, (server, tool))
+            .map_err(|error| {
                 (
-                    Error::Protocol(refusal),
+                    error,
                     crate::security::decision_record::DecisionKind::RoutingProfile,
                 )
             })?;
@@ -414,7 +413,7 @@ impl MetaMcp {
         is_admin: bool,
     ) -> Result<()> {
         if !is_admin
-            && let Some(capabilities) = self.get_capabilities()
+            && let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && capabilities
                 .with_definition(
@@ -473,7 +472,7 @@ impl MetaMcp {
         tool: &str,
         scope: InvokeScope<'_>,
     ) -> Result<Option<GrantVerdict>> {
-        let Some(cap) = self.get_capabilities() else {
+        let Some(cap) = self.caller_capabilities() else {
             return Ok(None);
         };
         if server != cap.name {

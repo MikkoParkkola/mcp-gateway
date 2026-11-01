@@ -39,10 +39,12 @@ fn every_pre_send_exit_of_request_attempted_is_marked() {
         exits, marked_exits,
         "a pre-send `?` exit without the mark:\n{code}"
     );
-    // The seven reviewed `?` steps; the withheld call's return is the eighth.
+    // The eight reviewed `?` steps (the eighth: a call carrying an injected
+    // secret over a transport that cannot redact it); the withheld call's
+    // return is the ninth.
     assert_eq!(
-        marked_exits, 7,
-        "premise: the seven reviewed pre-send steps are marked"
+        marked_exits, 8,
+        "premise: the eight reviewed pre-send steps are marked"
     );
     assert!(
         region.contains("return Err(refused_before_send(refusal));"),

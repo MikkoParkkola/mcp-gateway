@@ -198,6 +198,8 @@ fn keys() -> Vec<ApiKeyConfig> {
         key("alpha-key", &["alpha", "caps"]),
         key("alpha-only", &["alpha"]),
         key("both-key", &["alpha", "beta", "caps"]),
+        // Scoped to a name no backend registers, beside a registered one.
+        key("gamma-key", &["alpha", "beta", "gamma"]),
         ApiKeyConfig {
             allowed_tools: Some(vec!["alpha_read".to_string()]),
             ..key("read-key", &["*"])

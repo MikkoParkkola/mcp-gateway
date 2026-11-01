@@ -40,6 +40,7 @@ pub(crate) use authorization::{
     sanitize_exempt,
 };
 mod backend_handlers;
+pub(crate) mod caller_hiding;
 mod handlers;
 // The web UI's Try-a-tool route runs this one MCP path in process (U12).
 #[cfg(feature = "webui")]
@@ -154,6 +155,7 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
@@ -179,6 +181,9 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// Slice B T10: only an API-key match records a key's last use.
+#[cfg(all(test, feature = "webui"))]
+mod keys_last_used_callers_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
@@ -355,6 +360,12 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// An echoed injected secret is kept out of the idempotency cache, task
+/// answers and the task store.
+#[cfg(all(test, feature = "firewall"))]
+mod secret_echo_stored_tests;
+#[cfg(test)]
+mod secret_echo_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.

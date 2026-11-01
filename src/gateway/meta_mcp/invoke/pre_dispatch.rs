@@ -36,7 +36,7 @@ impl MetaMcp {
         backend: Option<&crate::backend::Backend>,
         binding: Option<&str>,
     ) -> bool {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(definition) = capabilities.get(tool)
         {

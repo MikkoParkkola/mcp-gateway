@@ -471,6 +471,24 @@ impl HttpTransport {
         identity_key: Option<&str>,
         waiting: Option<super::sse_channel::Waiting>,
     ) -> Result<JsonRpcResponse> {
+        let answer = self
+            .read_answer_unscrubbed(request, response, message_url, identity_key, waiting)
+            .await;
+        match self.needles.get() {
+            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+            None => answer,
+        }
+    }
+
+    /// [`Self::read_answer`] before the scrub: every body is parsed here.
+    async fn read_answer_unscrubbed(
+        &self,
+        request: &JsonRpcRequest,
+        response: reqwest::Response,
+        message_url: &str,
+        identity_key: Option<&str>,
+        waiting: Option<super::sse_channel::Waiting>,
+    ) -> Result<JsonRpcResponse> {
         // Extract session ID from response headers if this caller's bucket is
         // empty (MIK-6784: store under the caller's identity key, never a shared
         // slot). The first request for a new identity has no session; the
@@ -518,12 +536,9 @@ impl HttpTransport {
             // carry `set-cookie`, `authorization` echoes and bearer material.
             // Computed before the macro, as above (MIK-7324).
             let diagnostic_url = sanitize_url_for_diagnostics(message_url);
-            let names: Vec<&str> = response
-                .headers()
-                .keys()
-                .map(header::HeaderName::as_str)
-                .collect();
-            debug!(target: HTTP_TARGET, url = %diagnostic_url, "No session ID in response. Header names: {:?}", names);
+            // The count only: a header name is backend text.
+            let headers = response.headers().len();
+            debug!(target: HTTP_TARGET, url = %diagnostic_url, headers, "No session ID in response");
         }
 
         let status = response.status();
@@ -576,15 +591,15 @@ impl HttpTransport {
             // notification until the call it belongs to had already finished
             // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
             // complete body. Each frame is published as its chunk arrives.
+            use super::sse_decoder::decode_sse_exchange;
             use futures::TryStreamExt;
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
+            let needles = self.needles.get().map(AsRef::as_ref);
             match self.body_budget.get() {
-                Some(budget) => {
-                    super::sse_decoder::decode_sse_exchange(budget.metered(stream)).await
-                }
-                None => super::sse_decoder::decode_sse_exchange(stream).await,
+                Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,
+                None => decode_sse_exchange(stream, needles).await,
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
@@ -606,8 +621,9 @@ impl HttpTransport {
     /// A 2xx JSON body, counted against the byte budget when one is set.
     async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
         match self.body_budget.get() {
-            Some(budget) => serde_json::from_slice(&budget.read(response).await?)
-                .map_err(|e| Error::Transport(format!("Failed to parse response: {e}"))),
+            Some(budget) => serde_json::from_slice(&budget.read(response).await?).map_err(|e| {
+                Error::Transport(super::parse_failure("Failed to parse response", &e))
+            }),
             None => response
                 .json()
                 .await
@@ -648,7 +664,7 @@ impl HttpTransport {
             return Ok(answer);
         }
         serde_json::from_slice(&body)
-            .map_err(|e| Error::Transport(format!("Failed to parse response: {e}")))
+            .map_err(|e| Error::Transport(super::parse_failure("Failed to parse response", &e)))
     }
 
     /// Get next request ID

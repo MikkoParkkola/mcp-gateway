@@ -175,9 +175,7 @@ impl A2aClient {
                 response.status()
             )));
         }
-        let card = read_capped_json(response, "A2A Agent Card").await?;
-        serde_json::from_value(card)
-            .map_err(|e| Error::Protocol(format!("A2A Agent Card is malformed: {e}")))
+        parse_card(read_capped_json(response, "A2A Agent Card").await?)
     }
 
     /// The first JSON-RPC 1.x interface of `card`, held to the configured
@@ -405,7 +403,22 @@ async fn read_capped_json(mut response: reqwest::Response, what: &str) -> Result
         }
         body.extend_from_slice(&chunk);
     }
-    serde_json::from_slice(&body).map_err(|e| Error::Protocol(format!("{what} is not JSON: {e}")))
+    serde_json::from_slice(&body).map_err(|e| malformed(what, &e))
+}
+
+/// The card the agent served.
+fn parse_card(card: Value) -> Result<AgentCard> {
+    serde_json::from_value(card).map_err(|e| malformed("A2A Agent Card", &e))
+}
+
+/// `what` did not decode. A serde error can quote a value the agent sent
+/// (`invalid type: string "…"`), so only where it broke is named.
+fn malformed(what: &str, e: &serde_json::Error) -> Error {
+    Error::Protocol(format!(
+        "{what} is malformed (line {}, column {})",
+        e.line(),
+        e.column()
+    ))
 }
 
 /// A JSON-RPC envelope as the agent's error or its raw result.
@@ -439,8 +452,8 @@ fn decode_reply(envelope: &Value) -> Result<Reply<Box<SendMessageResponse>>> {
         Reply::Answer(result) => result,
         Reply::AgentError { code, message } => return Ok(Reply::AgentError { code, message }),
     };
-    let reply: SendMessageResponse = serde_json::from_value(result)
-        .map_err(|e| Error::Protocol(format!("A2A SendMessage result is malformed: {e}")))?;
+    let reply: SendMessageResponse =
+        serde_json::from_value(result).map_err(|e| malformed("A2A SendMessage result", &e))?;
     if reply.task.is_some() == reply.message.is_some() {
         return Err(Error::Protocol(
             "A2A SendMessage result must hold exactly one of task and message".into(),
@@ -454,7 +467,7 @@ fn decode_task(envelope: &Value, method: &str) -> Result<Reply<Task>> {
     match decode_envelope(envelope)? {
         Reply::Answer(result) => serde_json::from_value(result)
             .map(Reply::Answer)
-            .map_err(|e| Error::Protocol(format!("A2A {method} result is malformed: {e}"))),
+            .map_err(|e| malformed(&format!("A2A {method} result"), &e)),
         Reply::AgentError { code, message } => Ok(Reply::AgentError { code, message }),
     }
 }
