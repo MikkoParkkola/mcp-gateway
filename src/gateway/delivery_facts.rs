@@ -88,18 +88,8 @@ struct Finding {
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryFacts {
     effect: ResponseEffect,
-    /// During this call the gateway removed an injected value from something
-    /// this backend sent: an answer the caller got, or one it never did (a
-    /// discarded page, a handshake, a retried attempt). Never cleared: an
-    /// over-report is the safe direction for a secret-echo control, which an
-    /// under-report would hide. Shared with every nested cell
-    /// ([`discarded`], [`step`]), so a nested send writes it at once, even
-    /// one later refused or cancelled; a fresh delivery ([`scope`]) has its own.
-    echo_redacted: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// The transport's scrub replaced an answer with its refusal in this
-    /// cell. Read with the delivered error ([`echo_refusal_delivered`]), so
-    /// a replaced answer the call never delivered records nothing.
-    echo_refusal_built: bool,
+    /// What the transport's scrub did to an injected value this call sent.
+    echo: Echo,
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
@@ -109,6 +99,23 @@ pub(crate) struct DeliveryFacts {
     last_step: LastStep,
     /// What this delivery's backend sends did.
     sends: Sends,
+}
+
+/// What the injected-value scrub did during a delivery.
+#[derive(Debug, Clone, Default)]
+struct Echo {
+    /// During this call the gateway removed an injected value from something
+    /// this backend sent: an answer the caller got, or one it never did (a
+    /// discarded page, a handshake, a retried attempt). Never cleared: an
+    /// over-report is the safe direction for a secret-echo control, which an
+    /// under-report would hide. Shared with every nested cell
+    /// ([`discarded`], [`step`]), so a nested send writes it at once, even
+    /// one later refused or cancelled; a fresh delivery ([`scope`]) has its own.
+    redacted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The scrub replaced an answer with its refusal in this cell. Read with
+    /// the delivered error ([`echo_refusal_delivered`]), so a replaced answer
+    /// the call never delivered records nothing.
+    refusal_built: bool,
 }
 
 /// The two facts a delivery keeps about its sends. Both can hold at once (a
@@ -136,8 +143,7 @@ impl Default for DeliveryFacts {
     fn default() -> Self {
         Self {
             effect: ResponseEffect::Delivered,
-            echo_redacted: std::sync::Arc::default(),
-            echo_refusal_built: false,
+            echo: Echo::default(),
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
@@ -164,7 +170,7 @@ impl DeliveryFacts {
     /// The strongest effect: this cell's own, raised to `Rewritten` when the
     /// scrub redacted anything during the call.
     fn effect(&self) -> ResponseEffect {
-        if self.echo_redacted.load(std::sync::atomic::Ordering::SeqCst) {
+        if self.echo.redacted.load(std::sync::atomic::Ordering::SeqCst) {
             self.effect.max(ResponseEffect::Rewritten)
         } else {
             self.effect
@@ -174,7 +180,10 @@ impl DeliveryFacts {
     /// A nested cell: fresh facts, sharing this call's redaction fact.
     fn nested(&self) -> Self {
         Self {
-            echo_redacted: std::sync::Arc::clone(&self.echo_redacted),
+            echo: Echo {
+                redacted: std::sync::Arc::clone(&self.echo.redacted),
+                refusal_built: false,
+            },
             ..Self::default()
         }
     }
@@ -339,7 +348,7 @@ pub(crate) fn outlet(error: &crate::Error) {
 pub(crate) fn echo_refusal_delivered(error: &crate::Error) {
     if crate::security::needles::is_echo_refusal(error) {
         with(|facts| {
-            if facts.echo_refusal_built {
+            if facts.echo.refusal_built {
                 facts.effect = facts.effect.max(ResponseEffect::Refused);
             }
         });
@@ -355,11 +364,12 @@ pub(crate) fn send_began() {
 
 /// The transport's scrub removed an injected value from something this
 /// backend sent during the call: recorded `rewritten` whether or not the
-/// caller receives it ([`DeliveryFacts::echo_redacted`]).
+/// caller receives it.
 pub(crate) fn echo_redacted() {
     with(|facts| {
         facts
-            .echo_redacted
+            .echo
+            .redacted
             .store(true, std::sync::atomic::Ordering::SeqCst);
     });
 }
@@ -368,7 +378,7 @@ pub(crate) fn echo_redacted() {
 /// recorded `refused` only where that refusal is delivered
 /// ([`echo_refusal_delivered`]).
 pub(crate) fn echo_refusal_built() {
-    with(|facts| facts.echo_refusal_built = true);
+    with(|facts| facts.echo.refusal_built = true);
 }
 
 /// Run one transport call of this delivery as a counted send: counted when
@@ -506,7 +516,8 @@ pub(crate) fn record_fields(
         // refusal it ends on does, and so does the scrub's redaction fact,
         // which is the whole call's.
         let echoed = facts
-            .echo_redacted
+            .echo
+            .redacted
             .load(std::sync::atomic::Ordering::SeqCst);
         if effect == ResponseEffect::Refused || echoed {
             fields.insert("response_effect".into(), effect.as_str().into());

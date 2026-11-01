@@ -77,6 +77,7 @@ src/gateway/auth_resolved.rs	refuse_collisions	refuse_shared_principals	1	no-rec
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_collisions	1	no-record	config load: the key list's collision check (refuse_collisions)
 src/gateway/auth_resolved.rs	with_keys_of	refuse_collisions	1	no-record	config reload: a reloaded key list that collides is refused whole; no call is delivered
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
+src/gateway/delivery_facts.rs	echo_refusal_delivered	is_echo_refusal	1	not-delivered	a predicate: whether the delivered error reads as the scrub's refusal, read with the cell's echo_refusal_built
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	refuse_on_playbook_run	1	not-a-decision	client-protocol rejection: retry fields on a playbook run
 src/gateway/meta_mcp/admission.rs	admit_operation	refuse_another_era	1	composite-or-replay	a stored delivery not served to the other protocol era
