@@ -15,6 +15,7 @@ use std::rc::Rc;
 
 use super::catalogue::{Route, prompt_with, read_resource};
 use super::catalogue::{assert_catalogue_refused, assert_catalogue_sent};
+use super::meta::meta_fixture;
 use super::*;
 use crate::security::firewall::relay_witness_hook;
 
@@ -127,6 +128,36 @@ async fn t1d_catalogue_admitted_under_off_a_later_block_still_sends() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Block);
     let answer = prompt_with(&fx, Route::Direct, "b", PROSE).await;
+    assert_catalogue_sent(&fx, &answer, forwarded + 1);
+    assert_ordered(&seen, admitted);
+}
+
+/// T3a: meta `catalogue_refusal`, admitted under `block`, `off` published at
+/// the seam: still refused, with status 403. GREEN pin on base.
+#[tokio::test]
+async fn t3a_meta_catalogue_admitted_under_block_a_later_off_still_refuses() {
+    let fx = meta_fixture(catalogue_setup(), None).await;
+    read_resource(&fx, Route::Meta, "a").await;
+    let forwarded = fx.catalogue();
+    let admitted = fx.state.live_config.seq();
+    let seen = arm_reload(&fx, CollusionAction::Off);
+    let answer = prompt_with(&fx, Route::Meta, "b", PROSE).await;
+    assert_catalogue_refused(&fx, &answer, forwarded);
+    assert_eq!(answer.0, 403, "{}", answer.1);
+    assert_ordered(&seen, admitted);
+}
+
+/// T3b: meta `catalogue_refusal`, admitted under `off`, `block` published at
+/// the seam: forwarded. RED on base: refused under the startup `block`.
+#[tokio::test]
+async fn t3b_meta_catalogue_admitted_under_off_a_later_block_still_sends() {
+    let fx = meta_fixture(catalogue_setup(), None).await;
+    read_resource(&fx, Route::Meta, "a").await;
+    let forwarded = fx.catalogue();
+    publish(&fx.state, CollusionAction::Off);
+    let admitted = fx.state.live_config.seq();
+    let seen = arm_reload(&fx, CollusionAction::Block);
+    let answer = prompt_with(&fx, Route::Meta, "b", PROSE).await;
     assert_catalogue_sent(&fx, &answer, forwarded + 1);
     assert_ordered(&seen, admitted);
 }
