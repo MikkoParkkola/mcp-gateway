@@ -172,6 +172,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/discovery/config_scanner.rs",
         "other MCP clients' configs; not the gateway's files",
     ),
+    (
+        "src/discovery/config_scanner_client_scan.rs",
+        "other MCP clients' configs, opened to tell a permission refusal from a bad file before the parse; not the gateway's files",
+    ),
     ("src/fs_lock.rs", "lock files; empty"),
     ("src/fs_lock_windows.rs", "lock files; empty"),
     (
@@ -197,6 +201,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/fragments.rs",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",

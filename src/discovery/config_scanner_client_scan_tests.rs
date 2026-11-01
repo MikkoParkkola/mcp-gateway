@@ -18,6 +18,14 @@ fn claude(path: &Path) -> Candidate {
     }
 }
 
+/// Each unreadable file as its app and file name.
+fn unreadable_names(scan: &ClientScan) -> Vec<(DiscoverySource, String)> {
+    scan.unreadable
+        .iter()
+        .map(|file| (file.source.clone(), file.file_name()))
+        .collect()
+}
+
 fn write(path: &Path, value: &serde_json::Value) {
     crate::gateway::test_helpers::write_owner_only(path, value.to_string()).expect("write");
 }
@@ -73,7 +81,7 @@ async fn an_unreadable_file_is_named_and_the_others_still_scan() {
     let names: Vec<&str> = scan.finds.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, ["srv"]);
     assert_eq!(
-        scan.unreadable,
+        unreadable_names(&scan),
         vec![(DiscoverySource::VsCode, "settings.json".to_string())]
     );
     assert_eq!(scan.fingerprint, ConfigScanner::fingerprint(&candidates));
@@ -95,7 +103,7 @@ async fn a_huge_file_or_a_directory_never_reaches_a_parser() {
 
     assert!(scan.finds.is_empty(), "{:?}", scan.finds);
     assert_eq!(
-        scan.unreadable,
+        unreadable_names(&scan),
         vec![
             (DiscoverySource::ClaudeDesktop, "huge.json".to_string()),
             (DiscoverySource::ClaudeDesktop, "folder.json".to_string()),
@@ -127,4 +135,147 @@ fn the_candidates_name_no_environment_or_process_source() {
         c.source,
         DiscoverySource::Environment | DiscoverySource::RunningProcess
     )));
+}
+
+/// R13: a client file behind a directory the gateway may not search is not
+/// "absent": its stamp differs from a missing file's, and the scan names it
+/// unreadable. Skipped under root, where permissions do not bind.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_behind_an_unsearchable_directory_is_not_absent() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sub = dir.path().join("client");
+    std::fs::create_dir(&sub).expect("dir");
+    let path = sub.join("claude.json");
+    let candidates = [claude(&path)];
+    let absent = ConfigScanner::fingerprint(&candidates);
+
+    write(&path, &entry("v"));
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+    let premise = std::fs::metadata(&path).map_err(|e| e.kind());
+    let denied = ConfigScanner::fingerprint(&candidates);
+    let scan = ConfigScanner::new().scan_candidates(&candidates).await;
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o700)).expect("restore");
+
+    assert_eq!(
+        premise.err(),
+        Some(std::io::ErrorKind::PermissionDenied),
+        "premise: the file's metadata is refused"
+    );
+    assert_ne!(denied, absent, "an unsearchable file read as absent");
+    assert_eq!(
+        scan.unreadable.len(),
+        1,
+        "an unsearchable file was skipped as absent"
+    );
+}
+
+fn candidate(path: &Path, format: Format) -> Candidate {
+    Candidate {
+        path: path.to_path_buf(),
+        source: DiscoverySource::VsCode,
+        format,
+    }
+}
+
+/// R9: each unreadable file carries the reason class it failed for.
+#[tokio::test]
+async fn an_unreadable_file_carries_its_reason_class() {
+    use crate::decisions::UnreadableReason;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let huge = dir.path().join("huge.json");
+    let size = usize::try_from(MAX_CLIENT_FILE + 1).expect("fits");
+    std::fs::write(&huge, vec![b' '; size]).expect("write");
+    let broken = dir.path().join("broken.json");
+    std::fs::write(&broken, "{ not json").expect("write");
+    let candidates = [claude(&huge), claude(&broken)];
+    let rows = ConfigScanner::new()
+        .scan_candidates(&candidates)
+        .await
+        .unreadable_rows();
+    let reason = |file: &str| {
+        rows.iter()
+            .find(|(name, _, _)| name == file)
+            .map(|(_, reason, _)| *reason)
+    };
+    assert_eq!(
+        reason("huge.json"),
+        Some(UnreadableReason::NotAReadableFile)
+    );
+    assert_eq!(reason("broken.json"), Some(UnreadableReason::DidNotParse));
+}
+
+/// R9: a file the gateway may not open reads as `no_permission`, whichever
+/// parser it is for. Skipped under root, where permissions do not bind.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_that_may_not_be_opened_is_no_permission_for_every_format() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut candidates = Vec::new();
+    for (name, format) in [
+        ("claude.json", Format::Claude),
+        ("settings.json", Format::VsCode),
+        ("zed.json", Format::Zed),
+        ("continue.json", Format::Continue),
+    ] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "{}").expect("write");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        assert_eq!(
+            std::fs::File::open(&path).err().map(|e| e.kind()),
+            Some(std::io::ErrorKind::PermissionDenied),
+            "premise: {name} may not be opened"
+        );
+        candidates.push(candidate(&path, format));
+    }
+    let rows = ConfigScanner::new()
+        .scan_candidates(&candidates)
+        .await
+        .unreadable_rows();
+    assert_eq!(rows.len(), 4, "{rows:?}");
+    for (file, reason, _) in &rows {
+        assert_eq!(
+            *reason,
+            crate::decisions::UnreadableReason::NoPermission,
+            "{file}"
+        );
+    }
+}
+
+/// R9: two unreadable files with one name keep distinct path digests, and
+/// a row carries the file name and the digest, never the path.
+#[tokio::test]
+async fn two_unreadable_files_with_one_name_keep_distinct_digests() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut candidates = Vec::new();
+    for app in ["code", "cursor"] {
+        let sub = dir.path().join(app);
+        std::fs::create_dir(&sub).expect("dir");
+        let path = sub.join("settings.json");
+        std::fs::write(&path, "{ not json").expect("write");
+        candidates.push(candidate(&path, Format::VsCode));
+    }
+    let rows = ConfigScanner::new()
+        .scan_candidates(&candidates)
+        .await
+        .unreadable_rows();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_ne!(rows[0].2, rows[1].2, "the two files share a digest");
+    let shown = format!("{rows:?}");
+    assert!(
+        !shown.contains(&dir.path().display().to_string()),
+        "a path reached a row: {shown}"
+    );
+    for (file, _, digest) in &rows {
+        assert_eq!(file, "settings.json");
+        assert_eq!(digest.len(), 64, "a keyed digest: {digest}");
+    }
 }
