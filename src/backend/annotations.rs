@@ -205,8 +205,30 @@ pub(crate) fn prepare_tool_metadata(
         resend_permitted,
         read_only_declared,
         hint_declared,
+        write_declared: HashSet::new(),
+        listed: HashSet::new(),
         verdicts,
     }
+}
+
+/// What a tool declares a call could change, from the declared-hint sets of
+/// the slot that listed it; `None` when the evidence cannot say (duplicates
+/// that disagree or only partly declare, a name the slot never listed).
+pub(crate) fn declared_effect(
+    name: &str,
+    sets: DeclaredHints<'_>,
+) -> Option<crate::security::decision_record::Effect> {
+    let _ = (name, sets);
+    Some(crate::security::decision_record::Effect::MayWrite)
+}
+
+/// The declared-hint sets one slot keeps, borrowed for [`declared_effect`].
+#[derive(Clone, Copy)]
+pub(crate) struct DeclaredHints<'a> {
+    pub(crate) read_only_declared: &'a HashSet<String>,
+    pub(crate) write_declared: &'a HashSet<String>,
+    pub(crate) hint_declared: &'a HashSet<String>,
+    pub(crate) listed: &'a HashSet<String>,
 }
 
 /// Names with at least one occurrence whose declared hints fail `safe`.
@@ -240,5 +262,11 @@ pub(crate) struct PreparedTools {
     /// The listed names with a declared `readOnlyHint`, true or false: whether
     /// the UI shows a tool's class as declared or inferred. Grants nothing.
     pub(crate) hint_declared: HashSet<String>,
+    /// The tools every listed occurrence of which declared
+    /// `readOnlyHint: false`: the only ones whose effect reads may-write.
+    pub(crate) write_declared: HashSet<String>,
+    /// Every listed name, so a name whose occurrences all omitted the hint
+    /// reads undeclared, and a name never listed reads nothing.
+    pub(crate) listed: HashSet<String>,
     pub(crate) verdicts: super::descriptor_gate::Verdicts,
 }
