@@ -196,15 +196,17 @@ fn abandoned_fill_lifecycle() {
             hinted("c", None),
             hinted("d", Some(true)),
             hinted("e", None),
+            hinted("f", Some(true)),
         ],
-        &["a", "d"],
+        &["a", "d", "f"],
     );
-    // Observed: `a` as before, `b` without its hint, `c` now declaring one.
-    // Never reached: `d` and `e`.
+    // Observed: `a` as before, `b` without its hint, `c` now declaring one,
+    // `f` withdrawing its read-only claim. Never reached: `d` and `e`.
     let seen = vec![
         listed("a", Some(true)),
         listed("b", None),
         listed("c", Some(true)),
+        listed("f", Some(false)),
     ];
     let hook = backend.abandoned_fill_hook(
         backend.shared_entry(),
@@ -212,13 +214,14 @@ fn abandoned_fill_lifecycle() {
     );
     hook();
     assert_eq!(
-        effect_of(&backend, &["a", "b", "c", "d", "e"]),
+        effect_of(&backend, &["a", "b", "c", "d", "e", "f"]),
         [
             Some(Effect::ReadOnly),
             None,
             None,
             Some(Effect::ReadOnly),
-            Some(Effect::Undeclared)
+            Some(Effect::Undeclared),
+            None
         ]
     );
 }

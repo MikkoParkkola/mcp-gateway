@@ -216,3 +216,70 @@ async fn a_capability_tool_records_its_definitions_effect() {
         assert_eq!(d["declared_effect_source"], "capability_definition", "{d}");
     }
 }
+
+/// A response-cache hit on a capability keeps its definition's effect and
+/// says so, as the backend hit keeps the tool's.
+#[tokio::test]
+async fn a_capability_cache_hit_records_its_definitions_effect() {
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&hits);
+    let app = axum::Router::new().route(
+        "/lookup",
+        axum::routing::get(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+            async { axum::Json(json!({"value": "ok"})) }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind the endpoint");
+    let port = listener.local_addr().expect("its address").port();
+    tokio::spawn(async move { drop(axum::serve(listener, app).await) });
+    let base_url = crate::test_fixture_host::fixture_url(port);
+    let definition = crate::capability::parse_capability(&format!(
+        "name: lookup\n\
+         description: Look one thing up\n\
+         metadata:\n\
+         \x20 exposure: public\n\
+         \x20 read_only: true\n\
+         providers:\n\
+         \x20 primary:\n\
+         \x20   service: rest\n\
+         \x20   config:\n\
+         \x20     base_url: {base_url}\n\
+         \x20     path: /lookup\n\
+         \x20     method: GET\n"
+    ))
+    .expect("the capability parses");
+    let client = crate::test_fixture_host::fixture_client(Duration::from_secs(5));
+    let executor =
+        Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
+    let caps = Arc::new(crate::capability::CapabilityBackend::new("caps", executor));
+    caps.register_capability(definition).expect("registers");
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = meta(Ok(ok_result()), &dir);
+    meta.set_capabilities(caps);
+    meta.cache = Some(Arc::new(crate::cache::ResponseCache::new()));
+    meta.default_cache_ttl = Duration::from_secs(300);
+    let who = api_key_caller();
+    let args = json!({"server": "caps", "tool": "lookup", "arguments": {}});
+    for _ in 0..2 {
+        let _ = meta
+            .invoke_tool(&args, None, &context(&AllowAll, &who))
+            .await;
+    }
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "premise: the second call was a hit"
+    );
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let hit = &all[1]["decision"];
+    assert_eq!(hit["decided"], "cache_hit_not_redecided", "{hit}");
+    assert_eq!(hit["declared_effect"], "read_only", "{hit}");
+    assert_eq!(
+        hit["declared_effect_source"], "capability_definition",
+        "{hit}"
+    );
+}
