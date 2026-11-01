@@ -736,16 +736,6 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
     }
 }
 
-fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_success(client);
-    }
-}
-
 /// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
 /// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
 /// chokepoint, so without this a client could route around provenance simply
@@ -777,16 +767,7 @@ fn stamp_direct_provenance(
     ));
 }
 
-fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_failure(client);
-    }
-}
-
+mod client_outcome;
 mod costs;
 mod direct_audit;
 mod direct_caller;

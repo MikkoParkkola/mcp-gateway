@@ -319,7 +319,7 @@ async fn finish_response(
     );
     if method == "tools/list" {
         if response.error.is_none() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
         super::normalize_tools_list_response(&route.backend, &mut response);
         // List = invoke: only what this route's `tools/call` admits.
@@ -337,7 +337,7 @@ async fn finish_response(
         );
     } else if method != "tools/call" {
         if !response.excludes_client_accounting() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
     } else {
         super::stamp_direct_provenance(
