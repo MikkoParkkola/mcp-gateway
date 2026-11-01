@@ -16,7 +16,7 @@ pub(super) const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/prove
 
 /// Plain-error refusal gaps, each closed by its follow-up, which deletes the
 /// slug here when it flips the last `pending:<slug>` row.
-const PENDING: [&str; 1] = ["inv2-credential-miss"];
+const PENDING: [&str; 2] = ["inv2-credential-miss", "unbindable-confirmation"];
 
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
