@@ -55,6 +55,8 @@ impl Backend {
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.read_only_declared.write() = prepared.read_only_declared;
         *entry.hint_declared.write() = prepared.hint_declared;
+        *entry.write_declared.write() = prepared.write_declared;
+        *entry.effect_listed.write() = prepared.listed;
         let listing = if truncated {
             crate::backend::Listing::Truncated
         } else {
@@ -94,7 +96,7 @@ impl Backend {
         &self,
         key: &crate::backend::PoolKey,
         listed: &[String],
-        read_only: &HashSet<String>,
+        (read_only, write): (&HashSet<String>, &HashSet<String>),
         resend_safe: &HashSet<String>,
     ) {
         let Some(slot) = self.pool.get(key).map(|slot| Arc::clone(slot.value())) else {
@@ -121,6 +123,8 @@ impl Backend {
                 slot.resend_permitted
                     .write()
                     .retain(|t| resend_safe.contains(t));
+                // Before the read-only set narrows, so it sees what that clears.
+                narrow_effect(&slot, |t| read_only.contains(t), |t| write.contains(t));
                 slot.read_only_declared
                     .write()
                     .retain(|t| read_only.contains(t));
@@ -135,7 +139,7 @@ impl Backend {
         name: &str,
         pins: &std::collections::BTreeMap<String, String>,
         tools: &[serde_json::Value],
-    ) -> (Vec<String>, HashSet<String>, HashSet<String>) {
+    ) -> PageSets {
         let (mut parsed, _unparseable) = crate::backend::descriptor_gate::parse_listed(tools);
         let listed = parsed.iter().map(|t| t.name.clone()).collect();
         let prepared = crate::backend::prepare_tool_metadata(
@@ -144,11 +148,12 @@ impl Backend {
             crate::backend::Judging::AlreadyJudged,
             &mut parsed,
         );
-        (
+        PageSets {
             listed,
-            prepared.read_only_declared,
-            prepared.resend_permitted,
-        )
+            read_only: prepared.read_only_declared,
+            write: prepared.write_declared,
+            resend_safe: prepared.resend_permitted,
+        }
     }
 
     /// A direct drain that ended without being remembered (an error frame, a
@@ -164,13 +169,12 @@ impl Backend {
         if tools.is_empty() {
             return;
         }
-        let (listed, read_only, resend_safe) =
-            Self::page_sets(&self.name, self.flagged_tool_pins(), tools);
+        let page = Self::page_sets(&self.name, self.flagged_tool_pins(), tools);
         self.revoke_from_page(
             &self.pool_key_for(identity_key),
-            &listed,
-            &read_only,
-            &resend_safe,
+            &page.listed,
+            (&page.read_only, &page.write),
+            &page.resend_safe,
         );
     }
 
@@ -193,18 +197,84 @@ impl Backend {
             if pages.is_empty() {
                 return;
             }
-            let (listed, read_only, resend_safe) = Self::page_sets(&name, &pins, &pages);
-            let listed: HashSet<&String> = listed.iter().collect();
+            let page = Self::page_sets(&name, &pins, &pages);
+            let listed: HashSet<&String> = page.listed.iter().collect();
             entry
                 .resend_permitted
                 .write()
-                .retain(|t| !listed.contains(t) || resend_safe.contains(t));
+                .retain(|t| !listed.contains(t) || page.resend_safe.contains(t));
+            // A name the pages never listed keeps its effect; a listed one
+            // keeps it only where the page still declares it. Before the
+            // read-only set narrows, so it sees what that clears.
+            narrow_effect(
+                &entry,
+                |t| !listed.contains(t) || page.read_only.contains(t),
+                |t| !listed.contains(t) || page.write.contains(t),
+            );
             entry
                 .read_only_declared
                 .write()
-                .retain(|t| !listed.contains(t) || read_only.contains(t));
+                .retain(|t| !listed.contains(t) || page.read_only.contains(t));
         })
     }
+
+    /// The declared effect of `tool` in `binding`'s slot, as of its last
+    /// `tools/list`: the same slot resolution the dispatch uses. A cold slot,
+    /// or evidence that cannot say, gives `None`.
+    #[must_use]
+    pub(crate) fn declared_effect_for(
+        &self,
+        binding: Option<&str>,
+        tool: &str,
+    ) -> Option<crate::security::decision_record::Effect> {
+        let slot = self.tools_slot(binding);
+        let (read_only, write) = (slot.read_only_declared.read(), slot.write_declared.read());
+        let (hint, listed) = (slot.hint_declared.read(), slot.effect_listed.read());
+        crate::backend::annotations::declared_effect(
+            tool,
+            crate::backend::annotations::DeclaredHints {
+                read_only_declared: &read_only,
+                write_declared: &write,
+                hint_declared: &hint,
+                listed: &listed,
+            },
+        )
+    }
+}
+
+/// One page's sets, read before any gate dropped a name.
+struct PageSets {
+    listed: Vec<String>,
+    read_only: HashSet<String>,
+    write: HashSet<String>,
+    resend_safe: HashSet<String>,
+}
+
+/// Narrow `entry`'s may-write set to the names `keep_write` keeps, and take
+/// out of the effect's listed names every name whose read-only or may-write
+/// declaration this narrowing clears, so it records no effect rather than
+/// reading undeclared. Called before the caller narrows the read-only set,
+/// which it reads to find the read-only names `keep_read_only` drops.
+fn narrow_effect(
+    entry: &crate::backend::pool::PooledEntry,
+    keep_read_only: impl Fn(&String) -> bool,
+    keep_write: impl Fn(&String) -> bool,
+) {
+    // One lock at a time, read-only set first: the order declared_effect_for
+    // reads them in, so the two cannot deadlock.
+    let mut cleared: Vec<String> = entry
+        .read_only_declared
+        .read()
+        .iter()
+        .filter(|t| !keep_read_only(t))
+        .cloned()
+        .collect();
+    {
+        let mut write = entry.write_declared.write();
+        cleared.extend(write.iter().filter(|t| !keep_write(t)).cloned());
+        write.retain(|t| keep_write(t));
+    }
+    entry.effect_listed.write().retain(|t| !cleared.contains(t));
 }
 
 #[cfg(test)]

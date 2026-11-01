@@ -174,6 +174,9 @@ pub(crate) fn prepare_tool_metadata(
         hints.read_only_hint == Some(true) || hints.idempotent_hint == Some(true)
     });
     let not_read_only = names_failing(tools, |hints| hints.read_only_hint == Some(true));
+    // The effect's evidence, read with the read-only set and before the
+    // inference: may-write only when every occurrence declared false.
+    let not_write = names_failing(tools, |hints| hints.read_only_hint == Some(false));
     // Display only: which names the server classed itself, either way, read
     // before the inference below fills every omitted hint.
     let hint_declared = tools
@@ -200,13 +203,15 @@ pub(crate) fn prepare_tool_metadata(
     // read-only stays out. Only an explicit `readOnlyHint: true` counts; an
     // idempotent write may be retried, but must never be answered from cache.
     let read_only_declared = names_passing(tools, &not_read_only);
+    let write_declared = names_passing(tools, &not_write);
+    let listed = tools.iter().map(|tool| tool.name.clone()).collect();
     normalize_tool_annotations(server, tools);
     PreparedTools {
         resend_permitted,
         read_only_declared,
         hint_declared,
-        write_declared: HashSet::new(),
-        listed: HashSet::new(),
+        write_declared,
+        listed,
         verdicts,
     }
 }
@@ -218,8 +223,19 @@ pub(crate) fn declared_effect(
     name: &str,
     sets: DeclaredHints<'_>,
 ) -> Option<crate::security::decision_record::Effect> {
-    let _ = (name, sets);
-    Some(crate::security::decision_record::Effect::MayWrite)
+    use crate::security::decision_record::Effect;
+    if sets.read_only_declared.contains(name) {
+        Some(Effect::ReadOnly)
+    } else if sets.write_declared.contains(name) {
+        Some(Effect::MayWrite)
+    } else if sets.listed.contains(name) && !sets.hint_declared.contains(name) {
+        // Every occurrence omitted the hint: the tool declared nothing.
+        Some(Effect::Undeclared)
+    } else {
+        // Duplicates that disagree or only partly declare, or a name this
+        // slot never listed: the evidence cannot say.
+        None
+    }
 }
 
 /// The declared-hint sets one slot keeps, borrowed for [`declared_effect`].

@@ -54,6 +54,17 @@ pub(crate) enum Effect {
     Undeclared,
 }
 
+/// Where a declared effect came from: always a claim, never a gateway
+/// guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum EffectSource {
+    /// The backend tool's own `readOnlyHint`.
+    ToolAnnotation,
+    /// The operator's capability definition.
+    CapabilityDefinition,
+}
+
 /// Whether the call was decided for itself, or carried an earlier decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,6 +110,9 @@ pub(crate) struct Decision {
     /// (`response_effect`), never this object's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_effect: Option<Effect>,
+    /// Who declared `declared_effect`; present exactly when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_effect_source: Option<EffectSource>,
     pub decided: Decided,
 }
 
@@ -182,7 +196,7 @@ struct NotedChecks {
     allow: Option<NotedAllow>,
     findings: Option<Vec<DecisionFinding>>,
     findings_truncated: bool,
-    effect: Option<Effect>,
+    effect: Option<(Effect, EffectSource)>,
 }
 
 /// The allow a call names: its kind, rule id, grant id (a matched grant
@@ -287,8 +301,15 @@ impl Noted {
     }
 
     /// What the tool declares the call could change, as this call read it.
-    pub(crate) fn note_effect(&mut self, effect: Effect) {
-        self.checks().effect = Some(effect);
+    pub(crate) fn note_effect(&mut self, effect: Effect, source: EffectSource) {
+        self.checks().effect = Some((effect, source));
+    }
+
+    /// The notes for a call answered without deciding it again (a cache hit):
+    /// no refusal and no allow of its own, but the findings and the declared
+    /// effect this call's admission established.
+    pub(crate) fn as_not_redecided(&self) -> Self {
+        Self::not_redecided()
     }
 
     /// The decision object for this call under the published config `live`.
@@ -344,7 +365,9 @@ impl Noted {
             grant_id,
             request_findings: checks.and_then(|checks| checks.findings.clone()),
             request_findings_truncated: checks.is_some_and(|checks| checks.findings_truncated),
-            declared_effect: checks.and_then(|checks| checks.effect),
+            declared_effect: checks.and_then(|checks| checks.effect.map(|(effect, _)| effect)),
+            declared_effect_source: checks
+                .and_then(|checks| checks.effect.map(|(_, source)| source)),
             decided,
         }
     }

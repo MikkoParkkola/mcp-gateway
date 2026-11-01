@@ -7,7 +7,7 @@
 use serde_json::json;
 
 use super::{
-    AllowRank, DECISION_VERSION, Decided, DecisionFinding, DecisionKind, Effect,
+    AllowRank, DECISION_VERSION, Decided, DecisionFinding, DecisionKind, Effect, EffectSource,
     MAX_REQUEST_FINDINGS, Noted, RULE_ID_TAG, Refused, rule_id,
 };
 use crate::security::audit::AuditOutcome;
@@ -127,7 +127,7 @@ fn a_matched_grant_records_its_grant_id_beside_its_rule_id() {
 fn findings_and_effect_are_kept_whichever_check_wins() {
     let mut noted = Noted::default();
     noted.note_findings([finding("shell_injection", "high", "request_args")]);
-    noted.note_effect(Effect::MayWrite);
+    noted.note_effect(Effect::MayWrite, EffectSource::ToolAnnotation);
     noted.refused(DecisionKind::ToolPolicy, None);
     let refused = noted.decision(
         Decided::Fresh,
@@ -246,5 +246,41 @@ fn rule_ids_are_keyed() {
     assert_ne!(
         rule_id(DecisionKind::Firewall, &a, &definition),
         rule_id(DecisionKind::Firewall, &b, &definition)
+    );
+}
+
+/// A cache hit is not decided again, but keeps the findings and the declared
+/// effect its admission noted, with the effect's source.
+#[test]
+fn a_cache_hit_keeps_the_effect_its_admission_noted() {
+    let mut noted = Noted::default();
+    noted.note_findings([finding("shell_injection", "high", "request_args")]);
+    noted.note_effect(Effect::ReadOnly, EffectSource::CapabilityDefinition);
+    let d = noted
+        .as_not_redecided()
+        .decision(Decided::CacheHitNotRedecided, Refused::No, None);
+    assert_eq!(d.kind, DecisionKind::NotRedecided);
+    assert_eq!(d.declared_effect, Some(Effect::ReadOnly));
+    assert_eq!(
+        d.declared_effect_source,
+        Some(EffectSource::CapabilityDefinition)
+    );
+    assert_eq!(
+        d.request_findings,
+        Some(vec![finding("shell_injection", "high", "request_args")])
+    );
+}
+
+#[test]
+fn the_effect_source_wire_names() {
+    let mut noted = Noted::default();
+    noted.note_effect(Effect::MayWrite, EffectSource::ToolAnnotation);
+    let v = serde_json::to_value(allowed(&noted)).unwrap();
+    assert_eq!(v["declared_effect"], "may_write");
+    assert_eq!(v["declared_effect_source"], "tool_annotation");
+    let none = serde_json::to_value(allowed(&Noted::default())).unwrap();
+    assert!(
+        none.get("declared_effect_source").is_none(),
+        "absent with no effect"
     );
 }

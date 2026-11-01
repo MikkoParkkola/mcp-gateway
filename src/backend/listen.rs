@@ -227,6 +227,8 @@ impl Backend {
             // MIK-8393: the cache's admission set is derived from the same list.
             entry.read_only_declared.write().clear();
             entry.hint_declared.write().clear();
+            entry.write_declared.write().clear();
+            entry.effect_listed.write().clear();
         });
     }
 
