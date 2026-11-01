@@ -187,19 +187,16 @@ fn an_imported_config_with_client_variables_loads() {
 #[test]
 fn every_discovery_debug_line_shows_its_text_escaped() {
     const HOSTILE: &str = "a\u{1b}[31m\u{202e}b\nforged";
-    let rows: [(&str, Box<dyn Fn()>); 3] = [
-        (
-            "Scanning MCP config file",
-            Box::new(|| note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")))),
-        ),
-        (
-            "Found MCP server in environment",
-            Box::new(|| note_environment_server(HOSTILE, "MCP_SERVER_X_URL")),
-        ),
-        (
-            "Found MCP server in environment",
-            Box::new(|| note_environment_server("x", &format!("MCP_SERVER_{HOSTILE}_URL"))),
-        ),
+    let rows: [(&str, fn()); 3] = [
+        ("Scanning MCP config file", || {
+            note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")))
+        }),
+        ("Found MCP server in environment", || {
+            note_environment_server(HOSTILE, "MCP_SERVER_X_URL")
+        }),
+        ("Found MCP server in environment", || {
+            note_environment_server("x", &format!("MCP_SERVER_{HOSTILE}_URL"))
+        }),
     ];
     for (site, log) in rows {
         let ((), logs) = crate::test_log_capture::capture_at(tracing::Level::DEBUG, log);
