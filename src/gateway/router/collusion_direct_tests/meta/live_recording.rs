@@ -118,13 +118,17 @@ async fn r43b_prime_b_off_published_before_delivery_stores_no_replay_entry() {
     let (digests, _) = firewall(&fx)
         .replay_digests(&control)
         .expect("premise: steady block stores the chain's entry under the Sync key");
+    // Seam receipts may sit beside the step receipts (`capture_commit`
+    // keeps both); at least one labelled alpha:read step must be there.
+    let receipts: Vec<(Option<u32>, &str, &str)> = digests
+        .iter()
+        .map(|d| (d.label, d.server.as_str(), d.tool.as_str()))
+        .collect();
     assert!(
-        !digests.is_empty()
-            && digests
-                .iter()
-                .all(|d| d.label.is_some()
-                    && (d.server.as_str(), d.tool.as_str()) == ("alpha", "read")),
-        "premise: the entry holds in-plan alpha:read receipts with step labels"
+        receipts
+            .iter()
+            .any(|&(label, server, tool)| label.is_some() && (server, tool) == ("alpha", "read")),
+        "premise: the entry holds an in-plan, labelled alpha:read receipt: {receipts:?}"
     );
     reload(&fx, CollusionAction::Off);
     let key = keyed_chain(&fx, "r43bp-b").await;
