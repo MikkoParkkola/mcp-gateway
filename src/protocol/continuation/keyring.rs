@@ -247,10 +247,12 @@ impl Keyring {
                 })
         });
 
+        let retained_keys = ring.keys.len();
+        drop(ring);
         tracing::info!(
             retired_kid = old_kid,
             minting_kid = new_kid,
-            retained_keys = ring.keys.len(),
+            retained_keys,
             "continuation key rotated"
         );
         Ok(())

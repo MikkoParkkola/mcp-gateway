@@ -160,10 +160,10 @@ pub struct EraCache {
 }
 
 /// The determination, its lock and its lock-free mirror, private so the only
-/// way to change the determination is [`Guard::set`], which updates the
+/// way to change the determination is [`ObservationGuard::set`], which updates the
 /// mirror bound into the same cell (MIK-8218 invariant).
 ///
-/// A [`Guard`] derefs to the observation for reading only and has no
+/// An [`ObservationGuard`] derefs to the observation for reading only and has no
 /// `Default` and no public constructor, so `*guard = EraObservation::...`,
 /// `*guard = Default::default()`, `mem::take` and a write to some other
 /// mirror are all compile errors, not test failures.
@@ -180,7 +180,7 @@ mod determination {
     }
 
     /// The held era lock, bound to its cell's mirror.
-    pub(super) struct Guard<'a> {
+    pub(super) struct ObservationGuard<'a> {
         observation: tokio::sync::MutexGuard<'a, EraObservation>,
         mirror: &'a AtomicU8,
     }
@@ -191,8 +191,8 @@ mod determination {
 
     impl Cell {
         /// Take the era lock.
-        pub(super) async fn lock(&self) -> Guard<'_> {
-            Guard {
+        pub(super) async fn lock(&self) -> ObservationGuard<'_> {
+            ObservationGuard {
                 observation: self.observation.lock().await,
                 mirror: &self.mirror,
             }
@@ -208,7 +208,7 @@ mod determination {
         }
     }
 
-    impl Guard<'_> {
+    impl ObservationGuard<'_> {
         /// The one write of the determination: the observation and its
         /// mirror change together, under the lock.
         pub(super) fn set(&mut self, value: EraObservation) {
@@ -225,7 +225,7 @@ mod determination {
         }
     }
 
-    impl std::ops::Deref for Guard<'_> {
+    impl std::ops::Deref for ObservationGuard<'_> {
         type Target = EraObservation;
         fn deref(&self) -> &EraObservation {
             &self.observation
@@ -500,7 +500,7 @@ impl EraCache {
     /// Run one probe and record what it decided. The caller owns the lock.
     async fn probe_and_store<F, Fut, I>(
         &self,
-        guard: &mut determination::Guard<'_>,
+        guard: &mut determination::ObservationGuard<'_>,
         trigger: ProbeTrigger,
         probe: F,
         install: I,
