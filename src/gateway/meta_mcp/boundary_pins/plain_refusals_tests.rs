@@ -16,7 +16,7 @@ pub(super) const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/prove
 
 /// Plain-error refusal gaps, each closed by its follow-up, which deletes the
 /// slug here when it flips the last `pending:<slug>` row.
-const PENDING: [&str; 1] = ["MIK-8998"];
+const PENDING: [&str; 1] = ["inv2-credential-miss"];
 
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in delivery_framing.rs (`Forbidden`, `GatewayRefused`,
@@ -403,7 +403,7 @@ fn credential_miss_ordinal(source: &str) -> usize {
 }
 
 #[test]
-fn the_inv2_branch_is_pending_on_mik_8998() {
+fn the_inv2_credential_miss_is_pending() {
     let source = std::fs::read_to_string(crate_root().join("src/gateway/meta_mcp/search.rs"))
         .expect("search.rs reads");
     let ordinal = credential_miss_ordinal(&source);
@@ -414,7 +414,7 @@ fn the_inv2_branch_is_pending_on_mik_8998() {
         .into_iter()
         .find(|l| l.starts_with(&key))
         .unwrap_or_else(|| panic!("no row for the credential miss: {key}"));
-    assert_eq!(row(line).class, "pending:MIK-8998", "{line}");
+    assert_eq!(row(line).class, "pending:inv2-credential-miss", "{line}");
 }
 
 fn error_enum(source: &str) -> syn::ItemEnum {
