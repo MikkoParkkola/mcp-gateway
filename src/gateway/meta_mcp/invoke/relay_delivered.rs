@@ -29,20 +29,20 @@ impl MetaMcp {
             let digest = fw.delivery_digest(server, tool, value)?;
             let (key, keyed) = (who.key.to_owned(), who.keyed);
             let (server, tool) = (server.to_owned(), tool.to_owned());
-            let live = self.live_config();
+            // Checked here, not in the closure: a channel may run the commit
+            // under its own lock (`streaming.rs`), and nothing logs there.
+            let Some(live) = self.live_config() else {
+                super::staging::unpublished("bridge");
+                return None;
+            };
             Some(crate::gateway::input_bridge::DeliveryCommit::new(
                 move || {
                     let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
                     // Read when delivery is confirmed, not when built.
-                    let generation = live.as_ref().map(|live| live.generation());
+                    let generation = live.generation();
                     #[cfg(all(test, feature = "firewall"))]
                     super::commit_capture_hook::run();
-                    match generation {
-                        Some(generation) => {
-                            fw.record_digest(caller, &server, &tool, &digest, &generation);
-                        }
-                        None => super::staging::unpublished("bridge"),
-                    }
+                    fw.record_digest(caller, &server, &tool, &digest, &generation);
                 },
             ))
         }
