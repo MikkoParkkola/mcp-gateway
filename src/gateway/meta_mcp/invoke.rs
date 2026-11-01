@@ -359,6 +359,8 @@ mod ask_expiry_budget_tests;
 
 #[cfg(test)]
 mod bridge_send_refusal_tests;
+#[cfg(test)]
+mod refusal_first_scan_tests;
 
 #[cfg(test)]
 mod tracing_target_tests;
