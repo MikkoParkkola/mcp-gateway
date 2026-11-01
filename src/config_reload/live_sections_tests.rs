@@ -366,18 +366,21 @@ async fn g6_a_refused_preparation_changes_nothing_and_g5_one_publish() {
 
 // G7: the meta-tool's reload context and the file watcher publish through
 // the same holder, so either one changes what the next request takes. The
-// meta-tool path runs first, before any watcher can race it.
-#[tokio::test]
-async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
+// meta-tool path runs first, before any watcher can race it. `texts` are the
+// file's three states: the start, the meta-tool's edit and the watcher's;
+// `published` says whether a generation shows the state of step 1 or 2.
+async fn both_contexts_publish(
+    texts: [String; 3],
+    published: impl Fn(&super::Generation, usize) -> bool,
+) {
     use std::sync::Arc;
     use std::time::Duration;
     let write = |path: &std::path::Path, text: &str| {
         crate::gateway::test_helpers::write_owner_only(path, text)
     };
-    let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.yaml");
-    write(&path, &flag(true)).expect("write");
+    write(&path, &texts[0]).expect("write");
     let initial = Config::load(Some(&path)).expect("loads");
     let live = Arc::new(LiveConfig::new(initial.clone()));
     let registry = Arc::new(crate::backend::BackendRegistry::new());
@@ -390,15 +393,12 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         Duration::from_secs(60),
     )
     .expect("the registry pairs with the config");
-    write(&path, &flag(false)).expect("write");
+    write(&path, &texts[1]).expect("write");
     meta_tool
         .reload_outcome()
         .await
         .expect("the meta-tool reload applies");
-    assert!(
-        !live.generation().sanitize_input(),
-        "meta-tool: not published"
-    );
+    assert!(published(&live.generation(), 1), "meta-tool: not published");
 
     let (_shutdown, shutdown_rx) = tokio::sync::broadcast::channel(1);
     let _watcher = super::ConfigWatcher::start_with_hook(
@@ -418,15 +418,44 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
         super::refusals::ReloadReporting::default(),
     )
     .expect("the watcher starts");
-    write(&path, &flag(true)).expect("write");
+    write(&path, &texts[2]).expect("write");
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while !live.generation().sanitize_input() {
+    while !published(&live.generation(), 2) {
         assert!(
             tokio::time::Instant::now() < deadline,
             "watcher: the edit was never published"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+}
+
+#[tokio::test]
+async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
+    let flag = |on: bool| format!("security:\n  sanitize_input: {on}\n");
+    both_contexts_publish([flag(true), flag(false), flag(true)], |generation, step| {
+        generation.sanitize_input() == (step != 1)
+    })
+    .await;
+}
+
+// T20 (U19 PR3a): a budget-and-alert edit reaches the live generation through
+// both entry points.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn t20_both_reload_contexts_publish_a_budget_and_alert_edit() {
+    let governed = |daily: f64, percent: u32| {
+        format!(
+            "cost_governance:\n  enabled: true\n  budgets:\n    daily: {daily}\n  \
+             alerts:\n    - at_percent: {percent}\n      action: block\n"
+        )
+    };
+    let texts = [governed(10.0, 90), governed(5.0, 60), governed(7.0, 70)];
+    both_contexts_publish(texts, |generation, step| {
+        let governance = &generation.config().cost_governance;
+        governance.budgets.daily == Some([10.0, 5.0, 7.0][step])
+            && governance.alerts.first().map(|rule| rule.at_percent) == Some([90, 60, 70][step])
+    })
+    .await;
 }
 
 // F7: a reload of a file that does not parse is refused, and the running
