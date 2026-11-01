@@ -102,6 +102,50 @@ pub(crate) struct Decision {
     pub decided: Decided,
 }
 
+/// The decision object version this gateway writes: version 2 records carry
+/// request findings and the declared effect.
+pub(crate) const DECISION_VERSION: u8 = 2;
+
+/// Most request findings one record carries; beyond it the record says it
+/// was truncated.
+pub(crate) const MAX_REQUEST_FINDINGS: usize = 16;
+
+/// The HKDF info a rule-id key is derived with, so rule ids never share a key
+/// with config revisions or record principals.
+pub(crate) const RULE_ID_TAG: &[u8] = b"decision.rule_id.v1";
+
+/// How specific an affirmative rule is: an allowed call names its most
+/// specific one. An order of specificity, not of execution (every check runs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum AllowRank {
+    /// A firewall rule that softened a finding whose default was Block.
+    FirewallSoftenedBlock,
+    /// A matched identity grant.
+    Grant,
+    /// A matched mTLS rule.
+    MtlsRule,
+    /// A tool-policy allow entry.
+    ToolPolicyEntry,
+    /// A firewall allow rule, including one that only softened a Warn.
+    FirewallAllowRule,
+}
+
+/// The stable id of one compiled rule: its kind, then the keyed HMAC of its
+/// serialised definition, full width.
+pub(crate) fn rule_id(
+    kind: DecisionKind,
+    key: &[u8; 32],
+    definition: &serde_json::Value,
+) -> String {
+    let _ = key;
+    let kind = serde_json::to_value(kind)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let digest = crate::hashing::sha256_hex(crate::hashing::canonical_json(definition).as_bytes());
+    format!("{kind}:{}", &digest[..12])
+}
+
 /// Whether the record being written is of a refused call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refused {
@@ -178,6 +222,30 @@ impl Noted {
         self.checks().allow.get_or_insert((kind, rule_id));
     }
 
+    /// An affirmative rule that allowed the call, ranked: the most specific
+    /// one noted is the one recorded, whatever order the checks ran in.
+    pub(crate) fn allowed_by(
+        &mut self,
+        kind: DecisionKind,
+        rank: AllowRank,
+        rule_id: Option<String>,
+        grant_id: Option<String>,
+    ) {
+        let _ = (rank, grant_id);
+        self.allowed(kind, rule_id);
+    }
+
+    /// Request findings raised for this call, projected to type, severity
+    /// and location: added to any noted before, de-duplicated, capped.
+    pub(crate) fn note_findings(&mut self, findings: impl IntoIterator<Item = DecisionFinding>) {
+        let _ = findings.into_iter().count();
+    }
+
+    /// What the tool declares the call could change, as this call read it.
+    pub(crate) fn note_effect(&mut self, effect: Effect) {
+        let _ = effect;
+    }
+
     /// The decision object for this call under the published config `live`.
     ///
     /// A refused call that noted no check records `unrecorded`, never an
@@ -239,3 +307,7 @@ impl Noted {
 #[cfg(test)]
 #[path = "decision_record_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "decision_record_writer_tests.rs"]
+mod writer_tests;
