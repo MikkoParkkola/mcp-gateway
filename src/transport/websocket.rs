@@ -650,7 +650,7 @@ impl Transport for WebSocketTransport {
     }
 
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let answer = backend_request(async move {
+        backend_request(async move {
             let id = self.next_id();
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
@@ -688,7 +688,7 @@ impl Transport for WebSocketTransport {
             // Finished, answered or failed: the transport's own timeout is not a
             // cancel (design Q1).
             cancel.disarm();
-            match outcome {
+            let answer = match outcome {
                 Ok(Ok(Ok(response))) => Ok(response),
                 Ok(Err(e)) => Err(e),
                 Ok(Ok(Err(_))) => Err(Error::Transport(
@@ -697,16 +697,17 @@ impl Transport for WebSocketTransport {
                 Err(_) => Err(Error::BackendTimeout(
                     "WebSocket request timed out".to_string(),
                 )),
+            };
+            // Scrubbed on the call's own task (the reader routes the answer as
+            // sent), as the body's last step: a redacted answer stays the
+            // backend's, and a refusal is an error `Error::origin` counts as
+            // the gateway's.
+            match self.inner.needles.get() {
+                Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+                None => answer,
             }
         })
-        .await;
-        // Scrubbed on the call's own task (the reader routes the answer as
-        // sent), after the backend's wait is timed: a redacted answer is still
-        // the backend's, a refusal is the gateway's.
-        match self.inner.needles.get() {
-            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
-            None => answer,
-        }
+        .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {

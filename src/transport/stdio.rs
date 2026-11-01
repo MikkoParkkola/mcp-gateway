@@ -395,7 +395,7 @@ impl Transport for StdioTransport {
     }
 
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let outcome = backend_request(async move {
+        backend_request(async move {
             let id = self.next_id();
             let request = JsonRpcRequest {
                 jsonrpc: "2.0".to_string(),
@@ -431,15 +431,15 @@ impl Transport for StdioTransport {
             // The guards drop after this value: the pending entry and progress go.
             let outcome = self.exchange(message, rx, Some(&claim)).await;
             cancel.disarm();
-            outcome
+            // Scrubbed on the call's own task, as the body's last step: a
+            // redacted answer stays the backend's, and a refusal is an error
+            // `Error::origin` counts as the gateway's.
+            match self.needles.get() {
+                Some(needles) => crate::security::needles::scrub_answer(needles, outcome),
+                None => outcome,
+            }
         })
-        .await;
-        // Scrubbed on the call's task, after the backend's wait is timed: a
-        // redacted answer is still the backend's, a refusal is the gateway's.
-        match self.needles.get() {
-            Some(needles) => crate::security::needles::scrub_answer(needles, outcome),
-            None => outcome,
-        }
+        .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {

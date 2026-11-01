@@ -582,10 +582,10 @@ fn agent_error(id: RequestId, code: i32, message: &str) -> JsonRpcResponse {
 #[async_trait]
 impl Transport for A2aTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        // The backend's wait is timed; the answer is scrubbed after it.
-        self.scrubbed(
-            backend_request(async move { self.dispatch(method, params, &[], None).await }).await,
+        backend_request(
+            async move { self.scrubbed(self.dispatch(method, params, &[], None).await) },
         )
+        .await
     }
 
     /// Per-request headers (a propagated end-user credential) go on this one
@@ -598,13 +598,13 @@ impl Transport for A2aTransport {
         identity_key: Option<&str>,
         _resend: crate::transport::ResendPermission,
     ) -> Result<JsonRpcResponse> {
-        self.scrubbed(
-            backend_request(async move {
+        backend_request(async move {
+            self.scrubbed(
                 self.dispatch(method, params, extra_headers, identity_key)
-                    .await
-            })
-            .await,
-        )
+                    .await,
+            )
+        })
+        .await
     }
 
     fn redacts_injected_values(&self) -> bool {
