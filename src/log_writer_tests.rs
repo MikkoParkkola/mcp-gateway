@@ -279,6 +279,23 @@ fn l1d2_the_flush_keeps_one_deadline_and_waits_only_for_what_is_left() {
         Some(Duration::from_millis(500)),
         "the remaining budget, never a fresh one"
     );
+
+    // A send that itself takes a second leaves only the second after it.
+    let sent = flush_until(
+        deadline,
+        || Sent::Yes,
+        |d| {
+            waited.set(Some(d));
+            true
+        },
+        clock(start, &[1000]),
+    );
+    assert!(sent);
+    assert_eq!(
+        waited.get(),
+        Some(Duration::from_secs(1)),
+        "the budget is read after the send, not before it"
+    );
 }
 
 /// The production flush deadline is 2 s (L1d-2).

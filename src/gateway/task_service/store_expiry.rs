@@ -274,18 +274,6 @@ impl TaskStore {
 }
 
 impl Shared {
-    /// Rows served or reserved for `admission`'s principal.
-    fn held_by_owner(&self, admission: &super::super::record::AdmissionRecord) -> usize {
-        let state = self.state();
-        state
-            .entries
-            .values()
-            .map(|entry| &entry.record.admission)
-            .chain(state.reserved.iter().map(|(kept, _)| kept))
-            .filter(|kept| kept.principal_digest == admission.principal_digest)
-            .count()
-    }
-
     /// Apply one sealed row's re-read (MIK-8052, MIK-8121). A row that restores
     /// is served again under the ordering lock, which every mutation takes, so
     /// nothing reaches it by id before it is settled, published and its key
@@ -320,7 +308,8 @@ impl Shared {
         }
         // The load's per-principal cap holds for a repaired row too: a seal
         // never lifts over a directory startup would refuse.
-        if self.held_by_owner(&admission) >= self.limits.per_principal {
+        let held = super::principal_rows(&self.state(), &admission.principal_digest);
+        if held >= self.limits.per_principal {
             drop(order);
             tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
             return;

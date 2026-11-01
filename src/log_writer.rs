@@ -180,7 +180,8 @@ pub(crate) fn flush_until(
             return false;
         }
         match send() {
-            Sent::Yes => return wait(deadline - t),
+            // What is left once the marker is in: the send itself takes time.
+            Sent::Yes => return wait(deadline.saturating_duration_since(now())),
             Sent::Full => {}
             Sent::Gone => return false,
         }
