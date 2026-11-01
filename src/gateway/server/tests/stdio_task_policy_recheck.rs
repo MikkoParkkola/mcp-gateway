@@ -31,6 +31,7 @@ async fn a_stdio_task_worker_refuses_a_tool_the_current_policy_denies() {
     let retry = keyed("u5b");
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &fixture.policy,
+        generation: None,
     };
     let mut caller = Gateway::build_stdio_caller_context(
         true,

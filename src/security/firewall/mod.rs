@@ -408,6 +408,27 @@ impl Firewall {
         &self.startup
     }
 
+    /// The policy `generation` compiled, so a reload's rules decide the next
+    /// check (ADR-029, amended). With no generation (a `MetaMcp` with no live
+    /// config, which no production server builds: `live_config_guard_tests`)
+    /// it is the startup policy, logged once per process outside tests.
+    pub(crate) fn policy_under<'a>(
+        &'a self,
+        generation: Option<&'a crate::config_reload::Generation>,
+    ) -> &'a FirewallPolicy {
+        if let Some(generation) = generation {
+            return generation.firewall_policy();
+        }
+        #[cfg(not(test))]
+        {
+            static LOGGED: std::sync::Once = std::sync::Once::new();
+            LOGGED.call_once(|| {
+                tracing::error!("firewall judged with startup policy: no live config");
+            });
+        }
+        &self.startup
+    }
+
     /// [`Self::check_request`] with the caller's proven key, for a rule's
     /// `keys` scope; the entry point every gateway route uses (POLICY.2).
     pub(crate) fn check_request_keyed(

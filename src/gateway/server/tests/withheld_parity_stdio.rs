@@ -389,6 +389,7 @@ async fn direct_task_call(fx: &Twin, tool: &str) -> Value {
     let retry = super::owner2_stdio_tasks::keyed("wh-13");
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &fx.fixture.policy,
+        generation: None,
     };
     let mut caller = crate::gateway::Gateway::build_stdio_caller_context(
         true,

@@ -17,6 +17,9 @@ pub struct Generation {
     /// The resolved API key table, with the running restart-only `auth`
     /// settings and the shared per-client store.
     auth: Arc<ResolvedAuthConfig>,
+    /// `security.tool_policy`, compiled once per generation (ADR-029, amended):
+    /// every authorizer judged under this generation reads it.
+    tool_policy: Arc<crate::security::ToolPolicy>,
     /// `security.firewall`'s rules and redaction switch, compiled once per
     /// generation (ADR-029, amended): every check judged under this
     /// generation reads them, so one request never mixes two rule sets.
@@ -82,6 +85,9 @@ impl Generation {
             collusion: Arc::new(crate::security::firewall::CollusionView::compile(
                 &config.security.firewall.collusion,
             )),
+            tool_policy: Arc::new(crate::security::ToolPolicy::from_config(
+                &config.security.tool_policy,
+            )),
             config: Arc::new(config),
             auth,
         }
@@ -111,6 +117,9 @@ impl Generation {
             } else {
                 Arc::clone(&previous.collusion)
             },
+            tool_policy: Arc::new(crate::security::ToolPolicy::from_config(
+                &config.security.tool_policy,
+            )),
             config: Arc::new(config),
             auth,
         }
@@ -129,15 +138,14 @@ impl Generation {
         &self.auth
     }
 
+    /// The tool policy compiled from this generation's config.
+    #[must_use]
+    pub(crate) fn tool_policy(&self) -> &crate::security::ToolPolicy {
+        &self.tool_policy
+    }
+
     /// The firewall policy compiled from this generation's config.
     #[cfg(feature = "firewall")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the firewall checks once they judge under the request's generation"
-        )
-    )]
     #[must_use]
     pub(crate) fn firewall_policy(&self) -> &crate::security::firewall::FirewallPolicy {
         &self.firewall

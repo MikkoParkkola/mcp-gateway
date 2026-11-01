@@ -361,8 +361,8 @@ pub(super) fn decide_tool_target<'a>(
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
         .and_then(|()| {
-            state
-                .tool_policy
+            generation
+                .tool_policy()
                 .check(target.server, target.tool)
                 .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
         })
@@ -670,6 +670,9 @@ pub(crate) struct RouterAuthorizer<'a> {
 }
 
 impl ToolAuthorizer for RouterAuthorizer<'_> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        Some(self.generation)
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         decide_tool_target(
             self.state,

@@ -506,6 +506,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
     let policy = ToolPolicy::default();
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let retry = RetryFields::default();
     let caller = Gateway::build_stdio_caller_context(

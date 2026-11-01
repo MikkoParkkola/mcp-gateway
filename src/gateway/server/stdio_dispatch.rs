@@ -26,7 +26,7 @@ impl Gateway {
     )]
     pub(super) async fn dispatch_relay_scoped(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         _mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         mut request: serde_json::Value,
         client: StdioClient<'_>,
@@ -37,7 +37,10 @@ impl Gateway {
         use crate::protocol::JsonRpcResponse;
 
         let session_id = client.session_id;
-        let policy = ToolPolicyAuthorizer { tool_policy };
+        let policy = ToolPolicyAuthorizer {
+            tool_policy: generation.tool_policy(),
+            generation: generation.generation(),
+        };
         let scope = InvokeScope::stdio(
             &policy,
             crate::identity_propagation::CallerProof::new(
@@ -110,7 +113,7 @@ impl Gateway {
                 Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
                     Self::dispatch_tools_call(
                         meta_mcp,
-                        tool_policy,
+                        generation,
                         &mut request,
                         id,
                         client,
@@ -514,7 +517,7 @@ impl Gateway {
     #[expect(clippy::too_many_lines, reason = "one admission path, kept whole")]
     async fn dispatch_tools_call(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         request: &mut serde_json::Value,
         id: crate::protocol::RequestId,
         client: StdioClient<'_>,
@@ -543,7 +546,8 @@ impl Gateway {
             // for `gateway_invoke` alone, so a stdio playbook or code-mode
             // step reached a backend with no policy check at all.
             let stdio_authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
-                tool_policy: tool_policy.as_ref(),
+                tool_policy: generation.tool_policy(),
+                generation: generation.generation(),
             };
 
             let retry = crate::protocol::mrtr::RetryFields::from_params(params);

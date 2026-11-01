@@ -46,7 +46,7 @@ impl Gateway {
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy,
+            tool_policy: _,
             mtls_policy,
             data_dir,
             record_key,
@@ -128,7 +128,7 @@ impl Gateway {
         meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
         let task_store =
-            stdio_tasks::open(&self.config, &meta_mcp, &tool_policy, &live_config).await;
+            stdio_tasks::open(&self.config, &meta_mcp, &live_config).await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());
@@ -226,7 +226,7 @@ impl Gateway {
         // watchers stop with the announcer, so they end on every exit path.
         let announcer = super::tools_changed::stdio::StdioAnnouncer::start(
             (Arc::clone(&self.backends), Arc::clone(&meta_mcp)),
-            Arc::clone(&tool_policy),
+            Arc::clone(&live_config),
             nudge_rx,
             writer.clone(),
         );
@@ -327,9 +327,9 @@ impl Gateway {
             // ADR-023: this line is judged by the generation current as it is
             // read, held for its whole dispatch; taken before parsing, so a
             // reload while the line is parsed cannot reach it.
-            let sanitize = super::stdio_single::InputSanitizing::from_setting(
-                live_config.generation().sanitize_input(),
-            );
+            let generation = live_config.generation();
+            let sanitize =
+                super::stdio_single::InputSanitizing::from_setting(generation.sanitize_input());
             let line = line.trim().to_string();
             if line.is_empty() {
                 continue;
@@ -427,7 +427,7 @@ impl Gateway {
                     break;
                 }
                 let meta_mcp = Arc::clone(&meta_mcp);
-                let tool_policy = Arc::clone(&tool_policy);
+                let generation = Arc::clone(&generation);
                 let mtls_policy = Arc::clone(&mtls_policy);
                 let (writer, reads) = (writer.clone(), Arc::clone(&reads));
                 let admission = Arc::clone(&admission);
@@ -446,7 +446,7 @@ impl Gateway {
                         let (responses, _) = Self::dispatch_streaming_notifications(
                             Box::pin(Self::dispatch_batch_read(
                                 &meta_mcp,
-                                &tool_policy,
+                                &generation,
                                 &mtls_policy,
                                 request,
                                 (session_id, sanitize, serving),
@@ -517,7 +517,7 @@ impl Gateway {
                 .and_then(|id| serde_json::from_value(id.clone()).ok());
             let task = {
                 let meta_mcp = Arc::clone(&meta_mcp);
-                let tool_policy = Arc::clone(&tool_policy);
+                let generation = Arc::clone(&generation);
                 let mtls_policy = Arc::clone(&mtls_policy);
                 // Cloned, not borrowed: the caller context holds
                 // `&dyn ClientChannel` and a spawned task needs `'static`.
@@ -541,7 +541,7 @@ impl Gateway {
                         let ((response, staged), hidden) = Self::dispatch_streaming_notifications(
                             Box::pin(Self::dispatch_single_staged(
                                 &meta_mcp,
-                                &tool_policy,
+                                &generation,
                                 &mtls_policy,
                                 request,
                                 StdioClient {

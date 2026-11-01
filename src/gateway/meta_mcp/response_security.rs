@@ -391,9 +391,10 @@ impl super::MetaMcp {
             use crate::security::response_policy::{ResponseArtifactKind, ResponseMutationPolicy};
 
             let mut inspected = challenge.clone();
+            let published = self.current_generation();
             let verdict = firewall
                 .check_response_artifact(
-                    firewall.startup_policy(),
+                    firewall.policy_under(published.as_deref()),
                     &mut inspected,
                     targets,
                     correlation,
