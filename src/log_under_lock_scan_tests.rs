@@ -255,6 +255,14 @@ impl Scan<'_> {
                 .get_ident()
                 .is_some_and(|i| held.contains(&i.to_string())),
             syn::Expr::Block(b) => self.block_yields(&b.block, held),
+            // `let g = select! { g = m.lock() => g, .. }`: syn sees only tokens,
+            // so a macro that acquires inside yields a guard.
+            syn::Expr::Macro(m) => {
+                let tokens = m.mac.tokens.to_string();
+                ACQUIRE
+                    .iter()
+                    .any(|a| tokens.contains(&format!(". {a} ()")))
+            }
             syn::Expr::Match(m) => {
                 let scrutinee = self.acquires(&m.expr, held);
                 m.arms.iter().any(|a| {

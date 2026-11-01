@@ -129,6 +129,11 @@ const CASES: &[(&str, &str, &str)] = &[
         "async fn f(m: &M) { let g = m.lock().unwrap(); drop(g); tokio::select! { _ = tick() => { warn!(\"x\"); } } }",
     ),
     (
+        "guard bound out of select!",
+        "async fn f(m: &M) { let g = tokio::select! { g = m.lock() => g }; warn!(\"x\"); }",
+        "async fn f(m: &M) { let g = tokio::select! { g = m.lock() => g }; drop(g); warn!(\"x\"); }",
+    ),
+    (
         "zero-argument read",
         "fn f(l: &L) { let g = l.read(); tracing::event!(Level::WARN, \"x\"); }",
         "fn f(r: &mut R, buf: &mut [u8]) { let n = r.read(buf); warn!(\"x\"); }",

@@ -356,4 +356,9 @@ fn l1h_a_text_line_is_still_escaped_on_its_way_through_the_queue() {
         !text.contains("\x1b[2K"),
         "a field wrote a raw control sequence: {text:?}"
     );
+    // Escaped, not stripped: the field's text is all still there.
+    assert!(
+        text.contains(r"runner\n2026-10-28") && text.contains(r"\u{1b}[2K"),
+        "the field's controls are written as escapes: {text:?}"
+    );
 }
