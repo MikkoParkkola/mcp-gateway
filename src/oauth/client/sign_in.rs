@@ -393,15 +393,13 @@ impl OAuthClient {
     /// the install-key lock. Whether it was cached.
     pub(super) fn cache_loaded(&self, token: TokenInfo) -> bool {
         let key = self.credential_key().ok();
-        match &self.sign_in_status {
-            Some(status) => status.if_current(key.as_deref(), || {
+        if let Some(status) = &self.sign_in_status {
+            return status.if_current(key.as_deref(), || {
                 *self.current_token.write() = Some(token);
-            }),
-            None => {
-                *self.current_token.write() = Some(token);
-                true
-            }
+            });
         }
+        *self.current_token.write() = Some(token);
+        true
     }
 
     /// Whether the latest confirmed sign-in was saved under another issuer

@@ -216,7 +216,7 @@ async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
         cell.record_install(&owned.credential_key().unwrap());
         let (reached, release) = owned.adopt_pause.arm();
         let (since, cohort) = (gate.epoch(), gate.cohort());
-        let call = tokio::task::spawn_blocking(move || {
+        let asked = tokio::task::spawn_blocking(move || {
             let deadline = tokio::time::Instant::now() + HANG_BOUND;
             let answer = futures::executor::block_on(async {
                 if detached {
@@ -234,7 +234,7 @@ async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
         cell.record_install(OTHER_ISSUER_KEY);
         release.notify_one();
 
-        let (owned, answer) = call.await.expect("the call ran");
+        let (owned, answer) = asked.await.expect("the call ran");
         let refused = answer.expect_err("nothing of the old issuer is handed back");
         assert!(
             matches!(refused, Error::AuthorizationRequired { .. }),
@@ -283,7 +283,7 @@ async fn a_confirm_after_an_install_elsewhere_publishes_its_own_state() {
 
 /// An adopt under the client's own issuer while a provider-changed reason
 /// stands ends the reason and publishes the adopted token's state. Red before
-/// the republish: the status read NeverSignedIn while the token served.
+/// the republish: the status read `NeverSignedIn` while the token served.
 #[tokio::test]
 async fn an_adopt_that_ends_provider_changed_publishes_the_token() {
     let server = TokenServer::start(&[]).await;
@@ -294,9 +294,9 @@ async fn an_adopt_that_ends_provider_changed_publishes_the_token() {
     cell.record_install(&owned.credential_key().unwrap());
     cell.raise_provider_changed();
 
-    let served = headless(&owned).await.expect("the install is adopted");
+    let handed = headless(&owned).await.expect("the install is adopted");
 
-    assert_eq!(served, "a1");
+    assert_eq!(handed, "a1");
     assert!(
         matches!(cell.snapshot(), SignIn::SignedIn { .. }),
         "{:?}",

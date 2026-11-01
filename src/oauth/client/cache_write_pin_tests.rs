@@ -36,7 +36,7 @@ fn writers(root: &Path, dir: &Path, out: &mut BTreeSet<(String, String)>) {
             writers(root, &path, out);
             continue;
         }
-        if !name.ends_with(".rs") {
+        if path.extension().is_none_or(|extension| extension != "rs") {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a readable source");
