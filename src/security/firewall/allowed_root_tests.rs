@@ -14,6 +14,8 @@ mod docs;
 mod entry;
 #[path = "allowed_root_locality_tests.rs"]
 mod locality;
+#[path = "allowed_root_reload_tests.rs"]
+mod reload;
 #[path = "allowed_root_rules_tests.rs"]
 mod rules;
 #[path = "allowed_root_runtime_tests.rs"]
