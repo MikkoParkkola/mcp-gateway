@@ -252,8 +252,9 @@ pub(super) fn deliver_replay(
         seams::note_replay(admitted.idem_reservation.is_some());
         // Either store's replay delivers an answer already counted.
         crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
-        use crate::gateway::meta_mcp::invoke::audit::{Answered, note_cached};
-        note_cached(Answered::Replay);
+        crate::gateway::meta_mcp::invoke::audit::note_cached(
+            crate::gateway::meta_mcp::invoke::audit::Answered::Replay,
+        );
         // A replay is a delivery too: it renews this caller's own copy,
         // shaped for this request's era (MIK-8022).
         replay_scan(state, (&admitted.call, envelope), client, &mut response);
