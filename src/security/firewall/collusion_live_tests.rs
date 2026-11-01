@@ -524,12 +524,17 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
         kept.iter().all(|(source, _)| &**source != "alpha:read"),
         "O5.2b: the replayed receipt was kept as an overflow pair: {kept:?}"
     );
-    // `capped` counts drops and overflows together, so this is the one drop
-    // the plan names as `record_dropped` +1; an overflow would move it by the
-    // same amount, which the pairs assertion above separates.
+    // `capped` is the exact per-detector total of drops and overflows
+    // together; the dropped count is visible separately as the metric's
+    // `bound` label, asserted below.
     assert_eq!(
         detector.capped() - before,
         1,
         "O5.2b: one record not counted"
+    );
+    #[cfg(feature = "metrics")]
+    assert!(
+        super::collusion_live_rig::bound_count("record_dropped") > dropped,
+        "O5.2b: the replayed receipt was not counted as record_dropped"
     );
 }
