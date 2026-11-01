@@ -403,6 +403,65 @@ mod tests {
 
     // ── Structural validity ───────────────────────────────────────────────────
 
+    /// LOG.4: the firewall audit file has its own writer. With every tracing
+    /// line on this thread dropped by a stalled stderr, an entry still
+    /// reaches the file.
+    #[test]
+    fn l3_a_firewall_audit_entry_reaches_its_file_while_stderr_is_stalled() {
+        let tmp = NamedTempFile::new().unwrap();
+        let logger = AuditLogger::new(tmp.path()).unwrap();
+        let stalled = crate::log_writer::test_sinks::stalled_log();
+        tracing::warn!("probe");
+        assert_eq!(
+            stalled.writer.dropped_lines(),
+            1,
+            "tracing on this thread is stalled"
+        );
+        logger.log_request(
+            "sess-lossy",
+            "srv",
+            "l3-lossy-probe",
+            "caller",
+            &json!({}),
+            &clean_verdict(),
+        );
+        drop(stalled);
+        let lines = read_lines(tmp.path());
+        assert!(
+            // The session id is stored hashed; the tool name as written.
+            lines
+                .iter()
+                .any(|l| l.contains("\"tool\":\"l3-lossy-probe\"")),
+            "the entry is not in its file: {lines:?}"
+        );
+    }
+
+    /// LOG.4: the firewall's stderr fallback writes stderr itself, not through
+    /// the lossy tracing writer, so a stalled log never drops its entries.
+    #[test]
+    fn l3_the_firewall_stderr_fallback_does_not_go_through_the_lossy_writer() {
+        let stalled = crate::log_writer::test_sinks::stalled_log();
+        tracing::warn!("probe");
+        assert_eq!(
+            stalled.writer.dropped_lines(),
+            1,
+            "tracing on this thread is stalled"
+        );
+        AuditLogger::stderr().log_request(
+            "sess-fallback",
+            "srv",
+            "tool",
+            "caller",
+            &json!({}),
+            &clean_verdict(),
+        );
+        assert_eq!(
+            stalled.writer.dropped_lines(),
+            1,
+            "the fallback entry went through tracing"
+        );
+    }
+
     #[test]
     fn audit_entry_is_valid_ndjson() {
         let tmp = NamedTempFile::new().unwrap();

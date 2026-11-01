@@ -279,3 +279,37 @@ async fn two_unreadable_files_with_one_name_keep_distinct_digests() {
         assert_eq!(digest.len(), 64, "a keyed digest: {digest}");
     }
 }
+
+/// The webui scan's debug line names a client file escaped: a file whose name
+/// holds a bidi override, a zero-width space and a newline is logged on one
+/// line, with each written as its escape.
+#[cfg(unix)]
+#[test]
+fn the_client_scan_debug_line_shows_the_file_name_escaped() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("cl\u{202e}\u{200b}x\nforged.json");
+    write(&path, &entry("v"));
+    let candidates = [claude(&path)];
+    let scanner = ConfigScanner::new();
+    let (_, logs) = crate::test_log_capture::capture_at(tracing::Level::DEBUG, || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(scanner.scan_candidates(&candidates))
+    });
+    let line = logs
+        .lines()
+        .find(|line| line.contains("Scanning client config at"))
+        .unwrap_or_else(|| panic!("the site did not fire: {logs:?}"));
+    assert!(
+        line.contains("forged.json"),
+        "the name was split across lines: {logs:?}"
+    );
+    for spelled in ["\\u{202e}", "\\u{200b}", "\\u{a}"] {
+        assert!(line.contains(spelled), "no {spelled} in {line:?}");
+    }
+    for raw in ['\u{202e}', '\u{200b}'] {
+        assert!(!logs.contains(raw), "{raw:?} reached the log: {logs:?}");
+    }
+}

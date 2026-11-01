@@ -53,6 +53,7 @@ fn delivery_ctx<'a>(
         signing: None,
         chain_source: ChainSource::NotEligible,
         chain_nonce: None,
+        generation: None,
     }
 }
 

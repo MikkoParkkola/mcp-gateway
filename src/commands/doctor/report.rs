@@ -20,11 +20,10 @@ fn print_results_human(results: &[CheckResult]) {
     let use_color = std::env::var("NO_COLOR").is_err();
 
     for result in results {
-        let badge = format_badge(&result.status, use_color);
-        println!("{badge} {}: {}", result.label, result.detail);
-        if let Some(ref hint) = result.hint {
-            println!("       Hint: {hint}");
-        }
+        print!(
+            "{}",
+            super::human_lines(format_badge(&result.status, use_color), result)
+        );
     }
 
     println!();
@@ -80,7 +79,7 @@ pub(super) fn check_result_json_value(result: &CheckResult) -> Value {
         "label": result.label,
         "category": result.category,
         "status": status_str(&result.status),
-        "detail": result.detail,
+        "detail": result.full_detail(),
         "hint": result.hint,
         "fixability": {
             "auto_fixable": result.auto_fixable,

@@ -54,17 +54,9 @@ impl UpstreamListeners {
             Err(full) => {
                 let ledger = shared.ledger();
                 let mut ledger = ledger.lock();
-                if ledger.warn_cap() {
-                    let ((keys, bytes, stranded), unplaced) = (ledger.size(), ledger.unplaced());
-                    tracing::warn!(
-                        backend = %key.backend,
-                        keys,
-                        bytes,
-                        stranded,
-                        unplaced,
-                        "upstream listener: URI cap held by stranded keys until config removal or restart"
-                    );
-                }
+                let cap_held = ledger
+                    .warn_cap()
+                    .then(|| (ledger.size(), ledger.unplaced()));
                 drop(ledger);
                 // A refusal for capacity keeps an idle task running while
                 // its passes can still release keys (D5 cleanup).
@@ -73,6 +65,17 @@ impl UpstreamListeners {
                     map.remove(key);
                 } else {
                     shared.wake.send_modify(|n| *n += 1);
+                }
+                drop(map);
+                if let Some(((keys, bytes, stranded), unplaced)) = cap_held {
+                    tracing::warn!(
+                        backend = %key.backend,
+                        keys,
+                        bytes,
+                        stranded,
+                        unplaced,
+                        "upstream listener: URI cap held by stranded keys until config removal or restart"
+                    );
                 }
                 return Err(full);
             }

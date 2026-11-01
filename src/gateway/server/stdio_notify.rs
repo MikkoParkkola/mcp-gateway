@@ -77,7 +77,7 @@ impl Gateway {
     /// so a later item's relay check sees what an earlier item delivered.
     pub(super) async fn dispatch_batch_read(
         meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
-        tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         (session_id, sanitize, serving): (
@@ -107,7 +107,7 @@ impl Gateway {
                     reads.guard(),
                     Box::pin(Self::dispatch_single_staged(
                         meta_mcp,
-                        tool_policy,
+                        generation,
                         mtls_policy,
                         req,
                         super::StdioClient {
@@ -154,7 +154,7 @@ impl Gateway {
     #[cfg(test)]
     pub(super) async fn dispatch_batch_for_client(
         meta_mcp: &std::sync::Arc<crate::gateway::meta_mcp::MetaMcp>,
-        tool_policy: &std::sync::Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &std::sync::Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
@@ -162,7 +162,7 @@ impl Gateway {
         let reads = meta_mcp.stdio_reads();
         Self::dispatch_batch_read(
             meta_mcp,
-            tool_policy,
+            generation,
             mtls_policy,
             batch,
             (

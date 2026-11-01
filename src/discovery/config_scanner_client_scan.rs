@@ -238,7 +238,7 @@ impl ConfigScanner {
                     continue;
                 }
             };
-            debug!("Scanning client config at {}", path.display());
+            debug!("Scanning client config at {}", super::shown_path(path));
             // A FIFO, a device or a huge file never reaches a parser.
             if !(meta.is_file() && meta.len() <= MAX_CLIENT_FILE) {
                 unread(UnreadableReason::NotAReadableFile);

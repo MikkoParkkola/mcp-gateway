@@ -7,10 +7,11 @@ use std::process::ExitCode;
 
 use mcp_gateway::discovery::{
     AutoDiscovery,
-    shadow::{ShadowRemediationAction, ShadowScanReport, ShadowTrustStatus},
+    shadow::{ShadowRemediationAction, ShadowScanReport},
 };
 
 use super::super::config_write::CommentLoss;
+use super::render::{render_server_entry, render_shadow_report};
 
 pub(super) async fn cap_discover(
     format: String,
@@ -189,66 +190,7 @@ async fn cap_discover_shadow(
 }
 
 fn print_shadow_report(report: &ShadowScanReport) {
-    if report.assets.is_empty() {
-        println!("✅ No shadow servers found — all discovered MCP servers are registered.");
-        println!("Passive scan only; no discovered tools were invoked.");
-        return;
-    }
-    if let Some(note) = &report.ids_note {
-        println!("Note: {note}.");
-    }
-
-    println!(
-        "⚠️  Found {} shadow (unregistered) MCP server(s). Passive scan only; no discovered tools were invoked.\n",
-        report.summary.unmanaged_total
-    );
-    println!("Action groups:");
-    for group in &report.action_groups {
-        println!("  {:?}: {} asset(s)", group.action, group.count);
-    }
-    println!();
-
-    for asset in &report.assets {
-        println!("📦 {}", asset.name);
-        println!("   ID: {}", asset.id);
-        println!("   Severity: {:?}", asset.severity);
-        println!("   Source: {:?}", asset.source);
-        println!("   Trust: {:?}", asset.trust_status);
-        println!("   Transport: {}", asset.transport.kind);
-        if let Some(endpoint) = &asset.transport.endpoint {
-            println!("   Endpoint: {endpoint}");
-        }
-        if let Some(path) = &asset.evidence.config_path {
-            println!("   Config: {path}");
-        }
-        if let Some(pid) = asset.evidence.pid {
-            println!("   PID: {pid}");
-        }
-        if let Some(executable) = &asset.evidence.executable {
-            println!("   Executable: {executable} (arguments redacted)");
-        }
-        println!("   Auth exposure: {:?}", asset.auth_exposure);
-        println!("   Data risk: {:?}", asset.data_risk);
-        println!("   Recommended action: {:?}", asset.remediation.action);
-        println!("   Confidence: {:?}", asset.remediation.confidence);
-        println!(
-            "   Confirmation required: {}",
-            asset.remediation.confirmation_required
-        );
-        println!("   Verify: {}", asset.remediation.verification_step);
-        if asset.remediation.action == ShadowRemediationAction::AdoptIntoGateway
-            && let Some(command) = &asset.remediation.apply_command
-        {
-            println!("   Apply after review: {command}");
-        }
-        if asset.trust_status == ShadowTrustStatus::Unmanaged {
-            println!("   Reason: {}", asset.risk_reasons.join(", "));
-        }
-        println!();
-    }
-
-    println!("Default mode is dry-run. To adopt reviewed local unmanaged servers, rerun with:");
-    println!("   mcp-gateway cap discover --shadow --write-config");
+    print!("{}", render_shadow_report(report));
 }
 
 const DISCOVER_EMPTY: &str = "No MCP servers found.
@@ -287,39 +229,5 @@ fn print_discovered_servers(servers: &[mcp_gateway::discovery::DiscoveredServer]
 }
 
 fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
-    println!("📦 {}", server.name);
-    println!("   Description: {}", server.description);
-    println!("   Source: {:?}", server.source);
-    match &server.transport {
-        mcp_gateway::config::TransportConfig::Stdio { command, .. } => {
-            println!("   Transport: stdio");
-            println!(
-                "   Command: {}",
-                mcp_gateway::security::summarize_stdio_command(command)
-            );
-        }
-        mcp_gateway::config::TransportConfig::Http { http_url, .. } => {
-            println!("   Transport: http");
-            println!(
-                "   URL: {}",
-                mcp_gateway::security::diagnostic_url(http_url)
-            );
-        }
-        mcp_gateway::config::TransportConfig::WebSocket { ws_url, .. } => {
-            println!("   Transport: websocket");
-            println!("   URL: {}", mcp_gateway::security::diagnostic_url(ws_url));
-        }
-        #[cfg(feature = "a2a")]
-        mcp_gateway::config::TransportConfig::A2a { a2a_url, .. } => {
-            println!("   Transport: a2a");
-            println!("   URL: {}", mcp_gateway::security::diagnostic_url(a2a_url));
-        }
-    }
-    if let Some(ref path) = server.metadata.config_path {
-        println!("   Config: {}", path.display());
-    }
-    if let Some(pid) = server.metadata.pid {
-        println!("   PID: {pid}");
-    }
-    println!();
+    print!("{}", render_server_entry(server));
 }

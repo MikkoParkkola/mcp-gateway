@@ -149,7 +149,7 @@ impl ReloadContext {
         let sink = self.identity_grants.as_ref()?;
         // Bounded like `lock_reload_within`: busy is its own refusal, so an
         // operator retries instead of inspecting a grants file that is fine.
-        let Ok(_grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
+        let Ok(grants_guard) = tokio::time::timeout(RELOAD_LOCK_WAIT, sink.lock.lock()).await
         else {
             env_poll::report_grants_busy(&sink.read_errors, &sink.path);
             return Some(Err(
@@ -169,6 +169,8 @@ impl ReloadContext {
             (Some(auditor), Some((_, journal))) => match auditor.prepare(&file.grants, journal) {
                 Ok(prepared) => Some(prepared),
                 Err(refusal) => {
+                    drop(locked);
+                    drop(grants_guard);
                     error!(path = %sink.path.display(), reason = %refusal.0, "Identity-grant reload refused");
                     return Some(Err(refusal.0));
                 }
@@ -223,6 +225,10 @@ impl ReloadContext {
             evicted += hit;
         }
 
+        // Record after publish: a failed append never unpublishes (AUDIT4.6).
+        let clause = audit_clause(sink.auditor.as_deref(), prepared);
+        drop(locked);
+        drop(grants_guard);
         info!(
             path = %sink.path.display(),
             rows = incoming_rows.len(),
@@ -232,9 +238,6 @@ impl ReloadContext {
             subjects_skipped = ?skipped,
             "Identity grants reloaded"
         );
-        // Record after publish: a failed append never unpublishes (AUDIT4.6).
-        let clause = audit_clause(sink.auditor.as_deref(), prepared);
-        drop(locked);
         Some(Ok(format!(
             "identity grants reloaded ({} rows, {delta}, {evicted} pool slots evicted){clause}",
             incoming_rows.len()

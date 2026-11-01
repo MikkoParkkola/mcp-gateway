@@ -32,7 +32,9 @@ pub(in crate::gateway) async fn meta_mcp_handler(
     let audit = offers_event_stream.then(|| state.meta_mcp.rejection_audit());
     let guard_for_scope = guard.clone();
     // MIK-8161: a backend's mid-call notifications meet the egress scan too.
-    let screen = Some(state.meta_mcp.notification_screen("http", ""));
+    // Judged under the request's pinned generation and the published one.
+    let pinned = crate::gateway::router::pinned_generation(http_request.extensions());
+    let screen = Some(state.meta_mcp.notification_screen(("http", ""), pinned));
     // MIK-8176: the slots this request's mints take are owned here, outside
     // the grant-audit replacer, and by the dispatch future itself, so a
     // stream that polls it after this handler returns still has its scope.

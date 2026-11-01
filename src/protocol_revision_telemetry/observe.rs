@@ -205,6 +205,9 @@ pub fn observe_client_extensions(extensions: &ExtensionSet) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     for extension in extensions.iter() {
         reg.observe_extension(extension);
+    }
+    drop(reg);
+    for extension in extensions.iter() {
         tracing::debug!(
             extension = extension.id(),
             "mcp728.u1 client extension negotiated"

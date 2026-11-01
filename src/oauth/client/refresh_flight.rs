@@ -303,10 +303,14 @@ pub(crate) async fn refresh_stored(
         let sent = record.refresh_token.clone()?;
         Some((record, sent))
     }) else {
+        drop(across);
+        drop(guard);
         warn!(backend = %label, "No stored refresh token; a login is needed");
         return Ok(Refreshed::LoginRequired);
     };
     if flight.is_spent(&sent) {
+        drop(across);
+        drop(guard);
         warn!(backend = %label, "Refusing to resend a spent refresh token");
         return Ok(Refreshed::LoginRequired);
     }
@@ -326,6 +330,8 @@ pub(crate) async fn refresh_stored(
     // a mark the next refresh reads (FU-A.4). Without it, nothing is sent.
     state.in_flight = Some(marker);
     if let Err(error) = storage.save_refresh_state(key, resource_url, &state) {
+        drop(across);
+        drop(guard);
         warn!(backend = %label, %error, "Could not mark the refresh in flight; not refreshing");
         return Err(error);
     }
