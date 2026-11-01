@@ -212,7 +212,7 @@ impl MetaMcp {
                 continue;
             }
             let offered = self
-                .get_capabilities()
+                .caller_capabilities()
                 .is_some_and(|cap| cap.name == server && cap.get(tool).is_some());
             if !offered {
                 return Some(Error::BackendNotFound(server.to_string()));

@@ -258,6 +258,11 @@ mod chain_withheld;
 #[cfg(test)]
 #[path = "clock_p2_tests.rs"]
 mod clock_p2;
+/// The scrub's refusal of an echo, delivered from a composite step and a
+/// caller-forwarded read, records refused only where it is delivered.
+#[cfg(test)]
+#[path = "echo_refusal_delivery_tests.rs"]
+mod echo_refusal_delivery;
 /// A playbook step the policy refuses at dispatch records refused.
 #[cfg(test)]
 #[path = "playbook_dispatch_refusal_tests.rs"]

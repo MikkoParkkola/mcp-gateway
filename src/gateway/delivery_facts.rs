@@ -19,7 +19,9 @@
 //!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
-//! saw. Outside a cell every setter is a no-op and the recorder omits both.
+//! saw. It still records a refusal it ended on, and `rewritten` when the
+//! injected-value scrub removed a value during the call, a fact of the whole
+//! call rather than of any one step. Outside a cell every setter is a no-op and the recorder omits both.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -36,7 +38,13 @@ pub(crate) enum ResponseEffect {
     Delivered,
     /// Delivered with a gateway annotation added (findings, contract notes).
     Annotated,
-    /// Delivered with bytes the gateway changed.
+    /// Delivered with bytes the gateway changed, or, from the injected-value
+    /// scrub: during this call the gateway removed an injected value from
+    /// something this backend sent. That can be an answer the caller never
+    /// received (a discarded page, a handshake, a retried attempt), so it
+    /// does not mean the answer delivered was edited. Over-reporting is the
+    /// safe direction for a secret-echo control: an under-report would hide
+    /// that a backend sent a credential back.
     Rewritten,
     /// Not delivered: the gateway answered with a refusal.
     Refused,
@@ -82,6 +90,8 @@ struct Finding {
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryFacts {
     effect: ResponseEffect,
+    /// What the transport's scrub did to an injected value this call sent.
+    echo: Echo,
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
@@ -100,6 +110,23 @@ pub(crate) struct DeliveryFacts {
     last_step_folded: Option<RpcError>,
     /// Whose failure the error about to be delivered is (`wrapped_step`).
     error_of: ErrorOf,
+}
+
+/// What the injected-value scrub did during a delivery.
+#[derive(Debug, Clone, Default)]
+struct Echo {
+    /// During this call the gateway removed an injected value from something
+    /// this backend sent: an answer the caller got, or one it never did (a
+    /// discarded page, a handshake, a retried attempt). Never cleared: an
+    /// over-report is the safe direction for a secret-echo control, which an
+    /// under-report would hide. Shared with every nested cell
+    /// ([`discarded`], [`step`]), so a nested send writes it at once, even
+    /// one later refused or cancelled; a fresh delivery ([`scope`]) has its own.
+    redacted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The scrub replaced an answer with its refusal in this cell. Read with
+    /// the delivered error ([`echo_refusal_delivered`]), so a replaced answer
+    /// the call never delivered records nothing.
+    refusal_built: bool,
 }
 
 /// The two facts a delivery keeps about its sends. Both can hold at once (a
@@ -139,6 +166,7 @@ impl Default for DeliveryFacts {
     fn default() -> Self {
         Self {
             effect: ResponseEffect::Delivered,
+            echo: Echo::default(),
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
@@ -185,6 +213,34 @@ impl DeliveryFacts {
     pub(crate) fn refused(&self) -> bool {
         self.effect == ResponseEffect::Refused
     }
+
+    /// The strongest effect: this cell's own, raised to `Rewritten` when the
+    /// scrub redacted anything during the call.
+    fn effect(&self) -> ResponseEffect {
+        if self.echo.redacted.load(std::sync::atomic::Ordering::SeqCst) {
+            self.effect.max(ResponseEffect::Rewritten)
+        } else {
+            self.effect
+        }
+    }
+
+    /// A nested cell: fresh facts, sharing this call's redaction fact.
+    fn nested(&self) -> Self {
+        Self {
+            echo: Echo {
+                redacted: std::sync::Arc::clone(&self.echo.redacted),
+                refusal_built: false,
+            },
+            ..Self::default()
+        }
+    }
+}
+
+/// A nested cell inside the open one, or a fresh one outside any delivery.
+fn nested_cell() -> DeliveryFacts {
+    FACTS
+        .try_with(|cell| cell.borrow().nested())
+        .unwrap_or_default()
 }
 
 /// Run `future` with a fresh cell open: one delivery.
@@ -198,10 +254,13 @@ pub(crate) async fn scope<F: std::future::Future>(future: F) -> F::Output {
 /// drops it) in a cell of its own, discarded: a refusal it meets, such as a
 /// refused redirect hop, is not this call's answer. Every such send site is
 /// listed in `boundary_pins/discarded_sends.rs`.
+///
+/// A redaction it meets is still this call's: the nested cell shares the
+/// call's redaction fact.
 pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
     // Boxed: the cell would otherwise sit inline in every dispatch future
     // that awaits a probe.
-    Box::pin(scope(future)).await
+    Box::pin(FACTS.scope(RefCell::new(nested_cell()), future)).await
 }
 
 /// Run one composite step in a cell of its own, as [`scope`] does, and note
@@ -212,18 +271,14 @@ pub(crate) async fn discarded<F: std::future::Future>(future: F) -> F::Output {
 pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     let cell = DeliveryFacts {
         lone_target: true,
-        ..DeliveryFacts::default()
+        ..nested_cell()
     };
     let (output, refused, folded, error_of) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
             let (refused, folded, error_of) = FACTS.with(|cell| {
                 let cell = cell.borrow();
-                (
-                    cell.effect == ResponseEffect::Refused,
-                    cell.folded,
-                    cell.error_of,
-                )
+                (cell.refused(), cell.folded, cell.error_of)
             });
             (output, refused, folded, error_of)
         })
@@ -425,10 +480,12 @@ pub(crate) fn refused<E>(error: E) -> E {
 /// Where an error becomes the delivered frame: a refusal a gateway decision
 /// sealed ([`crate::Error::GatewayRefused`]) raises `Refused`, and so does an
 /// authorization refusal ([`crate::Error::Forbidden`]), a decision about the
-/// caller wherever it was built, whatever its code. Every `Forbidden` site is
-/// classified in `boundary_pins/delivery_refusals.tsv`. Any other error raises
-/// nothing.
+/// caller wherever it was built, whatever its code, and the scrub's refusal
+/// of an answer that echoed an injected value ([`echo_refusal_delivered`]).
+/// Every `Forbidden` site is classified in
+/// `boundary_pins/delivery_refusals.tsv`. Any other error raises nothing.
 pub(crate) fn outlet(error: &crate::Error) {
+    echo_refusal_delivered(error);
     if matches!(
         error,
         crate::Error::GatewayRefused { .. } | crate::Error::Forbidden { .. }
@@ -437,11 +494,45 @@ pub(crate) fn outlet(error: &crate::Error) {
     }
 }
 
+/// Where a backend's error becomes the delivered answer outside [`outlet`]
+/// (a tool result, a forwarded error, a composite step): `Refused` when the
+/// error is the scrub's refusal of an answer that echoed an injected value
+/// and this cell's scrub built one. The error alone is not enough: a backend
+/// can send the same code and text, which the scrub leaves as it is.
+pub(crate) fn echo_refusal_delivered(error: &crate::Error) {
+    if crate::security::needles::is_echo_refusal(error) {
+        with(|facts| {
+            if facts.echo.refusal_built {
+                facts.effect = facts.effect.max(ResponseEffect::Refused);
+            }
+        });
+    }
+}
+
 /// A send of this delivery entered its backend's transport: from here it may
 /// have reached the backend. Recorded before the transport call; a dropped or
 /// panicking call never takes it back.
 pub(crate) fn send_began() {
     with(|facts| facts.sends.entered += 1);
+}
+
+/// The transport's scrub removed an injected value from something this
+/// backend sent during the call: recorded `rewritten` whether or not the
+/// caller receives it.
+pub(crate) fn echo_redacted() {
+    with(|facts| {
+        facts
+            .echo
+            .redacted
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+}
+
+/// The transport's scrub replaced an answer with its refusal. It is
+/// recorded `refused` only where that refusal is delivered
+/// ([`echo_refusal_delivered`]).
+pub(crate) fn echo_refusal_built() {
+    with(|facts| facts.echo.refusal_built = true);
 }
 
 /// Run one transport call of this delivery as a counted send: counted when
@@ -561,7 +652,8 @@ pub(crate) fn unvouched() {
 /// refusal, read off what is actually sent, so no later rebuild can hide
 /// it. A counted annotation raises `Annotated` in the cell where the gateway
 /// notes it. An unvouched delivery still records a refusal this request
-/// made, and omits everything else.
+/// made, and `rewritten` when the scrub removed an injected value during the
+/// call, and omits everything else.
 pub(crate) fn record_fields(
     facts: Option<&DeliveryFacts>,
     frame_refused: bool,
@@ -570,12 +662,19 @@ pub(crate) fn record_fields(
     let Some(facts) = facts else {
         return;
     };
-    let mut effect = facts.effect;
+    let mut effect = facts.effect();
     if frame_refused {
         effect = effect.max(ResponseEffect::Refused);
     }
     if !facts.vouched {
-        if effect == ResponseEffect::Refused {
+        // No one step's facts describe what a composite delivers, but a
+        // refusal it ends on does, and so does the scrub's redaction fact,
+        // which is the whole call's.
+        let echoed = facts
+            .echo
+            .redacted
+            .load(std::sync::atomic::Ordering::SeqCst);
+        if effect == ResponseEffect::Refused || echoed {
             fields.insert("response_effect".into(), effect.as_str().into());
         }
         return;

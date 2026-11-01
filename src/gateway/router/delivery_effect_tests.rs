@@ -346,3 +346,67 @@ async fn a_direct_profile_withheld_call_records_refused() {
     let row = only_delivery(HttpRoute::Direct, &delivery_rows(&log).await);
     assert_eq!(row["response_effect"], "refused", "{row}");
 }
+
+/// An injected value the backend echoes as its `error.code`.
+const ECHOED_CODE: i32 = 7_391_540;
+
+/// The backend's error echoing [`ECHOED_CODE`], as the transport's scrub
+/// hands it on: run inside the fixture's send, on the call's own task, as a
+/// real transport runs it, so it is that call's scrub that built the
+/// refusal.
+fn echo_refused() -> crate::Error {
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", &ECHOED_CODE.to_string());
+    let echo = crate::Error::JsonRpc {
+        code: ECHOED_CODE,
+        message: "no".into(),
+        data: None,
+    };
+    crate::security::needles::scrub_answer(&needles, Err(echo)).expect_err("replaced")
+}
+
+/// The same refusal's code and text sent by the backend itself, with no
+/// value echoed: nothing was replaced, so it is the backend's own error.
+fn lookalike() -> crate::Error {
+    crate::Error::JsonRpc {
+        code: -32_603,
+        message: "the backend's answer contained a credential the gateway injected".into(),
+        data: None,
+    }
+}
+
+/// W0, W1: an answer the scrub replaced with its refusal, delivered (the
+/// meta route's `isError` result, the direct route's error frame), records
+/// `refused`.
+#[tokio::test]
+async fn an_echo_refusal_delivered_records_refused() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let recorded = firewalled_recorded_call(route, Answer::FailsWith(echo_refused), None).await;
+        let body = recorded.body.to_string();
+        assert!(
+            body.contains("contained a credential the gateway injected")
+                && !body.contains(&ECHOED_CODE.to_string()),
+            "{route:?}: premise: the refusal was delivered: {body}"
+        );
+        let row = only_delivery(route, &recorded.rows);
+        assert_eq!(row["response_effect"], "refused", "{route:?}: {row}");
+    }
+}
+
+/// M2b: the backend's own error reading as that refusal is not one.
+#[tokio::test]
+async fn a_lookalike_echo_refusal_records_no_refusal() {
+    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
+        let recorded = firewalled_recorded_call(route, Answer::FailsWith(lookalike), None).await;
+        let row = only_delivery(route, &recorded.rows);
+        // The scrub's two effects are absent. The meta route answers a failed
+        // dispatch as a tool result carrying the gateway's recovery hint,
+        // which is an annotation; the direct route frames the error as sent.
+        let expected = match route {
+            HttpRoute::Mcp => "annotated",
+            HttpRoute::Direct => "delivered",
+        };
+        assert_eq!(row["response_effect"], expected, "{route:?}: {row}");
+    }
+}

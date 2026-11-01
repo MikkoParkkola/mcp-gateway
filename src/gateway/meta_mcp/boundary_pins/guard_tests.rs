@@ -277,6 +277,9 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         // A constructor, as `new` is: it installs the secret resolver the
         // registry stamps on each backend, and reads no backend.
         "with_secret_resolver",
+        // A constructor too: it sets the redaction grace each backend's
+        // value set gets, and reads no backend.
+        "with_redaction_grace",
         "get",
         "all",
         "statuses",

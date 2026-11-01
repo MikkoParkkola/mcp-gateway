@@ -24,9 +24,20 @@ impl Error {
             | Self::TransportConnect(_)
             | Self::TransportPermanent(_) => Origin::BackendFailure,
             Self::Http(e) if http_is_backend_refusal(e) => Origin::BackendFailure,
-            // The backend's own answer: a peer's JSON-RPC body on a 429/503
-            // (built in production only by the HTTP transport), and any error
-            // member a backend sent (built only by `backend_json_rpc`).
+            // Built in production by two sites. The HTTP transport builds it
+            // from a peer's JSON-RPC body on a 429/503: the backend's own
+            // answer. The injected-value scrub builds it when it replaces such
+            // an answer with its refusal, keeping it retryable: the gateway's
+            // decision. The two are told apart by the refusal's own code and
+            // text; a backend sending that exact refusal on a 429/503 is
+            // counted as the gateway's (a metric skew only, register row 375).
+            Self::JsonRpcRetryable { .. } if crate::security::needles::is_echo_refusal(self) => {
+                Origin::Gateway
+            }
+            // The backend's own answer: a peer's JSON-RPC body on a 429/503,
+            // and any error member a backend sent (built only by
+            // `backend_json_rpc`; the scrub's refusal of one is the gateway's
+            // `JsonRpc`, never this variant).
             Self::JsonRpcRetryable { .. } | Self::BackendJsonRpc { .. } => Origin::Backend,
             Self::Config(_)
             | Self::Forbidden { .. }
