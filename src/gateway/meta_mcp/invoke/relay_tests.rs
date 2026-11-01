@@ -743,3 +743,6 @@ mod live;
 
 #[path = "relay_live_funnel_tests.rs"]
 mod live_funnel;
+
+#[path = "relay_live_witness_tests.rs"]
+mod live_witness;
