@@ -176,6 +176,7 @@ impl Firewall {
         let (leaves, values) = delivery_parts(result);
         let (mut digest, cut) = of_parts(&leaves, values, sensitive);
         digest.inferred = inferred;
+        digest.set_source(&source);
         self.count_cut(cut);
         Some((digest, cut))
     }

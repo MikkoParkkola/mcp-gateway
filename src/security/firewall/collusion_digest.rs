@@ -117,12 +117,18 @@ pub(crate) struct DeliveryDigest {
     /// The result's own classification marker, taken before any redaction:
     /// the inferred fact a record holds, never a list match.
     pub(super) inferred: bool,
+    /// The `server:tool` the result came from, set where the digest is
+    /// taken: the identity a record holds.
+    source: Option<std::sync::Arc<str>>,
     /// Staged whole, its cap still to apply (a plan step, MIK-7992).
     deferred: bool,
     /// A seam between plan steps of two or more sources (`MIK-8113`): the
     /// contributing `server:tool` sources, ascending. Its copy may leave only
     /// by a flow every one of them allows.
     pub(super) seam_sources: Option<Box<[String]>>,
+    /// Each contributing source's own inferred fact, in `seam_sources`'
+    /// order: a composite keeps them apart, never one combined bit.
+    pub(super) seam_inferred: Option<Box<[bool]>>,
     /// What the holder received when this receipt was cut: excuse only
     /// (`MIK-8066.EXCUSE.1`).
     pub(super) cut_fps: Option<std::sync::Arc<[u64]>>,
@@ -263,23 +269,41 @@ fn cap<'a>(n: usize, at: &dyn Fn(usize) -> View<'a>) -> (Vec<Segment>, bool) {
 
 impl DeliveryDigest {
     /// The source identity and inferred fact this digest stages (tests
-    /// only). The stub carries one combined bit and no identity.
+    /// only).
     #[cfg(test)]
     pub(crate) fn facts_for_test(&self) -> (Option<std::sync::Arc<str>>, bool) {
-        (None, self.sensitive)
+        (self.source.clone(), self.inferred)
     }
 
-    /// Each contributing source with its inferred fact (tests only). The
-    /// stub gives every contributor the one combined bit.
+    /// Each contributing source with its inferred fact (tests only).
     #[cfg(test)]
     pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
-        let sources = self.seam_sources.as_deref()?;
-        Some(
-            sources
-                .iter()
-                .map(|s| (std::sync::Arc::from(s.as_str()), self.sensitive))
-                .collect(),
+        contributor_facts(
+            self.seam_sources.as_deref()?,
+            self.seam_inferred.as_deref(),
+            self.inferred,
         )
+    }
+
+    /// This seam's contributors' own inferred facts, in its sources' order;
+    /// the seam is inferred when any is.
+    #[must_use]
+    pub(crate) fn with_contributor_facts(mut self, inferred: Box<[bool]>) -> Self {
+        self.inferred = inferred.iter().any(|f| *f);
+        self.sensitive |= self.inferred;
+        self.seam_inferred = Some(inferred);
+        self
+    }
+
+    /// Whether the result itself was classified sensitive (the inferred
+    /// fact), apart from any list match.
+    pub(crate) const fn is_inferred(&self) -> bool {
+        self.inferred
+    }
+
+    /// Set the `server:tool` this digest's result came from.
+    pub(super) fn set_source(&mut self, source: &str) {
+        self.source = Some(std::sync::Arc::from(source));
     }
 
     /// [`Self::of_parts`] with every leaf a value (tests only).
@@ -298,8 +322,10 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive,
             inferred: sensitive,
+            source: None,
             deferred: false,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
@@ -373,8 +399,10 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive,
             inferred: sensitive,
+            source: None,
             deferred: true,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
@@ -411,8 +439,10 @@ impl DeliveryDigest {
             retained: self.retained[..kept].to_vec(),
             sensitive: self.sensitive,
             inferred: self.inferred,
+            source: self.source.clone(),
             deferred: false,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins,
@@ -478,7 +508,9 @@ impl DeliveryDigest {
             retained: fps,
             sensitive,
             inferred: sensitive,
+            source: None,
             seam_sources: sources,
+            seam_inferred: None,
             ..Self::default()
         }
     }
@@ -492,7 +524,8 @@ impl DeliveryDigest {
             .map(|s| s.text.as_str())
     }
 
-    /// Whether this digest is sensitive.
+    /// Whether this digest is sensitive (tests only).
+    #[cfg(test)]
     pub(crate) const fn is_sensitive(&self) -> bool {
         self.sensitive
     }
@@ -654,8 +687,10 @@ impl DeliveryDigest {
             retained: Vec::new(),
             sensitive: self.sensitive,
             inferred: self.inferred,
+            source: self.source.clone(),
             deferred: true,
             seam_sources: None,
+            seam_inferred: None,
             cut_fps: None,
             seam_excuses: None,
             joins: Joins::None,
@@ -791,4 +826,24 @@ impl DeliveryDigest {
         }
         runs
     }
+}
+
+/// Each of `sources` with its own inferred fact, else the seam's one fact
+/// (a digest built before facts were kept apart).
+#[cfg(test)]
+pub(super) fn contributor_facts(
+    sources: &[String],
+    inferred: Option<&[bool]>,
+    seam: bool,
+) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
+    Some(
+        sources
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let fact = inferred.and_then(|f| f.get(i).copied()).unwrap_or(seam);
+                (std::sync::Arc::from(s.as_str()), fact)
+            })
+            .collect(),
+    )
 }

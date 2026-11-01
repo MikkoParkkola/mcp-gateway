@@ -253,17 +253,6 @@ impl RelayGate {
         }
         Instant::now()
     }
-
-    /// The `allowed_flows` entries (bit each) whose source matches `target`:
-    /// how a plan's overflow seams are grouped.
-    fn source_flows(&self, target: &str) -> u64 {
-        self.view
-            .flows
-            .iter()
-            .enumerate()
-            .filter(|(_, (source, _))| source.matches(target))
-            .fold(0, |mask, (bit, _)| mask | (1 << bit))
-    }
 }
 
 /// `server:tool` globs, compiled; one that does not parse is dropped (the
@@ -510,12 +499,6 @@ impl Firewall {
             }
         }
         seams
-    }
-
-    /// The `allowed_flows` mask of each of `sources`, in order: a seam's flow
-    /// policy beside its sensitivity (`MIK-8113`).
-    pub(crate) fn source_masks(&self, sources: &[String]) -> Vec<u64> {
-        sources.iter().map(|s| self.relay.source_flows(s)).collect()
     }
 }
 
