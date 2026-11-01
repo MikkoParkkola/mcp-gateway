@@ -65,7 +65,22 @@ fn credentials(action: FirewallAction) -> FirewallRule {
 /// The answer `body` judged under `policies`, by a firewall whose own
 /// switches let both detectors run.
 fn judge(policies: AnswerPolicies<'_>, body: &Value) -> (FirewallVerdict, Value) {
-    let firewall = Firewall::from_config(config(Vec::new(), true), None);
+    judge_detecting(true, policies, body)
+}
+
+/// [`judge`], with the firewall's prompt-injection detection set to `detects`.
+fn judge_detecting(
+    detects: bool,
+    policies: AnswerPolicies<'_>,
+    body: &Value,
+) -> (FirewallVerdict, Value) {
+    let firewall = Firewall::from_config(
+        FirewallConfig {
+            prompt_injection_detection: detects,
+            ..config(Vec::new(), true)
+        },
+        None,
+    );
     let mut answer = body.clone();
     let verdict = firewall
         .check_response_artifact(
@@ -102,6 +117,34 @@ fn credential() -> Value {
 
 fn holds(answer: &Value, text: &str) -> bool {
     answer.to_string().contains(text)
+}
+
+/// A redaction straddle with injection detection off: the credential is
+/// redacted, the redacting generation's warning stands, and the pre-redaction
+/// copy yields no injection finding.
+#[test]
+fn a_redaction_straddle_with_injection_detection_off_finds_no_injection() {
+    let body = json!({"content": [{"type": "text", "text": format!("{INJECTION} {}", canary())}]});
+    for (r_on, p_on) in [(true, false), (false, true)] {
+        let rules = vec![credentials(FirewallAction::Warn)];
+        let r = FirewallPolicy::compile(&config(rules.clone(), r_on));
+        let p = FirewallPolicy::compile(&config(rules, p_on));
+        let (verdict, delivered) = judge_detecting(false, AnswerPolicies::pair(&r, &p), &body);
+        let case = format!("R {r_on}, P {p_on}");
+        assert!(
+            !holds(&delivered, &canary()),
+            "redacted, {case}: {delivered}"
+        );
+        assert_eq!(verdict.action, FirewallAction::Warn, "{case}");
+        assert!(
+            verdict
+                .findings
+                .iter()
+                .all(|f| f.scan_type != ScanType::PromptInjection),
+            "{case}: {:?}",
+            verdict.findings
+        );
+    }
 }
 
 /// A loosening reload in flight stays strict: R blocks the finding, P warns.
@@ -250,8 +293,9 @@ fn agreeing_generations_scan_once() {
 }
 
 /// Dominance: over every combination of rules and switches below, the
-/// straddle's verdict is at least as strong as each generation's alone, in
-/// action and in redaction, and holds every finding type either produced.
+/// straddle's action is exactly the stronger of the two generations' actions
+/// alone, it redacts when either alone does, and it holds every finding type
+/// either produced.
 #[test]
 fn the_straddle_is_never_weaker_than_either_generation() {
     let rank = |a: FirewallAction| match a {
@@ -282,11 +326,12 @@ fn the_straddle_is_never_weaker_than_either_generation() {
                 let (r, p) = (config(r_rules.clone(), r_on), config(p_rules.clone(), p_on));
                 for body in &bodies {
                     let (both, delivered) = straddle(&r, &p, body);
+                    let mut strongest = 0;
                     for (side, one) in [("R", &r), ("P", &p)] {
                         let (single, single_delivered) = alone(one, body);
                         let case =
                             format!("{side} {r_rules:?}/{r_on} vs {p_rules:?}/{p_on} on {body}");
-                        assert!(rank(both.action) >= rank(single.action), "action: {case}");
+                        strongest = strongest.max(rank(single.action));
                         if single_delivered != *body {
                             assert!(delivered != *body, "redaction: {case}");
                         }
@@ -297,6 +342,11 @@ fn the_straddle_is_never_weaker_than_either_generation() {
                             );
                         }
                     }
+                    assert_eq!(
+                        rank(both.action),
+                        strongest,
+                        "action: {r_rules:?}/{r_on} vs {p_rules:?}/{p_on} on {body}"
+                    );
                 }
             }
         }
