@@ -41,6 +41,8 @@ pub mod budget_guard;
 mod collusion;
 mod collusion_digest;
 mod collusion_gate;
+#[cfg(test)]
+pub(crate) mod collusion_live_rig;
 /// The one replay key: relay replay builds it at capture and lookup, and the
 /// store indexes by it (MIK-8662; the crate-wide path is decision
 /// `mik-8662-vis`).

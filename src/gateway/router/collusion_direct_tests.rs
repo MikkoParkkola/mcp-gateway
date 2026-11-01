@@ -20,6 +20,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::idempotency::IdempotencyCache;
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::firewall::collusion_live_rig::{freeze, paired};
 use crate::security::firewall::{
     AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallConfig,
 };
@@ -322,10 +323,16 @@ async fn fixture(setup: Setup) -> Fixture {
         ..FirewallConfig::default()
     };
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));
+    // The firewall and the live config come from this one section, so the
+    // generation a request is judged under agrees with the detector; the
+    // fixture's resolved keys stay.
+    let (firewall, live) = paired(config, &state_mut.live_config);
+    state_mut.live_config = Arc::new(live);
+    // Frozen at construction: nothing ages out on a slow run, only
+    // `lapse_window` moves the clock.
+    freeze(&firewall);
     // With the gateway's keyring, as the gateway builds it (#2210, MIK-8276).
-    state_mut.firewall = Some(Arc::new(
-        Firewall::from_config(config, None).with_continuations(meta.continuation()),
-    ));
+    state_mut.firewall = Some(Arc::new(firewall.with_continuations(meta.continuation())));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {
