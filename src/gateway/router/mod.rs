@@ -382,6 +382,9 @@ mod trace_span;
 mod trace_span_tests;
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_cell_tests;
+/// T24 through the route: a capability reloaded as a write is not run.
+#[cfg(all(test, feature = "webui"))]
+mod ui_capability_reload_tests;
 #[cfg(all(test, feature = "webui"))]
 mod ui_tool_call_gates_tests;
 #[cfg(all(test, feature = "webui"))]
