@@ -219,8 +219,10 @@ fn a_key_named_through_an_env_file_is_the_gateways_key() {
     let named = tempfile::tempdir().expect("home");
     let env_file = named.path().join("keys.env");
     write(&env_file, &format!("R12_RECORD_KEY={KEY}\n"));
+    // Single-quoted: a Windows path's backslashes are escapes in a
+    // double-quoted YAML string, and `\U` in `C:\Users` fails the parse.
     let gateway = format!(
-        "env_files:\n  - \"{}\"\nbackends: {{}}\nsecurity:\n  record_principal_key: \"env:R12_RECORD_KEY\"\n",
+        "env_files:\n  - '{}'\nbackends: {{}}\nsecurity:\n  record_principal_key: \"env:R12_RECORD_KEY\"\n",
         env_file.display()
     );
     let named = home_in(named, &gateway);
