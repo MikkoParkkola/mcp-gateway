@@ -309,7 +309,14 @@ impl Noted {
     /// no refusal and no allow of its own, but the findings and the declared
     /// effect this call's admission established.
     pub(crate) fn as_not_redecided(&self) -> Self {
-        Self::not_redecided()
+        let mut noted = Self::not_redecided();
+        if let Some(held) = self.0.as_deref() {
+            let checks = noted.checks();
+            checks.findings.clone_from(&held.findings);
+            checks.findings_truncated = held.findings_truncated;
+            checks.effect = held.effect;
+        }
+        noted
     }
 
     /// The decision object for this call under the published config `live`.

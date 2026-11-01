@@ -255,6 +255,15 @@ impl MetaMcp {
             backend.as_deref(),
             dispatch_binding.as_deref(),
         );
+        // The effect the record carries, read from the same slot and
+        // definition as the cache's admission (MIK-8914.API2A.19).
+        if let Some((effect, source)) = self.declared_effect(
+            (server, tool),
+            backend.as_deref(),
+            dispatch_binding.as_deref(),
+        ) {
+            super::audit::note_declared_effect(effect, source);
+        }
         // U12: a web UI call runs only as the call the route checked, and a
         // tool this slot did not declare read-only only when confirmed. Here
         // the backend instance and the caller's binding are the dispatched

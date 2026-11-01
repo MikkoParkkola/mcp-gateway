@@ -45,6 +45,36 @@ impl MetaMcp {
         backend.is_some_and(|backend| backend.is_read_only_for(binding, tool))
     }
 
+    /// What the called tool declares the call could change, asked as
+    /// [`Self::cache_admits`] asks: a capability by its definition, otherwise
+    /// the registry backend by what its slot declared. `None` when nothing
+    /// declared it in a way the evidence can read.
+    pub(super) fn declared_effect(
+        &self,
+        (server, tool): (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        binding: Option<&str>,
+    ) -> Option<(
+        crate::security::decision_record::Effect,
+        crate::security::decision_record::EffectSource,
+    )> {
+        use crate::security::decision_record::{Effect, EffectSource};
+        if let Some(capabilities) = self.get_capabilities()
+            && server == capabilities.name
+            && let Some(definition) = capabilities.get(tool)
+        {
+            let effect = if definition.metadata.read_only {
+                Effect::ReadOnly
+            } else {
+                Effect::MayWrite
+            };
+            return Some((effect, EffectSource::CapabilityDefinition));
+        }
+        backend?
+            .declared_effect_for(binding, tool)
+            .map(|effect| (effect, EffectSource::ToolAnnotation))
+    }
+
     pub(super) fn refuse_shared_oauth_login(
         &self,
         server: &str,
