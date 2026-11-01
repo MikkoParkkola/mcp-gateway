@@ -83,6 +83,15 @@ impl<'a> AnswerPolicies<'a> {
         }
     }
 
+    /// Two distinct policies, as two generations would compile them.
+    #[cfg(test)]
+    pub(super) const fn pair(pinned: &'a FirewallPolicy, published: &'a FirewallPolicy) -> Self {
+        Self {
+            pinned,
+            published: Some(published),
+        }
+    }
+
     /// Whether the answer is redacted: either policy redacts.
     pub(crate) fn redacts(&self) -> bool {
         self.pinned.credential_redaction || self.published.is_some_and(FirewallPolicy::redacts)

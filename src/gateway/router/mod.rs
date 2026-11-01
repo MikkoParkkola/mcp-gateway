@@ -803,8 +803,10 @@ pub(crate) fn compression() -> CompressionLayer {
 }
 
 /// Pin the published generation on a request before anything else runs. Every
-/// later judgement on the request reads this one, so a reload that publishes
-/// mid-request never mixes two configurations into one answer.
+/// later request-side judgement reads this one, so a reload that publishes
+/// mid-request never mixes two configurations into the request's checks; the
+/// answer side judges under this one and the published one (ADR-029, amended,
+/// item 5).
 async fn pin_generation(
     axum::extract::State(live): axum::extract::State<Arc<crate::config_reload::LiveConfig>>,
     mut request: axum::extract::Request,

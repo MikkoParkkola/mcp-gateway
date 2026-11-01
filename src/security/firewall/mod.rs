@@ -79,6 +79,8 @@ mod response_observer;
 #[cfg(test)]
 pub(crate) mod response_tests;
 #[cfg(test)]
+mod answer_policies_tests;
+#[cfg(test)]
 mod rule_glob_tests;
 #[cfg(test)]
 mod rule_scan_tests;
@@ -659,8 +661,9 @@ impl Firewall {
     /// May redact credentials/PII from the response value in place (returns
     /// the potentially-modified value).
     ///
-    /// Judged by the rules this firewall was built from, as
-    /// [`Self::check_request`] is; never called by the gateway's own routes.
+    /// Judged by the rules this firewall was built from, as one generation,
+    /// as [`Self::check_request`] is; never called by the gateway's own
+    /// routes, whose answers are judged under two (`AnswerPolicies`).
     pub fn check_response(
         &self,
         session_id: &str,

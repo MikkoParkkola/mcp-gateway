@@ -43,9 +43,10 @@ impl MetaMcp {
         self.startup_live_config.get().cloned().or(from_reload)
     }
 
-    /// The generation published now, for a check no request generation
-    /// reaches (a response, a task result); `None` only before startup sets
-    /// the live config. Every reader is a firewall check.
+    /// The generation published now: the answer side's P beside the request's
+    /// pinned one, and the only one for a check no request is behind (task
+    /// settlement, a poll, a requestless notification). `None` only before
+    /// startup sets the live config. Every reader is a firewall check.
     #[cfg(feature = "firewall")]
     pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
         self.live_config().map(|live| live.generation())

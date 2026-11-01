@@ -2,15 +2,18 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! One published configuration and every view a request is judged against
 //! (ADR-023, amended): built in full before a reload changes anything, then
-//! published in one swap. A request takes one when it arrives and keeps it,
-//! so no request mixes two configurations.
+//! published in one swap. A request takes one when it arrives and keeps it
+//! for every request-side check, so no request mixes two configurations
+//! there; its answer is judged under that one and the one published at scan
+//! time, the stronger result standing (ADR-029, amended, item 5).
 
 use std::sync::Arc;
 
 use crate::config::{Config, EnvOverlay};
 use crate::gateway::auth::ResolvedAuthConfig;
 
-/// The configuration a request is judged against, from arrival to response.
+/// The configuration a request is judged against on arrival: every request-side
+/// check, and half of the answer side's pair.
 #[derive(Debug)]
 pub struct Generation {
     config: Arc<Config>,
