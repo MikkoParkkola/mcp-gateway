@@ -269,7 +269,7 @@ impl MetaMcp {
             );
             return Err(refusal);
         }
-        #[cfg(test)]
+        #[cfg(all(test, feature = "webui"))]
         ui_gate_seam::ui_gate_admitted();
         // A web UI call runs the tool itself: a stored answer is not a run.
         if read_only
@@ -309,7 +309,7 @@ impl MetaMcp {
 /// after the gate judged it (a capability reloaded as a write).
 /// Thread-local, like `caller_verdict`'s dispatch seam: rows that arm it run
 /// on a current-thread runtime.
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 pub(crate) mod ui_gate_seam {
     use std::cell::RefCell;
 

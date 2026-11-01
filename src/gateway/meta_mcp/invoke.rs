@@ -83,7 +83,7 @@ mod dispatch;
 mod errors;
 mod intake;
 mod keys;
-#[cfg(test)]
+#[cfg(all(test, feature = "webui"))]
 pub(crate) use keys::ui_gate_seam;
 mod legacy_bridge;
 mod policy;
