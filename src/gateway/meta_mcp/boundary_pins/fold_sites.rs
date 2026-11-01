@@ -255,7 +255,7 @@ fn required_setter(class: &str) -> Option<&'static str> {
 }
 
 /// Whether the function at `key` calls `setter`.
-fn calls(sites: &Sites, key: &(String, String), setter: &str) -> bool {
+fn function_calls(sites: &Sites, key: &(String, String), setter: &str) -> bool {
     sites
         .setters_in
         .get(key)
@@ -270,7 +270,7 @@ fn diff(sites: &Sites, text: &str) -> Vec<String> {
         match is_error.get(key) {
             Some((n, class)) if n == count => {
                 if let Some(setter) = required_setter(class)
-                    && !calls(sites, key, setter)
+                    && !function_calls(sites, key, setter)
                 {
                     wrong.push(format!("{class}, no {setter} call: {file}\t{func}"));
                 }
