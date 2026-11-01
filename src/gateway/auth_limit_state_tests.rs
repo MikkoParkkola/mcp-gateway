@@ -260,3 +260,25 @@ fn t5b_the_previous_secret_shares_the_keys_state() {
         "the current secret got its own breaker"
     );
 }
+
+/// T9f: with the clock unreadable an undated key still authenticates, and no
+/// last-use time is written, since none was read.
+#[test]
+fn t9f_an_unreadable_clock_writes_no_last_use() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let cfg = over(&runtime, vec![key("k", A, Some(P1))]);
+    {
+        let _clock = crate::clock::test_clock::before_epoch();
+        assert!(
+            cfg.validate_token(A).is_some(),
+            "an undated key needs no clock"
+        );
+    }
+    let only = cfg.api_keys()[0].clone();
+    assert_eq!(cfg.key_last_used(&only), None, "a time was written unread");
+    assert!(cfg.validate_token(A).is_some(), "control: readable clock");
+    assert!(
+        cfg.key_last_used(&only).is_some(),
+        "control: the match is recorded"
+    );
+}

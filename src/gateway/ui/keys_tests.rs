@@ -71,6 +71,28 @@ fn keys(mu_file: &std::path::Path) -> Vec<ApiKeyConfig> {
     ]
 }
 
+/// The audit trail the fixture's gateway writes, in `dir`.
+fn log_in(dir: &tempfile::TempDir) -> Arc<crate::security::TransparencyLogger> {
+    use crate::security::audit_rotation_config::{OnDiskFull, RotationConfig};
+    let config = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: dir
+            .path()
+            .join("transparency.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+        key_id: "test".into(),
+        shared_secret: String::new(),
+        rotation: RotationConfig {
+            max_segment_bytes: 1 << 20,
+            max_segment_age_secs: 0,
+            retain_segments: 2,
+            on_disk_full: OnDiskFull::ExpireOldest,
+        },
+    };
+    Arc::new(crate::security::TransparencyLogger::open(Arc::new(config)).expect("the log opens"))
+}
+
 struct Fixture {
     state: Arc<AppState>,
     runtime: Arc<AuthRuntime>,
@@ -82,10 +104,14 @@ impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("mu.digest"), spec(MU)).expect("write");
+        let log = log_in(&dir);
         let (state, router_dir) = crate::gateway::router::tests::audience_state(
             &AuthConfig::default(),
             (None, None),
-            |meta| meta,
+            move |mut meta| {
+                meta.transparency_logger = Some(log);
+                meta
+            },
         )
         .await;
         Self {
@@ -499,4 +525,24 @@ fn t9d_the_newer_reading_wins() {
     );
     runtime.note_used(P1, 300);
     assert_eq!(runtime.last_used(P1), Some(300));
+}
+
+/// Every audit record the fixture's gateway has written, one per line.
+fn audit_lines(fx: &Fixture) -> Vec<String> {
+    std::fs::read_to_string(fx.dir.path().join("transparency.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// T8b: the read writes no audit record (the admin audit layer records
+/// writes, not GETs): the trail is the same line for line before and after.
+#[tokio::test]
+async fn t8b_the_read_writes_no_audit_record() {
+    let fx = Fixture::new().await;
+    let before = audit_lines(&fx);
+    let answer = fx.as_bearer(fx.table()).await;
+    assert_eq!(answer.as_array().map(Vec::len), Some(3), "{answer}");
+    assert_eq!(audit_lines(&fx), before, "the read wrote an audit record");
 }
