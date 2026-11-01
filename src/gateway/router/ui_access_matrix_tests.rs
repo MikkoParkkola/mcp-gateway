@@ -759,6 +759,10 @@ fn every_ui_api_path_is_in_the_matrix() {
 #[path = "ui_access_matrix_known_tests.rs"]
 mod known;
 
+/// Who reads which identity grants in the control-plane snapshot.
+#[path = "ui_control_plane_scope_tests.rs"]
+mod control_plane_scope;
+
 /// The status report against the guards, through the same fixture.
 #[path = "ui_access_report_tests.rs"]
 mod report;

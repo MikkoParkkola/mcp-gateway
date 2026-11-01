@@ -21,6 +21,7 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, oneshot};
 use tracing::{debug, error, info, warn};
 
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use crate::transport::notification_sink::DeliveryHandle;
 
 use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
@@ -353,53 +354,59 @@ impl Drop for ProgressRegistrationGuard<'_> {
 #[async_trait]
 impl Transport for StdioTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
+        backend_request(async move {
+            let id = self.next_id();
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: id.clone(),
+                method: method.to_string(),
+                params,
+            };
 
-        // Register before the write: the reader task can route a notification
-        // back before `write_message` returns. The token registered is whatever
-        // the params carry on the wire -- for a call the gateway minted for
-        // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
-        // never the caller's own token (MIK-7272.SUB.2b). Draining it is the
-        // guard's job on every exit path, cancellation included.
-        let _progress_cleanup = request_progress_token(request.params.as_ref())
-            .map(|token| ProgressRegistrationGuard::register(self, &token));
+            // Register before the write: the reader task can route a notification
+            // back before `write_message` returns. The token registered is whatever
+            // the params carry on the wire -- for a call the gateway minted for
+            // (`src/gateway/meta_mcp/invoke.rs`) that is the minted `gw-<uuid>`,
+            // never the caller's own token (MIK-7272.SUB.2b). Draining it is the
+            // guard's job on every exit path, cancellation included.
+            let _progress_cleanup = request_progress_token(request.params.as_ref())
+                .map(|token| ProgressRegistrationGuard::register(self, &token));
 
-        let message = serde_json::to_string(&request)?;
-        let (tx, rx) = oneshot::channel();
-        self.pending.insert(id.to_string(), tx);
-        // Removing the entry is the guard's job on every path: on success the
-        // reader task has already routed the response and the removal is a
-        // no-op, and on an error, an internal timeout or CANCELLATION (an
-        // outer timeout or task abort dropping this future mid-await) the
-        // guard's Drop is the only thing that removes it — without it a
-        // stranded entry would leak here for the transport's lifetime.
-        let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
+            let message = serde_json::to_string(&request)?;
+            let (tx, rx) = oneshot::channel();
+            self.pending.insert(id.to_string(), tx);
+            // Removing the entry is the guard's job on every path: on success the
+            // reader task has already routed the response and the removal is a
+            // no-op, and on an error, an internal timeout or CANCELLATION (an
+            // outer timeout or task abort dropping this future mid-await) the
+            // guard's Drop is the only thing that removes it — without it a
+            // stranded entry would leak here for the transport's lifetime.
+            let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
 
-        // Declared after `_cleanup`, so it drops first and still finds the
-        // entry of a request nobody answered.
-        let claim = WriteClaim::new();
-        let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
-        // The guards drop after this value: the pending entry and progress go.
-        let outcome = self.exchange(message, rx, Some(&claim)).await;
-        cancel.disarm();
-        outcome
+            // Declared after `_cleanup`, so it drops first and still finds the
+            // entry of a request nobody answered.
+            let claim = WriteClaim::new();
+            let mut cancel = tree::CancelUnanswered::arm(self, &request, &claim);
+            // The guards drop after this value: the pending entry and progress go.
+            let outcome = self.exchange(message, rx, Some(&claim)).await;
+            cancel.disarm();
+            outcome
+        })
+        .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let notification = JsonRpcNotification {
-            jsonrpc: "2.0".to_string(),
-            method: method.to_string(),
-            params,
-        };
+        backend_wait(async move {
+            let notification = JsonRpcNotification {
+                jsonrpc: "2.0".to_string(),
+                method: method.to_string(),
+                params,
+            };
 
-        let message = serde_json::to_string(&notification)?;
-        self.write_message(message).await
+            let message = serde_json::to_string(&notification)?;
+            self.write_message(message).await
+        })
+        .await
     }
 
     fn is_connected(&self) -> bool {

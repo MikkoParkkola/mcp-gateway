@@ -570,7 +570,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
     );
     assert_answers_native(&response);
     assert!(
-        !response.egress_scanned,
+        !response.wire_meta.egress_scanned,
         "a retry routed to its origin backend is never marked inspected"
     );
     assert_eq!(

@@ -5,13 +5,9 @@
 
 use super::*;
 
-/// Cells that record a known disclosure, pinned as today's answer: with a
-/// store, a control-plane snapshot shows every user's audit events to an
-/// unprivileged caller. A key or identity with no role mapping falls back to
-/// auditor, and a mapped Developer keeps its role, which also reads all of
-/// it. The follow-up that scopes the snapshot moves exactly these cells,
-/// deliberately.
-const KNOWN_WRONG: &[&str] = &[
+/// Callers whose role reads only their own grants and audit events: with a
+/// store, their snapshot differs from an auditor's, who reads every event.
+const OWN_ROWS_ONLY: &[&str] = &[
     "StandardKey",
     "OidcDeveloper",
     "OidcDeveloperNoSubject",
@@ -114,12 +110,12 @@ fn the_expectation_holds_known_answers() {
             "{path}"
         );
     }
-    // The known disclosure is still answered as today: each such caller
-    // reads the seeded store's snapshot.
-    for &caller in KNOWN_WRONG {
+    // A caller limited to its own rows never reads the auditor's full view.
+    for &caller in OWN_ROWS_ONLY {
         for shape in ["plain+store", "bad-query+store"] {
-            assert!(
-                get(routes::UI_CONTROL_PLANE, shape, caller).starts_with("200:"),
+            assert_ne!(
+                get(routes::UI_CONTROL_PLANE, shape, caller),
+                get(routes::UI_CONTROL_PLANE, shape, "OidcAuditor"),
                 "{shape} {caller}"
             );
         }
