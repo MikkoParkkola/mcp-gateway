@@ -141,10 +141,7 @@ async fn a_failed_adoption_does_not_acknowledge_the_install() {
     .await
     .expect("the probe path answers");
 
-    assert!(
-        !matches!(&failed, Ok(Some(token)) if token == "old"),
-        "the old account's token still serves: {failed:?}"
-    );
+    assert!(failed.is_err(), "no credential serves: {failed:?}");
     let client = pair.serving.oauth_client_for_test().expect("a client");
     assert!(
         client.lock().await.install_stale_for_test(),

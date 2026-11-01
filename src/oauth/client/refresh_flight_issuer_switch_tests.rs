@@ -88,32 +88,67 @@ async fn an_adopt_racing_an_issuer_switch_acknowledges_nothing() {
     assert!(owned.install_stale(), "the new install is not acknowledged");
 }
 
-/// A background refresh of the old issuer's credential, after a sign-in under
-/// the other issuer was confirmed and published, leaves the status as that
-/// sign-in published it. Red today: the caller-side publish writes the old
-/// credential's expiry.
+/// A publish by the old issuer's client (a refresh that was already in flight
+/// ends with one), after a sign-in under the other issuer was confirmed and
+/// published, leaves the status as that sign-in published it. Red today: it
+/// writes the old credential's expiry.
 #[tokio::test]
-async fn an_old_issuer_refresh_keeps_the_new_sign_ins_status() {
+async fn an_old_issuer_publish_keeps_the_new_sign_ins_status() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    hold(&owned, &token("a1", Some("r1"), false));
+    cell.record_install(OTHER_ISSUER_KEY);
+    cell.set_held(Some(4_000_000_000), false);
+    let published = cell.snapshot();
+
+    owned.publish_sign_in();
+
+    assert_eq!(
+        cell.snapshot(),
+        published,
+        "the new sign-in's status stands"
+    );
+}
+
+/// A background renewal of the old issuer's credential, once a sign-in under
+/// the other issuer is confirmed, sends nothing: the old refresh token stays
+/// unspent until a re-discovery settles which issuer serves. Red today: the
+/// renewal refreshes the old credential.
+#[tokio::test]
+async fn a_background_renewal_after_an_issuer_switch_sends_nothing() {
     let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().unwrap();
     let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
     let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
     hold(&owned, &token("a1", Some("r1"), true));
     cell.record_install(OTHER_ISSUER_KEY);
-    cell.set_held(Some(4_000_000_000), false);
-    let published = cell.snapshot();
 
     let renewal = owned.attempt_background_renewal().await;
 
     assert!(
-        matches!(renewal, crate::oauth::client::renewal::Renewal::Renewed),
-        "control: the old credential refreshed"
+        matches!(renewal, crate::oauth::client::renewal::Renewal::Deferred),
+        "the renewal waits"
     );
-    assert_eq!(
-        cell.snapshot(),
-        published,
-        "the new sign-in's status stands"
-    );
+    assert_eq!(server.requests(), 0, "nothing was sent");
+}
+
+/// An install under the client's own issuer whose token cannot be read leaves
+/// a provider-changed reason standing: only an adopt that took a token ends
+/// it. Red today: the reason is cleared before the read.
+#[tokio::test]
+async fn a_failed_adopt_keeps_the_provider_changed_reason() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    cell.record_install(&owned.credential_key().unwrap());
+    cell.raise_provider_changed();
+
+    assert_eq!(owned.adopt_installed(), None, "nothing was stored");
+
+    assert_eq!(cell.snapshot(), SignIn::ProviderChanged);
 }
 
 /// A restart revoked the detached step after it set out: a held token, cached

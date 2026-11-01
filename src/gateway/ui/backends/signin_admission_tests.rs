@@ -162,8 +162,9 @@ async fn a_slow_discovery_shortens_the_authorization_window() {
     let ends = chrono::DateTime::parse_from_rfc3339(reply.json()["expires_at"].as_str().unwrap())
         .expect("expires_at is RFC 3339")
         .timestamp();
+    let admitted_at = i64::try_from(t0).unwrap();
     assert!(
-        ends <= i64::try_from(t0).unwrap() + 4,
+        (admitted_at + 3..=admitted_at + 4).contains(&ends),
         "expires_at runs from admission: {ends} against {t0}"
     );
     let until = gw
