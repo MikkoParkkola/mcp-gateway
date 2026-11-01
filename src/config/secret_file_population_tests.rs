@@ -207,6 +207,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/caller_view.rs",
+        "cfg(test) source scanner reading the crate's own sources to count unfiltered capability-provider reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/invoke_stages.rs",
         "cfg(test) source scanner reading the invoke stage files for the MIK-8488 stage pin; no secret",
     ),

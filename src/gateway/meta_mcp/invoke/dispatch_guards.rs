@@ -163,14 +163,12 @@ impl MetaMcp {
         call: &BackendCall<'_>,
     ) -> Result<()> {
         let (server, tool) = (call.server, call.tool);
-        self.active_profile(call.session_id)
-            .check(server, tool)
-            .map_err(|refusal| {
+        self.caller_profile_check(call.session_id, (server, tool))
+            .inspect_err(|_| {
                 super::audit::note_refused_by(
                     crate::security::decision_record::DecisionKind::RoutingProfile,
                     None,
                 );
-                Error::Protocol(refusal)
             })?;
         self.admit_backend_wide(server)
     }
