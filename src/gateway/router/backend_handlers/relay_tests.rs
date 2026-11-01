@@ -246,8 +246,12 @@ async fn classes_noted_by_staging(state: &AppState) -> String {
     format!("{notes:?}")
 }
 
+/// Staging classifies whenever the firewall is on, under an effective `off`
+/// too: a reload from `off` to `on` between staging and delivery must not
+/// fail open (ADR-029, amended; this inverts the earlier "only when relay is
+/// on" row).
 #[tokio::test]
-async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
+async fn staging_a_catalogue_result_classifies_while_the_firewall_is_on() {
     let (active, _store) = blocking_state().await;
     assert!(active.firewall.as_ref().is_some_and(|fw| fw.relay_active()));
     let noted = classes_noted_by_staging(&active).await;
@@ -263,15 +267,16 @@ async fn staging_a_catalogue_result_classifies_only_when_relay_is_on() {
         Firewall::from_config(FirewallConfig::default(), None).with_continuations(keys),
     ));
     assert!(
-        !inactive
+        inactive
             .firewall
             .as_ref()
-            .is_some_and(|fw| fw.relay_active())
+            .is_some_and(|fw| fw.relay_active()),
+        "the firewall is on, so staging runs whatever the action"
     );
     let noted = classes_noted_by_staging(&inactive).await;
     assert!(
-        !noted.contains("personal_data"),
-        "classified with relay off: {noted}"
+        noted.contains("personal_data"),
+        "not classified with the firewall on and the action off: {noted}"
     );
 }
 
