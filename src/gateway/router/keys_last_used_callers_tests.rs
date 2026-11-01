@@ -3,7 +3,9 @@
 //! T10, the dashboard-session and OIDC parts (slice B test plan r2): only an
 //! accepted API-key match records a key's last use. A request carried by a
 //! dashboard session, and one carried by a verified OIDC identity, both pass
-//! the real auth middleware and leave every key's last use unset.
+//! the real auth middleware and leave every key's last use unset. The OIDC
+//! request presents a key-server temporary token, as a signed-in browser's
+//! client does, so the identity is verified by the middleware itself.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,12 +20,15 @@ use super::{AppState, create_router};
 use crate::config::{ApiKeyConfig, AuthConfig};
 use crate::gateway::auth::{Now, SESSION_COOKIE, SessionLimits};
 use crate::key_server::oidc::VerifiedIdentity;
+use crate::key_server::{InMemoryTokenStore, KeyServer, TemporaryToken};
 
 const BEARER: &str = "t10-static-bearer";
 const ADMIN_KEY: &str = "t10-admin-key";
 const STATUS: &str = "/ui/api/status";
 
-async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+async fn fixture(
+    key_server: Option<Arc<KeyServer>>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
@@ -36,7 +41,31 @@ async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir)
         }],
         ..AuthConfig::default()
     };
-    test_router_app_state_with_auth_and_key_server(&auth, None).await
+    test_router_app_state_with_auth_and_key_server(&auth, key_server).await
+}
+
+/// A key-server temporary token for a verified OIDC identity.
+fn oidc_token() -> TemporaryToken {
+    let now = crate::clock::unix_secs().expect("the test clock reads");
+    TemporaryToken {
+        jti: InMemoryTokenStore::generate_jti(),
+        token: InMemoryTokenStore::generate_bearer(),
+        identity: VerifiedIdentity {
+            subject: "t10-subject".to_string(),
+            email: "t10@example.test".to_string(),
+            name: None,
+            groups: vec!["devs".to_string()],
+            issuer: "https://idp.example.test".to_string(),
+        },
+        scopes: crate::key_server::store::TokenScopes {
+            backends: vec!["*".to_string()],
+            tools: vec![],
+            rate_limit: 0,
+        },
+        iat: now,
+        exp: now + 3600,
+        client_ip: None,
+    }
 }
 
 /// Every configured key's last use, as the published table reads it.
@@ -85,7 +114,7 @@ async fn assert_a_key_request_records(state: &Arc<AppState>) {
 /// T10b: a dashboard session's request writes no key's last use.
 #[tokio::test]
 async fn t10b_a_session_request_writes_no_last_use() {
-    let (state, _dir) = Box::pin(fixture()).await;
+    let (state, _dir) = Box::pin(fixture(None)).await;
     let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
     let handle = state
         .dashboard_bootstrap
@@ -109,16 +138,20 @@ async fn t10b_a_session_request_writes_no_last_use() {
 /// T10c: a verified OIDC identity's request writes no key's last use.
 #[tokio::test]
 async fn t10c_an_oidc_request_writes_no_last_use() {
-    let (state, _dir) = Box::pin(fixture()).await;
-    let identity = VerifiedIdentity {
-        subject: "t10-subject".to_string(),
-        email: "t10@example.test".to_string(),
-        name: None,
-        groups: vec!["devs".to_string()],
-        issuer: "https://idp.example.test".to_string(),
-    };
-    let request = from_here(Request::builder().uri(STATUS).extension(identity));
-    let _status = send(&state, request).await;
+    let key_server = Arc::new(KeyServer::new(crate::config::KeyServerConfig::default()));
+    let token = oidc_token();
+    let bearer = token.token.clone();
+    key_server.store.insert(token).await;
+    let (state, _dir) = Box::pin(fixture(Some(key_server))).await;
+    let request = from_here(
+        Request::builder()
+            .uri(STATUS)
+            .header(header::AUTHORIZATION, format!("Bearer {bearer}")),
+    );
+    assert!(
+        send(&state, request).await.is_success(),
+        "premise: the verified identity is admitted"
+    );
     assert!(
         last_uses(&state).iter().all(Option::is_none),
         "an OIDC request recorded a key's last use"
