@@ -402,20 +402,27 @@ fn finding_has_no_content() {
     }
 }
 
+/// The detector keeps no action of its own: an `off` view at delivery
+/// records nothing, the same delivery under `block` does.
 #[test]
 fn off_records_nothing() {
-    let now = Instant::now();
+    use crate::security::firewall::CollusionAction;
+    use crate::security::firewall::collusion_live_rig::{Rig, config, plain};
     let s = secret();
+    let rig = Rig::new(config(CollusionAction::Block, &[], vec![]));
+    let on = rig.generation();
+    rig.reload(|c| c.security.firewall.collusion.action = CollusionAction::Off);
+    let off = rig.generation();
+    let detector = rig
+        .firewall
+        .collusion_detector()
+        .expect("built whatever the action");
 
-    let on = detector();
-    on.record_delivery_at(T, A, true, &s, now);
-    assert!(on.tracked_fingerprints() > 0);
-    assert!(on.check_egress_at(B, U, &s, now).is_some());
+    rig.deliver("alice", ("alpha", "read"), &plain(&s), &off);
+    assert_eq!(detector.tracked_fingerprints(), 0);
 
-    let off = CollusionDetector::new(RelayParams::default());
-    off.record_delivery_at(T, A, true, &s, now);
-    assert_eq!(off.tracked_fingerprints(), 0);
-    assert!(off.check_egress_at(B, U, &s, now).is_none());
+    rig.deliver("alice", ("alpha", "read"), &plain(&s), &on);
+    assert!(detector.tracked_fingerprints() > 0);
 }
 
 // Row 17 ───────────────────────────────────────────────────────────────────
