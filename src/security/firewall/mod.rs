@@ -382,7 +382,7 @@ impl Firewall {
     /// Judged by the rules this firewall was built from: for a program that
     /// embeds it, that is the current config. The gateway's own routes never
     /// call it; they judge under the request's generation
-    /// (`live_config_guard_tests`).
+    /// (the `boundary_pins::live_config` rows).
     pub fn check_request(
         &self,
         session_id: &str,
@@ -415,7 +415,7 @@ impl Firewall {
 
     /// The policy `generation` compiled, so a reload's rules decide the next
     /// check (ADR-029, amended). With no generation (a `MetaMcp` with no live
-    /// config, which no production server builds: `live_config_guard_tests`)
+    /// config, which no production server builds: the `boundary_pins::live_config` rows)
     /// it is the startup policy, logged once per process outside tests.
     pub(crate) fn policy_under<'a>(
         &'a self,

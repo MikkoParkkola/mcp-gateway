@@ -16,6 +16,7 @@ mod invoke_stages_r6;
 mod invoke_stages_rules;
 mod invoke_stages_tests;
 mod keyed_request;
+mod live_config;
 mod live_generation;
 mod packaged;
 mod presend_exits;
