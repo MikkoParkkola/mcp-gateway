@@ -255,7 +255,33 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     if let Some(entry) = sections.iter_mut().find(|(name, _)| *name == "meta_mcp") {
         entry.1 = meta_mcp_restart_only(running) != meta_mcp_restart_only(wanted);
     }
+    #[cfg(feature = "cost-governance")]
+    if let Some(entry) = sections
+        .iter_mut()
+        .find(|(name, _)| *name == "cost_governance")
+    {
+        entry.1 = cost_governance_differs(running, wanted);
+    }
     sections
+}
+
+/// Whether `cost_governance` differs in a way only a restart applies. The
+/// budgets and the alerts apply on reload, so they are blanked on both sides,
+/// but only while governance is on on both: turning it on or off is
+/// restart-only (the enforcer is built, or not, at startup), and a budget edit
+/// across that line must still report.
+#[cfg(feature = "cost-governance")]
+fn cost_governance_differs(running: &Config, wanted: &Config) -> bool {
+    let live_budgets = running.cost_governance.enabled && wanted.cost_governance.enabled;
+    let view = |config: &Config| {
+        let mut governance = config.cost_governance.clone();
+        if live_budgets {
+            governance.budgets = crate::cost_accounting::config::BudgetLimits::default();
+            governance.alerts.clear();
+        }
+        canonical_json(&governance)
+    };
+    view(running) != view(wanted)
 }
 
 /// `security` with the fields that apply on reload set to one fixed value, so
