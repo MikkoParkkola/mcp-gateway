@@ -28,8 +28,20 @@ fn detector() -> CollusionDetector {
     det
 }
 
-fn seam(det: &CollusionDetector, masks: Vec<u64>, now: Instant) {
-    det.record_seam_at(SEAM, ALICE, (true, masks), det.fingerprints(TEXT), now);
+/// Alpha's and beta's `allowed_flows` entries (bit each).
+const CONTRIBUTORS: [(&str, u64); 2] = [("mock:alpha", 0b01), ("mock:beta", 0b10)];
+
+fn seam(det: &CollusionDetector, now: Instant) {
+    let names = CONTRIBUTORS.map(|(name, _)| name.to_string());
+    let held = (true, &names[..], super::no_lists());
+    det.record_seam_at(SEAM, ALICE, held, det.fingerprints(TEXT), now);
+}
+
+/// What bob sending [`TEXT`] through an egress matching the entries in
+/// `mask` finds.
+fn egress(det: &CollusionDetector, mask: u64, now: Instant) -> Option<super::RelayFinding> {
+    let view = super::live_stubs::masked(&CONTRIBUTORS, (EGRESS, mask));
+    det.check_egress_under(&view, BOB, EGRESS, TEXT, now)
 }
 
 /// Alpha's text may leave by entry 1, beta's by entry 2: an egress matching
@@ -38,15 +50,13 @@ fn seam(det: &CollusionDetector, masks: Vec<u64>, now: Instant) {
 fn a_seam_leaves_only_by_a_flow_every_contributor_allows() {
     let det = detector();
     let now = Instant::now();
-    seam(&det, vec![0b01, 0b10], now);
+    seam(&det, now);
     assert!(
-        det.check_egress_flows_at(BOB, (EGRESS, 0b11), TEXT, now)
-            .is_none(),
+        egress(&det, 0b11, now).is_none(),
         "an egress every contributor allows is a flow"
     );
     assert!(
-        det.check_egress_flows_at(BOB, (EGRESS, 0b01), TEXT, now)
-            .is_some(),
+        egress(&det, 0b01, now).is_some(),
         "beta's text left by a flow only alpha's may take"
     );
 }
@@ -57,11 +67,10 @@ fn a_seam_leaves_only_by_a_flow_every_contributor_allows() {
 fn a_repeated_seam_keeps_every_contributors_limit() {
     let det = detector();
     let now = Instant::now();
-    seam(&det, vec![0b01, 0b10], now);
-    seam(&det, vec![0b01, 0b10], now);
+    seam(&det, now);
+    seam(&det, now);
     assert!(
-        det.check_egress_flows_at(BOB, (EGRESS, 0b01), TEXT, now)
-            .is_some(),
+        egress(&det, 0b01, now).is_some(),
         "a repeat widened the seam's flows"
     );
 }
@@ -71,21 +80,10 @@ fn a_repeated_seam_keeps_every_contributors_limit() {
 fn an_ordinary_source_leaves_by_any_entry_it_matched() {
     let det = detector();
     let now = Instant::now();
-    det.record_fingerprints_at(
-        "mock:alpha",
-        ALICE,
-        (true, 0b01),
-        det.fingerprints(TEXT),
-        now,
-    );
-    assert!(
-        det.check_egress_flows_at(BOB, (EGRESS, 0b01), TEXT, now)
-            .is_none()
-    );
-    assert!(
-        det.check_egress_flows_at(BOB, (EGRESS, 0b10), TEXT, now)
-            .is_some()
-    );
+    let held = (true, None, super::no_lists());
+    det.record_fingerprints_at("mock:alpha", ALICE, held, det.fingerprints(TEXT), now);
+    assert!(egress(&det, 0b01, now).is_none());
+    assert!(egress(&det, 0b10, now).is_some());
 }
 
 const FIELD_A: &str = "north slope rows seven to twelve, late pears";

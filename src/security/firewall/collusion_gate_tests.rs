@@ -436,7 +436,12 @@ fn a_split_copy_near_the_cap_keeps_both_forms() {
     assert!(!cut, "premise: under the record cap");
     let fps = digest.fingerprints(&detector);
     assert!(fps.len() > 1_024, "premise: more than one form's old share");
-    detector.record_fingerprints_at("alpha:t", "b", (false, 0), fps.clone(), Instant::now());
+    let held = (
+        false,
+        None,
+        crate::security::firewall::collusion::no_lists(),
+    );
+    detector.record_fingerprints_at("alpha:t", "b", held, fps.clone(), Instant::now());
     assert_eq!(detector.source_truncated(), 0);
     assert_eq!(detector.tracked_fingerprints(), fps.len());
 }

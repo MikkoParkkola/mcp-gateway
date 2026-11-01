@@ -352,7 +352,7 @@ fn default_detector() -> super::collusion::CollusionDetector {
 
 /// SG2: the detector's record entry keeps no action of its own: a delivery
 /// recorded under an `observe` view is kept. RED on base: the early return at
-/// the top of `record_delivery_flows_at`.
+/// the top of `record_delivery_under`.
 #[test]
 fn sg2_the_record_entry_has_no_action_gate() {
     let view_rig = Rig::new(config(Observe, &["alpha:read"], vec![]));

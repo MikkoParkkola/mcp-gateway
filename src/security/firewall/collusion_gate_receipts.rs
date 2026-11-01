@@ -171,10 +171,11 @@ impl Firewall {
     ) -> Option<(DeliveryDigest, bool)> {
         self.relay_detector()?;
         let source = format!("{server}:{tool}");
-        let sensitive = self.relay.sources.iter().any(|p| p.matches(&source))
-            || context_integrity_sensitive(result);
+        let inferred = context_integrity_sensitive(result);
+        let sensitive = self.relay.view.sources.iter().any(|p| p.matches(&source)) || inferred;
         let (leaves, values) = delivery_parts(result);
-        let (digest, cut) = of_parts(&leaves, values, sensitive);
+        let (mut digest, cut) = of_parts(&leaves, values, sensitive);
+        digest.inferred = inferred;
         self.count_cut(cut);
         Some((digest, cut))
     }
@@ -257,20 +258,21 @@ impl Firewall {
             return;
         }
         let source = format!("{server}:{tool}");
+        // The source identity and inferred fact are held; the lists decide
+        // retention only.
+        let view = &self.relay.view;
         // MIK-8113: a seam of several sources leaves only by a flow every
         // contributing source allows.
         if let Some(sources) = digest.seam_sources.as_deref() {
-            let masks = sources.iter().map(|s| self.relay.source_flows(s)).collect();
             detector.record_seam_at(
                 &source,
                 caller.key(),
-                (digest.sensitive, masks),
+                (digest.inferred, sources, view),
                 digest.fingerprints(detector),
                 self.relay.now(),
             );
             return;
         }
-        let flows = self.relay.source_flows(&source);
-        self.record_kept(detector, &source, caller, flows, digest);
+        self.record_kept(detector, &source, caller, view, digest);
     }
 }

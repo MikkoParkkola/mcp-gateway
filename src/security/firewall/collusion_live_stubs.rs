@@ -1,104 +1,92 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Test-only entry points and readers for the live-relay rows: the detector
-//! entries that take a source identity, an inferred fact and a view, and the
-//! overflow and interning readers. Each returns today's facts until the fix
-//! gives it meaning.
+//! Test-only readers for the live-relay rows: the overflow pairs, the
+//! unattributed mark, the overflow bytes and the interned names.
 
-use std::time::Instant;
-
-use super::{CollusionDetector, Entry, Holders, RelayFinding};
+use super::{CollusionDetector, Entry, Holders};
 
 impl CollusionDetector {
-    /// Record a result delivered to `principal` from `source` under `view`:
-    /// the source identity and the inferred fact (a classification marker
-    /// on the result), from which the list match and the flows follow. The
-    /// stub derives today's `(sensitive, flows)` as the gate does now.
-    #[cfg(test)]
-    pub(crate) fn record_delivery_under(
-        &self,
-        view: &super::super::CollusionView,
-        (source, inferred): (&str, bool),
-        principal: &str,
-        text: &str,
-        now: Instant,
-    ) {
-        let sensitive = view.lists(source) || inferred;
-        self.record_delivery_flows_at(
-            source,
-            principal,
-            (sensitive, view.source_flows(source)),
-            text,
-            now,
-        );
-    }
-
-    /// Check an egress through `target` by `principal` under `view`. The stub
-    /// derives today's egress flow mask as the gate does now.
-    #[cfg(test)]
-    pub(crate) fn check_egress_under(
-        &self,
-        view: &super::super::CollusionView,
-        principal: &str,
-        target: &str,
-        args: &str,
-        now: Instant,
-    ) -> Option<RelayFinding> {
-        self.check_egress_fingerprints_at(
-            principal,
-            (target, view.egress_flows(target)),
-            self.fingerprints(args),
-            now,
-        )
-    }
-
-    /// Allow `n` bytes of overflow pairs in all (tests only). The stub keeps
-    /// no pairs yet.
-    #[cfg(test)]
-    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
+    /// Allow `n` bytes of overflow pairs in all (tests only).
     pub(super) fn set_overflow_bytes_total(&mut self, n: usize) {
-        let _ = n; // used by the fix
+        self.state.get_mut().budget.limit = n;
     }
 
-    /// The overflow pairs `(source, inferred)` `caller` holds for the one
-    /// fingerprint of `text` (tests only). The stub holds none.
-    #[cfg(test)]
-    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
+    /// The overflow pairs `(source, inferred)` `caller` holds for the
+    /// fingerprints of `text` (tests only).
     pub(crate) fn overflow_pairs_of(
         &self,
         text: &str,
         caller: &str,
     ) -> Vec<(std::sync::Arc<str>, bool)> {
-        let _ = (text, caller); // used by the fix
-        Vec::new()
+        let principal = self.digest(caller);
+        let state = self.state.lock();
+        self.fingerprints(text)
+            .iter()
+            .filter_map(|fp| match state.entries.get(fp) {
+                Some(Entry {
+                    holders: Holders::Tracked(t),
+                    ..
+                }) => Some(t.pairs_of(principal)),
+                _ => None,
+            })
+            .flatten()
+            .collect()
     }
 
-    /// Whether `caller`'s overflow for the fingerprint of `text` is held
-    /// without a source (tests only). Today every overflow is.
-    #[cfg(test)]
+    /// Whether `caller`'s overflow for a fingerprint of `text` is marked
+    /// unattributed (tests only).
     pub(crate) fn overflow_unattributed(&self, text: &str, caller: &str) -> bool {
         let principal = self.digest(caller);
         let state = self.state.lock();
         self.fingerprints(text).iter().any(|fp| {
             matches!(
                 state.entries.get(fp),
-                Some(Entry { holders: Holders::Tracked(t), .. }) if t.has_overflow(principal)
+                Some(Entry { holders: Holders::Tracked(t), .. }) if t.unattributed(principal)
             )
         })
     }
 
     /// The overflow bytes `(per caller maximum, total)` held now (tests
-    /// only). The stub counts none.
-    #[cfg(test)]
-    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
+    /// only).
     pub(crate) fn overflow_bytes(&self) -> (usize, usize) {
-        (0, 0)
+        let state = self.state.lock();
+        let most = state
+            .entries
+            .values()
+            .filter_map(|e| match &e.holders {
+                Holders::Tracked(t) => Some(t.max_caller_bytes()),
+                Holders::Common => None,
+            })
+            .max()
+            .unwrap_or(0);
+        (most, state.budget.total)
     }
 
-    /// Source names interned now (tests only). The stub interns none.
-    #[cfg(test)]
-    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
+    /// Source names some record holds now (tests only).
     pub(crate) fn interned_sources_for_test(&self) -> usize {
-        0
+        self.state.lock().interned.len()
     }
+}
+
+/// The view an old bit-mask row meant: `recorded` is each source with the
+/// `allowed_flows` entries (bit each) it matched, `egress` the egress with
+/// its own. An entry both match becomes a flow from that source to the
+/// egress, so a copy is allowed exactly when its mask and the egress's share
+/// a bit (tests only).
+pub(super) fn masked(
+    recorded: &[(&str, u64)],
+    (egress, mask): (&str, u64),
+) -> crate::security::firewall::CollusionView {
+    let allowed_flows = recorded
+        .iter()
+        .filter(|(_, m)| m & mask != 0)
+        .map(|(source, _)| crate::security::firewall::AllowedFlow {
+            source: (*source).to_string(),
+            egress: egress.to_string(),
+        })
+        .collect();
+    crate::security::firewall::CollusionView::compile(&crate::security::firewall::CollusionConfig {
+        allowed_flows,
+        ..crate::security::firewall::CollusionConfig::default()
+    })
 }

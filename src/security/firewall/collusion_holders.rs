@@ -8,39 +8,34 @@
 //! [`MAX_RECORDS_PER_CALLER`] records per fingerprint; records past
 //! [`INLINE_RECORDS`] draw from one global pool shared by every fingerprint,
 //! so memory is today's inline records plus the pool, whatever the fan-out.
-//! A record that does not fit is dropped when it is plain (only an excuse is
-//! lost) and, when it is sensitive, kept as the caller's *overflow*: the
-//! caller held sensitive text whose source and flows are gone, so any other
-//! caller's egress of it counts, whatever its flows and whatever exact copy
-//! the sender holds. Text `common_principals` distinct callers hold is
-//! `Common`, decided from every caller seen, records kept or not.
+//! A record that does not fit is dropped when it is plain under the lists it
+//! is recorded under (only an excuse is lost) and, when it is sensitive, kept
+//! as one of the caller's *overflow* pairs: its source identity and inferred
+//! fact, judged at witness like any held copy, but never excused by an exact
+//! copy the sender holds. A caller whose pairs no longer fit, by count or by
+//! bytes, or past the total budget, is *unattributed*: judged sensitive and
+//! covered by no flow until that mark ages out. Text `common_principals`
+//! distinct callers hold is `Common`, decided from every caller seen, records
+//! kept or not.
 
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::origin::Origin;
 use super::{Copies, Holder};
+use crate::security::firewall::CollusionView;
 
 /// Records one fingerprint keeps without drawing on the pool.
 pub(super) const INLINE_RECORDS: usize = 8;
 /// Records one caller keeps for one fingerprint.
 pub(super) const MAX_RECORDS_PER_CALLER: usize = 64;
 /// Overflow pairs one caller keeps for one fingerprint: past it the caller's
-/// overflow is unattributed. Published for the rows; given meaning by the fix.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "bounds the overflow pairs in the fix")
-)]
+/// overflow is unattributed.
 pub(super) const OVERFLOW_PAIRS_PER_CALLER: usize = 16;
 /// Bytes of overflow pairs one caller keeps for one fingerprint.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "bounds the overflow pairs in the fix")
-)]
 pub(super) const OVERFLOW_BYTES_PER_CALLER: usize = 4 * 1024;
 /// Bytes of overflow pairs across every caller and fingerprint.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "bounds the overflow pairs in the fix")
-)]
 pub(super) const OVERFLOW_BYTES_TOTAL: usize = 1024 * 1024;
 /// Records past [`INLINE_RECORDS`], across every fingerprint. At most
 /// 65,536 x `size_of::<Holder>()` bytes (asserted by a unit row).
@@ -54,9 +49,86 @@ pub(super) struct Tracked {
     /// Every caller that received it, with its latest delivery: `Common` is
     /// decided from these, so a dropped record never hides a caller.
     callers: Vec<(u64, Instant)>,
-    /// Callers with a sensitive record that did not fit, and when they got
-    /// it sensitive. Only sensitive deliveries add to it.
-    overflow: Vec<(u64, Copies)>,
+    /// Callers with a sensitive record that did not fit.
+    overflow: Vec<Overflow>,
+}
+
+/// One caller's sensitive records past its cap, for one fingerprint.
+struct Overflow {
+    principal: u64,
+    pairs: Vec<Pair>,
+    /// Set when a pair did not fit: what was lost is judged sensitive and
+    /// covered by no flow. Only new unattributed evidence extends it.
+    unattributed: Option<Copies>,
+}
+
+/// An overflowed record: its source identity and inferred fact.
+struct Pair {
+    origin: Origin,
+    inferred: bool,
+    copies: Copies,
+}
+
+/// The bytes one pair is charged beside its name.
+const PAIR_BYTES: usize = std::mem::size_of::<Pair>();
+
+/// The overflow bytes held across every fingerprint: pairs, plus each name
+/// once while some pair holds it.
+pub(super) struct Budget {
+    pub(super) total: usize,
+    pub(super) limit: usize,
+    names: HashMap<Arc<str>, usize>,
+}
+
+impl Budget {
+    pub(super) fn new(limit: usize) -> Self {
+        Self {
+            total: 0,
+            limit,
+            names: HashMap::new(),
+        }
+    }
+
+    /// What adding a pair of `origin` would charge.
+    fn charge(&self, origin: &Origin) -> usize {
+        PAIR_BYTES
+            + names(origin)
+                .filter(|n| !self.names.contains_key(*n))
+                .map(|n| n.len())
+                .sum::<usize>()
+    }
+
+    fn take(&mut self, origin: &Origin) {
+        self.total += self.charge(origin);
+        for name in names(origin) {
+            *self.names.entry(Arc::clone(name)).or_default() += 1;
+        }
+    }
+
+    fn give_back(&mut self, origin: &Origin) {
+        self.total -= PAIR_BYTES;
+        for name in names(origin) {
+            if let Some(n) = self.names.get_mut(name) {
+                *n -= 1;
+                if *n == 0 {
+                    self.names.remove(name);
+                    self.total -= name.len();
+                }
+            }
+        }
+    }
+}
+
+fn names(origin: &Origin) -> Box<dyn Iterator<Item = &Arc<str>> + '_> {
+    match origin {
+        Origin::One(name) => Box::new(std::iter::once(name)),
+        Origin::Each(names) => Box::new(names.iter()),
+    }
+}
+
+/// A pair's bytes as its caller's bound counts them: the pair and its names.
+fn caller_bytes(pair: &Pair) -> usize {
+    PAIR_BYTES + names(&pair.origin).map(|n| n.len()).sum::<usize>()
 }
 
 /// What adding a delivery did, for the detector's counters.
@@ -85,8 +157,9 @@ impl Tracked {
         self.callers.len()
     }
 
-    /// Drop what left the window at `now`: records, callers and overflow.
-    pub(super) fn expire(&mut self, now: Instant, window: Duration) {
+    /// Drop what left the window at `now`: records, callers and overflow,
+    /// giving the overflow's bytes back to `budget`.
+    pub(super) fn expire(&mut self, now: Instant, window: Duration, budget: &mut Budget) {
         let live = |at: Instant| now.saturating_duration_since(at) <= window;
         self.records.retain(|r| live(r.copies.latest()));
         if self.records.capacity() > INLINE_RECORDS {
@@ -94,17 +167,40 @@ impl Tracked {
                 .shrink_to(self.records.len().max(INLINE_RECORDS));
         }
         self.callers.retain(|(_, at)| live(*at));
-        self.overflow.retain(|(_, copies)| live(copies.latest()));
+        for slot in &mut self.overflow {
+            slot.pairs.retain(|pair| {
+                let keep = live(pair.copies.latest());
+                if !keep {
+                    budget.give_back(&pair.origin);
+                }
+                keep
+            });
+            if slot.unattributed.is_some_and(|c| !live(c.latest())) {
+                slot.unattributed = None;
+            }
+        }
+        self.overflow
+            .retain(|slot| !slot.pairs.is_empty() || slot.unattributed.is_some());
     }
 
-    /// Add `new` delivered at `now`. `room` is how many pool records this
-    /// fingerprint may hold in all.
+    /// Give every overflow pair's bytes back: the entry is going.
+    pub(super) fn release(&mut self, budget: &mut Budget) {
+        for slot in self.overflow.drain(..) {
+            for pair in &slot.pairs {
+                budget.give_back(&pair.origin);
+            }
+        }
+    }
+
+    /// Add `new` delivered at `now`, its retention decided by the lists of
+    /// `view`, the generation it is recorded under. `room` is how many pool
+    /// records this fingerprint may hold in all.
     pub(super) fn add(
         &mut self,
         new: Holder,
-        now: Instant,
-        window: Duration,
-        room: usize,
+        (now, window): (Instant, Duration),
+        (view, room): (&CollusionView, usize),
+        budget: &mut Budget,
     ) -> Added {
         // `MIK-8066` D6: an unread holder is evidence, never a caller.
         if !new.unread {
@@ -117,11 +213,10 @@ impl Tracked {
         {
             // Kept by their own times, whatever order calls arrive in.
             r.copies.add(&new.copies, window);
-            match (&mut r.sensitive, new.sensitive) {
+            match (&mut r.inferred, new.inferred) {
                 (Some(held), Some(more)) => held.add(&more, window),
                 (held, more) => *held = held.or(more),
             }
-            r.flows.merge(new.flows);
             return Added::Kept;
         }
         let mine = self
@@ -146,25 +241,71 @@ impl Tracked {
             }
             self.records.shrink_to_fit();
         }
-        let Some(sensitive) = new.sensitive else {
+        if new.inferred.is_none() && !new.origin.listed(view) {
             return Added::PlainDropped;
-        };
+        }
         // A plain record of the same caller gives way to a sensitive one.
         let plain = |r: &Holder| {
             r.principal == new.principal
-                && r.sensitive
+                && r.inferred
                     .is_none_or(|c| now.saturating_duration_since(c.latest()) > window)
+                && !r.origin.listed(view)
         };
         if let Some(i) = self.records.iter().position(plain) {
             let source = self.records[i].source;
             self.records[i] = new;
             return Added::PlainReplaced { source };
         }
-        match self.overflow.iter_mut().find(|(p, _)| *p == new.principal) {
-            Some((_, copies)) => copies.add(&sensitive, window),
-            None => self.overflow.push((new.principal, sensitive)),
-        }
+        self.overflow_pair(new, now, window, budget);
         Added::Overflowed
+    }
+
+    /// Keep `new` as a pair of its caller's overflow, or mark the caller
+    /// unattributed when the pair does not fit its count, its bytes or the
+    /// total budget. A pair already held is refreshed, never the mark.
+    fn overflow_pair(&mut self, new: Holder, now: Instant, window: Duration, budget: &mut Budget) {
+        let pair = Pair {
+            inferred: new.inferred.is_some(),
+            origin: new.origin,
+            copies: new.copies,
+        };
+        let i = match self
+            .overflow
+            .iter()
+            .position(|s| s.principal == new.principal)
+        {
+            Some(i) => i,
+            None => {
+                self.overflow.push(Overflow {
+                    principal: new.principal,
+                    pairs: Vec::new(),
+                    unattributed: None,
+                });
+                self.overflow.len() - 1
+            }
+        };
+        let slot = &mut self.overflow[i];
+        if let Some(held) = slot
+            .pairs
+            .iter_mut()
+            .find(|p| p.origin == pair.origin && p.inferred == pair.inferred)
+        {
+            held.copies.add(&pair.copies, window);
+            return;
+        }
+        let bytes: usize = slot.pairs.iter().map(caller_bytes).sum::<usize>() + caller_bytes(&pair);
+        let fits = slot.pairs.len() < OVERFLOW_PAIRS_PER_CALLER
+            && bytes <= OVERFLOW_BYTES_PER_CALLER
+            && budget.total + budget.charge(&pair.origin) <= budget.limit;
+        if fits {
+            budget.take(&pair.origin);
+            slot.pairs.push(pair);
+            return;
+        }
+        match &mut slot.unattributed {
+            Some(copies) => copies.add(&Copies::one(now), window),
+            None => slot.unattributed = Some(Copies::one(now)),
+        }
     }
 
     fn note_caller(&mut self, principal: u64, now: Instant) {
@@ -174,33 +315,71 @@ impl Tracked {
         }
     }
 
-    /// Whether `principal` holds any overflow (tests only).
+    /// Whether `principal` is unattributed (tests only).
     #[cfg(test)]
-    pub(super) fn has_overflow(&self, principal: u64) -> bool {
-        self.overflow.iter().any(|(p, _)| *p == principal)
+    pub(super) fn unattributed(&self, principal: u64) -> bool {
+        self.overflow
+            .iter()
+            .any(|s| s.principal == principal && s.unattributed.is_some())
+    }
+
+    /// `principal`'s overflow pairs `(source, inferred)` (tests only).
+    #[cfg(test)]
+    pub(super) fn pairs_of(&self, principal: u64) -> Vec<(Arc<str>, bool)> {
+        self.overflow
+            .iter()
+            .filter(|s| s.principal == principal)
+            .flat_map(|s| &s.pairs)
+            .filter_map(|p| match &p.origin {
+                Origin::One(name) => Some((Arc::clone(name), p.inferred)),
+                Origin::Each(_) => None,
+            })
+            .collect()
+    }
+
+    /// The most overflow bytes one caller holds here (tests only).
+    #[cfg(test)]
+    pub(super) fn max_caller_bytes(&self) -> usize {
+        self.overflow
+            .iter()
+            .map(|s| s.pairs.iter().map(caller_bytes).sum())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Whether `principal`'s own sensitive copy is held only as overflow at
     /// `now`: its record did not fit, so no exact copy of it can excuse it
     /// (`MIK-8201`: such a refusal is named capacity).
     pub(super) fn overflowed(&self, principal: u64, now: Instant, window: Duration) -> bool {
-        self.overflow
-            .iter()
-            .any(|(p, copies)| *p == principal && copies.held(now, window))
+        self.overflow.iter().any(|s| {
+            s.principal == principal
+                && (s.unattributed.is_some_and(|c| c.held(now, window))
+                    || s.pairs.iter().any(|p| p.copies.held(now, window)))
+        })
     }
 
-    /// A caller other than `sender` whose overflow is held at `now`: it
-    /// counts for any egress of the fingerprint (its source and flows are
-    /// gone, so no exact copy excuses it and no flow allows it).
+    /// A caller other than `sender` whose overflow counts for an egress
+    /// through `egress` at `now`, judged by `view`: an unattributed mark, or
+    /// a pair sensitive under `view` that no flow of `view` allows. No exact
+    /// copy the sender holds excuses either.
     pub(super) fn overflow_witness(
         &self,
         sender: u64,
-        now: Instant,
-        window: Duration,
+        (now, window): (Instant, Duration),
+        (view, egress): (&CollusionView, &str),
     ) -> Option<u64> {
+        let counts = |p: &Pair| {
+            p.copies.held(now, window)
+                && (p.inferred || p.origin.listed(view))
+                && !p.origin.flows_to(view, egress)
+        };
         self.overflow
             .iter()
-            .find(|(p, copies)| *p != sender && copies.held(now, window))
-            .map(|(p, _)| *p)
+            .find(|s| {
+                s.principal != sender
+                    && (s.unattributed.is_some_and(|c| c.held(now, window))
+                        || s.pairs.iter().any(counts))
+            })
+            .map(|s| s.principal)
     }
 }

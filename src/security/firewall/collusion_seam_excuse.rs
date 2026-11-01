@@ -122,7 +122,7 @@ impl SeamExcuses {
         now: Instant,
         window: Duration,
     ) -> bool {
-        // The window test repeats `sweep`, which `check_egress_flows_at` runs
+        // The window test repeats `sweep`, which `check_egress_fingerprints_at` runs
         // first under the same lock (#3726 s3); kept for any caller that does not.
         self.held
             .get(&(source, principal, fp))

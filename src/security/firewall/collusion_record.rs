@@ -6,9 +6,9 @@
 //! keeps.
 
 use super::{
-    BuildHasher, CAPACITY_METRIC, CollusionDetector, Copies, Entry, Flows, Holder, HolderId,
+    BuildHasher, CAPACITY_METRIC, CollusionDetector, Copies, Entry, Held, Holder, HolderId,
     Holders, Instant, MAX_SOURCE_FINGERPRINTS, Ordering, Pending, Recorded, RelayAction, count,
-    holders, sketch, thin, unread_key,
+    holders, origin, sketch, thin, unread_key,
 };
 
 impl CollusionDetector {
@@ -41,24 +41,18 @@ impl CollusionDetector {
     pub(crate) fn record_unread_at(
         &self,
         source: &str,
-        (sensitive, flows): (bool, u64),
+        held: Held<'_>,
         recorded: Recorded<'_>,
         now: Instant,
     ) {
-        self.record_holder_at(
-            source,
-            Self::unread_holder(),
-            (sensitive, Flows::Any(flows)),
-            recorded,
-            now,
-        );
+        self.record_holder_at(source, Self::unread_holder(), held, recorded, now);
     }
 
     pub(super) fn record_holder_at(
         &self,
         source: &str,
         id: HolderId,
-        (sensitive, flows): (bool, Flows),
+        (inferred, seam, view): Held<'_>,
         (mut fps, cut, sample): Recorded<'_>,
         now: Instant,
     ) {
@@ -114,16 +108,28 @@ impl CollusionDetector {
             .reservation
             .as_ref()
             .map(|r| std::sync::Arc::new(sketch::Sketch::build(&sketched, r.shape)));
+        let mut state = self.state.lock();
+        state.sweep(now, window);
+        // The identity is interned once and shared by every fingerprint's
+        // record (B2).
+        let origin = match seam {
+            None => origin::Origin::One(state.interned.get(source)),
+            Some(names) => origin::Origin::Each(
+                names
+                    .iter()
+                    .map(|n| state.interned.get(n))
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
+        };
         let holder = |at| Holder {
             source: self.digest(source),
             principal: id.key,
             copies: Copies::one(at),
-            sensitive: sensitive.then(|| Copies::one(at)),
-            flows: flows.clone(),
+            inferred: inferred.then(|| Copies::one(at)),
+            origin: origin.clone(),
             unread: id.unread,
         };
-        let mut state = self.state.lock();
-        state.sweep(now, window);
         if let (Some(reservation), Some(sketch)) = (pending.reservation.take(), built) {
             state.sketches.publish(&reservation, sketch, now);
         }
@@ -152,7 +158,8 @@ impl CollusionDetector {
                 Holders::Tracked(holders::Tracked::default())
             };
             let room = self.pool_capacity.saturating_sub(state.pool);
-            let (holders, lost) = self.add(holders, holder(now), now, room);
+            let (holders, lost) =
+                self.add(holders, holder(now), (now, view, room), &mut state.budget);
             if let Some(source) = lost {
                 state.markers.mark((source, me), until);
             }

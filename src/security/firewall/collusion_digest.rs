@@ -107,7 +107,12 @@ pub(crate) struct DeliveryDigest {
     segments: Vec<Segment>,
     /// Fingerprints kept from leaves a change removed (plans only).
     retained: Vec<u64>,
+    /// Sensitive by the source lists the digest was taken under, or by the
+    /// result's own classification: what retention reads.
     pub(super) sensitive: bool,
+    /// The result's own classification marker, taken before any redaction:
+    /// the inferred fact a record holds, never a list match.
+    pub(super) inferred: bool,
     /// Staged whole, its cap still to apply (a plan step, MIK-7992).
     deferred: bool,
     /// A seam between plan steps of two or more sources (`MIK-8113`): the
@@ -288,6 +293,7 @@ impl DeliveryDigest {
             segments,
             retained: Vec::new(),
             sensitive,
+            inferred: sensitive,
             deferred: false,
             seam_sources: None,
             cut_fps: None,
@@ -362,6 +368,7 @@ impl DeliveryDigest {
                 .collect(),
             retained: Vec::new(),
             sensitive,
+            inferred: sensitive,
             deferred: true,
             seam_sources: None,
             cut_fps: None,
@@ -399,6 +406,7 @@ impl DeliveryDigest {
             segments,
             retained: self.retained[..kept].to_vec(),
             sensitive: self.sensitive,
+            inferred: self.inferred,
             deferred: false,
             seam_sources: None,
             cut_fps: None,
@@ -465,6 +473,7 @@ impl DeliveryDigest {
         Self {
             retained: fps,
             sensitive,
+            inferred: sensitive,
             seam_sources: sources,
             ..Self::default()
         }
@@ -488,6 +497,7 @@ impl DeliveryDigest {
     /// copy must not lose the verdict the original delivery carried.
     pub(crate) fn keeping_sensitivity_of(mut self, earlier: &Self) -> Self {
         self.sensitive |= earlier.sensitive;
+        self.inferred |= earlier.inferred;
         self
     }
 
@@ -639,6 +649,7 @@ impl DeliveryDigest {
             segments,
             retained: Vec::new(),
             sensitive: self.sensitive,
+            inferred: self.inferred,
             deferred: true,
             seam_sources: None,
             cut_fps: None,

@@ -392,7 +392,11 @@ fn concurrent_cut_deliveries_publish_at_distinct_positions() {
                 detector.record_cut_fingerprints_at(
                     "alpha:read",
                     "alice",
-                    (false, 0),
+                    (
+                        false,
+                        None,
+                        crate::security::firewall::collusion::no_lists(),
+                    ),
                     (Vec::new(), Some(cut)),
                     now,
                 );

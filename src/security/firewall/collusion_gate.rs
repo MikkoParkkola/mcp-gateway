@@ -209,10 +209,9 @@ pub(super) struct RelayGate {
     /// The replay receipt store (`MIK-8408` E1): one beside the detector,
     /// shared wherever the detector is shared.
     replay: Arc<ReplayReceipts>,
-    sources: Vec<glob::Pattern>,
-    non_egress: Vec<glob::Pattern>,
-    /// The compiled `allowed_flows`, as (source, egress), bit `i` for entry `i`.
-    flows: Vec<(glob::Pattern, glob::Pattern)>,
+    /// The collusion lists compiled at startup: what recording and the
+    /// witness judge by until each reads its own generation's.
+    view: super::CollusionView,
     /// Delivered results whose text was cut to the recording cap.
     text_cut: AtomicU64,
     /// Plans whose answer was over the bound their receipts are kept against.
@@ -237,9 +236,7 @@ impl RelayGate {
         Self {
             detector: detector_for(config),
             replay: Arc::new(ReplayReceipts::new()),
-            sources: compile_globs(&config.sources),
-            non_egress: compile_globs(&config.non_egress),
-            flows: compile_flows(&config.allowed_flows),
+            view: super::CollusionView::compile(config),
             text_cut: AtomicU64::new(0),
             plan_drop: AtomicU64::new(0),
             #[cfg(test)]
@@ -258,20 +255,14 @@ impl RelayGate {
         Instant::now()
     }
 
-    /// The `allowed_flows` entries (bit each) whose source matches `target`.
+    /// The `allowed_flows` entries (bit each) whose source matches `target`:
+    /// how a plan's overflow seams are grouped.
     fn source_flows(&self, target: &str) -> u64 {
-        Self::mask(self.flows.iter().map(|(source, _)| source), target)
-    }
-
-    /// The `allowed_flows` entries (bit each) whose egress matches `target`.
-    fn egress_flows(&self, target: &str) -> u64 {
-        Self::mask(self.flows.iter().map(|(_, egress)| egress), target)
-    }
-
-    fn mask<'a>(patterns: impl Iterator<Item = &'a glob::Pattern>, target: &str) -> u64 {
-        patterns
+        self.view
+            .flows
+            .iter()
             .enumerate()
-            .filter(|(_, pattern)| pattern.matches(target))
+            .filter(|(_, (source, _))| source.matches(target))
             .fold(0, |mask, (bit, _)| mask | (1 << bit))
     }
 }
@@ -396,7 +387,13 @@ impl Firewall {
             return FirewallVerdict::allow();
         };
         let target = format!("{server}:{tool}");
-        if self.relay.non_egress.iter().any(|p| p.matches(&target)) {
+        if self
+            .relay
+            .view
+            .non_egress
+            .iter()
+            .any(|p| p.matches(&target))
+        {
             return FirewallVerdict::allow();
         }
         let block = self.config.collusion.action == CollusionAction::Block;
@@ -415,7 +412,7 @@ impl Firewall {
             _ => detector
                 .check_egress_fingerprints_at(
                     caller.key(),
-                    (&target, self.relay.egress_flows(&target)),
+                    (&target, &self.relay.view),
                     detector.egress_fingerprints(&egress_parts(params)),
                     self.relay.now(),
                 )

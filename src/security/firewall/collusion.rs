@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use icu_normalizer::ComposingNormalizerBorrowed;
 use parking_lot::Mutex;
 
+use super::CollusionView;
+
 /// What the detector does. Mirrors the operator-facing `collusion.action`;
 /// the detector keeps the same state under both on-states, and the firewall
 /// decides whether a finding refuses the call.
@@ -94,14 +96,15 @@ const MAX_SOURCE_FINGERPRINTS: usize = 4 * 1_024;
 struct Holder {
     source: u64,
     principal: u64,
-    /// Every delivery of this pair: what the same-source excuse reads.
+    /// Every delivery of this pair: what the same-source excuse reads, and
+    /// what a witness reads when the lists in force name the source.
     copies: Copies,
-    /// The *sensitive* deliveries: what a relay witness reads. Kept apart so
-    /// a plain re-delivery cannot extend sensitive evidence.
-    sensitive: Option<Copies>,
-    /// The `allowed_flows` entries this copy may leave through without being
-    /// a relay.
-    flows: Flows,
+    /// The deliveries whose result itself was classified sensitive (the
+    /// inferred fact). Kept apart so a plain re-delivery cannot extend it.
+    inferred: Option<Copies>,
+    /// The source identity, judged at witness against the lists and flows
+    /// in force.
+    origin: origin::Origin,
     /// `MIK-8066` D6: an unread plan's evidence holder. Never a caller, so it
     /// never counts toward `Common`.
     unread: bool,
@@ -114,39 +117,6 @@ struct Holder {
 struct HolderId {
     key: u64,
     unread: bool,
-}
-
-/// Which `allowed_flows` entries (one bit per entry) let a held copy leave
-/// through an egress without being a relay.
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) enum Flows {
-    /// An ordinary source: the entries whose source glob matched it; an
-    /// egress matching any of them is allowed.
-    Any(u64),
-    /// A seam between plan steps (`MIK-8113`): one mask per contributing
-    /// source; an egress is allowed only when it matches an entry of every
-    /// one, so the joined text never leaves by a flow some contributor's text
-    /// may not take. Never empty.
-    Each(std::sync::Arc<[u64]>),
-}
-
-impl Flows {
-    /// Whether an egress matching the entries in `egress` may carry this copy.
-    fn allows(&self, egress: u64) -> bool {
-        match self {
-            Self::Any(mask) => mask & egress != 0,
-            Self::Each(masks) => !masks.is_empty() && masks.iter().all(|m| m & egress != 0),
-        }
-    }
-
-    /// A repeat delivery of the same pair: an ordinary source's entries
-    /// accumulate; a seam's identity fixes its contributors, so its masks
-    /// are the same and kept.
-    fn merge(&mut self, more: Self) {
-        if let (Self::Any(held), Self::Any(more)) = (&mut *self, more) {
-            *held |= more;
-        }
-    }
 }
 
 enum Holders {
@@ -171,7 +141,6 @@ struct Entry {
     order: (Instant, u64),
 }
 
-#[derive(Default)]
 struct State {
     entries: HashMap<u64, Entry>,
     /// Oldest-first index of `entries`, for expiry and the cap.
@@ -187,6 +156,26 @@ struct State {
     /// A caller's own subset-forward seams: excuse only, apart from the
     /// evidence entries (`MIK-8205`).
     seams: seam::seam_excuse::SeamExcuses,
+    /// Overflow pair bytes held across every fingerprint.
+    budget: holders::Budget,
+    /// Source names, shared by every record holding them (B2).
+    interned: origin::Interned,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: BTreeMap::new(),
+            next_seq: 0,
+            pool: 0,
+            sketches: sketch::SketchStore::default(),
+            markers: sketch::Markers::default(),
+            seams: seam::seam_excuse::SeamExcuses::default(),
+            budget: holders::Budget::new(holders::OVERFLOW_BYTES_TOTAL),
+            interned: origin::Interned::default(),
+        }
+    }
 }
 
 impl State {
@@ -201,13 +190,17 @@ impl State {
         self.sketches.sweep(now, window);
         self.markers.sweep(now);
         self.seams.sweep(now, window);
+        self.interned.release();
     }
 
     /// Remove `fp`'s entry, releasing its pool records: every removal goes
     /// through here, so the pool count never leaks.
     fn remove(&mut self, fp: u64) -> Option<Entry> {
-        let entry = self.entries.remove(&fp)?;
+        let mut entry = self.entries.remove(&fp)?;
         self.pool -= entry.pool_records();
+        if let Holders::Tracked(tracked) = &mut entry.holders {
+            tracked.release(&mut self.budget);
+        }
         Some(entry)
     }
 
@@ -291,6 +284,11 @@ fn unread_key() -> &'static RandomState {
 /// exact evidence candidates sampled but never sketched (`MIK-8066.BIG.3`),
 /// borrowed: recording reads them synchronously and copies none (D9).
 pub(super) type Recorded<'a> = (Vec<u64>, Option<std::sync::Arc<[u64]>>, Option<&'a [u64]>);
+
+/// What a record holds of its delivery: the inferred fact, a seam's
+/// contributing sources (`None` for one source), and the view of the
+/// generation current at delivery, whose lists decide retention only.
+pub(crate) type Held<'a> = (bool, Option<&'a [String]>, &'a CollusionView);
 
 fn count(n: usize) -> u64 {
     u64::try_from(n).unwrap_or(u64::MAX)
@@ -396,7 +394,8 @@ impl CollusionDetector {
         nfc.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// Records a result delivered to `principal` from `source`.
+    /// Records a result delivered to `principal` from `source`, `sensitive`
+    /// an inferred fact: judged by no lists, so no reload changes it.
     ///
     /// Every delivered result is recorded, sensitive or not, so B's own copy
     /// excuses B whichever side arrived first.
@@ -408,50 +407,45 @@ impl CollusionDetector {
         text: &str,
         now: Instant,
     ) {
-        self.record_delivery_flows_at(source, principal, (sensitive, 0), text, now);
+        self.record_delivery_under(
+            origin::no_lists(),
+            (source, sensitive),
+            principal,
+            text,
+            now,
+        );
     }
 
-    /// [`Self::record_delivery_at`] for a source that matched the
-    /// `allowed_flows` entries in `flows` (bit per entry), given with the
-    /// delivery's sensitivity.
-    // replaced by `record_delivery_under` in the fix
-    pub(crate) fn record_delivery_flows_at(
+    /// Record a result delivered to `principal` from `source` under `view`,
+    /// the generation current at delivery: the source identity and the
+    /// inferred fact (a classification marker on the result) are held, and
+    /// `view`'s lists decide only whether a record past the cap is kept.
+    pub(crate) fn record_delivery_under(
         &self,
-        source: &str,
+        view: &CollusionView,
+        (source, inferred): (&str, bool),
         principal: &str,
-        (sensitive, flows): (bool, u64),
         text: &str,
         now: Instant,
     ) {
         if self.params.action == RelayAction::Off {
             return;
         }
-        self.record_fingerprints_at(
-            source,
-            principal,
-            (sensitive, flows),
-            self.fingerprints(text),
-            now,
-        );
+        let held = (inferred, None, view);
+        self.record_fingerprints_at(source, principal, held, self.fingerprints(text), now);
     }
 
-    /// [`Self::record_delivery_flows_at`] for fingerprints already taken, in
+    /// [`Self::record_delivery_under`] for fingerprints already taken, in
     /// the order they are kept when over [`MAX_SOURCE_FINGERPRINTS`].
     pub(crate) fn record_fingerprints_at(
         &self,
         source: &str,
         principal: &str,
-        (sensitive, flows): (bool, u64),
+        held: Held<'_>,
         fps: Vec<u64>,
         now: Instant,
     ) {
-        self.record_held_at(
-            source,
-            principal,
-            (sensitive, Flows::Any(flows)),
-            (fps, None, None),
-            now,
-        );
+        self.record_held_at(source, principal, held, (fps, None, None), now);
     }
 
     /// [`Self::record_fingerprints_at`] for a delivery whose receipt was cut:
@@ -462,49 +456,33 @@ impl CollusionDetector {
         &self,
         source: &str,
         principal: &str,
-        (sensitive, flows): (bool, u64),
+        held: Held<'_>,
         (fps, cut): (Vec<u64>, Option<std::sync::Arc<[u64]>>),
         now: Instant,
     ) {
-        self.record_held_at(
-            source,
-            principal,
-            (sensitive, Flows::Any(flows)),
-            (fps, cut, None),
-            now,
-        );
+        self.record_held_at(source, principal, held, (fps, cut, None), now);
     }
 
     /// [`Self::record_fingerprints_at`] for a seam between plan steps under
-    /// its composite `source` (`MIK-8113`): `masks` holds one `allowed_flows`
-    /// mask per contributing source, and an egress must match every one.
+    /// its composite `source` (`MIK-8113`): it holds every contributing
+    /// source, and an egress must be allowed for each one.
     pub(crate) fn record_seam_at(
         &self,
         source: &str,
         principal: &str,
-        (sensitive, mut masks): (bool, Vec<u64>),
+        (inferred, contributors, view): (bool, &[String], &CollusionView),
         fps: Vec<u64>,
         now: Instant,
     ) {
-        // Distinct masks, shared by every fingerprint's holder: as allowing
-        // as the full list, and never one copy per fingerprint.
-        masks.sort_unstable();
-        masks.dedup();
-        let flows = Flows::Each(masks.into());
-        self.record_held_at(
-            source,
-            principal,
-            (sensitive, flows),
-            (fps, None, None),
-            now,
-        );
+        let held = (inferred, Some(contributors), view);
+        self.record_held_at(source, principal, held, (fps, None, None), now);
     }
 
     fn record_held_at(
         &self,
         source: &str,
         principal: &str,
-        held: (bool, Flows),
+        held: Held<'_>,
         recorded: Recorded<'_>,
         now: Instant,
     ) {
@@ -523,16 +501,16 @@ impl CollusionDetector {
         &self,
         holders: Holders,
         new: Holder,
-        now: Instant,
-        room: usize,
+        (now, view, room): (Instant, &CollusionView, usize),
+        budget: &mut holders::Budget,
     ) -> (Holders, Option<u64>) {
         let Holders::Tracked(mut tracked) = holders else {
             return (holders, None);
         };
         let window = self.params.window;
-        tracked.expire(now, window);
+        tracked.expire(now, window, budget);
         let new_source = new.source;
-        let (bound, lost) = match tracked.add(new, now, window, room) {
+        let (bound, lost) = match tracked.add(new, (now, window), (view, room), budget) {
             holders::Added::Kept => (None, None),
             holders::Added::PlainDropped => (Some("record_dropped"), Some(new_source)),
             holders::Added::PlainReplaced { source } => (Some("record_replaced"), Some(source)),
@@ -543,6 +521,7 @@ impl CollusionDetector {
             telemetry_metrics::counter!(CAPACITY_METRIC, "bound" => bound).increment(1);
         }
         let holders = if tracked.callers() >= self.params.common_principals {
+            tracked.release(budget);
             Holders::Common
         } else {
             Holders::Tracked(tracked)
@@ -550,12 +529,8 @@ impl CollusionDetector {
         (holders, lost)
     }
 
-    /// The relay predicate for `principal` sending `args` through `tool`.
-    ///
-    /// A fingerprint counts when, inside the window, some other principal got
-    /// it as sensitive from a source T that `principal` never got it from,
-    /// and it is not `Common`; or some other caller's sensitive record past
-    /// its cap is held (`MIK-8123`).
+    /// The relay predicate for `principal` sending `args` through `tool`,
+    /// judged by no lists: only inferred facts are sensitive.
     pub(crate) fn check_egress_at(
         &self,
         principal: &str,
@@ -563,29 +538,34 @@ impl CollusionDetector {
         args: &str,
         now: Instant,
     ) -> Option<RelayFinding> {
-        self.check_egress_flows_at(principal, (tool, 0), args, now)
+        self.check_egress_under(origin::no_lists(), principal, tool, args, now)
     }
 
-    /// [`Self::check_egress_at`] for an egress that matched the
-    /// `allowed_flows` entries in `flows` (bit per entry): a copy whose source
-    /// matched the same entry is an allowed flow, not a relay.
-    pub(crate) fn check_egress_flows_at(
+    /// The relay predicate for `principal` sending `args` through `target`,
+    /// judged by `view`, the witnessing request's generation.
+    ///
+    /// A fingerprint counts when, inside the window, some other principal
+    /// holds it sensitive under `view` from a source T that `principal`
+    /// never got it from, no flow of `view` lets T's copy leave through
+    /// `target`, and it is not `Common`; or some other caller's overflow
+    /// counts under `view` (`MIK-8123`).
+    pub(crate) fn check_egress_under(
         &self,
+        view: &CollusionView,
         principal: &str,
-        flows: (&str, u64),
+        target: &str,
         args: &str,
         now: Instant,
     ) -> Option<RelayFinding> {
-        self.check_egress_fingerprints_at(principal, flows, self.fingerprints(args), now)
+        self.check_egress_fingerprints_at(principal, (target, view), self.fingerprints(args), now)
     }
 
-    /// [`Self::check_egress_flows_at`] for fingerprints already taken: the
+    /// [`Self::check_egress_under`] for fingerprints already taken: the
     /// gateway's egress, less its glue windows (`MIK-8290`).
-    // replaced by `check_egress_under` in the fix
     pub(crate) fn check_egress_fingerprints_at(
         &self,
         principal: &str,
-        (tool, egress_flows): (&str, u64),
+        (tool, view): (&str, &CollusionView),
         fps: Vec<u64>,
         now: Instant,
     ) -> Option<RelayFinding> {
@@ -619,8 +599,11 @@ impl CollusionDetector {
                     || state.sketches.holds((source, sender), fp, now, window)
                     || state.seams.holds((source, sender), fp, now, window)
             };
-            let sensitive =
-                |t: &&Holder| t.sensitive.is_some_and(|copies| copies.held(now, window));
+            // Sensitive by its own inferred fact, or by the lists in force.
+            let sensitive = |t: &&Holder| {
+                t.inferred.is_some_and(|copies| copies.held(now, window))
+                    || (t.copies.held(now, window) && t.origin.listed(view))
+            };
             // `MIK-8201`: which reason a witness supports. Capacity first,
             // then another source; labels only, never excuses.
             let classify = |t: &Holder| {
@@ -647,7 +630,7 @@ impl CollusionDetector {
                 .iter()
                 .filter(sensitive)
                 .filter(|t| {
-                    t.principal != sender && !excused(t.source) && !t.flows.allows(egress_flows)
+                    t.principal != sender && !excused(t.source) && !t.origin.flows_to(view, tool)
                 })
                 .map(|t| (classify(t), t))
                 .min_by_key(|(class, _)| *class)
@@ -660,7 +643,9 @@ impl CollusionDetector {
                     _ => &mut elsewhere,
                 }
                 .get_or_insert(witness);
-            } else if let Some(receiver) = tracked.overflow_witness(sender, now, window) {
+            } else if let Some(receiver) =
+                tracked.overflow_witness(sender, (now, window), (view, tool))
+            {
                 // `MIK-8123`: a sensitive record past the cap has no source
                 // left to excuse it or flow to allow it.
                 matches += 1;
@@ -735,6 +720,10 @@ mod copies;
 use copies::Copies;
 #[path = "collusion_holders.rs"]
 mod holders;
+#[path = "collusion_origin.rs"]
+mod origin;
+#[cfg(test)]
+pub(crate) use origin::no_lists;
 #[path = "collusion_reason.rs"]
 mod reason;
 #[cfg(test)]
