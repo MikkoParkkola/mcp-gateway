@@ -78,16 +78,9 @@ OUTPUT = {"windows": ["--show-output"]}
 # fix removes, each as (pattern on the entry name, most allowed, why). It may
 # only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
-_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # Each entry names the open ticket whose fix removes it: nothing here is
 # unowned.
 KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
-    # MIK-9150
-    ("oauth_test_[a-z0-9_]+", 10, "oauth::client tests' token stores"),
-    # MIK-9151
-    (f"chain-(test|resume-test|cleanup)-{_UUID}", 9, "chains::executor tests"),
-    # MIK-9152
-    ("http_transport_tls_guard", 1, "transport::http tests' token store"),
     # MIK-8986 (an audit write) and MIK-9034 (a stdio task record)
     (r"\.tmp[A-Za-z0-9]{6}", 4,
      "a late write that outlives its test's temp dir: an audit write "
@@ -100,9 +93,6 @@ KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
 # can only lose entries. A leaked TempLog folder is named `audit-log-*` and
 # matches none of these.
 LEFTOVER_CEILING: dict[str, int] = {
-    "oauth_test_[a-z0-9_]+": 10,
-    f"chain-(test|resume-test|cleanup)-{_UUID}": 9,
-    "http_transport_tls_guard": 1,
     r"\.tmp[A-Za-z0-9]{6}": 4,
 }
 
