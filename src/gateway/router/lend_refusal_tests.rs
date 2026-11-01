@@ -83,6 +83,17 @@ async fn gateway(
     url: String,
     mint: FixedMint,
 ) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
+    gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await
+}
+
+/// [`gateway`] with the backend's input-schema enforcement set to `mode`:
+/// anything but `off` runs the argument-key check, whose cold fill lists
+/// the backend first.
+async fn gateway_in(
+    url: String,
+    mint: FixedMint,
+    mode: crate::config::InputSchemaEnforcement,
+) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
         BackendConfig {
@@ -99,6 +110,7 @@ async fn gateway(
                 token_exchange_endpoint: None,
                 token_exchange_scope: None,
             }),
+            input_schema_enforcement: mode,
             ..BackendConfig::r2_off()
         },
         &FailsafeConfig::default(),
@@ -388,4 +400,40 @@ async fn a_direct_lend_refusal_suggests_no_retry() {
         !text.contains("_recovery") && !text.contains("retrying once is safe"),
         "no retry is suggested: {answer}"
     );
+}
+
+/// LEND.5: a cold fill the lender refuses (the call carries no credential)
+/// answers as the dispatch's refusal under `mode`, never as "schema
+/// unreadable" and never as a backend error result.
+async fn assert_cold_fill_refusal(mode: crate::config::InputSchemaEnforcement) {
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs) = gateway_in(url, mint, mode).await;
+    let (status, answer) = invoke(&router).await;
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "premise: nothing reached the backend: {status} {answer}"
+    );
+    assert_eq!(
+        answer["error"]["code"], -32001,
+        "answered as the refusal, under {mode:?}: {status} {answer}"
+    );
+    assert!(
+        !answer.to_string().contains("input schema"),
+        "not the unreadable-schema answer: {answer}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_closed() {
+    assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Closed).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_standard() {
+    assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Standard).await;
 }

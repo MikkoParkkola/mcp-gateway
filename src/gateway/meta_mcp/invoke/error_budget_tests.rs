@@ -485,3 +485,48 @@ async fn an_open_breaker_still_reports_circuit_open_and_counts() {
         "an open breaker is still a failure sample"
     );
 }
+
+/// The per-user lender's refusal of a send, as it builds it.
+fn lend_refusal() -> Error {
+    Error::Forbidden {
+        code: -32001,
+        status: 403,
+        message: "per-user send refused: this credential was refused".to_string(),
+    }
+}
+
+/// LEND.6: a refusal of the caller (here the per-user lender's) is no
+/// evidence about the backend: it records no sample in either window.
+#[test]
+fn a_caller_refusal_records_no_budget_sample() {
+    let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    let refused = lend_refusal();
+    for _ in 0..5 {
+        m.record_error_budget("srv", "tool", BudgetOutcome::of_error(&refused));
+    }
+    assert_eq!(m.kill_switch.window_counts("srv"), (0, 0));
+    assert_eq!(
+        m.kill_switch.capability_window_counts("srv", "tool"),
+        (0, 0)
+    );
+}
+
+/// LEND.6: refusals leave a window already holding genuine failures as it
+/// was: they are neither added as failures nor as successes that would
+/// dilute the failure rate.
+#[test]
+fn caller_refusals_leave_a_seeded_window_unchanged() {
+    let m = MetaMcp::new(Arc::new(BackendRegistry::new()));
+    for _ in 0..3 {
+        m.record_error_budget("srv", "tool", BudgetOutcome::Failure);
+    }
+    let refused = lend_refusal();
+    for _ in 0..5 {
+        m.record_error_budget("srv", "tool", BudgetOutcome::of_error(&refused));
+    }
+    assert_eq!(m.kill_switch.window_counts("srv"), (0, 3));
+    assert_eq!(
+        m.kill_switch.capability_window_counts("srv", "tool"),
+        (0, 3)
+    );
+}
