@@ -48,6 +48,7 @@ struct Session {
     task: tokio::task::JoinHandle<()>,
     next_id: u64,
     /// The Meta-MCP the session serves.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
 }
 
