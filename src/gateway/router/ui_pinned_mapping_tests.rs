@@ -11,6 +11,11 @@
 //! pinned one is also live: forward and reverse, so a check that reads the
 //! live config fails one row, and one that admits on either generation fails
 //! the other. Answers compare as the access matrix records them.
+//!
+//! The control-plane export status has no row: its one check is
+//! `ReadInventory`, which every role holds, so no two mappings answer it
+//! differently. The family guard (`boundary_pins::pinned_role_mapping`)
+//! covers its read instead.
 
 use std::net::SocketAddr;
 use std::sync::Arc;

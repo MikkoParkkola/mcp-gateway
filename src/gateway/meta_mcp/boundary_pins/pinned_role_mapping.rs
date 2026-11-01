@@ -42,14 +42,16 @@ const ALLOW: &[(&str, &str, &str)] = &[(
 )];
 
 /// The two fields, read as `.name` in a macro's arguments. Those are tokens,
-/// not expressions, so the walk never reports them as field reads.
-fn macro_reads(mac: &syn::Macro) -> impl Iterator<Item = &'static str> {
+/// not expressions, so the walk never reports them as field reads. The
+/// printed tokens are space-separated and a literal prints as one token, so
+/// only a `.` token followed by exactly the field's name counts.
+fn macro_reads(mac: &syn::Macro) -> Vec<&'static str> {
     let text = mac.tokens.to_string();
+    let tokens: Vec<&str> = text.split_whitespace().collect();
     ["live_config", "role_mapping"]
         .into_iter()
-        .filter(move |name| {
-            text.contains(&format!(". {name}")) || text.contains(&format!(".{name}"))
-        })
+        .filter(|name| tokens.windows(2).any(|pair| pair == [".", *name]))
+        .collect()
 }
 
 /// The functions that read each field, per (file, function).
@@ -80,7 +82,9 @@ impl Sink for Reads {
                 member: syn::Member::Named(name),
                 ..
             }) => self.note(key, &name.to_string()),
-            syn::Expr::Macro(mac) => macro_reads(&mac.mac).for_each(|n| self.note(key.clone(), n)),
+            syn::Expr::Macro(mac) => macro_reads(&mac.mac)
+                .into_iter()
+                .for_each(|n| self.note(key.clone(), n)),
             _ => {}
         }
     }
@@ -88,7 +92,9 @@ impl Sink for Reads {
     fn stmt(&mut self, at: &Place, stmt: &syn::Stmt) {
         if let (Some(func), syn::Stmt::Macro(mac)) = (&at.func, stmt) {
             let key = (at.file.clone(), func.clone());
-            macro_reads(&mac.mac).for_each(|n| self.note(key.clone(), n));
+            macro_reads(&mac.mac)
+                .into_iter()
+                .for_each(|n| self.note(key.clone(), n));
         }
     }
 
@@ -123,6 +129,25 @@ impl Sink for Reads {
 struct Names(Vec<String>);
 
 impl<'ast> syn::visit::Visit<'ast> for Names {
+    // Test-only code is not production, as in the walk.
+    fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
+        let attrs: &[syn::Attribute] = match stmt {
+            syn::Stmt::Local(local) => &local.attrs,
+            syn::Stmt::Macro(mac) => &mac.attrs,
+            syn::Stmt::Expr(expr, _) => super::scan::expr_attrs(expr),
+            syn::Stmt::Item(_) => &[],
+        };
+        if !super::scan::test_only(attrs) {
+            syn::visit::visit_stmt(self, stmt);
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        if !super::scan::test_only(super::scan::expr_attrs(expr)) {
+            syn::visit::visit_expr(self, expr);
+        }
+    }
+
     fn visit_expr_field(&mut self, field: &'ast syn::ExprField) {
         if let syn::Member::Named(name) = &field.member {
             self.0.push(name.to_string());
@@ -131,7 +156,8 @@ impl<'ast> syn::visit::Visit<'ast> for Names {
     }
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
-        self.0.extend(macro_reads(mac).map(str::to_owned));
+        self.0
+            .extend(macro_reads(mac).into_iter().map(str::to_owned));
     }
 }
 
@@ -190,7 +216,8 @@ fn role_checks_read_the_pinned_mapping() {
 
 /// The guard on a fixture crate: a plain read, a read in a macro's arguments
 /// and one in a trait's default method are found; a listed read passes; a
-/// row with no read behind it is stale; a test-only read is not production.
+/// row with no read behind it is stale. A test-only read, a literal and a
+/// longer name that starts with a field's name are not reads.
 #[test]
 fn the_guard_finds_every_shape_of_live_read() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -205,6 +232,8 @@ fn listed(s: &S) -> bool { s.live_config.get().control_plane.role_mapping.x() }
 fn pinned(g: &G) -> bool { g.config().control_plane.role_mapping.x() }
 #[cfg(test)]
 fn in_test(s: &S) -> bool { s.live_config.get().control_plane.role_mapping.x() }
+trait Quiet { fn q(&self, s: &S) { #[cfg(test)] { let _ = s.live_config.get().control_plane.role_mapping; } } }
+fn named_alike(s: &S) { tracing::info!("s.live_config .role_mapping", s.live_config_x.role_mapping_y); }
 "#,
     )
     .expect("fixture");
