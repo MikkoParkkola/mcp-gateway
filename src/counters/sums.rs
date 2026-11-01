@@ -16,7 +16,42 @@ use super::{CounterStore, HALF, Inner, Metric, Series};
 
 /// One label's calls: `(last 24 hours, the same hours of the day before)`,
 /// each `None` when it could be low.
-pub(crate) type CallWindows = (Option<u64>, Option<u64>);
+/// Points in the half-hour series: the current bucket and the 11 before it.
+pub(crate) const SERIES: usize = 12;
+
+/// One label's calls over the windows [`CounterStore::window_sums`] reads,
+/// each `None` where it could be low.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CallWindows {
+    /// The last 24 hours: the 48 half hours ending with the current one.
+    pub day: Option<u64>,
+    /// The same local wall-clock hours of the day before.
+    pub prev_day: Option<u64>,
+    /// The last two completed half hours: an exact hour ending at the start
+    /// of the current one.
+    pub hour: Option<u64>,
+    /// The two completed half hours before those.
+    pub prev_hour: Option<u64>,
+    /// Calls per half hour, oldest first, starting at
+    /// [`WindowSums::series_start`]; the last is the partial current one.
+    pub series: [Option<u64>; SERIES],
+}
+
+impl CallWindows {
+    /// Every window unknown: the label cannot be counted.
+    pub(crate) const UNKNOWN: Self = Self {
+        day: None,
+        prev_day: None,
+        hour: None,
+        prev_hour: None,
+        series: [None; SERIES],
+    };
+
+    /// The two 24-hour windows.
+    pub(crate) fn days(&self) -> (Option<u64>, Option<u64>) {
+        (self.day, self.prev_day)
+    }
+}
 
 /// What [`CounterStore::window_sums`] read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +61,8 @@ pub(crate) struct WindowSums {
     /// `(last 24 hours, the same hours of the day before)` per asked label,
     /// in the order asked.
     pub counts: Vec<CallWindows>,
+    /// The unix start of every label's first series point.
+    pub series_start: i64,
 }
 
 /// One caller x server pair's calls and blocks in the last 24 hours.
@@ -153,7 +190,7 @@ impl CounterStore {
             .iter()
             .map(|&label| {
                 let Some(read) = Read::of(&inner, label) else {
-                    return (None, None);
+                    return CallWindows::UNKNOWN;
                 };
                 let walk = || {
                     #[cfg(test)]
@@ -174,7 +211,11 @@ impl CounterStore {
                 answer
             })
             .collect();
-        WindowSums { since, counts }
+        WindowSums {
+            since,
+            counts,
+            series_start: 0,
+        }
     }
 }
 
@@ -217,7 +258,11 @@ impl<'a> Read<'a> {
                 .then(|| self.sum(buckets))
                 .flatten()
         };
-        (day(current), previous.and_then(day))
+        CallWindows {
+            day: day(current),
+            prev_day: previous.and_then(day),
+            ..CallWindows::UNKNOWN
+        }
     }
 
     /// Whether the label held bucket `b`, after its admission bucket.

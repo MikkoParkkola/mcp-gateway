@@ -462,16 +462,20 @@ async fn tools(
         .iter()
         .map(|(server, tool)| crate::counters::Filter::Tool(server, tool))
         .collect();
-    let (windows, counts_since) = call_windows(&state, &labels);
-    for (entry, (day, prev)) in entries.iter_mut().zip(windows) {
-        entry["calls_24h"] = json!(day);
-        entry["calls_prev_24h"] = json!(prev);
+    let (windows, counts_since, series_start) = call_windows(&state, &labels);
+    for (entry, w) in entries.iter_mut().zip(windows) {
+        entry["calls_24h"] = json!(w.day);
+        entry["calls_prev_24h"] = json!(w.prev_day);
+        entry["calls_1h"] = json!(w.hour);
+        entry["calls_prev_1h"] = json!(w.prev_hour);
+        entry["calls_series"] = json!(w.series);
     }
 
     Json(json!({
         "tools": entries,
         "total": entries.len(),
         "counts_since": counts_since,
+        "series_start": series_start,
     }))
     .into_response()
 }
@@ -659,20 +663,24 @@ struct ToolsQuery {
 /// Each label's calls in the last 24 hours (the 48 half-hour buckets ending
 /// with the current, partial one) and in the same local wall-clock hours of
 /// the day before (on a DST date that span is one hour shorter or longer),
-/// read in one store read, plus when counting began. A count is `None` when
+/// and the hour windows and half-hour series, read in one store read, plus
+/// when counting began and the series' first point. A count is `None` when
 /// it could be low (calls folded into an overflow, or no longer held); every
-/// count and the start are `None` when the counter store is not running or
+/// count and both starts are `None` when the counter store is not running or
 /// the clock cannot be read: the caller still answers, with nulls.
 fn call_windows(
     state: &AppState,
     labels: &[crate::counters::Filter<'_>],
-) -> (Vec<crate::counters::CallWindows>, Option<u64>) {
-    let unknown = || vec![(None, None); labels.len()];
+) -> (Vec<crate::counters::CallWindows>, Option<u64>, Option<i64>) {
     let (Some(store), Ok(now)) = (state.meta_mcp.counters(), crate::clock::unix_secs()) else {
-        return (unknown(), None);
+        return (
+            vec![crate::counters::CallWindows::UNKNOWN; labels.len()],
+            None,
+            None,
+        );
     };
     let sums = store.window_sums(labels, now, &crate::local_day::host_zone());
-    (sums.counts, Some(sums.since))
+    (sums.counts, Some(sums.since), Some(sums.series_start))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
