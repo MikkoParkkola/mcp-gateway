@@ -566,16 +566,12 @@ impl OAuthClient {
         (self.announce)(auth_url_str);
     }
 
-    /// Take the confirmed token from storage. The counter is sampled before the
-    /// read and recorded only after a successful adopt (adopt again if it moved).
-    /// A token inside the expiry buffer is loaded, not adopted, so a refresh can
-    /// use its refresh token; `None` then.
-    // Beside the login code: it reuses `adopt_stored_login`, private to grants.
+    /// Take the confirmed token from storage, recording the count sampled before
+    /// the read only once adopted under this client's own issuer (again if it
+    /// moved), which alone ends a provider-changed state. A token inside the
+    /// expiry buffer is loaded, not adopted: `None`.
     pub(super) fn adopt_installed(&self) -> Option<String> {
         let status = self.sign_in_status.as_ref()?;
-        // An install under this client's own issuer is the one thing that
-        // ends a provider-changed state.
-        status.clear_provider_changed();
         loop {
             let sampled = status.installed();
             let adopted = self.adopt_stored_login();
@@ -585,9 +581,8 @@ impl OAuthClient {
                     .ok()
                     .and_then(|key| self.storage.load(&key, &self.resource_url));
                 let Some(stored) = stored else {
-                    // Nothing could be read: the old account's token must not
-                    // keep serving, and the install stays unacknowledged so
-                    // the next call retries.
+                    // Nothing could be read: the old account's token stops serving,
+                    // and the install stays unacknowledged so the next call retries.
                     *self.current_token.write() = None;
                     return None;
                 };
@@ -595,11 +590,10 @@ impl OAuthClient {
             }
             #[cfg(all(test, feature = "webui"))]
             self.adopt_pause.pause_blocking();
-            // A confirm under another issuer landed after the caller checked:
-            // it is not acknowledged as adopted, and nothing read is handed back.
             if self.issuer_differs() {
                 return None;
             }
+            status.clear_provider_changed();
             self.installed_seen
                 .store(sampled, std::sync::atomic::Ordering::SeqCst);
             if status.installed() == sampled {

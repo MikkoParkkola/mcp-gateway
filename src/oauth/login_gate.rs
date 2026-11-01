@@ -451,6 +451,30 @@ impl LoginGate {
             otherwise
         }
     }
+
+    /// `stage` of detached work that set out at `since` (MIK-8339): ended by a
+    /// restart or stop, and at the authorization window or `deadline`,
+    /// whichever comes first, read through [`Self::classify`].
+    pub(crate) async fn bounded<T>(
+        &self,
+        since: u64,
+        cohort: &Arc<Cohort>,
+        backend: &str,
+        deadline: tokio::time::Instant,
+        stage: impl std::future::Future<Output = T>,
+    ) -> Result<T, Error> {
+        let window = stage_end(crate::oauth::OAUTH_AUTHORIZATION_WINDOW, deadline);
+        tokio::select! {
+            biased;
+            () = self.revoked_since(since) => Err(Error::AuthorizationCancelled {
+                backend: backend.to_owned(),
+            }),
+            () = tokio::time::sleep_until(window) => {
+                Err(self.classify(cohort, backend, Error::BackendTimeout(backend.to_owned())))
+            }
+            done = stage => Ok(done),
+        }
+    }
 }
 
 #[cfg(test)]

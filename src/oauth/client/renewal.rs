@@ -31,6 +31,11 @@ impl OAuthClient {
     /// Try the headless renewal strategies (`refresh_token`, then
     /// `client_credentials`), stopping at a policy refusal.
     pub(super) async fn attempt_background_renewal(&self) -> Renewal {
+        // A sign-in confirmed under another issuer: this client's credential
+        // is not spent until the token step has re-discovered.
+        if self.issuer_differs() {
+            return Renewal::Deferred;
+        }
         // A refresh sends the stored refresh token (MIK-8018); a cached one
         // only says this client has a grant to refresh.
         let has_refresh_token = self
