@@ -14,6 +14,7 @@ src/backend/metadata.rs	get_cached_list_for	refuse_shared_start	1	not-delivered	
 src/backend/ops.rs	blocked_call_refusal	blocked_tool_refusal	1	feeds	the backend's send backstop for a withheld tool
 src/backend/ops.rs	notify_with_headers_lent	blocked_call_refusal	1	no-record	a notification to a backend; notifications carry no delivery record
 src/backend/ops.rs	request_attempted	blocked_call_refusal	1	composite-or-replay	the send backstop: every route's gate withholds the name first (raised there); reached only by a name the gates missed
+src/backend/ops.rs	request_attempted	refuse_unredacted	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
 src/backend/pool.rs	refuse_shared_start	Error::Forbidden{}	1	recorded	a delivered Forbidden is recorded by the outlet
 src/backend/pool_eviction.rs	arm_refusal_eviction	on_definitive_refusal	1	not-delivered	registers the slot's eviction on a definitive refusal
 src/backend/secret_send.rs	prepare_secrets	refuse_secret_target	1	not-a-decision	a secret rule the send cannot apply: a configuration failure, not a decision about the caller
@@ -68,6 +69,7 @@ src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	no
 src/error.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
+src/error_origin.rs	origin	is_echo_refusal	1	not-delivered	predicate: counts the scrub's retryable refusal as the gateway's, for the error-count metric
 src/events/rpc_held.rs	cap_refusal_for	cap_refusal	1	no-record	an events subscription cap, not a call delivery
 src/events/worker.rs	retry_unsent	retry_after_refusal	1	no-record	event delivery
 src/events/worker.rs	unsent_later	retry_after_refusal	1	no-record	event delivery
@@ -80,6 +82,7 @@ src/gateway/auth_resolved.rs	refuse_collisions	refuse_shared_principals	1	no-rec
 src/gateway/auth_resolved.rs	try_from_config_keyed	refuse_collisions	1	no-record	config load: the key list's collision check (refuse_collisions)
 src/gateway/auth_resolved.rs	with_keys_of	refuse_collisions	1	no-record	config reload: a reloaded key list that collides is refused whole; no call is delivered
 src/gateway/authz.rs	authorize_backend	backend_refusal	1	feeds	the authorization error; meta and stdio route stages raise it, the direct 403 is classed Denied
+src/gateway/delivery_facts.rs	echo_refusal_delivered	is_echo_refusal	1	not-delivered	a predicate: whether the delivered error reads as the scrub's refusal, read with the cell's echo_refusal_built
 src/gateway/meta_mcp/account_outcome.rs	judge_account	audit_transient_refusal	1	not-delivered	audit row
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	refuse_on_playbook_run	1	not-a-decision	client-protocol rejection: retry fields on a playbook run
 src/gateway/meta_mcp/admission.rs	admit_operation	refuse_another_era	1	composite-or-replay	a stored delivery not served to the other protocol era
@@ -326,14 +329,15 @@ src/security/http_diagnostics.rs	oauth_request_error	ssrf_refusal	1	pending:capa
 src/security/http_diagnostics.rs	safe_request_error	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	safe_request_error_for	ssrf_refusal	1	feeds	the SSRF refusal a capability call raises at send_with_retry
 src/security/http_diagnostics.rs	status_refusal	is_deterministic_refusal	1	not-delivered	predicate
+src/security/needles.rs	scrubbed_answer	refusal	2	feeds	a backend answer that holds a value the gateway injected is replaced; the call records it refused where it is delivered (delivery_facts::echo_refusal_delivered, read with the cell's echo_refusal_built)
 src/security/ssrf/destination.rs	check_literal	literal_refusal	1	feeds	the SSRF literal-address refusal its callers deliver
 src/security/ssrf/redirect.rs	ssrf_redirect_policy	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/budget.rs	charge	response_refusal	1	no-record	the start-once preview only (budget.rs: only the preview attaches a budget)
 src/transport/http/client.rs	build	refuse_hop	1	recorded	refuse_hop raises while the cell vouches
 src/transport/http/requests.rs	lent_for	counted_refusal	1	recorded	a refused per-user send's Forbidden, recorded by the outlet where a call delivers it
-src/transport/http/requests.rs	read_answer	is_deterministic_refusal	1	not-delivered	predicate
-src/transport/http/requests.rs	read_answer	peer_refusal	1	not-a-decision	the backend's own refusal status
-src/transport/http/requests.rs	read_answer	status_refusal	1	not-a-decision	the backend's own refusal status
+src/transport/http/requests.rs	read_answer_unscrubbed	is_deterministic_refusal	1	not-delivered	predicate
+src/transport/http/requests.rs	read_answer_unscrubbed	peer_refusal	1	not-a-decision	the backend's own refusal status
+src/transport/http/requests.rs	read_answer_unscrubbed	status_refusal	1	not-a-decision	the backend's own refusal status
 src/transport/http/sse_channel.rs	over_budget	response_refusal	1	no-record	the start-once preview only
 src/transport/lender.rs	counted_refusal	count_refusal	1	not-delivered	the metric count
 src/transport/lender.rs	lent_for	counted_refusal	4	recorded	a refused per-user send's Forbidden, recorded by the outlet where a call delivers it

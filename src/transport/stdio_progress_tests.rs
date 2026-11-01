@@ -311,3 +311,95 @@ async fn stdio_drops_a_progress_notification_no_caller_asked_for() {
         "and it must not register itself on the way through"
     );
 }
+
+const NEEDLE: &str = "control-id-secret-5b1e";
+
+/// A transport whose needle set holds [`NEEDLE`].
+fn with_needle() -> std::sync::Arc<StdioTransport> {
+    let transport = make_transport("cat");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", NEEDLE);
+    transport.attach_needles(std::sync::Arc::new(needles));
+    transport
+}
+
+/// DELTA-5 (T1.23): a progress token equal to an injected value
+/// routes by the token the backend sent; the caller's copy is scrubbed.
+#[tokio::test]
+async fn a_progress_token_equal_to_a_secret_routes_and_arrives_scrubbed() {
+    let transport = with_needle();
+    let (call, mut rx) = crate::transport::notify_ingress::test_support::scope(None, async {
+        let _ = transport.register_progress_token(NEEDLE);
+        transport
+            .handle_response(&progress_line(NEEDLE, 1))
+            .expect("a notification must not fail the read loop");
+    });
+    call.await;
+    let got = rx
+        .try_recv()
+        .expect("the frame routes by the token the backend sent");
+    let text = serde_json::to_string(&got.params).unwrap();
+    assert!(
+        !text.contains(NEEDLE),
+        "the caller's copy holds the secret: {text}"
+    );
+}
+
+/// DELTA-5 (T1.23): a subscription tag equal to an injected value
+/// still finds its listen.
+#[tokio::test]
+async fn a_subscription_tag_equal_to_a_secret_still_routes() {
+    use crate::transport::upstream_tap::{KindSet, Requested, UpstreamNote};
+    let transport = with_needle();
+    let requested = Requested {
+        kinds: KindSet {
+            resources_changed: true,
+            ..KindSet::default()
+        },
+        uris: Vec::new(),
+    };
+    let mut rx = transport.taps.listen(&serde_json::json!(NEEDLE), requested);
+    let frame = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/subscriptions/acknowledged",
+        "params": {"notifications": {"resourcesListChanged": true},
+                   "_meta": {"io.modelcontextprotocol/subscriptionId": NEEDLE}}})
+    .to_string();
+    transport
+        .handle_response(&frame)
+        .expect("a notification must not fail the read loop");
+    assert!(
+        matches!(rx.try_recv(), Ok(UpstreamNote::Ack { .. })),
+        "the acknowledgement did not reach its listen"
+    );
+}
+
+/// Lead ruling G9 (stdio): the watch filter compares the scrubbed note, the
+/// URI a client knows. A watcher of the redacted URI gets the update; one
+/// guessing the raw URI does not.
+#[tokio::test]
+async fn the_watch_filter_compares_the_redacted_uri() {
+    use crate::transport::upstream_tap::{UpstreamNote, Watched};
+    let line = serde_json::json!({"jsonrpc": "2.0",
+        "method": "notifications/resources/updated",
+        "params": {"uri": format!("file:///x?k={NEEDLE}")}})
+    .to_string();
+    let redacted = with_needle();
+    let mut rx = redacted
+        .taps
+        .unsolicited(Watched::by(|uri| uri == "file:///x?k=[redacted]"));
+    redacted.handle_response(&line).expect("a notification");
+    let Ok(UpstreamNote::Notice { uri: Some(uri), .. }) = rx.try_recv() else {
+        panic!("the watcher of the redacted URI got nothing");
+    };
+    assert_eq!(uri, "file:///x?k=[redacted]");
+    let raw = with_needle();
+    let mut rx = raw
+        .taps
+        .unsolicited(Watched::by(|uri| uri.contains(NEEDLE)));
+    raw.handle_response(&line).expect("a notification");
+    assert!(
+        rx.try_recv().is_err(),
+        "a watcher guessing the raw URI got it"
+    );
+}

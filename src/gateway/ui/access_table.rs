@@ -245,6 +245,14 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Gateway, Tab::Status)],
         true,
     ),
+    // Lists every configured key: an admin read, as the config view is.
+    row(
+        routes::UI_KEYS,
+        Get,
+        Admin(Forbidden),
+        &[(Page::Access, Tab::Status)],
+        true,
+    ),
     row(
         routes::UI_DEAD_LETTERS,
         Get,
