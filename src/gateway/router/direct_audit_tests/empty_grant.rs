@@ -445,6 +445,12 @@ async fn an_empty_grant_is_refused_before_its_arguments_are_scanned() {
         StatusCode::BAD_REQUEST,
         "premise: the firewall blocks these arguments: {body}"
     );
+    let parsed: Value = serde_json::from_str(&body).expect("the answer is JSON");
+    assert_eq!(
+        parsed["error"]["code"].as_i64(),
+        Some(-32600),
+        "premise: the firewall's own refusal, not another bad request: {body}"
+    );
 
     let fx = scanned(&[]).await;
     assert_grant_refusal(
