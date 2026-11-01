@@ -551,3 +551,6 @@ fn an_unused_anchor_on_the_value_is_unprovable() {
 
 #[path = "config_persistence_keyedit_a2_tests.rs"]
 mod a2;
+
+#[path = "config_persistence_keyedit_api_keys_tests.rs"]
+mod api_keys;
