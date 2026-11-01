@@ -144,6 +144,10 @@ pub(in crate::gateway::meta_mcp) enum BudgetOutcome {
     /// rate limiter refused before dispatch (F23). Neither is evidence about
     /// the backend's health, so neither is sampled.
     IgnoredRateLimit,
+    /// The gateway refused the caller ([`super::gate::is_authorization_refusal`]):
+    /// a decision about the caller, no evidence about the backend, so not
+    /// sampled. One caller's refusals must not disable a backend for everyone.
+    IgnoredRefusal,
 }
 
 impl BudgetOutcome {
@@ -187,6 +191,9 @@ impl BudgetOutcome {
 
     /// [`Self::of`] for a dispatch that failed.
     pub(in crate::gateway::meta_mcp) fn of_error(error: &Error) -> Self {
+        if super::gate::is_authorization_refusal(error) {
+            return Self::IgnoredRefusal;
+        }
         // The gateway refused before asking the backend (F23, #2300).
         if error.is_gateway_throttle()
             || crate::gateway::recovery::is_rate_limited(&error.to_string())

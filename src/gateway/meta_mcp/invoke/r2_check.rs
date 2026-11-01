@@ -191,6 +191,13 @@ impl MetaMcp {
             }
             _ => error,
         };
+        // A refusal of the caller is answered as itself, never folded into a
+        // tool result: counted as the dispatch it stands in for, then refused.
+        if super::gate::is_authorization_refusal(&error) {
+            self.count_refused_fill(server, tool, &error, checked_at);
+            super::audit::note_send_refusal(&error);
+            return Err(error);
+        }
         let value = self.account_refused_fill(server, tool, &error, (checked_at, surface));
         if crate::personal_accounts::refusal::marked(&error).is_some() {
             return Err(error);
@@ -221,7 +228,10 @@ impl MetaMcp {
             )
             .await;
         let message = error.to_string();
-        if parks || crate::personal_accounts::refusal::marked(&error).is_some() {
+        if parks
+            || crate::personal_accounts::refusal::marked(&error).is_some()
+            || super::gate::is_authorization_refusal(&error)
+        {
             *parked.lock() = Some(error);
         }
         message
@@ -240,6 +250,20 @@ impl MetaMcp {
         error: &Error,
         (started, surface): (std::time::Instant, MetaSurface),
     ) -> Value {
+        self.count_refused_fill(server, tool, error, started);
+        dispatch_error_result(error, tool, server, surface)
+    }
+
+    /// The accounting half of [`Self::account_refused_fill`]: the invocation
+    /// counter, the latency histogram and the error budget, without the tool
+    /// result, for a refusal answered as itself.
+    pub(super) fn count_refused_fill(
+        &self,
+        server: &str,
+        tool: &str,
+        error: &Error,
+        started: std::time::Instant,
+    ) {
         telemetry_metrics::counter!(
             "mcp_tool_invocations_total",
             "server" => server.to_owned(),
@@ -252,6 +276,5 @@ impl MetaMcp {
         )
         .record(started.elapsed().as_secs_f64());
         self.record_error_budget(server, tool, BudgetOutcome::of_error(error));
-        dispatch_error_result(error, tool, server, surface)
     }
 }

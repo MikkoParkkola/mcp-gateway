@@ -253,6 +253,14 @@ impl MetaMcp {
                             .with_connect_offer(Err(refused), verified_identity)
                             .await;
                     }
+                    // A refusal of the caller at the round's send answers as
+                    // itself, as the first dispatch's does (post_dispatch).
+                    if super::gate::is_authorization_refusal(&refused) {
+                        if crate::playbook::current_step().is_some() {
+                            crate::gateway::delivery_facts::refused_while_vouched();
+                        }
+                        return Err(refused);
+                    }
                     // Anything else the 401 site produced (a rejection mark, or
                     // a custody refusal connecting cannot fix) answers exactly
                     // as the same failure on the first dispatch would. Sealed

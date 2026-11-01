@@ -109,8 +109,10 @@ impl DirectFailure<'_> {
         }
         // An authorization refusal raised at the send (a lent-only slot the
         // call brought no credential for) is the gateway's decision: answered
-        // with its own status, as on the meta route, so the direct recorder
-        // classes it denied and records it refused.
+        // with its own status and code, so the direct recorder classes it
+        // denied and records it refused. The meta route answers the same
+        // refusal as the same -32001 error (`invoke::post_dispatch`), never as
+        // a backend error result to retry.
         let status = match &error {
             crate::Error::Forbidden { status, .. } => {
                 StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)

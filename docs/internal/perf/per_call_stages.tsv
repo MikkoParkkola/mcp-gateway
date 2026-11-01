@@ -412,6 +412,7 @@ src/gateway/meta_mcp/invoke/provenance_stamp.rs	note_unsealed	-	on-path, untimed
 src/gateway/meta_mcp/invoke/r2_check.rs	absent_on_slot	-	on-path, untimed: per-user-catalogue backends withholding the tool only
 src/gateway/meta_mcp/invoke/r2_check.rs	account_refused_fill	-	on-path, untimed: cold-slot catalogue fills the failsafe refused only
 src/gateway/meta_mcp/invoke/r2_check.rs	answer_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed only
+src/gateway/meta_mcp/invoke/r2_check.rs	count_refused_fill	-	on-path, untimed: cold-slot catalogue fills that failed or were refused only
 src/gateway/meta_mcp/invoke/r2_check.rs	bridged_refused_fill	-	on-path, untimed: bridged rounds whose cold-slot fill failed only
 src/gateway/meta_mcp/invoke/r2_check.rs	miss_hint_pool	-	on-path, untimed: unknown-tool misses only; the timed tool is listed on its backend
 src/gateway/meta_mcp/invoke/r2_check.rs	miss_with_hint	-	on-path, untimed: unknown-tool misses only; the timed tool is listed on its backend

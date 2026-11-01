@@ -7,9 +7,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use super::fill_check::{
-    Completeness, TEXT_UNAVAILABLE, is_transport_failure, text_absent, text_partial,
-};
+use super::fill_check::{Completeness, TEXT_UNAVAILABLE, text_absent, text_partial};
 use super::{Backend, PoolKey};
 use crate::config::InputSchemaEnforcement;
 use crate::transport::LentCredential;
@@ -338,26 +336,15 @@ impl Backend {
                 Some(now) => now,
                 None => return cached.as_ref().map_or(Ok(None), held),
             },
-            // Raised only by the fill's own failsafe gate or slot admission
-            // (#2300): no transport constructs any of these variants.
-            Err(
-                e @ (crate::Error::CircuitOpen { .. }
-                | crate::Error::RateLimited(_)
-                | crate::Error::IdentitySlotsExhausted { .. }),
-            ) => {
-                return Err(e);
-            }
-            // A3: under `closed`, a backend that could not be reached answers
-            // as a failed dispatch would (and is accounted as one). A cooldown
-            // fast-fail answers as the failure it stands in for. `standard`
-            // forwards, and the dispatch then fails on its own. A login wait
-            // answers as itself, with its remedy, and is accounted as nothing.
-            Err(e)
-                if mode == InputSchemaEnforcement::Closed
-                    && (is_transport_failure(&e) || e.is_authorization_wait()) =>
-            {
-                return Err(e);
-            }
+            // F13's table (`catalogue_verdict::fill_error_answers`): the fill's
+            // own failsafe gate or slot admission (#2300) and a refusal of the
+            // caller answer as themselves in every mode; A3: under `closed`, a
+            // backend that could not be reached answers as a failed dispatch
+            // would (and is accounted as one), a cooldown fast-fail as the
+            // failure it stands in for, and a login wait as itself with its
+            // remedy, accounted as nothing. `standard` forwards anything else,
+            // and the dispatch then fails on its own.
+            Err(e) if super::catalogue_verdict::fill_error_answers(mode, &e) => return Err(e),
             Err(_) => return Ok(unavailable((mode, lens))),
         };
         // A store voided by a newer list (a list replaced the slot mid-fill)
