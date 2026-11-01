@@ -15,7 +15,11 @@ use super::direct_guards_fixture::{Answer, Fx, fixture_hardened_signed_built};
 use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
 
 /// A playbook named `name` whose steps are `alpha/read` with each `cmd`.
-fn reads(name: &str, cmds: &[&str], extra: Value) -> crate::playbook::PlaybookDefinition {
+pub(super) fn reads(
+    name: &str,
+    cmds: &[&str],
+    extra: Value,
+) -> crate::playbook::PlaybookDefinition {
     let steps: Vec<Value> = cmds
         .iter()
         .enumerate()
@@ -47,7 +51,7 @@ async fn served(answer: Answer, definitions: Vec<crate::playbook::PlaybookDefini
 
 /// A signed modern `tools/call` of `name` on `path`, keyed when `key` is given,
 /// with `extra` merged into its params (retry fields). The whole body.
-async fn call(
+pub(super) async fn call(
     fx: &Fx,
     (path, name): (&str, &str),
     mut params: Value,
@@ -130,7 +134,7 @@ async fn direct(fx: &Fx, cmd: &str, key: &str, nonce: &str) -> Value {
     .await
 }
 
-fn calls(fx: &Fx) -> usize {
+pub(super) fn calls(fx: &Fx) -> usize {
     fx.calls.load(Ordering::SeqCst)
 }
 
