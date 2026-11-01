@@ -207,8 +207,13 @@ impl SessionLifecycle {
         // Marked first, so a call still holding the session runs these
         // again after its last write (MIK-7996).
         self.mark_ended(session_id);
+        // Logged once the handler list's read guard is released.
+        let mut ran = Vec::new();
         for (name, cb) in self.ended.read().iter() {
             cb(session_id);
+            ran.push(name.clone());
+        }
+        for name in ran {
             debug!(
                 session_id = %crate::gateway::session_id::session_fp(session_id),
                 handler = %name,
@@ -232,13 +237,20 @@ impl SessionLifecycle {
             return;
         }
         let fp = crate::gateway::session_id::session_fp(session_id);
-        debug!(
-            session_id = %fp,
-            callbacks = cbs.len(),
-            "Session disconnect cleanup"
-        );
+        let count = cbs.len();
+        // Logged once `cbs` is released.
+        let mut ran = Vec::with_capacity(count);
         for (name, cb) in cbs.iter() {
             cb(session_id);
+            ran.push(name.clone());
+        }
+        drop(cbs);
+        debug!(
+            session_id = %fp,
+            callbacks = count,
+            "Session disconnect cleanup"
+        );
+        for name in ran {
             debug!(session_id = %fp, handler = %name, "Cleanup handler executed");
         }
     }

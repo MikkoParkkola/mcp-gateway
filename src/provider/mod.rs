@@ -181,6 +181,8 @@ impl ProviderRegistry {
     /// Returns `Err` only if every provider fails.
     pub async fn all_tools(&self) -> Vec<(String, Tool)> {
         let mut out = Vec::new();
+        // Logged once no map entry reference is held.
+        let mut failed = Vec::new();
         for entry in &self.providers {
             match entry.value().list_tools().await {
                 Ok(tools) => {
@@ -188,10 +190,11 @@ impl ProviderRegistry {
                         out.push((entry.key().clone(), t));
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(provider = %entry.key(), error = %e, "Failed to list tools");
-                }
+                Err(e) => failed.push((entry.key().clone(), e)),
             }
+        }
+        for (provider, e) in failed {
+            tracing::warn!(provider = %provider, error = %e, "Failed to list tools");
         }
         out
     }
