@@ -385,20 +385,35 @@ fn a_backends_own_error_echoing_a_value_is_scrubbed() {
             backend(
                 -32001,
                 "backend refused",
-                Some(serde_json::json!({"echo": "token-one-value"})),
+                Some(serde_json::json!({"echo": "token-one-value", "keep": "plain"})),
             ),
         ),
     ] {
         let answer = super::scrub_answer(&needles, answer);
         let text = format!("{answer:?}");
         assert!(!text.contains("token-one-value"), "{name}: {text}");
-        assert!(
-            matches!(
-                answer,
-                Err(crate::Error::BackendJsonRpc { code: -32001, .. })
-            ),
-            "{name}: the backend's error, scrubbed: {text}"
-        );
+        let Err(crate::Error::BackendJsonRpc {
+            code: -32001,
+            message,
+            data,
+        }) = answer
+        else {
+            panic!("{name}: the backend's error, scrubbed: {text}");
+        };
+        // Only the value goes: the rest of the error reaches the caller.
+        assert!(message.starts_with("backend refused"), "{name}: {message}");
+        if name == "data" {
+            assert_eq!(message, "backend refused", "the message carried no value");
+            let data = data.expect("the data is kept");
+            assert_eq!(data["keep"], "plain", "{data}");
+            assert!(data["echo"].is_string(), "{data}");
+        } else {
+            assert_ne!(
+                message, "backend refused ",
+                "the value is replaced, not cut"
+            );
+            assert_eq!(data, None);
+        }
     }
     let answer = super::scrub_answer(&needles, backend(-32077, "backend refused", None));
     let text = format!("{answer:?}");
@@ -407,6 +422,20 @@ fn a_backends_own_error_echoing_a_value_is_scrubbed() {
         matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
         "code: the gateway's refusal: {text}"
     );
+}
+
+/// A backend's own error carrying the scrub's exact refusal code and text is
+/// still the backend's: it never reads as the gateway's echo refusal, and
+/// it counts as the backend's.
+#[test]
+fn a_backend_sending_the_refusal_text_is_not_the_gateways_refusal() {
+    let backend = crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: super::REFUSAL_CODE,
+        message: super::ECHO_REFUSAL.to_owned(),
+        data: None,
+    });
+    assert!(!super::is_echo_refusal(&backend), "{backend:?}");
+    assert_eq!(backend.origin(), crate::protocol::Origin::Backend);
 }
 
 /// Review A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
