@@ -151,3 +151,72 @@ fn the_watch_filter_compares_the_redacted_uri() {
         "a watcher guessing the raw URI got it"
     );
 }
+
+/// What a call's delivery record says about its answer, for a backend that
+/// answers with `reply` (the members after the id) while `secret` is an
+/// injected value. The reader routes the answer as sent; the call scrubs it
+/// on its own task, so the effect lands in this call's cell.
+async fn recorded_effect(reply: serde_json::Value, secret: &str) -> (serde_json::Value, String) {
+    let url = super::tests::mock_backend(move |request| {
+        let mut answer = reply.clone();
+        answer["jsonrpc"] = json!("2.0");
+        answer["id"] = request["id"].clone();
+        vec![answer]
+    })
+    .await;
+    let t = super::tests::connected(&url).await;
+    let needles = NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", secret);
+    let _ = t.inner.needles.set(Arc::new(needles));
+    let mut fields = serde_json::Map::new();
+    let answer = crate::gateway::delivery_facts::scope(async {
+        let answer = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            crate::transport::Transport::request(t.as_ref(), "tools/call", None),
+        )
+        .await
+        .expect("answered");
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        answer
+    })
+    .await;
+    (
+        fields.get("response_effect").cloned().unwrap_or_default(),
+        format!("{answer:?}"),
+    )
+}
+
+/// Over WebSocket too: a redacted answer is recorded as rewritten.
+#[tokio::test]
+async fn a_redacted_answer_is_recorded_as_rewritten() {
+    let reply =
+        json!({"result": {"content": [{"type": "text", "text": format!("echo {NEEDLE}")}]}});
+    let (effect, answer) = recorded_effect(reply, NEEDLE).await;
+    assert!(!answer.contains(NEEDLE), "premise: scrubbed: {answer}");
+    assert_eq!(effect, json!("rewritten"), "{answer}");
+}
+
+/// An answer replaced by the fixed refusal is recorded as refused.
+#[tokio::test]
+async fn a_replaced_answer_is_recorded_as_refused() {
+    let reply = json!({"error": {"code": 7_391_540, "message": "nope"}});
+    let (effect, answer) = recorded_effect(reply, "7391540").await;
+    assert!(answer.contains("Err"), "premise: refused: {answer}");
+    assert_eq!(effect, json!("refused"), "{answer}");
+}
+
+/// Control: an answer the scrub left alone is recorded as delivered.
+#[tokio::test]
+async fn a_clean_answer_is_recorded_as_delivered() {
+    let reply = json!({"result": {"content": [{"type": "text", "text": "nothing to hide"}]}});
+    let (effect, answer) = recorded_effect(reply, NEEDLE).await;
+    assert!(
+        answer.contains("nothing to hide"),
+        "premise: answered: {answer}"
+    );
+    assert_eq!(effect, json!("delivered"), "{answer}");
+}

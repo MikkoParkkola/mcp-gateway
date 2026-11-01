@@ -211,11 +211,16 @@ impl NeedleSet {
         let valid_until = live.iter().map(|held| held.last_sent + self.grace).min();
         drop(values);
         let compiled = std::sync::Arc::new(Compiled::new(&secrets));
-        *self.compiled.write() = Some(Cached {
-            compiled: std::sync::Arc::clone(&compiled),
-            version,
-            valid_until,
-        });
+        // Stored only if no insert or retirement moved the version while this
+        // built: a build is never cached under a version it did not see.
+        let mut cache = self.compiled.write();
+        if self.version.load(Ordering::SeqCst) == version {
+            *cache = Some(Cached {
+                compiled: std::sync::Arc::clone(&compiled),
+                version,
+                valid_until,
+            });
+        }
         compiled
     }
 }
@@ -510,16 +515,19 @@ fn merge(a: Scrubbed, b: Scrubbed) -> Scrubbed {
 
 /// What a transport hands on for `answer`: its values removed, and the fixed
 /// refusal in its place when the set overflowed or an `error.code` is one of
-/// them. Run on the call's own task: an answer it changed is recorded as
-/// rewritten on that call's delivery (a no-op outside one).
+/// them. Run on the call's own task, so the call's delivery records what it
+/// did (a no-op outside one): a redacted answer was delivered changed, and
+/// one replaced by the refusal never reached the caller.
 pub(crate) fn scrub_answer(
     needles: &NeedleSet,
     answer: crate::Result<JsonRpcResponse>,
 ) -> crate::Result<JsonRpcResponse> {
+    use crate::gateway::delivery_facts::{ResponseEffect, raise};
     let (answer, outcome) = scrubbed_answer(needles, answer);
-    if matches!(outcome, Scrubbed::Redacted | Scrubbed::Refuse) {
-        use crate::gateway::delivery_facts::{ResponseEffect, raise};
-        raise(ResponseEffect::Rewritten);
+    match outcome {
+        Scrubbed::Redacted => raise(ResponseEffect::Rewritten),
+        Scrubbed::Refuse => raise(ResponseEffect::Refused),
+        Scrubbed::Clean | Scrubbed::Withhold => {}
     }
     answer
 }

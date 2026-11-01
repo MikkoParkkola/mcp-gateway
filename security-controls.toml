@@ -372,7 +372,7 @@ reason = "needs a backend response carrying the payload; the caller leg has no w
 
 [[control]]
 id = "injected-secret-echo-redaction"
-description = "a value a backend's secrets: rules injected is removed from everything that backend sends back, inside each transport, before anything parses, logs, caches or stores it; a frame the set cannot scrub is refused"
+description = "a value a backend's secrets: rules injected is removed from everything that backend sends back: each transport parses the answer, then scrubs it before any log, cache or store sees it or the caller receives it; an answer the set cannot scrub is refused"
 source = "src/security/needles.rs"
 probe = "none"
 reason = "needs a backend that echoes a value the gateway injected into its call; the caller leg cannot make a backend do that. Exercised by the echo rows over real transports (secret_echo_tests, the stdio and WebSocket scrub rows, the A2A needles rows) and their red proofs"

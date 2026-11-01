@@ -430,22 +430,31 @@ async fn renewing_a_live_value_keeps_the_cached_matcher() {
     );
 }
 
-/// Whether, in `block`, the `values.write()` lock is taken before `now` is
-/// read.
+/// Whether, in `block`, the statement taking `self.values.write()` comes
+/// before the statement reading `Instant::now()`.
 fn clock_read_under_the_lock(block: &syn::Block) -> bool {
-    let at = |want: &dyn Fn(&syn::Local) -> bool| {
-        block
-            .stmts
-            .iter()
-            .position(|stmt| matches!(stmt, syn::Stmt::Local(local) if want(local)))
-    };
-    let lock = at(&|local| {
-        local.init.as_ref().is_some_and(|init| {
-            matches!(init.expr.as_ref(), syn::Expr::MethodCall(call) if call.method == "write")
+    fn is_values_write(expr: &syn::Expr) -> bool {
+        matches!(expr, syn::Expr::MethodCall(call)
+            if call.method == "write"
+                && matches!(call.receiver.as_ref(), syn::Expr::Field(field)
+                    if matches!(&field.member, syn::Member::Named(name) if name == "values")
+                        && matches!(field.base.as_ref(), syn::Expr::Path(p) if p.path.is_ident("self"))))
+    }
+    fn is_instant_now(expr: &syn::Expr) -> bool {
+        matches!(expr, syn::Expr::Call(call)
+            if matches!(call.func.as_ref(), syn::Expr::Path(p)
+                if p.path.segments.iter().rev().take(2).map(|s| s.ident.to_string()).eq(["now", "Instant"])))
+    }
+    let at = |want: &dyn Fn(&syn::Expr) -> bool| {
+        block.stmts.iter().position(|stmt| {
+            matches!(stmt, syn::Stmt::Local(local)
+                if local.init.as_ref().is_some_and(|init| want(&init.expr)))
         })
-    });
-    let clock = at(&|local| matches!(&local.pat, syn::Pat::Ident(p) if p.ident == "now"));
-    matches!((lock, clock), (Some(lock), Some(clock)) if lock < clock)
+    };
+    matches!(
+        (at(&is_values_write), at(&is_instant_now)),
+        (Some(lock), Some(clock)) if lock < clock
+    )
 }
 
 /// Round 3: `insert` reads the clock under the values lock. Read before it, a
@@ -476,6 +485,14 @@ fn the_renewal_clock_is_read_under_the_lock() {
         let now = tokio::time::Instant::now();
         let mut values = self.values.write();
     });
+    // Another lock taken first, or a binding named `now` that is not the
+    // clock, does not pass for the values lock and the clock read.
+    let decoy: syn::Block = syn::parse_quote!({
+        let mut other = self.compiled.write();
+        let now = tokio::time::Instant::now();
+        let mut values = self.values.write();
+    });
+    assert!(!clock_read_under_the_lock(&decoy), "another lock passed");
     assert!(
         !clock_read_under_the_lock(&planted),
         "a clock read before the lock passed"
