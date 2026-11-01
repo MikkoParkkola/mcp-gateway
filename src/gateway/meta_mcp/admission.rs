@@ -415,6 +415,10 @@ impl MetaMcp {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
                 response.id = Some(request_id.clone());
+                // Scrubbed on the way out against the values current now: a
+                // value marked secret after this answer was stored is removed,
+                // and a refused scrub makes the fixed refusal the answer.
+                let _ = self.backends.scrub_stored(&mut response);
                 Ok(SyncAdmission::Replay(
                     response,
                     audit,

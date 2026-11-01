@@ -578,6 +578,18 @@ impl MetaMcp {
         task: &crate::gateway::task_service::CommittedTask,
         value: &mut Value,
     ) -> EgressOutcome {
+        // Scrubbed on the way out against the values current now: a value
+        // marked secret after this output was stored is removed. A refused
+        // scrub withholds the output: `tasks/get` answers the delivery
+        // refusal, a notification goes out status-only.
+        if self.backends.scrub_stored_value(value).is_err() {
+            tracing::warn!(
+                task = %task.task.id(),
+                "stored task output withheld: a credential the gateway keeps redacted \
+                 could not be removed from it (its backend's redaction set is full)"
+            );
+            return EgressOutcome::Refused;
+        }
         let targets = stored_targets(task);
         let (server, tool) = (targets[0].server.as_str(), targets[0].tool.as_str());
         let correlation = ResponseCorrelation {

@@ -146,7 +146,13 @@ impl MetaMcp {
                     .defer_or_serve_existing(id, tool_name, &targets, held, caller)
                     .await;
             }
-            Ok(outcome) => invoke::ask_if_refused_submit(caller, outcome).into_response(id),
+            Ok(outcome) => {
+                let mut answer = invoke::ask_if_refused_submit(caller, outcome).into_response(id);
+                // An existing task's stored output is scrubbed on the way out
+                // against the values current now; a fresh one has none yet.
+                let _ = self.backends.scrub_stored(&mut answer);
+                answer
+            }
             Err(crate::gateway::task_service::ServiceError::AuditUnavailable) => {
                 error_response_preserving_status(id, &crate::Error::AuditUnavailable)
             }
@@ -194,7 +200,11 @@ impl MetaMcp {
         if let Some(answer) = Box::pin(self.first_refused(&id, tool_name, &walk, caller)).await {
             return answer;
         }
-        BeginOutcome::Existing(held).into_response(id)
+        let mut answer = BeginOutcome::Existing(held).into_response(id);
+        // A repeated keyed task serves stored output: scrubbed on the way
+        // out against the values current now.
+        let _ = self.backends.scrub_stored(&mut answer);
+        answer
     }
 
     /// The account walk site 5 and the sync plan replay share (MIK-8406

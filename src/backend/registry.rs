@@ -284,6 +284,43 @@ impl BackendRegistry {
         names
     }
 
+    /// Scrubs a stored answer on its way out against every value set this
+    /// registry retains: registered backends and removed ones still inside
+    /// their grace. The sets are collected first, so no map guard is held
+    /// while it scrubs.
+    pub(crate) fn scrub_stored(
+        &self,
+        response: &mut crate::protocol::JsonRpcResponse,
+    ) -> crate::security::needles::Scrubbed {
+        crate::security::needles::scrub_stored(&self.retained_sets(), response)
+    }
+
+    /// Every value set this registry retains, registered or removed.
+    fn retained_sets(&self) -> Vec<Arc<crate::security::needles::NeedleSet>> {
+        self.needles
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect()
+    }
+
+    /// [`Self::scrub_stored`] for a stored tool result held as a bare value;
+    /// an `Err` is the refusal to deliver instead.
+    pub(crate) fn scrub_stored_value(
+        &self,
+        value: &mut serde_json::Value,
+    ) -> crate::Result<crate::security::needles::Scrubbed> {
+        crate::security::needles::scrub_stored_value(&self.retained_sets(), value)
+    }
+
+    /// [`Self::scrub_stored`] for a stored error's message text; an `Err` is
+    /// the refusal to deliver instead.
+    pub(crate) fn scrub_stored_text(
+        &self,
+        text: &mut String,
+    ) -> crate::Result<crate::security::needles::Scrubbed> {
+        crate::security::needles::scrub_stored_text(&self.retained_sets(), text)
+    }
+
     /// Makes `configured` the record a backend registering from now on is
     /// seeded with: set at startup before the register loop, and by a reload
     /// before it applies its patch.

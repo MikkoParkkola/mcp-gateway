@@ -156,15 +156,21 @@ impl MetaMcp {
                         );
                         return Err(Error::ResponseFirewallRefused);
                     }
-                    let (code, message) = crate::idempotency::cached_error_parts(&error);
+                    let (code, mut message) = crate::idempotency::cached_error_parts(&error);
+                    // Scrubbed on the way out against the values current now.
+                    self.backends.scrub_stored_text(&mut message)?;
                     debug!(target: INVOKE_TARGET,
                         server,
                         tool, trace_id, "Idempotency cache hit (failed)"
                     );
                     return Err(Error::json_rpc(code, message));
                 }
-                GuardOutcome::CachedResult(cached) => {
+                GuardOutcome::CachedResult(mut cached) => {
                     debug!(target: INVOKE_TARGET, server, tool, trace_id, "Idempotency cache hit");
+                    // Scrubbed on the way out against the values current now:
+                    // a value marked secret after this answer was stored is
+                    // removed; a refusal is this call's answer instead.
+                    self.backends.scrub_stored_value(&mut cached)?;
                     audit::counting::note_replay();
                     // A stored side-effect notice is the gateway's own text;
                     // its first call delivered no read either (MIK-7991).
@@ -412,7 +418,16 @@ impl MetaMcp {
                     policy_epoch,
                 },
             )
-            && let Some((cached, read, writes)) = cache.get_read(&cache_key)
+            // Scrubbed on the way out against the values current now (a value
+            // marked secret after this entry was stored is removed); a refused
+            // scrub serves no hit, and the call goes to the backend.
+            && let Some((cached, read, writes)) =
+                cache.get_read(&cache_key).and_then(|(mut cached, read, writes)| {
+                    self.backends
+                        .scrub_stored_value(&mut cached)
+                        .ok()
+                        .map(|_| (cached, read, writes))
+                })
         {
             cache_reads::restore(read.as_ref());
             debug!(target: INVOKE_TARGET, server, tool, trace_id, "Cache hit");

@@ -468,6 +468,84 @@ pub(crate) fn scrub_response_with(needles: &NeedleSet, response: &mut JsonRpcRes
     scrub_response(&secrets, response)
 }
 
+/// Scrubs a stored answer (a response-cache hit, an idempotency replay, a
+/// stored or repeated task result, a task notification) on its way out,
+/// against every set in `sets`: the values current now, whatever was
+/// current when it was stored. A refusal from any set replaces the answer
+/// with the fixed refusal, its id kept. Run on the delivering call's task,
+/// so that call's record says what was done.
+pub(crate) fn scrub_stored(
+    sets: &[std::sync::Arc<NeedleSet>],
+    response: &mut JsonRpcResponse,
+) -> Scrubbed {
+    use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
+    let mut outcome = Scrubbed::Clean;
+    for set in sets {
+        match scrub_response_with(set, response) {
+            Scrubbed::Clean => {}
+            Scrubbed::Redacted => outcome = Scrubbed::Redacted,
+            Scrubbed::Refuse | Scrubbed::Withhold => {
+                *response =
+                    JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, refusal_message(set));
+                echo_redacted();
+                echo_refusal_built();
+                return Scrubbed::Refuse;
+            }
+        }
+    }
+    if outcome == Scrubbed::Redacted {
+        echo_redacted();
+    }
+    outcome
+}
+
+/// [`scrub_stored`] for a stored tool result held as a bare value: it is
+/// scrubbed as a response's result. A refusal is the fixed refusal as an
+/// error, and the value must not be delivered.
+pub(crate) fn scrub_stored_value(
+    sets: &[std::sync::Arc<NeedleSet>],
+    value: &mut Value,
+) -> crate::Result<Scrubbed> {
+    let mut response =
+        JsonRpcResponse::success(crate::protocol::RequestId::Number(0), std::mem::take(value));
+    let outcome = scrub_stored(sets, &mut response);
+    match (response.result, response.error) {
+        (Some(result), None) => {
+            *value = result;
+            Ok(outcome)
+        }
+        (_, error) => Err(crate::Error::JsonRpc {
+            code: error.as_ref().map_or(REFUSAL_CODE, |e| e.code),
+            message: error.map_or_else(|| ECHO_REFUSAL.to_owned(), |e| e.message),
+            data: None,
+        }),
+    }
+}
+
+/// [`scrub_stored`] for a stored error's message text. A refusal is the
+/// fixed refusal error, and the stored error must not be delivered.
+pub(crate) fn scrub_stored_text(
+    sets: &[std::sync::Arc<NeedleSet>],
+    text: &mut String,
+) -> crate::Result<Scrubbed> {
+    let mut outcome = Scrubbed::Clean;
+    for set in sets {
+        match scrub_text(set, text) {
+            Scrubbed::Clean => {}
+            Scrubbed::Redacted => outcome = Scrubbed::Redacted,
+            Scrubbed::Refuse | Scrubbed::Withhold => {
+                crate::gateway::delivery_facts::echo_redacted();
+                crate::gateway::delivery_facts::echo_refusal_built();
+                return Err(refusal(set));
+            }
+        }
+    }
+    if outcome == Scrubbed::Redacted {
+        crate::gateway::delivery_facts::echo_redacted();
+    }
+    Ok(outcome)
+}
+
 /// Redacts one piece of backend text a transport hands on outside a frame
 /// (a change-notice URI).
 pub(crate) fn scrub_text(needles: &NeedleSet, text: &mut String) -> Scrubbed {
