@@ -53,7 +53,8 @@ src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	error_response_preservi
 src/gateway/meta_mcp/invoke/bridge_dispatch.rs	undeclared_input_request	Error::JsonRpc{}	1
 src/gateway/meta_mcp/invoke/continuation.rs	rejected_continuation	Error::JsonRpc{}	1
 src/gateway/meta_mcp/invoke/continuation.rs	unbindable_continuation	Error::JsonRpc{}	1
-src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	Error::JsonRpc{}	1
+src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	Error::backend_json_rpc	1
+src/gateway/meta_mcp/invoke/dispatch_guards.rs	from_response	Error::backend_json_rpc	1
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	from_response	Error::json_rpc	1
 src/gateway/meta_mcp/invoke/egress.rs	of	delivery_refusal_error	1
 src/gateway/meta_mcp/invoke/egress.rs	scan_egress	delivery_refusal_error	1
@@ -89,6 +90,7 @@ src/gateway/meta_mcp/search.rs	code_mode_search	Error::json_rpc	1
 src/gateway/meta_mcp/search/chain_exec.rs	chain_step_result	Error::json_rpc	1
 src/gateway/meta_mcp/search/chain_exec.rs	execute_chain	Error::json_rpc	6
 src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::JsonRpc{}	1
+src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::backend_json_rpc	2
 src/gateway/meta_mcp/search/chain_exec.rs	step_failure	Error::json_rpc	1
 src/gateway/meta_mcp/signing.rs	admit_signing_nonce_stamped	Error::json_rpc	1
 src/gateway/meta_mcp/signing.rs	finalize_gateway_invoke_response	Error::json_rpc	2

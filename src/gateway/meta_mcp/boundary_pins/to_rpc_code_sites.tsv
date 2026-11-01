@@ -2,13 +2,16 @@
 # A frame built from an Error that can be a backend failure goes through JsonRpcResponse::of_error / of_error_text instead.
 # file	fn	reads	reason
 src/backend/ops.rs	record_dispatch_error	2	log field only; no frame
+src/gateway/delivery_facts.rs	step_carried	1	count marker only: the code is paired with the error's own origin(); no frame is built
 src/gateway/meta_mcp/admission_replay.rs	defer_or_serve_replay	2	grant and JSON-RPC refusals only; gateway-origin frame
 src/gateway/meta_mcp/caller_forward.rs	prompt_credential	2	credential steps return Config, JsonRpc or Internal only; gateway-origin frame
 src/gateway/meta_mcp/grant_audit.rs	slot_http	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/meta_mcp/invoke/audit_replay.rs	audit_replay	1	the audit write's own failure on a replay; gateway-origin frame
 src/gateway/meta_mcp/invoke/audit.rs	note_dispatch_failure	1	failure note for the audit record; no frame
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	1	task-state error record; no frame
+src/gateway/meta_mcp/invoke/bridge_dispatch.rs	invoke	1	count marker only: the code is paired with the error's own origin(); no frame is built
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	1	response-firewall refusal body; gateway-origin
+src/gateway/meta_mcp/invoke/errors.rs	dispatch_error_result	1	count marker only: the code is paired with the error's own origin(); no frame is built
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	1	a gate's own refusal; gateway-origin frame
 src/gateway/meta_mcp/invoke/send.rs	send	1	stored idempotency failure body; a replay loses the origin (known limit, register row 251)
 src/gateway/meta_mcp/invoke/stored_proof.rs	lift_deferred	1	grant and JSON-RPC refusals only; gateway-origin frame
