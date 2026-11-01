@@ -125,6 +125,8 @@ async fn guard_and_sanitize(
         .await?;
     } else if matches!(envelope.method.as_str(), "prompts/get" | "resources/read") {
         // MIK-7765: a catalogue read's forwarded params are an egress too.
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
         #[cfg(feature = "firewall")]
         if let Some(refusal) = super::catalogue_refusal(
             scope.state,

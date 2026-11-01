@@ -17,6 +17,31 @@ use super::{
 #[cfg(feature = "firewall")]
 use super::{RelayKey, receipt_with};
 
+/// The seam the funnel rows arm (patterned on `refuse_hook`): reached at the
+/// top of each recording funnel, after its caller captured the generation
+/// current at delivery and before the funnel records anything.
+#[cfg(test)]
+pub(crate) mod commit_capture_hook {
+    use crate::security::firewall::collusion_live_rig::Hook;
+
+    thread_local! {
+        static HOOK: Hook = Hook::default();
+    }
+
+    pub(crate) fn arm(action: impl FnOnce() + 'static) {
+        HOOK.with(|h| h.arm(action));
+    }
+
+    /// Called at the top of each funnel.
+    pub(crate) fn run() {
+        HOOK.with(Hook::run);
+    }
+
+    pub(crate) fn reached() -> u32 {
+        HOOK.with(Hook::reached)
+    }
+}
+
 /// Run one plan step's dispatch: the receipts it stages are a plan's, under
 /// `label`, the step as the plan's answer names it. A plan run
 /// inside a step keeps the outer step's label: the outer answer names that
@@ -88,6 +113,8 @@ impl StagedReceipts {
         allow(clippy::needless_pass_by_value, clippy::unused_self)
     )]
     pub(crate) fn commit(self, delivered: bool, generation: &crate::config_reload::Generation) {
+        #[cfg(test)]
+        commit_capture_hook::run();
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
             // Snapshot before recording, exactly what
@@ -231,6 +258,8 @@ pub(crate) fn commit_with(
     delivered: bool,
     generation: &crate::config_reload::Generation,
 ) {
+    #[cfg(test)]
+    commit_capture_hook::run();
     let receipts = RELAY_RECEIPTS
         .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))
         .unwrap_or_default();

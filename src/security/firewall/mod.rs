@@ -49,6 +49,8 @@ pub(crate) mod collusion_live_rig;
 pub(crate) use collusion::replay::StoredKey;
 #[cfg(test)]
 pub(crate) use collusion_digest::{note_walk_for_test, walks_built};
+#[cfg(test)]
+pub(crate) use collusion_gate::relay_witness_hook;
 pub use collusion_gate::{AllowedFlow, CollusionAction, CollusionConfig};
 pub(crate) use collusion_gate::{
     DeliveryDigest, PlanStaging, RelayCaller, ReplaySource, ReplayedDigest,

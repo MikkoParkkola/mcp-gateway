@@ -67,3 +67,34 @@ impl Firewall {
         LiveConfig::new(config).generation()
     }
 }
+
+/// A one-shot test hook, patterned on the generation build's `refuse_hook`:
+/// armed on a current-thread runtime, run once at a production seam, with a
+/// count of how often the seam was reached so a row cannot pass vacuously if
+/// the seam moves.
+#[derive(Default)]
+pub(crate) struct Hook {
+    action: std::cell::RefCell<Option<Box<dyn FnOnce()>>>,
+    reached: std::cell::Cell<u32>,
+}
+
+impl Hook {
+    /// Run `action` the next time the seam is reached.
+    pub(crate) fn arm(&self, action: impl FnOnce() + 'static) {
+        *self.action.borrow_mut() = Some(Box::new(action));
+    }
+
+    /// Called at the seam: count the visit and run the armed action, once.
+    pub(crate) fn run(&self) {
+        self.reached.set(self.reached.get() + 1);
+        let action = self.action.borrow_mut().take();
+        if let Some(action) = action {
+            action();
+        }
+    }
+
+    /// How many times the seam was reached on this thread.
+    pub(crate) fn reached(&self) -> u32 {
+        self.reached.get()
+    }
+}

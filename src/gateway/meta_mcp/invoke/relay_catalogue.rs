@@ -52,6 +52,8 @@ impl MetaMcp {
         let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
         #[cfg(feature = "firewall")]
         {
+            #[cfg(test)]
+            crate::security::firewall::relay_witness_hook::run();
             if let Some(refusal) =
                 self.catalogue_refusal(caller.as_ref(), &backend.name, method, &params, &id)
             {

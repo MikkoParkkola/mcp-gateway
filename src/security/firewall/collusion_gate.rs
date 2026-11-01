@@ -33,6 +33,31 @@ use crate::security::Severity;
 /// (under-receipt, never a false excuse).
 const PLAN_STAGED_CAP: usize = 4 * DELIVERED_SET_CAP;
 
+/// The seam a config-timing row arms (patterned on `refuse_hook`): reached
+/// immediately before a witness site evaluates the generation it judges
+/// under, after the request's own generation is pinned.
+#[cfg(test)]
+pub(crate) mod relay_witness_hook {
+    use super::super::collusion_live_rig::Hook;
+
+    thread_local! {
+        static HOOK: Hook = Hook::default();
+    }
+
+    pub(crate) fn arm(action: impl FnOnce() + 'static) {
+        HOOK.with(|h| h.arm(action));
+    }
+
+    /// Called at each witness site.
+    pub(crate) fn run() {
+        HOOK.with(Hook::run);
+    }
+
+    pub(crate) fn reached() -> u32 {
+        HOOK.with(Hook::reached)
+    }
+}
+
 /// What relay detection does with a finding.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

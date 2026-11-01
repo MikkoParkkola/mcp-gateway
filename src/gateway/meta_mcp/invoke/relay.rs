@@ -173,6 +173,8 @@ impl MetaMcp {
             caller.api_key_name.unwrap_or("anonymous"),
         );
         let who = caller.relay_caller(session_id);
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
         let Some(refused) = self.relay_refusal(who, audit, target, egress) else {
             return Ok(());
         };
@@ -225,6 +227,8 @@ impl super::BridgeDispatcher<'_> {
             self.api_key_name.unwrap_or("anonymous"),
         );
         let target = (self.server, self.tool);
+        #[cfg(all(test, feature = "firewall"))]
+        crate::security::firewall::relay_witness_hook::run();
         let Some(refused) = self.meta.relay_refusal(self.relay, audit, target, &egress) else {
             return Ok(());
         };
@@ -589,6 +593,8 @@ pub(crate) use catalogue::{CatalogueCaller, as_caller};
 #[cfg(feature = "firewall")]
 pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
+#[cfg(test)]
+pub(crate) use staging::commit_capture_hook;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use staging::take_staged_for_test;
 pub(crate) use staging::{
