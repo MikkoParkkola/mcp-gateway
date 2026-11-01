@@ -197,6 +197,10 @@ mod truncate;
 pub mod trust;
 #[cfg(test)]
 mod unsafe_allowlist_tests;
+/// The 4.0.0 upgrade-notice data. Crate-internal API for the CLI binary, not
+/// supported for external use.
+#[doc(hidden)]
+pub mod upgrade_notice;
 #[doc(hidden)]
 pub mod validator;
 // Windows owner-only store custody and Credential Manager: `win_acl` and

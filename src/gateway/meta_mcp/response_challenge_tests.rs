@@ -172,7 +172,7 @@ fn assert_projected_refusal(error: &crate::Error) {
     assert_eq!(error.to_rpc_code(), -32600);
     let response =
         error_response_preserving_status(RequestId::String("caller-current-17".into()), error);
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(
