@@ -58,6 +58,35 @@ impl<'ast> Visit<'ast> for Print {
         self.0
             .push(format!("un{}", matches!(op, syn::UnOp::Neg(_))));
     }
+    /// A rebuild of the matched variant prints the same in either form:
+    /// `Error::JsonRpc { .. }` and `Error::backend_json_rpc(JsonRpcError { .. })`
+    /// print as one `JsonRpc` literal of their fields.
+    fn visit_expr(&mut self, expr: &'ast syn::Expr) {
+        const VARIANTS: [&str; 3] = ["JsonRpc", "BackendJsonRpc", "JsonRpcError"];
+        match expr {
+            syn::Expr::Struct(s)
+                if last_segment(&s.path).is_some_and(|n| VARIANTS.contains(&n.as_str())) =>
+            {
+                self.0.push("JsonRpc{".to_owned());
+                for field in &s.fields {
+                    self.visit_field_value(field);
+                }
+                if let Some(rest) = &s.rest {
+                    self.0.push("..".to_owned());
+                    self.visit_expr(rest);
+                }
+            }
+            syn::Expr::Call(c)
+                if c.args.len() == 1
+                    && matches!(c.args.first(), Some(syn::Expr::Struct(_)))
+                    && matches!(c.func.as_ref(), syn::Expr::Path(p)
+                        if last_segment(&p.path).is_some_and(|n| n == "backend_json_rpc")) =>
+            {
+                c.args.iter().for_each(|arg| self.visit_expr(arg));
+            }
+            _ => syn::visit::visit_expr(self, expr),
+        }
+    }
     fn visit_pat_rest(&mut self, _: &'ast syn::PatRest) {
         self.0.push("..".to_owned());
     }

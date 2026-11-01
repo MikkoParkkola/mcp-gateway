@@ -1,1 +1,15 @@
 # file	function	count	class	reason
+src/backend/era.rs	removed_method_refusal_message	1	gateway-only	reads the gateway-built removed-method mark
+src/error_origin.rs	origin	1	gateway-only	the origin map: BackendJsonRpc maps to Backend in its own arm
+src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	3	gateway-only	forwards the gateway's named recovery keys; backend data is dropped
+src/gateway/router/accounts/offer.rs	direct_refusal	1	excluded	gateway-built admission offer error, before dispatch
+src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	1	excluded	gateway-built admission offer error, before dispatch
+src/gateway/router/inflight_calls.rs	is_client_cancelled	1	excluded	the gateway's own cancel error, peer-proof
+src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	1	excluded	gateway-built admission offer error, before dispatch
+src/personal_accounts/refusal.rs	marked	1	gateway-only	the account refusal mark is the gateway's alone
+src/personal_accounts/refusal.rs	offer_data	1	excluded	keyed seal of a gateway-built refusal
+src/personal_accounts/refusal.rs	transient_data	1	excluded	keyed seal of a gateway-built refusal
+src/personal_accounts/refusal.rs	unmark	1	gateway-only	the account refusal mark is the gateway's alone
+src/personal_accounts/refusal.rs	upstream_rejection	1	excluded	keyed seal of a gateway-built refusal
+src/playbook/engine/mod.rs	step_reason	1	gateway-only	tool text built by tool_error only
+src/security/audit.rs	from_result	1	gateway-only	a gateway -32001/-32004 is a denial; a backend's is an error

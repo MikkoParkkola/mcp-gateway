@@ -14,8 +14,8 @@
 //!   per file.
 //!
 //! A new site, a moved call or a changed count fails and prints the row.
-//! What this cannot see: a literal outside a macro body (a raw string), a call
-//! inside a macro body, or a call passed by path.
+//! What this cannot see: a literal outside a macro body (a raw string), or a
+//! call passed by path.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -76,6 +76,32 @@ impl Sites {
             let func = at.func.clone().unwrap_or_else(|| "-".to_owned());
             *self.is_error.entry((at.file.clone(), func)).or_default() += found;
         }
+        // A call inside a macro body (`stream!`, `select!`) is read from its
+        // tokens: `name (` after a non-identifier token that is not `fn`.
+        let text = mac.tokens.to_string();
+        for name in SETTERS.iter().chain(&COUNTS) {
+            let spelled = format!("{} (", name.replace("::", " :: "));
+            for (i, _) in text.match_indices(&spelled) {
+                let before = text[..i].trim_end();
+                let joined = before.ends_with(|c: char| c.is_alphanumeric() || c == '_');
+                if !joined && !before.ends_with(" fn") && before != "fn" {
+                    self.call(at, name);
+                }
+            }
+        }
+    }
+
+    fn call(&mut self, at: &Place, name: &str) {
+        let kind = if SETTERS.contains(&name) {
+            "setter"
+        } else {
+            "count"
+        };
+        let key = (kind.to_owned(), name.to_owned(), at.file.clone());
+        *self.calls.entry(key).or_default() += 1;
+        let func = at.func.clone().unwrap_or_else(|| "-".to_owned());
+        let names = self.setters_in.entry((at.file.clone(), func)).or_default();
+        names.insert(name.to_owned());
     }
 }
 
@@ -90,18 +116,7 @@ impl Sink for Sites {
                 let Some(name) = call_name(&p.path) else {
                     return;
                 };
-                let kind = if SETTERS.contains(&name.as_str()) {
-                    "setter"
-                } else {
-                    "count"
-                };
-                let key = (kind.to_owned(), name.clone(), at.file.clone());
-                *self.calls.entry(key).or_default() += 1;
-                let func = at.func.clone().unwrap_or_else(|| "-".to_owned());
-                self.setters_in
-                    .entry((at.file.clone(), func))
-                    .or_default()
-                    .insert(name);
+                self.call(at, &name);
             }
             _ => {}
         }
@@ -260,6 +275,10 @@ fn an_added_site_fails_in_each_table() {
         (
             "fn more() { step_carried(None); }",
             "unlisted: setter\tstep_carried",
+        ),
+        (
+            "fn more() { let s = stream! { delivery_facts::wrapped_step(); }; }",
+            "unlisted: setter\twrapped_step",
         ),
         (
             "fn more() { count_framed(1, None, false); }",

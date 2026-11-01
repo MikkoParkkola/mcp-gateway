@@ -37,6 +37,9 @@ fn a_pattern_without_the_backend_alternative_fails() {
         "match e { Err(Error::JsonRpc { .. } | Error::BackendJsonRpc { .. }) => 1, _ => 0 };",
         "matches!(e, Error::JsonRpc { code: -1, .. } | Error::BackendJsonRpc { code: -1, .. });",
         "match e { Error::JsonRpc { code, .. } => code, Error::BackendJsonRpc { code, .. } => code, _ => 0 };",
+        "match e { Error::JsonRpc { code, message, data } => Error::JsonRpc { code, message: m, data }, \
+         Error::BackendJsonRpc { code, message, data } => \
+         Error::backend_json_rpc(JsonRpcError { code, message: m, data }), _ => e };",
     ] {
         assert_eq!(uncarried(carry), 0, "{carry}");
     }
