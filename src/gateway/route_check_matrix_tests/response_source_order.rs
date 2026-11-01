@@ -96,7 +96,7 @@ fn a_new_extractor_arm_reopens_mik_8707() {
 }
 
 /// Stdio's finalize step is `/mcp`'s with no router firewall: `finalize_content`
-/// only calls `finalize_routed(.., None)` (`response_security.rs:224-230`), so
+/// only calls `finalize_routed(.., None)` (its body in `response_security.rs`), so
 /// stdio's seal-then-sign and sign-then-record order is the one R-SIGN and
 /// R-RECSIGN drive on `/mcp`. A stdio tail that stops delegating fails here.
 #[test]
