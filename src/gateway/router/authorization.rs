@@ -654,13 +654,9 @@ pub(crate) struct RouterAuthorizer<'a> {
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub(super) cert_identity: Option<&'a CertIdentity>,
     /// The principal a refusal is recorded against, resolved once at
-    /// construction.
-    ///
-    /// Resolved and stored rather than derived in `caller_name`, which returns
-    /// a borrow and so could only ever hand back the API-key name. An
-    /// agent-authenticated or certificate-authenticated caller would otherwise
-    /// be audited as unauthenticated — and those are the refusals an incident
-    /// responder most needs to attribute.
+    /// construction: `caller_name` returns a borrow, so deriving it there
+    /// could only give the API-key name, and an agent- or certificate-
+    /// authenticated caller, whose refusals matter most, would read as none.
     pub(super) principal: Option<String>,
 }
 
