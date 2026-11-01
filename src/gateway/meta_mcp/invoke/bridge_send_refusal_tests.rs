@@ -92,10 +92,27 @@ async fn a_bridged_round_refused_at_its_send_ends_as_that_refusal() {
     backend.set_transport_for_test(Arc::new(AsksThenRefused {
         calls: Arc::clone(&calls),
     }));
+    let answer = bridged_invoke(backend, &Accepting).await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "premise: round two reached its send: {answer:?}"
+    );
+    match answer {
+        Err(crate::Error::Forbidden { code: -32001, .. }) => {}
+        other => panic!("the round's refusal, not the bridge's -32003: {other:?}"),
+    }
+}
+
+/// Invoke `asker`'s `book` as a legacy client that answers questions through
+/// `channel`, so a backend asking for input is bridged.
+async fn bridged_invoke(
+    backend: Arc<Backend>,
+    channel: &dyn ClientChannel,
+) -> crate::Result<Value> {
     let registry = Arc::new(BackendRegistry::new());
     let _ = registry.register(backend);
     let meta = MetaMcp::new(registry);
-    let channel = Accepting;
     let mut caller = ctx(&AllowAll);
     caller.era = crate::protocol::meta::Era::Legacy;
     caller.input_capabilities = crate::protocol::meta::classify_request(
@@ -106,19 +123,110 @@ async fn a_bridged_round_refused_at_its_send_ends_as_that_refusal() {
         None,
     )
     .declared_capabilities();
-    caller.channel = &channel;
+    caller.channel = channel;
     let args = json!({"server": "asker", "tool": "book", "arguments": {}});
-    let answer = meta
-        .invoke_tool(&args, Some("session-bridge-refusal"), &caller)
-        .await;
+    meta.invoke_tool(&args, Some("session-bridge-refusal"), &caller)
+        .await
+}
+
+/// Lists `book` once; every later list is refused at its send as the
+/// per-user lender refuses it. The first `tools/call` asks for input.
+struct AsksThenListRefused {
+    lists: Arc<AtomicUsize>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Transport for AsksThenListRefused {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        let body = if method == "tools/list" {
+            if self.lists.fetch_add(1, Ordering::SeqCst) > 0 {
+                return Err(lend_refusal());
+            }
+            json!({"tools": [{"name": "book", "inputSchema": {"type": "object"}}]})
+        } else if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            json!({
+                "resultType": "input_required",
+                "inputRequests": {"k1": {"method": "elicitation/create",
+                    "params": {"message": "Which account?", "requestedSchema": {"type": "object", "properties": {}}}}},
+                "requestState": "s1"
+            })
+        } else {
+            json!({"content": [{"type": "text", "text": "booked"}]})
+        };
+        Ok(crate::protocol::JsonRpcResponse::success_serialized(
+            RequestId::Number(1),
+            body,
+        ))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A client that accepts every question, after emptying the backend's
+/// catalogues: round two's key check then fills its slot cold.
+struct EmptiesThenAccepts {
+    backend: Arc<Backend>,
+}
+
+#[async_trait::async_trait]
+impl ClientChannel for EmptiesThenAccepts {
+    async fn send_request(
+        &self,
+        session_id: &str,
+        id: &str,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, DeliveryError> {
+        self.backend.empty_tool_catalogues_for_test();
+        Accepting.send_request(session_id, id, method, params).await
+    }
+}
+
+/// M5 (`bridged_refused_fill`): round two's cold fill refused at its send
+/// by the lender ends the exchange as that refusal, and no `tools/call` is
+/// sent after it.
+#[tokio::test]
+async fn a_bridged_rounds_cold_fill_refused_at_its_send_ends_as_that_refusal() {
+    let (lists, calls) = (Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0)));
+    let backend = Arc::new(Backend::new(
+        "asker",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(AsksThenListRefused {
+        lists: Arc::clone(&lists),
+        calls: Arc::clone(&calls),
+    }));
+    let channel = EmptiesThenAccepts {
+        backend: Arc::clone(&backend),
+    };
+    let answer = bridged_invoke(backend, &channel).await;
+    assert_eq!(
+        lists.load(Ordering::SeqCst),
+        2,
+        "premise: round two filled its emptied slot: {answer:?}"
+    );
     assert_eq!(
         calls.load(Ordering::SeqCst),
-        2,
-        "premise: round two reached its send: {answer:?}"
+        1,
+        "no tools/call after the refused fill: {answer:?}"
     );
     match answer {
         Err(crate::Error::Forbidden { code: -32001, .. }) => {}
-        other => panic!("the round's refusal, not the bridge's -32003: {other:?}"),
+        other => panic!("the fill's refusal, not the bridge's -32003: {other:?}"),
     }
 }
 

@@ -172,9 +172,9 @@ pub struct Backend {
     #[cfg(test)]
     pub(crate) unfilled_outcome_reads: std::sync::atomic::AtomicUsize,
     /// Test-only (MIK-9129): loans this backend's lent-only slots refused
-    /// (`lend_to_slot`), counted per backend so a row owns its count.
+    /// (`lend_to_slot`), counted per binding, so a row reads its caller's own.
     #[cfg(test)]
-    pub(crate) lend_refusals: std::sync::atomic::AtomicUsize,
+    pub(crate) lend_refusals: parking_lot::Mutex<std::collections::HashMap<String, usize>>,
     /// Consecutive health-probe answers this peer declined to serve
     /// (MIK-7217, OUTBOUND.2).
     ///

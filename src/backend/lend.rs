@@ -25,8 +25,13 @@ impl Backend {
         }
         if credential.headers.is_empty() {
             #[cfg(test)]
-            self.lend_refusals
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if let super::pool::PoolKey::PerUser { binding } = key {
+                *self
+                    .lend_refusals
+                    .lock()
+                    .entry(binding.clone())
+                    .or_default() += 1;
+            }
             return Err(Error::Forbidden {
                 code: -32001,
                 status: 403,

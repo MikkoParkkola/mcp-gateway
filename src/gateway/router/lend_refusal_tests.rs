@@ -521,12 +521,11 @@ async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
     let (status, answer) =
         meta_call(&router, "gateway_run_playbook", json!({"name": "plan"})).await;
     let backend = meta.backends().get(BACKEND).expect("the backend");
+    let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
     assert_eq!(
-        backend
-            .lend_refusals
-            .load(std::sync::atomic::Ordering::SeqCst),
-        1,
-        "the lender refused the step's fill once: {status} {answer}"
+        refusals,
+        [1],
+        "the lender refused the caller's binding once: {status} {answer}"
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let text = answer.to_string();
