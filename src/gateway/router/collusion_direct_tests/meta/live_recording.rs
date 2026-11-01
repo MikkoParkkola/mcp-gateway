@@ -89,11 +89,16 @@ async fn keyed_chain(fx: &Fixture, key: &str) -> StoredKey {
         .expect("premise: the keyed chain was admitted");
     let digest: [u8; 32] = sha2::Sha256::digest(b"a").into();
     let principal = super::super::key(b"a", "alice").principal_for(&digest);
-    let (identity, operation) = crate::gateway::meta_mcp::invoke::relay::sync_replay_key(
-        principal.storage_form(),
-        key,
-        &operation,
+    // Admission keys under `execution_principal(owner)`: the routed owner
+    // first, which for an API-key client is `credential:<principal>`
+    // (`session_owner_key`, pinned by `route_owners_with_auth_on`).
+    let owner = format!(
+        "{}{}",
+        crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
+        principal.storage_form()
     );
+    let (identity, operation) =
+        crate::gateway::meta_mcp::invoke::relay::sync_replay_key(&owner, key, &operation);
     StoredKey::Sync {
         identity,
         round: String::new(),
