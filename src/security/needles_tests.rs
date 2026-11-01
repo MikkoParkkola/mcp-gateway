@@ -392,6 +392,14 @@ fn a_backends_own_error_echoing_a_value_is_scrubbed() {
         let answer = super::scrub_answer(&needles, answer);
         let text = format!("{answer:?}");
         assert!(!text.contains("token-one-value"), "{name}: {text}");
+        // The frame a client is sent, data included, carries no value either.
+        let error = answer.as_ref().expect_err("an error answer");
+        let frame = serde_json::to_string(&crate::protocol::JsonRpcResponse::of_error(
+            Some(crate::protocol::RequestId::Number(1)),
+            error,
+        ))
+        .expect("the frame serialises");
+        assert!(!frame.contains("token-one-value"), "{name}: {frame}");
         let Err(crate::Error::BackendJsonRpc {
             code: -32001,
             message,

@@ -100,11 +100,18 @@ fn the_scrubs_refusal_is_the_gateways_and_a_peer_answer_the_backends() {
             data: None,
         })
     };
+    let backend = |code, message: &str| {
+        Err(Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: None,
+        }))
+    };
     let origin = |answer: crate::Result<JsonRpcResponse>| match answer {
         Err(error) => Some(error.origin()),
         Ok(_) => None,
     };
-    let rows: [(&str, crate::Result<JsonRpcResponse>, Option<Origin>); 4] = [
+    let rows: [(&str, crate::Result<JsonRpcResponse>, Option<Origin>); 7] = [
         (
             "a clean retryable error",
             retryable(-32000, "busy"),
@@ -127,6 +134,21 @@ fn the_scrubs_refusal_is_the_gateways_and_a_peer_answer_the_backends() {
                 739_154,
                 "nope",
             )),
+            Some(Origin::Gateway),
+        ),
+        (
+            "a backend's own error, clean",
+            backend(-32001, "no"),
+            Some(Origin::Backend),
+        ),
+        (
+            "a backend's own error carrying a value, redacted",
+            backend(-32001, "no 0739154"),
+            Some(Origin::Backend),
+        ),
+        (
+            "a backend's own error whose code is a value, replaced",
+            backend(739_154, "no"),
             Some(Origin::Gateway),
         ),
     ];
