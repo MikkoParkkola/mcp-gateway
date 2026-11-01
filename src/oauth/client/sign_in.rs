@@ -398,9 +398,11 @@ impl OAuthClient {
         let discovered = self.discover_documents().await?;
         #[cfg(all(test, feature = "webui"))]
         self.rediscovery_pause.pause().await;
-        let Some(status) = self.sign_in_status.clone() else {
-            return Ok(());
-        };
+        // `issuer_differs` held, so the client has a cell.
+        let status = self
+            .sign_in_status
+            .clone()
+            .expect("an install under another issuer implies a status cell");
         let found = super::storage_key(&self.backend_name, &discovered.auth.issuer);
         if status.install_key().as_deref() != Some(found.as_str()) {
             *self.current_token.write() = None;

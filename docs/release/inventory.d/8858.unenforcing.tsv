@@ -29,3 +29,8 @@ src/oauth/client/sign_in.rs	bump_installed	1	Counts a confirmed sign-in once its
 src/oauth/client/sign_in.rs	set_held	1	Stores a held token's expiry and refreshability for the status; it gates no request.
 src/oauth/login_gate.rs	attempt	1	Hands out the login attempt whose finish a decision awaits.
 src/oauth/client/grants.rs	register_for_login	1	Registers the login's client id, ending at a cancel or the deadline; the issuer check stays in issue_token.
+src/oauth/client/mod.rs	commit_discovery	1	Keeps the documents discovery fetched and loads the credential stored under their issuer; the checks are in discover_documents.
+src/oauth/client/sign_in.rs	record_install	1	Stores the install key before the count is bumped.
+src/oauth/client/sign_in.rs	install_key	1	Reads the latest install key.
+src/oauth/client/sign_in.rs	settled_publisher	1	Builds the hook that publishes a settled refresh to the status; it gates no request.
+src/oauth/client/sign_in.rs	issuer_wait	1	Builds the sign-in wait answer; the decision is in issuer_differs.
