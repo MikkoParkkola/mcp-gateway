@@ -12,8 +12,8 @@ src/gateway/meta_mcp/invoke/dispatch_guards.rs	firewall_refusal_body	1	response-
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	1	a gate's own refusal; gateway-origin frame
 src/gateway/meta_mcp/invoke/send.rs	send	1	stored idempotency failure body; a replay loses the origin (known limit, register row 251)
 src/gateway/meta_mcp/invoke/stored_proof.rs	lift_deferred	1	grant and JSON-RPC refusals only; gateway-origin frame
-src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	1	response-firewall arm only; every other error goes through of_error
-src/gateway/meta_mcp/response_security.rs	recovered_result_error	1	gateway recovery refusal; gateway-origin frame
+src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	1	response-firewall arm only; every other error goes through of_error
+src/gateway/meta_mcp/response_security/error_answers.rs	recovered_result_error	1	gateway recovery refusal; gateway-origin frame
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/meta_mcp/signing.rs	admit_signing_nonce_stamped	1	picks the decision-record kind of a refused signing nonce (the gateway's own nonce store); no frame
 src/gateway/outbound/audit.rs	recorded	1	audit-unavailable refusal; gateway-origin frame

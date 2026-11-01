@@ -8,111 +8,12 @@ pub(crate) use crate::security::response_policy::{ResponseCorrelation, ResponseP
 use crate::error::rpc_codes::INTERNAL_ERROR;
 use std::sync::Arc;
 
-use super::MetaMcp;
-use crate::attestation::BnautAttestationSigner;
-
-/// Result-shaping signers, set once at startup before the router serves calls.
-impl MetaMcp {
-    /// Enable signed runtime provenance stamping (MIK-6905, rung 1.2).
-    ///
-    /// When set, every aggregated tool result is stamped with a signed
-    /// `_meta.provenance` receipt. Off by default; the field is `None` unless
-    /// this is called, so the stamping branch never runs on the hot path
-    /// otherwise.
-    pub fn enable_provenance_stamping(&mut self, signer: BnautAttestationSigner) {
-        self.provenance_signer = Some(Arc::new(signer));
-    }
-
-    /// Enable public (Ed25519) provenance stamping (MIK-8398).
-    ///
-    /// When set alongside the HMAC signer, every stamped result also carries
-    /// a publicly verifiable Ed25519 signature.
-    pub(crate) fn enable_public_provenance(
-        &mut self,
-        signer: crate::trust::provenance_public::ProvenancePublicSigner,
-    ) {
-        self.public_provenance_signer = Some(Arc::new(signer));
-    }
-
-    /// The public provenance signer, when one is installed: Activity signs
-    /// its export manifests with the same key.
-    #[cfg(feature = "webui")]
-    pub(crate) fn public_provenance_signer(
-        &self,
-    ) -> Option<Arc<crate::trust::provenance_public::ProvenancePublicSigner>> {
-        self.public_provenance_signer.clone()
-    }
-
-    /// Whether a public provenance signer is installed (tests only).
-    #[cfg(test)]
-    pub(crate) fn public_provenance_installed(&self) -> bool {
-        self.public_provenance_signer.is_some()
-    }
-
-    /// Enable ASI07 origin-link emission, with increment-3 defaults for the
-    /// verification trust (no trusted keys, 8 links, 300 s window).
-    pub(crate) fn set_chain_signer(
-        &mut self,
-        signer: crate::security::signature_chain::ChainSigner,
-        emit: crate::config::ChainEmit,
-    ) {
-        self.chain_signer = Some(Arc::new(ChainIdentity {
-            signer,
-            emit,
-            max_links: crate::security::signature_chain::MAX_CHAIN_LINKS,
-            trusted_keys: std::collections::BTreeMap::new(),
-            replay_window: 300,
-        }));
-    }
-
-    /// Set what upstream chains are verified against (inc3 D3).
-    pub(crate) fn set_chain_trust(
-        &mut self,
-        max_links: usize,
-        trusted_keys: TrustedKeys,
-        replay_window: u64,
-    ) {
-        if let Some(identity) = self.chain_signer.as_mut().and_then(Arc::get_mut) {
-            identity.max_links = max_links;
-            identity.trusted_keys = trusted_keys;
-            identity.replay_window = replay_window;
-        }
-    }
-
-    /// Enable shadow claim capture (MIK-6908, rung 3.1).
-    ///
-    /// Only has an observable effect once `provenance_signer` is also
-    /// `Some` — capture runs alongside stamping at the same chokepoint, not
-    /// independently of it.
-    pub fn enable_claim_capture(&mut self, sink: Arc<crate::trust::ClaimCaptureSink>) {
-        self.claim_capture = Some(sink);
-    }
-}
-
 /// A `gateway_invoke` result with its chain eligibility and upstream outcome.
 pub(crate) type Sourced = (
     serde_json::Value,
     ChainSource,
     Option<std::sync::Arc<crate::protocol::UpstreamChain>>,
 );
-
-/// `security.remote_server_signing.trusted_keys`.
-pub(crate) type TrustedKeys = std::collections::BTreeMap<
-    String,
-    crate::security::remote_provenance::TrustedRemoteServerKeyConfig,
->;
-
-/// This gateway's chain identity and what it verifies upstream chains
-/// against (ASI07 increments 2 and 3).
-pub(crate) struct ChainIdentity {
-    pub(crate) signer: crate::security::signature_chain::ChainSigner,
-    pub(crate) emit: crate::config::ChainEmit,
-    /// [`crate::security::signature_chain::MAX_CHAIN_LINKS`] in production.
-    pub(crate) max_links: usize,
-    pub(crate) trusted_keys: TrustedKeys,
-    /// `security.message_signing.replay_window`, seconds.
-    pub(crate) replay_window: u64,
-}
 
 /// Map an authenticated external operation to its response-policy targets.
 pub(crate) fn meta_response_targets(
@@ -644,6 +545,12 @@ impl DeliveryCredential {
     }
 }
 
+mod error_answers;
+pub(crate) use error_answers::{error_response_preserving_status, recovered_result_error};
+
+mod signers;
+pub(crate) use signers::ChainIdentity;
+
 mod delivery_record;
 pub(in crate::gateway) use delivery_record::record_answer_delivery;
 
@@ -657,21 +564,6 @@ mod challenge_tests;
 #[cfg(all(test, feature = "firewall"))]
 #[path = "response_delivery_tests.rs"]
 mod delivery_tests;
-
-/// A playbook step failure's tool text (MIK-8429 D3), forwarded so an
-/// aborted plan still tells its caller why. Only a string within the
-/// playbook's cap: the key is named, not the whole object, and a backend's
-/// error data carrying the same key cannot push more text through it.
-fn capped_tool_text(data: &serde_json::Value) -> Option<(String, serde_json::Value)> {
-    let text = data.get(crate::playbook::TOOL_TEXT_DATA_KEY)?.as_str()?;
-    // One more than the cap: the cut marker the playbook appends.
-    (text.chars().count() <= crate::playbook::TOOL_TEXT_CAP + 1).then(|| {
-        (
-            crate::playbook::TOOL_TEXT_DATA_KEY.to_string(),
-            serde_json::Value::from(text),
-        )
-    })
-}
 
 #[cfg(test)]
 #[path = "chain_emission_tests.rs"]
@@ -692,116 +584,4 @@ impl super::MetaMcp {
     pub(crate) fn transparency_log(&self) -> Option<&Arc<crate::security::TransparencyLogger>> {
         self.transparency_logger.as_ref()
     }
-}
-
-/// The error a recovered task result settles on when the gateway's own
-/// processing refuses it: a firewall refusal as a native task and the
-/// synchronous call report it (-32600, MIK-7667), anything else as internal.
-pub(crate) fn recovered_result_error(error: &crate::Error) -> crate::protocol::JsonRpcError {
-    if matches!(error, crate::Error::ResponseFirewallRefused)
-        && let Some(refusal) = crate::protocol::JsonRpcResponse::delivery_refusal_error(
-            None,
-            error.to_rpc_code(),
-            &error.to_string(),
-        )
-        .error
-    {
-        return refusal;
-    }
-    crate::protocol::JsonRpcError {
-        code: INTERNAL_ERROR,
-        message: error.to_string(),
-        data: None,
-    }
-}
-
-/// Turn a dispatch error into a JSON-RPC error response, keeping the HTTP
-/// status when the error is an authorization refusal.
-///
-/// The refusal already knows its status; every other error does not carry one
-/// and gets the caller's default. The status rides in the error's optional
-/// `data` because that is the only channel that survives this conversion —
-/// `JsonRpcResponse` has no status of its own, and re-deriving one at the HTTP
-/// boundary from the JSON-RPC code cannot work: eight of the nine refusal
-/// branches emit the generic `-32600`, and `-32003` already means something
-/// else elsewhere.
-pub(crate) fn error_response_preserving_status(
-    id: crate::protocol::RequestId,
-    error: &crate::Error,
-) -> crate::protocol::JsonRpcResponse {
-    crate::gateway::delivery_facts::outlet(error);
-    let mut response = match error {
-        crate::Error::ResponseFirewallRefused => {
-            crate::protocol::JsonRpcResponse::delivery_refusal_error(
-                Some(id),
-                error.to_rpc_code(),
-                &error.to_string(),
-            )
-        }
-        _ => crate::protocol::JsonRpcResponse::of_error(Some(id), error),
-    };
-    if let Some(ref mut rpc_error) = response.error {
-        // Written unconditionally, so this function is the sole authority on
-        // the field. `JsonRpcResponse::error` starts it at `None` and nothing
-        // else in the gateway writes it today, but a future path that forwarded
-        // a backend's error data could otherwise hand a backend the power to
-        // choose the gateway's HTTP status. Assigning both arms closes that
-        // without depending on the audit staying true.
-        rpc_error.data = match error {
-            crate::Error::Forbidden { status, .. } => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: status,
-            })),
-            // D1-f: the log is down, not the caller wrong. 503 so an operator
-            // and a load balancer read it as unavailability.
-            crate::Error::AuditUnavailable => Some(serde_json::json!({
-                crate::gateway::authz::HTTP_STATUS_DATA_KEY: 503,
-            })),
-            // Gateway-authored, so its fixed fields go out whole.
-            crate::Error::AmbiguousBackend { .. } => error.ambiguous_backend_data(),
-            // A gateway-authored refusal may carry a recovery payload the
-            // client needs: MRTR.9 names the capability an input request would
-            // have required and MRTR.9a the mode, which is the difference
-            // between a client that can fix its declaration and retry and one
-            // that only sees prose. Named keys only, never the whole object:
-            // `invoke_tool` puts a *backend's* error data into this variant, and
-            // forwarding it wholesale would hand a backend the status field.
-            crate::Error::JsonRpc {
-                data: Some(data), ..
-            } => {
-                let forwarded: serde_json::Map<String, serde_json::Value> = [
-                    super::invoke::REQUIRED_CAPABILITIES_DATA_KEY,
-                    super::invoke::UNSUPPORTED_ELICITATION_MODE_DATA_KEY,
-                ]
-                .into_iter()
-                .filter_map(|key| Some((key.to_string(), data.get(key)?.clone())))
-                .chain(capped_tool_text(data))
-                .collect();
-                // `None` rather than `{}`: a backend error carrying none of these
-                // keys leaves `data` absent exactly as when one key was forwarded.
-                (!forwarded.is_empty()).then_some(serde_json::Value::Object(forwarded))
-            }
-            _ => None,
-        };
-        // A connect offer only under the gateway's own seal (MIK-6745, ADR-008).
-        // An offer's text is the gateway's own, so it goes out without the
-        // JSON-RPC prefix Display adds. Gated on the offer keys, not the seal:
-        // a sealed upstream rejection forwards `{}` and keeps its text, as does
-        // any unsealed error (MIK-7559).
-        let offer = crate::personal_accounts::refusal::offer_data(error);
-        let is_offer = offer
-            .as_ref()
-            .and_then(serde_json::Value::as_object)
-            .is_some_and(|keys| !keys.is_empty());
-        if let (true, crate::Error::JsonRpc { message, .. }) = (is_offer, error) {
-            rpc_error.message.clone_from(message);
-        }
-        // A sealed transient answer likewise goes out with its own text and
-        // its retryable data (MIK-8392 Busy parity), never a backend's.
-        let transient = crate::personal_accounts::refusal::transient_data(error);
-        if let (true, crate::Error::JsonRpc { message, .. }) = (transient.is_some(), error) {
-            rpc_error.message.clone_from(message);
-        }
-        rpc_error.data = transient.or(offer).or(rpc_error.data.take());
-    }
-    response
 }
