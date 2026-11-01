@@ -304,3 +304,54 @@ fn a_chain_ending_on_a_backends_error_counts_as_backend() {
     );
     assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
 }
+
+/// N13: a chain ending on a backend's refused argument (INVALID_PARAMS)
+/// counts once as `backend`: the chain keeps the backend's error.
+#[test]
+fn a_chain_ending_on_a_backends_refused_argument_counts_as_backend() {
+    let ((_, answer), text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32602), |_| {}).await;
+        execute(&fx, true).await
+    });
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// M2: on the meta route a backend's error shaped as the gateway's account
+/// refusal is folded like any backend error and counts as the backend's; it
+/// is never answered as the account refusal.
+#[test]
+fn a_backends_account_shaped_error_on_the_meta_route_is_a_tool_error() {
+    let ((_, answer), text) = counted(async {
+        let fx = fixture(Answer::FailsWith(peer_account_shaped), |_| {}).await;
+        invoke(&fx).await
+    });
+    let folded = folded_text(&answer);
+    assert!(
+        folded.contains("connect your account"),
+        "the backend's own text: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
+}
+
+/// N10: a plan that carries on past a backend's error (reported) and then
+/// meets a gateway refusal (an absent tool) counts once, as the gateway's
+/// kind: the gateway's failure outweighs the backend's.
+#[test]
+fn a_plan_with_a_backends_error_and_a_gateway_refusal_counts_the_gateways() {
+    let definition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "p", "description": "two steps",
+        "on_error": "continue",
+        "steps": [
+            {"name": "s0", "tool": "read", "server": "alpha", "arguments": {}},
+            {"name": "s1", "tool": "no_such_tool", "server": "alpha", "arguments": {}}
+        ]
+    }))
+    .expect("the playbook deserialises");
+    let ((_, answer), text) = counted(async {
+        let fx = serving(Answer::RpcError(-32001), definition).await;
+        run_p(&fx).await
+    });
+    let counts = all(&text);
+    assert_eq!(counts[3], 0, "counted as the backend's: {answer}\n{text}");
+    assert_eq!(counts.iter().sum::<u64>(), 1, "{answer}\n{text}");
+}
