@@ -87,10 +87,12 @@ impl Sites {
         // A call inside a macro body (`stream!`, `select!`) is read from its
         // tokens: `name (` after a non-identifier token that is not `fn`.
         let text = mac.tokens.to_string();
-        if text.contains("get :: < RpcError > ()") {
+        // Token text spacing is the printer's: compare with it removed.
+        let packed: String = text.split_whitespace().collect();
+        if packed.contains("get::<RpcError>()") {
             self.marker_reads.insert(place(at));
         }
-        if text.contains("extensions_mut () . insert (") {
+        if packed.contains("extensions_mut().insert(") {
             self.marker_inserts.insert(place(at));
         }
         for name in SETTERS.iter().chain(&COUNTS) {
@@ -181,7 +183,11 @@ fn marker_path(sites: &Sites) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, names) in &sites.setters_in {
         let (file, func) = key;
-        let counts = names.contains("count_answer") || names.contains("count_framed");
+        // The count functions themselves take the marker as a parameter.
+        let forwards = file == "src/gateway/health_metrics/layers.rs"
+            && matches!(func.as_str(), "count_answer" | "count_framed");
+        let counts =
+            !forwards && (names.contains("count_answer") || names.contains("count_framed"));
         if counts && !sites.marker_reads.contains(key) {
             wrong.push(format!("counts without reading the marker: {file}\t{func}"));
         }

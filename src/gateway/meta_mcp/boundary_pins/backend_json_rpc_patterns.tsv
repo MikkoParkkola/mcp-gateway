@@ -1,15 +1,16 @@
-# file	function	count	class	reason
-src/backend/era.rs	removed_method_refusal_message	1	gateway-only	reads the gateway-built removed-method mark
-src/error_origin.rs	origin	1	gateway-only	the origin map: BackendJsonRpc maps to Backend in its own arm
-src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	3	gateway-only	forwards the gateway's named recovery keys; backend data is dropped
-src/gateway/router/accounts/offer.rs	direct_refusal	1	excluded	gateway-built admission offer error, before dispatch
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	1	excluded	gateway-built admission offer error, before dispatch
-src/gateway/router/inflight_calls.rs	is_client_cancelled	1	excluded	the gateway's own cancel error, peer-proof
-src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	1	excluded	gateway-built admission offer error, before dispatch
-src/personal_accounts/refusal.rs	marked	1	gateway-only	the account refusal mark is the gateway's alone
-src/personal_accounts/refusal.rs	offer_data	1	excluded	keyed seal of a gateway-built refusal
-src/personal_accounts/refusal.rs	transient_data	1	excluded	keyed seal of a gateway-built refusal
-src/personal_accounts/refusal.rs	unmark	1	gateway-only	the account refusal mark is the gateway's alone
-src/personal_accounts/refusal.rs	upstream_rejection	1	excluded	keyed seal of a gateway-built refusal
-src/playbook/engine/mod.rs	step_reason	1	gateway-only	tool text built by tool_error only
-src/security/audit.rs	from_result	1	gateway-only	a gateway -32001/-32004 is a denial; a backend's is an error
+# file	function	anchor (the pattern printed, BackendJsonRpc read as JsonRpc)	count	class	reason
+src/backend/era.rs	removed_method_refusal_message	crate Error JsonRpc code code message message data Some data	1	gateway-only	reads the gateway-built removed-method mark
+src/error_origin.rs	origin	Self Config _ Self Forbidden .. Self ResponseFirewallRefused Self AuditUnavailable Self ConfigValidation _ Self ConfigWatcher _ Self CapabilityHashMismatch .. Self BackendNotFound _ Self AmbiguousBackend .. Self RateLimited _ Self IdentitySlotsExhausted .. Self ToolNotFound _ Self Protocol _ Self ProtocolVersionRejected .. Self OAuth _ Self AuthorizationIncomplete .. Self AuthorizationCancelled .. Self AuthorizationRequired .. Self AuthorizationPending .. Self Tls _ Self JsonRpc .. Self GatewayRefused .. Self CliCredentialRefused .. Self Io _ Self Json _ Self Http _ Self Shutdown Self Internal _	1	gateway-only	the origin map: BackendJsonRpc maps to Backend in its own arm
+src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	crate Error JsonRpc data Some data ..	1	gateway-only	forwards only the gateway's named recovery keys; a backend's data is dropped
+src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	true crate Error JsonRpc message message ..	2	gateway-only	a sealed account offer or transient answer keeps the gateway's own text
+src/gateway/router/accounts/offer.rs	direct_refusal	Some Error JsonRpc message message .. Some data	1	excluded	gateway-built admission offer error, before dispatch
+src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	crate Error JsonRpc data Some data ..	1	excluded	gateway-built admission offer error, before dispatch
+src/gateway/router/inflight_calls.rs	is_client_cancelled	crate Error JsonRpc code code message message data None	1	excluded	the gateway's own cancel error, peer-proof
+src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	crate Error JsonRpc data Some data ..	1	excluded	gateway-built admission offer error, before dispatch
+src/personal_accounts/refusal.rs	marked	Error JsonRpc code MARKED message message data Some data	1	gateway-only	the account refusal mark is the gateway's alone
+src/personal_accounts/refusal.rs	offer_data	Error JsonRpc data Some data ..	1	excluded	keyed seal of a gateway-built refusal
+src/personal_accounts/refusal.rs	transient_data	Error JsonRpc data Some data ..	1	excluded	keyed seal of a gateway-built refusal
+src/personal_accounts/refusal.rs	unmark	Error JsonRpc message message ..	1	gateway-only	the account refusal mark is the gateway's alone
+src/personal_accounts/refusal.rs	upstream_rejection	Error JsonRpc data Some data ..	1	excluded	keyed seal of a gateway-built refusal
+src/playbook/engine/mod.rs	step_reason	crate Error JsonRpc data Some data ..	1	gateway-only	tool text built by tool_error only
+src/security/audit.rs	from_result	Err Error JsonRpc code code ..	1	gateway-only	a gateway -32001/-32004 is a denial; a backend's is an error
