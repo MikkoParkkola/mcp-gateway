@@ -212,14 +212,18 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         lone_target: true,
         ..DeliveryFacts::default()
     };
-    let (output, refused, folded) = FACTS
+    let (output, refused, folded, error_of) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
-            let (refused, folded) = FACTS.with(|cell| {
+            let (refused, folded, error_of) = FACTS.with(|cell| {
                 let cell = cell.borrow();
-                (cell.effect == ResponseEffect::Refused, cell.folded)
+                (
+                    cell.effect == ResponseEffect::Refused,
+                    cell.folded,
+                    cell.error_of,
+                )
             });
-            (output, refused, folded)
+            (output, refused, folded, error_of)
         })
         .await;
     with(|facts| {
@@ -228,8 +232,11 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
         } else {
             LastStep::Settled
         };
-        // Only the latest step's fold: a later step replaces it.
+        // Only the latest step's fold: a later step replaces it, and so
+        // does whether the step's error wraps it (the bridge's -32003 inside
+        // a single execute), which the delivered error then counts as.
         facts.last_step_folded = folded;
+        facts.error_of = error_of;
     });
     output
 }
@@ -289,16 +296,22 @@ pub(crate) fn gateway_folded(code: i32) {
 
 /// The composite's answer carries its latest step's outcome (a playbook
 /// reporting a step it continued past, a single-tool execute delivering its
-/// step's answer as its own): the step's fold if it had one, else `error`,
-/// the step's typed failure. Call before [`step_absorbed`].
+/// step's answer as its own): `error`, the step's typed failure, unless it
+/// wraps the step's fold (`wrapped_step`, `step_tool_failed`) or there is
+/// none; then the step's fold. A typed error that replaced the step's folded
+/// answer (a gate's refusal) is counted as itself. Call before
+/// [`step_absorbed`].
 pub(crate) fn step_carried(error: Option<&crate::Error>) {
     with(|facts| {
-        let carried = facts.last_step_folded.take().or_else(|| {
-            error.map(|e| RpcError {
-                code: e.to_rpc_code(),
-                origin: e.origin(),
-            })
+        let fold = facts.last_step_folded.take();
+        let own = error.map(|e| RpcError {
+            code: e.to_rpc_code(),
+            origin: e.origin(),
         });
+        let carried = match facts.error_of {
+            ErrorOf::EndedStep => fold.or(own),
+            ErrorOf::Own => own.or(fold),
+        };
         facts.folded = worst(facts.folded, carried);
     });
 }
