@@ -16,7 +16,7 @@ fn without_middle(pieces: &[String]) -> String {
         .iter()
         .enumerate()
         .filter(|(k, _)| *k != middle)
-        .map(String::as_str)
+        .map(|(_, piece)| piece.as_str())
         .collect()
 }
 
