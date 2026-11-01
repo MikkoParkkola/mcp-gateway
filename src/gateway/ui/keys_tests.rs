@@ -104,6 +104,16 @@ impl Fixture {
     async fn new() -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(dir.path().join("mu.digest"), spec(MU)).expect("write");
+        // The loader refuses a secret file other users can read.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(
+                dir.path().join("mu.digest"),
+                std::fs::Permissions::from_mode(0o600),
+            )
+            .expect("chmod 600");
+        }
         let log = log_in(&dir);
         let (state, router_dir) = crate::gateway::router::tests::audience_state(
             &AuthConfig::default(),
