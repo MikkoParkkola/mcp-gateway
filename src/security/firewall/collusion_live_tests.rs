@@ -391,10 +391,10 @@ fn sg6_the_witness_follows_the_view_action_both_ways() {
 
 /// Alice's plan receipt of `alpha:read` delivering [`PROSE`], kept to the
 /// plan's answer and snapshotted for replay.
-fn plan_snapshot(rig: &Rig) -> super::collusion_digest::ReplayReceipt {
+fn plan_snapshot(rig: &Rig, text: &str) -> super::collusion_digest::ReplayReceipt {
     let staged = super::PlanStaging::default();
     staged.set_caller("alice");
-    let step = serde_json::json!({"body": PROSE});
+    let step = serde_json::json!({"body": text});
     let digest = rig
         .firewall
         .receipt_digest("alpha", "read", &step, Some(&staged))
@@ -416,7 +416,7 @@ fn replayed_verdict(reload: bool) -> crate::security::firewall::FirewallVerdict 
     let mut cfg = config(Block, &["alpha:*"], vec![]);
     cfg.security.firewall.collusion.window_secs = 1;
     let rig = Rig::new(cfg);
-    let snapshot = plan_snapshot(&rig);
+    let snapshot = plan_snapshot(&rig, PROSE);
     rig.lapse(std::time::Duration::from_secs(2));
     if reload {
         rig.reload(|c| c.security.firewall.collusion.sources = vec![]);
@@ -443,5 +443,36 @@ fn p8_9a_a_replayed_receipt_follows_the_current_lists() {
     assert!(
         !refused(&verdict),
         "P8.9a: the replay kept the old list match"
+    );
+}
+
+/// O5.2b: a replay re-decides retention under the current lists. Alice's plan
+/// delivery of a one-fingerprint text from a listed source is snapshotted;
+/// after the window and a reload that unlists the source, her cap is filled
+/// and the snapshot replayed: the receipt is plain now, does not fit, and is
+/// dropped, so bob relaying the text is allowed. RED on base: the snapshot's
+/// stored bit overflows it, which refuses bob.
+#[test]
+fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
+    let text = super::collusion_live_rig::one_fp(1);
+    let mut cfg = config(Block, &["alpha:*"], vec![flow("fill:*", "alpha:send")]);
+    cfg.security.firewall.collusion.window_secs = 1;
+    let rig = Rig::new(cfg);
+    let snapshot = plan_snapshot(&rig, &text);
+    rig.lapse(std::time::Duration::from_secs(2));
+    rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
+    let g1 = rig.generation();
+    for i in 0..64 {
+        let tool = i.to_string();
+        rig.deliver("alice", ("fill", &tool), &plain(&text), &g1);
+    }
+    let replayed = super::DeliveryDigest::of_replay_receipt(&snapshot);
+    let alice = super::RelayCaller::Keyed("alice");
+    rig.firewall
+        .record_digest(alice, "alpha", "read", &replayed, &g1);
+    let verdict = rig.relays("bob", SEND, &text, &g1);
+    assert!(
+        !refused(&verdict),
+        "O5.2b: the replay kept the stored class"
     );
 }

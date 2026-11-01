@@ -327,3 +327,20 @@ fn o5_3_the_last_reference_frees_the_interned_source() {
     let _ = bob(&rig, &rig.generation(), &t, plus(now, 601));
     assert_eq!(detector(&rig).interned_sources_for_test(), before, "O5.3");
 }
+
+/// O5.2a: retention at the cap uses the lists of the generation the record is
+/// made under. Lists change before recording; under cap pressure the source
+/// listed now overflows as a pair and the one no longer listed is dropped.
+/// RED on base at the pairs assertion.
+#[test]
+fn o5_2a_retention_uses_the_recording_generations_lists() {
+    let (rig, t, now) = (rig(&["fill:*", "src:s"]), one_fp(0), Instant::now());
+    rig.reload(|c| {
+        c.security.firewall.collusion.sources = vec!["fill:*".to_string(), "src:p".to_string()];
+    });
+    let g1 = rig.generation();
+    fill_cap(&rig, &g1, "carol", &t, now);
+    record(&rig, &g1, ("src:s", "carol"), &t, now);
+    record(&rig, &g1, ("src:p", "carol"), &t, now);
+    assert_eq!(pairs(&rig, &t, "carol"), [("src:p".to_string(), false)]);
+}
