@@ -13,10 +13,11 @@
 //! check: a mapping read routed through a helper in another function is
 //! missed, as an alias is missed in the other pins.
 //!
-//! One judge must read the live mapping for good: the delivery judge with no
-//! request behind it (`auth_live::current_client`, which rechecks an open
-//! stream). It judges each delivery by the generation current then, so a role
-//! removed by a reload stops a stream already open. Today it reaches the
+//! One judge must read the live mapping for good: the judge of a delivery
+//! with no request behind it, `auth_live::current_caller`, which stream
+//! rechecks reach through `current_client` and the view judge and the UI
+//! stream call directly. It judges each delivery by the generation current
+//! then, so a role removed by a reload stops a stream already open. Today it reaches the
 //! mapping through `key_server_credential`, which the request path shares, so
 //! that function's one row covers both callers until the request path moves
 //! to the pinned generation. The change that moves it deletes that row, or
@@ -167,6 +168,13 @@ fn role_checks_read_the_pinned_mapping() {
             .iter()
             .any(|(file, _)| file.starts_with("src/gateway/ui/")),
         "premise: the scan sees the UI's role-mapping reads"
+    );
+    assert!(
+        reads
+            .mapping
+            .iter()
+            .any(|(file, _)| !file.starts_with("src/gateway/ui/")),
+        "premise: the scan sees role-mapping reads outside the UI"
     );
     assert!(
         unlisted.is_empty(),
