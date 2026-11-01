@@ -72,7 +72,7 @@ struct Found {
 
 /// A function that builds or answers a refusal, by its name: `*refusal`,
 /// `refuse_*`, or the sealed constructor `gateway_refused`.
-fn is_refusal_name(name: &str) -> bool {
+pub(super) fn is_refusal_name(name: &str) -> bool {
     name.ends_with("refusal") || name.starts_with("refuse_") || name == "gateway_refused"
 }
 

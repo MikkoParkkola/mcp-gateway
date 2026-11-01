@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use super::delivery_framing::is_refusal_name;
 use super::scan::{Place, Sink};
 
 /// The plain `crate::Error` variants a gateway decision returns as a refusal
@@ -459,7 +460,8 @@ impl Sink for Collect {
                 let segments = segments(&path.path);
                 if let Some(name) = segments.last() {
                     let owner = segments.len().checked_sub(2).map(|i| segments[i].clone());
-                    if !value && segments.len() == 1 && (name == "refuse" || name == "refusal") {
+                    // `refusal` is a refusal name: the refusal scan rows it already.
+                    if !value && segments.len() == 1 && name == "refuse" {
                         self.push(at, Kind::Closure(name.clone()));
                         return;
                     }
@@ -625,14 +627,16 @@ impl Collect {
                     }
                     let associated =
                         owner.as_deref() == Some("Error") && ASSOCIATED.contains(&name.as_str());
-                    if gateway && (associated || helpers.contains(name)) {
+                    // A helper with a refusal name is rowed by the refusal scan.
+                    let helper = helpers.contains(name) && !is_refusal_name(name);
+                    if gateway && (associated || helper) {
                         plain_needle = Some(format!("via {name}{suffix}"));
                     }
                 }
                 Kind::Call {
                     name, method: true, ..
                 } => {
-                    if gateway && helpers.contains(name) {
+                    if gateway && helpers.contains(name) && !is_refusal_name(name) {
                         plain_needle = Some(format!("via {name}"));
                     }
                 }

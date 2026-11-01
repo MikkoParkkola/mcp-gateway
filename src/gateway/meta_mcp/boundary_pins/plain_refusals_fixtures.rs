@@ -335,3 +335,20 @@ fn b8_targets_in_both_bin_layouts_are_found() {
     let found: Vec<String> = crate_targets(root).into_iter().collect();
     assert_eq!(found, ["src/lib.rs", "src/main.rs"]);
 }
+
+/// A refusal-named helper or closure is rowed by the refusal scan in
+/// `delivery_framing.rs`, not again here; its own construction still is.
+#[test]
+fn f12_a_refusal_named_helper_is_not_rowed_twice() {
+    assert_eq!(
+        plain(
+            "fn missing_refusal(s: &str) -> Error { Error::ToolNotFound(s.into()) }\n\
+             fn a() -> Result<()> { let refusal = |m| Error::Protocol(m); Err(missing_refusal(\"x\")) }\n\
+             fn b() -> Result<()> { Err(refusal(m)) }"
+        ),
+        [
+            "a Error::Protocol(..) 1",
+            "missing_refusal Error::ToolNotFound(..) 1"
+        ]
+    );
+}
