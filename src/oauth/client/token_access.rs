@@ -13,6 +13,21 @@ impl OAuthClient {
     ///
     /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
+        let token = self.get_token_unchecked().await?;
+        self.handed_back(token)
+    }
+
+    /// A token about to be handed back: refused if a sign-in under another
+    /// issuer was confirmed while the call awaited, as the entry check would
+    /// have refused it.
+    fn handed_back(&self, token: String) -> Result<String> {
+        if self.issuer_differs() {
+            return Err(self.issuer_wait());
+        }
+        Ok(token)
+    }
+
+    async fn get_token_unchecked(&self) -> Result<String> {
         // The install was saved under another issuer: no credential of either
         // issuer is used until the transport's token step has re-discovered.
         if self.issuer_differs() {
@@ -86,8 +101,8 @@ impl OAuthClient {
     /// restart or stop (`AuthorizationCancelled`) and ends at
     /// [`grants::OAUTH_AUTHORIZATION_WINDOW`] through
     /// [`LoginGate::classify`](super::super::login_gate::LoginGate::classify),
-    /// never falling into a login after its bound. A refresh that succeeds
-    /// after a revocation is not handed back.
+    /// never falling into a login after its bound. A cached, adopted or
+    /// refreshed token is not handed back after a revocation.
     pub(crate) async fn get_token_detached(
         &self,
         interactive: bool,
@@ -95,8 +110,31 @@ impl OAuthClient {
         cohort: &std::sync::Arc<super::super::login_gate::Cohort>,
         deadline: tokio::time::Instant,
     ) -> Result<String> {
+        let (token, obtained) = self
+            .detached_unchecked(interactive, since, cohort, deadline)
+            .await?;
+        if obtained == Obtained::Held
+            && self
+                .login_gate
+                .as_ref()
+                .is_some_and(|gate| gate.is_revoked(since))
+        {
+            return Err(Error::AuthorizationCancelled {
+                backend: self.backend_name.clone(),
+            });
+        }
+        self.handed_back(token)
+    }
+
+    async fn detached_unchecked(
+        &self,
+        interactive: bool,
+        since: u64,
+        cohort: &std::sync::Arc<super::super::login_gate::Cohort>,
+        deadline: tokio::time::Instant,
+    ) -> Result<(String, Obtained)> {
         if let Some(access) = self.live_token() {
-            return Ok(access);
+            return Ok((access, Obtained::Held));
         }
         if self.issuer_differs() {
             return Err(self.issuer_wait());
@@ -104,7 +142,7 @@ impl OAuthClient {
         if self.install_stale()
             && let Some(access) = self.adopt_installed()
         {
-            return Ok(access);
+            return Ok((access, Obtained::Held));
         }
         let cancelled = || Error::AuthorizationCancelled {
             backend: self.backend_name.clone(),
@@ -131,24 +169,17 @@ impl OAuthClient {
             // Every outcome republishes, as in `get_token`.
             self.publish_sign_in();
             match refreshed {
-                Ok(token) => {
-                    if self
-                        .login_gate
-                        .as_ref()
-                        .is_some_and(|gate| gate.is_revoked(since))
-                    {
-                        return Err(cancelled());
-                    }
-                    return Ok(token);
-                }
+                Ok(token) => return Ok((token, Obtained::Held)),
                 Err(e) if is_ssrf_refusal(&e) => return Err(e),
                 // A busy lock is not an expired grant either: no login starts.
                 Err(e) if super::refresh_flight::is_credential_lock_busy(&e) => return Err(e),
                 Err(_) => {}
             }
         }
-        self.authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
-            .await
+        let token = self
+            .authorize_shared_with(interactive, Some(since), Some(cohort), Some(deadline))
+            .await?;
+        Ok((token, Obtained::LoggedIn))
     }
 
     /// Return the backend name (used by the background refresh task for logging).
@@ -187,4 +218,12 @@ impl OAuthClient {
 
         remaining < refresh_buffer(self.token_refresh_buffer_secs, t.lifetime_secs)
     }
+}
+
+/// How a detached step came by its token: a login settles its own revocation
+/// race, a held (cached, adopted or refreshed) token is checked again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Obtained {
+    Held,
+    LoggedIn,
 }

@@ -773,7 +773,20 @@ async fn detach_token_step(
             client = oauth.lock_owned() => client,
         };
         let mut client = client;
-        client.rediscover_if_moved().await?;
+        // Bounded as the wait for the client is: a re-discovery is a fetch.
+        tokio::select! {
+            biased;
+            () = gate.revoked_since(since) => {
+                return Err(Error::AuthorizationCancelled { backend });
+            }
+            () = tokio::time::sleep_until(crate::oauth::login_gate::stage_end(
+                crate::oauth::OAUTH_AUTHORIZATION_WINDOW,
+                deadline,
+            )) => {
+                return Err(gate.classify(&cohort, &backend, Error::BackendTimeout(backend.clone())));
+            }
+            moved = client.rediscover_if_moved() => moved?,
+        }
         client.get_token_detached(true, since, &cohort, deadline).await
     }));
     task.await

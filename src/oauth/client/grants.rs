@@ -595,6 +595,11 @@ impl OAuthClient {
             }
             #[cfg(all(test, feature = "webui"))]
             self.adopt_pause.pause_blocking();
+            // A confirm under another issuer landed after the caller checked:
+            // it is not acknowledged as adopted, and nothing read is handed back.
+            if self.issuer_differs() {
+                return None;
+            }
             self.installed_seen
                 .store(sampled, std::sync::atomic::Ordering::SeqCst);
             if status.installed() == sampled {

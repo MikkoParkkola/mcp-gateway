@@ -435,11 +435,15 @@ impl OAuthClient {
     }
 
     /// Write the state `held` (the token just loaded or saved, if any) puts
-    /// this client in.
+    /// this client in. Nothing while the latest install is under another
+    /// issuer: the status is that sign-in's, as in `settled_publisher`.
     pub(super) fn publish_token_state(&self, held: Option<&TokenInfo>) {
         let Some(status) = &self.sign_in_status else {
             return;
         };
+        if self.issuer_differs() {
+            return;
+        }
         match held {
             Some(token) if self.auth_metadata.is_some() => {
                 status.set_held(token.expires_at, token.refresh_token.is_some());
