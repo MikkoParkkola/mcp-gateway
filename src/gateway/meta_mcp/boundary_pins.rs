@@ -9,6 +9,7 @@ mod creation_sites;
 mod delivery_framing;
 mod discarded_sends;
 mod echo_rows_real_transports;
+mod fragments;
 mod guard_tests;
 mod inbound_parse_sites;
 mod invoke_stages;

@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
+use super::fragments::{Table, live_base, pin_table, scratch_table, shown, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
@@ -187,36 +188,34 @@ impl Sink for Exits {
     }
 }
 
-/// The reviewed list: file, function, exits, marks, class, reason.
-const LISTED: &str = include_str!("presend_exits.tsv");
+/// (file, function) -> (exits, marks, class, the table file listing it).
+type Listed = BTreeMap<(String, String), (usize, usize, String, String)>;
 
-/// (file, function) -> (exits, marks, class) as listed.
-type Listed = BTreeMap<(String, String), (usize, usize, String)>;
-
-/// The listed rows, and the ones that are malformed.
-fn listed() -> (Listed, Vec<String>) {
-    let mut rows = BTreeMap::new();
+/// The listed rows from the reviewed `presend_exits` table (file, function,
+/// exits, marks, class, reason), and the ones that are malformed.
+fn listed(table: &Table) -> (Listed, Vec<String>) {
+    let mut rows = Listed::new();
     let mut bad = Vec::new();
-    for line in LISTED
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
+    for (path, line) in table.rows() {
+        let at = shown(path);
         let cols: Vec<&str> = line.split('\t').collect();
         let [file, func, exits, marks, class, reason] = cols[..] else {
-            bad.push(format!("not six columns: {line}"));
+            bad.push(format!("not six columns in {at}: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
-            bad.push(format!("no class or no reason: {line}"));
+            bad.push(format!("no class or no reason in {at}: {line}"));
         }
         let (Ok(exits), Ok(marks)) = (exits.parse::<usize>(), marks.parse::<usize>()) else {
-            bad.push(format!("exits or marks is not a number: {line}"));
+            bad.push(format!("exits or marks is not a number in {at}: {line}"));
             continue;
         };
-        rows.insert(
-            (file.to_owned(), func.to_owned()),
-            (exits, marks, class.to_owned()),
-        );
+        let value = (exits, marks, class.to_owned(), at.clone());
+        if let Some((.., earlier)) = rows.insert((file.to_owned(), func.to_owned()), value) {
+            bad.push(format!(
+                "repeated key in {earlier} and {at}: {file}\t{func}"
+            ));
+        }
     }
     (rows, bad)
 }
@@ -228,28 +227,41 @@ fn listed() -> (Listed, Vec<String>) {
 fn every_pre_send_refusal_exit_is_marked_or_excluded() {
     let mut exits = Exits::default();
     walk(crate_root(), &ROOTS, &mut exits).expect("the walk reads every module");
-    let (want, bad) = listed();
-    let mut wrong = bad;
-    for ((file, func), (e, m, class)) in &exits.found {
-        match want.get(&(file.clone(), func.clone())) {
-            Some((we, wm, c)) if we == e && wm == m && c == class => {}
-            Some((we, wm, c)) => wrong.push(format!(
-                "listed {we} exits {wm} marks {c}, found {e} exits {m} marks {class}: {file}\t{func}"
-            )),
-            None => wrong.push(format!(
-                "unlisted: {file}\t{func}\t{e}\t{m}\t{class}\t<reason>"
-            )),
-        }
-    }
-    for (file, func) in want.keys().filter(|k| !exits.found.contains_key(*k)) {
-        wrong.push(format!("stale: {file}\t{func}"));
-    }
+    let wrong = differences(&exits.found, &pin_table("presend_exits"));
     assert!(
         wrong.is_empty(),
         "pre-send refusal exits differ from presend_exits.tsv ({}):\n{}",
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// What differs between the found exits and the reviewed table: malformed
+/// rows, changed counts or classes, unlisted functions and stale rows.
+fn differences(found: &Found, table: &Table) -> Vec<String> {
+    let (want, bad) = listed(table);
+    let mut wrong = bad;
+    let mut add = Vec::new();
+    for ((file, func), (e, m, class)) in found {
+        match want.get(&(file.clone(), func.clone())) {
+            Some((we, wm, c, _)) if we == e && wm == m && c == class => {}
+            Some((we, wm, c, at)) => wrong.push(format!(
+                "listed {we} exits {wm} marks {c}, found {e} exits {m} marks {class}, edit this row in {at}: {file}\t{func}"
+            )),
+            None => add.push(format!("{file}\t{func}\t{e}\t{m}\t{class}\t<reason>")),
+        }
+    }
+    for ((file, func), (.., at)) in want.iter().filter(|(k, _)| !found.contains_key(*k)) {
+        wrong.push(format!("stale, remove from {at}: {file}\t{func}"));
+    }
+    if !add.is_empty() {
+        wrong.push(format!(
+            "rows to add ({}; put these in your fragment presend_exits.d/<ticket>.tsv):",
+            add.len()
+        ));
+        wrong.extend(add);
+    }
+    wrong
 }
 
 /// The scanner tells the three classes apart, and counts a hand-released
@@ -362,4 +374,123 @@ fn only_a_refused_note_is_a_refusal_mark() {
         })),
         1
     );
+}
+
+/// Every pre-send refusal exit the walk finds, by (file, function).
+fn found() -> Found {
+    let mut exits = Exits::default();
+    walk(crate_root(), &ROOTS, &mut exits).expect("the walk reads every module");
+    exits.found
+}
+
+/// FRAG.2 through the real comparison: a real row held only by a fragment
+/// still counts.
+#[test]
+fn presend_exits_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[("0.tsv", &moved)]);
+    let wrong = differences(&found(), &table);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// FRAG.2: a stale row in a fragment fails, naming the fragment.
+#[test]
+fn presend_exits_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tf\t1\t1\tmarks\tnone\n";
+    let (_root, table) = scratch_table(
+        "presend_exits",
+        &live_base("presend_exits"),
+        &[("0.tsv", stale)],
+    );
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("stale") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// FRAG.2: a key held by the base and by a fragment fails, naming both files.
+#[test]
+fn presend_exits_key_repeated_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table(
+        "presend_exits",
+        &live_base("presend_exits"),
+        &[("0.tsv", &moved)],
+    );
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("presend_exits.tsv") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key listed twice in one file fails.
+#[test]
+fn presend_exits_key_repeated_in_one_file_fails() {
+    let (_, moved) = without_first_row(&live_base("presend_exits"));
+    let base = format!("{}{moved}", live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[]);
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong.iter().any(|l| l.contains("repeated")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn presend_exits_missing_key_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[]);
+    let wrong = differences(&found(), &table).join("\n");
+    assert!(wrong.contains("rows to add"), "{wrong}");
+    assert!(wrong.contains("presend_exits.d/<ticket>.tsv"), "{wrong}");
+}
+
+/// A row whose value changed under the same key names the file to edit.
+#[test]
+fn presend_exits_changed_value_names_the_owning_file() {
+    let (base, moved) = without_first_row(&live_base("presend_exits"));
+    let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
+    cols[2] = "999";
+    let changed = format!("{}\n", cols.join("\t"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[("0.tsv", &changed)]);
+    let wrong = differences(&found(), &table).join("\n");
+    assert!(
+        wrong.contains("edit this row in") && wrong.contains("0.tsv"),
+        "{wrong}"
+    );
+}
+
+/// Each row check still fires for a row that sits only in a fragment.
+#[test]
+fn presend_exits_validations_still_fail_in_a_fragment() {
+    for (bad, diagnostic) in [
+        ("a\tb\n", "not six columns"),
+        (
+            "src/x.rs\tf\tmany\t1\tmarks\twhy\n",
+            "exits or marks is not a number",
+        ),
+        ("src/x.rs\tf\t1\t1\tnope\twhy\n", "no class or no reason"),
+        ("src/x.rs\tf\t1\t1\tmarks\t \n", "no class or no reason"),
+    ] {
+        let (_root, table) = scratch_table(
+            "presend_exits",
+            &live_base("presend_exits"),
+            &[("0.tsv", bad)],
+        );
+        let wrong = differences(&found(), &table).join("\n");
+        assert!(
+            wrong.contains(diagnostic) && wrong.contains("0.tsv"),
+            "{bad:?}: {wrong}"
+        );
+    }
 }
