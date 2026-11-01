@@ -51,6 +51,8 @@ pub(crate) struct Gate(Arc<(Mutex<GateState>, Condvar)>);
 pub(crate) struct GateState {
     closed: bool,
     entered: bool,
+    /// The watchdog opened the gate: a write waited past it.
+    fired: bool,
 }
 
 impl Gate {
@@ -77,10 +79,20 @@ impl Gate {
         let mut g = m.lock().expect("gate");
         g.entered = true;
         cv.notify_all();
-        let (g, _) = cv
+        let (mut g, timeout) = cv
             .wait_timeout_while(g, WATCHDOG, |s| s.closed)
             .expect("gate");
+        if timeout.timed_out() {
+            // Open for good, so a regression fails once instead of per write.
+            g.closed = false;
+            g.fired = true;
+            cv.notify_all();
+        }
         drop(g);
+    }
+    /// Whether a write waited past the watchdog.
+    pub(crate) fn fired(&self) -> bool {
+        self.0.0.lock().expect("gate").fired
     }
 }
 
