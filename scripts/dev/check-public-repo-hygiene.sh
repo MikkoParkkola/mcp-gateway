@@ -278,7 +278,7 @@ is_self_file() {
 # and an inventory row file are named for their ticket and cite it.
 is_ticket_keyed() {
   case "$1" in
-    changelog.d/*.md | upgrading.d/*.md | docs/release/inventory.d/*.tsv) return 0 ;;
+    changelog.d/*.md | upgrading.d/*.md | docs/release/inventory.d/*.tsv | src/gateway/meta_mcp/boundary_pins/*.d/*.tsv) return 0 ;;
   esac
   return 1
 }

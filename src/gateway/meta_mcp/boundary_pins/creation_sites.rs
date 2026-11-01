@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
-use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
+use super::fragments::{Table, live_base, pin_table, scratch_table, shown, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
@@ -164,30 +164,35 @@ const CLASSES: [&str; 3] = ["helper", "no-secret", "test-only"];
 /// The listed counts from the reviewed `creation_sites` table (file, function,
 /// kind, count, class, reason), and the rows that are malformed or carry no
 /// class.
-fn listed(table: &Table) -> (Counts, Vec<String>) {
-    let mut counts = Counts::new();
+fn listed(table: &Table) -> (Listed, Vec<String>) {
+    let mut counts = Listed::new();
     let mut bad = Vec::new();
-    let listed = table.text();
-    for line in listed
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
+    for (path, line) in table.rows() {
+        let at = shown(path);
         let cols: Vec<&str> = line.split('\t').collect();
         let [file, func, kind, n, class, reason] = cols[..] else {
-            bad.push(format!("not six columns: {line}"));
+            bad.push(format!("not six columns in {at}: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
-            bad.push(format!("no class or no reason: {line}"));
+            bad.push(format!("no class or no reason in {at}: {line}"));
         }
         let Ok(n) = n.parse::<usize>() else {
-            bad.push(format!("count is not a number: {line}"));
+            bad.push(format!("count is not a number in {at}: {line}"));
             continue;
         };
-        counts.insert((file.to_owned(), func.to_owned(), kind.to_owned()), n);
+        let key = (file.to_owned(), func.to_owned(), kind.to_owned());
+        if let Some((_, earlier)) = counts.insert(key, (n, at.clone())) {
+            bad.push(format!(
+                "repeated key in {earlier} and {at}: {file}\t{func}\t{kind}"
+            ));
+        }
     }
     (counts, bad)
 }
+
+/// (file, function, kind) -> (count, the table file listing it).
+type Listed = BTreeMap<(String, String, String), (usize, String)>;
 
 /// Every creating call in production code is a reviewed row with a class,
 /// with its exact count; a new call, a changed count or a stale row fails
@@ -210,18 +215,32 @@ fn every_file_creation_site_is_classified() {
 fn differences(found: &Counts, table: &Table) -> Vec<String> {
     let (want, bad) = listed(table);
     let mut wrong: Vec<String> = bad;
+    let mut add = Vec::new();
     for (key, n) in found {
         match want.get(key) {
-            Some(m) if m == n => {}
-            Some(m) => wrong.push(format!("count {m} -> {n}: {}\t{}\t{}", key.0, key.1, key.2)),
-            None => wrong.push(format!(
-                "unlisted: {}\t{}\t{}\t{n}\t<class>\t<reason>",
+            Some((m, _)) if m == n => {}
+            Some((m, at)) => wrong.push(format!(
+                "count {m} -> {n}, edit this row in {at}: {}\t{}\t{}",
+                key.0, key.1, key.2
+            )),
+            None => add.push(format!(
+                "{}\t{}\t{}\t{n}\t<class>\t<reason>",
                 key.0, key.1, key.2
             )),
         }
     }
-    for key in want.keys().filter(|k| !found.contains_key(*k)) {
-        wrong.push(format!("stale: {}\t{}\t{}", key.0, key.1, key.2));
+    for (key, (_, at)) in want.iter().filter(|(k, _)| !found.contains_key(*k)) {
+        wrong.push(format!(
+            "stale, remove from {at}: {}\t{}\t{}",
+            key.0, key.1, key.2
+        ));
+    }
+    if !add.is_empty() {
+        wrong.push(format!(
+            "rows to add ({}; put these in your fragment creation_sites.d/<ticket>.tsv):",
+            add.len()
+        ));
+        wrong.extend(add);
     }
     wrong
 }

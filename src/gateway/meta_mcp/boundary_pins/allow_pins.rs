@@ -8,7 +8,9 @@ use std::path::Path;
 use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
-use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
+use super::fragments::{
+    Table, live_base, multiset_delta, pin_table, scratch_table, without_first_row,
+};
 use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
@@ -387,36 +389,24 @@ fn t1a_every_classed_read_is_pinned() {
 
 /// The allow table check: `actual` against the pinned rows of `table`.
 fn allows_check(actual: &[String], table: &Table) -> Result<(), String> {
-    let mut pinned: Vec<String> = table
-        .text()
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(str::to_string)
+    let pinned: Vec<(&Path, &str)> = table
+        .rows()
+        .iter()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(file, l)| (file.as_path(), l.as_str()))
         .collect();
-    pinned.sort();
-    if actual == pinned {
-        return Ok(());
-    }
-    Err(format!(
-        "allow inventory changed ({} rows pinned, {} found)\nfull inventory:\n{}",
-        pinned.len(),
-        actual.len(),
-        actual.join("\n")
-    ))
+    multiset_delta("allows", actual, &pinned).map_or(Ok(()), Err)
 }
 
 /// The class table check: the found rows against the pinned rows of `table`.
 fn classes_check(found: &[String], table: &Table) -> Result<(), String> {
-    let want = pinned(&table.text());
-    if found == want {
-        return Ok(());
-    }
-    Err(format!(
-        "class table changed ({} pinned, {} found)\nfull table:\n{}",
-        want.len(),
-        found.len(),
-        found.join("\n")
-    ))
+    let pinned: Vec<(&Path, &str)> = table
+        .rows()
+        .iter()
+        .filter(|(_, l)| !l.trim().is_empty())
+        .map(|(file, l)| (file.as_path(), l.as_str()))
+        .collect();
+    multiset_delta("scoped_backends_classes", found, &pinned).map_or(Ok(()), Err)
 }
 
 /// T1d: the `Registry::new` call sites. Mutant T1d-m1: a second one.

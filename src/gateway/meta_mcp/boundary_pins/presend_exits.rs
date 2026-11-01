@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
-use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
+use super::fragments::{Table, live_base, pin_table, scratch_table, shown, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
@@ -188,35 +188,34 @@ impl Sink for Exits {
     }
 }
 
-/// (file, function) -> (exits, marks, class) as listed.
-type Listed = BTreeMap<(String, String), (usize, usize, String)>;
+/// (file, function) -> (exits, marks, class, the table file listing it).
+type Listed = BTreeMap<(String, String), (usize, usize, String, String)>;
 
 /// The listed rows from the reviewed `presend_exits` table (file, function,
 /// exits, marks, class, reason), and the ones that are malformed.
 fn listed(table: &Table) -> (Listed, Vec<String>) {
-    let mut rows = BTreeMap::new();
+    let mut rows = Listed::new();
     let mut bad = Vec::new();
-    let listed = table.text();
-    for line in listed
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
+    for (path, line) in table.rows() {
+        let at = shown(path);
         let cols: Vec<&str> = line.split('\t').collect();
         let [file, func, exits, marks, class, reason] = cols[..] else {
-            bad.push(format!("not six columns: {line}"));
+            bad.push(format!("not six columns in {at}: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
-            bad.push(format!("no class or no reason: {line}"));
+            bad.push(format!("no class or no reason in {at}: {line}"));
         }
         let (Ok(exits), Ok(marks)) = (exits.parse::<usize>(), marks.parse::<usize>()) else {
-            bad.push(format!("exits or marks is not a number: {line}"));
+            bad.push(format!("exits or marks is not a number in {at}: {line}"));
             continue;
         };
-        rows.insert(
-            (file.to_owned(), func.to_owned()),
-            (exits, marks, class.to_owned()),
-        );
+        let value = (exits, marks, class.to_owned(), at.clone());
+        if let Some((.., earlier)) = rows.insert((file.to_owned(), func.to_owned()), value) {
+            bad.push(format!(
+                "repeated key in {earlier} and {at}: {file}\t{func}"
+            ));
+        }
     }
     (rows, bad)
 }
@@ -242,19 +241,25 @@ fn every_pre_send_refusal_exit_is_marked_or_excluded() {
 fn differences(found: &Found, table: &Table) -> Vec<String> {
     let (want, bad) = listed(table);
     let mut wrong = bad;
+    let mut add = Vec::new();
     for ((file, func), (e, m, class)) in found {
         match want.get(&(file.clone(), func.clone())) {
-            Some((we, wm, c)) if we == e && wm == m && c == class => {}
-            Some((we, wm, c)) => wrong.push(format!(
-                "listed {we} exits {wm} marks {c}, found {e} exits {m} marks {class}: {file}\t{func}"
+            Some((we, wm, c, _)) if we == e && wm == m && c == class => {}
+            Some((we, wm, c, at)) => wrong.push(format!(
+                "listed {we} exits {wm} marks {c}, found {e} exits {m} marks {class}, edit this row in {at}: {file}\t{func}"
             )),
-            None => wrong.push(format!(
-                "unlisted: {file}\t{func}\t{e}\t{m}\t{class}\t<reason>"
-            )),
+            None => add.push(format!("{file}\t{func}\t{e}\t{m}\t{class}\t<reason>")),
         }
     }
-    for (file, func) in want.keys().filter(|k| !found.contains_key(*k)) {
-        wrong.push(format!("stale: {file}\t{func}"));
+    for ((file, func), (.., at)) in want.iter().filter(|(k, _)| !found.contains_key(*k)) {
+        wrong.push(format!("stale, remove from {at}: {file}\t{func}"));
+    }
+    if !add.is_empty() {
+        wrong.push(format!(
+            "rows to add ({}; put these in your fragment presend_exits.d/<ticket>.tsv):",
+            add.len()
+        ));
+        wrong.extend(add);
     }
     wrong
 }
