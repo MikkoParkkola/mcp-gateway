@@ -82,6 +82,7 @@ fn firewall_pass(mut artifact: Value) -> (FirewallVerdict, Value, Vec<Value>) {
     );
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut artifact,
             &[ResponsePolicyTarget {
                 server: "cap".into(),

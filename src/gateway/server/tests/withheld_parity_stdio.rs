@@ -77,10 +77,10 @@ async fn twin(spec: Spec) -> Twin {
 async fn twin_with(spec: Spec, configure: impl FnOnce(&mut crate::config::Config)) -> Twin {
     let (url, calls) = serve(catalogue(spec)).await;
     let policy = (spec.reason == Reason::Policy && spec.side != Side::Control).then(|| {
-        crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+        crate::security::ToolPolicyConfig {
             deny: vec![spec.tool.to_string()],
             ..crate::security::ToolPolicyConfig::default()
-        })
+        }
     });
     let surfaced = spec.surfaced_on(BACKEND);
     let fixture = Box::pin(fixture_on_with(
@@ -389,6 +389,7 @@ async fn direct_task_call(fx: &Twin, tool: &str) -> Value {
     let retry = super::owner2_stdio_tasks::keyed("wh-13");
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &fx.fixture.policy,
+        generation: None,
     };
     let mut caller = crate::gateway::Gateway::build_stdio_caller_context(
         true,

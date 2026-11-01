@@ -7,6 +7,9 @@
 //! reload must leave that report, and every other setting in its section must
 //! stay in it, alone or in a combined edit.
 
+#[cfg(feature = "firewall")]
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 
 use super::{LiveConfig, compute_diff};
@@ -218,11 +221,16 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
     (reports, stuck)
 }
 
-// R2 (every field): each security field other than the two hot flags,
-// changed alone, keeps the section restart-pending.
+// R2 (every field): each security field other than the two hot flags and the
+// tool policy (ADR-029, amended), changed alone, keeps the section
+// restart-pending. The live firewall fields are nested in `firewall`, whose
+// generic edit flips a restart-only one; they have their own row.
 #[test]
 fn r2_each_other_security_field_alone_stays_restart_pending() {
-    let (reports, stuck) = each_field_alone("security", &["sanitize_input", "ssrf_protection"]);
+    let (reports, stuck) = each_field_alone(
+        "security",
+        &["sanitize_input", "ssrf_protection", "tool_policy"],
+    );
     let missed: Vec<&str> = reports
         .iter()
         .filter(|(_, p, _)| !p.contains(&"security"))
@@ -448,4 +456,106 @@ async fn f7_a_malformed_file_leaves_the_running_generation() {
     assert!(Arc::ptr_eq(&before, &live.generation()), "published");
     assert!(live.generation().sanitize_input(), "the flag changed");
     assert_eq!(live.seq(), 0, "a refused reload published");
+}
+
+/// ADR-029 (amended): each generation compiles its own firewall policy from
+/// its own config, so a reload's policy is not the running one's.
+#[cfg(feature = "firewall")]
+#[test]
+fn each_generation_compiles_its_own_firewall_policy() {
+    let running = LiveConfig::new(Config::default()).generation();
+    let mut config = Config::default();
+    config.security.firewall.credential_redaction = false;
+    let wanted = super::Generation::following(config, Arc::clone(running.auth()), &running);
+    assert!(running.firewall_policy().redacts(), "the default redacts");
+    assert!(
+        !wanted.firewall_policy().redacts(),
+        "the reload's own switch"
+    );
+}
+
+/// ADR-029 (amended): a reload whose detector settings differ from the running
+/// detector keeps the previous generation's collusion view, never the
+/// startup's, so a pending parameter edit cannot drop a live `block`.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
+    use crate::security::firewall::CollusionAction;
+    let startup = LiveConfig::new(Config::default()).generation();
+    assert_eq!(startup.collusion_view().action(), CollusionAction::Off);
+    let mut block = Config::default();
+    block.security.firewall.collusion.action = CollusionAction::Block;
+    let live = super::Generation::following(block, Arc::clone(startup.auth()), &startup);
+    assert_eq!(
+        live.collusion_view().action(),
+        CollusionAction::Block,
+        "premise: the running detector runs it, so it applies"
+    );
+    let mut held = Config::default();
+    held.security.firewall.collusion.action = CollusionAction::Observe;
+    held.security.firewall.collusion.window_secs += 1;
+    let next = super::Generation::following(held, Arc::clone(live.auth()), &live);
+    assert_eq!(
+        next.collusion_view().action(),
+        CollusionAction::Block,
+        "a held edit keeps the previous view"
+    );
+}
+
+/// Until the relay gate judges with the generation's view (ADR-029's PR2), a
+/// collusion edit reports a restart: the line never claims a live change the
+/// gate does not apply.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_collusion_edit_reports_a_restart_until_the_relay_gate_reads_it_live() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    wanted.security.firewall.collusion.action = crate::security::firewall::CollusionAction::Block;
+    assert!(pending(&running, wanted).contains(&"security"));
+}
+
+/// The tool policy applies on reload in every build, the firewall's too.
+#[test]
+fn a_tool_policy_edit_alone_reports_no_restart() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    wanted.security.tool_policy.deny = vec!["a:b".to_string()];
+    assert!(!pending(&running, wanted).contains(&"security"));
+}
+
+/// ADR-029 (amended): the policy fields the Policies screen edits apply on
+/// reload, so an edit to any one of them alone reports no restart.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_policy_field_edit_alone_reports_no_restart() {
+    use crate::security::firewall::{FirewallAction, FirewallRule};
+    type Edit = (&'static str, fn(&mut Config));
+    let running = Config::default();
+    let edits: [Edit; 3] = [
+        ("tool_policy", |c| {
+            c.security.tool_policy.deny = vec!["a:b".to_string()];
+        }),
+        ("firewall.rules", |c| {
+            c.security.firewall.rules = vec![FirewallRule {
+                tool_match: "read".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
+            }];
+        }),
+        ("firewall.credential_redaction", |c| {
+            c.security.firewall.credential_redaction = !c.security.firewall.credential_redaction;
+        }),
+    ];
+    for (field, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !pending(&running, wanted).contains(&"security"),
+            "{field} alone reports a restart"
+        );
+    }
 }

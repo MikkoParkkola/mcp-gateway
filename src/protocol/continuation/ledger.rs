@@ -243,6 +243,7 @@ impl InFlight {
             .count()
             >= share
         {
+            drop(held);
             tracing::warn!("a caller holds its share of the in-flight table; refusing a new slot");
             return None;
         }

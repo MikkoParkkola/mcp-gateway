@@ -28,7 +28,7 @@ pub(crate) async fn stdio_task_surfaced() -> (Value, usize) {
 /// that surfaces `echo` per `surfacing` (MIK-8326: a denied surfaced tool must
 /// answer as the name does where nothing is surfaced).
 pub(crate) async fn stdio_task_read(
-    policy: Option<crate::security::ToolPolicy>,
+    policy: Option<crate::security::ToolPolicyConfig>,
     surfacing: Surfacing,
 ) -> (Value, usize) {
     let trace = Box::pin(stdio_task_run(policy, surfacing, None)).await;
@@ -50,7 +50,7 @@ pub(crate) struct StdioTrace {
 /// [`stdio_task_read`] with the production firewall on, writing to `audit`.
 #[cfg(feature = "firewall")]
 pub(crate) async fn stdio_task_traced(
-    policy: Option<crate::security::ToolPolicy>,
+    policy: Option<crate::security::ToolPolicyConfig>,
     surfacing: Surfacing,
     audit: &std::path::Path,
 ) -> StdioTrace {
@@ -58,7 +58,7 @@ pub(crate) async fn stdio_task_traced(
 }
 
 async fn stdio_task_run(
-    policy: Option<crate::security::ToolPolicy>,
+    policy: Option<crate::security::ToolPolicyConfig>,
     surfacing: Surfacing,
     audit: Option<&std::path::Path>,
 ) -> StdioTrace {

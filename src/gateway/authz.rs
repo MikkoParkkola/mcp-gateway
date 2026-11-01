@@ -229,6 +229,14 @@ pub trait ToolAuthorizer {
     /// `quota_principal`: a wrapper delegates, and only a transport with no
     /// client scope answers [`BackendGrant::Unscoped`].
     fn backend_grant(&self) -> BackendGrant<'_>;
+
+    /// The generation this caller is judged under: the request's pinned one,
+    /// or the one current at a queued dispatch. `None` only for an authorizer
+    /// built from no request (the unscoped operator, a test's), which is
+    /// judged under the generation published at the check, never the startup
+    /// policy. Required, with no default: an authorizer that forgot it would
+    /// judge with stale rules and nothing would fail.
+    fn generation(&self) -> Option<&crate::config_reload::Generation>;
 }
 
 /// Whether a decision writes its audit record. An enum rather than a `bool`
@@ -328,6 +336,9 @@ pub(crate) struct AllowAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for AllowAll {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -355,6 +366,9 @@ pub(crate) struct DenyAll;
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyAll {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -394,6 +408,9 @@ pub(crate) struct DenyOne {
 
 #[cfg(test)]
 impl ToolAuthorizer for DenyOne {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }
@@ -454,6 +471,9 @@ impl<A: ToolAuthorizer> CountingAuthorizer<A> {
 
 #[cfg(test)]
 impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        self.inner.generation()
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         self.inner.quota_principal()
     }
@@ -491,11 +511,47 @@ impl<A: ToolAuthorizer> ToolAuthorizer for CountingAuthorizer<A> {
 ///
 /// This replaces the inline check that ran for `gateway_invoke` alone, so a
 /// stdio playbook or code-mode step is now covered where it was not.
+/// What a stdio line is judged with: in production its generation, taken as
+/// the line is read (ADR-029, amended, item 5). A test may hand a bare tool
+/// policy instead, judged under no generation; that impl exists only in tests,
+/// so production cannot pass a startup policy.
+pub(crate) trait StdioLine: Sync {
+    /// The tool policy that decides the line's calls.
+    fn tool_policy(&self) -> &crate::security::ToolPolicy;
+    /// The generation the line is judged under.
+    fn generation(&self) -> Option<&crate::config_reload::Generation>;
+}
+
+impl StdioLine for std::sync::Arc<crate::config_reload::Generation> {
+    fn tool_policy(&self) -> &crate::security::ToolPolicy {
+        crate::config_reload::Generation::tool_policy(self)
+    }
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        Some(self)
+    }
+}
+
+#[cfg(test)]
+impl StdioLine for std::sync::Arc<crate::security::ToolPolicy> {
+    fn tool_policy(&self) -> &crate::security::ToolPolicy {
+        self
+    }
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
+}
+
 pub(crate) struct ToolPolicyAuthorizer<'a> {
     pub(crate) tool_policy: &'a crate::security::ToolPolicy,
+    /// The generation the call is judged under; `tool_policy` is its policy.
+    /// `None` only for a test's own policy.
+    pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 
 impl ToolAuthorizer for ToolPolicyAuthorizer<'_> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        self.generation
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }

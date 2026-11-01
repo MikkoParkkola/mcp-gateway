@@ -5,7 +5,10 @@
 
 use serde_json::Value;
 
-use super::{Finding, FindingLocation, Firewall, FirewallAction, FirewallVerdict, ScanType};
+use super::{
+    AnswerPolicies, Finding, FindingLocation, Firewall, FirewallAction, FirewallPolicy,
+    FirewallVerdict, ScanType,
+};
 use crate::protocol::continuation::Keyring;
 use crate::security::Severity;
 use crate::security::response_policy::{
@@ -14,21 +17,19 @@ use crate::security::response_policy::{
 };
 
 impl Firewall {
-    /// Whether a response scan may rewrite a credential in place.
-    pub(crate) const fn redacts(&self) -> bool {
-        self.config.credential_redaction
-    }
-
     /// Whether [`Self::check_response_artifact`] scans at all: off, it allows
     /// every artifact unread, which is no scan for a delivery to state.
     pub(crate) const fn scans_responses(&self) -> bool {
         self.config.enabled && self.config.scan_responses
     }
 
-    /// Inspect one artifact and evaluate every authenticated routing target.
-    /// Immutable questions may be refused, but are never silently rewritten.
-    pub(crate) fn check_response_artifact(
+    /// Inspect one artifact and evaluate every authenticated routing target
+    /// under each of `policies`, keeping the strongest action (ADR-029,
+    /// amended, item 5). Immutable questions may be refused, but are never
+    /// silently rewritten.
+    pub(crate) fn check_response_artifact<'p>(
         &self,
+        policies: impl Into<AnswerPolicies<'p>>,
         response: &mut Value,
         targets: &[ResponsePolicyTarget],
         correlation: &ResponseCorrelation<'_>,
@@ -50,26 +51,32 @@ impl Firewall {
         // restored whole before the Block. The routed tools/call pass redacts and never
         // copies (MIK-7917 item 3).
         let original = (mutation != ResponseMutationPolicy::Redact).then(|| response.clone());
-        let findings = self.inspect_response_content(response, correlation);
-        let mut action = targets
-            .iter()
-            .fold(FirewallAction::Allow, |combined, target| {
-                strongest_action(
-                    combined,
-                    self.resolve_action(
-                        RuleTarget {
-                            server: if target.origin == TargetOrigin::NoBackend {
-                                ServerOf::NoBackend
-                            } else {
-                                ServerOf::Backend(&target.server)
-                            },
-                            tool: &target.tool,
-                            key: correlation.key,
-                        },
-                        &findings,
-                    ),
-                )
-            });
+        let (per_policy, findings) =
+            self.inspect_response_content(policies.into(), response, correlation);
+        // Each policy resolves its own findings; the strongest action stands.
+        let mut action =
+            per_policy
+                .iter()
+                .fold(FirewallAction::Allow, |combined, (policy, own)| {
+                    targets.iter().fold(combined, |combined, target| {
+                        strongest_action(
+                            combined,
+                            Self::resolve_action(
+                                policy,
+                                RuleTarget {
+                                    server: if target.origin == TargetOrigin::NoBackend {
+                                        ServerOf::NoBackend
+                                    } else {
+                                        ServerOf::Backend(&target.server)
+                                    },
+                                    tool: &target.tool,
+                                    key: correlation.key,
+                                },
+                                own,
+                            ),
+                        )
+                    })
+                });
         if let Some(original) = original
             && protected_value_changed(&original, response, mutation)
         {
@@ -93,22 +100,32 @@ impl Firewall {
         Ok(verdict)
     }
 
-    /// Run the existing detectors once; policy target count never multiplies it.
-    fn inspect_response_content(
+    /// Run the existing detectors once; policy target count never multiplies
+    /// it. Each policy gets the findings its own redaction switch produces
+    /// (ADR-029, amended, item 5, rule 1): with redaction on, the credential
+    /// findings and the injection findings on the redacted text; with it off,
+    /// the injection findings on the raw text, quote withheld. Only when the
+    /// two policies disagree does the injection scan also read a pre-redaction
+    /// copy. Returns each policy's findings and their union for the audit.
+    fn inspect_response_content<'p>(
         &self,
+        policies: AnswerPolicies<'p>,
         response: &mut Value,
         correlation: &ResponseCorrelation<'_>,
-    ) -> Vec<Finding> {
+    ) -> (Vec<(&'p FirewallPolicy, Vec<Finding>)>, Vec<Finding>) {
         #[cfg(test)]
         self.response_observer
             .inspections
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let mut findings = Vec::new();
+        let redacts = policies.redacts();
+        let raw = (policies.redaction_disagrees() && self.config.prompt_injection_detection)
+            .then(|| response.clone());
+        let mut credential = Vec::new();
         // Redact first: an injection finding quotes up to 200 chars of raw
         // text (a value or, since #2114, a key), so it must quote the redacted
         // text or a credential beside the marker reaches the audit log.
-        if self.config.credential_redaction {
+        if redacts {
             #[cfg(test)]
             self.response_observer
                 .redactions
@@ -118,34 +135,64 @@ impl Firewall {
                     .as_ref()
                     .is_some_and(|state| is_own_continuation(state.keyring(), value))
             };
-            findings.extend(self.redactor.scan_and_redact_unless(response, &own));
+            credential = self.redactor.scan_and_redact_unless(response, &own);
         }
-        if self.config.prompt_injection_detection {
-            #[cfg(test)]
-            self.response_observer
-                .prompt_scans
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            // Detection always reads what the client receives. With redaction
-            // on that is already redacted text; with it off the raw quote is
-            // withheld, since masking a 200-char cut can miss a split token.
-            let matches = self.response_scanner.scan_response(
-                correlation.external_server,
-                correlation.external_tool,
-                response,
-            );
-            findings.extend(matches.into_iter().map(|matched| Finding {
+        // Detection reads what the client receives. With redaction on that is
+        // already redacted text; with it off the raw quote is withheld, since
+        // masking a 200-char cut can miss a split token.
+        let delivered = self.injection_findings(response, correlation, redacts);
+        let unredacted = raw.map(|raw| self.injection_findings(&raw, correlation, false));
+        let per: Vec<(&'p FirewallPolicy, Vec<Finding>)> = policies
+            .each()
+            .map(|policy| {
+                let findings = match (&unredacted, policy.credential_redaction) {
+                    (Some(raw_findings), false) => raw_findings.clone(),
+                    (_, true) => credential.iter().chain(&delivered).cloned().collect(),
+                    (None, false) => delivered.clone(),
+                };
+                (policy, findings)
+            })
+            .collect();
+        let mut all = credential;
+        all.extend(delivered);
+        all.extend(unredacted.unwrap_or_default());
+        (per, all)
+    }
+
+    /// The prompt-injection findings on `value`, quoted only when `quoted`
+    /// (the text was redacted first).
+    fn injection_findings(
+        &self,
+        value: &Value,
+        correlation: &ResponseCorrelation<'_>,
+        quoted: bool,
+    ) -> Vec<Finding> {
+        if !self.config.prompt_injection_detection {
+            return Vec::new();
+        }
+        #[cfg(test)]
+        self.response_observer
+            .prompt_scans
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let matches = self.response_scanner.scan_response(
+            correlation.external_server,
+            correlation.external_tool,
+            value,
+        );
+        matches
+            .into_iter()
+            .map(|matched| Finding {
                 scan_type: ScanType::PromptInjection,
                 severity: Severity::Medium,
                 description: matched.pattern_description,
-                matched: if self.config.credential_redaction {
+                matched: if quoted {
                     matched.matched_fragment
                 } else {
                     QUOTE_WITHHELD.to_owned()
                 },
                 location: FindingLocation::ResponseContent,
-            }));
-        }
-        findings
+            })
+            .collect()
     }
 }
 

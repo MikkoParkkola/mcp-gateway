@@ -277,6 +277,12 @@ impl<T> CachedMetadata<T> {
             .map(|at| at.checked_sub(by).expect("an uptime past the TTL"));
     }
 
+    /// Whether another thread could take the write lock now (G2).
+    #[cfg(test)]
+    pub(crate) fn writable_for_test(&self) -> bool {
+        self.state.try_write().is_some()
+    }
+
     /// How many callers wait on the fill in flight (0 with none): each
     /// subscribed in `acquire` and is told its mark before it awaits, and the
     /// leader's own receiver is gone once `acquire` returns (MIK-8353 PR-W).

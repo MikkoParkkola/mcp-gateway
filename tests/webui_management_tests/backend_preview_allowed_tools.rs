@@ -428,12 +428,13 @@ async fn the_other_scopes_cannot_widen_the_selection() {
     let upstream = Arc::new(Upstream::default());
     let url = stub(Arc::clone(&upstream)).await;
     let fixture = fixture_with(|state| {
-        state.tool_policy = Arc::new(mcp_gateway::security::ToolPolicy::from_config(
-            &mcp_gateway::security::ToolPolicyConfig {
-                allow: vec!["sel:*".to_string()],
-                ..mcp_gateway::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state.live_config.get()).clone();
+        config.security.tool_policy = mcp_gateway::security::ToolPolicyConfig {
+            allow: vec!["sel:*".to_string()],
+            ..mcp_gateway::security::ToolPolicyConfig::default()
+        };
+        state.live_config.set(config);
         let open = mcp_gateway::config::ApiKeyConfig {
             key_sha256: Some(mcp_gateway::config::api_key_digest_spec(
                 OPEN_KEY.as_bytes(),

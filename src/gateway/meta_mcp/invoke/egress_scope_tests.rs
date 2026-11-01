@@ -54,7 +54,7 @@ fn a_backend_scoped_block_applies_to_a_notification_of_unnamed_origin() {
         {"match": "*", "scan": ["credentials"], "action": "block", "servers": ["alpha"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
-    let screen = meta.notification_screen("caller", "session");
+    let screen = meta.notification_screen(("caller", "session"), None);
     assert!(
         !screen.admit(&mut progress()),
         "withheld: alpha could have sent it"
@@ -69,7 +69,7 @@ fn a_block_scoped_to_an_unregistered_backend_does_not_apply() {
         {"match": "*", "scan": ["credentials"], "action": "block", "servers": ["beta"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
-    let screen = meta.notification_screen("caller", "session");
+    let screen = meta.notification_screen(("caller", "session"), None);
     assert!(screen.admit(&mut progress()), "admitted, redacted");
 }
 
@@ -83,7 +83,7 @@ fn the_backend_and_key_cross_product_reaches_a_notification() {
          "servers": ["alpha"], "keys": ["k1"]},
         {"match": "*", "scan": ["credentials"], "action": "allow"},
     ]));
-    let screen = meta.notification_screen("caller", "session");
+    let screen = meta.notification_screen(("caller", "session"), None);
     assert!(
         !screen.admit(&mut progress()),
         "withheld: (alpha, k1) could have sent it"
@@ -102,7 +102,7 @@ fn a_block_scoped_to_the_capability_backend_applies_to_a_notification() {
         "caps",
         Arc::new(crate::capability::CapabilityExecutor::new()),
     )));
-    let screen = meta.notification_screen("caller", "session");
+    let screen = meta.notification_screen(("caller", "session"), None);
     assert!(
         !screen.admit(&mut progress()),
         "withheld: the capability backend could have sent it"

@@ -92,6 +92,7 @@ impl Fixture {
                 signing: None,
                 chain_source: super::super::response_security::ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         ))
     }
