@@ -366,6 +366,7 @@ impl EraCache {
         if !serving(&mut || observation.set(EraObservation::never_probed())) {
             return false;
         }
+        drop(observation);
         tracing::info!(
             target: "mcp_gateway::observed",
             backend = %self.name,
@@ -402,8 +403,10 @@ impl EraCache {
     {
         let mut guard = self.observation.lock().await;
         if guard.source == EraSource::Probed {
+            let era = guard.era;
+            drop(guard);
             tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = true);
-            return guard.era;
+            return era;
         }
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = false);
         self.probe_and_store(&mut guard, ProbeTrigger::Reprobe, probe, install)
@@ -424,8 +427,10 @@ impl EraCache {
     {
         let mut guard = self.observation.lock().await;
         if guard.source == EraSource::Probed {
+            let era = guard.era;
+            drop(guard);
             tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = true);
-            return guard.era;
+            return era;
         }
         tracing::info!(target: "mcp_gateway::observed", backend = %self.name, slot = self.slot, hit = false);
         self.probe_and_store(&mut guard, trigger, probe, install_always)

@@ -223,6 +223,7 @@ impl KillSwitch {
             rate >= threshold,
             self.is_killed(server),
         );
+        drop(window);
 
         match action {
             BudgetAction::Warn => {
@@ -240,7 +241,6 @@ impl KillSwitch {
                     threshold = threshold,
                     "Error budget exhausted — auto-killing server"
                 );
-                drop(window);
                 self.set_killed(server, true);
                 return true;
             }
@@ -364,6 +364,7 @@ impl KillSwitch {
             rate >= cfg.threshold,
             false,
         );
+        drop(window);
 
         match action {
             BudgetAction::Warn => {
@@ -381,7 +382,6 @@ impl KillSwitch {
                     threshold = cfg.threshold,
                     "Capability error budget exhausted — auto-disabling capability"
                 );
-                drop(window);
                 self.disabled_capabilities.insert(key, Instant::now());
                 return true;
             }
