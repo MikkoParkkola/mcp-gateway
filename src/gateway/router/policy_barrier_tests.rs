@@ -318,3 +318,98 @@ async fn dispatch_rescan_follows_the_pin() {
     assert!(blocked.refused && blocked.calls == 1, "{blocked:?}");
     assert!(!passed.refused && passed.calls == 2, "{passed:?}");
 }
+
+/// Submit `gateway_invoke alpha read` with the injection as a task on `/mcp`,
+/// and return the last `tasks/get` body once it leaves `working`.
+async fn injected_task(fx: &Fx, key: &str) -> Value {
+    use super::direct_guards_fixture::send_with_headers;
+    let modern = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {
+            "extensions": {"io.modelcontextprotocol/tasks": {}}
+        },
+    });
+    let mut submit_meta = modern.clone();
+    submit_meta[crate::protocol::mrtr::IDEMPOTENCY_KEY_META] = json!(key);
+    let submit = json!({
+        "name": "gateway_invoke",
+        "arguments": {"server": "alpha", "tool": "read", "arguments": injected()},
+        "task": {},
+        "_meta": submit_meta,
+    });
+    let headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tools/call"),
+        ("mcp-name", "gateway_invoke"),
+    ];
+    let (_, created) =
+        send_with_headers(fx, "/mcp", "k-std", "tools/call", submit, None, &headers).await;
+    let id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("the submit was refused: {created}"))
+        .to_owned();
+    let get_headers = [
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", "tasks/get"),
+        ("mcp-name", id.as_str()),
+    ];
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let get = json!({"taskId": id, "_meta": modern});
+            let (_, body) =
+                send_with_headers(fx, "/mcp", "k-std", "tasks/get", get, None, &get_headers).await;
+            if body.pointer("/result/status").and_then(Value::as_str) != Some("working") {
+                return body;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("the task never settled")
+}
+
+/// Queued task dispatch is current-at-run (ADR-029, amended, item 5): a task
+/// is judged by the rules current when its worker dispatches. Admitted under
+/// warning rules, it is refused when blocking rules are published before
+/// dispatch, and nothing is sent. Judging by the startup rules (warn) would
+/// send it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_queued_task_takes_the_rules_current_at_dispatch() {
+    let fx = fixture(Answer::Ok, Some(FirewallAction::Warn)).await;
+    let blocks = configured(&fx, rules_block);
+    let (live, fired) = (
+        std::sync::Arc::clone(&fx.state.live_config),
+        Rc::new(Cell::new(false)),
+    );
+    let flag = Rc::clone(&fired);
+    seams::before_task_dispatch(move || {
+        live.set(blocks);
+        flag.set(true);
+    });
+    let got = injected_task(&fx, "barrier-tighten").await;
+    assert!(fired.get(), "the reload published before dispatch");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "dispatched: {got}");
+    assert_ne!(
+        got.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "{got}"
+    );
+}
+
+/// The loosening direction, against the startup rules: a fixture started
+/// with blocking rules, warning rules published before the submit. The task
+/// is judged by the warning rules current at dispatch and is sent. Judging by
+/// the startup rules (block) would refuse it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_queued_task_is_not_judged_by_the_startup_rules() {
+    let fx = fixture(Answer::Ok, Some(FirewallAction::Block)).await;
+    fx.state.live_config.set(configured(&fx, rules_warn));
+    let got = injected_task(&fx, "barrier-loosen").await;
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 1, "not dispatched: {got}");
+    assert_eq!(
+        got.pointer("/result/status").and_then(Value::as_str),
+        Some("completed"),
+        "{got}"
+    );
+}
