@@ -752,7 +752,8 @@ async fn a_detached_refresh_whose_caller_left_still_publishes() {
     owned.publish_sign_in();
     let before = cell.snapshot();
     let deadline = tokio::time::Instant::now() + HANG_BOUND;
-    let ask = owned.get_token_detached(false, gate.epoch(), &gate.cohort(), deadline);
+    let cohort = gate.cohort();
+    let ask = owned.get_token_detached(false, gate.epoch(), &cohort, deadline);
     let leave = async {
         server.arrivals(1, HANG_BOUND).await;
         gate.cancel_and_join().await;
