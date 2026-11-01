@@ -142,7 +142,7 @@ impl CollusionDetector {
             // Calls can reach the lock out of time order; an entry's age only
             // ever moves forward.
             let mut touched = now;
-            let holders = if let Some(entry) = state.remove(fp) {
+            let holders = if let Some(entry) = state.take(fp) {
                 state.order.remove(&entry.order);
                 touched = touched.max(entry.order.0);
                 entry.holders

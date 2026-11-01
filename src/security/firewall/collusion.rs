@@ -193,14 +193,21 @@ impl State {
         self.interned.release();
     }
 
-    /// Remove `fp`'s entry, releasing its pool records: every removal goes
-    /// through here, so the pool count never leaks.
-    fn remove(&mut self, fp: u64) -> Option<Entry> {
-        let mut entry = self.entries.remove(&fp)?;
-        self.pool -= entry.pool_records();
-        if let Holders::Tracked(tracked) = &mut entry.holders {
+    /// Discard `fp`'s entry, releasing its pool records and its overflow
+    /// bytes: every discard goes through here, so neither count leaks.
+    fn remove(&mut self, fp: u64) {
+        if let Some(mut entry) = self.take(fp)
+            && let Holders::Tracked(tracked) = &mut entry.holders
+        {
             tracked.release(&mut self.budget);
         }
+    }
+
+    /// Take `fp`'s entry out to update it, releasing its pool records, which
+    /// [`Self::insert`] takes again; its overflow stays charged.
+    fn take(&mut self, fp: u64) -> Option<Entry> {
+        let entry = self.entries.remove(&fp)?;
+        self.pool -= entry.pool_records();
         Some(entry)
     }
 
