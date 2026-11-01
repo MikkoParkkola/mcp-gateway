@@ -79,6 +79,10 @@ pub(crate) struct ResponseDeliveryContext<'a> {
     pub chain_source: ChainSource,
     /// `io.mcp-gateway/chain-nonce` captured from the request, if any.
     pub chain_nonce: Option<&'a str>,
+    /// The request's pinned generation (on stdio, the line's): with the one
+    /// published at scan time, what the answer is judged under (ADR-029,
+    /// amended, item 5).
+    pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 
 impl super::MetaMcp {
@@ -169,6 +173,7 @@ impl super::MetaMcp {
             correlation: &context.correlation,
             api_key_name: None,
             firewall,
+            generation: context.generation,
         };
         self.scan_egress(&mut response, &at);
         // MIK-7211.PARENT.6: the scope is settled before the chain link and the
@@ -241,8 +246,8 @@ impl super::MetaMcp {
     /// [`crate::Error::ResponseFirewallRefused`] when the verdict refuses.
     pub(crate) fn inspect_task_result(
         &self,
-        targets: &[ResponsePolicyTarget],
-        task_id: &str,
+        (targets, task_id): (&[ResponsePolicyTarget], &str),
+        generation: Option<&crate::config_reload::Generation>,
         result: &mut serde_json::Value,
     ) -> crate::Result<()> {
         use super::invoke::egress::{Egress, EgressOutcome};
@@ -266,6 +271,7 @@ impl super::MetaMcp {
             correlation: &correlation,
             api_key_name: None,
             firewall: self.firewall.as_deref(),
+            generation,
         };
         if self.firewall_result(result, &at) == EgressOutcome::Refused {
             tracing::warn!(task_id, "Firewall: task result blocked");
@@ -278,13 +284,13 @@ impl super::MetaMcp {
     /// The bridge supplies authenticated targets and excludes opaque state.
     #[cfg_attr(
         not(feature = "firewall"),
-        allow(clippy::unused_self, clippy::unnecessary_wraps)
+        allow(clippy::unused_self, clippy::unnecessary_wraps, unused_variables)
     )]
     pub(crate) fn enforce_firewall_challenge(
         &self,
         challenge: &serde_json::Value,
-        targets: &[ResponsePolicyTarget],
-        correlation: &ResponseCorrelation<'_>,
+        (targets, correlation): (&[ResponsePolicyTarget], &ResponseCorrelation<'_>),
+        generation: Option<&crate::config_reload::Generation>,
     ) -> crate::Result<()> {
         #[cfg(feature = "firewall")]
         if let Some(firewall) = &self.firewall {
@@ -294,6 +300,7 @@ impl super::MetaMcp {
             let mut inspected = challenge.clone();
             let verdict = firewall
                 .check_response_artifact(
+                    firewall.answer_policies(generation, self.current_generation().as_deref()),
                     &mut inspected,
                     targets,
                     correlation,

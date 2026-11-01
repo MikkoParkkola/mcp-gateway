@@ -16,9 +16,8 @@ fn unix_now() -> u64 {
 /// is 360, above the 300 s floor).
 #[test]
 fn an_unset_buffer_derives_from_the_token_lifetime() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_surf2_lifetime")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),
@@ -60,9 +59,8 @@ fn an_unset_buffer_is_not_serialized() {
 /// one-hour token with 200 s left does not refresh (10 % of 3600 would).
 #[test]
 fn a_set_buffer_wins_over_the_token_lifetime() {
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_surf2_set_wins")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),

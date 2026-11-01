@@ -1,0 +1,1 @@
+src/gateway/task_service/store.rs	principal_rows	1	critical	d	principal_rows	Counts the served and reserved rows of a principal; admit refuses a new row and apply_reread keeps a repaired row sealed when the count reaches the per-principal cap, so an undercount lets either exceed the cap startup would refuse

@@ -377,6 +377,9 @@ struct NoBackends;
 
 #[cfg(feature = "spec-preview")]
 impl crate::gateway::authz::ToolAuthorizer for NoBackends {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn decide<'a>(
         &'a self,
         _target: crate::gateway::authz::ToolTarget<'a>,

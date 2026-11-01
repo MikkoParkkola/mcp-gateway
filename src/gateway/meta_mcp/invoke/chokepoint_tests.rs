@@ -21,6 +21,9 @@ struct RevokedAfter {
 }
 
 impl ToolAuthorizer for RevokedAfter {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&QuotaPrincipal> {
         None
     }

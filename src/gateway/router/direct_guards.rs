@@ -130,7 +130,10 @@ impl DirectRouteGuards {
             (&BackendCall<'_>, Option<&str>),
             Seal<'_>,
         ),
-        client: Option<&AuthenticatedClient>,
+        (client, generation): (
+            Option<&AuthenticatedClient>,
+            &crate::config_reload::Generation,
+        ),
         (admission, cancel_entry): (
             &Admission,
             Option<&crate::gateway::router::inflight_calls::Registered>,
@@ -236,7 +239,7 @@ impl DirectRouteGuards {
         let outcome = scan_direct_egress(
             state,
             (call, ContentChecks::Dispatched),
-            client,
+            (client, generation),
             &mut response,
         );
         if outcome != EgressOutcome::Refused
@@ -321,11 +324,16 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
 /// The egress scan (design `2026-10-08-one-egress-scan.md`) on a direct-route
 /// frame: `call`'s backend and tool (the method, for a non-tool answer) are
 /// the policy target, `content` says whether dispatch already ran the content
-/// checks, and the scan marks the frame so a later exit skips it.
+/// checks, and the scan marks the frame so a later exit skips it. The answer
+/// is judged under the call's pinned `generation` and the published one
+/// (ADR-029, amended, item 5).
 pub(super) fn scan_direct_egress(
     state: &AppState,
     (call, content): (&BackendCall<'_>, ContentChecks),
-    client: Option<&AuthenticatedClient>,
+    (client, generation): (
+        Option<&AuthenticatedClient>,
+        &crate::config_reload::Generation,
+    ),
     response: &mut JsonRpcResponse,
 ) -> EgressOutcome {
     use crate::gateway::meta_mcp::invoke::egress::Egress;
@@ -358,6 +366,7 @@ pub(super) fn scan_direct_egress(
         correlation: &correlation,
         api_key_name: client.map(|c| c.name.as_str()),
         firewall,
+        generation: Some(generation),
     };
     state.meta_mcp.scan_egress(response, &at)
 }

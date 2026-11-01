@@ -218,7 +218,8 @@ fn inspect_settled_pinned(
     let before = result.clone();
     let refused = state
         .meta_mcp()
-        .inspect_task_result(&targets, id, result)
+        // Task settlement: the published generation alone.
+        .inspect_task_result((&targets, id), None, result)
         .is_err();
     let rewritten = !refused && *result != before;
     let decided = (refused || rewritten).then(|| Decided {

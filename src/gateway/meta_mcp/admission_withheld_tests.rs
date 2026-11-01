@@ -416,6 +416,9 @@ async fn a_replay_past_revocation_records_refused() {
 struct DenyEach(&'static [&'static str]);
 
 impl ToolAuthorizer for DenyEach {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }
