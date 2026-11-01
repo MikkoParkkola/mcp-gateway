@@ -266,11 +266,15 @@ impl HttpTransport {
             // client mutex a login holds for minutes, and never detaches
             // (MIK-7982 C2, MIK-8339).
             if !login_gate::interactive() {
-                let oauth = oauth_mutex
-                    .try_lock()
-                    .map_err(|_| Error::AuthorizationRequired {
-                        backend: sanitize_url_for_diagnostics(&self.base_url),
-                    })?;
+                let mut oauth =
+                    oauth_mutex
+                        .try_lock()
+                        .map_err(|_| Error::AuthorizationRequired {
+                            backend: sanitize_url_for_diagnostics(&self.base_url),
+                        })?;
+                // Holding the client: a confirmed sign-in under a changed
+                // issuer is re-discovered here before any token is used.
+                oauth.rediscover_if_moved().await?;
                 let token = oauth.get_token().await?;
                 Provenance::mark_dispatched();
                 return Ok(Some(token));
@@ -768,6 +772,8 @@ async fn detach_token_step(
             }
             client = oauth.lock_owned() => client,
         };
+        let mut client = client;
+        client.rediscover_if_moved().await?;
         client.get_token_detached(true, since, &cohort, deadline).await
     }));
     task.await

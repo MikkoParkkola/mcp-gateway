@@ -150,13 +150,38 @@ impl SignInStatus {
 
     /// Replace the value.
     pub(crate) fn set(&self, next: SignIn) {
-        *self.cell.lock() = Stored::Fixed(next);
+        let mut cell = self.cell.lock();
+        // A publish from the old issuer's credential cannot clear the reason.
+        if matches!(*cell, Stored::Fixed(SignIn::ProviderChanged))
+            && next != SignIn::ProviderChanged
+        {
+            return;
+        }
+        *cell = Stored::Fixed(next);
+    }
+
+    /// The provider changed issuer: a person must sign in again. Only
+    /// [`Self::clear_provider_changed`] ends it.
+    pub(crate) fn raise_provider_changed(&self) {
+        *self.cell.lock() = Stored::Fixed(SignIn::ProviderChanged);
+    }
+
+    /// An install under the serving client's own issuer was adopted.
+    pub(crate) fn clear_provider_changed(&self) {
+        let mut cell = self.cell.lock();
+        if matches!(*cell, Stored::Fixed(SignIn::ProviderChanged)) {
+            *cell = Stored::Fixed(SignIn::NeverSignedIn);
+        }
     }
 
     /// Keep a held token's expiry and whether it can be refreshed, so the
     /// status ages with the clock instead of freezing at publish time.
     pub(crate) fn set_held(&self, expires_at: Option<u64>, refreshable: bool) {
-        *self.cell.lock() = Stored::Held {
+        let mut cell = self.cell.lock();
+        if matches!(*cell, Stored::Fixed(SignIn::ProviderChanged)) {
+            return;
+        }
+        *cell = Stored::Held {
             expires_at,
             refreshable,
         };
@@ -335,6 +360,32 @@ impl OAuthClient {
         crate::Error::AuthorizationRequired {
             backend: self.backend_name.clone(),
         }
+    }
+
+    /// Re-discover when the install was saved under another issuer, on the
+    /// token step that holds `&mut` on the client. The documents are fetched
+    /// without being kept; they are committed, without a second `initialize`,
+    /// only if their issuer is the install's. A fetch or parse failure is the
+    /// discovery's own error. A differing issuer fails closed with the sign-in
+    /// wait, the in-memory token dropped and the reason raised on the status.
+    pub(crate) async fn rediscover_if_moved(&mut self) -> crate::Result<()> {
+        if !self.issuer_differs() {
+            return Ok(());
+        }
+        let discovered = self.discover_documents().await?;
+        #[cfg(all(test, feature = "webui"))]
+        self.rediscovery_pause.pause().await;
+        let Some(status) = self.sign_in_status.clone() else {
+            return Ok(());
+        };
+        let found = super::storage_key(&self.backend_name, &discovered.auth.issuer);
+        if status.install_key().as_deref() != Some(found.as_str()) {
+            *self.current_token.write() = None;
+            status.raise_provider_changed();
+            return Err(self.issuer_wait());
+        }
+        status.clear_provider_changed();
+        self.commit_discovery(discovered)
     }
 
     /// Whether a sign-in was confirmed since this client last adopted from

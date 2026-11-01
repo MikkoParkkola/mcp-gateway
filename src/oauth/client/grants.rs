@@ -544,8 +544,10 @@ impl OAuthClient {
         self.publish_sign_in();
         // The file is durable: tell every client of this backend.
         if let (Some(status), Ok(key)) = (&self.sign_in_status, self.credential_key()) {
-            self.installed_seen
-                .store(status.record_install(&key), std::sync::atomic::Ordering::SeqCst);
+            self.installed_seen.store(
+                status.record_install(&key),
+                std::sync::atomic::Ordering::SeqCst,
+            );
         }
         Ok(())
     }
@@ -575,6 +577,9 @@ impl OAuthClient {
     // Beside the login code: it reuses `adopt_stored_login`, private to grants.
     pub(super) fn adopt_installed(&self) -> Option<String> {
         let status = self.sign_in_status.as_ref()?;
+        // An install under this client's own issuer is the one thing that
+        // ends a provider-changed state.
+        status.clear_provider_changed();
         loop {
             let sampled = status.installed();
             let adopted = self.adopt_stored_login();

@@ -20,6 +20,14 @@ use tracing::{debug, info};
 use identity::ClientIdSource;
 pub use identity::{registration_body, storage_key, validate_issuer};
 
+/// The documents one discovery fetched, kept only once they are committed.
+struct Discovered {
+    oauth_base_url: String,
+    resource_metadata: Option<ProtectedResourceMetadata>,
+    scopes: Option<Vec<String>>,
+    auth: AuthorizationServerMetadata,
+}
+
 /// OAuth client for a specific backend
 pub struct OAuthClient {
     /// HTTP client for token requests
@@ -265,6 +273,14 @@ impl OAuthClient {
     /// Panics if `oauth_base_url` is `None` after metadata discovery, which
     /// should not occur since both success and error paths set it.
     pub async fn initialize(&mut self) -> Result<()> {
+        let discovered = self.discover_documents().await?;
+        self.commit_discovery(discovered)
+    }
+
+    /// Fetch the protected-resource and authorization-server documents without
+    /// keeping any of them: nothing on the client changes until
+    /// [`Self::commit_discovery`].
+    async fn discover_documents(&self) -> Result<Discovered> {
         let base_url = metadata::base_url(&self.resource_url)?;
 
         // Which kind of issuer string this ends up with decides how exactly the
@@ -274,49 +290,63 @@ impl OAuthClient {
         // assignment rather than inferred later, because by then only the
         // string is left and the two are indistinguishable.
         let mut issuer_source = IssuerSource::Origin;
+        let mut oauth_base_url = base_url.clone();
+        let mut scopes = None;
 
         // Which protected-resource document describes this backend, held to
         // the configured resource (MIK-8320, MIK-8324). A mismatch or a policy
         // refusal is an answer, not a missing document: it ends discovery
         // rather than falling back (MIK-7701).
-        if let Some(meta) = self.discover_resource_metadata().await? {
+        let resource_metadata = self.discover_resource_metadata().await?;
+        if let Some(meta) = &resource_metadata {
             // Read before the macro so its count is graded (MIK-7725).
             let resource = &meta.resource;
             debug!(resource = %resource, "Found protected resource metadata");
 
             // Get authorization server from metadata
             if let Some(auth_server) = meta.authorization_server() {
-                self.oauth_base_url = Some(auth_server.to_string());
+                oauth_base_url = auth_server.to_string();
                 issuer_source = IssuerSource::Advertised;
-            } else {
-                // Fallback to same base URL
-                self.oauth_base_url = Some(base_url.clone());
             }
 
             // Use scopes from metadata if not specified
             if self.scopes.is_empty() && !meta.scopes_supported.is_empty() {
-                self.scopes.clone_from(&meta.scopes_supported);
+                scopes = Some(meta.scopes_supported.clone());
             }
-
-            self.resource_metadata = Some(meta);
         } else {
             debug!("No protected resource metadata, using base URL");
-            self.oauth_base_url = Some(base_url.clone());
         }
 
         // Discover authorization server metadata
-        let auth_base = self.oauth_base_url.as_ref().unwrap();
-        self.check_destination(auth_base, "authorization server")?;
-        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
-        let discovered = AuthorizationServerMetadata::discover(
-            self.client_for(auth_base)?,
-            auth_base,
+        self.check_destination(&oauth_base_url, "authorization server")?;
+        let auth = AuthorizationServerMetadata::discover(
+            self.client_for(&oauth_base_url)?,
+            &oauth_base_url,
             issuer_source,
         )
         .await?;
         // Checked before it is kept: a refused document never reaches a request.
-        self.check_advertised_endpoints(&discovered)?;
-        self.auth_metadata = Some(discovered);
+        self.check_advertised_endpoints(&auth)?;
+        Ok(Discovered {
+            oauth_base_url,
+            resource_metadata,
+            scopes,
+            auth,
+        })
+    }
+
+    /// Keep what [`Self::discover_documents`] fetched, and load the credential
+    /// stored under the issuer it names.
+    fn commit_discovery(&mut self, discovered: Discovered) -> Result<()> {
+        let previous_issuer = self.auth_metadata.as_ref().map(|m| m.issuer.clone());
+        self.oauth_base_url = Some(discovered.oauth_base_url);
+        if let Some(scopes) = discovered.scopes {
+            self.scopes = scopes;
+        }
+        if discovered.resource_metadata.is_some() {
+            self.resource_metadata = discovered.resource_metadata;
+        }
+        self.auth_metadata = Some(discovered.auth);
 
         self.drop_credentials_from_other_issuer(previous_issuer.as_deref());
 
