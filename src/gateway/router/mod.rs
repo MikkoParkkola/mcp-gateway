@@ -156,14 +156,14 @@ mod dispatch_parity_tests;
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
 
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
 mod era_refusal_http_tests;
 #[cfg(all(test, feature = "metrics"))]
 mod error_count_tests;
-#[cfg(all(test, feature = "metrics"))]
-mod backend_origin_count_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
 #[cfg(test)]

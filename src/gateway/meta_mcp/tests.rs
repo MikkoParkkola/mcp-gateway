@@ -39,6 +39,8 @@ mod admin_exposure;
 mod backend_lists;
 #[path = "tests/bridge_drop_tests.rs"]
 mod bridge_drop;
+#[path = "tests/bridged_origin.rs"]
+mod bridged_origin;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
 #[path = "tests/confirmation_binding.rs"]
@@ -49,8 +51,6 @@ mod enforced_transform;
 mod input_requests;
 #[path = "tests/invoke_bridge.rs"]
 mod invoke_bridge;
-#[path = "tests/bridged_origin.rs"]
-mod bridged_origin;
 #[path = "tests/modern_connections.rs"]
 mod modern_connections;
 #[path = "tests/narrowed_tool_lists.rs"]
