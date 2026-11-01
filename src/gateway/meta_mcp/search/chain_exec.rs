@@ -322,7 +322,10 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             data,
         },
         // The same refusal from the backend itself: the same text, still the
-        // backend's, so the chain it ends counts as the backend's error.
+        // backend's, so the chain it ends counts as the backend's error. No
+        // caller hands a chain step one today (`invoke_tool` folds every
+        // backend dispatch error into a tool result first); kept so an
+        // unfolded path keeps the origin rather than relying on reachability.
         Error::BackendJsonRpc {
             code: INVALID_PARAMS,
             message,
