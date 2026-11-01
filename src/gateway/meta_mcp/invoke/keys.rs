@@ -255,11 +255,8 @@ impl MetaMcp {
             backend.as_deref(),
             dispatch_binding.as_deref(),
         );
-        self.note_declared_effect(
-            (server, tool),
-            backend.as_deref(),
-            dispatch_binding.as_deref(),
-        );
+        let (be, bind) = (backend.as_deref(), dispatch_binding.as_deref());
+        self.note_declared_effect((server, tool), be, bind);
         // U12: a web UI call runs only as the call the route checked, and a
         // tool this slot did not declare read-only only when confirmed. Here
         // the backend instance and the caller's binding are the dispatched
