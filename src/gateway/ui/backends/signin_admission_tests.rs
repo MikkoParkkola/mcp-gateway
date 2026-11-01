@@ -90,3 +90,39 @@ async fn a_start_dropped_before_its_link_releases_the_login() {
     assert!(!gw.backend.login_gate.in_flight(), "the gate is still held");
     assert!(gw.row().await["sign_in_flow"].is_null(), "the flow is gone");
 }
+
+// The same claim through the real POST start route. On a gateway with no audit
+// log the admin layer passes a request straight through (see the layer's doc in
+// `admin_audit.rs`), so a request dropped during registration drops the start
+// and its guard cancels the attempt: the gate frees within the bound and no flow
+// remains. With an audit log the layer runs the handler on a task of its own, so
+// the start runs to completion after a disconnect and the gate frees only at the
+// start window; the direct-call row above covers the guard itself.
+#[tokio::test]
+async fn a_dropped_start_request_releases_the_login_without_an_audit_log() {
+    let gw = Arc::new(Gw::new_without_audit_log().await);
+    let serving = gw
+        .backend
+        .sign_in
+        .installed_client
+        .lock()
+        .clone()
+        .expect("the fixture installs a client");
+    let (reached, _release) = serving.registration_pause.arm();
+    let owner = gw.session();
+    let request = tokio::spawn({
+        let gw = Arc::clone(&gw);
+        async move { gw.start(&owner).await }
+    });
+    crate::test_pause::within("the login reaches its registration", reached.notified()).await;
+
+    request.abort();
+    let _ = request.await;
+
+    let began = std::time::Instant::now();
+    while gw.backend.login_gate.in_flight() && began.elapsed() < HANG_BOUND {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(!gw.backend.login_gate.in_flight(), "the gate is still held");
+    assert!(gw.row().await["sign_in_flow"].is_null(), "the flow is gone");
+}
