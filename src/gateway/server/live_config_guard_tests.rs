@@ -61,16 +61,23 @@ fn module_file(file: &Path, name: &str, path_attr: Option<&str>) -> PathBuf {
 }
 
 /// The `mod name;` declarations outside test items, each with its
-/// `#[path]` when one precedes it.
+/// `#[path]` when one precedes it. A declaration gated on `all(test, ..)` is
+/// a test item too; `production_text` blanks only a plain `#[cfg(test)]`.
 fn declarations(text: &str) -> Vec<(String, Option<String>)> {
     let mut out = Vec::new();
     let mut path_attr = None;
+    let mut test_only = false;
     for line in text.lines().map(str::trim) {
         if let Some(rest) = line.strip_prefix("#[path = \"") {
             path_attr = rest.strip_suffix("\"]").map(str::to_owned);
             continue;
         }
         if line.starts_with("#[") {
+            test_only |= line.starts_with("#[cfg(all(test,") || line.starts_with("#[cfg(all(test ");
+            continue;
+        }
+        if std::mem::take(&mut test_only) {
+            path_attr = None;
             continue;
         }
         let decl = line
