@@ -115,7 +115,14 @@ fn find_backend(
 /// The owner tag of the caller's valid dashboard session. A caller with no
 /// handle, or a handle that is not valid, gets 403: no owner is ever derived
 /// from nothing.
-fn session_owner(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Response>> {
+/// Judged against the request's pinned key table, so a session minted by a
+/// key a reload has since removed or demoted is no session here (as in the
+/// auth middleware).
+fn session_owner(
+    state: &AppState,
+    keys: &crate::gateway::auth::ResolvedAuthConfig,
+    headers: &HeaderMap,
+) -> Result<String, Box<Response>> {
     let refused = || {
         Box::new(
             structured_error(
@@ -128,9 +135,13 @@ fn session_owner(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Re
     };
     let handle = crate::gateway::auth::session_cookie_value(headers).ok_or_else(refused)?;
     let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
-    let check = state
-        .dashboard_bootstrap
-        .check_session(&handle, Now::read(), &limits, Touch::No);
+    let check = state.dashboard_bootstrap.check_session_with(
+        &handle,
+        Now::read(),
+        &limits,
+        Touch::No,
+        keys,
+    );
     if !matches!(check, SessionCheck::Valid) {
         return Err(refused());
     }
@@ -168,6 +179,7 @@ pub(in crate::gateway::ui) fn with_time(
 /// `POST /ui/api/backends/:name/signin` — start a sign-in.
 pub(super) async fn start_sign_in(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     guard: Guard,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
@@ -185,7 +197,7 @@ pub(super) async fn start_sign_in(
     if serde_json::from_slice::<Value>(&body).is_err() {
         return flat_error(StatusCode::BAD_REQUEST, "the body must be JSON").into_response();
     }
-    let owner = match session_owner(&state, &headers) {
+    let owner = match session_owner(&state, generation.auth(), &headers) {
         Ok(owner) => owner,
         Err(refused) => return *refused,
     };
@@ -272,6 +284,7 @@ struct ConfirmBody {
 /// `POST /ui/api/backends/:name/signin/confirm` — confirm or cancel it.
 pub(super) async fn confirm_sign_in(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     guard: Guard,
     client: Option<Extension<AuthenticatedClient>>,
     AxumPath(name): AxumPath<String>,
@@ -293,7 +306,7 @@ pub(super) async fn confirm_sign_in(
         )
         .into_response();
     };
-    let owner = match session_owner(&state, &headers) {
+    let owner = match session_owner(&state, generation.auth(), &headers) {
         Ok(owner) => owner,
         Err(refused) => return *refused,
     };
