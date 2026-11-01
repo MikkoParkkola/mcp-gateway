@@ -168,6 +168,14 @@ async fn a_confirm_under_a_changed_issuer_fails_closed_when_discovery_still_disa
             SignIn::ProviderChanged,
             "{caller:?}: an old-issuer publish cannot clear it"
         );
+        // A publish under the install's own issuer, which no issuer check
+        // stops: only the cell's refusal keeps the reason.
+        w.confirming.publish_sign_in();
+        assert_eq!(
+            w.cell.snapshot(),
+            SignIn::ProviderChanged,
+            "{caller:?}: a new-issuer publish cannot clear it"
+        );
     }
 }
 
