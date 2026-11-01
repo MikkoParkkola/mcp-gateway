@@ -96,6 +96,51 @@ impl Gate {
     }
 }
 
+/// A tracing layer that parks, at its gate, each event with a field whose
+/// value contains `needle`: a subscriber layer that stops, standing in for
+/// any slow one, so a row can look at the locks while a line is being written.
+pub(crate) struct ParkingLayer {
+    gate: Gate,
+    needle: &'static str,
+}
+
+impl ParkingLayer {
+    pub(crate) fn on(needle: &'static str, gate: &Gate) -> Self {
+        Self {
+            gate: gate.clone(),
+            needle,
+        }
+    }
+}
+
+struct Finds {
+    needle: &'static str,
+    found: bool,
+}
+
+impl tracing::field::Visit for Finds {
+    fn record_str(&mut self, _: &tracing::field::Field, value: &str) {
+        self.found |= value.contains(self.needle);
+    }
+
+    fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.found |= format!("{value:?}").contains(self.needle);
+    }
+}
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for ParkingLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        let mut finds = Finds {
+            needle: self.needle,
+            found: false,
+        };
+        event.record(&mut finds);
+        if finds.found {
+            self.gate.pass();
+        }
+    }
+}
+
 /// A sink that parks writes at its gate until the test opens it: every write,
 /// or only those containing `park_on`.
 pub(crate) struct ParkedSink {

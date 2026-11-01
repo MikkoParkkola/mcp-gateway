@@ -112,3 +112,51 @@ fn a_failed_start_logs_the_classification_and_not_the_childs_text() {
         "the classification is what drives the repair, not a substitute for it"
     );
 }
+
+/// G3: a failed start that needs no repair writes its line after releasing
+/// the cache lock, so with that line parked a second start of the backend
+/// can take the lock.
+#[test]
+fn g3_a_failed_start_without_a_repair_logs_after_the_cache_lock() {
+    use crate::log_writer::test_sinks::{Gate, ParkingLayer};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    crate::test_log_capture::keep_interest_open();
+    let workspace = tempfile::tempdir().expect("workspace");
+    write_stub(workspace.path(), DYING_UNRELATED_STUB);
+    let cache = seed_cache(workspace.path());
+    let log = workspace.path().join("spawns.log");
+    let env = env_with_cache(&log, "always-fail", UNRELATED, &cache.root);
+    let transport = transport(
+        workspace.path(),
+        env,
+        Duration::from_secs(5),
+        Some(&cache.root),
+    );
+    let lock = transport
+        .assigned_package_cache_dir()
+        .map(repair_lock)
+        .expect("the cache the test assigned");
+    let gate = Gate::closed();
+    let layer = ParkingLayer::on("start failed; reporting", &gate);
+    let driven = Arc::clone(&transport);
+    let driver = std::thread::spawn(move || {
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a current-thread runtime");
+            let _ = runtime.block_on(start_with_repair(&driven));
+        });
+    });
+    assert!(gate.wait_entered(), "the failed start never logged");
+    let free = lock.try_lock().is_ok();
+    gate.open();
+    driver.join().expect("the driver thread");
+    assert!(
+        free,
+        "the failed start's line is written under the cache lock"
+    );
+    assert!(!gate.fired(), "the line waited past the watchdog");
+}
