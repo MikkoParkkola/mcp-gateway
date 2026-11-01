@@ -579,7 +579,9 @@ async fn a_task_workers_cold_fill_refused_by_the_lender_is_recorded_refused() {
         tokio::task::yield_now().await;
     }
     let [invocation, delivery] = worker.as_slice() else {
-        panic!("premise: the worker's invocation and delivery records: {worker:?}");
+        panic!(
+            "the worker's dispatch is recorded as a refusal, an invocation and a delivery: {worker:?}"
+        );
     };
     assert_eq!(invocation["error_code"], -32001, "{invocation}");
     assert_eq!(
