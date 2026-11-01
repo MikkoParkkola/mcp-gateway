@@ -1,0 +1,2 @@
+src/transport/http/requests.rs	read_answer_unscrubbed	1	Reads a backend answer before the scrub; its one caller, read_answer, scrubs every result it returns, so it decides nothing.
+src/transport/http/sse_listen.rs	request_unscrubbed	1	Sends a legacy listener request and reads its answer before the scrub; its one caller, request, scrubs every result, so it decides nothing.

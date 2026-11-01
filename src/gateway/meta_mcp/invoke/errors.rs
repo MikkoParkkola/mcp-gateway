@@ -27,6 +27,8 @@ pub(super) fn dispatch_error_result(
     server: &str,
     surface: MetaSurface,
 ) -> Value {
+    // The delivered answer: the scrub's refusal of an echo records refused.
+    crate::gateway::delivery_facts::echo_refusal_delivered(e);
     audit::note_dispatch_failure(e);
     let (category, detail) = classify_dispatch_error(e);
     let mut hint = recovery_for_surface(

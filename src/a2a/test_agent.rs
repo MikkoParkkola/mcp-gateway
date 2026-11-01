@@ -60,6 +60,7 @@ pub(crate) async fn started(base: &str) -> Arc<A2aTransport> {
         Duration::from_secs(60),
         DestinationPolicy::Configured,
         None,
+        None,
     )
     .await
     .unwrap()

@@ -52,7 +52,7 @@ impl MetaMcp {
         {
             return Some(DescriptorId(descriptor.to_owned()));
         }
-        let capabilities = self.get_capabilities()?;
+        let capabilities = self.caller_capabilities()?;
         if server != capabilities.name {
             return None;
         }

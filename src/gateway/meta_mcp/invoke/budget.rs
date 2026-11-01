@@ -253,8 +253,12 @@ impl MetaMcp {
         )
     }
 
+    /// The read-only and destructive flags of `server`'s `tool` when it is a
+    /// capability the caller sees. A provider hidden from the caller has none,
+    /// as an unregistered name has none, so its answer's integrity audit
+    /// cannot tell the two apart.
     pub(super) fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(capability) = capabilities.get(tool)
         {

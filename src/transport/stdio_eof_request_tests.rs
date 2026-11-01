@@ -347,3 +347,182 @@ cat > seen"#,
     assert!(!recorded.contains("notifications/cancelled"), "{recorded}");
     let _ = t.close().await;
 }
+
+/// T1.21: a line the transport cannot parse is logged by its
+/// length only; the line is backend text and can hold an injected value.
+#[test]
+fn an_unparsable_line_is_logged_by_length_only() {
+    const NEEDLE: &str = "stdio-line-secret-61c0";
+    let logged = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                let (_workspace, t) = started(&format!("printf '{{oops {NEEDLE}\\n'")).await;
+                stdout_closed(&t).await;
+                let _ = t.close().await;
+            });
+    });
+    let log = serde_json::to_string(&logged).expect("records serialise");
+    assert!(
+        log.contains("Failed to handle a line"),
+        "premise: the line was refused: {log}"
+    );
+    assert!(!log.contains(NEEDLE), "the log quotes the line: {log}");
+}
+
+/// What a call's delivery record says about its answer, for a child that
+/// answers with `reply` (a JSON-RPC member after the id: `result` or
+/// `error`) while `secret` is an injected value. The answer is read through a
+/// real stdio reader: the reader routes it to the call as sent and the call
+/// scrubs it on its own task, so the effect lands in this call's cell.
+async fn recorded_effect(reply: &str, secret: &str) -> (serde_json::Value, String) {
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", secret);
+    recorded_effect_with(reply, needles).await
+}
+
+/// [`recorded_effect`] with a value set the caller built.
+async fn recorded_effect_with(
+    reply: &str,
+    needles: crate::security::needles::NeedleSet,
+) -> (serde_json::Value, String) {
+    let (_w, t) = started(&format!(
+        r#"read -r request
+printf '{{"jsonrpc":"2.0","id":%s,{reply}}}\n' "$(id_of "$request")"
+while IFS= read -r l; do :; done"#
+    ))
+    .await;
+    t.attach_needles(Arc::new(needles));
+    let mut fields = serde_json::Map::new();
+    let answer = crate::gateway::delivery_facts::scope(async {
+        let answer = tokio::time::timeout(Duration::from_secs(30), t.request("tools/call", None))
+            .await
+            .expect("answered");
+        // Delivered as the call delivers it: an error crosses the outlet.
+        if let Err(error) = &answer {
+            crate::gateway::delivery_facts::outlet(error);
+        }
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        answer
+    })
+    .await;
+    let _ = t.close().await;
+    (
+        fields.get("response_effect").cloned().unwrap_or_default(),
+        format!("{answer:?}"),
+    )
+}
+
+/// An injected value the child echoes.
+const ECHOED: &str = "rewrite-secret-7d41";
+
+/// An answer the scrub redacted is recorded as rewritten on the call's own
+/// delivery record, though the stdio reader that read it runs on another
+/// task.
+#[tokio::test]
+async fn a_redacted_answer_is_recorded_as_rewritten() {
+    let reply = format!(r#""result":{{"content":[{{"type":"text","text":"echo {ECHOED}"}}]}}"#);
+    let (effect, answer) = recorded_effect(&reply, ECHOED).await;
+    assert!(!answer.contains(ECHOED), "premise: scrubbed: {answer}");
+    assert_eq!(effect, serde_json::json!("rewritten"), "{answer}");
+}
+
+/// An answer replaced by the fixed refusal (its `error.code` is an injected
+/// value) never reached the caller: recorded as refused.
+#[tokio::test]
+async fn a_replaced_answer_is_recorded_as_refused() {
+    let (effect, answer) =
+        recorded_effect(r#""error":{"code":7391540,"message":"nope"}"#, "7391540").await;
+    assert!(
+        answer.contains("the backend's answer contained a credential the gateway injected"),
+        "premise: the fixed refusal: {answer}"
+    );
+    assert_eq!(effect, serde_json::json!("refused"), "{answer}");
+}
+
+/// The other replacement: a value set past its bound refuses every answer,
+/// and the call records refused.
+#[tokio::test]
+async fn an_answer_refused_for_a_full_set_is_recorded_as_refused() {
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    for i in 0..=crate::security::needles::MAX_NEEDLES {
+        needles.insert("b", &format!("full-set-value-{i:05}"));
+    }
+    assert!(needles.overflowed(), "premise: the set is full");
+    let (effect, answer) = recorded_effect_with(
+        r#""result":{"content":[{"type":"text","text":"nothing to hide"}]}"#,
+        needles,
+    )
+    .await;
+    assert!(
+        answer.contains(crate::security::needles::OVERFLOW_REFUSAL),
+        "premise: the overflow refusal: {answer}"
+    );
+    assert_eq!(effect, serde_json::json!("refused"), "{answer}");
+}
+
+/// Control: an answer the scrub left alone is recorded as delivered.
+#[tokio::test]
+async fn a_clean_answer_is_recorded_as_delivered() {
+    let (effect, answer) = recorded_effect(
+        r#""result":{"content":[{"type":"text","text":"nothing to hide"}]}"#,
+        ECHOED,
+    )
+    .await;
+    assert!(
+        answer.contains("nothing to hide"),
+        "premise: answered: {answer}"
+    );
+    assert_eq!(effect, serde_json::json!("delivered"), "{answer}");
+}
+
+/// An answer that arrives after its call timed out finds no call to scrub it:
+/// the reader drops it, and no log line quotes it. The child answers the
+/// timed-out call only once the next call arrives, then answers that one, so
+/// the second answer proves the late one was read first.
+#[test]
+fn a_late_answer_is_never_logged_raw() {
+    const LATE: &str = "late-answer-secret-3c90";
+    let logged = crate::test_log_capture::records(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime")
+            .block_on(async {
+                // timing: precondition
+                let (_w, t) = started_with_timeout(
+                    &format!(
+                        r#"read -r first
+read -r second
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"{LATE}"}}]}}}}\n' "$(id_of "$first")"
+printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$(id_of "$second")"
+while IFS= read -r l; do :; done"#
+                    ),
+                    Duration::from_millis(300),
+                )
+                .await;
+                let needles = crate::security::needles::NeedleSet::with_grace(
+                    Duration::from_secs(3_600),
+                );
+                needles.insert("b", LATE);
+                t.attach_needles(Arc::new(needles));
+                let first = t.request("tools/call", None).await;
+                assert!(
+                    matches!(first, Err(Error::BackendTimeout(_))),
+                    "premise: the first call timed out: {first:?}"
+                );
+                t.request("tools/list", None)
+                    .await
+                    .expect("the second call is answered after the late one");
+                let _ = t.close().await;
+            });
+    });
+    let log = serde_json::to_string(&logged).expect("records serialise");
+    assert!(!log.contains(LATE), "a late answer reached the log: {log}");
+}

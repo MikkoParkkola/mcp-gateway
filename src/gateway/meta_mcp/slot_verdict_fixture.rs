@@ -256,6 +256,26 @@ pub(crate) fn rearm_alpha_slot(backend: &Backend) -> Arc<Asked> {
     rearm_alpha_slot_with(backend, &valid(), false)
 }
 
+/// Arm alpha's per-user upstream to list `names` (each with a valid schema),
+/// for a row whose caller slot must fill with a tool the shared slot lacks.
+/// Its one caller (`router::oracle_per_user_tests`) is a firewall build's.
+#[cfg(feature = "firewall")]
+pub(crate) fn arm_alpha_upstream(backend: &Backend, names: &[&str]) -> Arc<Asked> {
+    let asked = Arc::new(Asked::default());
+    let tools: Vec<_> = names.iter().map(|name| tool(name, &valid())).collect();
+    backend.set_pooled_transport_for_test(
+        &PoolKey::PerUser {
+            binding: BINDING.to_string(),
+        },
+        Arc::new(Upstream {
+            tools: serde_json::to_value(&tools).expect("tools"),
+            asked: Arc::clone(&asked),
+            fail_list: false,
+        }),
+    );
+    asked
+}
+
 /// [`rearm_alpha_slot`] with `read`'s schema chosen and, with `fail_list`,
 /// every `tools/list` refused (MIK-8392 C2, L1).
 pub(crate) fn rearm_alpha_slot_with(

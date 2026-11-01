@@ -37,7 +37,11 @@ fn resolve_api_keys(
             Ok(ResolvedApiKey {
                 digest,
                 expires_at: k.expires_at,
-                quota_principal: QuotaPrincipal::api_key(&digest),
+                // Limit state follows the key's principal (ROT.11, delta d1).
+                quota_principal: QuotaPrincipal::api_key_with_principal(
+                    &digest,
+                    super::configured_key_principal(k.principal.as_deref(), &digest).storage_form(),
+                ),
                 name: k.name.clone(),
                 rate_limit: k.rate_limit,
                 backends: k.backends.clone(),
@@ -247,6 +251,20 @@ impl ResolvedAuthConfig {
         })
     }
 
+    /// When `key` last authenticated in this process, in unix seconds:
+    /// `None` before its first accepted match since start (API9.9).
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn key_last_used(&self, key: &ResolvedApiKey) -> Option<i64> {
+        self.runtime.last_used(key.principal().storage_form())
+    }
+
+    /// Every last use this table's runtime holds, for a row comparing the
+    /// whole map.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
+        self.runtime.last_used_all()
+    }
+
     /// Whether `token` is a configured API key past its expiry. Hashed again
     /// only on the reject path, to tell an expired key from a wrong one (D4).
     pub(super) fn is_expired_key(&self, token: &str) -> bool {
@@ -279,7 +297,7 @@ impl ResolvedAuthConfig {
         // An unreadable clock refuses every dated key, as
         // `api_key_expired_now` does.
         let now = crate::clock::utc_now().ok();
-        self.validate_token_judged(token, |at| {
+        self.validate_token_judged(token, now, |at| {
             at.is_some() && now.is_none_or(|now| crate::config::api_key_expired(at, now))
         })
     }
@@ -293,8 +311,10 @@ impl ResolvedAuthConfig {
         token: &str,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<AuthenticatedClient> {
-        self.validate_token_judged(token, |at| crate::config::api_key_expired(at, now))
-            .map(|(client, _origin)| client)
+        self.validate_token_judged(token, Some(now), |at| {
+            crate::config::api_key_expired(at, now)
+        })
+        .map(|(client, _origin)| client)
     }
 
     /// The one matcher behind both clocks. `expired` judges an optional expiry
@@ -303,6 +323,7 @@ impl ResolvedAuthConfig {
     fn validate_token_judged(
         &self,
         token: &str,
+        now: Option<chrono::DateTime<chrono::Utc>>,
         expired: impl Fn(Option<chrono::DateTime<chrono::Utc>>) -> bool,
     ) -> Option<(AuthenticatedClient, Option<NamedApiKey>)> {
         use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
@@ -371,6 +392,12 @@ impl ResolvedAuthConfig {
         // A previous digest is accepted only until its grace ends.
         if via_previous && expired(key.previous.as_ref().map(|p| p.expires_at)) {
             return None;
+        }
+        // Accepted: the key's last use, at the reading that judged it. With no
+        // reading there is no time to record, so nothing is written.
+        if let Some(now) = now {
+            self.runtime
+                .note_used(key.principal().storage_form(), now.timestamp());
         }
         Some((
             Self::client_of(key),
@@ -506,16 +533,17 @@ impl ResolvedAuthConfig {
 
 /// The key of a client's rate-limit bucket and circuit breaker (MIK-8489).
 ///
-/// The credential's quota principal (an API key's digest, the bearer, an OIDC
-/// issuer and subject, the dashboard session, an OAuth `client_id`), never the
-/// display name: a name is operator-chosen and may repeat, or equal the name
-/// another identity kind uses (`bearer`, an OIDC actor id). Identities that
+/// The credential's quota principal's limit key (an API key's principal hash,
+/// so a rotation under one principal keeps its window and breaker; the bearer,
+/// an OIDC issuer and subject, the dashboard session, an OAuth `client_id`),
+/// never the display name: a name is operator-chosen and may repeat, or equal
+/// the name another identity kind uses (`bearer`, an OIDC actor id). Identities that
 /// carry no quota principal (anonymous, public, stdio) key on a tagged label,
 /// which cannot equal a quota key: those are 64 hex digits, never `:`.
 fn client_state_key(client: &AuthenticatedClient) -> String {
     client.quota_principal.as_ref().map_or_else(
         || format!("label:{}", client.name),
-        |quota| quota.as_store_key().to_owned(),
+        |quota| quota.limit_store_key().to_owned(),
     )
 }
 

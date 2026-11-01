@@ -131,7 +131,12 @@ impl Transport for HttpTransport {
                     None
                 };
                 self.sessions.write().remove(bucket);
-                let handshake = self.initialize_as(extra_headers).await;
+                // The handshake's answer is not the caller's: a refusal it meets
+                // (a refused redirect hop) stays out of this call's record, and a
+                // redaction is still recorded (the nested cell shares it).
+                let handshake =
+                    crate::gateway::delivery_facts::discarded(self.initialize_as(extra_headers))
+                        .await;
                 if shared {
                     self.reinit_needed
                         .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
@@ -257,6 +262,10 @@ impl Transport for HttpTransport {
     // actually applies `extra_headers` to the wire (see
     // `send_request_with_headers` above) — the identity-propagation dispatch
     // gate relies on this override to allow a `required` backend to proceed.
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.get().is_some()
+    }
+
     fn carries_identity_headers(&self) -> bool {
         true
     }
