@@ -117,7 +117,7 @@ use crate::{Error, Result};
 use std::net::IpAddr;
 
 pub use resolver::{HostResolver, PinningResolver, SystemResolver};
-pub(crate) use resolver::{SsrfDenied, in_allowed, ssrf_denial};
+pub(crate) use resolver::{SsrfDenied, in_allowed, source_of, ssrf_denial};
 
 /// How every destination-policy refusal starts. Writer and reader stay a
 /// pair: each refusal is built from it, and [`is_ssrf_refusal`] and the

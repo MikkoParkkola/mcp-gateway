@@ -52,7 +52,10 @@ mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
-#[cfg(test)]
+// The one verified-identity-to-subject conversion, shared with the control-plane
+// snapshot so its own-grant matching cannot drift from dispatch's. The snapshot
+// is web UI code, its only production caller, so the re-export shares its gate.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;

@@ -34,8 +34,8 @@ enum Pass {
 /// it passes, so the instance-passing guarantee cannot erode silently.
 const SITES: [(&str, &str, &str, Pass); 6] = [
     (
-        "src/gateway/router/handlers/dispatch_tools_call.rs",
-        "tools_call",
+        "src/gateway/router/handlers/dispatch_tools_call/route_stage.rs",
+        "scan_targets",
         "check_request_keyed",
         Pass::Fallback(
             "the /mcp route scan: its targets carry no instance, and the chokepoint re-judges",
