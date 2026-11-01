@@ -49,6 +49,14 @@ pub(crate) enum SignIn {
         expect(dead_code, reason = "constructed only on the web UI read path")
     )]
     WaitingElsewhere,
+    /// A confirmed sign-in was saved under an issuer the serving client has
+    /// not adopted: the provider changed, so a person must sign in again. Only
+    /// adopting an install under that issuer clears it.
+    #[cfg_attr(
+        not(any(test, feature = "webui")),
+        expect(dead_code, reason = "raised only on the web UI sign-in path")
+    )]
+    ProviderChanged,
 }
 
 /// `expires_at` as RFC 3339.
@@ -74,6 +82,7 @@ impl SignIn {
                 | Self::NeverSignedIn
                 | Self::ReSignInAfterUpgrade
                 | Self::WaitingElsewhere
+                | Self::ProviderChanged
         )
     }
 }

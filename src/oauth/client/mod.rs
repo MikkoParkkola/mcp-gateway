@@ -71,6 +71,10 @@ pub struct OAuthClient {
     #[cfg(all(test, feature = "webui"))]
     pub(crate) registration_pause: crate::test_pause::Slot,
 
+    /// Where a test holds a re-discovery after it fetched the documents.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) rediscovery_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -245,6 +249,8 @@ impl OAuthClient {
             installed_seen: std::sync::atomic::AtomicU64::new(0),
             #[cfg(all(test, feature = "webui"))]
             registration_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            rediscovery_pause: crate::test_pause::Slot::default(),
         }
     }
 
@@ -525,6 +531,21 @@ impl OAuthClient {
             .expect("the seed saves");
         *self.current_token.write() = Some(token.clone());
         self.publish_sign_in();
+    }
+
+    /// The issuer this client last discovered.
+    pub(crate) fn issuer_for_test(&self) -> Option<String> {
+        self.auth_metadata.as_ref().map(|m| m.issuer.clone())
+    }
+
+    /// The storage key this client's credentials are under.
+    pub(crate) fn credential_key_for_test(&self) -> Option<String> {
+        self.credential_key().ok()
+    }
+
+    /// Whether an install is waiting to be adopted.
+    pub(crate) fn install_stale_for_test(&self) -> bool {
+        self.install_stale()
     }
 
     /// Where this client's token file is.
