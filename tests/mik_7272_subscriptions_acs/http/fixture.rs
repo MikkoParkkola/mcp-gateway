@@ -5,8 +5,8 @@
 use super::{
     AgentAuthState, AgentRegistry, AppState, Arc, BackendRegistry, Body, Config, GatewayKeyPair,
     MetaMcp, MtlsConfig, MtlsPolicy, NotificationMultiplexer, ProxyManager, Request,
-    ResolvedAuthConfig, ServiceExt, StatusCode, StoreLimits, SubscriptionRegistry, ToolPolicy,
-    ToolPolicyConfig, Value, auth_state, create_router, json, open_runtime,
+    ResolvedAuthConfig, ServiceExt, StatusCode, StoreLimits, SubscriptionRegistry, Value,
+    auth_state, create_router, json, open_runtime,
 };
 
 /// The gateway state, plus the directory its task store leases.

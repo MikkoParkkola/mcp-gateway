@@ -17,7 +17,6 @@ use mcp_gateway::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
