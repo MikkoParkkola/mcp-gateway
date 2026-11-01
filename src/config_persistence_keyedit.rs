@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Editing existing scalar fields of `gateway.yaml` in place, so a UI save
-//! keeps every comment and untouched byte (ADR-024). Each change rewrites the
-//! value of one key that already exists; anything this cannot prove right is
-//! `Unprovable`, and nothing is written. Creating keys and removing them come
-//! later, with their own design.
+//! Editing `gateway.yaml` in place, so a UI save keeps every comment and
+//! untouched byte (ADR-024). A change sets a field's value (inserting the key,
+//! and any missing parents, when it is absent), makes it a secret slot, or
+//! removes the key; a list may gain one new element, at its end, which also
+//! creates a missing list. Anything the meaning and bytes proofs cannot cover
+//! is `Unprovable`, and nothing is written: among those, removing or
+//! reordering list elements, removing a key that sits on its element's dash
+//! line, and deleting a line that carries a comment.
 //!
 //! A secret field is written as a slot: a placeholder the byte writer fills
 //! with the store reference it creates, after this edit has been proven.
