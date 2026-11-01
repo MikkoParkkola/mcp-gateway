@@ -139,7 +139,7 @@ fn g3_a_failed_start_without_a_repair_logs_after_the_cache_lock() {
         .expect("the cache the test assigned");
     let gate = Gate::closed();
     let layer = ParkingLayer::on("start failed; reporting", &gate);
-    let driven = Arc::clone(&transport);
+    let started = Arc::clone(&transport);
     let driver = std::thread::spawn(move || {
         let subscriber = tracing_subscriber::registry().with(layer);
         tracing::subscriber::with_default(subscriber, || {
@@ -147,7 +147,7 @@ fn g3_a_failed_start_without_a_repair_logs_after_the_cache_lock() {
                 .enable_all()
                 .build()
                 .expect("a current-thread runtime");
-            let _ = runtime.block_on(start_with_repair(&driven));
+            let _ = runtime.block_on(start_with_repair(&started));
         });
     });
     assert!(gate.wait_entered(), "the failed start never logged");

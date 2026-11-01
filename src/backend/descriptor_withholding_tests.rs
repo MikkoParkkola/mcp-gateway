@@ -423,10 +423,10 @@ fn locks_free_while_the_withheld_line_is_parked(drive: fn(&Backend)) {
     let (backend, _upstream) = backend(BackendConfig::default(), vec![tool(POISONED, PAYLOAD)]);
     let gate = Gate::closed();
     let layer = ParkingLayer::on("AX-010", &gate);
-    let driven = Arc::clone(&backend);
+    let shared = Arc::clone(&backend);
     let driver = std::thread::spawn(move || {
         let subscriber = tracing_subscriber::registry().with(layer);
-        tracing::subscriber::with_default(subscriber, || drive(&driven));
+        tracing::subscriber::with_default(subscriber, || drive(&shared));
     });
     assert!(
         gate.wait_entered(),
