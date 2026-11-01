@@ -348,11 +348,11 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
         // The content gate's delivery refusal keeps its type, and so its
         // -32600 and its audit projection, like a denial (MIK-8325).
         Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
-        // A gateway decision's refusal stays sealed, so the chain it ends
-        // records `refused`; the text is the same as the arm below.
-        e @ Error::GatewayRefused { .. } => Error::gateway_refused(
-            INTERNAL_ERROR,
-            format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+        // A gateway decision's refusal stays sealed, with its own code, so the
+        // chain it ends records `refused` and answers as the decision did.
+        Error::GatewayRefused { code, message } => Error::gateway_refused(
+            code,
+            format!("Chain step {idx} ({tool_ref}) refused: {message}"),
         ),
         // A backend's own error keeps the backend's origin, as a gateway
         // refusal keeps its seal above; the text is the same as the arm below.

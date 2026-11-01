@@ -77,14 +77,14 @@ src/gateway/meta_mcp/protocol.rs	handle_logging_set_level	JsonRpcResponse::error
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	JsonRpcResponse::error	2
 src/gateway/meta_mcp/resources.rs	resource_not_found	JsonRpcResponse::error	1
 src/gateway/meta_mcp/response_security.rs	emit_origin_link	delivery_refusal_error	2
-src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	JsonRpcResponse::of_error	1
-src/gateway/meta_mcp/response_security.rs	error_response_preserving_status	delivery_refusal_error	1
 src/gateway/meta_mcp/response_security.rs	finalize_routed	delivery_refusal_error	1
-src/gateway/meta_mcp/response_security.rs	recovered_result_error	delivery_refusal_error	1
 src/gateway/meta_mcp/response_security.rs	shape_meta_result	Error::json_rpc	1
 src/gateway/meta_mcp/response_security.rs	shape_meta_result	error_response_preserving_status	2
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	JsonRpcResponse::error	1
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	error_response_preserving_status	1
+src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	JsonRpcResponse::of_error	1
+src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	delivery_refusal_error	1
+src/gateway/meta_mcp/response_security/error_answers.rs	recovered_result_error	delivery_refusal_error	1
 src/gateway/meta_mcp/search.rs	code_mode_execute	Error::json_rpc	1
 src/gateway/meta_mcp/search.rs	code_mode_search	Error::json_rpc	1
 src/gateway/meta_mcp/search/chain_exec.rs	chain_step_result	Error::json_rpc	1
@@ -185,7 +185,7 @@ src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	JsonRpcResponse::e
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response	4
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_error_response_with_data	1
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	build_response	1
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	error_response_preserving_status	1
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	error_response_preserving_status	1
 src/gateway/router/handlers/events.rs	answer	JsonRpcResponse::error	1
 src/gateway/router/handlers/events.rs	answer	JsonRpcResponse::error_with_data	1
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	JsonRpcResponse::error	2

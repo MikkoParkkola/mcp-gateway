@@ -363,10 +363,14 @@ async fn dispatch(
                 // variant instead of arriving as an opaque error. A firewall
                 // refusal is as final as a denial (MIK-8325): the gate's verdict
                 // on the same answer will not change, and a retry calls the
-                // backend again.
+                // backend again. A gateway decision's refusal (a switched-off
+                // server, a spent budget) is as final, though it reads as
+                // never sent: re-sending it only repeats the refusal.
                 let refused = matches!(
                     e,
-                    crate::Error::Forbidden { .. } | crate::Error::ResponseFirewallRefused
+                    crate::Error::Forbidden { .. }
+                        | crate::Error::GatewayRefused { .. }
+                        | crate::Error::ResponseFirewallRefused
                 );
                 warn!(step = %step.name, error = %e, refused, "Step failed");
                 // Re-sent only when the error was raised before the request

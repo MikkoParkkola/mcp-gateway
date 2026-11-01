@@ -6,8 +6,9 @@
 //! `gateway`), a `backend_json_rpc(..)` call is a backend's, either taken
 //! off the wire (`origin`) or rebuilt from a frame or error that already
 //! carried a backend's origin (`rebuild`). A
-//! `BackendJsonRpc {..}` literal outside the two listed functions of
-//! `src/error.rs` (the constructor and `with_may_have_run`) fails outright:
+//! `BackendJsonRpc {..}` literal outside the two listed functions (the
+//! constructor in `src/error.rs`, `with_may_have_run` in its child
+//! `src/error/may_have_run.rs`) fails outright:
 //! the constructor is the only way to mark an error as the backend's.
 //!
 //! What this cannot see: a builder inside a macro body, or a call passed by
@@ -24,7 +25,7 @@ const ROOTS: [&str; 2] = ["src/lib.rs", "src/main.rs"];
 /// constructor, and the note that rebuilds a matched error as its own variant.
 const CONSTRUCTORS: [(&str, &str); 2] = [
     ("src/error.rs", "backend_json_rpc"),
-    ("src/error.rs", "with_may_have_run"),
+    ("src/error/may_have_run.rs", "with_may_have_run"),
 ];
 
 /// Whether `at` is one of the [`CONSTRUCTORS`].
@@ -251,7 +252,10 @@ fn only_the_listed_constructors_may_write_the_literal() {
         func: Some(func.to_owned()),
     };
     assert!(is_constructor(&at("src/error.rs", "backend_json_rpc")));
-    assert!(is_constructor(&at("src/error.rs", "with_may_have_run")));
+    assert!(is_constructor(&at(
+        "src/error/may_have_run.rs",
+        "with_may_have_run"
+    )));
     assert!(!is_constructor(&at("src/error.rs", "to_rpc_code")));
     assert!(!is_constructor(&at("src/lib.rs", "backend_json_rpc")));
 }

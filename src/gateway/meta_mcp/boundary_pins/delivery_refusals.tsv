@@ -29,6 +29,7 @@ src/capability/executor/cli_argv.rs	render_element	refuse_nul	1	not-a-decision	a
 src/capability/executor/cli_argv.rs	render_stdin	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/client.rs	build	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
 src/capability/executor/client.rs	build	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
+src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	2	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched, on both send paths; the caller still receives the transport error
 src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	pending:capability-refusals	a capability HTTP call the SSRF guard refuses; fixed by the capability-refusals follow-up
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
 src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
@@ -234,7 +235,7 @@ src/gateway/router/handlers/dispatch_intake_run.rs	intake_judgement	intake_refus
 src/gateway/router/handlers/dispatch_intake_session.rs	open_request_session	refusal	1	no-record	session admission
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	Refused::of	1	recorded	Refused::answer raises; answer_malformed is a client-protocol rejection
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	degraded_session_tool_refusal	1	not-a-decision	a session tool with no session at the capacity cap
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	request_refusal	1	recorded	route-stage request firewall, raised in this fn
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	scan_targets	request_refusal	1	recorded	route-stage request firewall, raised in this fn
 src/gateway/router/handlers/owner.rs	request_session_owner	hardened_identity_refusal	1	no-record	session owner authentication, before a call exists
 src/gateway/router/handlers/request_checks.rs	request_check_refusal	modern_method_refusal	1	not-a-decision	client-protocol rejection
 src/gateway/router/handlers/sse.rs	mcp_sse_handler	dead_attach_refusal	1	no-record	accounts, SSE, start-up or admin UI: no call delivery
@@ -280,8 +281,8 @@ src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, sta
 src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
 src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
 src/gateway/ui/tool_call.rs	parse	refusal	4	no-record	admin UI tool route: a body too large, unreadable or invalid, before any dispatch; admin_action record only
-src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs refused, recorded); admin_action records the disposition
-src/gateway/ui_call.rs	refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
+src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs ui_call_refused, recorded); admin_action records the disposition
+src/gateway/ui_call.rs	ui_call_refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
 src/identity_grants.rs	read_identity_grants_file_with_bytes	parse_refusal	1	no-record	identity grants file load
 src/identity_propagation/account_strategies_resolve.rs	resolve	audit_refusal	3	not-delivered	audit row
 src/identity_propagation/account_strategies_resolve.rs	resolve	transient_mint_refusal	1	not-a-decision	a credential mint failure

@@ -266,6 +266,10 @@ mod playbook_dispatch_refusal;
 #[cfg(test)]
 #[path = "playbook_writes_tests.rs"]
 mod playbook_writes;
+/// Both gateway refusals read as never sent.
+#[cfg(test)]
+#[path = "refusal_stage_rows_tests.rs"]
+mod refusal_stage_rows;
 
 /// A caller the gateway can name, and so can bind a continuation to.
 ///

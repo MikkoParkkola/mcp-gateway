@@ -10,7 +10,7 @@ src/capability/executor/cli_argv.rs	invalid_params	json_rpc	1	gateway	the gatewa
 src/capability/executor/mcp.rs	select	json_rpc	3	gateway	the gateway's parameter validation before a child runs
 src/capability/executor/mcp.rs	wait_ready	json_rpc	1	gateway	the gateway's parameter validation before a child runs
 src/error.rs	json_rpc	literal	1	gateway	the gateway constructor itself
-src/error.rs	with_may_have_run	literal	1	gateway	rebuilds the matched JsonRpc with its note; BackendJsonRpc has its own arm
+src/error/may_have_run.rs	with_may_have_run	literal	1	gateway	rebuilds the matched JsonRpc with its note; BackendJsonRpc has its own arm
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	json_rpc	1	gateway	a gateway admission refusal, before dispatch
 src/gateway/meta_mcp/admission.rs	admit_operation	json_rpc	9	gateway	a gateway admission refusal, before dispatch
 src/gateway/meta_mcp/admission.rs	mark_management_dispatch	json_rpc	2	gateway	a gateway admission refusal, before dispatch
