@@ -64,7 +64,6 @@ src/idempotency/admission.rs	.expect("owner checked under this guard")	1
 src/identity_grants/journal.rs	let bytes = serde_json::to_vec(grant).expect("an identity grant always serialises");	1
 src/identity_propagation/token_exchange.rs	.expect("failed to build HTTPS-only token-exchange HTTP client (TLS backend init)")	1
 src/oauth/callback.rs	let ipv6_addr: SocketAddr = format!("[::1]:{actual_port}").parse().unwrap();	1
-src/oauth/client/mod.rs	let auth_base = self.oauth_base_url.as_ref().unwrap();	1
 src/personal_accounts/mod.rs	.expect("custody start blocking worker")?;	1
 src/personal_accounts/worker.rs	.expect("custody blocking worker")	3
 src/protocol/continuation/ledger.rs	.expect("platform RNG must produce a continuation key");	1
