@@ -624,13 +624,24 @@ fn bench_modern_request_path(c: &mut Criterion) {
 // ── relay detection off-path benchmark ───────────────────────────────────────
 
 /// What one delivery costs with the firewall on and the collusion action
-/// `off`: the response check every delivery already pays on this path.
+/// `off`, as a proxy for the staging the amended decision adds there
+/// (ADR-029): relay-detection staging was skipped under `off` and now runs
+/// whenever the firewall is on, so a reload to `on` between staging and
+/// delivery cannot fail open.
 ///
-/// Relay-detection staging joins this path when the firewall is on whatever
-/// the action is (ADR-029, amended), and its entry is crate-private, so it has
-/// no case of its own here yet. When it gains a public entry, time it in this
-/// group: above about 2 microseconds per delivery goes to the lead before
-/// merge.
+/// The staging entry is crate-private and nothing is made public for a
+/// bench, so this times the public response check on the same path. What
+/// staging adds there, per receipt, is read off `digest_with`
+/// (`src/security/firewall/collusion_gate_receipts.rs:173-175`): one
+/// `format!("{server}:{tool}")` source-identity copy and one
+/// `context_integrity_sensitive(result)` classification
+/// (`src/security/firewall/collusion_gate.rs:561-569`: one JSON-pointer
+/// lookup and a scan of at most a few class names). This proxy does not
+/// bracket either: the response check does not run that classifier. It also
+/// leaves out the leaf walk and digest build that follow
+/// (`collusion_gate_receipts.rs:176-178`), which a real measurement of the
+/// staging entry has to include. The one-off measurement against the
+/// above-2-microsecond line is taken by hand, after the fix exists.
 #[cfg(feature = "firewall")]
 fn bench_collusion_off_delivery(c: &mut Criterion) {
     use mcp_gateway::security::firewall::{Firewall, FirewallConfig};
