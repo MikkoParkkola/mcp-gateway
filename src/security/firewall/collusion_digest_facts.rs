@@ -40,7 +40,7 @@ impl DeliveryDigest {
     }
 
     /// Set the `server:tool` this digest's result came from.
-    pub(super) fn set_source(&mut self, source: &str) {
+    pub(crate) fn set_source(&mut self, source: &str) {
         self.source = Some(std::sync::Arc::from(source));
     }
 }
