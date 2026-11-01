@@ -591,11 +591,11 @@ impl HttpTransport {
             // notification until the call it belongs to had already finished
             // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
             // complete body. Each frame is published as its chunk arrives.
+            use super::sse_decoder::decode_sse_exchange;
             use futures::TryStreamExt;
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
-            use super::sse_decoder::decode_sse_exchange;
             let needles = self.needles.get().map(AsRef::as_ref);
             match self.body_budget.get() {
                 Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,

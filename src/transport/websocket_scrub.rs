@@ -29,9 +29,6 @@ pub(super) fn scrub_frame(
     use crate::protocol::JsonRpcMessage;
     use crate::security::needles::{Scrubbed, ingress_scrub};
     match frame {
-        // An answer goes to its call as sent: the call scrubs it on its own
-        // task, so a rewrite lands on that call's delivery record.
-        McpFrame::Response(_) => true,
         McpFrame::Notification { method, params } => {
             let mut message = JsonRpcMessage::Notification(JsonRpcNotification {
                 jsonrpc: "2.0".to_string(),
@@ -45,7 +42,9 @@ pub(super) fn scrub_frame(
             }
             matches!(outcome, Scrubbed::Clean | Scrubbed::Redacted)
         }
-        // A server-initiated request is only logged, never relayed.
-        McpFrame::Request(_) | McpFrame::Ping | McpFrame::Pong => true,
+        // An answer goes to its call as sent: the call scrubs it on its own
+        // task, so a rewrite lands on that call's delivery record. A
+        // server-initiated request is only logged, never relayed.
+        McpFrame::Response(_) | McpFrame::Request(_) | McpFrame::Ping | McpFrame::Pong => true,
     }
 }
