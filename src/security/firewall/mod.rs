@@ -485,6 +485,10 @@ impl Firewall {
 
     /// [`Self::check_request`] with the caller's proven key, for a rule's
     /// `keys` scope; the entry point every gateway route uses (POLICY.2).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the call's parts as each route holds them: the pinned policy, the backend for its folder check"
+    )]
     pub(crate) fn check_request_keyed(
         &self,
         policy: &FirewallPolicy,
