@@ -16,8 +16,8 @@ use crate::commands::doctor::CheckStatus;
 
 #[path = "npm_pin_wire_fixture.rs"]
 mod fixture;
-#[path = "npm_pin_wire_response_tests.rs"]
-mod response;
+#[path = "npm_pin_wire_transport_tests.rs"]
+mod transport;
 use fixture::{
     Cert, Fake, HANG_GUARD, Proxy, Reply, STALL_OUTLASTS_BUDGET, assert_all_released,
     assert_budget_ended, check_within_guard, lookup_within_guard,

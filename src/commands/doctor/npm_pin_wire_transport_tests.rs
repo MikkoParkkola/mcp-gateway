@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Network rows on what the registry answers and how the request travels:
-//! a non-200 answer, a redirect, an endless or compressed body, invalid JSON
-//! and hostile text are each silent or sanitized, and an HTTPS proxy, NO_PROXY
-//! and an unusable proxy are honoured through the production builder. Moved
-//! from `npm_pin_wire_tests.rs` for the file-size ceiling.
+//! Network rows on the transport: what the registry sends back and how the
+//! request travels. A non-200 answer, a redirect, an endless or compressed
+//! body, invalid JSON and hostile text are each silent or sanitized; an HTTPS
+//! proxy, a `NO_PROXY` match and an unusable proxy are honoured through the
+//! production builder. Moved from `npm_pin_wire_tests.rs` for the file-size
+//! ceiling.
 
 use super::*;
 
