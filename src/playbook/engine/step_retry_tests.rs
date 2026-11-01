@@ -325,3 +325,30 @@ async fn an_aborted_step_keeps_its_error_and_says_it_may_have_run() {
         crate::Error::TransportConnect("connection refused".into()).to_string()
     );
 }
+
+/// A refusal is final under `retry`, whatever list its variant is on: a
+/// gateway decision's refusal and a denial are each called once. Mutant: the
+/// gateway refusal left out of the engine's non-retryable match (red once
+/// that refusal reads as raised before the send).
+#[tokio::test]
+async fn a_refusal_is_called_once_under_retry() {
+    let cases: Vec<Case> = vec![
+        ("GatewayRefused", || {
+            crate::Error::gateway_refused(-32000, "switched off by the operator")
+        }),
+        ("Forbidden", || crate::Error::Forbidden {
+            code: -32003,
+            status: 403,
+            message: "refused".into(),
+        }),
+    ];
+    for (what, error) in cases {
+        let invoker = Scripted::new(vec![answer(error)]);
+        let result = engine(ErrorStrategy::Retry)
+            .execute("pay", json!({}), &invoker)
+            .await
+            .expect("retry carries on past a failed step");
+        assert_eq!(invoker.calls(), 1, "{what}: a refusal was retried");
+        assert_eq!(result.steps_failed, vec!["charge"], "{what}");
+    }
+}
