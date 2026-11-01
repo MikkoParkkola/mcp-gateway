@@ -119,12 +119,14 @@ impl CollusionDetector {
                     .into(),
             ),
         };
+        let listed = origin.listed(view);
         let holder = |at| Holder {
             source: self.digest(source),
             principal: id.key,
             copies: Copies::one(at),
             inferred: inferred.then(|| Copies::one(at)),
             origin: origin.clone(),
+            listed,
             unread: id.unread,
         };
         if let (Some(reservation), Some(sketch)) = (pending.reservation.take(), built) {
@@ -155,8 +157,7 @@ impl CollusionDetector {
                 Holders::Tracked(holders::Tracked::default())
             };
             let room = self.pool_capacity.saturating_sub(state.pool);
-            let (holders, lost) =
-                self.add(holders, holder(now), (now, view, room), &mut state.budget);
+            let (holders, lost) = self.add(holders, holder(now), (now, room), &mut state.budget);
             if let Some(source) = lost {
                 state.markers.mark((source, me), until);
             }

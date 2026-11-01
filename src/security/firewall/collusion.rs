@@ -90,6 +90,10 @@ struct Holder {
     /// The source identity, judged at witness against the lists and flows
     /// in force.
     origin: origin::Origin,
+    /// Whether the view it was recorded under listed its source: its
+    /// retention class, fixed at record (ADR-029, amended, item 3). The
+    /// witness never reads it.
+    listed: bool,
     /// `MIK-8066` D6: an unread plan's evidence holder. Never a caller, so it
     /// never counts toward `Common`.
     unread: bool,
@@ -490,7 +494,7 @@ impl CollusionDetector {
         &self,
         holders: Holders,
         new: Holder,
-        (now, view, room): (Instant, &CollusionView, usize),
+        (now, room): (Instant, usize),
         budget: &mut holders::Budget,
     ) -> (Holders, Option<u64>) {
         let Holders::Tracked(mut tracked) = holders else {
@@ -499,7 +503,7 @@ impl CollusionDetector {
         let window = self.params.window;
         tracked.expire(now, window, budget);
         let new_source = new.source;
-        let (bound, lost) = match tracked.add(new, (now, window), (view, room), budget) {
+        let (bound, lost) = match tracked.add(new, (now, window), room, budget) {
             holders::Added::Kept => (None, None),
             holders::Added::PlainDropped => (Some("record_dropped"), Some(new_source)),
             holders::Added::PlainReplaced { source } => (Some("record_replaced"), Some(source)),

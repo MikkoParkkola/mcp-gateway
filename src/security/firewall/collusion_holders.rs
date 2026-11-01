@@ -192,14 +192,15 @@ impl Tracked {
         }
     }
 
-    /// Add `new` delivered at `now`, its retention decided by the lists of
-    /// `view`, the generation it is recorded under. `room` is how many pool
-    /// records this fingerprint may hold in all.
+    /// Add `new` delivered at `now`. Retention reads each record's class as
+    /// it was recorded (`listed`, the inferred slot), never re-judged under a
+    /// later view. `room` is how many pool records this fingerprint may hold
+    /// in all.
     pub(super) fn add(
         &mut self,
         new: Holder,
         (now, window): (Instant, Duration),
-        (view, room): (&CollusionView, usize),
+        room: usize,
         budget: &mut Budget,
     ) -> Added {
         // `MIK-8066` D6: an unread holder is evidence, never a caller.
@@ -217,6 +218,7 @@ impl Tracked {
                 (Some(held), Some(more)) => held.add(&more, window),
                 (held, more) => *held = held.or(more),
             }
+            r.listed |= new.listed;
             return Added::Kept;
         }
         let mine = self
@@ -241,15 +243,16 @@ impl Tracked {
             }
             self.records.shrink_to_fit();
         }
-        if new.inferred.is_none() && !new.origin.listed(view) {
+        if new.inferred.is_none() && !new.listed {
             return Added::PlainDropped;
         }
-        // A plain record of the same caller gives way to a sensitive one.
+        // A plain record of the same caller gives way to a sensitive one:
+        // plain as it was recorded, whatever a later view lists.
         let plain = |r: &Holder| {
             r.principal == new.principal
                 && r.inferred
                     .is_none_or(|c| now.saturating_duration_since(c.latest()) > window)
-                && !r.origin.listed(view)
+                && !r.listed
         };
         if let Some(i) = self.records.iter().position(plain) {
             let source = self.records[i].source;
