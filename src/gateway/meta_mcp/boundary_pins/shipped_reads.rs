@@ -497,6 +497,18 @@ fn glob_and_directory_entries_count_as_shipped() {
     assert!(!shipped(&patterns, "scripts/never/shipped.sh"));
 }
 
+/// The live `Cargo.toml` ships pin-table fragments, so the packaged suite
+/// reads every fragment a checkout reads.
+#[test]
+fn the_package_ships_fragment_files() {
+    let cargo_toml = std::fs::read_to_string(crate_root().join("Cargo.toml")).expect("Cargo.toml");
+    let patterns = include_patterns(&cargo_toml);
+    assert!(shipped(
+        &patterns,
+        "src/gateway/meta_mcp/boundary_pins/delivery_refusals.d/1.tsv"
+    ));
+}
+
 /// MIK-8501.SCAN.1: a `crate_root()` call triggers the scan without `CARGO_MANIFEST_DIR`.
 #[test]
 fn scan1_a_crate_root_helper_call_triggers_the_scan() {
