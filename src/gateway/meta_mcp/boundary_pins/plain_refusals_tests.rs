@@ -341,7 +341,10 @@ fn credential_miss_ordinal(source: &str) -> usize {
             let miss = local.init.as_ref().is_some_and(|init| {
                 init.diverge.is_some() && quote_text(&init.expr).contains("tool_credential_for")
             });
-            let saved = std::mem::replace(&mut self.in_miss, self.in_miss || miss);
+            let saved = {
+                let now = self.in_miss || miss;
+                std::mem::replace(&mut self.in_miss, now)
+            };
             syn::visit::visit_local(self, local);
             self.in_miss = saved;
         }
@@ -362,7 +365,10 @@ fn credential_miss_ordinal(source: &str) -> usize {
                     self.miss.get_or_insert(self.seen);
                 }
             }
-            let saved = std::mem::replace(&mut self.in_raise, self.in_raise || raise);
+            let saved = {
+                let now = self.in_raise || raise;
+                std::mem::replace(&mut self.in_raise, now)
+            };
             syn::visit::visit_expr_call(self, call);
             self.in_raise = saved;
         }
