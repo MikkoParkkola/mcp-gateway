@@ -186,7 +186,7 @@ fn an_imported_config_with_client_variables_loads() {
 /// shows none of them raw, and the record stays one line.
 #[test]
 fn every_discovery_debug_line_shows_its_text_escaped() {
-    const HOSTILE: &str = "a\u{1b}[31m\u{202e}b\nforged";
+    const HOSTILE: &str = "a\u{1b}[31m\u{202e}\u{200b}b\nforged";
     let rows: [(&str, fn()); 3] = [
         ("Scanning MCP config file", || {
             note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")));
@@ -204,7 +204,10 @@ fn every_discovery_debug_line_shows_its_text_escaped() {
             logs.contains(site),
             "{site}: the site did not fire: {logs:?}"
         );
-        for raw in ['\u{1b}', '\u{202e}'] {
+        for spelled in ["\\u{202e}", "\\u{200b}", "\\u{a}"] {
+            assert!(logs.contains(spelled), "{site}: no {spelled} in {logs:?}");
+        }
+        for raw in ['\u{1b}', '\u{202e}', '\u{200b}'] {
             assert!(
                 !logs.contains(raw),
                 "{site}: {raw:?} reached the log: {logs:?}"
