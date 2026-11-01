@@ -207,7 +207,7 @@ impl ConfigScanner {
         {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                debug!("Scanning MCP config file: {}", path.display());
+                note_mcp_config_file(&path);
                 if let Ok(mut config_servers) = self
                     .parse_claude_config(&path, DiscoverySource::McpConfig)
                     .await
@@ -249,10 +249,7 @@ impl ConfigScanner {
                     .to_lowercase()
                     .replace('_', "-");
 
-                // The variable name, never its value: an endpoint URL carries
-                // userinfo and query-string tokens often enough that logging it
-                // writes a credential into the log because discovery ran.
-                debug!("Found MCP server in environment: {name} (from {key})");
+                note_environment_server(&name, &key);
 
                 servers.push(DiscoveredServer::new(
                     name.clone(),
@@ -677,6 +674,20 @@ impl ConfigScanner {
 pub(crate) mod client_scan;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
+
+/// Logs the MCP config file about to be read. Its name is whatever the
+/// directory holds.
+fn note_mcp_config_file(path: &Path) {
+    debug!("Scanning MCP config file: {}", path.display());
+}
+
+/// Logs a server found in the environment: the variable name, never its
+/// value. An endpoint URL carries userinfo and query-string tokens often
+/// enough that logging it writes a credential into the log because
+/// discovery ran.
+fn note_environment_server(name: &str, key: &str) {
+    debug!("Found MCP server in environment: {name} (from {key})");
+}
 
 #[cfg(test)]
 mod tests {
