@@ -144,7 +144,7 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
         return Ok(());
     };
     if !call.targets(step) || !call.gated.load(Ordering::SeqCst) {
-        return Err(refused(
+        return Err(ui_call_refused(
             DecisionKind::AdminCapability,
             "this send is not the call the web UI checked",
         ));
@@ -156,7 +156,7 @@ pub(crate) fn admit_send(step: (&str, &str)) -> crate::Result<()> {
     {
         Ok(_) | Err(SENDING) => Ok(()),
         // The web UI's deadline: no kind names it yet.
-        Err(_) => Err(refused(
+        Err(_) => Err(ui_call_refused(
             DecisionKind::Unrecorded,
             "the web UI stopped waiting for this call",
         )),
@@ -201,7 +201,7 @@ pub(crate) fn refuses_task() -> bool {
 
 /// The refusal for [`refuses_task`].
 pub(crate) fn task_refused() -> crate::Error {
-    refused(DecisionKind::Syntax, "a web UI call does not run as a task")
+    ui_call_refused(DecisionKind::Syntax, "a web UI call does not run as a task")
 }
 
 /// The gate before the send, where the dispatched backend and the caller's
@@ -217,7 +217,7 @@ pub(crate) fn gate(
     };
     // The principal is the one the route checked as an admin.
     if !call.targets(step) || principal != Some(call.principal.as_str()) {
-        return Err(refused(
+        return Err(ui_call_refused(
             DecisionKind::AdminCapability,
             "this call is not the one the web UI checked",
         ));
@@ -239,7 +239,7 @@ pub(crate) fn gate_capability(read_only: bool) -> crate::Result<()> {
 fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
     if call.confirm == Confirm::DeclaredReadOnlyOnly && !read_only {
         call.confirm_refused.store(true, Ordering::SeqCst);
-        return Err(refused(
+        return Err(ui_call_refused(
             DecisionKind::ToolPolicy,
             "this tool is not declared read-only; confirm_write is required",
         ));
@@ -249,7 +249,7 @@ fn confirmed(call: &UiCall, read_only: bool) -> crate::Result<()> {
 
 /// A refusal by this gate's `kind` of check, noted so the call's decision
 /// record names the check that refused it.
-fn refused(kind: DecisionKind, message: &str) -> crate::Error {
+fn ui_call_refused(kind: DecisionKind, message: &str) -> crate::Error {
     crate::gateway::meta_mcp::invoke::audit::note_refused_by(kind, None);
     // A gateway refusal of the delivery this call answers: its record says so.
     crate::gateway::delivery_facts::raise(crate::gateway::delivery_facts::ResponseEffect::Refused);

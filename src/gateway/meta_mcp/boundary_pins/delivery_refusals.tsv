@@ -278,8 +278,8 @@ src/gateway/ui/preview.rs	preview_backend	refusal	1	no-record	accounts, SSE, sta
 src/gateway/ui/tool_call.rs	admit	refusal	2	no-record	admin UI tool route, before any dispatch (message signing on, call slots busy); its admin_action record carries the disposition, no call delivery exists
 src/gateway/ui/tool_call.rs	call	refusal	2	no-record	admin UI tool route: a non-JSON body before dispatch, or the outward wording of a dispatched failure the inner gateway_invoke dispatch already recorded
 src/gateway/ui/tool_call.rs	parse	refusal	4	no-record	admin UI tool route: a body too large, unreadable or invalid, before any dispatch; admin_action record only
-src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs refused, recorded); admin_action records the disposition
-src/gateway/ui_call.rs	refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
+src/gateway/ui/tool_call.rs	past_deadline	refusal	1	no-record	admin UI tool route: the route's own 504; a call its deadline claimed runs on to its send claim, which refuses it (ui_call.rs ui_call_refused, recorded); admin_action records the disposition
+src/gateway/ui_call.rs	ui_call_refused	Error::Forbidden{}	1	recorded	web UI call gate, send and confirm refusals: raised here (delivery_facts::raise) before the error is built
 src/identity_grants.rs	read_identity_grants_file_with_bytes	parse_refusal	1	no-record	identity grants file load
 src/identity_propagation/account_strategies_resolve.rs	resolve	audit_refusal	3	not-delivered	audit row
 src/identity_propagation/account_strategies_resolve.rs	resolve	transient_mint_refusal	1	not-a-decision	a credential mint failure
