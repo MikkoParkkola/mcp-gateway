@@ -170,3 +170,96 @@ async fn a_resend_that_never_connected_after_an_expired_session_may_have_run() {
         "{error}"
     );
 }
+
+/// An injected value the recovering server echoes.
+const ECHOED: &str = "recovery-secret-5b2e";
+
+/// How the recovering server answers the stale session's request.
+#[derive(Clone, Copy)]
+enum Expiry {
+    /// 404: an error, never scrubbed as an answer.
+    NotFound,
+    /// A 200 whose error says the session was not found, and echoes
+    /// [`ECHOED`]: an answer the scrub redacts.
+    EchoingError,
+}
+
+/// A server that expires the stale session as `expiry`, re-initialises with
+/// an `initialize` answer that echoes [`ECHOED`], and answers the resend
+/// with a clean empty tool list. It serves until the test ends.
+fn recovering_server(expiry: Expiry) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+    let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            let (first, headers, body) = read_request(&stream);
+            let method = body["method"].as_str().unwrap_or_default();
+            if !first.starts_with("POST") {
+                respond(&stream, "405 Method Not Allowed", "", "");
+            } else if method == "initialize" {
+                let result = json!({"jsonrpc": "2.0", "id": body["id"], "result": {
+                    "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                    "serverInfo": {"name": ECHOED, "version": "0"}}});
+                respond(
+                    &stream,
+                    "200 OK",
+                    &format!("mcp-session-id: {FRESH}\r\n"),
+                    &result.to_string(),
+                );
+            } else if body.get("id").is_none() {
+                respond(&stream, "202 Accepted", "", "");
+            } else if headers.contains(FRESH) {
+                let result = json!({"jsonrpc": "2.0", "id": body["id"], "result": {"tools": []}});
+                respond(&stream, "200 OK", "", &result.to_string());
+            } else {
+                match expiry {
+                    Expiry::NotFound => respond(&stream, "404 Not Found", "", ""),
+                    Expiry::EchoingError => {
+                        let error = json!({"jsonrpc": "2.0", "id": body["id"], "error": {
+                            "code": -32_000, "message": format!("session not found: {ECHOED}")}});
+                        respond(&stream, "200 OK", "", &error.to_string());
+                    }
+                }
+            }
+        }
+    });
+    url
+}
+
+/// A call that recovers an expired session answers with the resend's
+/// answer, so its delivery record says what the scrub did to that answer
+/// only: not to the re-handshake's `initialize` answer, and not to the
+/// expired answer it replaced. Both of those echo an injected value here;
+/// the resend's answer is clean.
+#[tokio::test]
+async fn a_recovered_calls_record_is_its_resends_answer_only() {
+    for expiry in [Expiry::NotFound, Expiry::EchoingError] {
+        let url = recovering_server(expiry);
+        let transport = make_transport(&url);
+        *transport.message_url.write() = Some(url.clone());
+        set_default_session(&transport, "stale-session");
+        let needles =
+            crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+        needles.insert("b", ECHOED);
+        transport.attach_needles(Arc::new(needles));
+        let mut fields = serde_json::Map::new();
+        let answer = crate::gateway::delivery_facts::scope(async {
+            let answer = transport.request("tools/list", None).await;
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            answer
+        })
+        .await;
+        let answer = answer.expect("the resend answered");
+        assert_eq!(answer.result, Some(json!({"tools": []})), "premise");
+        assert_eq!(
+            default_session(&transport).as_deref(),
+            Some(FRESH),
+            "premise: the session was healed"
+        );
+        assert_eq!(fields["response_effect"], "delivered");
+    }
+}

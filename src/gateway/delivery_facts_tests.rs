@@ -421,3 +421,62 @@ async fn the_latest_attempts_scrub_effect_is_recorded() {
     })
     .await;
 }
+
+/// One counted send whose answer the scrub changed as `effect`.
+async fn scrubbed_send(effect: Option<ResponseEffect>) {
+    super::counted_send(async {
+        if let Some(effect) = effect {
+            super::raise_attempt(effect);
+        }
+        Ok(())
+    })
+    .await
+    .expect("sent");
+}
+
+/// Two requests of one delivery (a catalogue's pages): the first page's
+/// answer was redacted, so the merged answer holds redacted text, and the
+/// second page's send must not erase that.
+#[tokio::test]
+async fn a_later_requests_send_keeps_an_earlier_requests_scrub_effect() {
+    scope(async {
+        super::settled_attempts(scrubbed_send(Some(ResponseEffect::Rewritten))).await;
+        super::settled_attempts(scrubbed_send(None)).await;
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// Within one request, a retried attempt's effect is dropped and the
+/// answered attempt's is kept: the retry boundary is the request's, not the
+/// delivery's.
+#[tokio::test]
+async fn a_requests_retried_attempt_is_dropped_and_its_answered_one_kept() {
+    scope(async {
+        super::settled_attempts(async {
+            scrubbed_send(Some(ResponseEffect::Refused)).await;
+            scrubbed_send(None).await;
+        })
+        .await;
+        assert_eq!(recorded(false)["response_effect"], "delivered");
+        super::settled_attempts(async {
+            scrubbed_send(None).await;
+            scrubbed_send(Some(ResponseEffect::Rewritten)).await;
+        })
+        .await;
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// An answer the transport read and then replaced (a session expiry it
+/// recovered from) leaves no scrub effect.
+#[tokio::test]
+async fn a_discarded_answers_scrub_effect_is_dropped() {
+    scope(async {
+        super::raise_attempt(ResponseEffect::Refused);
+        super::answer_discarded();
+        assert_eq!(recorded(false)["response_effect"], "delivered");
+    })
+    .await;
+}

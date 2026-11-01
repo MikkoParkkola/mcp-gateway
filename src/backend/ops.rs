@@ -10,7 +10,9 @@ use serde_json::Value;
 
 use super::Backend;
 use crate::failsafe::{RetryPolicy, with_retry_unless};
-use crate::gateway::delivery_facts::{before_send as presend, counted_send, refused_before_send};
+use crate::gateway::delivery_facts::{
+    before_send as presend, counted_send, refused_before_send, settled_attempts,
+};
 use crate::protocol::JsonRpcResponse;
 use crate::protocol::param_headers::{is_param_header, mirror_headers};
 use crate::transport::{ResendPermission, resend_permission};
@@ -413,15 +415,16 @@ impl Backend {
         };
         // A call sent at most once (as `with_retry` sends under a disabled
         // policy) moves its payload in; only a resend copies (NFR.WORKLOAD.1).
+        // Only the attempt answered is recorded as scrubbed.
         let mut result = if matches!(attempts, Attempts::TaskCapabilityOnce) || !policy.enabled {
-            send(params, extra_headers).await
+            settled_attempts(send(params, extra_headers)).await
         } else {
             // A refused credential repeats its refusal: stop once this
             // dispatch's own loan was marked.
             let refused = || loan.as_ref().is_some_and(|held| held.refused().is_some());
-            with_retry_unless(&policy, &name, refused, || {
+            settled_attempts(with_retry_unless(&policy, &name, refused, || {
                 send(params.clone(), extra_headers.clone())
-            })
+            }))
             .await
         };
         // Every backend answer enters here, so this is the one place a

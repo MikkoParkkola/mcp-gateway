@@ -82,9 +82,10 @@ struct Finding {
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryFacts {
     effect: ResponseEffect,
-    /// What the transport's scrub did to the latest send attempt's answer.
-    /// Each counted send starts it over, so an attempt the call retried past
-    /// leaves nothing behind.
+    /// What the transport's scrub did to the answer of the send attempt in
+    /// flight. Each counted send starts it over, so an attempt the call
+    /// retried past leaves nothing behind; [`settled_attempts`] moves the one
+    /// a request settles on into `effect`.
     attempt: ResponseEffect,
     scanned: bool,
     findings: BTreeSet<Finding>,
@@ -306,6 +307,32 @@ pub(crate) fn send_began() {
 /// [`send_began`] starts it over.
 pub(crate) fn raise_attempt(effect: ResponseEffect) {
     with(|facts| facts.attempt = facts.attempt.max(effect));
+}
+
+/// The answer the transport read last is not the one it hands on (a session
+/// expiry it recovers from by resending): its scrub effect is dropped.
+pub(crate) fn answer_discarded() {
+    with(|facts| facts.attempt = ResponseEffect::Delivered);
+}
+
+/// Moves the scrub effect of the send attempt in flight into the delivery's.
+fn settle_attempt() {
+    with(|facts| {
+        facts.effect = facts.effect.max(facts.attempt);
+        facts.attempt = ResponseEffect::Delivered;
+    });
+}
+
+/// Runs one request's send attempts: an attempt a retry follows leaves no
+/// scrub effect, and the attempt the request settles on joins the
+/// delivery's effect, so a later request of the same delivery (a
+/// catalogue's next page) cannot erase it. One still in flight from before
+/// (a send outside any request) joins first.
+pub(crate) async fn settled_attempts<F: std::future::Future>(attempts: F) -> F::Output {
+    settle_attempt();
+    let output = attempts.await;
+    settle_attempt();
+    output
 }
 
 /// Run one transport call of this delivery as a counted send: counted when

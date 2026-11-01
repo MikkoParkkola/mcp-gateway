@@ -126,7 +126,10 @@ impl Transport for HttpTransport {
                 None
             };
             self.sessions.write().remove(bucket);
-            let handshake = self.initialize_as(extra_headers).await;
+            // The handshake's answer is not the caller's: its scrub effect
+            // stays out of this call's record.
+            let handshake =
+                crate::gateway::delivery_facts::discarded(self.initialize_as(extra_headers)).await;
             if shared {
                 self.reinit_needed
                     .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
@@ -164,6 +167,8 @@ impl Transport for HttpTransport {
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
+            // The expired answer is replaced by the resend's.
+            crate::gateway::delivery_facts::answer_discarded();
             // The first request reached the server, so a never-sent error from
             // the resend no longer proves nothing ran.
             return self
