@@ -285,6 +285,9 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         .chars()
         .take(2048)
         .collect();
+    // The chain's error wraps the step's own tool failure: counted as that
+    // step's, the backend's unless the gateway folded the result itself.
+    crate::gateway::delivery_facts::step_tool_failed();
     Err(Error::json_rpc(
         INTERNAL_ERROR,
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
@@ -357,10 +360,16 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
                 data: None,
             })
         }
-        e => Error::json_rpc(
-            INTERNAL_ERROR,
-            format!("Chain step {idx} ({tool_ref}) failed: {e}"),
-        ),
+        e => {
+            // The chain's error wraps this step's failure: counted with the
+            // failure's own origin, not as the gateway's.
+            crate::gateway::delivery_facts::step_carried(Some(&e));
+            crate::gateway::delivery_facts::wrapped_step();
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+            )
+        }
     }
 }
 

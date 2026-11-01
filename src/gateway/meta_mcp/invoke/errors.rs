@@ -28,6 +28,12 @@ pub(super) fn dispatch_error_result(
     surface: MetaSurface,
 ) -> Value {
     audit::note_dispatch_failure(e);
+    // The answer is a tool result, not an error frame: the failure it folds
+    // is still the delivery's, counted with its own origin.
+    crate::gateway::delivery_facts::folded(crate::gateway::health_metrics::RpcError {
+        code: e.to_rpc_code(),
+        origin: e.origin(),
+    });
     let (category, detail) = classify_dispatch_error(e);
     let mut hint = recovery_for_surface(
         category,

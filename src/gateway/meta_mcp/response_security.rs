@@ -325,6 +325,10 @@ impl super::MetaMcp {
                 );
             }
         }
+        // Last, after every refusal that replaces the frame, and before the
+        // frame leaves the delivery cell: what the answer carries folded is
+        // counted (a replacing refusal keeps its own marker).
+        crate::gateway::delivery_facts::stamp_folded(&mut response);
         response
     }
 }

@@ -119,6 +119,9 @@ pub(crate) struct OutboundFrame {
     /// Who wrote an error in an [`Payload::Answer`] value, whose frame no
     /// longer carries the origin a [`Payload::Response`] does.
     origin: Origin,
+    /// The failure an [`Payload::Answer`] value carries folded into a tool
+    /// result, which its frame carried as `wire_meta.folded`.
+    folded: Option<crate::gateway::health_metrics::RpcError>,
 }
 
 impl OutboundFrame {
@@ -134,12 +137,22 @@ impl OutboundFrame {
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
             origin: Origin::Gateway,
+            folded: None,
         }
     }
 
     /// This frame, its error (if any) written by `origin`.
     pub(crate) fn written_by(mut self, origin: Origin) -> Self {
         self.origin = origin;
+        self
+    }
+
+    /// This frame, carrying `folded`: a failure folded into its tool result.
+    pub(crate) fn folded_by(
+        mut self,
+        folded: Option<crate::gateway::health_metrics::RpcError>,
+    ) -> Self {
+        self.folded = folded;
         self
     }
 
@@ -209,6 +222,7 @@ impl OutboundFrame {
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
             origin: Origin::Gateway,
+            folded: None,
         }
     }
 
@@ -224,6 +238,7 @@ impl OutboundFrame {
             delivery: None,
             holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
             origin: Origin::Gateway,
+            folded: None,
         }
     }
 

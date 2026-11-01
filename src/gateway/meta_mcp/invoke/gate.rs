@@ -513,9 +513,11 @@ impl MetaMcp {
             note_denial_code(server, tool, -32003, Some(DecisionKind::BackendScope));
             // Outside the key's scope: refused, not merely missing.
             crate::gateway::delivery_facts::withheld();
+            crate::gateway::delivery_facts::gateway_folded(-32003);
         } else {
             // Not out of scope: the name matches nothing.
             super::audit::note_refused_by(DecisionKind::NotFound, None);
+            crate::gateway::delivery_facts::gateway_folded(-32001);
         }
         self.record_withheld(server, tool, Withholding::Absent, caller, session_id)
             .await;
