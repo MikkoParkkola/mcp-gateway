@@ -207,7 +207,8 @@ subtle = "2.6"
 # compiled, only a manifest entry (verified via `cargo tree`).
 # `process` gives geteuid for the CONFIG.2 config/env-file mode check;
 # `system` gives uname, the host name the UI's environment chip defaults to.
-rustix = { version = "1.1", features = ["fs", "process", "system"] }
+# `param` gives page_size, which turns /proc/self/statm pages into bytes.
+rustix = { version = "1.1", features = ["fs", "param", "process", "system"] }
 # Wipes credential bytes held in memory on drop with volatile writes: the
 # passthrough token lease and revocation material.
 # Already transitive; pinned to the locked version.

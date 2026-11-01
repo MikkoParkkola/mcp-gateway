@@ -5,12 +5,10 @@
 //! read.
 
 use crate::error::rpc_codes::INVALID_REQUEST;
-use axum::Json;
 use axum::http::StatusCode;
-use serde_json::Value;
 
 use super::AppState;
-use super::helpers::build_http_error_response;
+use super::helpers::{RpcHttp, build_http_error_response};
 use crate::gateway::auth::NamedApiKey;
 use crate::security::SecurityPosture;
 
@@ -29,7 +27,7 @@ pub(super) fn hardened_identity_refusal(
     state: &AppState,
     subject_key: Option<&str>,
     api_key: Option<&NamedApiKey>,
-) -> Option<(StatusCode, Json<Value>)> {
+) -> Option<RpcHttp> {
     let hardened = state.live_config.running().security.posture == SecurityPosture::Hardened;
     let identified = subject_key.is_some() || api_key.is_some_and(NamedApiKey::is_personal);
     (hardened && !identified)

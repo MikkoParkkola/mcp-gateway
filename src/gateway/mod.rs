@@ -8,6 +8,7 @@ pub(crate) use change_feed::ChangeFeed;
 pub(crate) mod authz;
 pub mod destructive_confirmation;
 mod differential;
+pub(crate) mod health_metrics;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
