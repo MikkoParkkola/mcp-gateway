@@ -25,6 +25,8 @@ use crate::security::firewall::{CollusionAction, Firewall, RelayCaller, StoredKe
 pub(super) struct LiveMeta {
     pub(super) meta: Arc<MetaMcp>,
     pub(super) rig: Rig,
+    /// What the `alpha` backend received (`tools/call` params).
+    pub(super) seen: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
     _dir: tempfile::TempDir,
 }
 
@@ -58,18 +60,34 @@ pub(super) fn live_meta_listing(
     let mut cfg = config(action, sources, vec![]);
     cfg.security.firewall.collusion.window_secs = window_secs;
     let rig = Rig::new(cfg);
-    let (meta, dir) = meta_over(&rig);
+    let (meta, dir, seen) = meta_over(&rig);
     LiveMeta {
         meta,
         rig,
+        seen,
         _dir: dir,
     }
 }
 
 /// A Meta-MCP running `rig`'s firewall, with a reload context over `rig`'s
 /// live config so the production read of "the generation now" finds it.
-fn meta_over(rig: &Rig) -> (Arc<MetaMcp>, tempfile::TempDir) {
+fn meta_over(
+    rig: &Rig,
+) -> (
+    Arc<MetaMcp>,
+    tempfile::TempDir,
+    Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+) {
     let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let backend = Arc::new(crate::backend::Backend::new(
+        "alpha",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    backend.set_transport_for_test(Arc::new(super::Seen(Arc::clone(&seen))));
+    assert!(registry.register(backend));
     let mut meta = MetaMcp::new(Arc::clone(&registry));
     meta.set_firewall(Some(Arc::clone(&rig.firewall)));
     meta.share_keyring_with_for_test(&rig.firewall);
@@ -86,7 +104,7 @@ fn meta_over(rig: &Rig) -> (Arc<MetaMcp>, tempfile::TempDir) {
     )
     .expect("the context builds");
     meta.set_reload_context(Arc::new(context));
-    (Arc::new(meta), dir)
+    (Arc::new(meta), dir, seen)
 }
 
 pub(super) fn sync_key() -> StoredKey {

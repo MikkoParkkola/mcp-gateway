@@ -707,6 +707,7 @@ async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
             retry: &retry,
         };
         meta.relay_refusal(
+            None,
             bob.relay_caller(None),
             ("", "bob"),
             ("alpha", "send"),

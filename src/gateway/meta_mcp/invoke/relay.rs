@@ -93,6 +93,7 @@ impl MetaMcp {
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(super) fn relay_refusal(
         &self,
+        pinned: Option<&crate::config_reload::Generation>,
         who: RelayKey<'_>,
         audit: (&str, &str),
         (server, tool): (&str, &str),
@@ -118,7 +119,10 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            let generation = crate::config_reload::Generation::placeholder();
+            // The request's pinned generation, else the one published now.
+            let published = self.current_generation();
+            let fallback = crate::config_reload::Generation::placeholder();
+            let generation = pinned.or(published.as_deref()).unwrap_or(&fallback);
             fw.relay_block_message(
                 generation.collusion_view(),
                 caller,
@@ -135,7 +139,7 @@ impl MetaMcp {
         }
         #[cfg(not(feature = "firewall"))]
         {
-            let _ = (who, audit, server, tool, egress);
+            let _ = (pinned, who, audit, server, tool, egress);
             None
         }
     }
@@ -175,7 +179,8 @@ impl MetaMcp {
         let who = caller.relay_caller(session_id);
         #[cfg(all(test, feature = "firewall"))]
         crate::security::firewall::relay_witness_hook::run();
-        let Some(refused) = self.relay_refusal(who, audit, target, egress) else {
+        let pinned = caller.authorizer.generation();
+        let Some(refused) = self.relay_refusal(pinned, who, audit, target, egress) else {
             return Ok(());
         };
         super::nonce_settle::settle_pre_send(
@@ -229,7 +234,10 @@ impl super::BridgeDispatcher<'_> {
         let target = (self.server, self.tool);
         #[cfg(all(test, feature = "firewall"))]
         crate::security::firewall::relay_witness_hook::run();
-        let Some(refused) = self.meta.relay_refusal(self.relay, audit, target, &egress) else {
+        let Some(refused) = self
+            .meta
+            .relay_refusal(None, self.relay, audit, target, &egress)
+        else {
             return Ok(());
         };
         let message = refused.to_string();
