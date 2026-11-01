@@ -481,3 +481,27 @@ fn o5_2a_counts_per_fingerprint_not_per_delivery() {
         "one drop and one overflow, two fingerprints each"
     );
 }
+
+/// Retention priority is decided when a copy is recorded (ADR-029,
+/// amended, item 3): carol's cap holds copies sensitive under the view they
+/// were recorded under (`src:*` listed). A reload unlists `src:*`; a
+/// newcomer sensitive under its own view (`new:*` listed) does not fit. The
+/// held copies keep their record-time priority, so the newcomer overflows
+/// as a pair instead of replacing one of them as plain. RED on base: the
+/// held copies are re-judged under the newcomer's view, so one is replaced.
+#[test]
+fn a_reload_that_unlists_a_source_cannot_make_held_sensitive_evidence_evictable() {
+    let (rig, t, now) = (rig(&["src:*"]), one_fp(0), Instant::now());
+    let g0 = rig.generation();
+    for i in 0..MAX_RECORDS_PER_CALLER {
+        record(&rig, &g0, (&format!("src:{i}"), "carol"), &t, now);
+    }
+    rig.reload(|c| c.security.firewall.collusion.sources = vec!["new:*".to_string()]);
+    let g1 = rig.generation();
+    record(&rig, &g1, ("new:x", "carol"), &t, now);
+    assert_eq!(
+        pairs(&rig, &t, "carol"),
+        [("new:x".to_string(), false)],
+        "a held copy sensitive when recorded was replaced as plain under a later view"
+    );
+}
