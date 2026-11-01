@@ -26,7 +26,7 @@ const PROSE: &str = "The orchard ledger for the north slope records seven rows o
     August, and which crew pruned the older trees after the second frost. It closes with the \
     count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
 
-/// A backend `alpha` that serves every `tools/call` and counts them.
+/// A backend `alpha` that serves every `tools/call` and counts those.
 struct Counting(Arc<AtomicUsize>);
 
 #[async_trait::async_trait]
@@ -41,7 +41,10 @@ impl crate::transport::Transport for Counting {
             let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
             return Ok(JsonRpcResponse::success(id, json!({"tools": [tool]})));
         }
-        self.0.fetch_add(1, Ordering::SeqCst);
+        // Only the relayed call counts, not the gateway's own probes.
+        if method == "tools/call" {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
         let sent = json!({"content": [{"type": "text", "text": "sent"}], "isError": false});
         Ok(JsonRpcResponse::success(id, sent))
     }
