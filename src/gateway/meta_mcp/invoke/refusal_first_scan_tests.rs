@@ -40,7 +40,7 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
             .and_then(|n| n.to_str())
             .unwrap_or_default()
             .to_owned();
-        if !name.ends_with(".rs") || name.contains("tests") {
+        if path.extension().is_none_or(|ext| ext != "rs") || name.contains("tests") {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a source file");
