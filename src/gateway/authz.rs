@@ -183,13 +183,15 @@ impl<'a> BackendGrant<'a> {
     /// empty backend list is a UI-wide admin that calls no backend; a
     /// non-empty list without `*` narrows the UI to those backends, admin or
     /// not. Every other case is [`Self::of`].
+    #[cfg(feature = "webui")]
     pub(crate) fn for_ui(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
         client.map_or(Self::Unscoped, |client| {
             Self::for_ui_list(client.admin, &client.backends)
         })
     }
 
-    /// [`Self::for_ui`] for a key held apart from its client.
+    /// `for_ui` for a key held apart from its client (the web UI's rule, used
+    /// also where a session is checked against the key that minted it).
     pub(crate) fn for_ui_list(admin: bool, backends: &'a [String]) -> Self {
         match Self::of_list(backends) {
             Self::Empty if admin => Self::Unscoped,
@@ -201,6 +203,7 @@ impl<'a> BackendGrant<'a> {
     /// UI's scoped reads share, so no surface judges a scope its own way. It
     /// agrees with `AuthenticatedClient::can_access_backend` for every grant
     /// shape, a pinned row (MCP dispatch still reads that one).
+    #[cfg(feature = "webui")]
     pub(crate) fn admits(self, name: &str) -> bool {
         match self {
             Self::Unscoped => true,

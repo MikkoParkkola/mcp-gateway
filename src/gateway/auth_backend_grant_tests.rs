@@ -124,6 +124,7 @@ fn no_env() -> crate::config::EnvOverlay {
 /// The UI's scope for each key shape: an admin key with an empty list is a
 /// UI-wide admin that calls no backend; a non-empty list without `*` narrows
 /// the UI, admin or not; a non-admin empty list reaches nothing.
+#[cfg(feature = "webui")]
 #[test]
 fn the_ui_scope_of_each_key_shape() {
     use crate::gateway::authz::BackendGrant;
@@ -153,6 +154,7 @@ fn the_ui_scope_of_each_key_shape() {
 
 /// The UI's membership test and MCP dispatch's agree for every grant shape,
 /// so the two cannot drift apart while dispatch keeps its own.
+#[cfg(feature = "webui")]
 #[test]
 fn grant_admits_agrees_with_can_access_backend() {
     use crate::gateway::authz::BackendGrant;
