@@ -75,22 +75,33 @@ OUTPUT = {"windows": ["--show-output"]}
 # A test leaves nothing in the temp directory. The Linux shards run
 # cargo with TMPDIR set to a fresh private directory and fail on any entry left
 # there that KNOWN_LEFTOVERS does not allow. The list holds only what a pending
-# fix removes, each as (pattern on the entry name, most allowed, why). It may
-# only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
+# fix removes, each as (pattern on the entry name, pattern every file inside it
+# must match, most allowed, why). An entry is matched by its contents too, so
+# a leftover from any other source fails even when its folder name is generic.
+# It may only shrink: the self-test holds each entry and count to
+# LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
-KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
-    (r"\.tmp[A-Za-z0-9]{6}", 4,
-     "a late write that outlives its test's temp dir: an audit write "
-     "(transparency_log::bounded_tests up to 3, identity_propagation::audit_fail_closed, "
-     "signing_allocation_tests::withheld_parity_stdio; hardened_signing_e2e and "
-     "mik_7272_task_1_acs) or a stdio task record"),
+_TMP = r"\.tmp[A-Za-z0-9]{6}"
+KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
+    (_TMP, r"audit\.jsonl\.hwm", 3,
+     "an audit write that outlives its test's temp dir "
+     "(transparency_log::bounded_tests, identity_propagation::audit_fail_closed, "
+     "signing_allocation_tests::withheld_parity_stdio, hardened_signing_e2e, "
+     "mik_7272_task_1_acs)"),
+    (_TMP, r"stdio/task-[0-9a-f-]{36}\.json", 1,
+     "a stdio task record written after its test's temp dir is gone"),
+    (_TMP, r"\.mcp-gateway/.+|tasks/stdio/store\.lease|inner\.yaml", 2,
+     "the home of a gateway an integration test spawned, written after the "
+     "test's temp dir is gone"),
 ]
-# Written out, not derived from the list above: a pattern added there and not
+# Written out, not derived from the list above: an entry added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
 # can only lose entries. A leaked TempLog folder is named `audit-log-*` and
 # matches none of these.
-LEFTOVER_CEILING: dict[str, int] = {
-    r"\.tmp[A-Za-z0-9]{6}": 4,
+LEFTOVER_CEILING: dict[tuple[str, str], int] = {
+    (_TMP, r"audit\.jsonl\.hwm"): 3,
+    (_TMP, r"stdio/task-[0-9a-f-]{36}\.json"): 1,
+    (_TMP, r"\.mcp-gateway/.+|tasks/stdio/store\.lease|inner\.yaml"): 2,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -153,18 +164,41 @@ def cargo(
     return p.wait(), lines
 
 
-def unexpected(names: list[str], known: list[tuple[str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
-    """The entries `known` does not allow, each pattern up to its count."""
-    used: dict[str, int] = {}
+def unexpected(entries: dict[str, list[str]],
+               known: list[tuple[str, str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
+    """The entries `known` does not allow. An entry is allowed when its name
+    matches, it holds at least one file and every file matches, each known
+    source up to its count. `entries` maps each name to the files under it."""
+    used: dict[tuple[str, str], int] = {}
     bad = []
-    for name in sorted(names):
-        for pattern, most, _why in known:
-            if re.fullmatch(pattern, name) and used.get(pattern, 0) < most:
-                used[pattern] = used.get(pattern, 0) + 1
+    for name in sorted(entries):
+        files = entries[name]
+        for pattern, holds, most, _why in known:
+            key = (pattern, holds)
+            if (re.fullmatch(pattern, name) and files
+                    and all(re.fullmatch(holds, f) for f in files)
+                    and used.get(key, 0) < most):
+                used[key] = used.get(key, 0) + 1
                 break
         else:
             bad.append(name)
     return bad
+
+
+def files_in(path: str) -> list[str]:
+    """The files under a leftover folder, relative and `/`-separated; none for
+    a plain file or an unreadable folder, which no known source matches."""
+    if not os.path.isdir(path):
+        return []
+    try:
+        return sorted(os.path.relpath(os.path.join(root, f), path).replace(os.sep, "/")
+                      for root, _dirs, fs in os.walk(path, onerror=_raise) for f in fs)
+    except OSError:
+        return []
+
+
+def _raise(error: OSError) -> None:
+    raise error
 
 
 def contents(path: str, most: int = 3) -> str:
@@ -213,7 +247,7 @@ def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -
             failed.append(f"examples: cargo build exited {rc}")
     if tmp:
         names = os.listdir(tmp)
-        bad = unexpected(names)
+        bad = unexpected({name: files_in(os.path.join(tmp, name)) for name in names})
         # Tolerated entries are printed too: which ones count against the
         # allowance is only sort order, so the cause can sit in either list.
         for name in sorted(set(names) - set(bad)):
@@ -294,17 +328,41 @@ def self_test() -> int:
                          f"{os.path.join('tasks', 'task-b.json')} 2B, "
                          f"{os.path.join('tasks', 'task-c.json')} 2B, +1 more"), shown
     assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
-    assert unexpected(["a", "b"], [("[ab]", 1, "one allowed")]) == ["b"], "the count bounds a pattern"
-    assert all(n <= LEFTOVER_CEILING.get(p, 0) for p, n, _ in KNOWN_LEFTOVERS), \
+    assert unexpected({"a": ["x"], "b": ["x"]}, [("[ab]", "x", 1, "one allowed")]) == ["b"], \
+        "the count bounds a source"
+    assert all(n <= LEFTOVER_CEILING.get((p, h), 0) for p, h, n, _ in KNOWN_LEFTOVERS), \
         "KNOWN_LEFTOVERS may only shrink"
+    hwm, task = ["audit.jsonl.hwm"], ["stdio/task-0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.json"]
+    home = [".mcp-gateway/protocol-revision-telemetry/window.json", "tasks/stdio/store.lease"]
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
-    assert unexpected(["audit-log-Ab12Cd", ".tmpAb12Cd"]) == ["audit-log-Ab12Cd"]
+    assert unexpected({"audit-log-Ab12Cd": hwm, ".tmpAb12Cd": hwm}) == ["audit-log-Ab12Cd"]
     # The families whose tests now use their own temp folders are no longer
-    # tolerated, and the plain temp dirs only up to their count.
+    # tolerated.
     gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
-    assert unexpected(gone) == sorted(gone), unexpected(gone)
-    plain = [f".tmpAb12C{i}" for i in range(5)]
-    assert unexpected(plain) == [".tmpAb12C4"], unexpected(plain)
+    assert unexpected({n: ["tokens"] for n in gone}) == sorted(gone), gone
+    # Each known source is tolerated up to its own count.
+    for files, most in ((hwm, 3), (task, 1), (home, 2)):
+        names = [f".tmpAb12C{i}" for i in range(most + 1)]
+        assert unexpected({n: files for n in names}) == [names[-1]], (files, most)
+    # A plain temp folder is tolerated only for what a known source writes: a
+    # stray file, a known file beside a stray one, an empty folder and a plain
+    # file all fail, though each has a tolerated name.
+    for files in (["other.db"], [*hwm, "other.db"], [*home, "keys/secret.pem"], []):
+        assert unexpected({".tmpAb12Cd": files}) == [".tmpAb12Cd"], files
+    # The same check end to end: a run that leaves a generically named temp
+    # folder holding a stray file turns red on it.
+    fake_dir = (*fake[:2], fake[2].replace(
+        "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
+        "d = os.path.join(os.environ['TMPDIR'], '.tmpXyZ789')\n"
+        "    os.mkdir(d)\n"
+        "    open(os.path.join(d, 'other.db'), 'w').close()"))
+    assert fake_dir != fake, "the planted folder must replace the planted file"
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        planted = run_steps("linux", "lib-a", fake_dir)
+    finally:
+        del os.environ["PLANT_LEAK"]
+    assert planted == ["left in TMPDIR: .tmpXyZ789 (other.db 0B)"], planted
     print("shard_tests self-test: ok")
     return 0
 
