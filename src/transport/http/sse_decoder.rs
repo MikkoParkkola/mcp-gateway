@@ -243,20 +243,32 @@ impl SseDecoder {
 /// Publishing happens inside the loop, not after it: a notification that
 /// arrived ahead of the response in the *same* chunk must still reach the sink
 /// before this returns, because returning ends the caller's scope.
-fn drain_events(events: Vec<SseEvent>) -> Result<Option<JsonRpcResponse>> {
+///
+/// A notification is scrubbed of `needles` before it is published, and one
+/// the scrub withholds is not published. The response frame is
+/// scrubbed by the caller with the rest of the answer.
+fn drain_events(
+    events: Vec<SseEvent>,
+    needles: Option<&crate::security::needles::NeedleSet>,
+) -> Result<Option<JsonRpcResponse>> {
     for event in events {
         // The line count is the discriminator for a backend that omits the
         // blank line between frames: its glued frames arrive as one block and
         // every `data:` line in a block is joined before parsing, so the parse
         // fails with a count above one. The payload itself stays out of the
         // message -- a tool result is the last thing to copy into an error.
-        let message: JsonRpcMessage = serde_json::from_str(&event.data).map_err(|e| {
+        let mut message: JsonRpcMessage = serde_json::from_str(&event.data).map_err(|e| {
             Error::Transport(format!(
-                "Failed to parse SSE data ({} data lines, {} bytes): {e}",
+                "Failed to parse SSE data ({} data lines, {} bytes); {}",
                 event.data.lines().count(),
-                event.data.len()
+                event.data.len(),
+                super::parse_failure("cause", &e)
             ))
         })?;
+        if matches!(message, JsonRpcMessage::Notification(_)) && withheld(needles, &mut message) {
+            tracing::debug!("Notification on response stream withheld");
+            continue;
+        }
         match message {
             JsonRpcMessage::Response(response) => return Ok(Some(response)),
             JsonRpcMessage::Notification(notification) => {
@@ -275,23 +287,40 @@ fn drain_events(events: Vec<SseEvent>) -> Result<Option<JsonRpcResponse>> {
     Ok(None)
 }
 
+/// Scrubs `message` of `needles`; `true` when it must not be published.
+fn withheld(
+    needles: Option<&crate::security::needles::NeedleSet>,
+    message: &mut JsonRpcMessage,
+) -> bool {
+    use crate::security::needles::{Scrubbed, ingress_scrub};
+    needles.is_some_and(|needles| {
+        matches!(
+            ingress_scrub(needles, message),
+            Scrubbed::Withhold | Scrubbed::Refuse
+        )
+    })
+}
+
 /// Drive an SSE body: publish each notification to the request-scoped sink as
 /// it completes, and return the response frame when it arrives.
 ///
 /// The caller maps its `reqwest::Error` to [`crate::error::Error::Transport`]
 /// before feeding, so this driver is exercisable from a plain stream fixture.
-pub(crate) async fn decode_sse_exchange<S>(stream: S) -> Result<JsonRpcResponse>
+pub(crate) async fn decode_sse_exchange<S>(
+    stream: S,
+    needles: Option<&crate::security::needles::NeedleSet>,
+) -> Result<JsonRpcResponse>
 where
     S: futures::Stream<Item = Result<bytes::Bytes>>,
 {
     let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
     tokio::pin!(stream);
     while let Some(chunk) = stream.next().await {
-        if let Some(response) = drain_events(decoder.push(&chunk?)?)? {
+        if let Some(response) = drain_events(decoder.push(&chunk?)?, needles)? {
             return Ok(response);
         }
     }
-    if let Some(response) = drain_events(decoder.finish()?)? {
+    if let Some(response) = drain_events(decoder.finish()?, needles)? {
         return Ok(response);
     }
     Err(Error::Transport("No data in SSE response".to_string()))
