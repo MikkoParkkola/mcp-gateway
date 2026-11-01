@@ -137,17 +137,25 @@ fn assert_bridged_backend_failure(error: &crate::Error, marker: Option<RpcError>
     );
 }
 
-/// N16, a plan step's invocation (`invoke_tool`, run as a step).
+/// N16, a plan ending on that step: the step's invocation (`invoke_tool`,
+/// run as a step), then the composite ending on its outcome, as a playbook
+/// aborting on it does.
 #[tokio::test]
-async fn a_bridged_backend_failure_in_a_step_counts_as_the_backends() {
+async fn a_bridged_backend_failure_ending_a_plan_counts_as_the_backends() {
     let meta = asking_meta();
     let channel = Accepting;
     let ctx = legacy_ctx(&channel);
-    let (error, marker) = counted_marker(meta.invoke_tool(
-        &json!({"server": "asker", "tool": "book", "arguments": {}}),
-        Some("session-bridged-origin"),
-        &ctx,
-    ))
+    let (error, marker) = counted_marker(async {
+        let outcome = meta
+            .invoke_tool(
+                &json!({"server": "asker", "tool": "book", "arguments": {}}),
+                Some("session-bridged-origin"),
+                &ctx,
+            )
+            .await;
+        delivery_facts::composite_ended(delivery_facts::CompositeEnd::of_outcome(&outcome));
+        outcome
+    })
     .await;
     assert_bridged_backend_failure(&error, marker);
 }
