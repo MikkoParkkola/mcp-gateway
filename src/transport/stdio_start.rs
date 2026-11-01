@@ -326,3 +326,7 @@ fn log_unhandled_line(line_len: usize, error: &crate::Error) {
     };
     error!(line_len, error = %why, "Failed to handle a line from the backend");
 }
+
+#[cfg(test)]
+#[path = "stdio_start_tests.rs"]
+mod tests;
