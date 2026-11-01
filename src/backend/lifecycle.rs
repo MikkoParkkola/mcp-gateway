@@ -128,6 +128,7 @@ impl Backend {
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
+            needles: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -451,6 +452,7 @@ impl Backend {
             built_under,
         )?;
         transport.mark_single_tenant();
+        self.attach_needles_to(&transport);
         // The same pairing check a slot's start runs: refused when the
         // policy changed since it was read, and recorded when none is pinned.
         self.begin_connecting(built_under)?;
@@ -595,6 +597,7 @@ impl Backend {
                 // it reads this cache to know it is the one message that may
                 // not wait for a verdict.
                 transport.attach_era(Arc::clone(&entry.era));
+                self.attach_needles_to(&transport);
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;

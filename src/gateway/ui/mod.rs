@@ -29,6 +29,7 @@ mod gateway_upgrade;
 mod guard;
 mod history;
 pub mod import;
+mod keys;
 mod overview;
 mod preview;
 mod preview_identity;
@@ -83,6 +84,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_TOOLS_CALL, post(tool_call::call))
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
+        .route(routes::UI_KEYS, get(keys::keys))
         .route(routes::UI_CONFIG, get(config))
         .route(routes::UI_RELOAD, post(reload))
         .route(routes::UI_DASHBOARD_LINK, post(session::dashboard_link))
@@ -684,6 +686,10 @@ fn call_windows(
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+#[path = "keys_tests.rs"]
+mod keys_tests;
 
 #[cfg(test)]
 mod tests;

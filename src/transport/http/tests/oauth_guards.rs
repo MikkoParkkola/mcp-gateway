@@ -108,7 +108,7 @@ async fn sse_decode_rejects_inbound_request_frame() {
     let body = "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"sampling/createMessage\",\"params\":{}}\n\n";
 
     // WHEN: the transport decodes it
-    let outcome = sse_decoder::decode_sse_exchange(sse_stream(body)).await;
+    let outcome = sse_decoder::decode_sse_exchange(sse_stream(body), None).await;
 
     // THEN: it is refused, never returned as an empty successful response
     assert!(
@@ -121,7 +121,7 @@ async fn sse_decode_rejects_inbound_request_frame() {
 #[tokio::test]
 async fn sse_decode_accepts_response_frame() {
     let body = "data: {\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"tools\":[]}}\n";
-    let response = sse_decoder::decode_sse_exchange(sse_stream(body))
+    let response = sse_decoder::decode_sse_exchange(sse_stream(body), None)
         .await
         .expect("valid response must decode");
     assert!(response.result.is_some());

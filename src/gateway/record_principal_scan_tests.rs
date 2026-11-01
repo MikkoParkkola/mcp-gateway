@@ -380,6 +380,9 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/services.rs", ".storage_form()", 1, Store, "bearer principal for live-binding comparison"),
     ("src/events/services.rs", "k.principal_for(&digest).storage_form() == key.principal", 1, Store, "a watch's configured key still holds its recorded principal (ADR-022)"),
     ("src/gateway/auth_resolved.rs", "k.principal().storage_form() == principal", 2, Store, "client_for_key and client_for_key_at find a key by its stored principal"),
+    ("src/gateway/auth_resolved.rs", "configured_key_principal(k.principal.as_deref(), &digest).storage_form()", 1, Store, "hashed into the key's limit-state key (ROT.11); only the hash keys the window and breaker"),
+    ("src/gateway/auth_resolved.rs", "self.runtime.last_used(key.principal().storage_form())", 1, Store, "in-memory last-use lookup key; the answer carries the time only"),
+    ("src/gateway/auth_resolved.rs", ".note_used(key.principal().storage_form(), now.timestamp())", 1, Store, "in-memory last-use map key, written on an accepted match"),
     ("src/events/services.rs", "sub.credential_principal.as_deref() == Some(live)", 1, Store, "live-binding comparison"),
     ("src/events/services.rs", "pub credential_principal: Option<&'a str>", 1, Decl, "Attempt field, keyed where recorded"),
     ("src/events/services.rs", "attempt.credential_principal.unwrap_or_default().to_owned()", 1, Keyed, "InternalPrincipal::new(..).record_form(key) for who.principal"),
@@ -456,6 +459,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/meta_mcp/invoke/projection.rs", "credential_principal: crate::gateway::auth::authenticated_principal(", 1, Decl, "projection input"),
     ("src/gateway/meta_mcp/invoke/projection.rs", "self.credential_principal,", 1, Decl, "projection input"),
     ("src/gateway/meta_mcp/caller_forward.rs", "client.map(|c| c.principal.storage_form())", 1, Store, "presence classification only"),
+    ("src/gateway/router/caller_hiding.rs", "CallerProvenance::classify(client.map(|c| c.principal.storage_form()))", 1, Store, "presence classification only: picks the caller's own catalogue slot for the hiding judgment"),
     ("src/gateway/meta_mcp/invoke/continuation.rs", ".map(crate::gateway::record_principal::InternalPrincipal::storage_form)", 1, Store, "continuation quota key"),
 ];
 
