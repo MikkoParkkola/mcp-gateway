@@ -161,3 +161,37 @@ async fn a_forwarded_echo_refusal_records_refused() {
         "{fields:?}"
     );
 }
+
+/// The invariant the composite rows rest on: a step's scrub refusal reaches
+/// `invoke_tool` folded, as `Ok` holding an `isError` result, with the step's
+/// own cell already marked refused (the dispatch error path reads it there).
+/// If the dispatch error path ever returns this error as `Err` instead, this
+/// row goes red, and `invoke_tool` must read the refusal in the step's cell
+/// itself again.
+#[tokio::test]
+async fn a_steps_echo_refusal_reaches_invoke_tool_folded_and_marked() {
+    let registry = Arc::new(BackendRegistry::new());
+    assert!(registry.register(echoing_backend()));
+    let meta = MetaMcp::new(registry);
+    let mut fields = serde_json::Map::new();
+    let answer = delivery_facts::scope(async {
+        let answer = meta
+            .invoke_tool(
+                &json!({"server": "alpha", "tool": "read", "arguments": {}}),
+                None,
+                &ctx(&AllowAll),
+            )
+            .await;
+        delivery_facts::composite_ended(delivery_facts::CompositeEnd::of(&answer));
+        delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
+        answer
+    })
+    .await;
+    let answer = answer.expect("folded: the step's error is a tool result, not Err");
+    assert_eq!(answer["isError"], json!(true), "{answer}");
+    assert_eq!(
+        fields.get("response_effect"),
+        Some(&json!("refused")),
+        "the step's cell marked it: {answer} {fields:?}"
+    );
+}
