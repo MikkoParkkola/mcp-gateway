@@ -5,6 +5,12 @@
 use super::*;
 use crate::backend::annotations::{DeclaredHints, declared_effect};
 use crate::security::decision_record::Effect;
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::Value;
+
+use crate::backend::Listing;
 
 fn hinted(name: &str, read_only: Option<bool>) -> Tool {
     let mut tool = sample_tool(name);
@@ -124,4 +130,95 @@ fn a_cold_slot_records_no_effect() {
         std::time::Duration::from_secs(300),
     );
     assert_eq!(backend.declared_effect_for(None, "read"), None);
+}
+
+/// A tool as a page lists it, with `readOnlyHint` set only when `read_only`
+/// is `Some`.
+fn listed(name: &str, read_only: Option<bool>) -> Value {
+    serde_json::to_value(hinted(name, read_only)).expect("tool")
+}
+
+/// A shared slot holding `tools` from one accepted fill, with `read_only`
+/// admitted to the cache as that fill would have admitted them.
+fn slot(tools: Vec<Tool>, read_only: &[&str]) -> Arc<Backend> {
+    let backend = Arc::new(Backend::new(
+        "beeper",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.prefill_tools_for_test(tools);
+    backend.set_read_only_declared_for_test(read_only);
+    backend
+}
+
+fn effect_of(backend: &Backend, names: &[&str]) -> Vec<Option<Effect>> {
+    names
+        .iter()
+        .map(|n| backend.declared_effect_for(None, n))
+        .collect()
+}
+
+#[test]
+fn revocation_lifecycle() {
+    let backend = slot(
+        vec![
+            hinted("a", Some(true)),
+            hinted("b", Some(false)),
+            hinted("c", None),
+        ],
+        &["a"],
+    );
+    // Relisting the admitted `a` as a write revokes; `b` drops its hint.
+    let page = [listed("a", Some(false)), listed("b", None)];
+    let _ = backend.remember_listed_tools_as(None, false, &page, Listing::Truncated);
+    assert_eq!(
+        effect_of(&backend, &["a", "b", "c"]),
+        [None, None, Some(Effect::Undeclared)]
+    );
+}
+
+/// A page that trips no cache or resend revocation still withdraws the
+/// may-write declaration it no longer makes.
+#[test]
+fn a_withdrawn_write_declaration_records_no_effect_without_a_revocation() {
+    let backend = slot(vec![hinted("b", Some(false))], &[]);
+    let _ = backend.remember_listed_tools_as(None, false, &[listed("b", None)], Listing::Truncated);
+    assert_eq!(effect_of(&backend, &["b"]), [None]);
+}
+
+#[test]
+fn abandoned_fill_lifecycle() {
+    let backend = slot(
+        vec![
+            hinted("a", Some(true)),
+            hinted("b", Some(false)),
+            hinted("c", None),
+            hinted("d", Some(true)),
+            hinted("e", None),
+        ],
+        &["a", "d"],
+    );
+    // Observed: `a` as before, `b` without its hint, `c` now declaring one.
+    // Never reached: `d` and `e`.
+    let seen = vec![
+        listed("a", Some(true)),
+        listed("b", None),
+        listed("c", Some(true)),
+    ];
+    let hook = backend.abandoned_fill_hook(
+        backend.shared_entry(),
+        Arc::new(parking_lot::Mutex::new(seen)),
+    );
+    hook();
+    assert_eq!(
+        effect_of(&backend, &["a", "b", "c", "d", "e"]),
+        [
+            Some(Effect::ReadOnly),
+            None,
+            None,
+            Some(Effect::ReadOnly),
+            Some(Effect::Undeclared)
+        ]
+    );
 }
