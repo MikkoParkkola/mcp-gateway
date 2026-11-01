@@ -400,6 +400,10 @@ while IFS= read -r l; do :; done"#
         let answer = tokio::time::timeout(Duration::from_secs(30), t.request("tools/call", None))
             .await
             .expect("answered");
+        // Delivered as the call delivers it: an error crosses the outlet.
+        if let Err(error) = &answer {
+            crate::gateway::delivery_facts::outlet(error);
+        }
         crate::gateway::delivery_facts::record_fields(
             crate::gateway::delivery_facts::snapshot().as_ref(),
             false,

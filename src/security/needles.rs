@@ -516,20 +516,50 @@ fn merge(a: Scrubbed, b: Scrubbed) -> Scrubbed {
 /// What a transport hands on for `answer`: its values removed, and the fixed
 /// refusal in its place when the set overflowed or an `error.code` is one of
 /// them. Run on the call's own task, so the call's delivery records what it
-/// did (a no-op outside one): a redacted answer was delivered changed, and
-/// one replaced by the refusal never reached the caller.
+/// did (a no-op outside one): either way the backend sent an injected value
+/// ([`delivery_facts::echo_redacted`]), and a replacement is recorded
+/// `refused` only where it is the answer delivered
+/// ([`delivery_facts::echo_refusal_built`]).
+///
+/// [`delivery_facts::echo_redacted`]: crate::gateway::delivery_facts::echo_redacted
+/// [`delivery_facts::echo_refusal_built`]: crate::gateway::delivery_facts::echo_refusal_built
 pub(crate) fn scrub_answer(
     needles: &NeedleSet,
     answer: crate::Result<JsonRpcResponse>,
 ) -> crate::Result<JsonRpcResponse> {
-    use crate::gateway::delivery_facts::{ResponseEffect, raise_attempt as raise};
+    use crate::gateway::delivery_facts::{echo_redacted, echo_refusal_built};
     let (answer, outcome) = scrubbed_answer(needles, answer);
     match outcome {
-        Scrubbed::Redacted => raise(ResponseEffect::Rewritten),
-        Scrubbed::Refuse => raise(ResponseEffect::Refused),
+        Scrubbed::Redacted => echo_redacted(),
+        Scrubbed::Refuse => {
+            echo_redacted();
+            echo_refusal_built();
+        }
         Scrubbed::Clean | Scrubbed::Withhold => {}
     }
     answer
+}
+
+/// Whether `error` reads as the scrub's refusal (see [`refusal`]): its code
+/// and one of its two texts, no data, as either JSON-RPC variant, since a
+/// replaced retryable error stays retryable. A backend can send the same,
+/// so a delivery records it `refused` only where its own scrub built one.
+pub(crate) fn is_echo_refusal(error: &crate::Error) -> bool {
+    let (crate::Error::JsonRpc {
+        code,
+        message,
+        data: None,
+    }
+    | crate::Error::JsonRpcRetryable {
+        code,
+        message,
+        data: None,
+        ..
+    }) = error
+    else {
+        return false;
+    };
+    *code == REFUSAL_CODE && (message == OVERFLOW_REFUSAL || message == ECHO_REFUSAL)
 }
 
 /// [`scrub_answer`]'s answer, and what the scrub did to it.
@@ -582,9 +612,12 @@ fn refusal_message(needles: &NeedleSet) -> &'static str {
     if needles.overflowed() {
         OVERFLOW_REFUSAL
     } else {
-        "the backend's answer contained a credential the gateway injected"
+        ECHO_REFUSAL
     }
 }
+
+/// The fixed refusal's text for an answer that held an injected value.
+const ECHO_REFUSAL: &str = "the backend's answer contained a credential the gateway injected";
 
 #[cfg(test)]
 #[path = "needles_tests.rs"]

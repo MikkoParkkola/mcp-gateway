@@ -11,10 +11,8 @@ use std::path::Path;
 /// The names pinned. `presend` is `before_send` as `request_attempted`
 /// imports it; `before_send` itself is pinned too, with no reviewed call, so
 /// a wrap that calls it by its own name elsewhere fails here.
-const NAMES: [&str; 10] = [
+const NAMES: [&str; 8] = [
     "counted_send",
-    "settled_attempts",
-    "answer_discarded",
     "presend",
     "before_send",
     "refused_before_send",
@@ -25,14 +23,9 @@ const NAMES: [&str; 10] = [
 ];
 
 /// (name, file) -> calls, as reviewed.
-const REVIEWED: [(&str, &str, usize); 16] = [
+const REVIEWED: [(&str, &str, usize); 14] = [
     ("after_a_send", "src/capability/executor/mcp_rounds.rs", 1),
     ("after_a_send", "src/transport/http/transport_impl.rs", 1),
-    (
-        "answer_discarded",
-        "src/transport/http/transport_impl.rs",
-        1,
-    ),
     ("counted_send", "src/backend/ops.rs", 1),
     ("nothing_sent", "src/gateway/delivery_facts.rs", 1),
     (
@@ -42,7 +35,6 @@ const REVIEWED: [(&str, &str, usize); 16] = [
     ),
     ("presend", "src/backend/ops.rs", 8),
     ("refused_before_send", "src/backend/ops.rs", 1),
-    ("settled_attempts", "src/backend/ops.rs", 2),
     (
         "refused_before_send_seen",
         "src/gateway/delivery_facts.rs",

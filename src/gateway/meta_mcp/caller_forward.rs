@@ -142,7 +142,10 @@ impl MetaMcp {
                 Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
                 None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
             },
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            Err(e) => {
+                crate::gateway::delivery_facts::echo_refusal_delivered(&e);
+                JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string())
+            }
         }
     }
 }

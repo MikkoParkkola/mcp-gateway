@@ -126,8 +126,9 @@ impl Transport for HttpTransport {
                 None
             };
             self.sessions.write().remove(bucket);
-            // The handshake's answer is not the caller's: its scrub effect
-            // stays out of this call's record.
+            // The handshake's answer is not the caller's: a refusal it meets
+            // (a refused redirect hop) stays out of this call's record, and a
+            // redaction is still recorded (the nested cell shares it).
             let handshake =
                 crate::gateway::delivery_facts::discarded(self.initialize_as(extra_headers)).await;
             if shared {
@@ -167,8 +168,6 @@ impl Transport for HttpTransport {
                 method = %method,
                 "Backend session expired; re-initializing and retrying once"
             );
-            // The expired answer is replaced by the resend's.
-            crate::gateway::delivery_facts::answer_discarded();
             // The first request reached the server, so a never-sent error from
             // the resend no longer proves nothing ran.
             return self

@@ -394,74 +394,63 @@ fn every_context_integrity_caller_is_classified() {
     }
 }
 
-/// A send attempt whose answer the scrub refused, then retried past: the
-/// call's record carries the latest attempt's effect, not the retried one's.
-#[tokio::test]
-async fn a_retried_attempts_scrub_effect_is_not_the_calls() {
-    scope(async {
-        super::send_began();
-        super::raise_attempt(ResponseEffect::Refused);
-        super::send_began();
-        assert_eq!(recorded(false)["response_effect"], "delivered");
-    })
-    .await;
+/// An injected value a backend echoes as its `error.code`, so the scrub
+/// replaces the answer with its refusal.
+const ECHOED_CODE: i32 = 7_391_540;
+
+/// The value set holding [`ECHOED_CODE`].
+fn needles() -> crate::security::needles::NeedleSet {
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", &ECHOED_CODE.to_string());
+    needles
 }
 
-/// The latest attempt's scrub effect is the call's, and a stronger
-/// delivery-level effect still wins over it.
-#[tokio::test]
-async fn the_latest_attempts_scrub_effect_is_recorded() {
-    scope(async {
-        super::send_began();
-        super::raise_attempt(ResponseEffect::Rewritten);
-        assert_eq!(recorded(false)["response_effect"], "rewritten");
-        raise(ResponseEffect::Refused);
-        super::send_began();
-        assert_eq!(recorded(false)["response_effect"], "refused");
-    })
-    .await;
+/// The scrub's answer to an error echoing [`ECHOED_CODE`], run in the open
+/// cell: the refusal it delivers in place of `echo`.
+fn scrubbed(echo: crate::Error) -> crate::Error {
+    crate::security::needles::scrub_answer(&needles(), Err(echo)).expect_err("replaced")
 }
 
-/// One counted send whose answer the scrub changed as `effect`.
-async fn scrubbed_send(effect: Option<ResponseEffect>) {
-    super::counted_send(async {
-        if let Some(effect) = effect {
-            super::raise_attempt(effect);
-        }
-        Ok(())
-    })
-    .await
-    .expect("sent");
+/// A JSON-RPC error echoing [`ECHOED_CODE`].
+fn echo() -> crate::Error {
+    crate::Error::JsonRpc {
+        code: ECHOED_CODE,
+        message: "no".into(),
+        data: None,
+    }
 }
 
-/// Two requests of one delivery (a catalogue's pages): the first page's
-/// answer was redacted, so the merged answer holds redacted text, and the
-/// second page's send must not erase that.
+/// The same echo on a retryable status: replaced, it stays retryable.
+fn retryable_echo() -> crate::Error {
+    crate::Error::JsonRpcRetryable {
+        code: ECHOED_CODE,
+        message: "busy".into(),
+        status: 503,
+        data: None,
+    }
+}
+
+/// M1: a redaction stays recorded whatever the call sends after it.
 #[tokio::test]
-async fn a_later_requests_send_keeps_an_earlier_requests_scrub_effect() {
+async fn a_redaction_is_recorded_for_the_whole_call() {
     scope(async {
-        super::settled_attempts(scrubbed_send(Some(ResponseEffect::Rewritten))).await;
-        super::settled_attempts(scrubbed_send(None)).await;
+        super::echo_redacted();
+        super::send_began();
+        super::send_began();
         assert_eq!(recorded(false)["response_effect"], "rewritten");
     })
     .await;
 }
 
-/// Within one request, a retried attempt's effect is dropped and the
-/// answered attempt's is kept: the retry boundary is the request's, not the
-/// delivery's.
+/// M4: a discarded send's redaction is the call's, even when that send then
+/// meets a refusal, which is not.
 #[tokio::test]
-async fn a_requests_retried_attempt_is_dropped_and_its_answered_one_kept() {
+async fn a_discarded_sends_redaction_is_recorded_and_its_refusal_is_not() {
     scope(async {
-        super::settled_attempts(async {
-            scrubbed_send(Some(ResponseEffect::Refused)).await;
-            scrubbed_send(None).await;
-        })
-        .await;
-        assert_eq!(recorded(false)["response_effect"], "delivered");
-        super::settled_attempts(async {
-            scrubbed_send(None).await;
-            scrubbed_send(Some(ResponseEffect::Rewritten)).await;
+        super::discarded(async {
+            super::echo_redacted();
+            raise(ResponseEffect::Refused);
         })
         .await;
         assert_eq!(recorded(false)["response_effect"], "rewritten");
@@ -469,13 +458,89 @@ async fn a_requests_retried_attempt_is_dropped_and_its_answered_one_kept() {
     .await;
 }
 
-/// An answer the transport read and then replaced (a session expiry it
-/// recovered from) leaves no scrub effect.
+/// M4: a discarded send dropped after its redaction (a probe's timeout) has
+/// already recorded it.
 #[tokio::test]
-async fn a_discarded_answers_scrub_effect_is_dropped() {
+async fn a_cancelled_discarded_sends_redaction_is_recorded() {
+    use futures::FutureExt;
     scope(async {
-        super::raise_attempt(ResponseEffect::Refused);
-        super::answer_discarded();
+        let pending = super::discarded(async {
+            super::echo_redacted();
+            std::future::pending::<()>().await;
+        })
+        .now_or_never();
+        assert!(pending.is_none(), "premise: the send never finished");
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// A composite step's redaction is the composite's.
+#[tokio::test]
+async fn a_steps_redaction_is_the_composites() {
+    scope(async {
+        super::step(async { super::echo_redacted() }).await;
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// The scrub's refusal delivered records refused, as either JSON-RPC variant
+/// (M9: a replaced retryable error stays `JsonRpcRetryable`).
+#[tokio::test]
+async fn the_scrubs_refusal_delivered_records_refused() {
+    for (name, error) in [("in-band", echo()), ("retryable", retryable_echo())] {
+        let effect = scope(async {
+            let refusal = scrubbed(error);
+            super::outlet(&refusal);
+            recorded(false)["response_effect"].clone()
+        })
+        .await;
+        assert_eq!(effect, "refused", "{name}");
+    }
+}
+
+/// F1, F5 (M3): a replaced answer the call does not deliver records the
+/// echo, never a refusal.
+#[tokio::test]
+async fn a_replaced_answer_not_delivered_records_no_refusal() {
+    scope(async {
+        let _retried_past = scrubbed(retryable_echo());
+        super::outlet(&crate::Error::Transport("later failure".into()));
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// M2b: a backend's error that reads as the refusal, with no replacement in
+/// the call, is the backend's: no refusal recorded.
+#[tokio::test]
+async fn a_lookalike_refusal_without_a_replacement_records_nothing() {
+    let lookalike = scope(async { scrubbed(echo()) }).await;
+    scope(async {
+        super::outlet(&lookalike);
+        super::echo_refusal_delivered(&lookalike);
+        assert_eq!(recorded(false)["response_effect"], "delivered");
+    })
+    .await;
+}
+
+/// A replacement built in a discarded cell is not the call's to deliver.
+#[tokio::test]
+async fn a_discarded_cells_replacement_is_not_the_calls() {
+    scope(async {
+        let refusal = super::discarded(async { scrubbed(echo()) }).await;
+        super::echo_refusal_delivered(&refusal);
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+    })
+    .await;
+}
+
+/// The narrow check leaves other refusals to the outlet.
+#[tokio::test]
+async fn the_narrow_check_marks_only_the_scrubs_refusal() {
+    scope(async {
+        super::echo_refusal_delivered(&crate::Error::gateway_refused(-32_600, "no"));
         assert_eq!(recorded(false)["response_effect"], "delivered");
     })
     .await;

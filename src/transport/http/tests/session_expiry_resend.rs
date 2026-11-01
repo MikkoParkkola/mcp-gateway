@@ -226,13 +226,14 @@ fn recovering_server(expiry: Expiry) -> String {
     url
 }
 
-/// A call that recovers an expired session answers with the resend's
-/// answer, so its delivery record says what the scrub did to that answer
-/// only: not to the re-handshake's `initialize` answer, and not to the
-/// expired answer it replaced. Both of those echo an injected value here;
-/// the resend's answer is clean.
+/// F3: a call that recovers an expired session answers with the resend's
+/// clean answer, but during the call the backend echoed an injected value
+/// (in the re-handshake's `initialize` answer, and in the second shape in
+/// the expired answer too), and the gateway removed it: the record says
+/// `rewritten`, never `refused`. The handshake runs in a discarded cell, so
+/// this also pins that a discarded send's redaction reaches the call.
 #[tokio::test]
-async fn a_recovered_calls_record_is_its_resends_answer_only() {
+async fn a_recovered_calls_record_keeps_every_redaction_of_the_call() {
     for expiry in [Expiry::NotFound, Expiry::EchoingError] {
         let url = recovering_server(expiry);
         let transport = make_transport(&url);
@@ -260,6 +261,6 @@ async fn a_recovered_calls_record_is_its_resends_answer_only() {
             Some(FRESH),
             "premise: the session was healed"
         );
-        assert_eq!(fields["response_effect"], "delivered");
+        assert_eq!(fields["response_effect"], "rewritten");
     }
 }
