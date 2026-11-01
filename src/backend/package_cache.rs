@@ -205,6 +205,7 @@ async fn start_reporting_with(
         return (Err(error), Repair::NotRepaired);
     };
     let Some(dir) = assigned_cache_to_clear(transport) else {
+        drop(held);
         warn!(
             command = %transport.diagnostic_command(),
             "the package cache was not assigned by this gateway; leaving it alone"
@@ -233,6 +234,7 @@ async fn repair_while_locked(
     discard: fn(PathBuf),
 ) -> (crate::Result<()>, Repair) {
     if !mark_repaired(dir) {
+        drop(held);
         warn!(
             path = %dir.display(),
             "package cache already repaired since the last successful start"
@@ -254,6 +256,7 @@ async fn repair_while_locked(
     // The tombstone's deletion and the latch reset already happened inside
     // the rename's task (see `retire_cache_dir`).
     if retired == Retired::Refused {
+        drop(_held);
         warn!(path = %dir.display(), "could not clear package cache");
         return (Err(error), Repair::NotRepaired);
     }
