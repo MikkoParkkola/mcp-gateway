@@ -317,8 +317,10 @@ impl LiveConfig {
         Arc::clone(self.inner.read().generation.config())
     }
 
-    /// The current generation. A request takes it once, on arrival, and is
-    /// judged by it until it answers; never read it again mid-request.
+    /// The current generation. A request takes it once, on arrival, and its
+    /// request-side checks are judged by that one alone. An answer-side scan
+    /// reads it again when the scan starts and judges the answer under both
+    /// (ADR-029, amended, item 5); nothing else reads it mid-request.
     #[must_use]
     pub fn generation(&self) -> Arc<Generation> {
         Arc::clone(&self.inner.read().generation)
