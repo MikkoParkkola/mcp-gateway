@@ -102,7 +102,7 @@ impl ReplayReceipt {
     /// Each contributing source with its inferred fact (tests only).
     #[cfg(test)]
     pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
-        super::contributor_facts(
+        super::facts::contributor_facts(
             self.seam_sources.as_deref()?,
             self.seam_inferred.as_deref(),
             self.inferred,
