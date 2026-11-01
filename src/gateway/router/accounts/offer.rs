@@ -16,11 +16,10 @@
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use std::sync::Arc;
 
-use axum::Json;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
 
-use super::super::super::helpers::build_http_response;
+use super::super::super::helpers::{RpcHttp, build_http_response};
 use super::{is_bridged, limits_of, owner_and_descriptor};
 use crate::config_reload::LiveConfig;
 use crate::gateway::meta_mcp::MetaMcp;
@@ -147,7 +146,7 @@ impl MetaMcp {
         text: String,
         refused: Option<Error>,
         identity: Option<&VerifiedIdentity>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> RpcHttp {
         let offered = match (refused, self.offers()) {
             (Some(error), Some(offers)) => Some(offers.offer(error, identity).await),
             _ => None,

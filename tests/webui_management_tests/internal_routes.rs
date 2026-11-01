@@ -77,7 +77,7 @@ struct Row {
 const AUDITOR_KEY: &str = "auditor-key";
 
 /// The auth-on posture: the admin bearer plus the Auditor API key from
-/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_auditor`).
+/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_viewer`).
 fn auth_on() -> AuthConfig {
     AuthConfig {
         enabled: true,

@@ -31,22 +31,16 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-#[path = "upgrade_backend_grant_notice.rs"]
-mod backend_grant_notice;
-#[path = "upgrade_notice_items.rs"]
-mod notice_items;
 #[path = "upgrade_url_keys.rs"]
 mod url_keys;
 #[path = "upgrade_webhook_notice.rs"]
 mod webhook_notice;
-use notice_items::NOTICE_4_0_0_ITEMS;
+use mcp_gateway::upgrade_notice::NOTICE_4_0_0_ITEMS;
 pub use url_keys::run_upgrade_with_config;
 
 // ── Semver comparison ─────────────────────────────────────────────────────────
 
-#[path = "upgrade_semver.rs"]
-mod stamp_version;
-pub use stamp_version::SemVer;
+pub use mcp_gateway::upgrade_notice::SemVer;
 
 // ── Migration registry ────────────────────────────────────────────────────────
 
@@ -211,7 +205,7 @@ fn migrate_3_0_0_multi_user_notice(data_dir: &Path) -> std::io::Result<()> {
 }
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
-// The items live in `upgrade_notice_items.rs`; this prints them once.
+// The items live in `upgrade_notice/mod.rs`; this prints them once.
 
 /// Emit the one-time 4.0.0 notice.
 ///
