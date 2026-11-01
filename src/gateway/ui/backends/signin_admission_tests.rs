@@ -70,10 +70,13 @@ async fn a_start_dropped_before_its_link_releases_the_login() {
         .clone()
         .expect("the fixture installs a client");
     let (reached, _release) = serving.registration_pause.arm();
-    let owner = gw.session();
+    // The start itself, not a request: the audit layer runs a handler on a
+    // task of its own, which would keep the future alive after a disconnect.
     let start = tokio::spawn({
         let gw = Arc::clone(&gw);
-        async move { gw.start(&owner).await }
+        async move {
+            super::super::signin_flow::start(&gw.state, &gw.backend, "owner".to_owned(), None).await
+        }
     });
     crate::test_pause::within("the login reaches its registration", reached.notified()).await;
 

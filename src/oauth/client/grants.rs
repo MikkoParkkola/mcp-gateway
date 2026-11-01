@@ -639,8 +639,14 @@ impl OAuthClient {
             backend: self.backend_name().to_string(),
         };
 
+        // A registration that observes the cancel, as the real one does: the
+        // pause ends when the login is cancelled.
         #[cfg(all(test, feature = "webui"))]
-        self.registration_pause.pause().await;
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {}
+            () = self.registration_pause.pause() => {}
+        }
         // Now ensure we have a client ID, passing the actual callback URL for
         // registration. A cancel during registration ends it there: no
         // browser opens, and the listener is closed before this returns.

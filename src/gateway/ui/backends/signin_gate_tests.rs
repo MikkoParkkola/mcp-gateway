@@ -112,6 +112,8 @@ async fn post(
     let response = backends_router()
         .with_state(Arc::clone(state))
         .layer(Extension(admin()))
+        // The production router pins the generation a request runs under.
+        .layer(Extension(state.live_config.generation()))
         .oneshot(request)
         .await
         .expect("the router is infallible");

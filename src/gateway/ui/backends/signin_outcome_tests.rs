@@ -164,9 +164,25 @@ async fn a_dropped_confirm_reads_as_cancelled() {
     let waiting = joiner(&gw);
     parked().await;
     let (reached, release) = gw.backend.sign_in.commit_pause.arm();
+    // The decision itself, not a request: the audit layer runs a handler on a
+    // task of its own so a write still commits after its client left, which
+    // would keep this future alive. Dropping `decide` is the claim.
+    let Who::Dashboard(handle) = owner else {
+        panic!("a session owner");
+    };
+    let tag = crate::gateway::record_principal::sign_in_owner(&gw.state.record_key(), &handle);
     let request = tokio::spawn({
         let gw = Arc::clone(&gw);
-        async move { gw.confirm(&owner, &attempt, "confirm").await }
+        async move {
+            super::super::signin_flow::decide(
+                &gw.state,
+                &gw.backend,
+                &tag,
+                &attempt,
+                super::super::signin_flow::Decision::Confirm,
+            )
+            .await
+        }
     });
     crate::test_pause::within("the confirm reaches its commit", reached.notified()).await;
 
