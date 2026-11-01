@@ -5,10 +5,13 @@
 //!
 //! - `is_error`: every production `"isError": true` JSON literal, per function,
 //!   with its class. A `gateway-folded` literal is the gateway's own refusal
-//!   folded into a tool result: its function must also call `gateway_folded`
-//!   or `folded`, so the fold is counted with the gateway's origin. The other
-//!   classes (`stored-notice`, `other-route`, `dispatch-error`) are read, not
-//!   checked.
+//!   folded into a tool result: its function must also call `gateway_folded`,
+//!   which always counts the gateway's origin (a `folded` call could name any
+//!   origin). A `dispatch-error` literal folds a dispatch failure with that
+//!   failure's own origin: its function must call `folded`. The other classes
+//!   (`stored-notice`, `other-route`) are read, not checked. Checked per
+//!   function, as every pin here is: a call on another branch of the same
+//!   function passes.
 //! - `setter`: every production call of a delivery-fact fold setter, per file.
 //! - `count`: every production call that counts an answer or reads its marker,
 //!   per file.
@@ -179,12 +182,21 @@ fn listed(text: &str) -> (IsErrorRows, CallRows, Vec<String>) {
     (is_error, calls, bad)
 }
 
-/// Whether the function at `key` calls a setter that counts a fold.
-fn folds(sites: &Sites, key: &(String, String)) -> bool {
+/// The setter a literal of `class` must call in its own function, if any.
+fn required_setter(class: &str) -> Option<&'static str> {
+    match class {
+        "gateway-folded" => Some("gateway_folded"),
+        "dispatch-error" => Some("folded"),
+        _ => None,
+    }
+}
+
+/// Whether the function at `key` calls `setter`.
+fn calls(sites: &Sites, key: &(String, String), setter: &str) -> bool {
     sites
         .setters_in
         .get(key)
-        .is_some_and(|s| s.contains("folded") || s.contains("gateway_folded"))
+        .is_some_and(|s| s.contains(setter))
 }
 
 /// What differs between the scan and the rows in `text`.
@@ -194,8 +206,10 @@ fn diff(sites: &Sites, text: &str) -> Vec<String> {
         let (file, func) = key;
         match is_error.get(key) {
             Some((n, class)) if n == count => {
-                if class == "gateway-folded" && !folds(sites, key) {
-                    wrong.push(format!("gateway-folded, no fold call: {file}\t{func}"));
+                if let Some(setter) = required_setter(class)
+                    && !calls(sites, key, setter)
+                {
+                    wrong.push(format!("{class}, no {setter} call: {file}\t{func}"));
                 }
             }
             Some((n, _)) => wrong.push(format!("listed {n}, found {count}: {file}\t{func}")),
@@ -305,7 +319,36 @@ fn a_gateway_folded_literal_must_fold() {
     assert!(
         wrong
             .iter()
-            .any(|w| w.starts_with("gateway-folded, no fold call")),
+            .any(|w| w.starts_with("gateway-folded, no gateway_folded call")),
+        "{wrong:?}"
+    );
+}
+
+/// A `gateway-folded` literal whose function folds through `folded` (any
+/// origin, a backend's included) fails; so does a `dispatch-error` literal
+/// whose function folds nothing.
+#[test]
+fn a_fold_must_use_the_setter_its_class_names() {
+    let source = "fn refuse() {
+        delivery_facts::folded(RpcError { code: 1, origin: Origin::Backend });
+        let _ = json!({\"isError\": true});
+    }
+    fn dispatch() { let _ = json!({\"isError\": true}); }";
+    let rows = "is_error\tsrc/lib.rs\trefuse\t1\tgateway-folded
+is_error\tsrc/lib.rs\tdispatch\t1\tdispatch-error
+setter\tfolded\tsrc/lib.rs\t1
+";
+    let wrong = diff(&scan_fixture(source), rows);
+    assert!(
+        wrong
+            .iter()
+            .any(|w| w.starts_with("gateway-folded, no gateway_folded call")),
+        "{wrong:?}"
+    );
+    assert!(
+        wrong
+            .iter()
+            .any(|w| w.starts_with("dispatch-error, no folded call")),
         "{wrong:?}"
     );
 }

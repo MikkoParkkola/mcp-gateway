@@ -6,12 +6,13 @@
 //! `backend_json_rpc_patterns.tsv`. A carry is an or-pattern whose
 //! `BackendJsonRpc` alternative equals the `JsonRpc` one after renaming the
 //! variant, or two arms of one match whose patterns, guards and bodies are
-//! equal after that rename. Exclusions are counted per function, so a new
-//! uncarried pattern in a listed function fails, and a row whose function has
-//! no uncarried pattern left is stale.
+//! equal after that rename. Exclusions are listed per occurrence, keyed by
+//! file, function and the pattern's anchor (its printed shape, `BackendJsonRpc`
+//! read as `JsonRpc`), so a new uncarried pattern in a listed function fails
+//! even beside a listed sibling, and a row whose pattern is gone is stale.
 //!
-//! Arm-body pairing: an arm or `if let` matching `BackendJsonRpc` but not
-//! `JsonRpc` must not build a `JsonRpc {..}` or `json_rpc(..)` in its body,
+//! Arm-body pairing: an arm or `if let` that can match `BackendJsonRpc`,
+//! alone or beside `JsonRpc`, must not build a `JsonRpc {..}` or `json_rpc(..)` in its body,
 //! which would hand a backend's error on as the gateway's.
 //!
 //! What this cannot see: patterns inside macro bodies other than `matches!`,
@@ -55,8 +56,44 @@ impl<'ast> Visit<'ast> for Print {
         });
     }
     fn visit_un_op(&mut self, op: &'ast syn::UnOp) {
-        self.0
-            .push(format!("un{}", matches!(op, syn::UnOp::Neg(_))));
+        use syn::UnOp as U;
+        self.0.push(
+            match op {
+                U::Deref(_) => "*",
+                U::Not(_) => "!",
+                U::Neg(_) => "-",
+                _ => "<un>",
+            }
+            .to_owned(),
+        );
+    }
+    /// Operators print as themselves, so `code == 1` and `code != 1` differ.
+    fn visit_bin_op(&mut self, op: &'ast syn::BinOp) {
+        use syn::BinOp as B;
+        self.0.push(
+            match op {
+                B::Add(_) => "+",
+                B::Sub(_) => "-",
+                B::Mul(_) => "*",
+                B::Div(_) => "/",
+                B::Rem(_) => "%",
+                B::And(_) => "&&",
+                B::Or(_) => "||",
+                B::BitXor(_) => "^",
+                B::BitAnd(_) => "&",
+                B::BitOr(_) => "|",
+                B::Shl(_) => "<<",
+                B::Shr(_) => ">>",
+                B::Eq(_) => "==",
+                B::Lt(_) => "<",
+                B::Le(_) => "<=",
+                B::Ne(_) => "!=",
+                B::Ge(_) => ">=",
+                B::Gt(_) => ">",
+                _ => "<op=>",
+            }
+            .to_owned(),
+        );
     }
     /// A rebuild of the matched variant prints the same in either form:
     /// `Error::JsonRpc { .. }` and `Error::backend_json_rpc(JsonRpcError { .. })`
@@ -218,8 +255,8 @@ fn matches_pattern(mac: &syn::Macro) -> Option<syn::Pat> {
     mac.parse_body_with(parser).ok()
 }
 
-/// (file, function) -> uncarried `JsonRpc` patterns.
-type Found = BTreeMap<(String, String), usize>;
+/// (file, function, anchor) -> uncarried `JsonRpc` patterns of that shape.
+type Found = BTreeMap<(String, String, String), usize>;
 
 #[derive(Default)]
 struct Patterns {
@@ -232,12 +269,19 @@ impl Patterns {
     fn note(&mut self, at: &Place, pat: &syn::Pat, carry: bool) {
         if names(pat, "JsonRpc") && !carry {
             let func = at.func.clone().unwrap_or_else(|| "-".to_owned());
-            *self.uncarried.entry((at.file.clone(), func)).or_default() += 1;
+            let anchor = print_pat(pat).join(" ");
+            *self
+                .uncarried
+                .entry((at.file.clone(), func, anchor))
+                .or_default() += 1;
         }
     }
 
+    /// An arm that can match a backend's error (alone or in an or-pattern
+    /// with the gateway's) must not build the gateway's variant: a rebuild
+    /// keeps the matched variant, so a combined arm that rebuilds is split.
     fn pair(&mut self, at: &Place, pat: &syn::Pat, body: &syn::Expr) {
-        if backend_only(pat) && builds_gateway_error(body) {
+        if names(pat, "BackendJsonRpc") && builds_gateway_error(body) {
             let func = at.func.as_deref().unwrap_or("-");
             self.rebuilt.push(format!("{}\t{func}", at.file));
         }
@@ -298,7 +342,7 @@ fn scan(root: &Path, roots: &[&str]) -> Patterns {
     patterns
 }
 
-/// The reviewed exclusions: file, function, count, class, reason.
+/// The reviewed exclusions: file, function, anchor, count, class, reason.
 const LISTED: &str = include_str!("backend_json_rpc_patterns.tsv");
 
 /// What differs between `found` and the exclusions in `listed`.
@@ -310,8 +354,8 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let cols: Vec<&str> = line.split('\t').collect();
-        let [file, func, count, class, reason] = cols[..] else {
-            wrong.push(format!("not five columns: {line}"));
+        let [file, func, anchor, count, class, reason] = cols[..] else {
+            wrong.push(format!("not six columns: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
@@ -321,19 +365,24 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
             wrong.push(format!("count is not a number: {line}"));
             continue;
         };
-        want.insert((file.to_owned(), func.to_owned()), count);
+        want.insert((file.to_owned(), func.to_owned(), anchor.to_owned()), count);
     }
-    for ((file, func), count) in found {
-        match want.get(&(file.clone(), func.clone())) {
+    for (key, count) in found {
+        let (file, func, anchor) = key;
+        match want.get(key) {
             Some(listed) if listed == count => {}
-            Some(listed) => wrong.push(format!("listed {listed}, found {count}: {file}\t{func}")),
+            Some(listed) => wrong.push(format!(
+                "listed {listed}, found {count}: {file}\t{func}\t{anchor}"
+            )),
             None => wrong.push(format!(
-                "unlisted: {file}\t{func}\t{count}\t<class>\t<reason>"
+                "unlisted: {file}\t{func}\t{anchor}\t{count}\t<class>\t<reason>"
             )),
         }
     }
-    for (file, func) in want.keys().filter(|k| !found.contains_key(*k)) {
-        wrong.push(format!("stale (carried now, or gone): {file}\t{func}"));
+    for (file, func, anchor) in want.keys().filter(|k| !found.contains_key(*k)) {
+        wrong.push(format!(
+            "stale (carried now, or gone): {file}\t{func}\t{anchor}"
+        ));
     }
     wrong
 }
