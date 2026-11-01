@@ -151,6 +151,20 @@ fn facts_path(file: &str, path: &syn::Path) -> Option<String> {
     (through || (file == FACTS_FILE && segments.len() == 1)).then_some(last)
 }
 
+/// Whether `expr` names `LastStep::Refused` anywhere (an if-expression too).
+fn stores_refused(expr: &syn::Expr) -> bool {
+    struct Find(bool);
+    impl<'ast> syn::visit::Visit<'ast> for Find {
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            let s = segments(path);
+            self.0 |= s.ends_with(&["LastStep".to_string(), "Refused".to_string()]);
+        }
+    }
+    let mut find = Find(false);
+    syn::visit::Visit::visit_expr(&mut find, expr);
+    find.0
+}
+
 /// Every expression under `expr` (itself included), by address.
 fn all_exprs(expr: &syn::Expr, into: &mut HashSet<usize>) {
     struct Gather<'a>(&'a mut HashSet<usize>);
@@ -454,19 +468,6 @@ impl Sink for Collect {
                         syn::Member::Named(ident) => ident.to_string(),
                         syn::Member::Unnamed(_) => String::new(),
                     };
-                    let stores_refused = |e: &syn::Expr| {
-                        let mut found = false;
-                        struct Find<'a>(&'a mut bool);
-                        impl<'ast> syn::visit::Visit<'ast> for Find<'_> {
-                            fn visit_path(&mut self, path: &'ast syn::Path) {
-                                let s = segments(path);
-                                *self.0 |=
-                                    s.ends_with(&["LastStep".to_string(), "Refused".to_string()]);
-                            }
-                        }
-                        syn::visit::Visit::visit_expr(&mut Find(&mut found), e);
-                        found
-                    };
                     if member == "effect" {
                         self.push(at, Kind::Writes("facts.effect ="));
                     } else if member == "last_step" && stores_refused(&assign.right) {
@@ -512,7 +513,9 @@ fn fns_with(events: &[Event], file: &str, hit: impl Fn(&Kind) -> bool) -> BTreeS
 }
 
 impl Collect {
-    pub(super) fn derive(&self) -> Derived {
+    /// The effect writers (closed under calls in `delivery_facts.rs`) and
+    /// the `LastStep::Refused` writers.
+    fn writers(&self) -> (BTreeSet<String>, BTreeSet<String>) {
         let events = &self.events;
         let mut effect_writers =
             fns_with(events, FACTS_FILE, |k| *k == Kind::Writes("facts.effect ="));
@@ -531,12 +534,13 @@ impl Collect {
         let step_writers = fns_with(events, FACTS_FILE, |k| {
             *k == Kind::Writes("facts.last_step = Refused")
         });
-        let needles: BTreeSet<&String> = effect_writers
-            .iter()
-            .chain(&step_writers)
-            .filter(|n| !NOT_A_NEEDLE.contains(&n.as_str()))
-            .collect();
+        (effect_writers, step_writers)
+    }
 
+    /// Error-valued `src/gateway` functions that build one of the twelve or
+    /// call such a function, to a fixed point.
+    fn helper_set(&self) -> BTreeSet<String> {
+        let events = &self.events;
         let valued: BTreeSet<&String> = self
             .error_valued
             .iter()
@@ -569,6 +573,18 @@ impl Collect {
                 break;
             }
         }
+        helpers
+    }
+
+    pub(super) fn derive(&self) -> Derived {
+        let events = &self.events;
+        let (effect_writers, step_writers) = self.writers();
+        let needles: BTreeSet<&String> = effect_writers
+            .iter()
+            .chain(&step_writers)
+            .filter(|n| !NOT_A_NEEDLE.contains(&n.as_str()))
+            .collect();
+        let helpers = self.helper_set();
 
         let mut raises = BTreeMap::new();
         let mut plain = Vec::new();

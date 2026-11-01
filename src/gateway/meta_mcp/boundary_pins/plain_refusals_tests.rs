@@ -19,7 +19,7 @@ pub(super) const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/prove
 const PENDING: [&str; 1] = ["inv2-credential-miss"];
 
 /// Every `crate::Error` variant that is not one of the twelve: covered by
-/// the refusal scan in delivery_framing.rs (`Forbidden`, `GatewayRefused`,
+/// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
 /// `ResponseFirewallRefused`), or not a gateway decision.
 const OTHER_VARIANTS: [&str; 23] = [
     "Forbidden",
@@ -218,7 +218,7 @@ pub(super) fn crate_targets(root: &std::path::Path) -> BTreeSet<String> {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             let path = entry.path();
-            if path.is_file() && name.ends_with(".rs") {
+            if path.is_file() && path.extension().is_some_and(|e| e == "rs") {
                 targets.insert(format!("src/bin/{name}"));
             } else if path.join("main.rs").is_file() {
                 targets.insert(format!("src/bin/{name}/main.rs"));
@@ -374,7 +374,6 @@ fn credential_miss_ordinal(source: &str) -> usize {
         }
     }
     fn quote_text(expr: &syn::Expr) -> String {
-        let mut text = String::new();
         struct Idents<'a>(&'a mut String);
         impl<'ast> Visit<'ast> for Idents<'_> {
             fn visit_ident(&mut self, ident: &'ast syn::Ident) {
@@ -382,6 +381,7 @@ fn credential_miss_ordinal(source: &str) -> usize {
                 self.0.push(' ');
             }
         }
+        let mut text = String::new();
         Idents(&mut text).visit_expr(expr);
         text
     }
