@@ -98,6 +98,11 @@ impl QuotaPrincipal {
     pub(crate) fn as_store_key(&self) -> &str {
         &self.0
     }
+
+    /// The key a client's rate-limit window and breaker are kept under.
+    pub(crate) fn limit_store_key(&self) -> &str {
+        &self.0
+    }
 }
 
 #[cfg(test)]
