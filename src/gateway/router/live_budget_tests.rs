@@ -20,7 +20,7 @@ const KEY: &str = "k-budget";
 
 /// Governance on, `read` at 1.0 a call, the default alert tiers, and the
 /// budgets `budgets` sets.
-fn governance(budgets: impl FnOnce(&mut CostGovernanceConfig)) -> CostGovernanceConfig {
+pub(super) fn governance(budgets: impl FnOnce(&mut CostGovernanceConfig)) -> CostGovernanceConfig {
     let mut cfg = CostGovernanceConfig {
         enabled: true,
         ..Default::default()
@@ -32,7 +32,7 @@ fn governance(budgets: impl FnOnce(&mut CostGovernanceConfig)) -> CostGovernance
 
 /// A gateway started with `cfg`: the enforcer built from it, and the live
 /// config publishing the same section, as startup does.
-async fn fixture(cfg: &CostGovernanceConfig) -> Fx {
+pub(super) async fn fixture(cfg: &CostGovernanceConfig) -> Fx {
     let registry = Arc::new(CostRegistry::new(cfg));
     let enforcer = Arc::new(BudgetEnforcer::new(cfg.clone(), Arc::clone(&registry)));
     let fx = fixture_built(Answer::Ok, move |meta| {
@@ -47,7 +47,7 @@ async fn fixture(cfg: &CostGovernanceConfig) -> Fx {
 }
 
 /// Publish an edit of `cost_governance`, as a reload would.
-fn reload(fx: &Fx, edit: impl FnOnce(&mut CostGovernanceConfig)) {
+pub(super) fn reload(fx: &Fx, edit: impl FnOnce(&mut CostGovernanceConfig)) {
     fx.state.live_config.edit(|c| edit(&mut c.cost_governance));
 }
 
@@ -312,7 +312,7 @@ async fn t12c_a_request_keeps_the_blocking_rule_it_arrived_with() {
 }
 
 /// A `read` call as the direct route builds it, pinned to `generation`.
-fn backend_call(generation: Option<&crate::config_reload::Generation>) -> BackendCall<'_> {
+pub(super) fn backend_call(generation: Option<&crate::config_reload::Generation>) -> BackendCall<'_> {
     BackendCall {
         server: "alpha",
         tool: "read",
