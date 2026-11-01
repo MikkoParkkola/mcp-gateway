@@ -138,6 +138,8 @@ async fn an_unchanged_result_keeps_its_receipts() {
 /// A rebuild from the redacted copy keeps the
 /// sensitivity the original delivery was judged to have, even when the
 /// redaction removed the classification marker.
+///
+/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn a_redaction_keeps_the_sensitivity_verdict_of_the_delivery() {
     let (meta, firewall) = classified_only_meta();

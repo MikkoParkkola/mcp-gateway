@@ -194,6 +194,8 @@ fn summary(server: &str, tool: &str, step: Option<u32>) -> Summary {
 /// bob's relay of the step's text refusable.
 /// Mutant killed: commit regardless of delivery (bob would already
 /// be refused after the `false` commit).
+///
+/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn g2_an_undelivered_commit_records_no_replayed_receipt() {
     let (meta, fw) = relay_meta();

@@ -192,6 +192,8 @@ fn code_of(result: &crate::Result<Value>) -> Option<i32> {
 /// and a backend that stopped to ask may have acted, so the key is kept as
 /// may-have-run: the same-key retry is not run again. Each
 /// call runs in a delivery cell, as every production entry point does.
+///
+/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn meta_retry_round_relay_refused() {
     let (meta, firewall, calls) =

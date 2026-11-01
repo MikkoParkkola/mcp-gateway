@@ -76,6 +76,7 @@ fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
         .allowed
 }
 
+/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn a_stdio_plan_receipts_each_step_it_delivered() {
     let registry = Arc::new(BackendRegistry::new());

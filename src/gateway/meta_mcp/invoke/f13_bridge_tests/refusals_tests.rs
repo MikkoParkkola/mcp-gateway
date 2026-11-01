@@ -114,6 +114,7 @@ enum RoundBlock {
 /// same refusal marks nothing.
 // One BridgeDispatcher literal per cell, as every bridged row here builds
 // it: splitting it would hide which field the row varies.
+/// Migrate to paired config when PR1's accessor lands.
 #[allow(clippy::too_many_lines)]
 #[cfg(feature = "firewall")]
 #[tokio::test]

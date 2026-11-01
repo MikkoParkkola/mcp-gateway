@@ -127,6 +127,7 @@ async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
         .expect("a request is answered")
 }
 
+/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn a_stdio_answer_is_receipted_as_delivered() {
     let stuffing = stuffing();
