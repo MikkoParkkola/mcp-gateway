@@ -23,7 +23,7 @@ fn a_peer_error_answering_this_request_is_surfaced() {
         &RequestId::Number(7),
         reqwest::StatusCode::FORBIDDEN,
     );
-    let Some(Error::JsonRpc { code, message, .. }) = refusal else {
+    let Some(Error::BackendJsonRpc { code, message, .. }) = refusal else {
         panic!("the peer's error was not surfaced: {refusal:?}");
     };
     assert_eq!(code, -32001);
