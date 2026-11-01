@@ -39,7 +39,6 @@ src/gateway/meta_mcp/chain_receipt.rs	refuse_chained_task	Error::json_rpc	1
 src/gateway/meta_mcp/confirmation.rs	confirmation_refusal_response	JsonRpcResponse::error	1
 src/gateway/meta_mcp/dispatch_names.rs	no_such_meta_tool	Error::json_rpc	1
 src/gateway/meta_mcp/grant_audit.rs	invoke_tool	Error::json_rpc	2
-src/gateway/meta_mcp/grant_audit.rs	invoke_tool	echo_refusal_delivered	1
 src/gateway/meta_mcp/grant_audit.rs	slot_http	JsonRpcResponse::error	1
 src/gateway/meta_mcp/grant_audit.rs	slot_http	error_response_preserving_status	1
 src/gateway/meta_mcp/grant_audit.rs	slot_rpc	error_response_preserving_status	1

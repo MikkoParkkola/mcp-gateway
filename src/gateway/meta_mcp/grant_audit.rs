@@ -597,17 +597,9 @@ impl super::MetaMcp {
         let trace_id = crate::gateway::trace::generate();
         // Each step's facts stay in a cell of its own: a step refusal the
         // composite carries on past never marks what the composite delivers.
-        // The scrub's refusal is read inside the step's cell, so the
-        // composite's rules decide whether the plan ends on it.
-        let sourced = crate::gateway::delivery_facts::step(async {
-            let sourced = self
-                .invoke_tool_with_source(args, session_id, caller, trace_id)
-                .await;
-            if let Err(error) = &sourced {
-                crate::gateway::delivery_facts::echo_refusal_delivered(error);
-            }
-            sourced
-        })
+        let sourced = crate::gateway::delivery_facts::step(
+            self.invoke_tool_with_source(args, session_id, caller, trace_id),
+        )
         .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
