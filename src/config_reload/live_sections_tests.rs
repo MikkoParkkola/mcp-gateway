@@ -215,11 +215,16 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
     (reports, stuck)
 }
 
-// R2 (every field): each security field other than the two hot flags,
-// changed alone, keeps the section restart-pending.
+// R2 (every field): each security field other than the two hot flags and the
+// tool policy (ADR-029, amended), changed alone, keeps the section
+// restart-pending. The live firewall fields are nested in `firewall`, whose
+// generic edit flips a restart-only one; they have their own row.
 #[test]
 fn r2_each_other_security_field_alone_stays_restart_pending() {
-    let (reports, stuck) = each_field_alone("security", &["sanitize_input", "ssrf_protection"]);
+    let (reports, stuck) = each_field_alone(
+        "security",
+        &["sanitize_input", "ssrf_protection", "tool_policy"],
+    );
     let missed: Vec<&str> = reports
         .iter()
         .filter(|(_, p, _)| !p.contains(&"security"))
@@ -489,4 +494,40 @@ fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
         CollusionAction::Block,
         "a held edit keeps the previous view"
     );
+}
+/// ADR-029 (amended): the policy fields the Policies screen edits apply on
+/// reload, so an edit to any one of them alone reports no restart.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_policy_field_edit_alone_reports_no_restart() {
+    use crate::security::firewall::{FirewallAction, FirewallRule};
+    type Edit = (&'static str, fn(&mut Config));
+    let running = Config::default();
+    let edits: [Edit; 3] = [
+        ("tool_policy", |c| {
+            c.security.tool_policy.deny = vec!["a:b".to_string()];
+        }),
+        ("firewall.rules", |c| {
+            c.security.firewall.rules = vec![FirewallRule {
+                tool_match: "read".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
+            }];
+        }),
+        ("firewall.credential_redaction", |c| {
+            c.security.firewall.credential_redaction = !c.security.firewall.credential_redaction;
+        }),
+    ];
+    for (field, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !pending(&running, wanted).contains(&"security"),
+            "{field} alone reports a restart"
+        );
+    }
 }

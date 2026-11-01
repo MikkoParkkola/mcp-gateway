@@ -21,6 +21,9 @@ use crate::protocol::RequestId;
 struct RefusesArguments;
 
 impl ToolAuthorizer for RefusesArguments {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn quota_principal(&self) -> Option<&crate::gateway::auth::QuotaPrincipal> {
         None
     }

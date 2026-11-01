@@ -260,6 +260,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
 }
 
 // PR2 of ADR-029's live-collusion work flips this; until then the relay gate judges with its startup lists.
+#[cfg(feature = "firewall")]
 const COLLUSION_LIVE: bool = false;
 
 /// Whether `security.firewall.collusion`'s four live fields (`sources`,
@@ -300,6 +301,14 @@ fn security_restart_only_json(
     let mut view = security.clone();
     view.sanitize_input = false;
     view.ssrf_protection = false;
+    // ADR-029 (amended): the policy fields the Policies screen edits apply on
+    // reload through the request's generation.
+    view.tool_policy = crate::security::ToolPolicyConfig::default();
+    #[cfg(feature = "firewall")]
+    {
+        view.firewall.rules.clear();
+        view.firewall.credential_redaction = false;
+    }
     #[cfg(feature = "firewall")]
     if matches!(collusion, CollusionFields::Masked) {
         let live = &mut view.firewall.collusion;

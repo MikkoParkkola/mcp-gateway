@@ -134,6 +134,7 @@ fn stdio_and_admin_refusals_keep_code_status_and_message() {
     let policy = deny_list_policy();
     let stdio = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let refuse = |tool: &'static str| {
         let args = json!({});

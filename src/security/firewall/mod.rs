@@ -356,7 +356,7 @@ impl Firewall {
             return FirewallVerdict::allow();
         }
         let findings = self.content_findings(target.tool, args);
-        let action = self.resolve_action(policy, target, &findings);
+        let action = Self::resolve_action(policy, target, &findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -384,6 +384,11 @@ impl Firewall {
     ///
     /// Returns a verdict. If `allowed` is `false`, the caller **must not**
     /// forward the request to the backend.
+    ///
+    /// Judged by the rules this firewall was built from: for a program that
+    /// embeds it, that is the current config. The gateway's own routes never
+    /// call it; they judge under the request's generation
+    /// (`live_config_guard_tests`).
     pub fn check_request(
         &self,
         session_id: &str,
@@ -411,6 +416,27 @@ impl Firewall {
     /// The startup generation's policy, for a caller that has no generation
     /// to judge under.
     pub(crate) fn startup_policy(&self) -> &FirewallPolicy {
+        &self.startup
+    }
+
+    /// The policy `generation` compiled, so a reload's rules decide the next
+    /// check (ADR-029, amended). With no generation (a `MetaMcp` with no live
+    /// config, which no production server builds: `live_config_guard_tests`)
+    /// it is the startup policy, logged once per process outside tests.
+    pub(crate) fn policy_under<'a>(
+        &'a self,
+        generation: Option<&'a crate::config_reload::Generation>,
+    ) -> &'a FirewallPolicy {
+        if let Some(generation) = generation {
+            return generation.firewall_policy();
+        }
+        #[cfg(not(test))]
+        {
+            static LOGGED: std::sync::Once = std::sync::Once::new();
+            LOGGED.call_once(|| {
+                tracing::error!("firewall judged with startup policy: no live config");
+            });
+        }
         &self.startup
     }
 
@@ -459,7 +485,7 @@ impl Firewall {
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            self.resolve_action(policy, target, &findings)
+            Self::resolve_action(policy, target, &findings)
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -623,6 +649,9 @@ impl Firewall {
     ///
     /// May redact credentials/PII from the response value in place (returns
     /// the potentially-modified value).
+    ///
+    /// Judged by the rules this firewall was built from, as
+    /// [`Self::check_request`] is; never called by the gateway's own routes.
     pub fn check_response(
         &self,
         session_id: &str,
@@ -675,7 +704,6 @@ impl Firewall {
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
     fn resolve_action(
-        &self,
         policy: &FirewallPolicy,
         target: RuleTarget<'_>,
         findings: &[Finding],

@@ -75,7 +75,7 @@ pub(crate) async fn poll_capability(
             key: crate::security::response_policy::KeyOf::of_client(client.api_key_identity()),
         };
         let verdict = fw.check_request_keyed(
-            fw.startup_policy(),
+            state.live_config.generation().firewall_policy(),
             &session,
             rule_target,
             &arguments,

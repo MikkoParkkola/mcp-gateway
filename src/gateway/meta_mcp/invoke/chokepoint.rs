@@ -282,8 +282,9 @@ impl MetaMcp {
             tool,
             key: crate::security::response_policy::KeyOf::NoKey,
         };
+        let published = self.current_generation();
         let verdict = firewall.check_request_keyed(
-            firewall.startup_policy(),
+            firewall.policy_under(published.as_deref()),
             session_id,
             rule_target,
             arguments,
@@ -402,9 +403,11 @@ impl MetaMcp {
                 crate::security::response_policy::KeyOf::Key,
             ),
         };
-        let mut verdict = firewall.rescan(firewall.startup_policy(), target, outbound.arguments);
+        let published = self.current_generation();
+        let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
+        let mut verdict = firewall.rescan(policy, target, outbound.arguments);
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(firewall.startup_policy(), target, answers);
+            let answered = firewall.rescan(policy, target, answers);
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }

@@ -54,7 +54,7 @@ impl Firewall {
             .fold(FirewallAction::Allow, |combined, target| {
                 strongest_action(
                     combined,
-                    self.resolve_action(
+                    Self::resolve_action(
                         policy,
                         RuleTarget {
                             server: if target.origin == TargetOrigin::NoBackend {
