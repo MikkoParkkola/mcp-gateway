@@ -542,6 +542,10 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
         return ExitCode::FAILURE;
     }
 
+    // The stdio path's last line, as the HTTP path's "Gateway shutdown
+    // complete": written just before exit, so it is the line the exit flush
+    // must not lose.
+    info!("stdio: shutdown complete");
     ExitCode::SUCCESS
 }
 
