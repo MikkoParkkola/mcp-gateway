@@ -103,7 +103,7 @@ async fn a_built_task_envelope_is_read_as_one() {
             );
         })
         .await;
-    receipts.commit(true);
+    receipts.commit(true, &meta.paired_generation_for_test());
     assert!(
         relayed_by_bob(&firewall, PROSE),
         "the stored result lost its receipt"

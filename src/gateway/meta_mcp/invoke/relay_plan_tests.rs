@@ -83,7 +83,7 @@ async fn deliver_plan(
             );
         })
         .await;
-    staged.commit(true, &firewall.paired_generation_for_test());
+    staged.commit(true, &meta.paired_generation_for_test());
 }
 
 /// A redaction inside step A keeps step B's receipt, keeps A's unredacted
@@ -619,7 +619,7 @@ async fn deliver_step(
             );
         })
         .await;
-    staged.commit(true, &firewall.paired_generation_for_test());
+    staged.commit(true, &meta.paired_generation_for_test());
 }
 
 /// MIK-7992: two short fields the plan delivers next to each other, where

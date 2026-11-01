@@ -101,7 +101,11 @@ pub(super) fn sync_key() -> StoredKey {
 /// under a Sync capture and finalised as delivered.
 pub(super) async fn plan_body(meta: &MetaMcp, result: &serde_json::Value) {
     let answer = json!({"content": [{"type": "text", "text": "plan answer"}]});
-    super::super::note_sync_capture("identity".to_owned(), String::new(), "operation".to_owned());
+    super::super::replay::note_sync_capture(
+        "identity".to_owned(),
+        String::new(),
+        "operation".to_owned(),
+    );
     plan_step(None, async {
         meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "read"), result);
     })

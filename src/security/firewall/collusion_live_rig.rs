@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::config::Config;
 use crate::config_reload::{Generation, LiveConfig};
-use crate::gateway::router::AppState;
+use crate::gateway::test_helpers::AppState;
 
 use super::{
     AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallAction, FirewallConfig,

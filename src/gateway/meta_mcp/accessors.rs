@@ -53,6 +53,19 @@ impl MetaMcp {
         self.reload_context.read().clone()
     }
 
+    /// The generation a gateway would publish for the configuration this
+    /// Meta-MCP's firewall was built from.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn paired_generation_for_test(
+        &self,
+    ) -> std::sync::Arc<crate::config_reload::Generation> {
+        self.firewall
+            .as_ref()
+            .map_or_else(crate::config_reload::Generation::placeholder, |fw| {
+                fw.paired_generation_for_test()
+            })
+    }
+
     /// The firewall the Meta-MCP records relay evidence into, for a fixture
     /// that pairs its live config with it.
     #[cfg(all(test, feature = "firewall"))]

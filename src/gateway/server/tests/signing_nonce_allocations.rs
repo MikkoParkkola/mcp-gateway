@@ -141,7 +141,10 @@ async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
     .await;
     let answer = answer.expect("a request carrying an id must produce a response");
     let frame = answer.delivered_unjudged(&fixture.meta, SESSION).await;
-    staged.commit(frame.delivers_result());
+    staged.commit(
+        frame.delivers_result(),
+        &fixture.meta.paired_generation_for_test(),
+    );
     frame
         .stdio_value()
         .map(std::borrow::Cow::into_owned)
