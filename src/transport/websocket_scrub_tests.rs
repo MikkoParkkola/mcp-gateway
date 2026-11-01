@@ -205,7 +205,10 @@ async fn a_redacted_answer_is_recorded_as_rewritten() {
 async fn a_replaced_answer_is_recorded_as_refused() {
     let reply = json!({"error": {"code": 7_391_540, "message": "nope"}});
     let (effect, answer) = recorded_effect(reply, "7391540").await;
-    assert!(answer.contains("Err"), "premise: refused: {answer}");
+    assert!(
+        answer.contains("the backend's answer contained a credential the gateway injected"),
+        "premise: the fixed refusal: {answer}"
+    );
     assert_eq!(effect, json!("refused"), "{answer}");
 }
 

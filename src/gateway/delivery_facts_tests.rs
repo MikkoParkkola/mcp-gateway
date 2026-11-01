@@ -393,3 +393,31 @@ fn every_context_integrity_caller_is_classified() {
         }
     }
 }
+
+/// A send attempt whose answer the scrub refused, then retried past: the
+/// call's record carries the latest attempt's effect, not the retried one's.
+#[tokio::test]
+async fn a_retried_attempts_scrub_effect_is_not_the_calls() {
+    scope(async {
+        super::send_began();
+        super::raise_attempt(ResponseEffect::Refused);
+        super::send_began();
+        assert_eq!(recorded(false)["response_effect"], "delivered");
+    })
+    .await;
+}
+
+/// The latest attempt's scrub effect is the call's, and a stronger
+/// delivery-level effect still wins over it.
+#[tokio::test]
+async fn the_latest_attempts_scrub_effect_is_recorded() {
+    scope(async {
+        super::send_began();
+        super::raise_attempt(ResponseEffect::Rewritten);
+        assert_eq!(recorded(false)["response_effect"], "rewritten");
+        raise(ResponseEffect::Refused);
+        super::send_began();
+        assert_eq!(recorded(false)["response_effect"], "refused");
+    })
+    .await;
+}

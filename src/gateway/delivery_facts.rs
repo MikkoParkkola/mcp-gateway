@@ -82,6 +82,10 @@ struct Finding {
 #[derive(Debug, Clone)]
 pub(crate) struct DeliveryFacts {
     effect: ResponseEffect,
+    /// What the transport's scrub did to the latest send attempt's answer.
+    /// Each counted send starts it over, so an attempt the call retried past
+    /// leaves nothing behind.
+    attempt: ResponseEffect,
     scanned: bool,
     findings: BTreeSet<Finding>,
     vouched: bool,
@@ -118,6 +122,7 @@ impl Default for DeliveryFacts {
     fn default() -> Self {
         Self {
             effect: ResponseEffect::Delivered,
+            attempt: ResponseEffect::Delivered,
             scanned: false,
             findings: BTreeSet::new(),
             vouched: true,
@@ -138,7 +143,12 @@ tokio::task_local! {
 impl DeliveryFacts {
     /// Whether a gateway refusal was raised in this cell.
     pub(crate) fn refused(&self) -> bool {
-        self.effect == ResponseEffect::Refused
+        self.effect() == ResponseEffect::Refused
+    }
+
+    /// The strongest effect: the delivery's own, or its latest send's.
+    fn effect(&self) -> ResponseEffect {
+        self.effect.max(self.attempt)
     }
 }
 
@@ -172,7 +182,7 @@ pub(crate) async fn step<F: std::future::Future>(future: F) -> F::Output {
     let (output, refused) = FACTS
         .scope(RefCell::new(cell), async {
             let output = future.await;
-            let refused = FACTS.with(|cell| cell.borrow().effect == ResponseEffect::Refused);
+            let refused = FACTS.with(|cell| cell.borrow().effect() == ResponseEffect::Refused);
             (output, refused)
         })
         .await;
@@ -285,7 +295,17 @@ pub(crate) fn outlet(error: &crate::Error) {
 /// have reached the backend. Recorded before the transport call; a dropped or
 /// panicking call never takes it back.
 pub(crate) fn send_began() {
-    with(|facts| facts.sends.entered += 1);
+    with(|facts| {
+        facts.sends.entered += 1;
+        facts.attempt = ResponseEffect::Delivered;
+    });
+}
+
+/// The transport's scrub changed this send's answer (redacted it, or
+/// replaced it with a refusal). Kept for the latest send only: a retry's
+/// [`send_began`] starts it over.
+pub(crate) fn raise_attempt(effect: ResponseEffect) {
+    with(|facts| facts.attempt = facts.attempt.max(effect));
 }
 
 /// Run one transport call of this delivery as a counted send: counted when
@@ -414,7 +434,7 @@ pub(crate) fn record_fields(
     let Some(facts) = facts else {
         return;
     };
-    let mut effect = facts.effect;
+    let mut effect = facts.effect();
     if frame_refused {
         effect = effect.max(ResponseEffect::Refused);
     }

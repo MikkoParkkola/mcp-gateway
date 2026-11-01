@@ -522,7 +522,7 @@ pub(crate) fn scrub_answer(
     needles: &NeedleSet,
     answer: crate::Result<JsonRpcResponse>,
 ) -> crate::Result<JsonRpcResponse> {
-    use crate::gateway::delivery_facts::{ResponseEffect, raise};
+    use crate::gateway::delivery_facts::{ResponseEffect, raise_attempt as raise};
     let (answer, outcome) = scrubbed_answer(needles, answer);
     match outcome {
         Scrubbed::Redacted => raise(ResponseEffect::Rewritten),

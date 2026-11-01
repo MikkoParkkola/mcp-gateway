@@ -378,14 +378,22 @@ fn an_unparsable_line_is_logged_by_length_only() {
 /// real stdio reader: the reader routes it to the call as sent and the call
 /// scrubs it on its own task, so the effect lands in this call's cell.
 async fn recorded_effect(reply: &str, secret: &str) -> (serde_json::Value, String) {
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    needles.insert("b", secret);
+    recorded_effect_with(reply, needles).await
+}
+
+/// [`recorded_effect`] with a value set the caller built.
+async fn recorded_effect_with(
+    reply: &str,
+    needles: crate::security::needles::NeedleSet,
+) -> (serde_json::Value, String) {
     let (_w, t) = started(&format!(
         r#"read -r request
 printf '{{"jsonrpc":"2.0","id":%s,{reply}}}\n' "$(id_of "$request")"
 while IFS= read -r l; do :; done"#
     ))
     .await;
-    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
-    needles.insert("b", secret);
     t.attach_needles(Arc::new(needles));
     let mut fields = serde_json::Map::new();
     let answer = crate::gateway::delivery_facts::scope(async {
@@ -427,7 +435,31 @@ async fn a_redacted_answer_is_recorded_as_rewritten() {
 async fn a_replaced_answer_is_recorded_as_refused() {
     let (effect, answer) =
         recorded_effect(r#""error":{"code":7391540,"message":"nope"}"#, "7391540").await;
-    assert!(answer.contains("Err"), "premise: refused: {answer}");
+    assert!(
+        answer.contains("the backend's answer contained a credential the gateway injected"),
+        "premise: the fixed refusal: {answer}"
+    );
+    assert_eq!(effect, serde_json::json!("refused"), "{answer}");
+}
+
+/// The other replacement: a value set past its bound refuses every answer,
+/// and the call records refused.
+#[tokio::test]
+async fn an_answer_refused_for_a_full_set_is_recorded_as_refused() {
+    let needles = crate::security::needles::NeedleSet::with_grace(Duration::from_secs(3_600));
+    for i in 0..=crate::security::needles::MAX_NEEDLES {
+        needles.insert("b", &format!("full-set-value-{i:05}"));
+    }
+    assert!(needles.overflowed(), "premise: the set is full");
+    let (effect, answer) = recorded_effect_with(
+        r#""result":{"content":[{"type":"text","text":"nothing to hide"}]}"#,
+        needles,
+    )
+    .await;
+    assert!(
+        answer.contains(crate::security::needles::OVERFLOW_REFUSAL),
+        "premise: the overflow refusal: {answer}"
+    );
     assert_eq!(effect, serde_json::json!("refused"), "{answer}");
 }
 
