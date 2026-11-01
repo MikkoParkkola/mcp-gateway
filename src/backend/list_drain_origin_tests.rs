@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A backend's own error frame on a list page is the backend's error: the
-//! fill fails with it, and the frame a `tools/list` caller is answered with
-//! counts as the backend's.
+//! catalogue fill fails with it (`page_error`), and the frame built from
+//! that error (`of_error`) counts as the backend's. A direct `tools/list`
+//! that forwards the page frame itself is another path, not pinned here.
 
 use super::*;
 use crate::gateway::health_metrics::RpcError;

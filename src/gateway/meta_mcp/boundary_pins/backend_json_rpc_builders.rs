@@ -225,6 +225,23 @@ fn a_stray_backend_literal_fails() {
     }
 }
 
+/// A literal in a third function of src/error.rs is scanned as a stray: the
+/// exemption is the two listed functions, not the file.
+#[test]
+fn a_literal_in_another_error_rs_function_is_a_stray() {
+    let root = tempfile::tempdir().expect("tempdir");
+    std::fs::create_dir(root.path().join("src")).expect("src dir");
+    std::fs::write(root.path().join("src/lib.rs"), "mod error;").expect("write lib.rs");
+    std::fs::write(
+        root.path().join("src/error.rs"),
+        "fn backend_json_rpc() { let _ = Self::BackendJsonRpc { code: 1, message: m, data: None }; }
+         fn other() { let _ = Self::BackendJsonRpc { code: 1, message: m, data: None }; }",
+    )
+    .expect("write error.rs");
+    let strays = scan(root.path(), &["src/lib.rs"]).strays;
+    assert_eq!(strays, ["src/error.rs\tother"]);
+}
+
 /// Only the listed functions of src/error.rs may write the literal: another
 /// function in that file is a stray.
 #[test]
