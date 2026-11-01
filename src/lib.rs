@@ -264,10 +264,15 @@ fn cap_handshake_logging(filter: EnvFilter) -> EnvFilter {
 /// for the life of the process and drop it last: dropping it flushes the
 /// queue, waiting at most [`log_writer::LOG_FLUSH_DEADLINE`].
 ///
+/// Library callers must keep the returned value until the process exits:
+/// `let _logs = setup_tracing(level, format)?;`. Discarding it flushes at
+/// once, and lines logged later are no longer flushed at exit.
+///
 /// # Errors
 ///
 /// Fails when the writer thread cannot be started.
 #[doc(hidden)]
+#[must_use = "hold the returned guard for the life of the process: dropping it flushes the log queue"]
 pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<impl Sized + use<>> {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
     let filter = cap_handshake_logging(filter);
