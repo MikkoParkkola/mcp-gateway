@@ -476,3 +476,22 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
         "O5.2b: the replay kept the stored class"
     );
 }
+
+/// F6.4 (report only, run on the build host): the cost of staging one
+/// delivery under a steady `off` with the firewall on, which the amended
+/// decision stages where it used to skip. Prints microseconds per delivery;
+/// above about 2 goes to the lead before merge.
+#[test]
+#[ignore = "report-only bench: run on the build host, read the printed figure"]
+fn f6_4_report_the_staging_cost_per_delivery_under_a_steady_off() {
+    const DELIVERIES: u32 = 20_000;
+    let rig = Rig::new(config(Off, &["alpha:read"], vec![]));
+    let result = classified(PROSE);
+    let started = std::time::Instant::now();
+    for _ in 0..DELIVERIES {
+        let digest = rig.firewall.delivery_digest("alpha", "read", &result);
+        std::hint::black_box(digest);
+    }
+    let per = started.elapsed().as_secs_f64() * 1e6 / f64::from(DELIVERIES);
+    println!("F6.4: {per:.3} microseconds per delivery staged under a steady off");
+}
