@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::direct_guards_fixture::{Answer, Fx, fixture_built, post_meta_invoke};
+pub(super) use super::direct_guards_fixture::Fx;
+use super::direct_guards_fixture::{Answer, fixture_built, post_meta_invoke};
 use crate::cost_accounting::config::{AlertAction, AlertRule, CostGovernanceConfig};
 use crate::cost_accounting::enforcer::BudgetEnforcer;
 use crate::cost_accounting::enforcer::crossings::BudgetCrossing;
@@ -16,7 +17,7 @@ use crate::cost_accounting::registry::CostRegistry;
 use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
 use crate::gateway::meta_mcp::visible::seams;
 
-const KEY: &str = "k-budget";
+pub(super) const KEY: &str = "k-budget";
 
 /// Governance on, `read` at 1.0 a call, the default alert tiers, and the
 /// budgets `budgets` sets.
@@ -72,7 +73,7 @@ fn refused(body: &Value) -> bool {
 }
 
 /// `KEY`'s spend today, as the enforcer counts it.
-fn spent(fx: &Fx) -> f64 {
+pub(super) fn spent(fx: &Fx) -> f64 {
     let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
     enforcer
         .snapshot()
@@ -83,7 +84,7 @@ fn spent(fx: &Fx) -> f64 {
 }
 
 /// `n` admitted calls; each must pass.
-async fn spend(fx: &Fx, n: usize) {
+pub(super) async fn spend(fx: &Fx, n: usize) {
     for i in 0..n {
         let body = call(fx).await;
         assert!(!refused(&body), "call {i} was refused: {body}");
@@ -92,14 +93,14 @@ async fn spend(fx: &Fx, n: usize) {
 
 /// The edit `scope` makes to set its budget to `limit`.
 #[derive(Clone, Copy, Debug)]
-enum Scope {
+pub(super) enum Scope {
     Key,
     Tool,
     Daily,
 }
 
 impl Scope {
-    fn set(self, cfg: &mut CostGovernanceConfig, limit: Option<f64>) {
+    pub(super) fn set(self, cfg: &mut CostGovernanceConfig, limit: Option<f64>) {
         let budgets = &mut cfg.budgets;
         match (self, limit) {
             (Self::Key, Some(l)) => {
@@ -312,7 +313,9 @@ async fn t12c_a_request_keeps_the_blocking_rule_it_arrived_with() {
 }
 
 /// A `read` call as the direct route builds it, pinned to `generation`.
-pub(super) fn backend_call(generation: Option<&crate::config_reload::Generation>) -> BackendCall<'_> {
+pub(super) fn backend_call(
+    generation: Option<&crate::config_reload::Generation>,
+) -> BackendCall<'_> {
     BackendCall {
         server: "alpha",
         tool: "read",
