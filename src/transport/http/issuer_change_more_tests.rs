@@ -31,9 +31,8 @@ async fn a_second_install_during_rediscovery_is_adopted_not_lost() {
 }
 
 // A restart lands while the re-discovery is parked after its fetch: the call
-// ends cancelled, and the install it would have adopted is not handed back.
-// Red today: the re-discovery runs outside the cancel select, and the adopted
-// token is returned.
+// ends cancelled while the re-discovery is still parked. Red today: the
+// re-discovery runs outside the cancel select, so the call waits for it.
 #[tokio::test]
 async fn a_restart_during_rediscovery_cancels_the_call() {
     let w = Arc::new(world().await);
@@ -46,9 +45,11 @@ async fn a_restart_during_rediscovery_cancels_the_call() {
     within("the re-discovery parks after its fetch", reached.notified()).await;
 
     w.serving.login_gate.cancel_and_join().await;
-    release.notify_one();
 
-    let ended = call.await.expect("the call ran");
+    let ended = within("the call ends on the restart", call)
+        .await
+        .expect("the call ran");
+    release.notify_one();
     assert!(
         matches!(ended, Err(crate::Error::AuthorizationCancelled { .. })),
         "{ended:?}"
