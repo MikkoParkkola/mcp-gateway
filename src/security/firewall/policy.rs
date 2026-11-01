@@ -69,22 +69,10 @@ impl CollusionView {
         }
     }
 
-    /// Whether `source` is listed under `sources`.
-    #[cfg(test)]
-    pub(crate) fn lists(&self, source: &str) -> bool {
-        self.sources.iter().any(|p| p.matches(source))
-    }
-
     /// The `allowed_flows` entries (bit each) whose source matches `target`.
     #[cfg(test)]
     pub(crate) fn source_flows(&self, target: &str) -> u64 {
         Self::mask(self.flows.iter().map(|(source, _)| source), target)
-    }
-
-    /// The `allowed_flows` entries (bit each) whose egress matches `target`.
-    #[cfg(test)]
-    pub(crate) fn egress_flows(&self, target: &str) -> u64 {
-        Self::mask(self.flows.iter().map(|(_, egress)| egress), target)
     }
 
     #[cfg(test)]

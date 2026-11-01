@@ -63,6 +63,10 @@ pub(in super::super) enum ReplayJudged {
 /// reservation, so a fresh digest built from it records as a first record.
 /// It also holds no `leaf_hashes`: recording never reads them (they serve
 /// seam ownership before commit, which a replay does not re-run).
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts of one delivery, not a state machine"
+)]
 #[derive(Clone)]
 pub(crate) struct ReplayReceipt {
     /// The plan step label; `None` for a seam receipt.

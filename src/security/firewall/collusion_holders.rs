@@ -269,21 +269,18 @@ impl Tracked {
             origin: new.origin,
             copies: new.copies,
         };
-        let i = match self
+        let mine = self
             .overflow
             .iter()
-            .position(|s| s.principal == new.principal)
-        {
-            Some(i) => i,
-            None => {
-                self.overflow.push(Overflow {
-                    principal: new.principal,
-                    pairs: Vec::new(),
-                    unattributed: None,
-                });
-                self.overflow.len() - 1
-            }
-        };
+            .position(|s| s.principal == new.principal);
+        let i = mine.unwrap_or_else(|| {
+            self.overflow.push(Overflow {
+                principal: new.principal,
+                pairs: Vec::new(),
+                unattributed: None,
+            });
+            self.overflow.len() - 1
+        });
         let slot = &mut self.overflow[i];
         if let Some(held) = slot
             .pairs
