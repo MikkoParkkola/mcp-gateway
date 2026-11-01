@@ -241,6 +241,9 @@ mod late_refusal_lease_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
+/// A send refusal releases its call's key only when nothing was sent.
+#[cfg(test)]
+mod lend_key_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;

@@ -473,3 +473,63 @@ async fn a_chain_step_refused_at_its_send_is_refused_once() {
         "the chain's step refusal: {answer}"
     );
 }
+
+/// Whether the delivery cell still vouches for its answer when a step runs.
+#[derive(Clone, Copy)]
+enum Cell {
+    Vouched,
+    Unvouched,
+}
+
+/// The delivery effect a playbook step's send refusal records in a `cell`.
+async fn step_refusal_effect(cell: Cell) -> serde_json::Map<String, Value> {
+    crate::gateway::delivery_facts::scope(crate::playbook::in_step(0, async move {
+        if matches!(cell, Cell::Unvouched) {
+            crate::gateway::delivery_facts::unvouched();
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let backend = Arc::new(Backend::new(
+            "refused",
+            BackendConfig::default(),
+            &FailsafeConfig::default(),
+            Duration::from_secs(300),
+        ));
+        backend.set_transport_for_test(Arc::new(RefusedAtSend {
+            calls: Arc::clone(&calls),
+        }));
+        let registry = Arc::new(BackendRegistry::new());
+        let _ = registry.register(backend);
+        let meta = MetaMcp::new(registry);
+        let caller = ctx(&AllowAll);
+        let args = json!({"server": "refused", "tool": "book", "arguments": {}});
+        let outcome = meta
+            .invoke_tool_with_source(&args, None, &caller, "vouch".into())
+            .await;
+        assert!(
+            matches!(&outcome, Err(crate::Error::Forbidden { code: -32001, .. })),
+            "premise: the step was refused at its send: {:?}",
+            outcome.as_ref().err()
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "premise: sent once");
+        let mut fields = serde_json::Map::new();
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        fields
+    }))
+    .await
+}
+
+/// The vouch rule at the first dispatch's fold site: a playbook step refused
+/// at its send records `refused` while the cell vouches for its answer, and
+/// nothing once the composite has unvouched it (an absorbed step never marks
+/// the composite's record).
+#[tokio::test]
+async fn a_step_refused_at_its_send_records_refused_only_while_vouched() {
+    let vouched = step_refusal_effect(Cell::Vouched).await;
+    assert_eq!(vouched["response_effect"], "refused", "{vouched:?}");
+    let unvouched = step_refusal_effect(Cell::Unvouched).await;
+    assert!(unvouched.get("response_effect").is_none(), "{unvouched:?}");
+}
