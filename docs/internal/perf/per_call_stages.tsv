@@ -453,6 +453,7 @@ src/gateway/meta_mcp/invoke/relay_staging.rs	in_plan_step	-	on-path, untimed: re
 src/gateway/meta_mcp/invoke/relay_staging.rs	new	-	on-path, untimed: relay-detection constructions (deferred receipts) only; relay detection is off in the harness
 src/gateway/meta_mcp/invoke/relay_staging.rs	none	stdio_invoke_tiny	the no-receipts staged value each stdio dispatch returns with relay detection off
 src/gateway/meta_mcp/invoke/relay_staging.rs	plan_step	-	gateway_execute and playbook steps only, not a single gateway_invoke
+src/gateway/meta_mcp/invoke/relay_staging.rs	unpublished	-	unreachable in production: logs only when no generation was published yet, which startup rules out before serving
 src/gateway/meta_mcp/invoke/relay_staging.rs	stage_with	-	direct /mcp/{backend} route only, not the meta tools/call path
 src/gateway/meta_mcp/invoke/relay_staging.rs	take_staged_for_test	-	test-only helper (cfg(test))
 src/gateway/meta_mcp/invoke/relay_catalogue.rs	as_caller	-	prompts/get and resources/read only, not the tools/call path
