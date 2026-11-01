@@ -535,18 +535,20 @@ fn task_request(method: &str, mut params: Value) -> Value {
 }
 
 /// LEND.5 on a task: the worker's dispatch judges the caller's slot itself
-/// (the route stage's memo judged only the request), so its cold fill is the
-/// dispatch check's own (`r2_check::answer_refused_fill`). The lender
-/// refuses that fill once, nothing is sent, and the task fails with the
-/// refusal, never completing with a backend error result to retry.
+/// (the route stage's memo judged only the creating request), so its cold
+/// fill is the dispatch check's own (`r2_check::answer_refused_fill`). The
+/// lender refuses that fill, nothing is sent, and the worker's dispatch is
+/// answered and recorded as the refusal, never as a backend error result.
+/// Read from the audit log, not `tasks/get`: a task read judges the slot
+/// again, and its answer is not this row's subject.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_tasks_cold_fill_refused_by_the_lender_fails_the_task_once() {
+async fn a_task_workers_cold_fill_refused_by_the_lender_is_recorded_refused() {
     let (url, calls) = peer().await;
     let mint = FixedMint {
         headers: vec![],
         expires_at: i64::MAX,
     };
-    let (router, _dirs, (_meta, backend)) =
+    let (router, dirs, (_meta, backend)) =
         gateway_in(url, mint, crate::config::InputSchemaEnforcement::Closed).await;
     let create = task_request(
         "tools/call",
@@ -554,44 +556,39 @@ async fn a_tasks_cold_fill_refused_by_the_lender_fails_the_task_once() {
                "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}}),
     );
     let (status, created) = post_mcp(&router, &create).await;
-    let id = created
-        .pointer("/result/taskId")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("premise: a task handle: {status} {created}"))
-        .to_owned();
-    // Polled, as a client does; bounded by attempts, not by a clock.
-    let mut read = Value::Null;
-    for _ in 0..10_000 {
-        read = post_mcp(&router, &task_request("tasks/get", json!({"taskId": id})))
-            .await
-            .1;
-        if matches!(
-            read.pointer("/result/status").and_then(Value::as_str),
-            Some("completed" | "failed" | "cancelled")
-        ) {
+    assert!(
+        created.pointer("/result/taskId").is_some(),
+        "premise: a task handle: {status} {created}"
+    );
+    // The worker's records, once its dispatch settles; bounded by attempts,
+    // not by a clock.
+    let mut worker: Vec<Value> = Vec::new();
+    for _ in 0..100_000 {
+        let raw = std::fs::read_to_string(dirs.0.path().join("audit.jsonl")).unwrap_or_default();
+        worker = raw
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|entry| entry["tool"] == TOOL)
+            .collect();
+        if worker
+            .iter()
+            .any(|entry| entry.get("response_effect").is_some())
+        {
             break;
         }
         tokio::task::yield_now().await;
     }
-    let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
+    let [invocation, delivery] = worker.as_slice() else {
+        panic!("premise: the worker's invocation and delivery records: {worker:?}");
+    };
+    assert_eq!(invocation["error_code"], -32001, "{invocation}");
     assert_eq!(
-        refusals,
-        [1],
-        "the lender refused the caller's binding once: {read}"
+        delivery["response_effect"], "refused",
+        "the worker's dispatch is recorded refused: {delivery}"
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-    assert_eq!(
-        read.pointer("/result/status"),
-        Some(&json!("failed")),
-        "{read}"
-    );
-    let text = read.to_string();
-    assert!(
-        text.contains("this call carried none"),
-        "the task fails with the lender's refusal: {read}"
-    );
-    assert!(
-        !text.contains("BACKEND_ERROR") && !text.contains("retrying once is safe"),
-        "not a backend error to retry: {read}"
-    );
+    // One refusal at the creating request's verdict, one at the worker's own
+    // dispatch: no strategy refills a refused slot.
+    let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
+    assert_eq!(refusals, [2], "the caller's binding, refused twice");
 }
