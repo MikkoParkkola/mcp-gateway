@@ -9,6 +9,7 @@
 use std::sync::Arc;
 
 use super::*;
+use crate::oauth::client::grants::Adopt;
 use crate::oauth::client::sign_in::{SignIn, SignInStatus};
 use crate::test_pause::within;
 use crate::test_wait::HANG_BOUND;
@@ -62,9 +63,9 @@ async fn a_refresh_in_flight_across_an_issuer_switch_hands_back_no_token() {
 }
 
 /// An adopt has read this client's own install when the confirm under the
-/// other issuer lands. It neither acknowledges the new install nor hands back
-/// the token it read. Red today: it loops, acknowledges the new count, and
-/// returns the old issuer's token.
+/// other issuer lands. It neither acknowledges the new install nor keeps the
+/// token it read cached: it answers `Moved`. Red before the adopt checked the
+/// issuer: it looped, acknowledged the new count, and returned the old token.
 #[tokio::test]
 async fn an_adopt_racing_an_issuer_switch_acknowledges_nothing() {
     let server = TokenServer::start(&[]).await;
@@ -84,8 +85,16 @@ async fn an_adopt_racing_an_issuer_switch_acknowledges_nothing() {
     release.notify_one();
 
     let (owned, adopted) = adopt.await.expect("the adopt ran");
-    assert_eq!(adopted, None, "nothing of the old issuer is handed back");
+    assert_eq!(
+        adopted,
+        Adopt::Moved,
+        "nothing of the old issuer is handed back"
+    );
     assert!(owned.install_stale(), "the new install is not acknowledged");
+    assert!(
+        owned.current_token.read().is_none(),
+        "nothing of the old issuer stays cached"
+    );
 }
 
 /// A publish by the old issuer's client (a refresh that was already in flight
@@ -146,7 +155,11 @@ async fn a_failed_adopt_keeps_the_provider_changed_reason() {
     cell.record_install(&owned.credential_key().unwrap());
     cell.raise_provider_changed();
 
-    assert_eq!(owned.adopt_installed(), None, "nothing was stored");
+    assert_eq!(
+        owned.adopt_installed(),
+        Adopt::Nothing,
+        "nothing was stored"
+    );
 
     assert_eq!(cell.snapshot(), SignIn::ProviderChanged);
 }
@@ -183,4 +196,131 @@ async fn a_revoked_detached_step_hands_back_no_held_token() {
         );
         assert_eq!(server.requests(), 0, "adopt={adopt}: nothing was sent");
     }
+}
+
+/// A confirm under the other issuer lands while `get_token` (and the detached
+/// step) holds an adopt after its read: the call answers the sign-in wait, the
+/// cache holds nothing of the old issuer, and no refresh is sent. Red before
+/// the adopt step checked the issuer: the old cached token was handed back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
+    for detached in [false, true] {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+        let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+        let owned = client(dir.path(), &server)
+            .with_sign_in_status(Arc::clone(&cell))
+            .with_login_gate(Arc::clone(&gate));
+        hold(&owned, &token("a1", Some("r1"), false));
+        cell.record_install(&owned.credential_key().unwrap());
+        let (reached, release) = owned.adopt_pause.arm();
+        let (since, cohort) = (gate.epoch(), gate.cohort());
+        let call = tokio::task::spawn_blocking(move || {
+            let deadline = tokio::time::Instant::now() + HANG_BOUND;
+            let answer = futures::executor::block_on(async {
+                if detached {
+                    owned
+                        .get_token_detached(false, since, &cohort, deadline)
+                        .await
+                } else {
+                    crate::oauth::login_gate::non_interactive(owned.get_token()).await
+                }
+            });
+            (owned, answer)
+        });
+        within("the adopt parks after its read", reached.notified()).await;
+
+        cell.record_install(OTHER_ISSUER_KEY);
+        release.notify_one();
+
+        let (owned, answer) = call.await.expect("the call ran");
+        let refused = answer.expect_err("nothing of the old issuer is handed back");
+        assert!(
+            matches!(refused, Error::AuthorizationRequired { .. }),
+            "detached={detached}: {refused}"
+        );
+        assert!(
+            owned.current_token.read().is_none(),
+            "detached={detached}: nothing of the old issuer stays cached"
+        );
+        assert_eq!(
+            server.requests(),
+            0,
+            "detached={detached}: nothing was sent"
+        );
+    }
+}
+
+/// A sign-in confirmed after an earlier install under the other issuer
+/// publishes its own state. Red before the install was recorded first: the
+/// publish was checked against the earlier install and dropped.
+#[tokio::test]
+async fn a_confirm_after_an_install_elsewhere_publishes_its_own_state() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    cell.record_install(OTHER_ISSUER_KEY);
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let by = tokio::time::Instant::now() + HANG_BOUND;
+
+    owned
+        .save_confirmed(
+            crate::oauth::client::sign_in::PendingGrant::from_token(token("a1", Some("r1"), false)),
+            &cancel,
+            by,
+        )
+        .await
+        .expect("the confirm saves");
+
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+        "{:?}",
+        cell.snapshot()
+    );
+}
+
+/// An adopt under the client's own issuer while a provider-changed reason
+/// stands ends the reason and publishes the adopted token's state. Red before
+/// the republish: the status read NeverSignedIn while the token served.
+#[tokio::test]
+async fn an_adopt_that_ends_provider_changed_publishes_the_token() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    hold(&owned, &token("a1", Some("r1"), false));
+    cell.record_install(&owned.credential_key().unwrap());
+    cell.raise_provider_changed();
+
+    let served = headless(&owned).await.expect("the install is adopted");
+
+    assert_eq!(served, "a1");
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+        "{:?}",
+        cell.snapshot()
+    );
+}
+
+/// A publish holds its issuer check and its write together: no install can
+/// land between them. Red before the single step: the check and the write
+/// were separate, and an install landed while the publish was held.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn no_install_lands_between_a_publish_check_and_its_write() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    hold(&owned, &token("a1", Some("r1"), false));
+    let (reached, release) = owned.publish_pause.arm();
+    let publisher = tokio::task::spawn_blocking(move || owned.publish_sign_in());
+    within("the publish parks after its check", reached.notified()).await;
+
+    let landed = cell.try_record_install_for_test(OTHER_ISSUER_KEY);
+    release.notify_one();
+    publisher.await.expect("the publish ran");
+
+    assert!(!landed, "an install landed inside a publish");
 }

@@ -87,6 +87,10 @@ pub struct OAuthClient {
     #[cfg(all(test, feature = "webui"))]
     pub(crate) adopt_pause: crate::test_pause::Slot,
 
+    /// Where a test holds a publish between its issuer check and its write.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) publish_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -265,6 +269,8 @@ impl OAuthClient {
             rediscovery_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             adopt_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            publish_pause: crate::test_pause::Slot::default(),
         }
     }
 
@@ -361,7 +367,7 @@ impl OAuthClient {
             .storage
             .load(&self.credential_key()?, &self.resource_url);
         if let Some(token) = &loaded {
-            *self.current_token.write() = Some(token.clone());
+            self.cache_loaded(token.clone());
         }
         // The issuer is known now: say what the token file says, once.
         self.publish_token_state(loaded.as_ref());
@@ -518,6 +524,8 @@ fn generate_client_id() -> String {
 #[cfg(test)]
 pub(crate) mod authorize_tests;
 mod browser;
+#[cfg(test)]
+mod cache_write_pin_tests;
 #[cfg(test)]
 mod deadline_tests;
 pub(crate) mod destination;

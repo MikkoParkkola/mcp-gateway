@@ -21,6 +21,7 @@ pub(crate) const OAUTH_AUTHORIZATION_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(300);
 
 mod authorize;
+pub(super) use authorize::Adopt;
 
 /// Build a token from a token endpoint's answer, first refusing an
 /// oversized `expires_in` (MIK-8207).
@@ -538,14 +539,15 @@ impl OAuthClient {
         self.save_issued_until(&token, cancel, Some(deadline))
             .await?;
         *self.current_token.write() = Some(token);
-        self.publish_sign_in();
-        // The file is durable: tell every client of this backend.
+        // The file is durable: tell every client of this backend, then
+        // publish, so the status is checked against this install's key.
         if let (Some(status), Ok(key)) = (&self.sign_in_status, self.credential_key()) {
             self.installed_seen.store(
                 status.record_install(&key),
                 std::sync::atomic::Ordering::SeqCst,
             );
         }
+        self.publish_sign_in();
         Ok(())
     }
 
@@ -564,42 +566,6 @@ impl OAuthClient {
         // be blocked (an endpoint-security tool may stop it), and stdout
         // is the stdio transport's JSON-RPC stream.
         (self.announce)(auth_url_str);
-    }
-
-    /// Take the confirmed token from storage, recording the count sampled before
-    /// the read only once adopted under this client's own issuer (again if it
-    /// moved), which alone ends a provider-changed state. A token inside the
-    /// expiry buffer is loaded, not adopted: `None`.
-    pub(super) fn adopt_installed(&self) -> Option<String> {
-        let status = self.sign_in_status.as_ref()?;
-        loop {
-            let sampled = status.installed();
-            let adopted = self.adopt_stored_login();
-            if adopted.is_none() {
-                let stored = self
-                    .credential_key()
-                    .ok()
-                    .and_then(|key| self.storage.load(&key, &self.resource_url));
-                let Some(stored) = stored else {
-                    // Nothing could be read: the old account's token stops serving,
-                    // and the install stays unacknowledged so the next call retries.
-                    *self.current_token.write() = None;
-                    return None;
-                };
-                *self.current_token.write() = Some(stored);
-            }
-            #[cfg(all(test, feature = "webui"))]
-            self.adopt_pause.pause_blocking();
-            if self.issuer_differs() {
-                return None;
-            }
-            status.clear_provider_changed();
-            self.installed_seen
-                .store(sampled, std::sync::atomic::Ordering::SeqCst);
-            if status.installed() == sampled {
-                return adopted;
-            }
-        }
     }
 
     /// The client id a login registers (or reuses) with the callback URL it

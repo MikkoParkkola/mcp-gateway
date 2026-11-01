@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Getting a usable access token: cached, refreshed, or a fresh login.
 
+use super::grants::Adopt;
 use super::{OAuthClient, refresh_buffer};
 use crate::security::ssrf::is_ssrf_refusal;
 use crate::{Error, Result};
@@ -20,10 +21,12 @@ impl OAuthClient {
         }
         // A sign-in confirmed elsewhere since this client last adopted: the
         // cache may be an older token, so take the stored one first.
-        if self.install_stale()
-            && let Some(access) = self.adopt_installed()
-        {
-            return Ok(access);
+        if self.install_stale() {
+            match self.adopt_installed() {
+                Adopt::Took(access) => return Ok(access),
+                Adopt::Moved => return Err(self.issuer_wait()),
+                Adopt::Nothing => {}
+            }
         }
         // Check if we have a valid cached token
         {
@@ -111,10 +114,12 @@ impl OAuthClient {
         if self.issuer_differs() {
             return Err(self.issuer_wait());
         }
-        if self.install_stale()
-            && let Some(access) = self.adopt_installed()
-        {
-            return self.held_back(access, since);
+        if self.install_stale() {
+            match self.adopt_installed() {
+                Adopt::Took(access) => return self.held_back(access, since),
+                Adopt::Moved => return Err(self.issuer_wait()),
+                Adopt::Nothing => {}
+            }
         }
         if self.has_refresh_token() {
             let refreshed = match &self.login_gate {

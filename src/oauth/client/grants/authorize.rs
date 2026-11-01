@@ -184,6 +184,51 @@ impl OAuthClient {
         self.login_gate.clone()
     }
 
+    /// Take the confirmed token from storage, recording the count sampled before
+    /// the read only once adopted under this client's own issuer (again if it
+    /// moved), which alone ends a provider-changed state. A token inside the
+    /// expiry buffer is cached, not adopted, so a refresh can use it.
+    pub(in crate::oauth::client) fn adopt_installed(&self) -> Adopt {
+        let Some(status) = self.sign_in_status.as_ref() else {
+            return Adopt::Nothing;
+        };
+        loop {
+            let sampled = status.installed();
+            let mut adopted = self.adopt_stored_login();
+            if adopted.is_none() {
+                let stored = self
+                    .credential_key()
+                    .ok()
+                    .and_then(|key| self.storage.load(&key, &self.resource_url));
+                let Some(stored) = stored else {
+                    // Nothing could be read: the old account's token stops serving,
+                    // and the install stays unacknowledged so the next call retries.
+                    *self.current_token.write() = None;
+                    return Adopt::Nothing;
+                };
+                if !self.cache_loaded(stored) {
+                    adopted = None;
+                }
+            }
+            #[cfg(all(test, feature = "webui"))]
+            self.adopt_pause.pause_blocking();
+            // The install is under another issuer: nothing of this client's
+            // issuer stays cached, and the install is not acknowledged.
+            if self.issuer_differs() {
+                *self.current_token.write() = None;
+                return Adopt::Moved;
+            }
+            if status.clear_provider_changed() {
+                self.publish_sign_in();
+            }
+            self.installed_seen
+                .store(sampled, std::sync::atomic::Ordering::SeqCst);
+            if status.installed() == sampled {
+                return adopted.map_or(Adopt::Nothing, Adopt::Took);
+            }
+        }
+    }
+
     /// Take up a live token another client of this backend stored, with the
     /// client id it registered (a refresh needs both). `None` if there is none.
     pub(super) fn adopt_stored_login(&self) -> Option<String> {
@@ -192,10 +237,12 @@ impl OAuthClient {
             .storage
             .load(&key, &self.resource_url)
             .filter(|token| !token.is_expired())?;
-        self.reload_registered_client_id(&key);
         let access = token.access_token.clone();
+        if !self.cache_loaded(token.clone()) {
+            return None;
+        }
+        self.reload_registered_client_id(&key);
         self.publish_token_state(Some(&token));
-        *self.current_token.write() = Some(token);
         Some(access)
     }
 
@@ -227,4 +274,16 @@ impl OAuthClient {
     ) -> Result<String> {
         self.authorize_until_by(cancel, listeners, None).await
     }
+}
+
+/// What adopting the latest confirmed sign-in came to.
+#[derive(Debug, PartialEq, Eq)]
+pub(in crate::oauth::client) enum Adopt {
+    /// Its token, now cached.
+    Took(String),
+    /// No live token was taken: the cache holds what could be read, if any.
+    Nothing,
+    /// The install is under another issuer than this client's: the cache is
+    /// emptied, and the caller answers with the sign-in wait.
+    Moved,
 }

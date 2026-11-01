@@ -129,19 +129,47 @@ impl SignInStatus {
     }
 
     /// Record a confirmed sign-in saved under `key`, returning the new count.
-    /// The key is stored first, so a reader that sees the new count sees the
-    /// key it belongs to.
+    /// The key and the count change under the install-key lock, so a reader
+    /// that sees the new count sees the key it belongs to, and no
+    /// [`Self::if_current`] write straddles the install.
     #[cfg(feature = "webui")]
     pub(crate) fn record_install(&self, key: &str) -> u64 {
-        *self.install_key.lock() = Some(key.to_owned());
+        let mut installed = self.install_key.lock();
+        *installed = Some(key.to_owned());
         self.installed
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1
     }
 
+    /// Test-only: record an install unless the install-key lock is held.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) fn try_record_install_for_test(&self, key: &str) -> bool {
+        let Some(mut installed) = self.install_key.try_lock() else {
+            return false;
+        };
+        *installed = Some(key.to_owned());
+        self.installed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        true
+    }
+
     /// The storage key of the latest confirmed sign-in, if any.
     pub(crate) fn install_key(&self) -> Option<String> {
         self.install_key.lock().clone()
+    }
+
+    /// Run `write` unless the latest confirmed sign-in is under another key
+    /// than `key`, holding the install-key lock across the check and the
+    /// write, so no install lands between them. Whether it ran.
+    pub(crate) fn if_current(&self, key: Option<&str>, write: impl FnOnce()) -> bool {
+        let installed = self.install_key.lock();
+        if let (Some(installed), Some(key)) = (installed.as_deref(), key)
+            && installed != key
+        {
+            return false;
+        }
+        write();
+        true
     }
 
     /// Replace the value.
@@ -163,11 +191,14 @@ impl SignInStatus {
     }
 
     /// An install under the serving client's own issuer was adopted.
-    pub(crate) fn clear_provider_changed(&self) {
+    /// Whether a reason was cleared, so the caller can publish in its place.
+    pub(crate) fn clear_provider_changed(&self) -> bool {
         let mut cell = self.cell.lock();
-        if matches!(*cell, Stored::Fixed(SignIn::ProviderChanged)) {
+        let raised = matches!(*cell, Stored::Fixed(SignIn::ProviderChanged));
+        if raised {
             *cell = Stored::Fixed(SignIn::NeverSignedIn);
         }
+        raised
     }
 
     /// Keep a held token's expiry and whether it can be refreshed, so the
@@ -349,16 +380,28 @@ impl OAuthClient {
             key.to_owned(),
         );
         Some(Box::new(move || {
-            if status
-                .install_key()
-                .is_some_and(|installed| installed != key)
-            {
-                return;
-            }
-            if let Some(token) = storage.load(&key, &resource_url) {
-                status.set_held(token.expires_at, token.refresh_token.is_some());
-            }
+            status.if_current(Some(&key), || {
+                if let Some(token) = storage.load(&key, &resource_url) {
+                    status.set_held(token.expires_at, token.refresh_token.is_some());
+                }
+            });
         }))
+    }
+
+    /// The one way a token loaded from storage enters the cache: only while the
+    /// latest confirmed sign-in is under this client's own key, checked under
+    /// the install-key lock. Whether it was cached.
+    pub(super) fn cache_loaded(&self, token: TokenInfo) -> bool {
+        let key = self.credential_key().ok();
+        match &self.sign_in_status {
+            Some(status) => status.if_current(key.as_deref(), || {
+                *self.current_token.write() = Some(token);
+            }),
+            None => {
+                *self.current_token.write() = Some(token);
+                true
+            }
+        }
     }
 
     /// Whether the latest confirmed sign-in was saved under another issuer
@@ -441,15 +484,17 @@ impl OAuthClient {
         let Some(status) = &self.sign_in_status else {
             return;
         };
-        if self.issuer_differs() {
-            return;
-        }
-        match held {
-            Some(token) if self.auth_metadata.is_some() => {
-                status.set_held(token.expires_at, token.refresh_token.is_some());
+        let key = self.credential_key().ok();
+        status.if_current(key.as_deref(), || {
+            #[cfg(all(test, feature = "webui"))]
+            self.publish_pause.pause_blocking();
+            match held {
+                Some(token) if self.auth_metadata.is_some() => {
+                    status.set_held(token.expires_at, token.refresh_token.is_some());
+                }
+                _ => status.set(self.sign_in_of(held)),
             }
-            _ => status.set(self.sign_in_of(held)),
-        }
+        });
     }
 
     fn sign_in_of(&self, held: Option<&TokenInfo>) -> SignIn {
