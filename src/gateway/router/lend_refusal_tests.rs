@@ -310,13 +310,27 @@ async fn meta_call(
         "params": {"name": name, "arguments": arguments,
                    "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                              "io.modelcontextprotocol/clientCapabilities": {}}}});
-    let mut request = axum::http::Request::builder()
+    post_mcp(router, &body).await
+}
+
+/// POST `body` to `/mcp` as the verified caller, with the modern headers its
+/// method and name select; returns the status and the parsed answer.
+async fn post_mcp(router: &axum::Router, body: &Value) -> (axum::http::StatusCode, Value) {
+    let method = body["method"].as_str().unwrap_or_default();
+    let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
-        .header("mcp-method", "tools/call")
-        .header("mcp-name", name)
+        .header("mcp-method", method);
+    if let Some(field) = crate::protocol::headers::mcp_name_body_field(method)
+        && let Some(name) = body
+            .pointer(&format!("/params/{field}"))
+            .and_then(Value::as_str)
+    {
+        builder = builder.header("mcp-name", name);
+    }
+    let mut request = builder
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
     request.extensions_mut().insert(VerifiedIdentity {
@@ -508,41 +522,76 @@ async fn lend_refusals_on_either_route_record_no_budget_sample() {
     );
 }
 
-/// LEND.5 for a playbook step: the lender refuses the step's cold fill
-/// once, nothing is sent, and the step answers as a refusal, never as a
-/// backend error result to retry.
+/// A modern request of `method` with `params`, declaring tasks.
+fn task_request(method: &str, mut params: Value) -> Value {
+    use crate::gateway::meta_mcp::upstream::TASKS_EXTENSION;
+    use crate::protocol::mrtr::IDEMPOTENCY_KEY_META;
+    params["_meta"] = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {"extensions": {TASKS_EXTENSION: {}}},
+        IDEMPOTENCY_KEY_META: "lend-task-1",
+    });
+    json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+}
+
+/// LEND.5 on a task: the worker's dispatch judges the caller's slot itself
+/// (the route stage's memo judged only the request), so its cold fill is the
+/// dispatch check's own (`r2_check::answer_refused_fill`). The lender
+/// refuses that fill once, nothing is sent, and the task fails with the
+/// refusal, never completing with a backend error result to retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
+async fn a_tasks_cold_fill_refused_by_the_lender_fails_the_task_once() {
     let (url, calls) = peer().await;
     let mint = FixedMint {
         headers: vec![],
         expires_at: i64::MAX,
     };
-    let (router, _dirs, (meta, backend)) =
+    let (router, _dirs, (_meta, backend)) =
         gateway_in(url, mint, crate::config::InputSchemaEnforcement::Closed).await;
-    let mut engine = crate::playbook::PlaybookEngine::new();
-    let definition = json!({
-        "playbook": "1.0", "name": "plan", "description": "one step",
-        "steps": [{"name": "only", "server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}],
-    });
-    engine.register(serde_json::from_value(definition).expect("the playbook parses"));
-    meta.set_playbook_engine(engine);
-    let (status, answer) =
-        meta_call(&router, "gateway_run_playbook", json!({"name": "plan"})).await;
+    let create = task_request(
+        "tools/call",
+        json!({"name": "gateway_invoke", "task": {},
+               "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}}),
+    );
+    let (status, created) = post_mcp(&router, &create).await;
+    let id = created
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("premise: a task handle: {status} {created}"))
+        .to_owned();
+    // Polled, as a client does; bounded by attempts, not by a clock.
+    let mut read = Value::Null;
+    for _ in 0..10_000 {
+        read = post_mcp(&router, &task_request("tasks/get", json!({"taskId": id})))
+            .await
+            .1;
+        if matches!(
+            read.pointer("/result/status").and_then(Value::as_str),
+            Some("completed" | "failed" | "cancelled")
+        ) {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
     let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
     assert_eq!(
         refusals,
         [1],
-        "the lender refused the caller's binding once: {status} {answer}"
+        "the lender refused the caller's binding once: {read}"
     );
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
-    let text = answer.to_string();
+    assert_eq!(
+        read.pointer("/result/status"),
+        Some(&json!("failed")),
+        "{read}"
+    );
+    let text = read.to_string();
     assert!(
-        !text.contains("BACKEND_ERROR") && !text.contains("retrying once is safe"),
-        "not a backend error to retry: {status} {answer}"
+        text.contains("this call carried none"),
+        "the task fails with the lender's refusal: {read}"
     );
     assert!(
-        answer.get("error").is_some(),
-        "a refusal: {status} {answer}"
+        !text.contains("BACKEND_ERROR") && !text.contains("retrying once is safe"),
+        "not a backend error to retry: {read}"
     );
 }
