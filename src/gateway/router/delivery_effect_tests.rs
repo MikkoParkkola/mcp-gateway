@@ -400,6 +400,6 @@ async fn a_lookalike_echo_refusal_records_no_refusal() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
         let recorded = firewalled_recorded_call(route, Answer::FailsWith(lookalike), None).await;
         let row = only_delivery(route, &recorded.rows);
-        assert_ne!(row["response_effect"], "refused", "{route:?}: {row}");
+        assert_eq!(row["response_effect"], "delivered", "{route:?}: {row}");
     }
 }

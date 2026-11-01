@@ -184,10 +184,19 @@ enum Expiry {
     EchoingError,
 }
 
+/// What the recovering server's `initialize` answer carries.
+#[derive(Clone, Copy)]
+enum Handshake {
+    /// Its server name is [`ECHOED`].
+    Echoing,
+    /// Nothing injected.
+    Clean,
+}
+
 /// A server that expires the stale session as `expiry`, re-initialises with
-/// an `initialize` answer that echoes [`ECHOED`], and answers the resend
-/// with a clean empty tool list. It serves until the test ends.
-fn recovering_server(expiry: Expiry) -> String {
+/// an `initialize` answer as `handshake` says, and answers the resend with a
+/// clean empty tool list. It serves until the test ends.
+fn recovering_server(expiry: Expiry, handshake: Handshake) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let url = format!("http://{}/mcp", listener.local_addr().expect("address"));
     std::thread::spawn(move || {
@@ -199,7 +208,10 @@ fn recovering_server(expiry: Expiry) -> String {
             } else if method == "initialize" {
                 let result = json!({"jsonrpc": "2.0", "id": body["id"], "result": {
                     "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-                    "serverInfo": {"name": ECHOED, "version": "0"}}});
+                    "serverInfo": {"name": match handshake {
+                        Handshake::Echoing => ECHOED,
+                        Handshake::Clean => "mock",
+                    }, "version": "0"}}});
                 respond(
                     &stream,
                     "200 OK",
@@ -226,6 +238,38 @@ fn recovering_server(expiry: Expiry) -> String {
     url
 }
 
+/// The recorded effect of a call that recovers a session the server expires
+/// as `expiry`, re-handshaking as `handshake`, the resend answered clean.
+async fn recovered_effect(expiry: Expiry, handshake: Handshake) -> Value {
+    let url = recovering_server(expiry, handshake);
+    let transport = make_transport(&url);
+    *transport.message_url.write() = Some(url.clone());
+    set_default_session(&transport, "stale-session");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("b", ECHOED);
+    transport.attach_needles(Arc::new(needles));
+    let mut fields = serde_json::Map::new();
+    let answer = crate::gateway::delivery_facts::scope(async {
+        let answer = transport.request("tools/list", None).await;
+        crate::gateway::delivery_facts::record_fields(
+            crate::gateway::delivery_facts::snapshot().as_ref(),
+            false,
+            &mut fields,
+        );
+        answer
+    })
+    .await;
+    let answer = answer.expect("the resend answered");
+    assert_eq!(answer.result, Some(json!({"tools": []})), "premise");
+    assert_eq!(
+        default_session(&transport).as_deref(),
+        Some(FRESH),
+        "premise: the session was healed"
+    );
+    fields["response_effect"].clone()
+}
+
 /// F3: a call that recovers an expired session answers with the resend's
 /// clean answer, but during the call the backend echoed an injected value
 /// (in the re-handshake's `initialize` answer, and in the second shape in
@@ -235,32 +279,19 @@ fn recovering_server(expiry: Expiry) -> String {
 #[tokio::test]
 async fn a_recovered_calls_record_keeps_every_redaction_of_the_call() {
     for expiry in [Expiry::NotFound, Expiry::EchoingError] {
-        let url = recovering_server(expiry);
-        let transport = make_transport(&url);
-        *transport.message_url.write() = Some(url.clone());
-        set_default_session(&transport, "stale-session");
-        let needles =
-            crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
-        needles.insert("b", ECHOED);
-        transport.attach_needles(Arc::new(needles));
-        let mut fields = serde_json::Map::new();
-        let answer = crate::gateway::delivery_facts::scope(async {
-            let answer = transport.request("tools/list", None).await;
-            crate::gateway::delivery_facts::record_fields(
-                crate::gateway::delivery_facts::snapshot().as_ref(),
-                false,
-                &mut fields,
-            );
-            answer
-        })
-        .await;
-        let answer = answer.expect("the resend answered");
-        assert_eq!(answer.result, Some(json!({"tools": []})), "premise");
         assert_eq!(
-            default_session(&transport).as_deref(),
-            Some(FRESH),
-            "premise: the session was healed"
+            recovered_effect(expiry, Handshake::Echoing).await,
+            "rewritten"
         );
-        assert_eq!(fields["response_effect"], "rewritten");
     }
+}
+
+/// Only the expired answer echoes the value, the handshake is clean: that
+/// first answer's redaction is still the call's.
+#[tokio::test]
+async fn a_recovered_call_keeps_its_expired_answers_redaction() {
+    assert_eq!(
+        recovered_effect(Expiry::EchoingError, Handshake::Clean).await,
+        "rewritten"
+    );
 }

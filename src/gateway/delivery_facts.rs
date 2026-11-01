@@ -19,7 +19,9 @@
 //!
 //! A delivery the gateway cannot vouch for omits both fields; it never claims
 //! `delivered` or an empty finding list for something no scan of this request
-//! saw. Outside a cell every setter is a no-op and the recorder omits both.
+//! saw. It still records a refusal it ended on, and `rewritten` when the
+//! injected-value scrub removed a value during the call, a fact of the whole
+//! call rather than of any one step. Outside a cell every setter is a no-op and the recorder omits both.
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -498,7 +500,8 @@ pub(crate) fn unvouched() {
 /// refusal, read off what is actually sent, so no later rebuild can hide
 /// it. A counted annotation raises `Annotated` in the cell where the gateway
 /// notes it. An unvouched delivery still records a refusal this request
-/// made, and omits everything else.
+/// made, and `rewritten` when the scrub removed an injected value during the
+/// call, and omits everything else.
 pub(crate) fn record_fields(
     facts: Option<&DeliveryFacts>,
     frame_refused: bool,

@@ -545,3 +545,34 @@ async fn the_narrow_check_marks_only_the_scrubs_refusal() {
     })
     .await;
 }
+
+/// The scrub's second refusal, a value set past its limit, is read as the
+/// scrub's refusal too: delivered, it records refused.
+#[tokio::test]
+async fn the_overflow_refusal_delivered_records_refused() {
+    let full =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    for value in 0..=crate::security::needles::MAX_NEEDLES {
+        full.insert("b", &format!("overflow-value-{value:05}"));
+    }
+    let effect = scope(async {
+        let answer = crate::protocol::JsonRpcResponse::success(
+            crate::protocol::RequestId::Number(1),
+            serde_json::json!({"content": []}),
+        );
+        let refusal =
+            crate::security::needles::scrub_answer(&full, Ok(answer)).expect_err("refused");
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "JSON-RPC error -32603: {}",
+                crate::security::needles::OVERFLOW_REFUSAL
+            ),
+            "premise: the overflow refusal"
+        );
+        super::outlet(&refusal);
+        recorded(false)["response_effect"].clone()
+    })
+    .await;
+    assert_eq!(effect, "refused");
+}
