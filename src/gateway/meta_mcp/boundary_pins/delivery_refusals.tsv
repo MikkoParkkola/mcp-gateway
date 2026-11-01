@@ -29,6 +29,7 @@ src/capability/executor/cli_argv.rs	render_element	refuse_nul	1	not-a-decision	a
 src/capability/executor/cli_argv.rs	render_stdin	refuse_nul	1	not-a-decision	a NUL byte in an argument: a malformed request
 src/capability/executor/client.rs	build	refuse_hop	2	recorded	refuse_hop raises while the cell vouches
 src/capability/executor/client.rs	build	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
+src/capability/executor/client.rs	send_with_retry	note_redirect_refusal	2	recorded	a cleartext downgrade the redirect policy refused (RedirectRefused): the send raises refused while vouched, on both send paths; the caller still receives the transport error
 src/capability/executor/client.rs	send_with_retry	ssrf_refusal	2	pending:capability-refusals	a capability HTTP call the SSRF guard refuses; fixed by the capability-refusals follow-up
 src/capability/executor/graphql.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
 src/capability/executor/jsonrpc.rs	execute	refuse_loopback_name	1	pending:capability-refusals	a capability URL naming loopback; fixed by the capability-refusals follow-up
