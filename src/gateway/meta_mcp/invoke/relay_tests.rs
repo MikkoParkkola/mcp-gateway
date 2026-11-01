@@ -740,3 +740,9 @@ mod redaction;
 
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;
+
+#[path = "relay_live_tests.rs"]
+mod live;
+
+#[path = "relay_live_funnel_tests.rs"]
+mod live_funnel;

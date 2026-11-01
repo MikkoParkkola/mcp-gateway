@@ -1,0 +1,235 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Recording follows the generation current at delivery (ADR-029, amended,
+//! items 3 and 4): a delivery committed while the effective action is `off`
+//! records and snapshots nothing, and one committed while it is `block`
+//! does, whatever the action was at startup or when the call was admitted.
+//!
+//! Every row holds the generation it hands the commit, as the funnel's
+//! caller would have read it; the Meta-MCP carries a reload context over the
+//! same live config so the production read has one to find.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use serde_json::json;
+
+use super::super::{AnswerShape, GatewayStamps, RELAY_RECEIPTS, RelayKey, plan_step};
+use super::{PROSE, text_result};
+use crate::config_reload::{LiveConfig, ReloadContext};
+use crate::gateway::meta_mcp::MetaMcp;
+use crate::security::firewall::collusion_live_rig::{Rig, classified, config};
+use crate::security::firewall::{CollusionAction, Firewall, RelayCaller, StoredKey};
+
+/// A Meta-MCP, its relay firewall and the live config both were built from.
+pub(super) struct LiveMeta {
+    pub(super) meta: Arc<MetaMcp>,
+    pub(super) rig: Rig,
+    _dir: tempfile::TempDir,
+}
+
+impl LiveMeta {
+    pub(super) fn firewall(&self) -> &Firewall {
+        &self.rig.firewall
+    }
+
+    pub(super) fn live(&self) -> &Arc<LiveConfig> {
+        &self.rig.live
+    }
+
+    pub(super) fn publish(&self, action: CollusionAction) {
+        self.rig
+            .reload(|c| c.security.firewall.collusion.action = action);
+    }
+}
+
+/// A Meta-MCP over `alpha:read` as the one listed source, `window_secs` of
+/// window, every k-gram kept, the clock frozen.
+pub(super) fn live_meta(action: CollusionAction, window_secs: u64) -> LiveMeta {
+    let mut cfg = config(action, &["alpha:read"], vec![]);
+    cfg.security.firewall.collusion.window_secs = window_secs;
+    let rig = Rig::new(cfg);
+    let (meta, dir) = meta_over(&rig);
+    LiveMeta {
+        meta,
+        rig,
+        _dir: dir,
+    }
+}
+
+/// A Meta-MCP running `rig`'s firewall, with a reload context over `rig`'s
+/// live config so the production read of "the generation now" finds it.
+fn meta_over(rig: &Rig) -> (Arc<MetaMcp>, tempfile::TempDir) {
+    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let mut meta = MetaMcp::new(Arc::clone(&registry));
+    meta.set_firewall(Some(Arc::clone(&rig.firewall)));
+    meta.share_keyring_with_for_test(&rig.firewall);
+    let dir = tempfile::tempdir().expect("a private directory");
+    let path = dir.path().join("gateway.yaml");
+    let yaml = crate::yaml::to_string(&*rig.live.get()).expect("the config serialises");
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("written owner-only");
+    let context = ReloadContext::new(
+        path,
+        Arc::clone(&rig.live),
+        registry,
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the context builds");
+    meta.set_reload_context(Arc::new(context));
+    (Arc::new(meta), dir)
+}
+
+pub(super) fn sync_key() -> StoredKey {
+    StoredKey::Sync {
+        identity: "identity".to_owned(),
+        round: String::new(),
+        operation: "operation".to_owned(),
+    }
+}
+
+/// Alice's plan call, run inside a collector: one `alpha:read` step staged
+/// under a Sync capture and finalised as delivered.
+pub(super) async fn plan_body(meta: &MetaMcp, result: &serde_json::Value) {
+    let answer = json!({"content": [{"type": "text", "text": "plan answer"}]});
+    super::super::note_sync_capture("identity".to_owned(), String::new(), "operation".to_owned());
+    plan_step(None, async {
+        meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "read"), result);
+    })
+    .await;
+    let snapshot = meta.relay_snapshot(&answer);
+    meta.restage_if_changed(snapshot, Some(&answer), AnswerShape::Literal);
+    meta.rebuild_receipt_from_final(Some(&answer), GatewayStamps::Legacy, AnswerShape::Literal);
+}
+
+/// [`plan_body`] in a staged collector, returned uncommitted.
+pub(super) async fn stage_plan(
+    lm: &LiveMeta,
+    result: &serde_json::Value,
+) -> super::super::StagedReceipts {
+    let ((), staged) = lm.meta.collecting_staged(plan_body(&lm.meta, result)).await;
+    staged
+}
+
+/// Whether bob sending `PROSE` through `alpha:send` is refused under the
+/// generation published now.
+pub(super) fn bob_refused(lm: &LiveMeta) -> bool {
+    let params = json!({"name": "send", "arguments": {"text": PROSE}});
+    let generation = lm.live().generation();
+    !lm.firewall()
+        .check_relay(
+            generation.collusion_view(),
+            RelayCaller::Keyed("bob"),
+            "alpha",
+            "send",
+            &params,
+            ("s", "bob"),
+        )
+        .allowed
+}
+
+/// R4.1 (red first): a plan delivery committed while `off` was current is
+/// not held, though it was admitted and staged under `block`. The control,
+/// with no `off` published, is held and snapshotted. RED on base: recording
+/// ignores the delivery-time generation, so the startup `block` holds it.
+#[tokio::test]
+async fn r4_1_a_commit_while_off_records_and_snapshots_nothing() {
+    let control = live_meta(CollusionAction::Block, 1);
+    let staged = stage_plan(&control, &text_result(PROSE)).await;
+    staged.commit(true, &control.live().generation());
+    assert!(
+        control.firewall().replay_digests(&sync_key()).is_some(),
+        "premise: a steady `block` snapshots the plan"
+    );
+    assert!(bob_refused(&control), "premise: a steady `block` records");
+
+    let lm = live_meta(CollusionAction::Block, 1);
+    let staged = stage_plan(&lm, &text_result(PROSE)).await;
+    lm.publish(CollusionAction::Off);
+    staged.commit(true, &lm.live().generation());
+    lm.publish(CollusionAction::Block);
+    assert!(
+        lm.firewall().replay_digests(&sync_key()).is_none(),
+        "R4.1: a snapshot was stored for a commit while `off` was current"
+    );
+    assert!(
+        !bob_refused(&lm),
+        "R4.1: the copy delivered while off is held"
+    );
+}
+
+/// R4.2: with relay detection `off`, a delivery still stages its facts (a
+/// reload to `on` between staging and delivery must not fail open) but
+/// records nothing. RED on base: nothing is staged under a startup `off`.
+#[tokio::test]
+async fn r4_2_a_steady_off_stages_facts_and_records_nothing() {
+    let lm = live_meta(CollusionAction::Off, 1);
+    let meta = &lm.meta;
+    let facts = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(
+                RelayKey::new("alice", true),
+                ("alpha", "read"),
+                &classified(PROSE),
+            );
+            RELAY_RECEIPTS
+                .try_with(|r| {
+                    r.borrow()
+                        .iter()
+                        .map(|r| r.digest.facts_for_test())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        })
+        .await;
+    let (facts, staged) = facts;
+    assert_eq!(
+        facts,
+        [(Some(std::sync::Arc::<str>::from("alpha:read")), true)],
+        "R4.2: the staged receipt does not carry the source and the inferred fact"
+    );
+    staged.commit(true, &lm.live().generation());
+    let tracked = lm
+        .firewall()
+        .collusion_detector()
+        .map_or(0, |d| d.tracked_fingerprints());
+    assert_eq!(tracked, 0, "R4.2: a steady `off` recorded");
+}
+
+/// P8.5b: a call admitted while `off` and committed after `block` was
+/// published is held. The control, `block` published after the commit, is
+/// not. RED on base: nothing is staged under a startup `off`.
+#[tokio::test]
+async fn p8_5b_off_to_block_between_admission_and_commit_is_held() {
+    let after_commit = live_meta(CollusionAction::Off, 1);
+    let staged = stage_plan(&after_commit, &text_result(PROSE)).await;
+    staged.commit(true, &after_commit.live().generation());
+    after_commit.publish(CollusionAction::Block);
+    assert!(
+        !bob_refused(&after_commit),
+        "control: a commit while off holds nothing"
+    );
+
+    let lm = live_meta(CollusionAction::Off, 1);
+    let staged = stage_plan(&lm, &text_result(PROSE)).await;
+    lm.publish(CollusionAction::Block);
+    staged.commit(true, &lm.live().generation());
+    assert!(
+        bob_refused(&lm),
+        "P8.5b: the commit under block holds nothing"
+    );
+}
+
+/// P8.12: a plan committed while `off` is current and every later action is
+/// `block` stores no replay entry and holds nothing. GREEN pin on base, for
+/// the wrong reason (a startup `off` builds no detector); the item-4 mutant
+/// that gates recording on the detector alone turns it red on the fix.
+#[tokio::test]
+async fn p8_12_a_startup_off_commit_then_block_holds_nothing() {
+    let lm = live_meta(CollusionAction::Off, 1);
+    let staged = stage_plan(&lm, &text_result(PROSE)).await;
+    staged.commit(true, &lm.live().generation());
+    lm.publish(CollusionAction::Block);
+    assert!(lm.firewall().replay_digests(&sync_key()).is_none());
+    assert!(!bob_refused(&lm), "P8.12: held");
+}

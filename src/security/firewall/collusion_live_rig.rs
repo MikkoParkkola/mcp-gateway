@@ -9,11 +9,16 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::{Value, json};
+
 use crate::config::Config;
 use crate::config_reload::{Generation, LiveConfig};
 use crate::gateway::router::AppState;
 
-use super::{Firewall, FirewallConfig};
+use super::{
+    AllowedFlow, CollusionAction, CollusionConfig, Firewall, FirewallAction, FirewallConfig,
+    FirewallVerdict, RelayCaller,
+};
 
 /// A firewall built from `firewall`, and a `LiveConfig` whose published
 /// configuration carries that same firewall section over `live`'s other
@@ -97,4 +102,167 @@ impl Hook {
     pub(crate) fn reached(&self) -> u32 {
         self.reached.get()
     }
+}
+
+/// Ordinary prose, long enough for several fingerprints.
+pub(crate) const PROSE: &str = "The orchard ledger for the north slope records seven rows of late \
+    pears, the grafting dates for each rootstock, the hours the drip lines ran during the dry \
+    weeks of August, and which crew pruned the older trees after the second frost.";
+
+/// A result carrying the gateway's own sensitive classification: the fact
+/// is inferred from the result, not from any `sources` list.
+pub(crate) fn classified(text: &str) -> Value {
+    json!({
+        "content": [{"type": "text", "text": text}],
+        "_context_integrity": {"classification": {"data_classes": ["personal_data"]}},
+    })
+}
+
+/// A plain text result.
+pub(crate) fn plain(text: &str) -> Value {
+    json!({"content": [{"type": "text", "text": text}]})
+}
+
+/// `source -> egress` as an `allowed_flows` entry.
+pub(crate) fn flow(source: &str, egress: &str) -> AllowedFlow {
+    AllowedFlow {
+        source: source.to_string(),
+        egress: egress.to_string(),
+    }
+}
+
+/// A configuration whose collusion section runs `action` over `sources` and
+/// `flows`, one match enough, a 600 s window.
+pub(crate) fn config(
+    action: CollusionAction,
+    sources: &[&str],
+    flows: Vec<AllowedFlow>,
+) -> crate::config::Config {
+    let mut config = Config::default();
+    config.security.firewall = FirewallConfig {
+        collusion: CollusionConfig {
+            action,
+            min_matches: 1,
+            sources: sources.iter().map(|s| (*s).to_string()).collect(),
+            allowed_flows: flows,
+            ..CollusionConfig::default()
+        },
+        ..FirewallConfig::default()
+    };
+    config
+}
+
+/// Why a relay was reported, as the finding's wording names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Why {
+    Relay,
+    OtherSource,
+    Capacity,
+}
+
+/// The reason in `verdict`'s finding; `None` for no finding.
+pub(crate) fn why(verdict: &FirewallVerdict) -> Option<Why> {
+    let description = &verdict.findings.first()?.description;
+    Some(if description.contains("different tool") {
+        Why::OtherSource
+    } else if description.contains("capacity") || description.contains("ran out of room") {
+        Why::Capacity
+    } else {
+        Why::Relay
+    })
+}
+
+/// `verdict` is a `-32002` refusal.
+pub(crate) fn refused(verdict: &FirewallVerdict) -> bool {
+    !verdict.allowed && verdict.action == FirewallAction::Block
+}
+
+/// `verdict` is an observed relay: allowed, warned, one finding.
+pub(crate) fn observed(verdict: &FirewallVerdict) -> bool {
+    verdict.allowed && verdict.action == FirewallAction::Warn && verdict.findings.len() == 1
+}
+
+impl Rig {
+    /// Record `result` as delivered to `who` from `server:tool`, under
+    /// `generation`.
+    pub(crate) fn deliver(
+        &self,
+        who: &str,
+        (server, tool): (&str, &str),
+        result: &Value,
+        generation: &Generation,
+    ) {
+        // No detector (a startup `off` on base) means nothing to record: the
+        // row then fails at its own assertion, not here.
+        let Some(digest) = self.firewall.delivery_digest(server, tool, result) else {
+            return;
+        };
+        self.firewall
+            .record_digest(RelayCaller::Keyed(who), server, tool, &digest, generation);
+    }
+
+    /// The verdict on `who` sending `text` through `server:tool`, judged
+    /// under `generation`'s view.
+    pub(crate) fn relays(
+        &self,
+        who: &str,
+        (server, tool): (&str, &str),
+        text: &str,
+        generation: &Generation,
+    ) -> FirewallVerdict {
+        let params = json!({"name": tool, "arguments": {"text": text}});
+        self.firewall.check_relay(
+            generation.collusion_view(),
+            RelayCaller::Keyed(who),
+            server,
+            tool,
+            &params,
+            ("s", who),
+        )
+    }
+}
+
+/// A firewall and its live configuration, with the generation a row pins.
+pub(crate) struct Rig {
+    pub(crate) firewall: Arc<Firewall>,
+    pub(crate) live: Arc<LiveConfig>,
+}
+
+impl Rig {
+    /// Build both from `config`, every k-gram kept and the clock frozen.
+    pub(crate) fn new(config: Config) -> Self {
+        let firewall = Firewall::from_config(config.security.firewall.clone(), None)
+            .keyed_for_test()
+            .keeping_every_kgram();
+        freeze(&firewall);
+        let firewall = Arc::new(firewall);
+        Self {
+            firewall,
+            live: Arc::new(LiveConfig::new(config)),
+        }
+    }
+
+    /// Publish the current configuration edited by `edit`.
+    pub(crate) fn reload(&self, edit: impl FnOnce(&mut Config)) {
+        let mut config = (*self.live.get()).clone();
+        edit(&mut config);
+        self.live.set(config);
+    }
+
+    /// The generation published now, to be held as a request's pinned one.
+    pub(crate) fn generation(&self) -> Arc<Generation> {
+        self.live.generation()
+    }
+
+    /// Let every receipt recorded so far lapse by `by`.
+    pub(crate) fn lapse(&self, by: Duration) {
+        self.firewall.advance_collusion_clock_for_test(by);
+    }
+}
+
+/// A text of exactly one k-gram (48 normalised characters), unique per `i`:
+/// with every k-gram kept it is one fingerprint, so a counter or a budget
+/// moves once per delivery of it.
+pub(crate) fn one_fp(i: u64) -> String {
+    format!("{i:0>48}")
 }

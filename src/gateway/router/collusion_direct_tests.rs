@@ -693,6 +693,7 @@ async fn a_forged_public_verdict_is_replaced_by_the_gateways_own() {
 }
 
 mod catalogue;
+mod live;
 mod meta;
 mod recording;
 mod relay_split;

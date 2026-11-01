@@ -861,6 +861,9 @@ pub(super) mod replay;
 #[path = "collusion_holders_tests.rs"]
 mod holders_tests;
 #[cfg(test)]
+#[path = "collusion_live_overflow_tests.rs"]
+mod live_overflow_tests;
+#[cfg(test)]
 #[path = "collusion_replay_tests.rs"]
 mod replay_tests;
 #[cfg(test)]

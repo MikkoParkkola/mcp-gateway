@@ -573,6 +573,8 @@ mod replica_restart_tests;
 #[cfg(test)]
 mod restart_required_tests;
 
+#[cfg(all(test, feature = "firewall"))]
+mod live_collusion_tests;
 #[cfg(test)]
 mod live_keys_reload_tests;
 #[cfg(test)]

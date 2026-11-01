@@ -190,8 +190,8 @@ fn summary(server: &str, tool: &str, step: Option<u32>) -> Summary {
     (server.to_owned(), tool.to_owned(), step, false, true)
 }
 
-/// G2: `commit_with(fw, false, &fw.paired_generation_for_test())` records nothing; `commit_with(fw,
-/// true, &fw.paired_generation_for_test())` records the staged replay receipts. The same staged task
+/// G2: `commit_with(fw, false)` records nothing; `commit_with(fw, true)`
+/// records the staged replay receipts. The same staged task
 /// replay is committed both ways, and only the delivered one makes
 /// bob's relay of the step's text refusable.
 /// Mutant killed: commit regardless of delivery (bob would already
