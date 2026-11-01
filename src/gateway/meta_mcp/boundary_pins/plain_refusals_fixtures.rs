@@ -357,12 +357,92 @@ fn f12_a_refusal_named_helper_is_not_rowed_twice() {
     );
 }
 
-/// A private alias outside the gateway reaches no gateway construction;
-/// a `pub(crate)` one does.
+/// D1 reverted (code review): a private crate-error alias outside the
+/// gateway is a hit too (a crate-root one reaches every gateway module);
+/// under the gateway a relative `super::Error` alias is one as well.
 #[test]
-fn b9_only_a_visible_alias_outside_the_gateway_is_a_hit() {
+fn b9_crate_error_aliases_are_hits_anywhere() {
     let (_dir, collect, _) = fixture("", "use crate::Error as E;\nfn f() {}");
+    assert_eq!(collect.aliases.len(), 1, "{:?}", collect.aliases);
+    let (_dir, collect, _) = fixture("use super::Error as E;\ntype F = super::Error;", "");
+    assert_eq!(
+        collect.aliases,
+        [
+            (
+                "src/gateway/a.rs".to_string(),
+                "use super::Error as E".to_string()
+            ),
+            ("src/gateway/a.rs".to_string(), "type F = Error".to_string()),
+        ]
+    );
+    let (_dir, collect, _) = fixture("use std::io::Error as IoError;", "use super::Error as E;");
     assert!(collect.aliases.is_empty(), "{:?}", collect.aliases);
-    let (_dir, collect, _) = fixture("", "pub(crate) use crate::Error as E;");
-    assert_eq!(collect.aliases.len(), 1);
+}
+
+/// The raise rows `gateway` (src/gateway/a.rs) and `other` (src/other/b.rs)
+/// produce, as `file fn needle count`, minus the fixture's own
+/// `delivery_facts.rs` rows.
+fn raise_rows(gateway: &str, other: &str) -> Vec<String> {
+    let (_dir, _, derived) = fixture(gateway, other);
+    derived
+        .raises
+        .iter()
+        .filter(|(key, _)| !key.starts_with("src/gateway/delivery_facts.rs"))
+        .map(|(key, n)| format!("{} {n}", key.replace('\t', " ")))
+        .collect()
+}
+
+const RAISE_HELPER: &str =
+    "fn withheld_for(r: u8) { if r > 0 { crate::gateway::delivery_facts::refused(()); } }\n";
+
+/// F13 (code review HIGH): a call of a local raise helper, or the helper
+/// handed on as a value, is a raise row, so deleting it fails the table.
+#[test]
+fn f13_a_raise_helper_call_is_a_raise_row() {
+    let gateway = format!(
+        "{RAISE_HELPER}fn a() {{ withheld_for(1); }}\n\
+         fn b(x: Option<u8>) {{ let _ = x.map(withheld_for); }}"
+    );
+    assert_eq!(
+        raise_rows(&gateway, ""),
+        [
+            "src/gateway/a.rs a via withheld_for 1",
+            "src/gateway/a.rs b via withheld_for (as value) 1",
+            "src/gateway/a.rs withheld_for refused 1"
+        ]
+    );
+}
+
+/// F14: a raise helper called from another module, by path or through an
+/// import of it, is a row; a namesake defined elsewhere is not.
+#[test]
+fn f14_a_raise_helper_is_resolved_across_modules() {
+    let other = "use crate::gateway::a::withheld_for;\n\
+                 fn c() { crate::gateway::a::withheld_for(2); }\n\
+                 fn d() { withheld_for(3); }";
+    let rows = raise_rows(RAISE_HELPER, other);
+    assert!(
+        rows.contains(&"src/other/b.rs c via withheld_for 1".to_string()),
+        "{rows:?}"
+    );
+    assert!(
+        rows.contains(&"src/other/b.rs d via withheld_for 1".to_string()),
+        "{rows:?}"
+    );
+    let namesake = raise_rows(
+        RAISE_HELPER,
+        "fn withheld_for(_: u8) {}\nfn e() { withheld_for(4); }",
+    );
+    assert!(!namesake.iter().any(|r| r.contains(" e ")), "{namesake:?}");
+}
+
+/// F15: a helper that only calls a raise helper is one too (fixed point).
+#[test]
+fn f15_a_helper_of_a_raise_helper_is_followed() {
+    let gateway = format!("{RAISE_HELPER}fn outer() {{ withheld_for(5); }}\nfn f() {{ outer(); }}");
+    let rows = raise_rows(&gateway, "");
+    assert!(
+        rows.contains(&"src/gateway/a.rs f via outer 1".to_string()),
+        "{rows:?}"
+    );
 }

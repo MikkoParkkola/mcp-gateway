@@ -13,9 +13,8 @@
 //! wrapper; a macro definition naming a monitored constructor) are rejected
 //! by guards, so the tables stay complete over what can land.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashSet};
 
-use super::delivery_framing::is_refusal_name;
 use super::scan::{Place, Sink};
 
 /// The plain `crate::Error` variants a gateway decision returns as a refusal
@@ -83,6 +82,11 @@ pub(super) struct Collect {
     pub(super) events: Vec<Event>,
     /// Functions returning an error value (`Error`, `Option<Error>`), by name.
     pub(super) error_valued: BTreeSet<(String, String)>,
+    /// Functions outside `delivery_facts.rs` returning `()`: (file, name).
+    /// One that raises is a raise helper ([`Collect::raise_helpers`]).
+    unit_fns: BTreeSet<(String, String)>,
+    /// Every import leaf: (file, path segments).
+    uses: Vec<(String, Vec<String>)>,
     /// Imports and aliases the recogniser cannot follow: (file, item text).
     pub(super) aliases: Vec<(String, String)>,
     /// `macro_rules!` definitions: (file, macro name, body tokens).
@@ -181,6 +185,21 @@ fn all_exprs(expr: &syn::Expr, into: &mut HashSet<usize>) {
     syn::visit::Visit::visit_expr(&mut Gather(into), expr);
 }
 
+/// The module name a file declares: its stem, or its directory's name
+/// for a `mod.rs`.
+fn module_of(file: &str) -> String {
+    let path = std::path::Path::new(file);
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
+    match stem.as_deref() {
+        Some("mod") => path
+            .parent()
+            .and_then(std::path::Path::file_name)
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+        _ => stem.unwrap_or_default(),
+    }
+}
+
 /// Whether `word` occurs in `text` with no identifier character either side.
 fn has_word(text: &str, word: &str) -> bool {
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
@@ -218,6 +237,13 @@ impl Collect {
     fn fn_sig(&mut self, at: &Place, sig: &syn::Signature, block: &syn::Block) {
         if returns_error(sig) {
             self.error_valued
+                .insert((at.file.clone(), sig.ident.to_string()));
+        }
+        if matches!(sig.output, syn::ReturnType::Default)
+            && at.file != FACTS_FILE
+            && at.file.starts_with("src/")
+        {
+            self.unit_fns
                 .insert((at.file.clone(), sig.ident.to_string()));
         }
         // A pass-through raise wrapper: a parameter handed straight to a
@@ -296,19 +322,26 @@ fn crate_error(segments: &[String]) -> bool {
     )
 }
 
+/// Whether `segments` reach an `Error` through `crate`, `super` or `self`:
+/// the crate's own error type, as the gateway names it.
+fn local_error(segments: &[String]) -> bool {
+    segments.last().is_some_and(|s| s == "Error")
+        && segments
+            .first()
+            .is_some_and(|s| matches!(s.as_str(), "crate" | "super" | "self"))
+}
+
 impl Collect {
     /// An import the recogniser cannot follow: the crate error renamed, one
     /// of the twelve (or a glob of the variants) imported, or a raise name,
     /// `delivery_facts` renamed or globbed. Helper renames are judged once
     /// helpers are known ([`Collect::renames`]).
     fn use_item(&mut self, at: &Place, item: &syn::ItemUse) {
-        // Outside the gateway only an import another module can use matters
-        // to the gateway's constructions; a raise import matters anywhere.
-        let reaches_gateway =
-            at.file.starts_with("src/gateway/") || !matches!(item.vis, syn::Visibility::Inherited);
+        let gateway = at.file.starts_with("src/gateway/");
         let mut leaves = Vec::new();
         use_leaves(&[], &item.tree, &mut leaves);
         for (path, rename) in leaves {
+            self.uses.push((at.file.clone(), path.clone()));
             let (Some(last), parent) = (path.last(), path.len().checked_sub(2).map(|i| &path[i]))
             else {
                 continue;
@@ -323,7 +356,10 @@ impl Collect {
             );
             let error_variant = parent.is_some_and(|p| p == "Error")
                 && (last == "*" || TWELVE.contains(&last.as_str()));
-            let error_renamed = rename.is_some() && crate_error(&path);
+            // The crate's error renamed: by its crate path anywhere, and under
+            // the gateway also by a relative path (`super::Error as E`).
+            let error_renamed =
+                rename.is_some() && (crate_error(&path) || (gateway && local_error(&path)));
             let through_facts = path.iter().rev().skip(1).any(|s| s == FACTS);
             let facts_renamed = last == FACTS && rename.is_some();
             if through_facts || facts_renamed {
@@ -335,9 +371,9 @@ impl Collect {
                     last.clone()
                 };
                 self.facts_uses.push((at.file.clone(), key, text));
-            } else if reaches_gateway && (error_variant || error_renamed) {
+            } else if error_variant || error_renamed {
                 self.aliases.push((at.file.clone(), text));
-            } else if let Some(rename) = rename.filter(|_| reaches_gateway) {
+            } else if let Some(rename) = rename {
                 self.renames.push((at.file.clone(), last.clone(), rename));
             }
         }
@@ -381,12 +417,13 @@ impl Sink for Collect {
             syn::Item::Type(alias) => {
                 if let syn::Type::Path(target) = &*alias.ty
                     && target.path.segments.last().is_some_and(|s| s.ident == "Error")
-                    // `crate::Error` anywhere; a bare `Error` where it is the
-                    // crate's (the gateway imports no other type by that name).
-                    && (at.file.starts_with("src/gateway/")
-                        || !matches!(alias.vis, syn::Visibility::Inherited))
+                    // `crate::Error` anywhere; under the gateway also a bare or
+                    // relative `Error` (the gateway imports no other type by
+                    // that name).
                     && (crate_error(&segments(&target.path))
-                        || (target.path.segments.len() == 1 && at.file.starts_with("src/gateway/")))
+                        || (at.file.starts_with("src/gateway/")
+                            && (target.path.segments.len() == 1
+                                || local_error(&segments(&target.path)))))
                 {
                     self.aliases
                         .push((at.file.clone(), format!("type {} = Error", alias.ident)));
@@ -511,219 +548,6 @@ impl Sink for Collect {
 /// from `src/gateway` is a `via` row. Pinned against src/error.rs.
 pub(super) const ASSOCIATED: [&str; 1] = ["circuit_open"];
 
-/// Effect writers that are not call needles: `step` scopes one composite
-/// step and notes its outcome; the step's own raise is the row.
-const NOT_A_NEEDLE: [&str; 1] = ["step"];
+mod derive;
 
-/// The tables and sets derived from one walk.
-pub(super) struct Derived {
-    /// `delivery_facts.rs` functions that write the effect, closed under
-    /// calls between them.
-    pub(super) effect_writers: BTreeSet<String>,
-    /// `delivery_facts.rs` functions that store `LastStep::Refused`.
-    pub(super) step_writers: BTreeSet<String>,
-    /// Error-valued `src/gateway` functions that build one of the twelve,
-    /// to a fixed point.
-    pub(super) helpers: BTreeSet<String>,
-    /// (file, fn, needle) -> count.
-    pub(super) raises: BTreeMap<String, usize>,
-    /// (file, fn, needle, ordinal), in walk order.
-    pub(super) plain: Vec<String>,
-}
-
-fn fns_with(events: &[Event], file: &str, hit: impl Fn(&Kind) -> bool) -> BTreeSet<String> {
-    events
-        .iter()
-        .filter(|e| e.file == file && hit(&e.kind))
-        .map(|e| e.func.clone())
-        .collect()
-}
-
-impl Collect {
-    /// The effect writers (closed under calls in `delivery_facts.rs`) and
-    /// the `LastStep::Refused` writers.
-    fn writers(&self) -> (BTreeSet<String>, BTreeSet<String>) {
-        let events = &self.events;
-        let mut effect_writers =
-            fns_with(events, FACTS_FILE, |k| *k == Kind::Writes("facts.effect ="));
-        loop {
-            let more = fns_with(
-                events,
-                FACTS_FILE,
-                |k| matches!(k, Kind::Call { name, method: false, value: false, .. } if effect_writers.contains(name)),
-            );
-            let before = effect_writers.len();
-            effect_writers.extend(more);
-            if effect_writers.len() == before {
-                break;
-            }
-        }
-        let step_writers = fns_with(events, FACTS_FILE, |k| {
-            *k == Kind::Writes("facts.last_step = Refused")
-        });
-        (effect_writers, step_writers)
-    }
-
-    /// Error-valued `src/gateway` functions that build one of the twelve or
-    /// call such a function, to a fixed point.
-    fn helper_set(&self) -> BTreeSet<String> {
-        let events = &self.events;
-        let valued: BTreeSet<&String> = self
-            .error_valued
-            .iter()
-            .filter(|(file, _)| file.starts_with("src/gateway/"))
-            .map(|(_, name)| name)
-            .collect();
-        let mut helpers = BTreeSet::new();
-        loop {
-            let builds = |k: &Kind| match k {
-                Kind::Construct { .. } => true,
-                Kind::Call { owner, name, .. } => {
-                    helpers.contains(name)
-                        || (owner.as_deref() == Some("Error")
-                            && ASSOCIATED.contains(&name.as_str()))
-                }
-                _ => false,
-            };
-            let more: BTreeSet<String> = events
-                .iter()
-                .filter(|e| {
-                    e.file.starts_with("src/gateway/")
-                        && valued.contains(&e.func)
-                        && builds(&e.kind)
-                })
-                .map(|e| e.func.clone())
-                .collect();
-            let before = helpers.len();
-            helpers.extend(more);
-            if helpers.len() == before {
-                break;
-            }
-        }
-        helpers
-    }
-
-    pub(super) fn derive(&self) -> Derived {
-        let events = &self.events;
-        let (effect_writers, step_writers) = self.writers();
-        let needles: BTreeSet<&String> = effect_writers
-            .iter()
-            .chain(&step_writers)
-            .filter(|n| !NOT_A_NEEDLE.contains(&n.as_str()))
-            .collect();
-        let helpers = self.helper_set();
-
-        let mut raises = BTreeMap::new();
-        let mut plain = Vec::new();
-        let mut ordinals: BTreeMap<String, usize> = BTreeMap::new();
-        for event in events {
-            let key = format!("{}\t{}", event.file, event.func);
-            let gateway = event.file.starts_with("src/gateway/");
-            let mut plain_needle = None;
-            match &event.kind {
-                Kind::Writes(needle) => {
-                    *raises.entry(format!("{key}\t{needle}")).or_insert(0) += 1;
-                }
-                Kind::Call {
-                    owner,
-                    name,
-                    value,
-                    method: false,
-                } => {
-                    // Inside delivery_facts.rs a bare name is a raise only when
-                    // called: a local such as `refused` in `step` is not one.
-                    let through = owner.as_deref() == Some(FACTS)
-                        || (event.file == FACTS_FILE && owner.is_none() && !*value);
-                    let suffix = if *value { " (as value)" } else { "" };
-                    if through && needles.contains(name) {
-                        *raises.entry(format!("{key}\t{name}{suffix}")).or_insert(0) += 1;
-                    }
-                    let associated =
-                        owner.as_deref() == Some("Error") && ASSOCIATED.contains(&name.as_str());
-                    // A helper with a refusal name is rowed by the refusal scan.
-                    let helper = helpers.contains(name) && !is_refusal_name(name);
-                    if gateway && (associated || helper) {
-                        plain_needle = Some(format!("via {name}{suffix}"));
-                    }
-                }
-                Kind::Call {
-                    name, method: true, ..
-                } => {
-                    if gateway && helpers.contains(name) && !is_refusal_name(name) {
-                        plain_needle = Some(format!("via {name}"));
-                    }
-                }
-                Kind::Construct {
-                    variant,
-                    form,
-                    wrapped,
-                } => {
-                    let shape = match *form {
-                        "call" => format!("Error::{variant}(..)"),
-                        "{}" => format!("Error::{variant}{{}}"),
-                        _ => format!("Error::{variant} (as value)"),
-                    };
-                    let wrap = if *wrapped { " wrapped" } else { "" };
-                    plain_needle = Some(format!("{shape}{wrap}"));
-                }
-                Kind::Closure(name) if gateway => {
-                    plain_needle = Some(format!("via {name} (closure)"));
-                }
-                Kind::InMacro(tokens) => {
-                    let names = monitored_tokens(tokens, &helpers);
-                    if names.iter().any(|n| n == FACTS) {
-                        *raises
-                            .entry(format!("{key}\t{FACTS} (in macro)"))
-                            .or_insert(0) += 1;
-                    }
-                    let plain_names: Vec<&str> = names
-                        .iter()
-                        .filter(|n| *n != FACTS)
-                        .map(String::as_str)
-                        .collect();
-                    if gateway && !plain_names.is_empty() {
-                        plain_needle = Some(format!("{} (in macro)", plain_names.join(",")));
-                    }
-                }
-                _ => {}
-            }
-            if let Some(needle) = plain_needle {
-                let row = format!("{key}\t{needle}");
-                let n = ordinals.entry(row.clone()).or_insert(0);
-                *n += 1;
-                plain.push(format!("{row}\t{n}"));
-            }
-        }
-        plain.sort();
-        Derived {
-            effect_writers,
-            step_writers,
-            helpers,
-            raises,
-            plain,
-        }
-    }
-
-    /// Imports through `delivery_facts` that hide a raise: a glob, a renamed
-    /// module, or a raise imported by name.
-    pub(super) fn raise_imports(&self, derived: &Derived) -> Vec<String> {
-        self.facts_uses
-            .iter()
-            .filter(|(_, key, _)| {
-                key == "*"
-                    || derived.effect_writers.contains(key)
-                    || derived.step_writers.contains(key)
-            })
-            .map(|(_, _, text)| text.clone())
-            .collect()
-    }
-
-    /// Imports that rename a discovered helper (`use x::helper as other`).
-    pub(super) fn helper_renames(&self, helpers: &BTreeSet<String>) -> Vec<String> {
-        self.renames
-            .iter()
-            .filter(|(_, from, _)| helpers.contains(from))
-            .map(|(file, from, to)| format!("{file}: use {from} as {to}"))
-            .collect()
-    }
-}
+pub(super) use derive::Derived;

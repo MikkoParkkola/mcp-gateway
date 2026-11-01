@@ -53,6 +53,10 @@ pub(super) fn collect(root: &std::path::Path, roots: &[&str]) -> Collect {
     collect
 }
 
+/// Reviewed aliases of the crate error the guard admits: (file, item).
+/// A private alias in a function body there, out of the gateway's reach.
+const ALIAS_ALLOW: [(&str, &str); 1] = [("src/security/needles.rs", "use crate::Error as E")];
+
 fn crate_collect() -> (Collect, Derived) {
     let collect = collect(crate_root(), &ROOTS);
     let derived = collect.derive();
@@ -125,6 +129,25 @@ fn refused_before_step_is_the_refusal_state_writer() {
 }
 
 #[test]
+fn the_raise_helpers_are_listed() {
+    let (_, derived) = crate_collect();
+    let want: BTreeSet<String> = [
+        "src/capability/executor/client.rs::note_redirect_refusal",
+        "src/gateway/meta_mcp/invoke/gate.rs::withheld_for",
+        "src/gateway/meta_mcp/invoke/gateway_writes.rs::note",
+        "src/gateway/meta_mcp/invoke/post_dispatch.rs::settle_unsent",
+        "src/gateway/meta_mcp/invoke/propagation.rs::raise",
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_eq!(
+        derived.raise_helpers, want,
+        "a function outside delivery_facts.rs now raises: review its call rows"
+    );
+}
+
+#[test]
 fn no_raise_is_imported_aliased_or_globbed() {
     let (collect, derived) = crate_collect();
     let found = collect.raise_imports(&derived);
@@ -140,6 +163,7 @@ fn no_monitored_variant_is_imported_aliased_or_globbed() {
     let mut found: Vec<String> = collect
         .aliases
         .iter()
+        .filter(|(file, text)| !ALIAS_ALLOW.contains(&(file.as_str(), text.as_str())))
         .map(|(file, text)| format!("{file}: {text}"))
         .collect();
     found.extend(collect.helper_renames(&derived.helpers));
