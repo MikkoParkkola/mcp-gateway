@@ -15,7 +15,7 @@ use std::time::Duration;
 use serde_json::json;
 
 use super::super::{AnswerShape, GatewayStamps, RELAY_RECEIPTS, RelayKey, plan_step};
-use super::{PROSE, text_result};
+use super::{OTHER_PROSE, PROSE, text_result};
 use crate::config_reload::{LiveConfig, ReloadContext};
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::firewall::collusion_live_rig::{Rig, classified, config};
@@ -46,7 +46,16 @@ impl LiveMeta {
 /// A Meta-MCP over `alpha:read` as the one listed source, `window_secs` of
 /// window, every k-gram kept, the clock frozen.
 pub(super) fn live_meta(action: CollusionAction, window_secs: u64) -> LiveMeta {
-    let mut cfg = config(action, &["alpha:read"], vec![]);
+    live_meta_listing(action, window_secs, &["alpha:read"])
+}
+
+/// [`live_meta`] with `sources` as the listed sources.
+pub(super) fn live_meta_listing(
+    action: CollusionAction,
+    window_secs: u64,
+    sources: &[&str],
+) -> LiveMeta {
+    let mut cfg = config(action, sources, vec![]);
     cfg.security.firewall.collusion.window_secs = window_secs;
     let rig = Rig::new(cfg);
     let (meta, dir) = meta_over(&rig);
@@ -232,4 +241,79 @@ async fn p8_12_a_startup_off_commit_then_block_holds_nothing() {
     lm.publish(CollusionAction::Block);
     assert!(lm.firewall().replay_digests(&sync_key()).is_none());
     assert!(!bob_refused(&lm), "P8.12: held");
+}
+
+/// Alice's single-target call delivering `staged`, then redacted to
+/// `delivered` before the commit, committed under the generation current.
+async fn redacted_commit(lm: &LiveMeta, staged: &serde_json::Value, delivered: &serde_json::Value) {
+    let meta = &lm.meta;
+    let ((), receipts) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "read"), staged);
+            let snapshot = meta.relay_snapshot(staged);
+            meta.restage_if_changed(snapshot, Some(delivered), AnswerShape::Literal);
+        })
+        .await;
+    receipts.commit(true, &lm.live().generation());
+}
+
+/// A classified result whose marker the redaction removed.
+fn classified_pair() -> (serde_json::Value, serde_json::Value) {
+    let mut classified = text_result(&format!("{PROSE} {OTHER_PROSE}"));
+    classified["_context_integrity"] =
+        json!({"classification": {"data_classes": ["personal_data"]}});
+    (classified, text_result(PROSE))
+}
+
+/// P8.14a: an inferred fact with no source named anywhere is held. GREEN pin
+/// on base.
+#[tokio::test]
+async fn p8_14a_an_inferred_fact_with_no_listed_source_is_held() {
+    let lm = live_meta_listing(CollusionAction::Block, 600, &[]);
+    let (classified, _) = classified_pair();
+    let meta = &lm.meta;
+    let ((), receipts) = meta
+        .collecting_staged(async {
+            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "read"), &classified);
+        })
+        .await;
+    receipts.commit(true, &lm.live().generation());
+    assert!(bob_refused(&lm), "P8.14a: an inferred copy is not held");
+}
+
+/// P8.14b: the inferred fact survives a redaction that removes the marker,
+/// and any source edit after it. GREEN pin on base.
+#[tokio::test]
+async fn p8_14b_an_inferred_fact_survives_redaction_and_source_edits() {
+    let lm = live_meta_listing(CollusionAction::Block, 600, &[]);
+    let (classified, delivered) = classified_pair();
+    redacted_commit(&lm, &classified, &delivered).await;
+    assert!(bob_refused(&lm), "refused after the redaction");
+    lm.rig
+        .reload(|c| c.security.firewall.collusion.sources = vec!["alpha:read".to_string()]);
+    assert!(bob_refused(&lm), "refused after the source was added");
+    lm.rig
+        .reload(|c| c.security.firewall.collusion.sources = vec![]);
+    assert!(
+        bob_refused(&lm),
+        "P8.14b: refused after the source was removed"
+    );
+}
+
+/// P8.14c: a list match does not cross a redaction. The copy is held because
+/// its source was listed at delivery; once the list is emptied, the redacted
+/// copy is plain. RED on base: the rebuild ORs the combined bit and the
+/// startup lists apply.
+#[tokio::test]
+async fn p8_14c_a_list_match_does_not_cross_a_redaction() {
+    let lm = live_meta_listing(CollusionAction::Block, 600, &["alpha:read"]);
+    let staged = text_result(&format!("{PROSE} {OTHER_PROSE}"));
+    redacted_commit(&lm, &staged, &text_result(PROSE)).await;
+    assert!(bob_refused(&lm), "control: held while the source is listed");
+    lm.rig
+        .reload(|c| c.security.firewall.collusion.sources = vec![]);
+    assert!(
+        !bob_refused(&lm),
+        "P8.14c: the list match survived the redaction"
+    );
 }
