@@ -211,6 +211,35 @@ fn l1d1_the_flush_writes_the_pending_notice_before_it_returns() {
     );
 }
 
+/// Dropping the flush guard waits for every line queued behind a slow sink
+/// (L1d-3): what the sink holds when the drop returns is all of them. The
+/// structural row on `main` (L1j-c) covers only where the guard is held.
+#[test]
+fn l1d3_dropping_the_flush_guard_waits_for_the_queued_lines() {
+    let (w, f, gate, out) = parked(8, 1 << 20);
+    line(&w, "first");
+    assert!(gate.wait_entered(), "the writer never took a line");
+    for n in 1..=5 {
+        line(&w, &format!("queued-{n}"));
+    }
+    let seen = out.clone();
+    let dropper = std::thread::spawn(move || {
+        drop(f);
+        seen.lines()
+    });
+    gate.open();
+    let at_return = dropper.join().expect("the flush thread");
+    assert_eq!(
+        at_return
+            .iter()
+            .filter(|l| l.starts_with("queued-"))
+            .count(),
+        5,
+        "the drop returned before the queued lines were written: {at_return:?}"
+    );
+    assert!(!gate.fired(), "a write waited past the watchdog");
+}
+
 /// A scripted clock that moves by the next step each time it is read.
 fn clock(start: Instant, steps: &[u64]) -> impl Fn() -> Instant + '_ {
     let at = std::cell::Cell::new(0);
