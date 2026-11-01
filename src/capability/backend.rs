@@ -539,14 +539,6 @@ impl CapabilityBackend {
         self.capabilities.read().get(name).cloned()
     }
 
-    /// The definition and the MCP revocation generation, read under one lock so
-    /// an unload cannot fall between them.
-    fn get_with_generation(&self, name: &str) -> Option<(CapabilityDefinition, u64)> {
-        let caps = self.capabilities.read();
-        let generation = self.executor.mcp_generation(name);
-        caps.get(name).cloned().map(|def| (def, generation))
-    }
-
     /// List all capability names in insertion order.
     pub fn list(&self) -> Vec<String> {
         self.capabilities

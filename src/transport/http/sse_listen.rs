@@ -110,10 +110,26 @@ impl SseListenSession {
             .ok_or_else(|| Error::Transport("listener SSE stream ended".to_owned()))
     }
 
+    /// [`Self::request_unscrubbed`], its answer and error scrubbed of the
+    /// backend's injected values: this path does not pass `read_answer`
+    ///.
+    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+        let needles = self.transport().ok().and_then(|t| t.needles.get().cloned());
+        let answer = self.request_unscrubbed(method, params).await;
+        match needles {
+            Some(needles) => crate::security::needles::scrub_answer(&needles, answer),
+            None => answer,
+        }
+    }
+
     /// One request on this session: its place on the stream first, then the
     /// POST; the answer from the body, or from the stream when the body is
     /// empty.
-    async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
+    async fn request_unscrubbed(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<JsonRpcResponse> {
         let t = self.transport()?;
         let channel = self.channel()?;
         let request = JsonRpcRequest {
@@ -150,7 +166,8 @@ impl SseListenSession {
                 .await
                 .map_err(|_| Error::Transport(format!("listener {method}: no answer in time")))?;
         }
-        serde_json::from_slice(&body).map_err(|e| Error::Protocol(e.to_string()))
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::Protocol(super::parse_failure("listener answer", &e)))
     }
 
     async fn notify(&self, method: &str) -> Result<()> {
@@ -197,9 +214,16 @@ impl SseListenSession {
             _ => {}
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
+        // Scrubbed, then watched: the filter compares the URI a client knows
+        // (lead ruling G9).
+        let needles = t.needles.get().cloned();
         let sink = Sink {
             tx,
-            map: Box::new(move |data| unsolicited_frame(data).filter(|note| watched.admits(note))),
+            map: Box::new(move |data| {
+                unsolicited_frame(data)
+                    .and_then(|note| super::listen::scrubbed(needles.as_deref(), note))
+                    .filter(|note| watched.admits(note))
+            }),
         };
         let channel = SseChannel::open(
             response,

@@ -180,3 +180,39 @@ fn an_imported_config_with_client_variables_loads() {
     crate::gateway::test_helpers::write_config_fixture(&path, &config).expect("config written");
     crate::config::Config::load(Some(&path)).expect("the written config loads");
 }
+
+/// Each discovery debug line that names a file or environment text carries
+/// it escaped: a value with an ANSI escape, a bidi override and a newline
+/// shows none of them raw, and the record stays one line.
+#[test]
+fn every_discovery_debug_line_shows_its_text_escaped() {
+    const HOSTILE: &str = "a\u{1b}[31m\u{202e}\u{200b}b\nforged";
+    let rows: [(&str, fn()); 3] = [
+        ("Scanning MCP config file", || {
+            note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")));
+        }),
+        ("Found MCP server in environment", || {
+            note_environment_server(HOSTILE, "MCP_SERVER_X_URL");
+        }),
+        ("Found MCP server in environment", || {
+            note_environment_server("x", &format!("MCP_SERVER_{HOSTILE}_URL"));
+        }),
+    ];
+    for (site, log) in rows {
+        let ((), logs) = crate::test_log_capture::capture_at(tracing::Level::DEBUG, log);
+        assert!(
+            logs.contains(site),
+            "{site}: the site did not fire: {logs:?}"
+        );
+        for spelled in ["\\u{202e}", "\\u{200b}", "\\u{a}"] {
+            assert!(logs.contains(spelled), "{site}: no {spelled} in {logs:?}");
+        }
+        for raw in ['\u{1b}', '\u{202e}', '\u{200b}'] {
+            assert!(
+                !logs.contains(raw),
+                "{site}: {raw:?} reached the log: {logs:?}"
+            );
+        }
+        assert_eq!(logs.lines().count(), 1, "{site}: {logs:?}");
+    }
+}
