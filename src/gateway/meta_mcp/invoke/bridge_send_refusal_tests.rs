@@ -533,3 +533,26 @@ async fn a_step_refused_at_its_send_records_refused_only_while_vouched() {
     let unvouched = step_refusal_effect(Cell::Unvouched).await;
     assert!(unvouched.get("response_effect").is_none(), "{unvouched:?}");
 }
+
+/// The parked arm's marked-account branch and its caller-refusal branch
+/// (`legacy_bridge.rs`) take disjoint errors: a marked account refusal is a
+/// JSON-RPC error carrying its account, never `Forbidden`, and a lend
+/// refusal is `Forbidden`, never marked. So the branches' order cannot change
+/// an answer, and a marked refusal keeps its connect offer.
+#[test]
+fn a_marked_refusal_and_a_lend_refusal_are_disjoint() {
+    const TEXT: &str = "account is not connected";
+    let marked = crate::personal_accounts::refusal::mark(
+        crate::Error::Config(TEXT.to_string()),
+        &crate::identity_propagation::PropagationError::AccountNotConnected(TEXT.to_string()),
+        Some("work"),
+    );
+    assert!(
+        crate::personal_accounts::refusal::marked(&marked).is_some(),
+        "premise: a marked refusal: {marked:?}"
+    );
+    assert!(!super::gate::is_authorization_refusal(&marked));
+    let lend = lend_refusal();
+    assert!(super::gate::is_authorization_refusal(&lend));
+    assert!(crate::personal_accounts::refusal::marked(&lend).is_none());
+}
