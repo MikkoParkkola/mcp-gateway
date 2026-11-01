@@ -316,6 +316,9 @@ impl ChainWatch {
         let mut ledger = self.ledger.lock();
         let mut warned = self.warned.lock();
         let before = ledger.clone();
+        // Logged once the three guards are released.
+        let mut cannot_watch = Vec::new();
+        let mut gone = Vec::new();
         for dir in wanted.difference(&before) {
             match watcher.watch(dir, RecursiveMode::NonRecursive) {
                 Ok(()) => {
@@ -324,10 +327,7 @@ impl ChainWatch {
                 }
                 Err(e) => {
                     if warned.insert(dir.clone()) {
-                        warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
-                        #[cfg(test)]
-                        self.watch_warnings
-                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        cannot_watch.push((dir, e));
                     }
                 }
             }
@@ -336,12 +336,25 @@ impl ChainWatch {
             // A directory already deleted (the old `ConfigMap` generation) has
             // lost its watch with it; either way it is no longer watched.
             if let Err(e) = watcher.unwatch(dir) {
-                info!(dir = %dir.display(), error = %e, "Config watcher: unwatch of a gone directory");
+                gone.push((dir, e));
             }
             ledger.remove(dir);
         }
         warned.retain(|dir| wanted.contains(dir));
-        *ledger != before
+        let changed = *ledger != before;
+        drop(warned);
+        drop(ledger);
+        drop(guard);
+        for (dir, e) in cannot_watch {
+            warn!(dir = %dir.display(), error = %e, "Config watcher: cannot watch");
+            #[cfg(test)]
+            self.watch_warnings
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        for (dir, e) in gone {
+            info!(dir = %dir.display(), error = %e, "Config watcher: unwatch of a gone directory");
+        }
+        changed
     }
 
     /// Drop each of `gone` that the ledger holds, and its watch, so the next

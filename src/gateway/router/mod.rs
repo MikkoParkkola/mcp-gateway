@@ -188,6 +188,9 @@ mod keys_last_used_callers_tests;
 mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod live_keys_tests;
+/// LOG.1: requests that log complete while stderr never drains.
+#[cfg(test)]
+mod log_lossy_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]

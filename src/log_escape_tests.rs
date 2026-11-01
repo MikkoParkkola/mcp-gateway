@@ -281,8 +281,8 @@ fn the_json_layer_keeps_the_probe_on_one_line() {
     let lib = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
         .expect("lib.rs");
     assert!(
-        lib.contains(".with(fmt::layer().json().with_writer(std::io::stderr))"),
-        "the JSON layer changed"
+        lib.contains("Box::new(fmt::layer().json().with_writer(writer))"),
+        "the JSON layer changed (it writes through the lossy stderr writer, log_writer.rs)"
     );
 }
 
