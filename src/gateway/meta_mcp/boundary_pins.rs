@@ -11,6 +11,7 @@ mod creation_sites;
 mod delivery_framing;
 mod discarded_sends;
 mod fold_sites;
+mod fragments;
 mod guard_tests;
 mod invoke_stages;
 mod invoke_stages_allow;
