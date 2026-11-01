@@ -89,7 +89,7 @@ fn shadow_run_with(home: &Path, vars: &[(&str, &str)]) -> (String, String) {
     let out = gateway_bin::command(home, gateway_bin::Inherit::Nothing)
         .current_dir(home)
         .env("MCP_GATEWAY_CONFIG_DIR", data_dir(home))
-        .envs(vars.iter().copied())
+        .envs(gateway_bin::checked_env(vars.iter().copied()))
         .args([
             "cap",
             "discover",
