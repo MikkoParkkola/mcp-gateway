@@ -92,10 +92,13 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        // The request's pinned generation, else the one published now;
-        // before startup publishes one there is nothing to judge under.
+        // The request's pinned generation, else the one published now
+        // (none only before startup publishes one: see `unpublished`).
         let published = self.current_generation();
-        let generation = caller.generation.as_deref().or(published.as_deref())?;
+        let Some(generation) = caller.generation.as_deref().or(published.as_deref()) else {
+            super::staging::unpublished("catalogue witness");
+            return None;
+        };
         let message = fw.relay_block_message(
             generation.collusion_view(),
             who,

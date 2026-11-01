@@ -189,10 +189,28 @@ impl DeferredReceipts {
     /// generation current now, captured once before anything records.
     pub(crate) fn commit(&self, written: bool) {
         let generation = self.live.as_ref().map(|live| live.generation());
-        if let (Some(staged), Some(generation)) = (self.staged.lock().take(), generation) {
-            staged.commit(written && self.eligible, &generation);
+        let Some(staged) = self.staged.lock().take() else {
+            return;
+        };
+        match generation {
+            Some(generation) => staged.commit(written && self.eligible, &generation),
+            None => unpublished("http funnel"),
         }
     }
+}
+
+/// A delivery or a witness found no published generation, so nothing is
+/// recorded or refused. Unreachable in production: startup publishes before
+/// serving (HTTP `server/run.rs:217`, before `listener::serve` at `:630`;
+/// stdio `server/stdio_loop.rs:127`, before the first read at `:319`; the
+/// bridge commits only inside a call already being served), and the
+/// `boundary_pins::live_config` rows fail on a reorder. Logged as an error,
+/// so a reorder that slipped past them is loud.
+pub(crate) fn unpublished(site: &'static str) {
+    tracing::error!(
+        site,
+        "relay check before startup published a generation: nothing recorded or refused"
+    );
 }
 
 impl MetaMcp {
@@ -201,8 +219,9 @@ impl MetaMcp {
     #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn commit_staged(&self, staged: StagedReceipts, delivered: bool) {
         #[cfg(feature = "firewall")]
-        if let Some(generation) = self.current_generation() {
-            staged.commit(delivered, &generation);
+        match self.current_generation() {
+            Some(generation) => staged.commit(delivered, &generation),
+            None => unpublished("staged commit"),
         }
         #[cfg(not(feature = "firewall"))]
         let _ = (staged, delivered);

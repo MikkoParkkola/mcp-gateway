@@ -37,8 +37,11 @@ impl MetaMcp {
                     let generation = live.as_ref().map(|live| live.generation());
                     #[cfg(all(test, feature = "firewall"))]
                     super::commit_capture_hook::run();
-                    if let Some(generation) = generation {
-                        fw.record_digest(caller, &server, &tool, &digest, &generation);
+                    match generation {
+                        Some(generation) => {
+                            fw.record_digest(caller, &server, &tool, &digest, &generation);
+                        }
+                        None => super::staging::unpublished("bridge"),
                     }
                 },
             ))

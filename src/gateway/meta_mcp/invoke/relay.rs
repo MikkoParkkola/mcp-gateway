@@ -119,10 +119,13 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            // The request's pinned generation, else the one published now;
-            // before startup publishes one there is nothing to judge under.
+            // The request's pinned generation, else the one published now
+            // (none only before startup publishes one: see `unpublished`).
             let published = self.current_generation();
-            let generation = pinned.or(published.as_deref())?;
+            let Some(generation) = pinned.or(published.as_deref()) else {
+                staging::unpublished("witness");
+                return None;
+            };
             fw.relay_block_message(
                 generation.collusion_view(),
                 caller,
@@ -386,11 +389,14 @@ impl MetaMcp {
     pub(crate) fn commit_staged_relay(&self, delivered: bool) {
         #[cfg(feature = "firewall")]
         if let Some(fw) = self.firewall.as_deref() {
-            // Under the generation current at delivery; before startup
-            // publishes one, nothing is judged and nothing records.
+            // Under the generation current at delivery (none only before
+            // startup publishes one: see `unpublished`).
             match self.current_generation() {
                 Some(generation) => commit_with(fw, delivered, &generation),
-                None => discard_staged(),
+                None => {
+                    discard_staged();
+                    staging::unpublished("commit");
+                }
             }
             return;
         }
