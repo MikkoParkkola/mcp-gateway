@@ -418,8 +418,8 @@ fn one_revocation(changes: &[(FieldPath, Change)]) -> Result<Option<&[Segment]>,
     Ok(Some(path.0.as_slice()))
 }
 
-/// S5 and S4 for a save holding a revocation: every original line the edit
-/// deleted is one a removal may delete, judged on the original text apart
+/// S5 and S4 for a save holding a revocation: the original lines the edit
+/// deleted are exactly the lines its removals may delete, judged on the original text apart
 /// from the edit (the element, each removed key, each entry the cascade
 /// emptied); else `Unprovable`. Returns the deleted lines that carried a
 /// comment, 1-based.
@@ -459,8 +459,12 @@ fn deleted_as_planned(
     let deleted: std::collections::BTreeSet<usize> = (0..original.split_inclusive('\n').count())
         .filter(|n| !surviving.contains(n))
         .collect();
-    if !deleted.is_subset(&allowed) {
-        return Err(unprovable("a deleted line is outside the removed entries"));
+    // Equal, not a subset: a deletion one comment line short keeps the
+    // meaning, so only this comparison sees it.
+    if deleted != allowed {
+        return Err(unprovable(
+            "the deleted lines are not the removed entries' lines",
+        ));
     }
     Ok(super::comments::comment_line_numbers(original, &deleted))
 }

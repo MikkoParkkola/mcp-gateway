@@ -184,6 +184,17 @@ fn r9b_a_trailing_comment_under_the_last_entry_is_reported() {
     assert_eq!(dropped, vec![5]);
 }
 
+// R9c: a trailing comment under an entry that is not the last goes with it:
+// a deletion one line short would keep the meaning, so S5's equality is what
+// refuses it.
+#[test]
+fn r9c_a_trailing_comment_under_a_middle_entry_is_removed_and_reported() {
+    let original = "auth:\n  api_keys:\n    - name: a\n      # under a\n    - name: b\n";
+    let (out, dropped) = revoked(original, &[revoke(0)]);
+    assert_eq!(out, "auth:\n  api_keys:\n    - name: b\n");
+    assert_eq!(dropped, vec![4]);
+}
+
 // R12: an emptied `auth` goes too, its line's comment reported.
 #[test]
 fn r12_an_emptied_auth_is_removed_and_its_comment_reported() {
