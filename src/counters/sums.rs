@@ -159,8 +159,10 @@ impl CounterStore {
     /// Calls in the 24-hour window ending at unix second `now` (the 48
     /// half-hour buckets ending with the current one, which is partial), and
     /// in the buckets holding the same local wall-clock times on the previous
-    /// date, for each of `labels` (`Filter::Tool` or `Filter::Server`, raw
-    /// names: the store normalizes them as it does when it records). One lock.
+    /// date, plus the last completed hour, the hour before it and the last
+    /// [`SERIES`] half hours, for each of `labels` (`Filter::Tool` or
+    /// `Filter::Server`, raw names: the store normalizes them as it does when
+    /// it records). One lock.
     pub(crate) fn window_sums<Tz: TimeZone>(
         &self,
         labels: &[Filter<'_>],
@@ -196,7 +198,12 @@ impl CounterStore {
                     #[cfg(test)]
                     self.window_walks
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    read.windows(&current, mapped.then_some(previous.as_slice()), now_bucket)
+                    read.windows(
+                        &current,
+                        mapped.then_some(previous.as_slice()),
+                        now_bucket,
+                        since,
+                    )
                 };
                 if read.series.is_some() {
                     return walk();
@@ -214,9 +221,20 @@ impl CounterStore {
         WindowSums {
             since,
             counts,
-            series_start: 0,
+            series_start: series_start(now_bucket),
         }
     }
+}
+
+/// The unix start of the first series point when the current bucket is
+/// `now_bucket`; before the epoch (a clock near 0) it is negative.
+fn series_start(now_bucket: u64) -> i64 {
+    let back = i64::try_from(SERIES - 1).unwrap_or(0);
+    let half = i64::try_from(HALF).unwrap_or(0);
+    i64::try_from(now_bucket)
+        .unwrap_or(i64::MAX)
+        .saturating_sub(back)
+        .saturating_mul(half)
 }
 
 /// One label's series as a batch read sees it.
@@ -252,17 +270,46 @@ impl<'a> Read<'a> {
     /// The label's calls over the current buckets and over the previous
     /// date's (`None` when they could not be mapped), each `None` where it
     /// could be low.
-    fn windows(&self, current: &[u64], previous: Option<&[u64]>, now_bucket: u64) -> CallWindows {
+    fn windows(
+        &self,
+        current: &[u64],
+        previous: Option<&[u64]>,
+        now_bucket: u64,
+        since: u64,
+    ) -> CallWindows {
         let day = |buckets: &[u64]| {
             self.holds_all(buckets, now_bucket)
                 .then(|| self.sum(buckets))
                 .flatten()
         };
+        let series = self.points(now_bucket, since);
+        // Pairs of points, so the hours and the series agree by construction.
+        let pair = |a: usize| series[a].zip(series[a + 1]).map(|(x, y)| x + y);
         CallWindows {
             day: day(current),
             prev_day: previous.and_then(day),
-            ..CallWindows::UNKNOWN
+            hour: pair(SERIES - 3),
+            prev_hour: pair(SERIES - 5),
+            series,
         }
+    }
+
+    /// The label's calls in each of the last [`SERIES`] buckets, the current
+    /// one last. A bucket before the epoch or before coverage is 0: the
+    /// store did not exist then, so no call is hidden.
+    fn points(&self, now_bucket: u64, since: u64) -> [Option<u64>; SERIES] {
+        let mut points = [Some(0); SERIES];
+        for (back, point) in (0_u64..).zip(points.iter_mut().rev()) {
+            if let Some(b) = now_bucket.checked_sub(back)
+                && (b + 1) * HALF > since
+            {
+                *point = self
+                    .holds_all(&[b], now_bucket)
+                    .then(|| self.sum(&[b]))
+                    .flatten();
+            }
+        }
+        points
     }
 
     /// Whether the label held bucket `b`, after its admission bucket.
