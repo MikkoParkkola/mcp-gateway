@@ -578,12 +578,18 @@ impl OAuthClient {
         loop {
             let sampled = status.installed();
             let adopted = self.adopt_stored_login();
-            if adopted.is_none()
-                && let Some(stored) = self
+            if adopted.is_none() {
+                let stored = self
                     .credential_key()
                     .ok()
-                    .and_then(|key| self.storage.load(&key, &self.resource_url))
-            {
+                    .and_then(|key| self.storage.load(&key, &self.resource_url));
+                let Some(stored) = stored else {
+                    // Nothing could be read: the old account's token must not
+                    // keep serving, and the install stays unacknowledged so
+                    // the next call retries.
+                    *self.current_token.write() = None;
+                    return None;
+                };
                 *self.current_token.write() = Some(stored);
             }
             self.installed_seen
