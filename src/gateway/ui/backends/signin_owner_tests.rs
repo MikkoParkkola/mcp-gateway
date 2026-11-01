@@ -81,8 +81,17 @@ async fn session_owner_refuses_a_session_whose_minting_key_is_gone() {
         session_owner(&gw.state, before.auth(), &headers).is_ok(),
         "control: the original table accepts the session"
     );
+    // The fixture seeds the live config with a resolved key table of its own
+    // (`LiveConfig::with_auth`) while `config.auth` stays default, so removing
+    // the key from `config.auth` would change nothing and `set` would keep the
+    // published table. A real reload carries a different auth section, as the
+    // K13 rows' `reload` does: here, one without the minting key.
     let mut config = (*gw.state.live_config.get()).clone();
-    config.auth.api_keys.retain(|key| key.name != ADMIN_KEY);
+    config.auth = crate::config::AuthConfig {
+        enabled: true,
+        bearer_token: Some("owner-tests-bearer".to_owned()),
+        ..crate::config::AuthConfig::default()
+    };
     gw.state.live_config.set(config);
     let after = gw.state.live_config.generation();
 
