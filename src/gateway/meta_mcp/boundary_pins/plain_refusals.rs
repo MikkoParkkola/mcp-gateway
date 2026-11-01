@@ -93,6 +93,9 @@ pub(super) struct Collect {
     /// Imports renamed with `as`: (file, original name, new name); one that
     /// renames a helper is rejected once helpers are known.
     pub(super) renames: Vec<(String, String, String)>,
+    /// Imports through `delivery_facts` (or renaming it): (file, the name
+    /// imported, or `*` for a glob or a renamed module, item text).
+    pub(super) facts_uses: Vec<(String, String, String)>,
     /// Expressions inside a raise call's argument (by address, this walk).
     wrapped: HashSet<usize>,
     /// Paths that are a call's function (by address, this walk).
@@ -316,9 +319,18 @@ impl Collect {
             let error_variant = parent.is_some_and(|p| p == "Error")
                 && (last == "*" || TWELVE.contains(&last.as_str()));
             let error_renamed = rename.is_some() && crate_error(&path);
-            let facts = path.iter().any(|s| s == FACTS)
-                && (last == "*" || rename.is_some() || last != FACTS);
-            if error_variant || error_renamed || facts {
+            let through_facts = path.iter().rev().skip(1).any(|s| s == FACTS);
+            let facts_renamed = last == FACTS && rename.is_some();
+            if through_facts || facts_renamed {
+                // A glob or a renamed module always hides raises; a named
+                // import does only when it names a raise ([`Collect::raise_imports`]).
+                let key = if last == "*" || facts_renamed {
+                    "*".to_string()
+                } else {
+                    last.clone()
+                };
+                self.facts_uses.push((at.file.clone(), key, text));
+            } else if error_variant || error_renamed {
                 self.aliases.push((at.file.clone(), text));
             } else if let Some(rename) = rename {
                 self.renames.push((at.file.clone(), last.clone(), rename));
@@ -523,7 +535,7 @@ impl Collect {
             let more = fns_with(
                 events,
                 FACTS_FILE,
-                |k| matches!(k, Kind::Call { name, method: false, .. } if effect_writers.contains(name)),
+                |k| matches!(k, Kind::Call { name, method: false, value: false, .. } if effect_writers.contains(name)),
             );
             let before = effect_writers.len();
             effect_writers.extend(more);
@@ -603,8 +615,10 @@ impl Collect {
                     value,
                     method: false,
                 } => {
+                    // Inside delivery_facts.rs a bare name is a raise only when
+                    // called: a local such as `refused` in `step` is not one.
                     let through = owner.as_deref() == Some(FACTS)
-                        || (event.file == FACTS_FILE && owner.is_none());
+                        || (event.file == FACTS_FILE && owner.is_none() && !*value);
                     let suffix = if *value { " (as value)" } else { "" };
                     if through && needles.contains(name) {
                         *raises.entry(format!("{key}\t{name}{suffix}")).or_insert(0) += 1;
@@ -671,6 +685,20 @@ impl Collect {
             raises,
             plain,
         }
+    }
+
+    /// Imports through `delivery_facts` that hide a raise: a glob, a renamed
+    /// module, or a raise imported by name.
+    pub(super) fn raise_imports(&self, derived: &Derived) -> Vec<String> {
+        self.facts_uses
+            .iter()
+            .filter(|(_, key, _)| {
+                key == "*"
+                    || derived.effect_writers.contains(key)
+                    || derived.step_writers.contains(key)
+            })
+            .map(|(_, _, text)| text.clone())
+            .collect()
     }
 
     /// Imports that rename a discovered helper (`use x::helper as other`).

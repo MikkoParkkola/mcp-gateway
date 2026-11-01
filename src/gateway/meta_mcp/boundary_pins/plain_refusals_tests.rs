@@ -125,12 +125,8 @@ fn refused_before_step_is_the_refusal_state_writer() {
 
 #[test]
 fn no_raise_is_imported_aliased_or_globbed() {
-    let (collect, _) = crate_collect();
-    let found: Vec<&(String, String)> = collect
-        .aliases
-        .iter()
-        .filter(|(_, text)| text.contains(super::plain_refusals::FACTS))
-        .collect();
+    let (collect, derived) = crate_collect();
+    let found = collect.raise_imports(&derived);
     assert!(
         found.is_empty(),
         "write raises as delivery_facts::<name>: {found:?}"
@@ -143,7 +139,6 @@ fn no_monitored_variant_is_imported_aliased_or_globbed() {
     let mut found: Vec<String> = collect
         .aliases
         .iter()
-        .filter(|(_, text)| !text.contains(super::plain_refusals::FACTS))
         .map(|(file, text)| format!("{file}: {text}"))
         .collect();
     found.extend(collect.helper_renames(&derived.helpers));

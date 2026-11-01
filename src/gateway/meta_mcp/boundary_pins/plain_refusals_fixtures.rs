@@ -180,6 +180,7 @@ fn fn2_a_helper_outside_the_gateway_is_not_followed() {
 fn guard_hits(gateway: &str, other: &str) -> Vec<String> {
     let (_dir, collect, derived) = fixture(gateway, other);
     let mut hits: Vec<String> = collect.aliases.iter().map(|(_, t)| t.clone()).collect();
+    hits.extend(collect.raise_imports(&derived));
     hits.extend(collect.helper_renames(&derived.helpers));
     hits.extend(
         collect
