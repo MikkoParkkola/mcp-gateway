@@ -202,7 +202,11 @@ async fn a_late_callback_after_cancel_is_ignored() {
     let gw = Gw::new().await;
     let owner = gw.session();
     let (first_url, first) = Gw::link(&gw.start(&owner).await);
-    let cancel = gw.confirm(&owner, &first, "cancel").await;
+    // Bounded: without the backend cancel the login runs on, and the cancel
+    // would answer only once the start window had run out.
+    let cancel = tokio::time::timeout(HANG_BOUND, gw.confirm(&owner, &first, "cancel"))
+        .await
+        .expect("the cancel answers without waiting out the start window");
     assert_eq!(cancel.status, StatusCode::OK, "{}", cancel.body);
     let second = gw.start(&owner).await;
     assert_eq!(second.status, StatusCode::OK, "{}", second.body);

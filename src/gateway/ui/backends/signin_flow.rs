@@ -526,6 +526,8 @@ async fn cancel_flow(backend: &Backend, owner: &str, attempt: &str) -> Decided {
     let Some(mut flow) = ended else {
         return Decided::NoSignIn;
     };
+    // Ends the login now: during the callback wait nothing reads the outcome
+    // `settle` sends, so without this it would wait for the start deadline.
     flow.cancel.cancel();
     #[cfg(test)]
     backend.sign_in.outcome_pause.pause().await;
