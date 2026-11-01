@@ -15,3 +15,5 @@ src/personal_accounts/refusal.rs	unmark	Error JsonRpc message message ..	1	gatew
 src/personal_accounts/refusal.rs	upstream_rejection	Error JsonRpc data Some data ..	1	excluded	keyed seal of a gateway-built refusal
 src/playbook/engine/mod.rs	step_reason	crate Error JsonRpc data Some data ..	1	gateway-only	tool text built by tool_error only
 src/security/audit.rs	from_result	Err Error JsonRpc code code ..	1	gateway-only	a gateway -32001/-32004 is a denial; a backend's is an error
+src/security/needles.rs	is_echo_refusal	crate Error JsonRpc code code message message data None crate Error JsonRpcRetryable code code message message data None ..	1	gateway-only	recognises the scrub's own refusal; a backend sending that text as its own error is the backend's, never the gateway's refusal
+src/security/needles.rs	scrubbed_answer	crate Error JsonRpc code code message message .. crate Error JsonRpcRetryable status status ..	1	gateway-only	the first element is the scrub's own refusal, keeping the retryable status of the error it replaced; a refused backend error becomes the gateway's refusal

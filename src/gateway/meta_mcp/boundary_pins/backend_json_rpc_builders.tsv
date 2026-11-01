@@ -4,6 +4,7 @@ src/backend/fill_check.rs	admit_fill	json_rpc	1	gateway	the gateway's admission 
 src/backend/list_drain.rs	drain_pages	json_rpc	1	gateway	the gateway's verdict on an unreadable page (a malformed answer, classed as Protocol is)
 src/backend/list_drain.rs	page_error	backend_json_rpc	1	origin	a backend's error frame on a list page, taken off the wire
 src/backend/probe.rs	record_unserved_probe	literal	1	gateway	the gateway's record of a probe it did not serve
+src/backend/secret_send.rs	refuse_unredacted	literal	1	gateway	the gateway's refusal to send an injected credential over a transport that cannot redact it; nothing is sent
 src/capability/execution_context.rs	validate_oauth_isolation	json_rpc	1	gateway	the gateway's OAuth isolation refusal
 src/capability/executor/cli.rs	confine_paths	json_rpc	1	gateway	the gateway's refusal of a path outside the confinement
 src/capability/executor/cli_argv.rs	invalid_params	json_rpc	1	gateway	the gateway's argument validation
@@ -88,4 +89,5 @@ src/protocol/mrtr.rs	solicited_input_responses	literal	1	gateway	the gateway's c
 src/protocol/mrtr.rs	take_chain_nonce_params	json_rpc	1	gateway	the gateway's continuation-parameter validation
 src/security/message_signing.rs	register_for_principal	json_rpc	4	gateway	the gateway's signing registration refusals
 src/security/message_signing_v2.rs	signing_error	json_rpc	1	gateway	the gateway's signing error
+src/security/needles.rs	refusal	literal	1	gateway	the injected-value scrub's own refusal of an answer that echoed a value
 src/transport/http/mod.rs	peer_refusal	backend_json_rpc	1	origin	a backend's JSON-RPC body on a non-retry status, taken off the wire
