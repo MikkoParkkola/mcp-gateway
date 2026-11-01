@@ -147,6 +147,8 @@ pub(crate) struct ParkedSink {
     gate: Gate,
     park_on: Option<&'static str>,
     accepted: Accepted,
+    /// How long each write takes once past the gate: a slow stderr.
+    per_line: Duration,
 }
 
 impl Write for ParkedSink {
@@ -154,6 +156,9 @@ impl Write for ParkedSink {
         let text = String::from_utf8_lossy(bytes);
         if self.park_on.is_none_or(|p| text.contains(p)) {
             self.gate.pass();
+        }
+        if !self.per_line.is_zero() {
+            thread::sleep(self.per_line);
         }
         self.accepted.push(bytes);
         Ok(bytes.len())
@@ -214,6 +219,25 @@ pub(crate) fn parked_on(
         gate: gate.clone(),
         park_on,
         accepted: accepted.clone(),
+        per_line: Duration::ZERO,
+    };
+    let (w, f) = spawn(Box::new(sink), lines, bytes, NoticeFormat::Text).expect("spawn");
+    (w, f, gate, accepted)
+}
+
+/// As [`parked`], with every write past the gate taking `per_line`.
+pub(crate) fn slow_parked(
+    lines: usize,
+    bytes: usize,
+    per_line: Duration,
+) -> (LossyStderr, LogFlush, Gate, Accepted) {
+    let gate = Gate::closed();
+    let accepted = Accepted::default();
+    let sink = ParkedSink {
+        gate: gate.clone(),
+        park_on: None,
+        accepted: accepted.clone(),
+        per_line,
     };
     let (w, f) = spawn(Box::new(sink), lines, bytes, NoticeFormat::Text).expect("spawn");
     (w, f, gate, accepted)

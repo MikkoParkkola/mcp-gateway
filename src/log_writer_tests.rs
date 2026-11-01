@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use tracing_subscriber::layer::SubscriberExt;
 
-use super::test_sinks::{Step, flush, line, notices, parked, parked_on, scripted, scripted_with};
+use super::test_sinks::{
+    Step, flush, line, notices, parked, parked_on, scripted, scripted_with, slow_parked,
+};
 use super::{LOG_FLUSH_DEADLINE, NoticeFormat, Sent, flush_until, notice_line};
 
 /// A failed write counts its line and the writer goes on (L1b).
@@ -216,7 +218,9 @@ fn l1d1_the_flush_writes_the_pending_notice_before_it_returns() {
 /// structural row on `main` (L1j-c) covers only where the guard is held.
 #[test]
 fn l1d3_dropping_the_flush_guard_waits_for_the_queued_lines() {
-    let (w, f, gate, out) = parked(8, 1 << 20);
+    // A slow stderr: the queued lines take well over the instant a drop that
+    // does not wait needs to return. The waiting drop passes at any speed.
+    let (w, f, gate, out) = slow_parked(8, 1 << 20, Duration::from_millis(50));
     line(&w, "first");
     assert!(gate.wait_entered(), "the writer never took a line");
     for n in 1..=5 {
