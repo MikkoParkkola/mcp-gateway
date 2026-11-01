@@ -120,8 +120,8 @@ fn holds(answer: &Value, text: &str) -> bool {
 }
 
 /// A redaction straddle with injection detection off: the credential is
-/// redacted, the redacting generation's warning stands, and the pre-redaction
-/// copy yields no injection finding.
+/// redacted, the redacting generation's warning stands, and no injection
+/// finding appears.
 #[test]
 fn a_redaction_straddle_with_injection_detection_off_finds_no_injection() {
     let body = json!({"content": [{"type": "text", "text": format!("{INJECTION} {}", canary())}]});
