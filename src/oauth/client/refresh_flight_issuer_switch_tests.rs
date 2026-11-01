@@ -3,6 +3,8 @@
 //! A sign-in confirmed under another issuer while a call of the old issuer's
 //! client is already past its entry check: nothing of the old issuer is handed
 //! back, the install is not acknowledged, and the status stays the new one's.
+//! And the detached step's other hand-back recheck: nothing held is handed to
+//! work a restart revoked.
 
 use std::sync::Arc;
 
@@ -112,4 +114,38 @@ async fn an_old_issuer_refresh_keeps_the_new_sign_ins_status() {
         published,
         "the new sign-in's status stands"
     );
+}
+
+/// A restart revoked the detached step after it set out: a held token, cached
+/// or adopted, is not handed back, as a refreshed one never was. Red today:
+/// both are returned.
+#[tokio::test]
+async fn a_revoked_detached_step_hands_back_no_held_token() {
+    for adopt in [false, true] {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+        let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+        let owned = client(dir.path(), &server)
+            .with_sign_in_status(Arc::clone(&cell))
+            .with_login_gate(Arc::clone(&gate));
+        hold(&owned, &token("a1", Some("r1"), false));
+        if adopt {
+            cell.record_install(&owned.credential_key().unwrap());
+        }
+        let since = gate.epoch();
+        gate.cancel_and_join().await;
+
+        let deadline = tokio::time::Instant::now() + HANG_BOUND;
+        let refused = owned
+            .get_token_detached(false, since, &gate.cohort(), deadline)
+            .await
+            .expect_err("nothing held after the restart");
+
+        assert!(
+            matches!(refused, Error::AuthorizationCancelled { .. }),
+            "adopt={adopt}: {refused}"
+        );
+        assert_eq!(server.requests(), 0, "adopt={adopt}: nothing was sent");
+    }
 }
