@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use super::sketch::{Markers, SketchStore};
-use super::{CollusionDetector, RelayAction, RelayParams, RelayReason};
+use super::{CollusionDetector, RelayParams, RelayReason};
 
 const BOB: &str = "principal-bob";
 const CAROL: &str = "principal-carol";
@@ -18,7 +18,6 @@ const EGRESS: &str = "backend:post_message";
 
 fn detector() -> CollusionDetector {
     let mut d = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     d.keep_every_kgram();
@@ -296,7 +295,6 @@ fn every_capacity_bound_is_counted() {
     let a = words("a", 60);
     grows("fingerprint_evicted", || {
         let mut d = CollusionDetector::new(RelayParams {
-            action: RelayAction::Observe,
             max_fingerprints: 1,
             ..RelayParams::default()
         });

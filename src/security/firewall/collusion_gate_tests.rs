@@ -414,9 +414,8 @@ fn a_split_delivery_records_the_flat_copys_fingerprints() {
 fn a_split_copy_near_the_cap_keeps_both_forms() {
     use std::time::Instant;
 
-    use super::super::collusion::{CollusionDetector, RelayAction, RelayParams};
+    use super::super::collusion::{CollusionDetector, RelayParams};
     let detector = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     let (_, pieces) = split_copy(RECORD_CAP / 4);

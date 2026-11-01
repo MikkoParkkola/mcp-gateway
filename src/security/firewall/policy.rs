@@ -84,13 +84,6 @@ impl CollusionView {
     }
 
     /// What relay detection does under this view.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the relay gate once it judges under the witness's generation"
-        )
-    )]
     pub(crate) const fn action(&self) -> CollusionAction {
         self.action
     }

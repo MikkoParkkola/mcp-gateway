@@ -14,7 +14,7 @@
 use std::time::Instant;
 
 use super::holders::{MAX_RECORDS_PER_CALLER, OVERFLOW_BYTES_TOTAL, OVERFLOW_PAIRS_PER_CALLER};
-use super::{CollusionDetector, RelayAction, RelayParams};
+use super::{CollusionDetector, RelayParams};
 use crate::config_reload::Generation;
 use crate::security::firewall::CollusionAction::Block;
 #[cfg(feature = "metrics")]
@@ -268,7 +268,6 @@ fn p8_8f_new_unattributed_evidence_refreshes_the_marker() {
 /// k-gram kept, one match enough.
 fn standalone() -> CollusionDetector {
     let mut detector = CollusionDetector::new(RelayParams {
-        action: RelayAction::Block,
         min_matches: 1,
         ..RelayParams::default()
     });

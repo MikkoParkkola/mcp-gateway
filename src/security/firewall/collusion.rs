@@ -23,23 +23,9 @@ use parking_lot::Mutex;
 
 use super::CollusionView;
 
-/// What the detector does. Mirrors the operator-facing `collusion.action`;
-/// the detector keeps the same state under both on-states, and the firewall
-/// decides whether a finding refuses the call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RelayAction {
-    /// No state is kept.
-    Off,
-    /// Findings are reported, calls proceed.
-    Observe,
-    /// Findings are reported and the call is refused.
-    Block,
-}
-
 /// Detector tuning. Defaults are the design's documented values.
 #[derive(Debug, Clone)]
 pub(crate) struct RelayParams {
-    pub(crate) action: RelayAction,
     pub(crate) window: Duration,
     pub(crate) min_matches: usize,
     pub(crate) common_principals: usize,
@@ -49,7 +35,6 @@ pub(crate) struct RelayParams {
 impl Default for RelayParams {
     fn default() -> Self {
         Self {
-            action: RelayAction::Off,
             window: Duration::from_secs(600),
             min_matches: 2,
             common_principals: 5,
@@ -435,9 +420,6 @@ impl CollusionDetector {
         text: &str,
         now: Instant,
     ) {
-        if self.params.action == RelayAction::Off {
-            return;
-        }
         let held = (inferred, None, view);
         self.record_fingerprints_at(source, principal, held, self.fingerprints(text), now);
     }
@@ -576,9 +558,6 @@ impl CollusionDetector {
         fps: Vec<u64>,
         now: Instant,
     ) -> Option<RelayFinding> {
-        if self.params.action == RelayAction::Off {
-            return None;
-        }
         let sender = self.digest(principal);
         let window = self.params.window;
         // Held at `now`: some copy delivered by then, inside the window.

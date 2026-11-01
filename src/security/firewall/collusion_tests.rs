@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use std::collections::HashSet;
 
-use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayAction, RelayParams, SAMPLE, sample};
+use super::{CollusionDetector, MAX_SOURCE_FINGERPRINTS, RelayParams, SAMPLE, sample};
 
 const A: &str = "principal-a";
 const B: &str = "principal-b";
@@ -19,7 +19,6 @@ const U: &str = "backend:post_message";
 
 fn observe() -> RelayParams {
     RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     }
 }

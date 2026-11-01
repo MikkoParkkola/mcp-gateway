@@ -16,8 +16,7 @@ use super::collusion::egress_parts;
 pub(super) use super::collusion::egress_text;
 use super::collusion::replay::ReplayReceipts;
 use super::collusion::{
-    CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayAction, RelayParams,
-    RelayReason, SeamForms,
+    CAPACITY_METRIC, CollusionDetector, MAX_COMMON_PRINCIPALS, RelayParams, RelayReason, SeamForms,
 };
 #[cfg(test)]
 pub(super) use super::collusion_digest::delivery_leaves;
@@ -234,7 +233,7 @@ impl RelayGate {
 
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
         Self {
-            detector: detector_for(config),
+            detector: Some(detector_for(config)),
             replay: Arc::new(ReplayReceipts::new()),
             view: super::CollusionView::compile(config),
             text_cut: AtomicU64::new(0),
@@ -291,20 +290,15 @@ pub(super) fn compile_flows(flows: &[AllowedFlow]) -> Vec<(glob::Pattern, glob::
         .collect()
 }
 
-/// The detector `config` asks for; `None` when relay detection is off.
-fn detector_for(config: &CollusionConfig) -> Option<Arc<CollusionDetector>> {
-    let action = match config.action {
-        CollusionAction::Off => return None,
-        CollusionAction::Observe => RelayAction::Observe,
-        CollusionAction::Block => RelayAction::Block,
-    };
-    Some(Arc::new(CollusionDetector::new(RelayParams {
-        action,
+/// The detector `config` asks for, built whatever its action: the action is
+/// read from the generation at each record and witness.
+fn detector_for(config: &CollusionConfig) -> Arc<CollusionDetector> {
+    Arc::new(CollusionDetector::new(RelayParams {
         window: Duration::from_secs(config.window_secs),
         min_matches: config.min_matches,
         common_principals: config.common_principals,
         ..RelayParams::default()
-    })))
+    }))
 }
 
 /// Result text kept per delivery: the first and last half of this, so an
@@ -363,11 +357,15 @@ impl Firewall {
         self.relay_detector().is_some()
     }
 
+    /// The detector, while the firewall is on and the startup action is not
+    /// `off`: what staging and recording read until each takes the action of
+    /// the generation current at delivery. The detector itself is always
+    /// built.
     fn relay_detector(&self) -> Option<&CollusionDetector> {
         self.relay
             .detector
             .as_deref()
-            .filter(|_| self.config.enabled)
+            .filter(|_| self.config.enabled && self.config.collusion.action != CollusionAction::Off)
     }
 
     /// Egress check: does `params`, sent by `caller` through `server:tool`,
@@ -382,21 +380,20 @@ impl Firewall {
         params: &Value,
         audit: (&str, &str),
     ) -> FirewallVerdict {
-        let _ = view; // used by the fix
         let Some(detector) = self.relay_detector() else {
             return FirewallVerdict::allow();
         };
-        let target = format!("{server}:{tool}");
-        if self
-            .relay
-            .view
-            .non_egress
-            .iter()
-            .any(|p| p.matches(&target))
-        {
+        // The witness's generation decides: its action, its `non_egress`,
+        // and the lists and flows every held copy is judged by. An effective
+        // `off` checks nothing and audits nothing.
+        if view.action() == CollusionAction::Off {
             return FirewallVerdict::allow();
         }
-        let block = self.config.collusion.action == CollusionAction::Block;
+        let target = format!("{server}:{tool}");
+        if view.non_egress.iter().any(|p| p.matches(&target)) {
+            return FirewallVerdict::allow();
+        }
+        let block = view.action() == CollusionAction::Block;
         let label = if block { "block" } else { "observe" };
         if matches!(caller, RelayCaller::Unkeyed(_)) {
             telemetry_metrics::counter!(UNKEYED_METRIC, "action" => label).increment(1);
@@ -412,7 +409,7 @@ impl Firewall {
             _ => detector
                 .check_egress_fingerprints_at(
                     caller.key(),
-                    (&target, &self.relay.view),
+                    (&target, view),
                     detector.egress_fingerprints(&egress_parts(params)),
                     self.relay.now(),
                 )
@@ -434,7 +431,7 @@ impl Firewall {
         // under the reason it was reported for (MIK-8201).
         telemetry_metrics::counter!(RELAY_METRIC, "action" => label, "reason" => reason)
             .increment(1);
-        // The configured action alone decides: no rule may soften a relay.
+        // The witness's action alone decides: no rule may soften a relay.
         let action = if block {
             FirewallAction::Block
         } else {

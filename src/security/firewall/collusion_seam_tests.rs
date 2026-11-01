@@ -7,7 +7,7 @@
 
 use std::time::Instant;
 
-use super::{CollusionDetector, RelayAction, RelayParams};
+use super::{CollusionDetector, RelayParams};
 
 const ALICE: &str = "principal-a";
 const BOB: &str = "principal-b";
@@ -21,7 +21,6 @@ const TEXT: &str =
 /// hash key.
 fn detector() -> CollusionDetector {
     let mut det = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     det.keep_every_kgram();

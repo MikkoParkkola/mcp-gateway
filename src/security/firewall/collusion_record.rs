@@ -7,8 +7,8 @@
 
 use super::{
     BuildHasher, CAPACITY_METRIC, CollusionDetector, Copies, Entry, Held, Holder, HolderId,
-    Holders, Instant, MAX_SOURCE_FINGERPRINTS, Ordering, Pending, Recorded, RelayAction, count,
-    holders, origin, sketch, thin, unread_key,
+    Holders, Instant, MAX_SOURCE_FINGERPRINTS, Ordering, Pending, Recorded, count, holders, origin,
+    sketch, thin, unread_key,
 };
 
 impl CollusionDetector {
@@ -56,9 +56,6 @@ impl CollusionDetector {
         (mut fps, cut, sample): Recorded<'_>,
         now: Instant,
     ) {
-        if self.params.action == RelayAction::Off {
-            return;
-        }
         // `MIK-8066.EXCUSE.1`: what a cut or truncation drops is still the
         // caller's own copy, so it is sketched, one sketch per delivery.
         let mut sketched: Vec<u64> = cut.as_deref().map(<[u64]>::to_vec).unwrap_or_default();

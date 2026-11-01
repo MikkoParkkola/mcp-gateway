@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
 use std::time::{Duration, Instant};
 
-use super::super::{CAPACITY_METRIC, CollusionDetector, K, RelayAction, key, sample};
+use super::super::{CAPACITY_METRIC, CollusionDetector, K, key, sample};
 use super::leading;
 
 /// Pieces per delivery that may take part in seams, counted round-robin
@@ -491,7 +491,7 @@ impl CollusionDetector {
         fps: &[u64],
         now: Instant,
     ) {
-        if self.params.action == RelayAction::Off || fps.is_empty() {
+        if fps.is_empty() {
             return;
         }
         let pair = (self.digest(source), self.digest(principal));

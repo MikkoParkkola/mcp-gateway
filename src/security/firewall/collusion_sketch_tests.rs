@@ -376,9 +376,8 @@ fn a_reservation_survives_expiry_during_its_build() {
 /// sketches live at distinct positions.
 #[test]
 fn concurrent_cut_deliveries_publish_at_distinct_positions() {
-    use super::super::{CollusionDetector, RelayAction, RelayParams};
+    use super::super::{CollusionDetector, RelayParams};
     let detector = CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     });
     let now = Instant::now();

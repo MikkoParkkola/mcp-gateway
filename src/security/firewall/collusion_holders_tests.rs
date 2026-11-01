@@ -10,7 +10,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::{CollusionDetector, RelayAction, RelayParams};
+use super::{CollusionDetector, RelayParams};
 
 const BOB: &str = "principal-bob";
 const CAROL: &str = "principal-carol";
@@ -21,7 +21,6 @@ const EGRESS: &str = "backend:post_message";
 
 fn detector() -> CollusionDetector {
     CollusionDetector::new(RelayParams {
-        action: RelayAction::Observe,
         ..RelayParams::default()
     })
 }
