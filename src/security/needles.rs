@@ -153,35 +153,32 @@ impl NeedleSet {
             }
             return;
         }
-        self.admit(&mut values, backend, value, Lifetime::Grace, now);
+        let overflowed = self.admit(&mut values, value, Lifetime::Grace, now);
+        drop(values);
+        if overflowed {
+            self.warn_overflowed(backend);
+        }
     }
 
     /// Pushes a value not yet held, dropping retired values first; past the
-    /// bound the set fails closed and keeps every value it holds.
+    /// bound the set fails closed and keeps every value it holds. Whether
+    /// this refusal is the first since the set last had room: the caller
+    /// warns once its guard is dropped, never while holding it.
+    #[must_use]
     fn admit(
         &self,
         values: &mut Vec<Held>,
-        backend: &str,
         value: &str,
         lifetime: Lifetime,
         now: tokio::time::Instant,
-    ) {
+    ) -> bool {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
         if values.len() >= MAX_NEEDLES {
-            if !self.overflowed.swap(true, Ordering::SeqCst) {
-                tracing::warn!(
-                    backend,
-                    bound = MAX_NEEDLES,
-                    grace_secs = self.grace.as_secs(),
-                    "secret values rotating faster than the redaction grace allows; this \
-                     backend's answers are withheld"
-                );
-            }
-            return;
+            return !self.overflowed.swap(true, Ordering::SeqCst);
         }
         // Room again after retirement: answers flow once more.
         self.overflowed.store(false, Ordering::SeqCst);
@@ -192,6 +189,18 @@ impl NeedleSet {
             lifetime,
         });
         self.version.fetch_add(1, Ordering::SeqCst);
+        false
+    }
+
+    /// The one warning a set that has just filled up gives.
+    fn warn_overflowed(&self, backend: &str) {
+        tracing::warn!(
+            backend,
+            bound = MAX_NEEDLES,
+            grace_secs = self.grace.as_secs(),
+            "secret values rotating faster than the redaction grace allows; this backend's \
+             answers are withheld"
+        );
     }
 
     /// Makes `secrets` the backend's configured values, as one swap: each is
@@ -236,6 +245,7 @@ impl NeedleSet {
         let mut values = self.values.write();
         let now = tokio::time::Instant::now();
         let mut changed = false;
+        let mut overflowed = false;
         for held in values.iter_mut() {
             if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
                 held.lifetime = Lifetime::Grace;
@@ -254,10 +264,14 @@ impl NeedleSet {
                 }
                 continue;
             }
-            self.admit(&mut values, backend, value, Lifetime::Configured, now);
+            overflowed |= self.admit(&mut values, value, Lifetime::Configured, now);
         }
         if changed {
             self.version.fetch_add(1, Ordering::SeqCst);
+        }
+        drop(values);
+        if overflowed {
+            self.warn_overflowed(backend);
         }
     }
 
