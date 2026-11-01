@@ -663,10 +663,9 @@ async fn get_token_and_the_detached_step_republish_after_a_retiring_refresh() {
             let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
             let owned = owned.with_login_gate(Arc::clone(&gate));
             let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
-            let result = owned
+            owned
                 .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
-                .await;
-            result
+                .await
         } else {
             headless(&owned).await
         };

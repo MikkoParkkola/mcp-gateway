@@ -23,7 +23,6 @@ pub(super) const BACKEND_NAME: &str = "issuer-change";
 /// The three servers and the switch.
 pub(super) struct Disco {
     pub(super) resource: String,
-    pub(super) issuer_a: String,
     pub(super) issuer_b: String,
     names_b: Arc<AtomicBool>,
 }
@@ -101,7 +100,6 @@ pub(super) async fn disco() -> Disco {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     Disco {
         resource,
-        issuer_a,
         issuer_b,
         names_b,
     }
