@@ -118,9 +118,9 @@ pub(super) fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) 
         // rate limit or transient 5xx is not mislabelled as a param error.
         Error::Protocol(msg) => (classify_from_detail(Some(msg)), msg.clone()),
         // A gateway refusal reads exactly as the JSON-RPC error it replaces.
-        Error::JsonRpc { message, .. } | Error::GatewayRefused { message, .. } => {
-            (ErrorCategory::BackendError, message.clone())
-        }
+        Error::JsonRpc { message, .. }
+        | Error::BackendJsonRpc { message, .. }
+        | Error::GatewayRefused { message, .. } => (ErrorCategory::BackendError, message.clone()),
         // A capability 429 arrives as a typed `Http` error and no longer says
         // "429" in its message, so the prose classifier above cannot see it.
         // Without this arm the hint silently degrades to `BackendError` and the

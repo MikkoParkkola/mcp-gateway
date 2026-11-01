@@ -127,7 +127,11 @@ pub(super) fn unless_retired(entry: &PooledEntry, step: &mut dyn FnMut()) -> boo
 pub(super) fn refusal_code(answer: &Result<JsonRpcResponse>) -> Option<i32> {
     match answer {
         Ok(response) => response.error.as_ref().map(|error| error.code),
-        Err(Error::JsonRpc { code, .. } | Error::JsonRpcRetryable { code, .. }) => Some(*code),
+        Err(
+            Error::JsonRpc { code, .. }
+            | Error::BackendJsonRpc { code, .. }
+            | Error::JsonRpcRetryable { code, .. },
+        ) => Some(*code),
         Err(_) => None,
     }
 }

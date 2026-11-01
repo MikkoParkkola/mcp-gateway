@@ -140,7 +140,9 @@ fn is_session_expired_error(err: &Error) -> bool {
         // `-32600`: on this path a malformed-request refusal is what it says it
         // is, and treating it as an expiry would re-initialize and retry every
         // one of them.
-        Error::JsonRpc { code, message, .. } | Error::JsonRpcRetryable { code, message, .. } => {
+        Error::JsonRpc { code, message, .. }
+        | Error::BackendJsonRpc { code, message, .. }
+        | Error::JsonRpcRetryable { code, message, .. } => {
             let lower = message.to_lowercase();
             // The marker set is the Transport arm's, mirrored: a peer that words
             // its expiry as "session expired" reaches one arm or the other
@@ -220,11 +222,7 @@ fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Opti
             data: error.data,
         }
     } else {
-        Error::JsonRpc {
-            code: error.code,
-            message: error.message,
-            data: error.data,
-        }
+        Error::backend_json_rpc(error)
     })
 }
 

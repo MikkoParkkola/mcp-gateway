@@ -378,11 +378,16 @@ impl MetaMcp {
         tool: &str,
         e: &crate::Error,
     ) -> bool {
-        let crate::Error::JsonRpc {
+        let (crate::Error::JsonRpc {
             code,
             message,
             data,
-        } = e
+        }
+        | crate::Error::BackendJsonRpc {
+            code,
+            message,
+            data,
+        }) = e
         else {
             return true;
         };

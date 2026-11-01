@@ -25,6 +25,9 @@ impl Error {
             // Built in production only by the HTTP transport, from a peer's
             // JSON-RPC body on a 429/503: the backend's own answer.
             Self::JsonRpcRetryable { .. } => Origin::Backend,
+            // Built only by `backend_json_rpc`, from an error member a backend
+            // sent: its own answer.
+            Self::BackendJsonRpc { .. } => Origin::Backend,
             Self::Config(_)
             | Self::Forbidden { .. }
             | Self::ResponseFirewallRefused
