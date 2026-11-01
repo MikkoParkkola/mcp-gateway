@@ -67,7 +67,11 @@ const GUARD_TYPES: &[&str] = &[
 #[derive(Default)]
 struct Known {
     guard_types: HashSet<String>,
-    helpers: HashSet<String>,
+    /// Methods that return a guard, matched only by a method call: a free
+    /// function of the same name (`admit`, say) is another function.
+    methods: HashSet<String>,
+    /// Free and associated functions that return a guard, matched only by a call.
+    functions: HashSet<String>,
 }
 
 /// One log macro written while a guard was held: file, function, macro.
@@ -125,7 +129,12 @@ fn learn(files: &[syn::File]) -> Known {
             if let syn::ReturnType::Type(_, ty) = &sig.output
                 && mentions_guard(ty, &known)
             {
-                known.helpers.insert(sig.ident.to_string());
+                let set = if sig.receiver().is_some() {
+                    &mut known.methods
+                } else {
+                    &mut known.functions
+                };
+                set.insert(sig.ident.to_string());
             }
         }
     }
@@ -249,7 +258,7 @@ impl Scan<'_> {
             syn::Expr::MethodCall(m) => {
                 let name = m.method.to_string();
                 (m.args.is_empty() && ACQUIRE.contains(&name.as_str()))
-                    || self.known.helpers.contains(&name)
+                    || self.known.methods.contains(&name)
                     || (DASHMAP_REFS.contains(&name.as_str()) && self.is_map(&m.receiver))
                     || (PEEL.contains(&name.as_str()) && self.acquires(&m.receiver, held))
             }
@@ -264,7 +273,7 @@ impl Scan<'_> {
                         c.args.last().is_some_and(|a| self.acquires(a, held))
                     }
                     "Some" | "Ok" => c.args.first().is_some_and(|a| self.acquires(a, held)),
-                    _ => self.known.helpers.contains(&name),
+                    _ => self.known.functions.contains(&name),
                 }
             }
             // A move of a held binding hands the guard on.

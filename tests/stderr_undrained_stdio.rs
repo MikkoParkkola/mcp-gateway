@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! L1j: the shipped stdio gateway, logging at trace, with a stderr nobody
 //! reads still answers every request and exits once stdin closes (L1j-a).
-//! With stderr drained, the same session logs more than a pipe holds, so the
-//! undrained run is a real test, and its last line reaches stderr (L1j-b).
+//! With stderr first left unread and then drained once stdin closes, the
+//! writer has dropped lines (so the pipe filled, and L1j-a is a real test),
+//! and the line logged just before exit still arrives: the exit flush waits
+//! for the backlog to drain (L1j-b).
 #![cfg(unix)]
 
 #[path = "common/gateway_bin.rs"]
@@ -28,8 +30,9 @@ const LAST_LINE: &str = "stdio: shutdown complete";
 enum Stderr {
     /// Held open and never read.
     Unread,
-    /// Read to the end and returned.
-    Drained,
+    /// Held unread through the session, then read to the end from the moment
+    /// stdin closes, and returned.
+    DrainedAtExit,
 }
 
 /// Write `frames` to the child's stdin, one per line.
@@ -73,18 +76,8 @@ async fn session(stderr: Stderr) -> Vec<u8> {
     let mut stdin = child.stdin.take().expect("stdin");
     let stdout = child.stdout.take().expect("stdout");
     let err = child.stderr.take().expect("stderr");
-    let (held, drained) = match stderr {
-        Stderr::Unread => (Some(err), None),
-        Stderr::Drained => {
-            let mut err = err;
-            let reader = tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                err.read_to_end(&mut bytes).await.expect("stderr reads");
-                bytes
-            });
-            (None, Some(reader))
-        }
-    };
+    let mut held = Some(err);
+    let mut drained = None;
 
     // Sent in windows under the gateway's in-flight cap (64), each answered
     // before the next is sent: past the cap the gateway refuses as busy, and
@@ -132,6 +125,14 @@ async fn session(stderr: Stderr) -> Vec<u8> {
             next = end + 1;
         }
         drop(stdin);
+        if matches!(stderr, Stderr::DrainedAtExit) {
+            let mut err = held.take().expect("stderr is held until now");
+            drained = Some(tokio::spawn(async move {
+                let mut bytes = Vec::new();
+                err.read_to_end(&mut bytes).await.expect("stderr reads");
+                bytes
+            }));
+        }
         while lines.next_line().await.expect("stdout reads").is_some() {}
         let status = child.wait().await.expect("reap child");
         (answered, status)
@@ -159,16 +160,11 @@ async fn l1j_a_an_unread_stderr_stalls_neither_requests_nor_exit() {
     session(Stderr::Unread).await;
 }
 
-/// L1j-b: with stderr drained, the session logs more than a pipe can hold
-/// (so L1j-a's stall would be real), and the last line before exit arrives.
+/// L1j-b: stderr is full when stdin closes, so lines were dropped, and the
+/// line logged just before exit still arrives once stderr drains.
 #[tokio::test]
-async fn l1j_b_a_drained_stderr_gets_the_whole_session_and_its_last_line() {
-    let err = session(Stderr::Drained).await;
-    assert!(
-        err.len() > 1 << 20,
-        "the session must log more than 1 MiB for L1j-a to mean anything: {} bytes",
-        err.len()
-    );
+async fn l1j_b_the_last_line_survives_a_full_stderr_at_exit() {
+    let err = session(Stderr::DrainedAtExit).await;
     let text = String::from_utf8_lossy(&err);
     let tail: String = text
         .chars()
@@ -178,6 +174,10 @@ async fn l1j_b_a_drained_stderr_gets_the_whole_session_and_its_last_line() {
         .chars()
         .rev()
         .collect();
+    assert!(
+        text.contains("log lines while stderr was not draining"),
+        "stderr filled during the session, so lines were dropped: ...{tail}"
+    );
     assert!(
         text.contains(LAST_LINE),
         "the line logged just before exit is flushed: ...{tail}"

@@ -186,3 +186,14 @@ fn g0_a_dashmap_declared_in_another_file_is_seen() {
     assert_eq!(hits.len(), 1, "{hits:?}");
     assert_eq!(hits[0].0, "user.rs");
 }
+
+/// G0: a method that returns a guard does not make a free function of the
+/// same name one, so `admit(..)` is not read as `self.admit(..)`.
+#[test]
+fn g0_a_guard_method_does_not_make_a_namesake_function_a_guard() {
+    let src = "impl S { fn admit(&self) -> MutexGuard<'_, u8> { self.m.lock().unwrap() } } \
+               fn admit(s: &u8) -> Result<u8, ()> { Ok(*s) } \
+               fn f(s: &u8) { let (a, b) = match admit(s) { Ok(x) => (x, x), Err(()) => return }; warn!(\"x\"); }";
+    let file = syn::parse_file(src).expect("planted source");
+    assert!(scan(&[("planted.rs".to_owned(), file)]).is_empty());
+}
