@@ -258,6 +258,8 @@ pub(crate) fn rearm_alpha_slot(backend: &Backend) -> Arc<Asked> {
 
 /// Arm alpha's per-user upstream to list `names` (each with a valid schema),
 /// for a row whose caller slot must fill with a tool the shared slot lacks.
+/// Its one caller (`router::oracle_per_user_tests`) is a firewall build's.
+#[cfg(feature = "firewall")]
 pub(crate) fn arm_alpha_upstream(backend: &Backend, names: &[&str]) -> Arc<Asked> {
     let asked = Arc::new(Asked::default());
     let tools: Vec<_> = names.iter().map(|name| tool(name, &valid())).collect();
