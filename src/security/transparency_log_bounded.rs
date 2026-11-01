@@ -239,6 +239,7 @@ impl TransparencyLogger {
             && s.in_flight == generation
         {
             s.stalled = true;
+            drop(s);
             tracing::error!("audit append timed out; the audit log is stalled");
         }
         timed_out()

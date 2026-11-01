@@ -212,26 +212,33 @@ impl Shared {
         if outcome.is_none() {
             record.upstream_cancel_pending = Some(pending);
         }
+        // Logged once the ordering lock is released, whether or not the
+        // commit below lands.
+        let mut gave_up = None;
         if let Some(given_up) = outcome {
             record.upstream_cancel_sent = true;
-            if let Some(given_up) = given_up {
-                let backend = send.backend.as_deref().unwrap_or("");
-                let handle = send.handle.as_str();
-                let reason = given_up.reason();
-                tracing::error!(
-                    task_id = %id,
-                    backend,
-                    handle,
-                    reason,
-                    "upstream tasks/cancel given up; the upstream job may still be running"
-                );
-            }
+            gave_up = given_up;
         }
         let still_pending = record.upstream_cancel_pending.is_some();
-        let bytes = serialize(&record)?;
-        self.commit(&record_name(task.id()), &bytes)?;
-        self.publish(task, record, super::HoldUpdate::Carry);
-        Ok(still_pending)
+        let committed =
+            serialize(&record).and_then(|bytes| self.commit(&record_name(task.id()), &bytes));
+        if committed.is_ok() {
+            self.publish(task, record, super::HoldUpdate::Carry);
+        }
+        drop(_order);
+        if let Some(given_up) = gave_up {
+            let backend = send.backend.as_deref().unwrap_or("");
+            let handle = send.handle.as_str();
+            let reason = given_up.reason();
+            tracing::error!(
+                task_id = %id,
+                backend,
+                handle,
+                reason,
+                "upstream tasks/cancel given up; the upstream job may still be running"
+            );
+        }
+        committed.map(|()| still_pending)
     }
 }
 

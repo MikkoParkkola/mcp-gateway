@@ -211,6 +211,7 @@ impl Keyring {
             // for an envelope, not for a rotation, and refusing it would turn a
             // ring-sizing mistake into an outage. The bound asserted beside
             // `CONTINUATION_ROTATION_SECS` is what keeps this unreachable.
+            drop(ring);
             tracing::warn!(
                 minting_kid = old_kid,
                 successor_kid = new_kid,

@@ -371,14 +371,18 @@ impl EventsHub {
             // lapses (MIK-8057).
             self.hold_unserved(&std::collections::BTreeMap::new());
         }
-        if scan == CatalogueScan::Partial && webhooks_on {
+        let partial = scan == CatalogueScan::Partial && webhooks_on;
+        let held = self.store.held_listing();
+        let released = self.release_worker();
+        // Logged once the catalogue gate is released.
+        drop(_gate);
+        if partial {
             tracing::warn!(
                 "events: the startup catalogue is partial (a capability directory could not \
                  be read) or its webhook refresh was refused; webhook subscriptions it does \
                  not serve are held, and resume when a reload serves them"
             );
         }
-        let held = self.store.held_listing();
         if !held.is_empty() {
             let types: Vec<(&str, usize)> =
                 held.iter().map(|t| (t.name.as_str(), t.count)).collect();
@@ -387,7 +391,7 @@ impl EventsHub {
                 "events: webhook subscriptions held: their type is not offered or served now"
             );
         }
-        self.release_worker()
+        released
     }
 
     /// Run [`Self::reconcile_catalogue_after`] until it succeeds, on the
