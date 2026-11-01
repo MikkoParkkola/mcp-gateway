@@ -145,7 +145,7 @@ async fn r43b_prime_b_off_published_before_delivery_stores_no_replay_entry() {
 }
 
 /// Case A (the post-fix positive half): startup `off`, `block` published
-/// with the startup window, min_matches and common_principals, then the
+/// with the startup window, `min_matches` and `common_principals`, then the
 /// in-plan delivery stores an entry under the Sync key. On base this
 /// fails at that assert by the startup gate: under a startup `off` no
 /// detector exists (`detector_for`), so nothing is staged or stored. After
