@@ -115,3 +115,41 @@ async fn a_served_retry_after_a_failed_attempt_carries_nothing() {
         "a served retry carries no fold"
     );
 }
+
+/// N12: a plan carries on past a backend step's failure (its tool error,
+/// wrapped by the plan) and then past a typed refusal of the gateway's: the
+/// answer reports both and counts once, as the gateway's, which outweighs
+/// the backend's. At unit level: through the router a step the caller may
+/// not run refuses the whole plan before any step runs
+/// (`authorize_execution_plan`), so a refusal is never reported beside a
+/// backend failure there. Mutant m12 (the backend outweighs the gateway in
+/// `weight`) turns it red.
+#[tokio::test]
+async fn a_reported_backend_failure_and_a_reported_refusal_count_the_gateways() {
+    let refusal = crate::Error::Forbidden {
+        code: -32003,
+        status: 403,
+        message: "step not permitted for this caller".into(),
+    };
+    let frame = stamped(
+        async {
+            step(async { folded(BACKEND) }).await;
+            step_tool_failed();
+            step_carried(Some(&crate::Error::json_rpc(
+                crate::error::rpc_codes::INTERNAL_ERROR,
+                "step 's0' failed: the tool reported an error",
+            )));
+            step_absorbed();
+            step(async {}).await;
+            step_carried(Some(&refusal));
+            step_absorbed();
+        },
+        JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(
+        frame.wire_meta.folded.map(|f| f.origin),
+        Some(Origin::Gateway),
+        "the gateway's refusal outweighs the backend's failure"
+    );
+}

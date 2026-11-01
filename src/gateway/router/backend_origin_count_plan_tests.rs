@@ -178,33 +178,3 @@ fn a_plan_timing_out_after_a_reported_backend_failure_counts_internal() {
     );
     assert_eq!(all(&text), [0, 0, 1, 0], "{answer}\n{text}");
 }
-
-/// N12: a plan reports a backend's failure on one step and a typed refusal
-/// (`step not permitted`, the key denies `read`) on the next; its answer
-/// counts once, as the gateway's kind: the gateway's refusal outweighs the
-/// backend's failure.
-#[test]
-fn a_plan_reporting_a_backend_failure_and_a_typed_refusal_counts_the_gateways() {
-    let definition = plan(
-        &json!([
-            {"name": "s0", "tool": "write", "server": "beta", "arguments": {}},
-            {"name": "s1", "tool": "read", "server": "alpha", "arguments": {}}
-        ]),
-        60,
-    );
-    let ((_, answer), text) = counted(async {
-        let fx = serving(Answer::Ok, definition).await;
-        install(&fx, "beta", "write", Script::Fails(peer_400));
-        run_p_as(&fx, "k-deny").await
-    });
-    let report = answer["result"]["content"][0]["text"]
-        .as_str()
-        .unwrap_or_default();
-    assert!(
-        report.contains("step not permitted") && report.contains("step_errors"),
-        "premise: both failures are reported: {answer}"
-    );
-    let counts = all(&text);
-    assert_eq!(counts[3], 0, "counted as the backend's: {answer}\n{text}");
-    assert_eq!(counts.iter().sum::<u64>(), 1, "{answer}\n{text}");
-}
