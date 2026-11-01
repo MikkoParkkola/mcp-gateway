@@ -235,18 +235,23 @@ impl MetaMcp {
                     .increment(1);
                     let predictions =
                         self.record_and_predict(session_id, arm_key, tool_key, caller.scope());
-                    return Ok(Some(GuardedValue::from_cache(cached).augment(|v| {
-                        let v =
-                            augment_with_trace(augment_with_predictions(v, predictions), trace_id);
-                        self.maybe_stamp_provenance(
-                            v,
-                            server,
-                            tool,
-                            api_key_name,
-                            crate::trust::CacheOutcome::Hit,
-                            client_claim,
-                        )
-                    })));
+                    let replay = audit::Answered::Replay;
+                    return Ok(Some(GuardedValue::from_cache(cached, replay).augment(
+                        |v| {
+                            let v = augment_with_trace(
+                                augment_with_predictions(v, predictions),
+                                trace_id,
+                            );
+                            self.maybe_stamp_provenance(
+                                v,
+                                server,
+                                tool,
+                                api_key_name,
+                                crate::trust::CacheOutcome::Hit,
+                                client_claim,
+                            )
+                        },
+                    )));
                 }
                 GuardOutcome::Proceed(reservation) => {
                     *idem_reservation = Some(reservation);
@@ -484,7 +489,8 @@ impl MetaMcp {
             }
             let predictions =
                 self.record_and_predict(session_id, arm_key, tool_key, caller.scope());
-            return Some(GuardedValue::from_cache(cached).augment(|v| {
+            let hit = audit::Answered::CacheHit;
+            return Some(GuardedValue::from_cache(cached, hit).augment(|v| {
                 let v = augment_with_trace(augment_with_predictions(v, predictions), trace_id);
                 self.maybe_stamp_provenance(
                     v,

@@ -53,8 +53,9 @@ pub(crate) struct DispatchNotes {
     /// The context-integrity kernel's data classes for that response, as
     /// their snake-case names.
     data_classes: BTreeSet<String>,
-    /// Served from a cache: no gate ran, so the delivered value is attributed.
-    cached: bool,
+    /// Served from a store past every gate, and which store: the delivered
+    /// value is attributed, and the record says which it was.
+    cached: Option<Answered>,
     /// What the web UI's counters need from the gates.
     counting: counting::CountNotes,
     /// MIN.1: the response held text over the attribution parse bound, so its
@@ -208,10 +209,21 @@ pub(crate) fn note_refusal(result: &Result<Value>) {
     }
 }
 
-/// MIK-7116.MIN.1: this call is answered from a cache, past every gate. The
+/// What answered a call past every gate. A response-cache hit stands in only
+/// for a call the slot declared read-only; a replay may stand in for a stored
+/// write, so its record must not read as a cache hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answered {
+    /// The response cache.
+    CacheHit,
+    /// An idempotency key's stored answer.
+    Replay,
+}
+
+/// MIK-7116.MIN.1: this call is answered from a store, past every gate. The
 /// answer is not this request's, so its delivery states no effect or findings.
-pub(crate) fn note_cached() {
-    note(|notes| notes.cached = true);
+pub(crate) fn note_cached(answered: Answered) {
+    note(|notes| notes.cached = Some(answered));
     crate::gateway::delivery_facts::unvouched();
 }
 
@@ -235,7 +247,7 @@ pub(crate) fn stored_failure(mut failure: Value) -> Value {
 /// MIK-7636: a keyed replay of the stored `failure`, noted as cached and, when
 /// its first call was, uninspected.
 pub(crate) fn note_cached_failure(failure: &Value) {
-    note_cached();
+    note_cached(Answered::Replay);
     if failure.get(UNINSPECTED_MARKER).and_then(Value::as_bool) == Some(true) {
         note(|notes| notes.uninspected = true);
     }
@@ -284,7 +296,7 @@ impl DispatchNotes {
         delivered: Option<&Value>,
     ) -> Map<String, Value> {
         let mut uninspected = self.uninspected;
-        if self.cached {
+        if self.cached.is_some() {
             if let Some(value) = delivered {
                 tenants.extend(meta.response_tenants(value));
                 uninspected |= meta.response_uninspected(value);
@@ -324,7 +336,7 @@ impl DispatchNotes {
         }
         // One value names how far the attribution can be trusted: past the
         // gates (a cache or replay), unread (text over the parse bound), or both.
-        let marker = match (self.cached, uninspected) {
+        let marker = match (self.cached.is_some(), uninspected) {
             (true, true) => Some("cached_delivery_uninspected"),
             (true, false) => Some("cached_delivery"),
             (false, true) => Some("uninspected"),

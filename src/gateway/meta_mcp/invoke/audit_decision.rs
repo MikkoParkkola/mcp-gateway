@@ -117,8 +117,8 @@ impl DispatchNotes {
         self.decision.refused_by_memo(kind);
     }
 
-    /// The decision object for this call's record: a cache hit ran no gate,
-    /// so it was not decided again.
+    /// The decision object for this call's record: a cache hit or a replay
+    /// ran no gate, so it was not decided again, and says which it was.
     pub(crate) fn decided(
         &self,
         meta: &MetaMcp,
@@ -126,10 +126,14 @@ impl DispatchNotes {
     ) -> crate::security::decision_record::Decision {
         use crate::security::decision_record::Decided;
         let live = meta.live_config();
-        if self.cached {
+        if let Some(answered) = self.cached {
+            let decided = match answered {
+                super::audit::Answered::CacheHit => Decided::CacheHitNotRedecided,
+                super::audit::Answered::Replay => Decided::Replayed,
+            };
             // Not decided again, but it keeps what its admission read.
             self.decision.as_not_redecided().decision(
-                Decided::CacheHitNotRedecided,
+                decided,
                 crate::security::decision_record::Refused::No,
                 live.as_deref(),
             )
