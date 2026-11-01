@@ -784,42 +784,6 @@ impl Error {
                 | Self::AuthorizationPending { .. }
         )
     }
-
-    /// Convert to JSON-RPC error code
-    #[must_use]
-    pub fn to_rpc_code(&self) -> i32 {
-        match self {
-            Self::JsonRpc { code, .. }
-            | Self::BackendJsonRpc { code, .. }
-            | Self::GatewayRefused { code, .. }
-            | Self::JsonRpcRetryable { code, .. }
-            | Self::Forbidden { code, .. } => *code,
-            Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
-            Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
-            Self::BackendNotFound(_) | Self::ToolNotFound(_) | Self::AmbiguousBackend { .. } => {
-                -32001
-            }
-            Self::AuditUnavailable => -32005,
-            Self::CliCredentialRefused { .. } => {
-                crate::security::http_diagnostics::CLI_UNAUTHORIZED
-            }
-            Self::BackendUnavailable(_)
-            | Self::CircuitOpen { .. }
-            | Self::RateLimited(_)
-            | Self::IdentitySlotsExhausted { .. }
-            | Self::BackendTimeout(_)
-            | Self::Transport(_)
-            // A connect failure is the same class on the wire; the variant
-            // exists for settlement, not for the caller.
-            | Self::TransportConnect(_)
-            // Same class as `Transport` to a JSON-RPC caller: a backend-side
-            // failure, not a gateway fault. Omitting it reported a missing
-            // backend command as an internal error.
-            | Self::TransportPermanent(_) => -32000,
-            Self::Http(e) if origin::http_is_backend_refusal(e) => -32000,
-            _ => rpc_codes::INTERNAL_ERROR, // Internal error
-        }
-    }
 }
 
 #[path = "error_ambiguous.rs"]
