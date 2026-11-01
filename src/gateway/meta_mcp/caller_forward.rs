@@ -139,12 +139,17 @@ impl MetaMcp {
             .await
         {
             Ok(resp) => match resp.error {
-                Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
+                Some(error) => {
+                    // Rebuilt for the caller; still the backend's error.
+                    let mut frame = JsonRpcResponse::error(Some(id), error.code, error.message);
+                    frame.wire_meta.origin = resp.wire_meta.origin;
+                    frame
+                }
                 None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
             },
             Err(e) => {
                 crate::gateway::delivery_facts::echo_refusal_delivered(&e);
-                JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string())
+                JsonRpcResponse::of_error(Some(id), &e)
             }
         }
     }

@@ -729,20 +729,7 @@ impl Error {
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
             | Self::TransportPermanent(_) => -32000,
-            // A 429 is the same class: the backend refused, the gateway is
-            // healthy. Only 429 is lifted -- every other `Http` status keeps
-            // the internal-error code it has always reported, so the arm is
-            // guarded rather than moved wholesale.
-            Self::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => -32000,
-            // A11-b: a typed credential refusal (401, 403) was `Transport`
-            // (-32000) until it was typed; it keeps that code, since the backend
-            // refused and the gateway is healthy.
-            Self::Http(e)
-                if e.status()
-                    .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal) =>
-            {
-                -32000
-            }
+            Self::Http(e) if origin::http_is_backend_refusal(e) => -32000,
             _ => rpc_codes::INTERNAL_ERROR, // Internal error
         }
     }
@@ -755,6 +742,8 @@ mod ambiguous;
 pub mod rpc_codes;
 
 mod may_have_run;
+#[path = "error_origin.rs"]
+mod origin;
 
 #[cfg(test)]
 #[path = "error_pre_send_scan_tests.rs"]
@@ -767,3 +756,7 @@ mod rpc_code_tests;
 #[cfg(test)]
 #[path = "error_non_exhaustive_tests.rs"]
 mod non_exhaustive_tests;
+
+#[cfg(test)]
+#[path = "error_origin_tests.rs"]
+mod origin_tests;

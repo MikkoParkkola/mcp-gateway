@@ -13,6 +13,7 @@
 //! `-32601`, `server/discover` included, so the era probe settles on legacy.
 
 use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -581,7 +582,10 @@ fn agent_error(id: RequestId, code: i32, message: &str) -> JsonRpcResponse {
 #[async_trait]
 impl Transport for A2aTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.scrubbed(self.dispatch(method, params, &[], None).await)
+        // The backend's wait is timed; the answer is scrubbed after it.
+        self.scrubbed(
+            backend_request(async move { self.dispatch(method, params, &[], None).await }).await,
+        )
     }
 
     /// Per-request headers (a propagated end-user credential) go on this one
@@ -595,8 +599,11 @@ impl Transport for A2aTransport {
         _resend: crate::transport::ResendPermission,
     ) -> Result<JsonRpcResponse> {
         self.scrubbed(
-            self.dispatch(method, params, extra_headers, identity_key)
-                .await,
+            backend_request(async move {
+                self.dispatch(method, params, extra_headers, identity_key)
+                    .await
+            })
+            .await,
         )
     }
 
@@ -610,7 +617,7 @@ impl Transport for A2aTransport {
 
     /// A2A has no notification channel.
     async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
-        Ok(())
+        backend_wait(async move { Ok(()) }).await
     }
 
     fn is_connected(&self) -> bool {

@@ -421,7 +421,7 @@ impl super::MetaMcp {
             crate::protocol::cacheable::clamp_delivered_scope(result);
             crate::security::signature_chain::strip_chain(result);
         }
-        if method == "tools/call" && !response.delivery_refusal {
+        if method == "tools/call" && !response.wire_meta.delivery_refusal {
             let source = response.chain_source;
             self.emit_origin_link(response, source, chain_nonce, None);
         }

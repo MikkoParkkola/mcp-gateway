@@ -4,29 +4,13 @@
 //! recorded and, when it crossed from 3.x into 4.0, the breaking-change items
 //! `mcp-gateway upgrade` prints.
 //!
-//! The items and the version order are the CLI's own files, compiled into the
-//! library a second time (as `clock.rs` is compiled into the binary), so the
-//! page cannot drift from the notice and no second copy of either exists.
+//! The items and the version order are the library's `upgrade_notice` module,
+//! which the CLI reads too, so the page cannot drift from the notice.
 
 use serde_json::{Value, json};
 
 use crate::counters::VersionChange;
-
-#[path = "../../commands/upgrade_backend_grant_notice.rs"]
-#[allow(dead_code, reason = "compiled for its `ITEM`; the CLI uses the rest")]
-mod backend_grant_notice;
-#[path = "../../commands/upgrade_notice_items.rs"]
-#[allow(dead_code, reason = "compiled for its item list; the CLI prints it")]
-mod notice_items;
-#[path = "../../commands/upgrade_semver.rs"]
-#[allow(dead_code, reason = "compiled for its ordering; the CLI uses the rest")]
-mod stamp_version;
-#[path = "../../commands/upgrade_webhook_notice.rs"]
-#[allow(dead_code, reason = "compiled for its `ITEM`; the CLI uses the rest")]
-mod webhook_notice;
-
-use notice_items::NOTICE_4_0_0_ITEMS;
-use stamp_version::SemVer;
+use crate::upgrade_notice::{NOTICE_4_0_0_ITEMS, SemVer};
 
 /// Characters kept of an item's headline.
 const HEADLINE_CAP: usize = 200;
