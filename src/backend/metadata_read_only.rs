@@ -52,11 +52,20 @@ impl Backend {
         truncated: bool,
         prepared: crate::backend::annotations::PreparedTools,
     ) -> crate::backend::descriptor_gate::PendingLogs {
+        // Emptied first and published last: until then no name reads
+        // undeclared from a mix of the old and new sets.
+        entry.effect_listed.write().clear();
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.read_only_declared.write() = prepared.read_only_declared;
         *entry.hint_declared.write() = prepared.hint_declared;
         *entry.write_declared.write() = prepared.write_declared;
-        *entry.effect_listed.write() = prepared.listed;
+        // A truncated fill may not have reached a name's other occurrences,
+        // so no name it lists reads undeclared.
+        *entry.effect_listed.write() = if truncated {
+            HashSet::new()
+        } else {
+            prepared.listed
+        };
         let listing = if truncated {
             crate::backend::Listing::Truncated
         } else {
@@ -96,12 +105,15 @@ impl Backend {
         &self,
         key: &crate::backend::PoolKey,
         listed: &[String],
-        (read_only, write): (&HashSet<String>, &HashSet<String>),
+        (read_only, write, hint): (&HashSet<String>, &HashSet<String>, &HashSet<String>),
         resend_safe: &HashSet<String>,
     ) {
         let Some(slot) = self.pool.get(key).map(|slot| Arc::clone(slot.value())) else {
             return;
         };
+        // Whether or not it revokes, a page withdraws the effect it contradicts.
+        let names: HashSet<String> = listed.iter().cloned().collect();
+        narrow_effect_to_page(&slot, listed, hints(read_only, write, hint, &names));
         // In flight FIRST (MIK-8393 r7): a fill stores its sets before it
         // clears the mark, so with no fill in flight the reads below see
         // whatever the last fill stored.
@@ -152,6 +164,7 @@ impl Backend {
             listed,
             read_only: prepared.read_only_declared,
             write: prepared.write_declared,
+            hint: prepared.hint_declared,
             resend_safe: prepared.resend_permitted,
         }
     }
@@ -173,7 +186,7 @@ impl Backend {
         self.revoke_from_page(
             &self.pool_key_for(identity_key),
             &page.listed,
-            (&page.read_only, &page.write),
+            (&page.read_only, &page.write, &page.hint),
             &page.resend_safe,
         );
     }
@@ -204,13 +217,11 @@ impl Backend {
                 .write()
                 .retain(|t| !listed.contains(t) || page.resend_safe.contains(t));
             // A name the pages never listed keeps its effect; a listed one
-            // keeps it only where the page still declares it. Before the
-            // read-only set narrows, so it sees what that clears.
-            narrow_effect(
-                &entry,
-                |t| !listed.contains(t) || page.read_only.contains(t),
-                |t| !listed.contains(t) || page.write.contains(t),
-            );
+            // keeps it only where the page declares the same. Before the
+            // read-only set narrows, so it reads the slot's effect as it was.
+            let names: HashSet<String> = page.listed.iter().cloned().collect();
+            let declared = hints(&page.read_only, &page.write, &page.hint, &names);
+            narrow_effect_to_page(&entry, &page.listed, declared);
             entry
                 .read_only_declared
                 .write()
@@ -247,7 +258,55 @@ struct PageSets {
     listed: Vec<String>,
     read_only: HashSet<String>,
     write: HashSet<String>,
+    hint: HashSet<String>,
     resend_safe: HashSet<String>,
+}
+
+fn hints<'a>(
+    read_only_declared: &'a HashSet<String>,
+    write_declared: &'a HashSet<String>,
+    hint_declared: &'a HashSet<String>,
+    listed: &'a HashSet<String>,
+) -> crate::backend::annotations::DeclaredHints<'a> {
+    crate::backend::annotations::DeclaredHints {
+        read_only_declared,
+        write_declared,
+        hint_declared,
+        listed,
+    }
+}
+
+/// Take out of `entry`'s effect every name in `listed` whose effect on the
+/// page (`page`) differs from the slot's, so evidence the page contradicts
+/// records no effect rather than either reading. The read-only set is the
+/// cache's and is narrowed by the caller.
+fn narrow_effect_to_page(
+    entry: &crate::backend::pool::PooledEntry,
+    listed: &[String],
+    page: crate::backend::annotations::DeclaredHints<'_>,
+) {
+    use crate::backend::annotations::declared_effect;
+    let contradicted: HashSet<&String> = {
+        // In declared_effect_for's order, every writer holding one at a time.
+        let (read_only, write) = (entry.read_only_declared.read(), entry.write_declared.read());
+        let (hint, names) = (entry.hint_declared.read(), entry.effect_listed.read());
+        let slot = hints(&read_only, &write, &hint, &names);
+        listed
+            .iter()
+            .filter(|t| declared_effect(t, slot) != declared_effect(t, page))
+            .collect()
+    };
+    if contradicted.is_empty() {
+        return;
+    }
+    entry
+        .write_declared
+        .write()
+        .retain(|t| !contradicted.contains(t));
+    entry
+        .effect_listed
+        .write()
+        .retain(|t| !contradicted.contains(t));
 }
 
 /// Narrow `entry`'s may-write set to the names `keep_write` keeps, and take
@@ -262,7 +321,7 @@ fn narrow_effect(
 ) {
     // One lock at a time, read-only set first: the order declared_effect_for
     // reads them in, so the two cannot deadlock.
-    let mut cleared: Vec<String> = entry
+    let mut cleared: HashSet<String> = entry
         .read_only_declared
         .read()
         .iter()

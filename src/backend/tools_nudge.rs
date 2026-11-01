@@ -301,6 +301,9 @@ impl super::Backend {
             &mut tools,
         );
         let entry = self.shared_entry();
+        // Emptied first and published last: until then no name reads
+        // undeclared from a mix of the old and new sets.
+        entry.effect_listed.write().clear();
         *entry.resend_permitted.write() = prepared.resend_permitted;
         *entry.hint_declared.write() = prepared.hint_declared;
         *entry.write_declared.write() = prepared.write_declared;

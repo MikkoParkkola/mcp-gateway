@@ -206,7 +206,16 @@ impl MetaMcp {
             },
             &mut idem_reservation,
         )? {
-            std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
+            std::ops::ControlFlow::Break(outcome) => {
+                // A replay may stand in for a stored write, so it records
+                // what the slot declares now, as a fresh call would.
+                let (be, bind) = (
+                    resolve_out.backend.as_deref(),
+                    resolve_out.dispatch_binding.as_deref(),
+                );
+                self.note_declared_effect((intake.step.server, intake.step.tool), be, bind);
+                return Ok(outcome);
+            }
             std::ops::ControlFlow::Continue(keyed) => keyed,
         };
 
