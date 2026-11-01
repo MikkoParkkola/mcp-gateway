@@ -23,6 +23,9 @@ const ZETA: &str = "keys-route-secret-zeta";
 const ZETA_OLD: &str = "keys-route-secret-zeta-old";
 const ALPHA: &str = "keys-route-secret-alpha";
 const MU: &str = "keys-route-secret-mu";
+const MU_OLD: &str = "keys-route-secret-mu-old";
+/// The keychain entry holding `mu`'s previous digest.
+const MU_PREV_ENTRY: &str = "keys-route-mu-prev";
 const P1: &str = "a1b2c3d4e5f6";
 
 fn spec(secret: &str) -> String {
@@ -66,9 +69,19 @@ fn keys(mu_file: &std::path::Path) -> Vec<ApiKeyConfig> {
             key_sha256: Some(format!("file:{}", mu_file.display())),
             name: "mu".into(),
             backends: vec!["*".into()],
+            previous_key_sha256: Some(format!("keychain:{MU_PREV_ENTRY}")),
+            previous_expires_at: Some(expiry()),
             ..Default::default()
         },
     ]
+}
+
+/// The overlay every table here resolves through: `mu`'s previous digest
+/// is a keychain reference, read from an in-memory keychain.
+fn overlay() -> crate::config::EnvOverlay {
+    let keychain = Arc::new(crate::config::keychain::FakeKeychain::default());
+    keychain.insert(MU_PREV_ENTRY, spec(MU_OLD).as_bytes());
+    crate::config::EnvOverlay::none().with_keychain(keychain)
 }
 
 /// The audit trail the fixture's gateway writes, in `dir`.
@@ -137,7 +150,7 @@ impl Fixture {
         };
         let resolved = ResolvedAuthConfig::try_from_config(
             &config,
-            &crate::config::EnvOverlay::none(),
+            &overlay(),
             crate::gateway::record_principal::TEST_RECORD_KEY,
         )
         .expect("the key table resolves")
@@ -320,15 +333,17 @@ fn t8_no_credential_identifier_leaves_the_route() {
         ZETA_OLD.into(),
         ALPHA.into(),
         MU.into(),
+        MU_OLD.into(),
         P1.into(),
         format!("file:{}", fx.mu_file().display()),
+        format!("keychain:{MU_PREV_ENTRY}"),
     ];
-    for secret in [ZETA, ZETA_OLD, ALPHA, MU] {
+    for secret in [ZETA, ZETA_OLD, ALPHA, MU, MU_OLD] {
         forbidden.extend(spellings(&digest(secret)));
         let derived = crate::gateway::auth::configured_key_principal(None, &digest(secret));
         forbidden.push(derived.storage_form().to_owned());
     }
-    for secret in [ZETA, ZETA_OLD, ALPHA, MU] {
+    for secret in [ZETA, ZETA_OLD, ALPHA, MU, MU_OLD] {
         let quota = table
             .validate_token(secret)
             .and_then(|client| client.quota_principal)
@@ -513,7 +528,7 @@ async fn t10_only_an_api_key_match_writes() {
     let table = Arc::new(
         ResolvedAuthConfig::try_from_config(
             &config,
-            &crate::config::EnvOverlay::none(),
+            &overlay(),
             crate::gateway::record_principal::TEST_RECORD_KEY,
         )
         .expect("resolves")
