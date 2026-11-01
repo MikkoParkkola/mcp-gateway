@@ -62,13 +62,19 @@ pub(crate) fn records(run: impl FnOnce()) -> Vec<serde_json::Value> {
 /// as plain text. Feature-free, so a row that only reads a warning runs in
 /// every feature combination (MIK-8219).
 pub(crate) fn capture_warnings<T>(operation: impl FnOnce() -> T) -> (T, String) {
+    capture_at(tracing::Level::WARN, operation)
+}
+
+/// `operation`'s value and the lines at `level` and above it logged on this
+/// thread, as plain text.
+pub(crate) fn capture_at<T>(level: tracing::Level, operation: impl FnOnce() -> T) -> (T, String) {
     keep_interest_open();
     let sink = Sink::default();
     let writer = sink.clone();
     let subscriber = tracing_subscriber::fmt()
         .without_time()
         .with_ansi(false)
-        .with_max_level(tracing::Level::WARN)
+        .with_max_level(level)
         .with_writer(move || writer.clone())
         .finish();
     let result = tracing::subscriber::with_default(subscriber, operation);
