@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9091.BEO.8 on the direct route: a backend's own -32001 refusal,
+//! On the direct route, a backend's own -32001 refusal,
 //! carried on a non-retry status, is the backend's error, not a denial the
 //! gateway made.
 

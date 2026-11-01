@@ -49,7 +49,7 @@ fn refused_on(status: reqwest::StatusCode) -> Error {
         .unwrap_or_else(|| panic!("premise: a {status} body answering this request is surfaced"))
 }
 
-/// MIK-9091.BEO.1: a peer's own refusal on a non-retry status is the
+/// A peer's own refusal on a non-retry status is the
 /// backend's answer, whatever its code, so it is counted as the backend's.
 #[test]
 fn a_peers_refusal_on_a_non_retry_status_is_the_backends() {
@@ -69,7 +69,7 @@ fn a_peers_refusal_on_a_non_retry_status_is_the_backends() {
     }
 }
 
-/// MIK-9091.BEO.1 control: a 500 already keeps the peer's code as a
+/// Control: a 500 already keeps the peer's code as a
 /// retryable refusal, the backend's.
 #[test]
 fn a_peers_refusal_on_a_500_stays_the_backends() {

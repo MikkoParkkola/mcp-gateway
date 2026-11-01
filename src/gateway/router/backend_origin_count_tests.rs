@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-9091: a backend's error counts as the backend's in
+//! A backend's error counts as the backend's in
 //! `mcp_gateway_errors_total`, on the direct route and on the meta route,
 //! whether it reaches the client as an error frame or folded into an
 //! `isError` tool result.
@@ -168,7 +168,7 @@ fn a_tools_own_is_error_result_on_the_meta_route_counts_nothing() {
     assert_eq!(all(&text), [0, 0, 0, 0], "{answer}\n{text}");
 }
 
-/// M1 (MIK-9091.BEO.9): a backend's error shaped like the gateway's account
+/// M1: a backend's error shaped like the gateway's account
 /// refusal is not honoured as one on the direct route: it answers 500 with
 /// its own text, as every other backend failure there does.
 #[test]
