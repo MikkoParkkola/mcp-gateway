@@ -354,6 +354,61 @@ fn a_supported_version_holding_a_value_is_refused() {
     );
 }
 
+/// A backend's own JSON-RPC error that echoes an injected value is scrubbed as
+/// its gateway twin is, in each place it can carry it: an echo in the message
+/// or the data is redacted and the error stays the backend's, its code kept;
+/// an echo in the code cannot be redacted, so the error is refused with the
+/// gateway's own refusal. The value never reaches the caller. Mutant m22 (the
+/// backend variant listed with the errors that carry nothing to scrub) turns
+/// it red.
+#[test]
+fn a_backends_own_error_echoing_a_value_is_scrubbed() {
+    let backend = |code: i32, message: &str, data: Option<serde_json::Value>| {
+        Err(crate::Error::backend_json_rpc(
+            crate::protocol::JsonRpcError {
+                code,
+                message: message.to_owned(),
+                data,
+            },
+        ))
+    };
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "token-one-value");
+    needles.insert("c", "-32077");
+    for (name, answer) in [
+        (
+            "message",
+            backend(-32001, "backend refused token-one-value", None),
+        ),
+        (
+            "data",
+            backend(
+                -32001,
+                "backend refused",
+                Some(serde_json::json!({"echo": "token-one-value"})),
+            ),
+        ),
+    ] {
+        let answer = super::scrub_answer(&needles, answer);
+        let text = format!("{answer:?}");
+        assert!(!text.contains("token-one-value"), "{name}: {text}");
+        assert!(
+            matches!(
+                answer,
+                Err(crate::Error::BackendJsonRpc { code: -32001, .. })
+            ),
+            "{name}: the backend's error, scrubbed: {text}"
+        );
+    }
+    let answer = super::scrub_answer(&needles, backend(-32077, "backend refused", None));
+    let text = format!("{answer:?}");
+    assert!(!text.contains("32077"), "code: {text}");
+    assert!(
+        matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
+        "code: the gateway's refusal: {text}"
+    );
+}
+
 /// Review A-F1: the RFC 3986 spelling (space as `%20`) and lowercase hex are
 /// matched as well as the form spelling.
 #[test]
