@@ -68,6 +68,10 @@ pub struct CheckResult {
     pub status: CheckStatus,
     /// Detail message shown after the status badge.
     pub detail: String,
+    /// The backend's captured stderr lines, when `--show-stderr` asked for
+    /// them. Backend text: the terminal prints each behind a gateway marker,
+    /// so none can pass for a result line.
+    pub stderr_tail: Option<Vec<String>>,
     /// Optional hint printed on the next line when status is Fail or Warn.
     pub hint: Option<String>,
     /// Stable diagnostic category for machine-readable output.
@@ -92,6 +96,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Pass,
             detail: detail.into(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,
@@ -108,6 +113,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Fail,
             detail: detail.into(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,
@@ -124,6 +130,7 @@ impl CheckResult {
             label: label.into(),
             status: CheckStatus::Warn,
             detail: detail.into(),
+            stderr_tail: None,
             hint: None,
             category: "general",
             fix_command: None,
@@ -653,6 +660,9 @@ pub(super) fn which_command(bin: &str) -> bool {
 #[path = "doctor/start_stdio.rs"]
 mod start_stdio;
 pub use start_stdio::StdioProbe;
+#[path = "doctor/human.rs"]
+mod human;
+use human::human_lines;
 #[cfg(test)]
 #[path = "doctor/key_digest_tests.rs"]
 mod key_digest_tests;
