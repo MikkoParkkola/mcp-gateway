@@ -51,8 +51,7 @@ pub(super) fn deliver(fw: &Firewall, who: &str, text: &str) {
 
 pub(super) fn relays(fw: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "beta",
         "send",
@@ -448,8 +447,7 @@ fn an_overfull_selection_abandons_the_sketch() {
 /// The description of `who`'s relay refusal for `text`, if refused.
 pub(super) fn refusal(fw: &Firewall, who: &str, text: &str) -> Option<String> {
     let params = json!({"name": "send", "arguments": {"text": text}});
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "beta",
         "send",

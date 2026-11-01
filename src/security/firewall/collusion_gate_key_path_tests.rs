@@ -80,17 +80,10 @@ fn reported(fw: &Firewall, who: &str, text: &str) -> bool {
 
 /// Whether `who` sending `params` is reported as a relay.
 fn relay_found(fw: &Firewall, who: &str, params: &Value) -> bool {
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
-        RelayCaller::Keyed(who),
-        "alpha",
-        "send",
-        params,
-        ("s", who),
-    )
-    .findings
-    .iter()
-    .any(|f| f.scan_type == ScanType::CollusionRelay)
+    fw.check_relay_paired(RelayCaller::Keyed(who), "alpha", "send", params, ("s", who))
+        .findings
+        .iter()
+        .any(|f| f.scan_type == ScanType::CollusionRelay)
 }
 
 /// The texts whose holder, delivered them in `shape` from the tool another

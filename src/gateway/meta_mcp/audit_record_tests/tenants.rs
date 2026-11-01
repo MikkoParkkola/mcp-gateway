@@ -680,8 +680,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         answers[1]
     );
     let params = json!({"name": "read", "arguments": {"text": notice}});
-    let verdict = firewall.check_relay(
-        firewall.paired_generation_for_test().collusion_view(),
+    let verdict = firewall.check_relay_paired(
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",
@@ -701,8 +700,7 @@ async fn a_replayed_lost_round_notice_puts_nothing_in_the_receipt() {
         "read",
         &answers[1],
     );
-    let verdict = firewall.check_relay(
-        firewall.paired_generation_for_test().collusion_view(),
+    let verdict = firewall.check_relay_paired(
         RelayCaller::Keyed("other-caller"),
         "alpha",
         "read",

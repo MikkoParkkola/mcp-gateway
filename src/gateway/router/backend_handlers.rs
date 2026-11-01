@@ -262,9 +262,7 @@ fn firewall_refusal(
     }
     let target = (backend_name, tool_name);
     let audit = (session_id.as_str(), caller_name);
-    #[cfg(test)]
-    crate::security::firewall::relay_witness_hook::run();
-    relay_refusal(fw, auth, id, target, params, audit)
+    relay_refusal(relay::witness_seam(fw), auth, id, target, params, audit)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).

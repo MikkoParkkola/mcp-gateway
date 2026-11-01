@@ -69,8 +69,7 @@ impl crate::transport::Transport for Alpha {
 fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "read", "arguments": {"text": text}});
     !firewall
-        .check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "read",

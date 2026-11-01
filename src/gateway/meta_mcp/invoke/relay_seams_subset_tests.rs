@@ -88,8 +88,7 @@ fn subset_reported(servers: &[&str]) -> bool {
         &json!({ "note": joined }),
     );
     let params = json!({"name": "send", "arguments": {"body": joined}});
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed("key-a"),
         "alpha",
         "send",

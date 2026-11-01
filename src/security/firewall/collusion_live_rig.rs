@@ -71,6 +71,38 @@ impl Firewall {
         config.security.firewall = self.config.clone();
         LiveConfig::new(config).generation()
     }
+
+    /// [`Self::check_relay`] under [`Self::paired_generation_for_test`]'s view.
+    pub(crate) fn check_relay_paired(
+        &self,
+        caller: RelayCaller<'_>,
+        server: &str,
+        tool: &str,
+        params: &Value,
+        audit: (&str, &str),
+    ) -> FirewallVerdict {
+        let generation = self.paired_generation_for_test();
+        self.check_relay(
+            generation.collusion_view(),
+            caller,
+            server,
+            tool,
+            params,
+            audit,
+        )
+    }
+
+    /// [`Self::relay_block_message`] under the paired generation's view.
+    pub(crate) fn relay_block_message_paired(
+        &self,
+        caller: RelayCaller<'_>,
+        target: (&str, &str),
+        params: &Value,
+        audit: (&str, &str),
+    ) -> Option<String> {
+        let generation = self.paired_generation_for_test();
+        self.relay_block_message(generation.collusion_view(), caller, target, params, audit)
+    }
 }
 
 /// A one-shot test hook, patterned on the generation build's `refuse_hook`:

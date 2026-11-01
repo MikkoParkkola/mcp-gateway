@@ -86,8 +86,7 @@ fn detectable(text: &str) -> bool {
         &json!({ "text": text }),
     );
     let params = json!({ "name": "send", "arguments": { "text": text } });
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed("other"),
         "probe",
         "send",

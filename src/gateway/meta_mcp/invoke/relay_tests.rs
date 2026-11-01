@@ -256,8 +256,7 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     };
     let relayed = || {
         let params = json!({"name": "send", "arguments": {"text": PROSE}});
-        let verdict = firewall.check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        let verdict = firewall.check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -319,8 +318,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
 fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     !firewall
-        .check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -584,8 +582,7 @@ fn a_wrapped_non_object_result_still_marks_a_relay() {
         &recorded,
     );
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    let verdict = fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    let verdict = fw.check_relay_paired(
         RelayCaller::Keyed("b"),
         "alpha",
         "send",

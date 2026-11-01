@@ -299,8 +299,7 @@ async fn r2_a_surfaced_replay_stages_its_receipt_for_the_admitted_server() {
     staged.commit(true, &firewall.paired_generation_for_test());
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     let relayed = !firewall
-        .check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        .check_relay_paired(
             RelayCaller::Keyed("bob"),
             "alpha",
             "send",
@@ -400,8 +399,7 @@ async fn r3_no_carried_server_records_and_stages_nothing() {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
     assert!(
         firewall
-            .check_relay(
-                firewall.paired_generation_for_test().collusion_view(),
+            .check_relay_paired(
                 RelayCaller::Keyed("bob"),
                 "beta",
                 "send",

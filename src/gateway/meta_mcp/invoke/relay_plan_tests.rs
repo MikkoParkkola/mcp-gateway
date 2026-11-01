@@ -26,8 +26,7 @@ const ENGINE: &str = "Step two was skipped because its condition was false; the 
 fn refused(firewall: &Firewall, who: &str, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
     !firewall
-        .check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        .check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",
@@ -258,8 +257,7 @@ async fn a_kept_plan_receipt_stays_sensitive() {
         .await;
     staged.commit(true, &firewall.paired_generation_for_test());
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    let carol = firewall.check_relay(
-        firewall.paired_generation_for_test().collusion_view(),
+    let carol = firewall.check_relay_paired(
         RelayCaller::Keyed("carol"),
         "alpha",
         "send",
@@ -458,8 +456,7 @@ async fn a_short_field_step_keeps_its_receipt_through_its_run() {
     let relayed = |who: &str| {
         let params = json!({"name": "send", "arguments": row.clone()});
         !firewall
-            .check_relay(
-                firewall.paired_generation_for_test().collusion_view(),
+            .check_relay_paired(
                 RelayCaller::Keyed(who),
                 "alpha",
                 "send",
@@ -658,8 +655,7 @@ async fn short_fields_delivered_adjacent_keep_their_run() {
 fn relays_row(firewall: &Firewall, who: &str, row: &Value) -> bool {
     let params = json!({"name": "send", "arguments": row});
     !firewall
-        .check_relay(
-            firewall.paired_generation_for_test().collusion_view(),
+        .check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",

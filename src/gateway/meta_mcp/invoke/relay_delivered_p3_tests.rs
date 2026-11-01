@@ -123,8 +123,7 @@ fn reported_after_carol(fw: &Firewall, who: &str, text: &str) -> bool {
         &json!({ "note": text }),
     );
     let params = json!({"name": "send", "arguments": {"body": text}});
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "alpha",
         "send",

@@ -535,8 +535,7 @@ fn a_holder_of_a_short_redacted_run_forwards_it_unrefused() {
     );
     let reported = |who: &str| {
         let params = json!({"name": "send", "arguments": {"text": run}});
-        fw.check_relay(
-            fw.paired_generation_for_test().collusion_view(),
+        fw.check_relay_paired(
             RelayCaller::Keyed(who),
             "alpha",
             "send",

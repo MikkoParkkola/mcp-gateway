@@ -40,8 +40,7 @@ fn firewall() -> Firewall {
 /// An egress through `alpha:send` carrying [`PROSE`], sent by `who`.
 fn egress(fw: &Firewall, who: &str) -> FirewallVerdict {
     let params = json!({"name": "send", "arguments": {"text": PROSE}});
-    fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    fw.check_relay_paired(
         RelayCaller::Keyed(who),
         "alpha",
         "send",

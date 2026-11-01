@@ -68,8 +68,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
 /// Whether bob sending `text` through `alpha:send` is refused as a relay.
 fn relayed_by_bob(fw: &Firewall, text: &str) -> bool {
     let params = json!({"name": "send", "arguments": {"text": text}});
-    !fw.check_relay(
-        fw.paired_generation_for_test().collusion_view(),
+    !fw.check_relay_paired(
         RelayCaller::Keyed("bob"),
         "alpha",
         "send",
