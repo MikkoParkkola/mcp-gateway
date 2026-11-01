@@ -100,9 +100,10 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         "gateway::meta_mcp::visibility::MetaMcp::admin_capability_rule",
         1,
     ),
-    // The visibility check before identity grants: no send.
+    // The visibility check before identity grants, naming the check that
+    // refused: no send.
     (
-        "gateway::meta_mcp::visibility::MetaMcp::may_invoke_before_grants",
+        "gateway::meta_mcp::visibility::MetaMcp::may_invoke_before_grants_explained",
         1,
     ),
     // A match pattern wrapped in `Err(..)`, which the scan counts: no value is
