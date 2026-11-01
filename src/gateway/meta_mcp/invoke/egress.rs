@@ -735,8 +735,8 @@ impl MetaMcp {
 mod stored_targets_tests;
 
 #[cfg(all(test, feature = "firewall"))]
-#[path = "egress_scope_tests.rs"]
-mod scope_tests;
-#[cfg(all(test, feature = "firewall"))]
 #[path = "answer_generation_tests.rs"]
 mod answer_generation_tests;
+#[cfg(all(test, feature = "firewall"))]
+#[path = "egress_scope_tests.rs"]
+mod scope_tests;
