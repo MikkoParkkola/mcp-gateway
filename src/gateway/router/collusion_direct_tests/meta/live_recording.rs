@@ -40,7 +40,13 @@ async fn live_fixture(action: CollusionAction) -> Fixture {
         sources: defaults.sources,
         ..CollusionConfig::default()
     };
-    st.live_config = Arc::new(LiveConfig::new(cfg));
+    // Keep the fixture's resolved keys: a fresh `LiveConfig::new` would
+    // resolve auth from the config alone, and the keyed calls would then
+    // carry no verified principal.
+    let auth = Arc::clone(st.live_config.generation().auth());
+    st.live_config = Arc::new(LiveConfig::from_prepared(
+        crate::config_reload::Generation::prepare_startup(cfg, auth),
+    ));
     // The clock is frozen at construction: nothing ages out on a slow run.
     firewall(&fx).advance_collusion_clock_for_test(Duration::ZERO);
     fx
