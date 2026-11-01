@@ -259,10 +259,6 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     sections
 }
 
-// PR2 of ADR-029's live-collusion work flips this; until then the relay gate judges with its startup lists.
-#[cfg(feature = "firewall")]
-const COLLUSION_LIVE: bool = false;
-
 /// Whether `security.firewall.collusion`'s four live fields (`sources`,
 /// `non_egress`, `allowed_flows`, `action`) count for a restart.
 #[derive(Clone, Copy)]
@@ -283,9 +279,8 @@ enum CollusionFields {
 #[cfg_attr(not(feature = "firewall"), expect(unused_variables))]
 fn collusion_fields(running: &Config, wanted: &Config) -> CollusionFields {
     #[cfg(feature = "firewall")]
-    if COLLUSION_LIVE
-        && crate::security::firewall::DetectorParams::of(&running.security.firewall)
-            .runs(&wanted.security.firewall)
+    if crate::security::firewall::DetectorParams::of(&running.security.firewall)
+        .runs(&wanted.security.firewall)
     {
         return CollusionFields::Masked;
     }
