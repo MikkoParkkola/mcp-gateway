@@ -621,8 +621,8 @@ async fn a_refresh_on_an_unreadable_clock_sends_nothing_and_keeps_its_token() {
 /// token is held.
 #[tokio::test]
 async fn a_background_refresh_that_retires_the_token_republishes_the_status() {
-    use super::renewal::Renewal;
     use super::sign_in::{SignIn, SignInStatus};
+    use crate::oauth::client::renewal::Renewal;
     let server = TokenServer::start(&[]).await;
     let dir = tempfile::tempdir().unwrap();
     let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));

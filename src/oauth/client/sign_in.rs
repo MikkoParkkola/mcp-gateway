@@ -52,10 +52,6 @@ pub(crate) enum SignIn {
     /// A confirmed sign-in was saved under an issuer the serving client has
     /// not adopted: the provider changed, so a person must sign in again. Only
     /// adopting an install under that issuer clears it.
-    #[cfg_attr(
-        not(any(test, feature = "webui")),
-        expect(dead_code, reason = "raised only on the web UI sign-in path")
-    )]
     ProviderChanged,
 }
 
