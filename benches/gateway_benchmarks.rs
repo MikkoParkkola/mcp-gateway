@@ -621,6 +621,50 @@ fn bench_modern_request_path(c: &mut Criterion) {
     group.finish();
 }
 
+// ── relay detection off-path benchmark ───────────────────────────────────────
+
+/// What one delivery costs with the firewall on and the collusion action
+/// `off`: the response check every delivery already pays on this path.
+///
+/// Relay-detection staging joins this path when the firewall is on whatever
+/// the action is (ADR-029, amended), and its entry is crate-private, so it has
+/// no case of its own here yet. When it gains a public entry, time it in this
+/// group: above about 2 microseconds per delivery goes to the lead before
+/// merge.
+#[cfg(feature = "firewall")]
+fn bench_collusion_off_delivery(c: &mut Criterion) {
+    use mcp_gateway::security::firewall::{Firewall, FirewallConfig};
+
+    let firewall = Firewall::from_config(FirewallConfig::default(), None);
+    let delivered = json!({
+        "content": [{"type": "text", "text": "The orchard ledger for the north slope \
+            records seven rows of late pears, the grafting dates for each rootstock, the \
+            hours the drip lines ran during the dry weeks of August, and which crew pruned \
+            the older trees after the second frost."}]
+    });
+
+    let mut group = c.benchmark_group("collusion_off_delivery");
+    group.bench_function("response_check_action_off", |b| {
+        b.iter_batched(
+            || delivered.clone(),
+            |mut response| {
+                std::hint::black_box(firewall.check_response(
+                    "bench-session",
+                    "alpha",
+                    "read",
+                    &mut response,
+                    "bench",
+                ))
+            },
+            BatchSize::SmallInput,
+        );
+    });
+    group.finish();
+}
+
+#[cfg(not(feature = "firewall"))]
+fn bench_collusion_off_delivery(_c: &mut Criterion) {}
+
 // ── continuation-envelope benchmarks ────────────────────────────────────────
 
 /// NFR.PERF.1 — what a continuation envelope costs to mint and to redeem.
@@ -804,5 +848,6 @@ criterion_group!(
     bench_modern_request_path,
     bench_continuation,
     bench_http_request_path,
+    bench_collusion_off_delivery,
 );
 criterion_main!(benches);
