@@ -606,3 +606,7 @@ mod send_tests;
 #[cfg(test)]
 #[path = "delivery_facts_calls_tests.rs"]
 mod calls_tests;
+
+#[cfg(test)]
+#[path = "delivery_facts_fold_tests.rs"]
+mod fold_tests;
