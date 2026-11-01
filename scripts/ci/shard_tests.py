@@ -370,6 +370,18 @@ def self_test() -> int:
     finally:
         del os.environ["PLANT_LEAK"]
     assert planted == ["left in TMPDIR: .tmpXyZ789 (other.db 0B)"], planted
+    # And a known source's leftover, through the same step, stays green.
+    fake_home = (*fake[:2], fake[2].replace(
+        "open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()",
+        "d = os.path.join(os.environ['TMPDIR'], '.tmpHoMe12', 'tasks', 'stdio')\n"
+        "    os.makedirs(d)\n"
+        "    open(os.path.join(d, 'store.lease'), 'w').close()"))
+    assert fake_home != fake, "the planted home must replace the planted file"
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        assert run_steps("linux", "lib-a", fake_home) == [], "a known source turned red"
+    finally:
+        del os.environ["PLANT_LEAK"]
     # The same on real folders: files_in feeds the match, and a link to a
     # folder beside an allowed file is a stray of its own.
     with tempfile.TemporaryDirectory() as root:
