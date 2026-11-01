@@ -105,7 +105,6 @@ async fn fixture_with(
         proxy_manager,
         streaming_config,
         key_server,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),

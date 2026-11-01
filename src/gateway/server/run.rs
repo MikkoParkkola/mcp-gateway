@@ -79,7 +79,6 @@ impl Gateway {
         // the protocol-revision window saver.
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy,
             mtls_policy,
             ranker,
             ranker_path,
@@ -88,6 +87,7 @@ impl Gateway {
             data_dir,
             record_key,
             transparency_log,
+            ..
         } = self.build_meta_mcp().await?;
         // One auditor for the process: the overrides in effect at start are
         // recorded now, and every reload context shares it.
@@ -452,7 +452,6 @@ impl Gateway {
             proxy_manager,
             streaming_config: self.config.streaming.clone(),
             key_server,
-            tool_policy,
             mtls_policy,
             trust_configured_backends: self.config.security.trust_configured_backends,
             inflight: Arc::clone(&inflight),

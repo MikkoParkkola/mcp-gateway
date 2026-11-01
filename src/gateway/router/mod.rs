@@ -24,7 +24,6 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
@@ -415,8 +414,6 @@ pub struct AppState {
     pub task_executor: Arc<crate::gateway::task_service::TaskExecutor>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
-    /// Tool access policy
-    pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
     pub mtls_policy: Arc<MtlsPolicy>,
     /// Whether URLs declared in `backends:` config are pre-authorised

@@ -46,7 +46,6 @@ impl Gateway {
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy: _,
             mtls_policy,
             data_dir,
             record_key,

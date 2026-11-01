@@ -25,7 +25,6 @@ use mcp_gateway::gateway::test_helpers::{
 use mcp_gateway::key_server::oidc::VerifiedIdentity;
 use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::headers::mcp_name_body_field;
-use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
@@ -237,7 +236,6 @@ async fn state_in(
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),

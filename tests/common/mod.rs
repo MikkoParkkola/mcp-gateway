@@ -23,7 +23,6 @@ pub use mcp_gateway::gateway::test_helpers::{
     AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
 };
 pub use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-pub use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 pub use serde_json::{Value, json};
 pub use std::sync::Arc;
 pub use tower::ServiceExt;
@@ -154,7 +153,6 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),

@@ -284,7 +284,6 @@ async fn state_with_firewalls_and_auth(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),

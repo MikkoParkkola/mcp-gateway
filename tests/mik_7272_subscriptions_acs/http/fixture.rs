@@ -54,7 +54,6 @@ pub(crate) async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
