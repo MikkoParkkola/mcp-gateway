@@ -104,7 +104,10 @@ pub(super) async fn overview(
     source.add_totals(&mut kpi);
     body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
-    body.insert("needs_you".into(), needs_you(&state, &denied));
+    body.insert(
+        "needs_you".into(),
+        needs_you((&state, &generation), &denied),
+    );
     source.add_flows(&mut body);
     if let Some(log) = &state.transparency_log {
         match last_actions(&log.path()) {
@@ -393,7 +396,10 @@ fn marker_rows(store: &CounterStore, now: u64) -> Value {
 
 /// What needs the operator, highest priority first, capped with `more`: the
 /// newest invalid config, then every refusal, then budgets near their limit.
-fn needs_you(state: &AppState, startup: &[Refusal]) -> Value {
+fn needs_you(
+    (state, generation): (&AppState, &crate::config_reload::Generation),
+    startup: &[Refusal],
+) -> Value {
     let (invalid, mut rows) = ledger_rows(state);
     // A denied server has no ledger entry and never ages out, so it leads.
     let denied = startup
@@ -401,7 +407,7 @@ fn needs_you(state: &AppState, startup: &[Refusal]) -> Value {
         .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
     rows.splice(0..0, denied);
     rows.splice(0..0, invalid);
-    rows.extend(limit_rows(state));
+    rows.extend(limit_rows(state, generation));
     let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS)).len();
     json!({ "rows": rows, "more": { "count": folded } })
 }
@@ -456,20 +462,22 @@ fn refused_row(refusal: &Refusal, detail: &Map<String, Value>) -> Value {
 /// alert's percent (inclusive, as the enforcer's own alerts compare), highest
 /// percent first. None when cost governance is off: there is no limit to near.
 #[cfg(feature = "cost-governance")]
-fn limit_rows(state: &AppState) -> Vec<Value> {
+fn limit_rows(state: &AppState, generation: &crate::config_reload::Generation) -> Vec<Value> {
     use crate::cost_accounting::config::AlertAction;
     let Some(enforcer) = &state.meta_mcp.budget_enforcer else {
         return Vec::new();
     };
-    let threshold = enforcer
-        .config
+    // The response's own generation: the threshold and the limits it is
+    // compared with come from one configuration.
+    let governance = enforcer.governance(Some(generation));
+    let threshold = governance
         .alerts
         .iter()
         .filter(|rule| rule.action == AlertAction::Notify)
         .map(|rule| f64::from(rule.at_percent))
         .reduce(f64::min)
         .unwrap_or(80.0);
-    let snapshot = enforcer.snapshot();
+    let snapshot = enforcer.snapshot_under(governance);
     let mut found: Vec<(f64, Value)> = Vec::new();
     let mut check = |scope: &str, name: Option<&str>, spent: f64, limit: f64| {
         if limit <= 0.0 {
@@ -512,7 +520,7 @@ fn limit_rows(state: &AppState) -> Vec<Value> {
 }
 
 #[cfg(not(feature = "cost-governance"))]
-fn limit_rows(_state: &AppState) -> Vec<Value> {
+fn limit_rows(_state: &AppState, _generation: &crate::config_reload::Generation) -> Vec<Value> {
     Vec::new()
 }
 
