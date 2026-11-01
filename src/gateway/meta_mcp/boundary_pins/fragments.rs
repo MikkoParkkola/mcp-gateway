@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The pin tables, read at test time from `boundary_pins/<name>.tsv`.
+//! The pin tables, read at test time from `boundary_pins/<name>.tsv` plus any
+//! `<name>.d/<digits>[-<digits>].tsv` fragments beside it.
 //!
-//! Every pin test reads its table through [`pin_table`], so the table's rows
-//! come from one loader instead of an `include_str!` per test. The table lives
-//! under `src/**`, which `Cargo.toml` `include` ships, so the packaged suite
-//! reads it the same way.
+//! The pin tests for `allows`, `scoped_backends_classes`, `creation_sites` and
+//! `presend_exits` read through [`pin_table`]; `delivery_framing.rs` still
+//! embeds its two tables until it moves to this loader, so a fragment beside
+//! them is not read yet. A new row goes in the change's own fragment, so two
+//! changes adding rows never edit the same file. The tables live under
+//! `src/**`, which `Cargo.toml` `include` ships, so the packaged suite reads
+//! them the same way.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -105,6 +109,14 @@ fn fragment_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
         if !fragment_name_ok(&name) {
             return Err(format!(
                 "pin-table fragment {} is not named <digits>[-<digits>].tsv",
+                path.display()
+            ));
+        }
+        // A regular file only: a directory fails on read, and a special file
+        // (a FIFO) could block the read instead of failing.
+        if !path.is_file() {
+            return Err(format!(
+                "pin-table fragment {} is not a regular file",
                 path.display()
             ));
         }
@@ -232,8 +244,11 @@ pub(super) fn without_first_row(text: &str) -> (String, String) {
     (rest, moved.expect("the table has a row"))
 }
 
-/// A crate-shaped temporary root holding table `name` (`base` text, and each
-/// `(file, text)` fragment under `name.d/`), and the table read from it.
+/// A crate-shaped temporary root holding table `name`: `base` as its base
+/// text, every live fragment of the table copied unchanged (so rows that live
+/// only in a fragment stay covered), then each extra `(file, text)` fragment.
+/// An extra may not reuse a live fragment's name. Returns the root and the
+/// table read from it.
 pub(super) fn scratch_table(
     name: &str,
     base: &str,
@@ -241,10 +256,22 @@ pub(super) fn scratch_table(
 ) -> (tempfile::TempDir, Table) {
     let root = tempfile::tempdir().expect("a temp crate");
     let dir = root.path().join(DIR);
-    std::fs::create_dir_all(dir.join(format!("{name}.d"))).expect("the fragment directory");
+    let frag_dir = dir.join(format!("{name}.d"));
+    std::fs::create_dir_all(&frag_dir).expect("the fragment directory");
     std::fs::write(dir.join(format!("{name}.tsv")), base).expect("the base table");
+    let live = fragment_files(&crate_root().join(DIR).join(format!("{name}.d")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    for path in &live {
+        let file = path.file_name().expect("a fragment name");
+        std::fs::copy(path, frag_dir.join(file)).expect("a live fragment copied");
+    }
     for (file, text) in fragments {
-        std::fs::write(dir.join(format!("{name}.d")).join(file), text).expect("a fragment");
+        let target = frag_dir.join(file);
+        assert!(
+            !target.exists(),
+            "{file} is a live fragment of {name}; use another name"
+        );
+        std::fs::write(target, text).expect("a fragment");
     }
     let table = pin_table_at(root.path(), name);
     (root, table)

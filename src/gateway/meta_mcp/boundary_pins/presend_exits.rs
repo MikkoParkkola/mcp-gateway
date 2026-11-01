@@ -388,7 +388,7 @@ fn found() -> Found {
 #[test]
 fn presend_exits_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("presend_exits"));
-    let (_root, table) = scratch_table("presend_exits", &base, &[("1.tsv", &moved)]);
+    let (_root, table) = scratch_table("presend_exits", &base, &[("0.tsv", &moved)]);
     let wrong = differences(&found(), &table);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -400,13 +400,13 @@ fn presend_exits_rejects_a_stale_fragment_row() {
     let (_root, table) = scratch_table(
         "presend_exits",
         &live_base("presend_exits"),
-        &[("1.tsv", stale)],
+        &[("0.tsv", stale)],
     );
     let wrong = differences(&found(), &table);
     assert!(
         wrong
             .iter()
-            .any(|l| l.contains("stale") && l.contains("1.tsv")),
+            .any(|l| l.contains("stale") && l.contains("0.tsv")),
         "{}",
         wrong.join("\n")
     );
@@ -419,13 +419,13 @@ fn presend_exits_key_repeated_across_files_fails_naming_both() {
     let (_root, table) = scratch_table(
         "presend_exits",
         &live_base("presend_exits"),
-        &[("1.tsv", &moved)],
+        &[("0.tsv", &moved)],
     );
     let wrong = differences(&found(), &table);
     assert!(
         wrong
             .iter()
-            .any(|l| l.contains("presend_exits.tsv") && l.contains("1.tsv")),
+            .any(|l| l.contains("presend_exits.tsv") && l.contains("0.tsv")),
         "{}",
         wrong.join("\n")
     );
@@ -462,10 +462,35 @@ fn presend_exits_changed_value_names_the_owning_file() {
     let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
     cols[2] = "999";
     let changed = format!("{}\n", cols.join("\t"));
-    let (_root, table) = scratch_table("presend_exits", &base, &[("1.tsv", &changed)]);
+    let (_root, table) = scratch_table("presend_exits", &base, &[("0.tsv", &changed)]);
     let wrong = differences(&found(), &table).join("\n");
     assert!(
-        wrong.contains("edit this row in") && wrong.contains("1.tsv"),
+        wrong.contains("edit this row in") && wrong.contains("0.tsv"),
         "{wrong}"
     );
+}
+
+/// Each row check still fires for a row that sits only in a fragment.
+#[test]
+fn presend_exits_validations_still_fail_in_a_fragment() {
+    for (bad, diagnostic) in [
+        ("a\tb\n", "not six columns"),
+        (
+            "src/x.rs\tf\tmany\t1\tmarks\twhy\n",
+            "exits or marks is not a number",
+        ),
+        ("src/x.rs\tf\t1\t1\tnope\twhy\n", "no class or no reason"),
+        ("src/x.rs\tf\t1\t1\tmarks\t \n", "no class or no reason"),
+    ] {
+        let (_root, table) = scratch_table(
+            "presend_exits",
+            &live_base("presend_exits"),
+            &[("0.tsv", bad)],
+        );
+        let wrong = differences(&found(), &table).join("\n");
+        assert!(
+            wrong.contains(diagnostic) && wrong.contains("0.tsv"),
+            "{bad:?}: {wrong}"
+        );
+    }
 }

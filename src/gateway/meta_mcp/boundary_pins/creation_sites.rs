@@ -275,7 +275,7 @@ fn counted() -> Counts {
 #[test]
 fn creation_sites_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("creation_sites"));
-    let (_root, table) = scratch_table("creation_sites", &base, &[("1.tsv", &moved)]);
+    let (_root, table) = scratch_table("creation_sites", &base, &[("0.tsv", &moved)]);
     let wrong = differences(&counted(), &table);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -287,13 +287,13 @@ fn creation_sites_rejects_a_stale_fragment_row() {
     let (_root, table) = scratch_table(
         "creation_sites",
         &live_base("creation_sites"),
-        &[("1.tsv", stale)],
+        &[("0.tsv", stale)],
     );
     let wrong = differences(&counted(), &table);
     assert!(
         wrong
             .iter()
-            .any(|l| l.contains("stale") && l.contains("1.tsv")),
+            .any(|l| l.contains("stale") && l.contains("0.tsv")),
         "{}",
         wrong.join("\n")
     );
@@ -307,13 +307,13 @@ fn creation_sites_key_repeated_across_files_fails_naming_both() {
     let (_root, table) = scratch_table(
         "creation_sites",
         &live_base("creation_sites"),
-        &[("1.tsv", &moved)],
+        &[("0.tsv", &moved)],
     );
     let wrong = differences(&counted(), &table);
     assert!(
         wrong
             .iter()
-            .any(|l| l.contains("creation_sites.tsv") && l.contains("1.tsv")),
+            .any(|l| l.contains("creation_sites.tsv") && l.contains("0.tsv")),
         "{}",
         wrong.join("\n")
     );
@@ -350,10 +350,41 @@ fn creation_sites_changed_value_names_the_owning_file() {
     let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
     cols[3] = "999";
     let changed = format!("{}\n", cols.join("\t"));
-    let (_root, table) = scratch_table("creation_sites", &base, &[("1.tsv", &changed)]);
+    let (_root, table) = scratch_table("creation_sites", &base, &[("0.tsv", &changed)]);
     let wrong = differences(&counted(), &table).join("\n");
     assert!(
-        wrong.contains("edit this row in") && wrong.contains("1.tsv"),
+        wrong.contains("edit this row in") && wrong.contains("0.tsv"),
         "{wrong}"
     );
+}
+
+/// Each row check still fires for a row that sits only in a fragment.
+#[test]
+fn creation_sites_validations_still_fail_in_a_fragment() {
+    for (bad, diagnostic) in [
+        ("a\tb\n", "not six columns"),
+        (
+            "src/x.rs\tf\tfs-write\tmany\thelper\twhy\n",
+            "count is not a number",
+        ),
+        (
+            "src/x.rs\tf\tfs-write\t1\tnope\twhy\n",
+            "no class or no reason",
+        ),
+        (
+            "src/x.rs\tf\tfs-write\t1\thelper\t \n",
+            "no class or no reason",
+        ),
+    ] {
+        let (_root, table) = scratch_table(
+            "creation_sites",
+            &live_base("creation_sites"),
+            &[("0.tsv", bad)],
+        );
+        let wrong = differences(&counted(), &table).join("\n");
+        assert!(
+            wrong.contains(diagnostic) && wrong.contains("0.tsv"),
+            "{bad:?}: {wrong}"
+        );
+    }
 }

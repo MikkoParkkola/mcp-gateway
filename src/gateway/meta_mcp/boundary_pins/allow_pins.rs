@@ -427,7 +427,7 @@ fn t1d_registry_construction_sites_are_pinned() {
 #[test]
 fn allows_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("allows"));
-    let (_root, table) = scratch_table("allows", &base, &[("1.tsv", &moved)]);
+    let (_root, table) = scratch_table("allows", &base, &[("0.tsv", &moved)]);
     allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
 }
 
@@ -436,9 +436,9 @@ fn allows_reads_a_required_row_from_a_fragment() {
 #[test]
 fn allows_rejects_a_stale_fragment_row() {
     let stale = "src/nowhere.rs\tnothing\tstatement\tLifecycle\tgetx1\n";
-    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("1.tsv", stale)]);
+    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", stale)]);
     let err = allows_check(&inventory(), &table).expect_err("a stale fragment row fails");
-    assert!(err.contains("1.tsv"), "{err}");
+    assert!(err.contains("0.tsv"), "{err}");
 }
 
 /// FRAG.2 through the class check's own path: a real row held only by a
@@ -446,7 +446,7 @@ fn allows_rejects_a_stale_fragment_row() {
 #[test]
 fn scoped_classes_reads_a_required_row_from_a_fragment() {
     let (base, moved) = without_first_row(&live_base("scoped_backends_classes"));
-    let (_root, table) = scratch_table("scoped_backends_classes", &base, &[("1.tsv", &moved)]);
+    let (_root, table) = scratch_table("scoped_backends_classes", &base, &[("0.tsv", &moved)]);
     classes_check(&ops().rows, &table).unwrap_or_else(|m| panic!("{m}"));
 }
 
@@ -458,10 +458,10 @@ fn scoped_classes_rejects_a_stale_fragment_row() {
     let (_root, table) = scratch_table(
         "scoped_backends_classes",
         &live_base("scoped_backends_classes"),
-        &[("1.tsv", stale)],
+        &[("0.tsv", stale)],
     );
     let err = classes_check(&ops().rows, &table).expect_err("a stale fragment row fails");
-    assert!(err.contains("1.tsv"), "{err}");
+    assert!(err.contains("0.tsv"), "{err}");
 }
 
 /// A legitimately repeated allow row (two identical statements in one fn)
@@ -480,7 +480,7 @@ fn a_legitimate_repeat_may_split_across_files() {
         .rfind(&format!("{repeated}\n"))
         .expect("the second copy");
     let rest = format!("{}{}", &base[..at], &base[at + repeated.len() + 1..]);
-    let (_root, table) = scratch_table("allows", &rest, &[("1.tsv", &format!("{repeated}\n"))]);
+    let (_root, table) = scratch_table("allows", &rest, &[("0.tsv", &format!("{repeated}\n"))]);
     allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
 }
 
@@ -492,4 +492,32 @@ fn a_missing_allow_row_is_listed_to_add_in_your_fragment() {
     let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
     assert!(err.contains("rows to add"), "{err}");
     assert!(err.contains("allows.d/<ticket>.tsv"), "{err}");
+}
+
+/// A count-1 row copied into a fragment is a surplus: the message names the
+/// quantity and every file holding a copy.
+#[test]
+fn a_surplus_copy_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("0.tsv", &moved)]);
+    let err = allows_check(&inventory(), &table).expect_err("a surplus copy fails");
+    assert!(err.contains("1 x "), "{err}");
+    assert!(
+        err.contains("allows.tsv") && err.contains("allows.d/0.tsv"),
+        "{err}"
+    );
+}
+
+/// The emitted message puts what to add before the comparison dump, and the
+/// dump carries the do-not-paste warning.
+#[test]
+fn the_delta_comes_before_any_dump() {
+    let (base, _) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[]);
+    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    let add = err.find("rows to add").expect("a rows-to-add section");
+    let dump = err
+        .find("for comparison only; do not paste into any table")
+        .expect("the comparison warning");
+    assert!(add < dump, "{err}");
 }

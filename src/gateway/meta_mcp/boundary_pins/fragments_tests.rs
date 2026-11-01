@@ -189,7 +189,12 @@ fn text_is_the_row_lines_only() {
 }
 
 /// The reader modules in this PR, and the tables they read.
-const READERS: [&str; 3] = ["allow_pins.rs", "creation_sites.rs", "presend_exits.rs"];
+const READERS: [&str; 4] = [
+    "allow_pins.rs",
+    "creation_sites.rs",
+    "presend_exits.rs",
+    "fragments.rs",
+];
 const TABLES: [&str; 4] = [
     "allows",
     "scoped_backends_classes",
