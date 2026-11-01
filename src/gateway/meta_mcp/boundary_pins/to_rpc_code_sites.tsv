@@ -34,7 +34,8 @@ src/gateway/router/backend_handlers/direct_preflight.rs	take_nonces	1	nonce refu
 src/gateway/router/backend_handlers/direct_preflight.rs	withheld_verdict	1	refusal code of a gateway routing-profile refusal for the caller verdict; no backend origin
 src/gateway/router/direct_guards.rs	refusal	2	every caller passes a gate's own error; gateway-origin frame
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	4	signing, nonce and sanitize refusals; gateway-origin frame
-src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	6	admission, kill-switch and audit refusals; gateway-origin frame
+src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	5	admission, kill-switch and audit refusals; gateway-origin frame
+src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	1	a withheld target's refusal code (moved from tools_call); gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	answer_intake	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	record	1	audit outcome code; no frame
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	3	admission refusals; gateway-origin frame
