@@ -591,3 +591,25 @@ fn transport_follows_redirect_matches_the_runtime_decision() {
         );
     }
 }
+
+/// C2: a backend's session-expiry refusal carried as its own JSON-RPC error
+/// (a non-2xx JSON body) still triggers session recovery, by code or by text.
+#[test]
+fn a_backends_own_session_expiry_refusal_triggers_recovery() {
+    let refusal = |code: i32, message: &str| {
+        Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: None,
+        })
+    };
+    assert!(is_session_expired_error(&refusal(
+        SESSION_NOT_FOUND_CODE,
+        "x"
+    )));
+    assert!(is_session_expired_error(&refusal(
+        -32000,
+        "Session not found"
+    )));
+    assert!(!is_session_expired_error(&refusal(-32600, "bad request")));
+}

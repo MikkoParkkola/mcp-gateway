@@ -520,3 +520,24 @@ fn a_backend_json_rpc_error_is_classed_as_its_gateway_twin() {
         );
     }
 }
+
+/// A2 (control): the budget probe rebuilds a frame a backend wrote as the
+/// backend's error, and a backend's -32001 there is a failure against the
+/// backend, never excused as a refusal of the caller.
+#[test]
+fn a_backend_written_frame_is_a_failure_through_the_budget_probe() {
+    let mut frame = crate::protocol::JsonRpcResponse::error(
+        Some(crate::protocol::RequestId::Number(1)),
+        -32001,
+        "backend says no",
+    );
+    frame.wire_meta.origin = crate::protocol::Origin::Backend;
+    let outcome = super::dispatch_guards::DirectOutcome::from_response(&Ok(frame));
+    assert!(
+        matches!(
+            outcome,
+            super::dispatch_guards::DirectOutcome::Failure { .. }
+        ),
+        "{outcome:?}"
+    );
+}

@@ -377,6 +377,46 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
 mod member_tests {
     use serde_json::json;
 
+    /// C5: a chain step's backend error keeps the backend's origin through
+    /// the chain's own wording: a refused argument keeps its code and gains
+    /// the step prefix, an absent method passes through unchanged, and any
+    /// other backend error is wrapped as the backend's.
+    #[test]
+    fn a_backends_step_error_keeps_its_origin_through_the_chain() {
+        use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
+        let backend = |code: i32| {
+            crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+                code,
+                message: "backend says no".to_owned(),
+                data: None,
+            })
+        };
+        let refused = super::step_failure(0, "alpha:read", backend(INVALID_PARAMS));
+        assert!(
+            matches!(&refused, crate::Error::BackendJsonRpc { code: INVALID_PARAMS, message, .. }
+                if message == "Chain step 0 (alpha:read) refused: backend says no"),
+            "{refused:?}"
+        );
+        let absent = super::step_failure(0, "alpha:read", backend(METHOD_NOT_FOUND));
+        assert!(
+            matches!(&absent, crate::Error::BackendJsonRpc { code: METHOD_NOT_FOUND, message, .. }
+                if message == "backend says no"),
+            "{absent:?}"
+        );
+        let other = super::step_failure(1, "alpha:read", backend(-32001));
+        assert!(
+            matches!(
+                &other,
+                crate::Error::BackendJsonRpc {
+                    code: INTERNAL_ERROR,
+                    ..
+                }
+            ),
+            "{other:?}"
+        );
+        assert_eq!(other.origin(), crate::protocol::Origin::Backend);
+    }
+
     /// `MIK-8113` (chain provenance): each result is its step's by the
     /// execution index written beside it, not its place in the array, so a
     /// chain resumed at step 3 labels its first result 3.

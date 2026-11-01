@@ -23,3 +23,34 @@ fn an_ambiguous_backend_refusal_is_the_gateways_own() {
         "classified as a missing backend is"
     );
 }
+
+/// V1: a backend's own JSON-RPC error reads exactly as the gateway's twin
+/// (text, code, the frame a client receives) and only its origin differs, so
+/// the variant changes the count and nothing a client sees.
+#[test]
+fn a_backend_json_rpc_error_reads_as_its_twin_and_is_the_backends() {
+    let data = Some(serde_json::json!({"detail": 1}));
+    let backend = Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: -32001,
+        message: "no such record".to_owned(),
+        data: data.clone(),
+    });
+    let gateway = Error::JsonRpc {
+        code: -32001,
+        message: "no such record".to_owned(),
+        data,
+    };
+    assert_eq!(backend.to_string(), gateway.to_string());
+    assert_eq!(backend.to_rpc_code(), gateway.to_rpc_code());
+    assert_eq!(backend.origin(), Origin::Backend);
+    assert_eq!(gateway.origin(), Origin::Gateway);
+    assert!(!backend.is_pre_dispatch(), "a backend's answer was sent");
+    assert!(!backend.is_lost_round());
+    assert!(!backend.is_gateway_throttle());
+    let id = Some(crate::protocol::RequestId::Number(1));
+    let frame = |e: &Error| {
+        serde_json::to_value(crate::protocol::JsonRpcResponse::of_error(id.clone(), e))
+            .expect("a frame serialises")
+    };
+    assert_eq!(frame(&backend), frame(&gateway), "the wire differs");
+}
