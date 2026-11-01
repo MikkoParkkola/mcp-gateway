@@ -407,7 +407,13 @@ impl StdioTasks {
                             )
                             .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                     },
-                    |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
+                    |current, frame| {
+                        self.host.meta_mcp.scan_task_read(
+                            current,
+                            caller.authorizer.generation(),
+                            frame,
+                        )
+                    },
                 )
                 .await
         })

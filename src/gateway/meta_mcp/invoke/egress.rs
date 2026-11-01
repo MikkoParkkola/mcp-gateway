@@ -64,6 +64,11 @@ pub(crate) struct Egress<'a> {
     /// every other.
     #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     pub(crate) firewall: Option<&'a Firewall>,
+    /// The request's pinned generation (on stdio, the line's): with the one
+    /// published when each scan starts, what the answer is judged under
+    /// (ADR-029, amended, item 5). `None` for an answer no request is behind.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
+    pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 
 /// What the scan did to a frame, in increasing strength.
@@ -144,7 +149,7 @@ impl MetaMcp {
             let mut artifact = fields.clone();
             let published = self.current_generation();
             let verdict = firewall.check_response_artifact(
-                firewall.policy_under(published.as_deref()),
+                firewall.answer_policies(at.generation, published.as_deref()),
                 &mut artifact,
                 &self.expand_targets(at.targets),
                 at.correlation,
@@ -205,10 +210,10 @@ impl MetaMcp {
             // Kept only where the scan may rewrite: a finding let through
             // untouched is not a rewrite.
             let published = self.current_generation();
-            let policy = firewall.policy_under(published.as_deref());
-            let before = policy.redacts().then(|| result.clone());
+            let policies = firewall.answer_policies(at.generation, published.as_deref());
+            let before = policies.redacts().then(|| result.clone());
             let verdict = firewall.check_response_artifact(
-                policy,
+                policies,
                 result,
                 &self.expand_targets(at.targets),
                 at.correlation,
@@ -344,11 +349,12 @@ pub(super) fn decoded_text(value: &Value, out: &mut String) {
 
 impl MetaMcp {
     /// The egress scan of a backend error held outside a frame (a task's
-    /// recovered failure, before it is stored): `server`/`tool` the target.
+    /// recovered failure, before it is stored): `server`/`tool` the target,
+    /// `generation` the request's pinned one, if a request is behind it.
     pub(crate) fn scan_backend_error(
         &self,
         (server, tool, trace_id): (&str, &str, &str),
-        api_key_name: Option<&str>,
+        (api_key_name, generation): (Option<&str>, Option<&crate::config_reload::Generation>),
         error: &mut JsonRpcError,
     ) -> EgressOutcome {
         let targets = [ResponsePolicyTarget {
@@ -371,6 +377,7 @@ impl MetaMcp {
             correlation: &correlation,
             api_key_name,
             firewall: self.firewall.as_deref(),
+            generation,
         };
         self.scan_error(error, &at)
     }
@@ -398,7 +405,7 @@ impl MetaMcp {
         };
         // A classification probe: nothing it finds or rewrites is delivered.
         crate::gateway::delivery_facts::suspended(|| {
-            self.scan_backend_error((server, tool, tool), None, &mut error)
+            self.scan_backend_error((server, tool, tool), (None, None), &mut error)
         }) == EgressOutcome::Delivered
     }
 }
@@ -413,6 +420,9 @@ struct NotificationEgress {
     /// The caller and session the dispatch bound once it authenticated them;
     /// the labels above until then.
     bound: std::sync::OnceLock<(String, String)>,
+    /// The call's pinned generation (on stdio, the line's): each notification
+    /// is judged under it and the one published when its scan starts.
+    generation: Option<std::sync::Arc<crate::config_reload::Generation>>,
 }
 
 impl crate::transport::notification_sink::NotificationScreen for NotificationEgress {
@@ -446,6 +456,7 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
             correlation: &correlation,
             api_key_name: None,
             firewall: self.meta.firewall.as_deref(),
+            generation: self.generation.as_deref(),
         };
         // A notification is not the answer: its scan writes nothing into the
         // delivery's facts (A4).
@@ -456,17 +467,19 @@ impl crate::transport::notification_sink::NotificationScreen for NotificationEgr
 
 impl MetaMcp {
     /// The notification screen for one client's scope: `caller` and
-    /// `session_id` label its verdicts.
+    /// `session_id` label its verdicts; `generation` is the call's pinned one,
+    /// `None` for notifications no request is behind.
     pub(crate) fn notification_screen(
         self: &std::sync::Arc<Self>,
-        caller: &str,
-        session_id: &str,
+        (caller, session_id): (&str, &str),
+        generation: Option<std::sync::Arc<crate::config_reload::Generation>>,
     ) -> std::sync::Arc<dyn crate::transport::notification_sink::NotificationScreen> {
         std::sync::Arc::new(NotificationEgress {
             meta: std::sync::Arc::clone(self),
             caller: caller.to_owned(),
             session_id: session_id.to_owned(),
             bound: std::sync::OnceLock::new(),
+            generation,
         })
     }
 
@@ -491,7 +504,7 @@ impl MetaMcp {
             let mut artifact = fields.clone();
             let published = self.current_generation();
             let verdict = firewall.check_response_artifact(
-                firewall.policy_under(published.as_deref()),
+                firewall.answer_policies(at.generation, published.as_deref()),
                 &mut artifact,
                 &self.expand_targets(at.targets),
                 at.correlation,
@@ -583,6 +596,7 @@ impl MetaMcp {
     pub(crate) fn scan_stored_task(
         &self,
         task: &crate::gateway::task_service::CommittedTask,
+        generation: Option<&crate::config_reload::Generation>,
         value: &mut Value,
     ) -> EgressOutcome {
         let targets = stored_targets(task);
@@ -602,6 +616,7 @@ impl MetaMcp {
             correlation: &correlation,
             api_key_name: None,
             firewall: self.firewall.as_deref(),
+            generation,
         };
         self.firewall_result(value, &at)
     }
@@ -611,12 +626,12 @@ impl MetaMcp {
     pub(crate) fn scan_task_read(
         &self,
         task: &crate::gateway::task_service::CommittedTask,
+        reader: Option<&crate::config_reload::Generation>,
         frame: &mut JsonRpcResponse,
     ) {
-        let refused = frame
-            .result
-            .as_mut()
-            .is_some_and(|value| self.scan_stored_task(task, value) == EgressOutcome::Refused);
+        let refused = frame.result.as_mut().is_some_and(|value| {
+            self.scan_stored_task(task, reader, value) == EgressOutcome::Refused
+        });
         if refused {
             *frame =
                 JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
@@ -642,6 +657,7 @@ impl MetaMcp {
     /// [`crate::Error::ResponseFirewallRefused`] when the scan refuses.
     pub(in crate::gateway) fn inspect_discovery_value(
         &self,
+        generation: Option<&crate::config_reload::Generation>,
         value: &mut Value,
     ) -> crate::Result<()> {
         let targets = [ResponsePolicyTarget {
@@ -664,6 +680,7 @@ impl MetaMcp {
             correlation: &correlation,
             api_key_name: None,
             firewall: self.firewall.as_deref(),
+            generation,
         };
         if self.content_refuses(&at, Part::Result, value)
             || self.firewall_result(value, &at) == EgressOutcome::Refused
@@ -705,6 +722,8 @@ impl MetaMcp {
             correlation: &correlation,
             api_key_name: None,
             firewall: self.firewall.as_deref(),
+            // Content checks only: no firewall policy is read.
+            generation: None,
         };
         // A key refusal: the gateway's error answer.
         self.content_refuses(&at, Part::Error, value)

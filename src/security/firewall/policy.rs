@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The part of the firewall a reload may change (ADR-029, amended
 //! 2026-10-30): the compiled rules and the credential-redaction switch that
-//! pairs with them. Every generation compiles its own, and each check takes
-//! the policy of the generation it is judged under, so one request never
-//! mixes two rule sets. The firewall's state (anomaly, tenant, budget,
-//! relay) is not here: it outlives every generation.
+//! pairs with them. Every generation compiles its own. A request-side check
+//! takes the request's pinned generation's policy, so one request never
+//! mixes two rule sets on the request side; an answer is judged under the
+//! stronger of its pinned and the published generation ([`AnswerPolicies`]).
+//! The firewall's state (anomaly, tenant, budget, relay) is not here: it
+//! outlives every generation.
 
 use super::CompiledRule;
 use super::collusion_gate::{CollusionAction, CollusionConfig, compile_flows, compile_globs};
@@ -44,6 +46,64 @@ impl std::fmt::Debug for FirewallPolicy {
             .field("rules", &self.rules.len())
             .field("credential_redaction", &self.credential_redaction)
             .finish()
+    }
+}
+
+/// The policies an answer is judged under (ADR-029, amended, item 5): the
+/// request's pinned generation's and the one published when the scan starts.
+/// Each is judged on the findings its own redaction switch produces, the
+/// stronger action stands, and the answer is redacted if either redacts, so
+/// an answer is never judged weaker than either generation alone. One policy
+/// when both are the same generation, or for an answer no request is behind.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnswerPolicies<'a> {
+    pinned: &'a FirewallPolicy,
+    published: Option<&'a FirewallPolicy>,
+}
+
+impl<'a> AnswerPolicies<'a> {
+    /// An answer to a request pinned to `pinned`, scanned while `published`
+    /// is current: one policy when they are the same generation.
+    pub(crate) fn answer(
+        pinned: &'a crate::config_reload::Generation,
+        published: &'a crate::config_reload::Generation,
+    ) -> Self {
+        Self {
+            pinned: pinned.firewall_policy(),
+            published: (!std::ptr::eq(pinned, published)).then(|| published.firewall_policy()),
+        }
+    }
+
+    /// One policy: a requestless answer's published generation, or a
+    /// firewall with no generation to judge under.
+    pub(crate) const fn single(policy: &'a FirewallPolicy) -> Self {
+        Self {
+            pinned: policy,
+            published: None,
+        }
+    }
+
+    /// Whether the answer is redacted: either policy redacts.
+    pub(crate) fn redacts(&self) -> bool {
+        self.pinned.credential_redaction || self.published.is_some_and(FirewallPolicy::redacts)
+    }
+
+    /// Whether the two policies disagree on redaction, so their findings
+    /// differ (ADR-029, amended, item 5, rule 1).
+    pub(super) fn redaction_disagrees(&self) -> bool {
+        self.published
+            .is_some_and(|other| other.credential_redaction != self.pinned.credential_redaction)
+    }
+
+    /// Each policy the answer is judged under: one or two.
+    pub(super) fn each(&self) -> impl Iterator<Item = &'a FirewallPolicy> {
+        std::iter::once(self.pinned).chain(self.published)
+    }
+}
+
+impl<'a> From<&'a FirewallPolicy> for AnswerPolicies<'a> {
+    fn from(policy: &'a FirewallPolicy) -> Self {
+        Self::single(policy)
     }
 }
 

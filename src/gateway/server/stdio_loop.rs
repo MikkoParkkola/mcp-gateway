@@ -452,7 +452,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         if !responses.is_empty() {
@@ -554,7 +557,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         #[cfg(test)]

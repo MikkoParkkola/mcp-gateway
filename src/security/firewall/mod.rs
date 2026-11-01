@@ -62,7 +62,7 @@ pub mod principal_window;
 pub mod redactor;
 mod response;
 mod verdict;
-pub(crate) use policy::{CollusionView, DetectorParams, FirewallPolicy};
+pub(crate) use policy::{AnswerPolicies, CollusionView, DetectorParams, FirewallPolicy};
 #[cfg(test)]
 use verdict::rule_matches;
 use verdict::{decide_firewall_action, first_matching_rule_action};
@@ -432,6 +432,21 @@ impl Firewall {
             });
         }
         &self.startup
+    }
+
+    /// What an answer is judged under (ADR-029, amended, item 5): the
+    /// request's `pinned` generation and the `published` one together, the
+    /// published one alone for an answer no request is behind, and the
+    /// startup policy only with neither ([`Self::policy_under`]).
+    pub(crate) fn answer_policies<'a>(
+        &'a self,
+        pinned: Option<&'a crate::config_reload::Generation>,
+        published: Option<&'a crate::config_reload::Generation>,
+    ) -> AnswerPolicies<'a> {
+        match (pinned, published) {
+            (Some(pinned), Some(published)) => AnswerPolicies::answer(pinned, published),
+            (one, other) => AnswerPolicies::single(self.policy_under(one.or(other))),
+        }
     }
 
     /// [`Self::check_request`] with the caller's proven key, for a rule's

@@ -309,7 +309,11 @@ async fn tasks_get_judged(
                         .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                 })
             },
-            |current, frame| state.meta_mcp.scan_task_read(current, frame),
+            |current, frame| {
+                state
+                    .meta_mcp
+                    .scan_task_read(current, Some(caller.generation), frame)
+            },
         )
         .await
 }
