@@ -167,11 +167,11 @@ async fn a_bridged_backend_failure_in_a_single_execute_counts_as_the_backends() 
     let meta = asking_meta();
     let channel = Accepting;
     let ctx = legacy_ctx(&channel);
-    let (error, marker) = counted_marker(meta.code_mode_execute(
+    let (error, marker) = counted_marker(Box::pin(meta.code_mode_execute(
         &json!({"tool": "asker:book", "arguments": {}}),
         Some("session-bridged-execute"),
         &ctx,
-    ))
+    )))
     .await;
     assert_bridged_backend_failure(&error, marker);
 }

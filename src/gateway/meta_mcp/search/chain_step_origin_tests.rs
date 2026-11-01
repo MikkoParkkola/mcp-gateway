@@ -4,7 +4,7 @@
 //! backend's own `INVALID_PARAMS` reaches `step_failure`'s refusal arm, and
 //! the chain's error delivered for it counts as the backend's. (Through the
 //! router a backend's dispatch error is folded into an `isError` result
-//! before the chain sees it, post_dispatch's `dispatch_error_result`; that
+//! before the chain sees it, `post_dispatch`'s `dispatch_error_result`; that
 //! path is the router row of the same name.)
 
 use crate::error::rpc_codes::INVALID_PARAMS;

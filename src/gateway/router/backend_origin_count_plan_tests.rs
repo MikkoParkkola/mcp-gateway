@@ -79,7 +79,7 @@ fn install(fx: &Fx, name: &str, tool: &'static str, script: Script) {
 }
 
 /// A playbook `p` of `steps`, carrying on past failures, with `timeout`.
-fn plan(steps: Value, timeout: u64) -> crate::playbook::PlaybookDefinition {
+fn plan(steps: &Value, timeout: u64) -> crate::playbook::PlaybookDefinition {
     serde_json::from_value(json!({
         "playbook": "1.0", "name": "p", "description": "plan row",
         "on_error": "continue", "timeout": timeout, "steps": steps
@@ -151,7 +151,7 @@ fn a_plan_ending_on_a_gateway_withheld_step_counts_the_gateways_kind() {
 #[test]
 fn a_plan_timing_out_after_a_reported_backend_failure_counts_internal() {
     let definition = plan(
-        json!([
+        &json!([
             {"name": "s0", "tool": "write", "server": "beta", "arguments": {}},
             {"name": "s1", "tool": "read", "server": "slow", "arguments": {}},
             {"name": "s2", "tool": "read", "server": "slow", "arguments": {}}
@@ -186,7 +186,7 @@ fn a_plan_timing_out_after_a_reported_backend_failure_counts_internal() {
 #[test]
 fn a_plan_reporting_a_backend_failure_and_a_typed_refusal_counts_the_gateways() {
     let definition = plan(
-        json!([
+        &json!([
             {"name": "s0", "tool": "write", "server": "beta", "arguments": {}},
             {"name": "s1", "tool": "read", "server": "alpha", "arguments": {}}
         ]),
