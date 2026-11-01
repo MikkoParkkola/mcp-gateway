@@ -199,3 +199,160 @@ async fn a_dispatch_refused_at_its_send_is_that_refusal_sent_once() {
         other => panic!("the send's refusal, not a folded result: {other:?}"),
     }
 }
+
+/// Answers `tools/call` with a backend's own -32001: in band when `in_band`,
+/// else as the transport's error (`peer_refusal` builds a backend's 4xx so).
+struct BackendRefuses {
+    in_band: bool,
+}
+
+#[async_trait::async_trait]
+impl Transport for BackendRefuses {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<crate::protocol::JsonRpcResponse> {
+        if method == "tools/list" {
+            return Ok(crate::protocol::JsonRpcResponse::success_serialized(
+                RequestId::Number(1),
+                json!({"tools": [{"name": "book", "inputSchema": {"type": "object"}}]}),
+            ));
+        }
+        if self.in_band {
+            return Ok(crate::protocol::JsonRpcResponse::error(
+                Some(RequestId::Number(1)),
+                -32001,
+                "the backend's own denial",
+            ));
+        }
+        Err(crate::Error::JsonRpc {
+            code: -32001,
+            message: "the backend's own denial".to_string(),
+            data: None,
+        })
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// A backend's own -32001 is the backend's answer, not the gateway's
+/// refusal of the caller: still folded into an error result, and still
+/// sampled against the backend's error budget (it cannot exempt itself).
+async fn assert_backend_refusal_stays_the_backends(in_band: bool) {
+    let backend = Arc::new(Backend::new(
+        "denies",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(BackendRefuses { in_band }));
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(backend);
+    let meta = MetaMcp::new(registry);
+    let caller = ctx(&AllowAll);
+    let args = json!({"server": "denies", "tool": "book", "arguments": {}});
+    let answer = meta.invoke_tool(&args, None, &caller).await;
+    let Ok(value) = &answer else {
+        panic!("a backend's denial is a folded result, not a gateway refusal: {answer:?}");
+    };
+    assert_eq!(value["isError"], true, "{value}");
+    assert!(
+        value.to_string().contains("the backend's own denial"),
+        "premise: the backend's denial: {value}"
+    );
+    assert_eq!(
+        meta.kill_switch.window_counts("denies"),
+        (0, 1),
+        "sampled as the backend's failure"
+    );
+}
+
+#[tokio::test]
+async fn a_backends_in_band_denial_stays_the_backends() {
+    assert_backend_refusal_stays_the_backends(true).await;
+}
+
+#[tokio::test]
+async fn a_backends_transport_denial_stays_the_backends() {
+    assert_backend_refusal_stays_the_backends(false).await;
+}
+
+/// `meta` over one backend, `refused`, whose call is refused at its send,
+/// with a one-step playbook `plan` on it; and the calls that reached the send.
+fn refused_plan_meta() -> (MetaMcp, Arc<AtomicUsize>) {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(Backend::new(
+        "refused",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(Arc::new(RefusedAtSend {
+        calls: Arc::clone(&calls),
+    }));
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(backend);
+    let meta = MetaMcp::new(registry);
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    let definition = json!({
+        "playbook": "1.0", "name": "plan", "description": "one step",
+        "steps": [{"name": "only", "server": "refused", "tool": "book", "arguments": {}}],
+    });
+    engine.register(serde_json::from_value(definition).expect("the playbook parses"));
+    meta.set_playbook_engine(engine);
+    (meta, calls)
+}
+
+/// A composite step refused at its send: sent exactly once (no strategy
+/// resends it) and answered with the neutral step refusal, as a step the
+/// policy refuses is, never as a backend error folded into the plan.
+async fn assert_step_refused_once(tool: &str, arguments: Value) {
+    let (meta, calls) = refused_plan_meta();
+    let answer = serde_json::to_value(
+        Box::pin(meta.handle_tools_call(
+            RequestId::Number(1),
+            tool,
+            arguments,
+            None,
+            ctx(&AllowAll),
+        ))
+        .await,
+    )
+    .expect("the answer is JSON");
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the step reached its send once: {answer}"
+    );
+    assert!(
+        !answer.to_string().contains("retrying once is safe"),
+        "no retry is suggested: {answer}"
+    );
+    assert_eq!(
+        answer["error"]["message"],
+        crate::gateway::meta_mcp::STEP_NOT_PERMITTED,
+        "the neutral step refusal: {answer}"
+    );
+}
+
+#[tokio::test]
+async fn a_playbook_step_refused_at_its_send_is_refused_once() {
+    assert_step_refused_once("gateway_run_playbook", json!({"name": "plan"})).await;
+}
+
+#[tokio::test]
+async fn a_chain_step_refused_at_its_send_is_refused_once() {
+    assert_step_refused_once(
+        "gateway_execute",
+        json!({"chain": [{"tool": "refused:book", "arguments": {}}]}),
+    )
+    .await;
+}
