@@ -38,6 +38,9 @@ pub(super) struct EvaluatedReload {
     pub(super) secret_refs: std::collections::BTreeSet<String>,
     /// What this evaluation read; digested when it is published.
     pub(super) inputs: super::revision::RawInputs,
+    /// Each backend's configured credentials, pinned before this load is
+    /// published.
+    pub(super) configured: crate::config::configured_secrets::ConfiguredByBackend,
 }
 
 pub(super) fn load_config_patch(
@@ -60,6 +63,7 @@ pub(super) fn load_config_patch(
         overlay: evaluated.overlay,
         secret_refs: evaluated.secret_refs,
         inputs: evaluated.inputs,
+        configured: evaluated.configured,
     })
 }
 
@@ -684,11 +688,29 @@ impl ReloadContext {
         let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
         let EvaluatedReload {
             config: new_config,
-            patch,
+            mut patch,
             overlay,
             inputs,
+            configured,
             ..
         } = evaluated;
+        // A backend whose configured credentials changed (a value newly
+        // written as a reference, or no longer) is modified: replacing its
+        // instance clears what it cached and seeds the new one, and the
+        // publish moves every cache key on.
+        for name in self.registry.marking_changes(&configured) {
+            let Some(cfg) = new_config
+                .enabled_backends()
+                .find(|(n, _)| **n == name)
+                .map(|(_, c)| c)
+            else {
+                continue;
+            };
+            let mut listed = patch.backends_added.iter().chain(&patch.backends_modified);
+            if !listed.any(|(n, _)| *n == name) {
+                patch.backends_modified.push((name, cfg.clone()));
+            }
+        }
 
         if patch.is_empty() {
             // The env files can rotate under an unchanged config file, so the
@@ -714,6 +736,9 @@ impl ReloadContext {
         let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
+        // After every refusal: a backend `apply_patch` registers is seeded
+        // from this load's record.
+        self.registry.set_load_record(configured);
         let fully_applied = apply_patch(
             &patch,
             &self.registry,

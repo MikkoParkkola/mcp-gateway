@@ -472,10 +472,6 @@ pub(super) fn classify_backends(old: &Config, new: &Config, patch: &mut ConfigPa
 ///
 /// Uses canonical JSON for a stable, deep equality check without requiring
 /// `PartialEq` on all nested types.
-///
-/// The configured-secret record is compared too: it is not serialized, and a
-/// value rewritten from a literal to a reference resolving to the same bytes
-/// changes only the record, which must still re-seed the backend.
 pub(super) fn backend_config_changed(old: &BackendConfig, new: &BackendConfig) -> bool {
-    canonical_json(old) != canonical_json(new) || old.configured_secrets != new.configured_secrets
+    canonical_json(old) != canonical_json(new)
 }

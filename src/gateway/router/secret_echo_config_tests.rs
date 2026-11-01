@@ -12,7 +12,7 @@ use std::time::Duration;
 use tower::ServiceExt;
 
 use super::create_router;
-use super::tests::test_router_app_state_with_backend;
+use super::tests::test_router_app_state;
 use crate::backend::Backend;
 use crate::config::{Config, FailsafeConfig};
 
@@ -85,27 +85,38 @@ fn stdio_backend(dir: &Path, env_line: &str) -> String {
     )
 }
 
-/// The `echoes` backend as the loaded config describes it.
-fn loaded_backend(path: &Path) -> Arc<Backend> {
-    let loaded = Config::load_evaluated(Some(path)).expect("the config loads");
+/// The `echoes` backend as the loaded config describes it, and the load's
+/// record of each backend's configured credentials.
+fn loaded_backend(
+    path: &Path,
+) -> (
+    Arc<Backend>,
+    crate::config::configured_secrets::ConfiguredByBackend,
+) {
+    let mut loaded = Config::load_evaluated(Some(path)).expect("the config loads");
     let config = loaded
         .config
         .backends
         .get("echoes")
         .expect("the backend is configured")
         .clone();
-    Arc::new(Backend::new(
+    let backend = Arc::new(Backend::new(
         "echoes",
         config,
         &FailsafeConfig::default(),
         Duration::from_secs(30),
-    ))
+    ));
+    (backend, std::mem::take(&mut loaded.configured))
 }
 
-/// Loads `path`, registers its `echoes` backend and calls its `echo` tool
-/// on the meta route; the client's answer.
+/// Loads `path`, registers its `echoes` backend the way startup does (the
+/// registry holds the load's record first) and calls its `echo` tool on the
+/// meta route; the client's answer.
 async fn invoke_echo(path: &Path) -> Value {
-    let (state, _store) = test_router_app_state_with_backend(loaded_backend(path)).await;
+    let (backend, configured) = loaded_backend(path);
+    let (state, _store) = test_router_app_state().await;
+    state.backends.set_load_record(configured);
+    assert!(state.backends.register(backend), "premise: registered");
     let router = create_router(state);
     post(
         &router,

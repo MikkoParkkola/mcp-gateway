@@ -231,6 +231,11 @@ pub struct BackendRegistry {
     needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
     /// How long a value stays redacted after its last send.
     redaction_grace: std::time::Duration,
+    /// Each backend name's configured `headers:`/`env:` credentials, from the
+    /// load being applied (at startup, or by the reload in progress): what a
+    /// backend registering under that name is seeded with. The pins belong to
+    /// the instance: a later change to this map moves none of them.
+    configured: parking_lot::RwLock<Arc<crate::config::configured_secrets::ConfiguredByBackend>>,
 }
 
 impl BackendRegistry {
@@ -250,7 +255,43 @@ impl BackendRegistry {
             secret_resolver: None,
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
+            configured: parking_lot::RwLock::default(),
         }
+    }
+
+    /// The backend names registered now whose configured credentials differ
+    /// from `configured`'s record for them (a name the map lacks counts as
+    /// empty). Names only. A reload makes each such backend modified, so its
+    /// instance is replaced and the new one seeded.
+    pub(crate) fn marking_changes(
+        &self,
+        configured: &crate::config::configured_secrets::ConfiguredByBackend,
+    ) -> Vec<String> {
+        let empty = crate::config::configured_secrets::ConfiguredSecrets::default();
+        let instances: Vec<Arc<Backend>> = self
+            .backends
+            .iter()
+            .map(|entry| Arc::clone(entry.value()))
+            .collect();
+        let mut names: Vec<String> = instances
+            .iter()
+            .filter(|backend| {
+                backend.configured_record() != *configured.get(&backend.name).unwrap_or(&empty)
+            })
+            .map(|backend| backend.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Makes `configured` the record a backend registering from now on is
+    /// seeded with: set at startup before the register loop, and by a reload
+    /// before it applies its patch.
+    pub(crate) fn set_load_record(
+        &self,
+        configured: crate::config::configured_secrets::ConfiguredByBackend,
+    ) {
+        *self.configured.write() = Arc::new(configured);
     }
 
     /// A registry whose backends resolve their `secrets:` values with
@@ -344,7 +385,8 @@ impl BackendRegistry {
             }),
         );
         backend.stamp_needles(needles);
-        backend.seed_needles();
+        let configured = Arc::clone(&*self.configured.read());
+        backend.seed_needles(configured.get(&backend.name).unwrap_or(&Default::default()));
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
@@ -621,6 +663,19 @@ impl BackendRegistry {
         if let Some((_, gone)) = &removed {
             // The drain finds the name unregistered: the backend shows nothing.
             gone.nudge_tools(super::tools_nudge::NudgeKind::Changed);
+            // Its configured values count their grace from the removal: an
+            // echo still in flight from it is removed until then.
+            // The set is taken out first: no map guard is held while it logs.
+            let set = self
+                .needles
+                .get(name)
+                .map(|entry| Arc::clone(entry.value()));
+            if let Some(set) = set {
+                set.pin_configured(
+                    name,
+                    &crate::config::configured_secrets::ConfiguredSecrets::default(),
+                );
+            }
         }
         removed.is_some()
     }

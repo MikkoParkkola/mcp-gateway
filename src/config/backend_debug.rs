@@ -27,7 +27,6 @@ impl std::fmt::Debug for BackendConfig {
             // them — redact to counts here, matching `secrets` below.
             .field("env", &format!("<{} vars>", self.env.len()))
             .field("headers", &format!("<{} headers>", self.headers.len()))
-            .field("configured_secrets", &self.configured_secrets)
             .field("oauth", &self.oauth)
             .field("secrets", &format!("<{} rules>", self.secrets.len()))
             .field("passthrough", &self.passthrough)

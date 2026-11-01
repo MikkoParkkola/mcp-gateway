@@ -129,6 +129,7 @@ impl Backend {
             destination: std::sync::OnceLock::new(),
             secret_resolver: std::sync::OnceLock::new(),
             needles: std::sync::OnceLock::new(),
+            configured: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),

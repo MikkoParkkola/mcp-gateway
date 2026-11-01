@@ -115,13 +115,21 @@ impl Backend {
     /// removed from what the backend sends before any call injects it (a
     /// tool description, an initialize answer). A rule that does not resolve
     /// yet adds nothing; its value joins when a send resolves it. The
-    /// backend's configured `headers:` and `env:` credentials are held first,
-    /// with or without a resolver: they reach the backend on every start.
-    pub(crate) fn seed_needles(&self) {
+    /// backend's configured `headers:` and `env:` credentials, `configured`
+    /// (the registry's record for its name), are held first, with or without
+    /// a resolver: they reach the backend on every start.
+    pub(crate) fn seed_needles(
+        &self,
+        configured: &crate::config::configured_secrets::ConfiguredSecrets,
+    ) {
         let Some(needles) = self.needles.get() else {
             return;
         };
-        needles.pin_configured(&self.name, &self.config.configured_secrets);
+        // This instance owns these pins: its name's set settles on them, so
+        // a value the instance it replaces held and it lacks counts its grace
+        // from now.
+        let _ = self.configured.set(configured.clone());
+        needles.pin_configured(&self.name, configured);
         let Some(resolver) = self.secret_resolver.get() else {
             return;
         };
@@ -130,6 +138,12 @@ impl Backend {
                 needles.insert(&self.name, &value);
             }
         }
+    }
+
+    /// The configured credentials this instance was seeded with; empty
+    /// before it registers.
+    pub(crate) fn configured_record(&self) -> crate::config::configured_secrets::ConfiguredSecrets {
+        self.configured.get().cloned().unwrap_or_default()
     }
 
     /// The rules of this backend that apply to `tool`.

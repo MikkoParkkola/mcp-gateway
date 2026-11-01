@@ -341,11 +341,14 @@ pub(crate) fn evaluate_backend_value(
 
 /// [`evaluate_backend_value`] over every enabled backend's `headers` and
 /// `env`, in place, collecting each unresolved one's message: backend env
-/// and headers are secret slots too (ADR-028).
+/// and headers are secret slots too (ADR-028). Records each backend's
+/// credentials into `configured`, from the text as written, before the
+/// overwrite loses which values came from a secret source.
 pub(crate) fn evaluate_backends(
     backends: &mut std::collections::HashMap<String, super::BackendConfig>,
     overlay: &EnvOverlay,
     unresolved: &mut Vec<String>,
+    configured: &mut super::configured_secrets::ConfiguredByBackend,
 ) {
     use super::configured_secrets::{ConfiguredSecrets, Slot, record};
     for (name, backend) in backends.iter_mut().filter(|(_, b)| b.enabled) {
@@ -370,7 +373,7 @@ pub(crate) fn evaluate_backends(
                 Err(message) => unresolved.push(message),
             }
         }
-        backend.configured_secrets = secrets;
+        configured.insert(name.clone(), secrets.sorted());
     }
 }
 

@@ -9,7 +9,7 @@ use super::EnvOverlay;
 use super::secret_ref::{SecretRef, literal_outside_templates, template_names};
 
 /// How sure the gateway is that a configured value is a secret.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum SecretOrigin {
     /// The config said so: a whole-value `env:`, `file:` or `keychain:`
     /// reference, or a variable substituted into a header. Redacted at any
@@ -22,7 +22,7 @@ pub(crate) enum SecretOrigin {
 }
 
 /// One configured credential: the field it was written in and its value.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct ConfiguredSecret {
     /// `headers.<key>` or `env.<key>`, for warnings.
     pub(crate) field: String,
@@ -46,12 +46,26 @@ impl ConfiguredSecrets {
         self.0.iter()
     }
 
+    /// In a fixed order: `headers:` and `env:` are maps, so two loads of the
+    /// same file can record in different orders, and a reload compares
+    /// records to tell whether a marking changed.
+    pub(super) fn sorted(mut self) -> Self {
+        self.0.sort();
+        self.0.dedup();
+        self
+    }
+
     /// A record holding exactly `secrets`, for rows that seed a set directly.
     #[cfg(test)]
     pub(crate) fn of(secrets: Vec<ConfiguredSecret>) -> Self {
         Self(secrets)
     }
 }
+
+/// Each enabled backend's configured credentials, by backend name, as one
+/// load recorded them. Kept beside the config, never on it: the config's
+/// public structs carry no field for it.
+pub(crate) type ConfiguredByBackend = std::collections::HashMap<String, ConfiguredSecrets>;
 
 /// Which kind of slot a value was written in.
 #[derive(Clone, Copy)]

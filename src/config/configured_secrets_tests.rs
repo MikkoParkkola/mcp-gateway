@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use super::{ConfiguredSecret, SecretOrigin};
+use super::{ConfiguredByBackend, ConfiguredSecret, SecretOrigin};
 use crate::config::{BackendConfig, EnvOverlay, secret_ref::evaluate_backends};
 
 /// Long enough that no length gate applies.
@@ -38,13 +38,13 @@ fn recorded(
         },
     )]);
     let mut unresolved = Vec::new();
-    evaluate_backends(&mut backends, &overlay, &mut unresolved);
+    let mut configured = ConfiguredByBackend::new();
+    evaluate_backends(&mut backends, &overlay, &mut unresolved, &mut configured);
     assert!(
         unresolved.is_empty(),
         "premise: everything resolves: {unresolved:?}"
     );
-    let mut out: Vec<_> = backends["b"]
-        .configured_secrets
+    let mut out: Vec<_> = configured["b"]
         .iter()
         .map(
             |ConfiguredSecret {
@@ -167,13 +167,10 @@ fn the_record_never_prints_a_value() {
             ..BackendConfig::default()
         },
     )]);
-    evaluate_backends(&mut backends, &overlay, &mut Vec::new());
+    let mut configured = ConfiguredByBackend::new();
+    evaluate_backends(&mut backends, &overlay, &mut Vec::new(), &mut configured);
     let backend = &backends["b"];
-    let printed = format!("{backend:?} {:?}", backend.configured_secrets);
-    assert_eq!(
-        backend.configured_secrets.iter().count(),
-        1,
-        "premise: one recorded"
-    );
+    let printed = format!("{backend:?} {:?}", configured["b"]);
+    assert_eq!(configured["b"].iter().count(), 1, "premise: one recorded");
     assert!(!printed.contains(TOKEN), "{printed}");
 }

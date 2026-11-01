@@ -123,6 +123,10 @@ impl Gateway {
         // one, so the decision has to be made before it, not after.
         let bound_accounts = crate::config::account_bindings::compile(&config)?;
 
+        // The startup load's configured `headers:`/`env:` credentials, held
+        // by the registry before any backend registers and seeds from them.
+        backends.set_load_record(env.take_startup_configured());
+
         // Register backends
         for (name, backend_config) in config.enabled_backends() {
             let effective = match bound_accounts.get(name) {
