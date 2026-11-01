@@ -189,13 +189,13 @@ fn every_discovery_debug_line_shows_its_text_escaped() {
     const HOSTILE: &str = "a\u{1b}[31m\u{202e}b\nforged";
     let rows: [(&str, fn()); 3] = [
         ("Scanning MCP config file", || {
-            note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")))
+            note_mcp_config_file(Path::new(&format!("/cfg/{HOSTILE}.json")));
         }),
         ("Found MCP server in environment", || {
-            note_environment_server(HOSTILE, "MCP_SERVER_X_URL")
+            note_environment_server(HOSTILE, "MCP_SERVER_X_URL");
         }),
         ("Found MCP server in environment", || {
-            note_environment_server("x", &format!("MCP_SERVER_{HOSTILE}_URL"))
+            note_environment_server("x", &format!("MCP_SERVER_{HOSTILE}_URL"));
         }),
     ];
     for (site, log) in rows {
