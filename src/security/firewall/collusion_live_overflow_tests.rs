@@ -72,7 +72,11 @@ fn p8_8a_an_overflow_pair_follows_its_sources_listing() {
     let g0 = rig.generation();
     fill_cap(&rig, &g0, "carol", &t, now);
     record(&rig, &g0, ("ov:1", "carol"), &t, now);
-    assert_eq!(pairs(&rig, &t, "carol"), [("ov:1".to_string(), false)]);
+    assert_eq!(
+        pairs(&rig, &t, "carol"),
+        [("ov:1".to_string(), false)],
+        "P8.8a: carol's overflow pair for T is not (ov:1, non-inferred)"
+    );
     assert_eq!(bob(&rig, &g0, &t, now), Some("capacity"), "control: G0");
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     assert_eq!(bob(&rig, &rig.generation(), &t, now), None, "P8.8a: G1");
@@ -86,7 +90,11 @@ fn p8_8b_a_pair_is_rejudged_through_a_remove_and_re_add() {
     let g0 = rig.generation();
     fill_cap(&rig, &g0, "carol", &t, now);
     record(&rig, &g0, ("ov:2", "carol"), &t, now);
-    assert_eq!(pairs(&rig, &t, "carol"), [("ov:2".to_string(), false)]);
+    assert_eq!(
+        pairs(&rig, &t, "carol"),
+        [("ov:2".to_string(), false)],
+        "P8.8b: carol's overflow pair for T is not (ov:2, non-inferred)"
+    );
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     assert_eq!(bob(&rig, &rig.generation(), &t, now), None, "G1 allowed");
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".into(), "ov:2".into()]);
@@ -124,12 +132,16 @@ fn p8_8b_prime_a_dropped_plain_copy_stays_dropped() {
     assert_eq!(detector(&rig).capped(), before + 1, "one drop, one count");
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".into(), "plain2".into()]);
     assert_eq!(bob(&rig, &rig.generation(), &t, now), None, "P8.8b'");
-    assert!(pairs(&rig, &t, "carol").is_empty());
+    assert!(
+        pairs(&rig, &t, "carol").is_empty(),
+        "P8.8b': a dropped plain copy was kept as an overflow pair"
+    );
 }
 
 /// P8.8c: a caller whose overflow outgrew the pair bound is unattributed and
 /// refuses even when every source is flowed; one source short of the bound,
-/// the same flows allow it. RED on base at the control "allowed".
+/// the same flows allow it. RED on base at the control's `unattributed`
+/// assertion: today every overflow is unattributed.
 #[test]
 fn p8_8c_a_saturated_caller_is_unattributed() {
     let bound = u64::try_from(OVERFLOW_PAIRS_PER_CALLER).expect("small");
@@ -151,14 +163,28 @@ fn p8_8c_a_saturated_caller_is_unattributed() {
         let verdict = bob(&rig, &rig.generation(), &t, now);
         (verdict, detector(&rig).overflow_unattributed(&t, "carol"))
     };
+    // One source short of saturation the pairs are all kept, so the caller is
+    // attributed and the flows decide: on base every overflow is unattributed
+    // and refuses, which is what this row's control pins.
+    let (verdict, unattributed) = run(bound);
+    assert!(
+        !unattributed,
+        "P8.8c control: exactly the bound is held attributed, not unattributed"
+    );
     assert_eq!(
-        run(bound).0,
-        None,
-        "control: exactly the bound is attributed"
+        verdict, None,
+        "P8.8c control: exactly the bound is allowed by its flows"
     );
     let (verdict, unattributed) = run(bound + 1);
-    assert!(unattributed, "P8.8c: not marked unattributed");
-    assert_eq!(verdict, Some("capacity"), "P8.8c: refused");
+    assert!(
+        unattributed,
+        "P8.8c: past the bound is not marked unattributed"
+    );
+    assert_eq!(
+        verdict,
+        Some("capacity"),
+        "P8.8c: past the bound is not refused"
+    );
 }
 
 /// P8.8g: the sender's own copy from a pair's source does not excuse the
@@ -171,7 +197,11 @@ fn p8_8g_a_senders_copy_does_not_excuse_a_sourced_pair() {
     record(&rig, &g0, ("ov:1", "carol"), &t, now);
     record(&rig, &g0, ("ov:1", "dave"), &t, now);
     let found = detector(&rig).check_egress_under(g0.collusion_view(), "dave", EGRESS, &t, now);
-    assert_eq!(found.map(|f| f.reason.label()), Some("capacity"));
+    assert_eq!(
+        found.map(|f| f.reason.label()),
+        Some("capacity"),
+        "P8.8g: the sender's own copy from the pair's source changed the refusal"
+    );
 }
 
 use std::time::Duration;
@@ -201,7 +231,11 @@ fn p8_8e_the_unattributed_marker_expires_on_its_own_window() {
     record(&rig, &g0, ("ov:3", "carol"), &t, plus(t0, 300));
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     let g1 = rig.generation();
-    assert_eq!(bob(&rig, &g1, &t, plus(t0, 300)), Some("capacity"));
+    assert_eq!(
+        bob(&rig, &g1, &t, plus(t0, 300)),
+        Some("capacity"),
+        "P8.8e: at t0+300 bob is not refused as capacity"
+    );
     assert_eq!(bob(&rig, &g1, &t, plus(t0, 601)), None, "P8.8e: refreshed");
 }
 
@@ -216,8 +250,16 @@ fn p8_8f_new_unattributed_evidence_refreshes_the_marker() {
     record(&rig, &g0, (&fresh, "carol"), &t, plus(t0, 300));
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     let g1 = rig.generation();
-    assert_eq!(bob(&rig, &g1, &t, plus(t0, 601)), Some("capacity"));
-    assert_eq!(bob(&rig, &g1, &t, plus(t0, 901)), None);
+    assert_eq!(
+        bob(&rig, &g1, &t, plus(t0, 601)),
+        Some("capacity"),
+        "P8.8f: at t0+601 bob is not refused as capacity"
+    );
+    assert_eq!(
+        bob(&rig, &g1, &t, plus(t0, 901)),
+        None,
+        "P8.8f: at t0+901 bob is still refused"
+    );
 }
 
 /// A detector of its own (so a test can set its budget), `block`, every
@@ -296,7 +338,10 @@ fn run_budget(text_of: fn(u64) -> String, per_caller: impl Fn(usize, usize) -> u
         Some("capacity"),
         "newcomer c{newcomer}"
     );
-    assert!(d.overflow_unattributed(&newcomer_text, &format!("c{newcomer}")));
+    assert!(
+        d.overflow_unattributed(&newcomer_text, &format!("c{newcomer}")),
+        "P8.8d: the newcomer is not marked unattributed"
+    );
 }
 
 /// P8.8d, one fingerprint per text: a full total budget fails closed for the
@@ -336,10 +381,16 @@ fn o5_1_the_byte_bound_marks_saturation_before_the_pair_count() {
     }
     assert_eq!(pairs(&rig, &t, "carol").len(), fit, "O5.1: pairs kept");
     assert!(fit < OVERFLOW_PAIRS_PER_CALLER, "premise: bytes bind first");
-    assert!(!detector(&rig).overflow_unattributed(&t, "carol"));
+    assert!(
+        !detector(&rig).overflow_unattributed(&t, "carol"),
+        "O5.1: the caller is unattributed before the byte bound trips"
+    );
     record(&rig, &g, (&name(fit + 1), "carol"), &t, now);
     assert!(detector(&rig).overflow_unattributed(&t, "carol"), "O5.1");
-    assert!(detector(&rig).overflow_bytes().0 <= OVERFLOW_BYTES_PER_CALLER);
+    assert!(
+        detector(&rig).overflow_bytes().0 <= OVERFLOW_BYTES_PER_CALLER,
+        "O5.1: the per-caller overflow bytes exceed the bound"
+    );
 }
 
 /// O5.3: the last reference frees an interned source. RED on base at the
@@ -350,7 +401,11 @@ fn o5_3_the_last_reference_frees_the_interned_source() {
     let g = rig.generation();
     let before = detector(&rig).interned_sources_for_test();
     record(&rig, &g, ("ov:z", "carol"), &t, now);
-    assert_eq!(detector(&rig).interned_sources_for_test(), before + 1);
+    assert_eq!(
+        detector(&rig).interned_sources_for_test(),
+        before + 1,
+        "O5.3: the interned source count did not rise by one"
+    );
     let _ = bob(&rig, &rig.generation(), &t, plus(now, 601));
     assert_eq!(detector(&rig).interned_sources_for_test(), before, "O5.3");
 }
@@ -379,7 +434,11 @@ fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
 fn o5_2a_retention_uses_the_recording_generations_lists() {
     let text = one_fp(0);
     let (rig, counted) = retention_under_the_recording_lists(&text);
-    assert_eq!(pairs(&rig, &text, "carol"), [("src:p".to_string(), false)]);
+    assert_eq!(
+        pairs(&rig, &text, "carol"),
+        [("src:p".to_string(), false)],
+        "O5.2a: carol's overflow pair is not (src:p, non-inferred)"
+    );
     assert_eq!(counted, 2, "one drop and one overflow, one fingerprint");
 }
 
@@ -390,7 +449,11 @@ fn o5_2a_retention_uses_the_recording_generations_lists() {
 fn o5_2a_counts_per_fingerprint_not_per_delivery() {
     let text = two_fp(0);
     let (rig, counted) = retention_under_the_recording_lists(&text);
-    assert_eq!(pairs(&rig, &text, "carol"), [("src:p".to_string(), false)]);
+    assert_eq!(
+        pairs(&rig, &text, "carol"),
+        [("src:p".to_string(), false)],
+        "O5.2a (two fingerprints): carol's overflow pair is not (src:p, non-inferred)"
+    );
     assert_eq!(
         counted, 4,
         "one drop and one overflow, two fingerprints each"

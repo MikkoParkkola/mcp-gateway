@@ -51,7 +51,11 @@ fn p8_1_a_removed_flow_refuses_after_the_reload() {
     );
     let verdict = rig.relays("bob", SEND, PROSE, &g1);
     assert!(refused(&verdict), "P8.1: the removed flow still allows it");
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.1: refused for a reason other than relay"
+    );
 }
 
 /// P8.2a: an inferred (classified) delivery from a source no list names is
@@ -78,7 +82,11 @@ fn p8_2a_a_flow_added_then_removed_follows_the_reload() {
     let g2 = rig.generation();
     let verdict = rig.relays("bob", SEND, PROSE, &g2);
     assert!(refused(&verdict), "P8.2a: the removed flow still allows it");
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.2a: refused for a reason other than relay"
+    );
 }
 
 /// P8.2b: a plain copy recorded under no list becomes sensitive when a
@@ -96,7 +104,11 @@ fn p8_2b_a_source_added_makes_the_held_plain_copy_sensitive() {
     let g1 = rig.generation();
     let verdict = rig.relays("bob", SEND, PROSE, &g1);
     assert!(refused(&verdict), "P8.2b: the added source does not apply");
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.2b: refused for a reason other than relay"
+    );
 }
 
 /// P8.3: reordering `allowed_flows` changes no verdict. GREEN pin on base
@@ -150,7 +162,11 @@ fn p8_4_an_emptied_non_egress_checks_the_egress_again() {
         refused(&verdict),
         "P8.4: the emptied non_egress still exempts it"
     );
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.4: refused for a reason other than relay"
+    );
 }
 
 /// P8.5a: relay detection switched on by a reload judges what is delivered
@@ -163,7 +179,11 @@ fn p8_5a_off_then_block_judges_the_delivery_after_the_switch() {
     rig.deliver("alice", READ, &plain(PROSE), &g1);
     let verdict = rig.relays("bob", SEND, PROSE, &g1);
     assert!(refused(&verdict), "P8.5a: nothing was recorded or checked");
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.5a: refused for a reason other than relay"
+    );
 }
 
 /// P8.6a: an activation that arrives with a detector parameter edit applies
@@ -180,7 +200,10 @@ fn p8_6a_activation_with_a_detector_edit_applies_nothing() {
     });
     let g1 = rig.generation();
     assert_eq!(g1.collusion_view().action(), Observe, "control: held");
-    assert!(rig.live.pending_restart_fields().contains(&"security"));
+    assert!(
+        rig.live.pending_restart_fields().contains(&"security"),
+        "P8.6a: security is not restart-pending"
+    );
     let verdict = rig.relays("bob", SEND, PROSE, &g1);
     assert!(observed(&verdict), "P8.6a: not observed: {verdict:?}");
 }
@@ -199,7 +222,10 @@ fn p8_6b_an_action_edit_beside_a_pending_edit_is_held() {
     rig.reload(|c| c.security.firewall.collusion.action = Off);
     let g2 = rig.generation();
     assert_eq!(g2.collusion_view().action(), Observe, "control: held");
-    assert!(rig.live.pending_restart_fields().contains(&"security"));
+    assert!(
+        rig.live.pending_restart_fields().contains(&"security"),
+        "P8.6b: security is not restart-pending"
+    );
     let verdict = rig.relays("bob", SEND, PROSE, &g2);
     assert!(observed(&verdict), "P8.6b: not observed: {verdict:?}");
 }
@@ -261,10 +287,17 @@ fn p8_13_a_live_block_survives_a_later_detector_edit() {
         Block,
         "control: held at block"
     );
-    assert!(rig.live.pending_restart_fields().contains(&"security"));
+    assert!(
+        rig.live.pending_restart_fields().contains(&"security"),
+        "P8.13: security is not restart-pending"
+    );
     let verdict = rig.relays("bob", SEND, PROSE, &g2);
     assert!(refused(&verdict), "P8.13: not refused: {verdict:?}");
-    assert_eq!(why(&verdict), Some(Why::Relay));
+    assert_eq!(
+        why(&verdict),
+        Some(Why::Relay),
+        "P8.13: refused for a reason other than relay"
+    );
 }
 
 /// P8.14d: an inferred fact expires with its own delivery; a plain delivery

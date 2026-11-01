@@ -129,18 +129,24 @@ async fn r4_4a_an_effective_block_records_though_off_is_requested() {
     );
     let staged = stage_plan(&lm, &text_result(&one_fp(0))).await;
     staged.commit(true, &g1);
-    assert!(lm.firewall().replay_digests(&sync_key()).is_some());
+    assert!(
+        lm.firewall().replay_digests(&sync_key()).is_some(),
+        "R4.4a: no snapshot under the effective block"
+    );
     assert!(bob_refused_with(&lm, &one_fp(0)), "R4.4a: not recorded");
 }
 
-/// R4.4b: effective `off`, requested `block` (held beside a window edit):
-/// nothing is recorded or snapshotted; once the edit applies, the control
-/// delivery is held. RED on base at the control.
+/// R4.4b: effective `off`, requested `block` (held beside a window edit).
+/// Startup `block`; `off` published (effective off); then `block` with a
+/// changed window, which is held, so the effective action stays `off`. A
+/// delivery committed then records and snapshots nothing; once the edit
+/// applies, bob relaying the text is allowed. The control, a delivery under
+/// the applied `block`, is held on any base. RED on base at the snapshot: the
+/// startup `block` records the delivery whatever the generation says.
 #[tokio::test]
 async fn r4_4b_an_effective_off_records_nothing_though_block_is_requested() {
     let text = one_fp(0);
-    let control = live_meta(Off, 600);
-    control.publish(Block);
+    let control = live_meta(Block, 600);
     let staged = stage_plan(&control, &text_result(&text)).await;
     staged.commit(true, &control.live().generation());
     assert!(
@@ -148,7 +154,8 @@ async fn r4_4b_an_effective_off_records_nothing_though_block_is_requested() {
         "control: a delivery under an applied `block` is held"
     );
 
-    let lm = live_meta(Off, 600);
+    let lm = live_meta(Block, 600);
+    lm.publish(Off);
     lm.rig.reload(|c| {
         c.security.firewall.collusion.action = Block;
         c.security.firewall.collusion.window_secs = 601;
@@ -161,8 +168,14 @@ async fn r4_4b_an_effective_off_records_nothing_though_block_is_requested() {
         c.security.firewall.collusion.action = Block;
         c.security.firewall.collusion.window_secs = 600;
     });
-    assert!(lm.firewall().replay_digests(&sync_key()).is_none());
-    assert!(!bob_refused_with(&lm, &text), "R4.4b: recorded under off");
+    assert!(
+        lm.firewall().replay_digests(&sync_key()).is_none(),
+        "R4.4b: a snapshot was stored under the effective off"
+    );
+    assert!(
+        !bob_refused_with(&lm, &text),
+        "R4.4b: recorded under the effective off"
+    );
 }
 
 /// Whether bob sending `text` through `alpha:send` is refused under the

@@ -14,7 +14,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use super::catalogue::{Route, prompt_with, read_resource};
-use super::catalogue::{assert_catalogue_refused, assert_catalogue_sent};
+use super::catalogue::{assert_catalogue_refused_as, assert_catalogue_sent_as};
 use super::meta::meta_fixture;
 use super::*;
 use crate::security::firewall::relay_witness_hook;
@@ -79,7 +79,7 @@ async fn t1a_admitted_under_block_a_later_off_still_refuses() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Off);
     let relay = call("send", &json!({"text": PROSE}), None, None);
-    assert_refused(&fx, &fx.call(Some("b"), &relay).await, 0);
+    assert_refused_as("T1a: ", &fx, &fx.call(Some("b"), &relay).await, 0);
     assert_ordered(&seen, admitted);
 }
 
@@ -93,7 +93,7 @@ async fn t1b_admitted_under_off_a_later_block_still_sends() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Block);
     let relay = call("send", &json!({"text": PROSE}), None, None);
-    assert_sent(&fx, &fx.call(Some("b"), &relay).await, 1);
+    assert_sent_as("T1b: ", &fx, &fx.call(Some("b"), &relay).await, 1);
     assert_ordered(&seen, admitted);
 }
 
@@ -113,7 +113,7 @@ async fn t1c_catalogue_admitted_under_block_a_later_off_still_refuses() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Off);
     let answer = prompt_with(&fx, Route::Direct, "b", PROSE).await;
-    assert_catalogue_refused(&fx, &answer, forwarded);
+    assert_catalogue_refused_as("T1c: ", &fx, &answer, forwarded);
     assert_ordered(&seen, admitted);
 }
 
@@ -128,7 +128,7 @@ async fn t1d_catalogue_admitted_under_off_a_later_block_still_sends() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Block);
     let answer = prompt_with(&fx, Route::Direct, "b", PROSE).await;
-    assert_catalogue_sent(&fx, &answer, forwarded + 1);
+    assert_catalogue_sent_as("T1d: ", &fx, &answer, forwarded + 1);
     assert_ordered(&seen, admitted);
 }
 
@@ -142,8 +142,8 @@ async fn t3a_meta_catalogue_admitted_under_block_a_later_off_still_refuses() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Off);
     let answer = prompt_with(&fx, Route::Meta, "b", PROSE).await;
-    assert_catalogue_refused(&fx, &answer, forwarded);
-    assert_eq!(answer.0, 403, "{}", answer.1);
+    assert_catalogue_refused_as("T3a: ", &fx, &answer, forwarded);
+    assert_eq!(answer.0, 403, "T3a: status: {}", answer.1);
     assert_ordered(&seen, admitted);
 }
 
@@ -158,7 +158,7 @@ async fn t3b_meta_catalogue_admitted_under_off_a_later_block_still_sends() {
     let admitted = fx.state.live_config.seq();
     let seen = arm_reload(&fx, CollusionAction::Block);
     let answer = prompt_with(&fx, Route::Meta, "b", PROSE).await;
-    assert_catalogue_sent(&fx, &answer, forwarded + 1);
+    assert_catalogue_sent_as("T3b: ", &fx, &answer, forwarded + 1);
     assert_ordered(&seen, admitted);
 }
 
@@ -179,11 +179,16 @@ async fn p8_4_route_an_emptied_non_egress_checks_the_egress_again() {
     })
     .await;
     fx.read(Some("a")).await;
-    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    assert_sent_as(
+        "P8.4 route control: ",
+        &fx,
+        &fx.send(Some("b"), PROSE).await,
+        1,
+    );
     edit(&fx.state, |c| {
         c.security.firewall.collusion.non_egress.clear();
     });
-    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    assert_refused_as("P8.4 route: ", &fx, &fx.send(Some("b"), PROSE).await, 1);
 }
 
 /// P8.5a on the route: `off` at startup, `block` published, then a read and
@@ -197,7 +202,7 @@ async fn p8_5a_route_off_then_block_refuses_a_later_relay() {
     .await;
     publish(&fx.state, CollusionAction::Block);
     fx.read(Some("a")).await;
-    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    assert_refused_as("P8.5a route: ", &fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
 /// P8.11 on the route: an effective `off` lets a relay through. RED on
@@ -206,7 +211,7 @@ async fn p8_5a_route_off_then_block_refuses_a_later_relay() {
 async fn p8_11_route_an_effective_off_sends_the_relay() {
     let fx = alice_read().await;
     publish(&fx.state, CollusionAction::Off);
-    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    assert_sent_as("P8.11 route: ", &fx, &fx.send(Some("b"), PROSE).await, 1);
 }
 
 /// SG6 on the route: `observe` at startup, `block` published: refused. RED
@@ -220,7 +225,7 @@ async fn sg6_route_observe_then_block_refuses() {
     .await;
     fx.read(Some("a")).await;
     publish(&fx.state, CollusionAction::Block);
-    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    assert_refused_as("SG6 route: ", &fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
 /// SG7: staging follows the firewall, not the action. A read admitted
@@ -240,7 +245,7 @@ async fn sg7_a_read_admitted_under_off_is_held_once_observe_is_published() {
     let state = Arc::clone(&fx.state);
     relay_witness_hook::arm(move || publish(&state, CollusionAction::Observe));
     fx.read(Some("a")).await;
-    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    assert_sent_as("SG7: ", &fx, &fx.send(Some("b"), PROSE).await, 1);
     let audited = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(
         audited.contains("collusion_relay"),
@@ -266,7 +271,7 @@ async fn r4_3b_the_route_funnel_records_under_the_captured_generation() {
     commit_capture_hook::arm(move || publish(&capture, CollusionAction::Off));
     fx.read(Some("a")).await;
     publish(&fx.state, CollusionAction::Block);
-    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    assert_refused_as("R4.3b: ", &fx, &fx.send(Some("b"), PROSE).await, 0);
     assert!(
         commit_capture_hook::reached() >= 1,
         "the capture hook never ran"

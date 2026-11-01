@@ -117,22 +117,45 @@ pub(super) async fn prompt_with(
     rpc(fx, route.path(), who, "prompts/get", &params).await
 }
 
-pub(super) fn assert_catalogue_refused(fx: &Fixture, (_, body): &(u16, String), forwarded: usize) {
-    let answer = envelope(body);
-    assert_eq!(answer["error"]["code"], -32002, "relay not refused: {body}");
-    assert!(answer.get("result").is_none(), "{body}");
-    assert_eq!(fx.catalogue(), forwarded, "the backend was called: {body}");
+pub(super) fn assert_catalogue_refused(fx: &Fixture, response: &(u16, String), forwarded: usize) {
+    assert_catalogue_refused_as("", fx, response, forwarded);
 }
 
-pub(super) fn assert_catalogue_sent(
+/// [`assert_catalogue_refused`] naming the row (a prefix such as `"T1c: "`).
+pub(super) fn assert_catalogue_refused_as(
+    row: &str,
+    fx: &Fixture,
+    (_, body): &(u16, String),
+    forwarded: usize,
+) {
+    let answer = envelope(body);
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "{row}relay not refused: {body}"
+    );
+    assert!(answer.get("result").is_none(), "{row}{body}");
+    assert_eq!(
+        fx.catalogue(),
+        forwarded,
+        "{row}the backend was called: {body}"
+    );
+}
+
+pub(super) fn assert_catalogue_sent(fx: &Fixture, response: &(u16, String), forwarded: usize) {
+    assert_catalogue_sent_as("", fx, response, forwarded);
+}
+
+/// [`assert_catalogue_sent`] naming the row.
+pub(super) fn assert_catalogue_sent_as(
+    row: &str,
     fx: &Fixture,
     (status, body): &(u16, String),
     forwarded: usize,
 ) {
     let answer = envelope(body);
-    assert_eq!(*status, 200, "{body}");
-    assert!(answer.get("error").is_none(), "refused: {body}");
-    assert_eq!(fx.catalogue(), forwarded, "{body}");
+    assert_eq!(*status, 200, "{row}not forwarded: {body}");
+    assert!(answer.get("error").is_none(), "{row}refused: {body}");
+    assert_eq!(fx.catalogue(), forwarded, "{row}{body}");
 }
 
 fn setup() -> Setup {

@@ -262,7 +262,10 @@ async fn p8_12_a_startup_off_commit_then_block_holds_nothing() {
     let staged = stage_plan(&lm, &text_result(PROSE)).await;
     staged.commit(true, &lm.live().generation());
     lm.publish(CollusionAction::Block);
-    assert!(lm.firewall().replay_digests(&sync_key()).is_none());
+    assert!(
+        lm.firewall().replay_digests(&sync_key()).is_none(),
+        "P8.12: a replay entry was stored for a commit while off"
+    );
     assert!(!bob_refused(&lm), "P8.12: held");
 }
 

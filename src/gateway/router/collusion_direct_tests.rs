@@ -455,22 +455,39 @@ fn envelope(body: &str) -> Value {
     serde_json::from_str(&body[start..=end]).unwrap_or_else(|e| panic!("{e}: {body}"))
 }
 
-fn assert_refused(fx: &Fixture, (status, body): &(u16, String), sends: usize) {
-    let answer = envelope(body);
-    assert_eq!(answer["error"]["code"], -32002, "{body}");
-    let message = answer["error"]["message"].as_str().unwrap_or_default();
-    assert!(message.starts_with("Relay detection blocked: "), "{body}");
-    assert!(answer.get("result").is_none(), "{body}");
-    assert_eq!(*status, 403, "{body}");
-    assert_eq!(fx.sends(), sends, "the backend was called: {body}");
+fn assert_refused(fx: &Fixture, response: &(u16, String), sends: usize) {
+    assert_refused_as("", fx, response, sends);
 }
 
-fn assert_sent(fx: &Fixture, (status, body): &(u16, String), sends: usize) {
+/// [`assert_refused`] naming the row (`row` is a prefix such as `"T1a: "`),
+/// so a failure says which expectation broke, not just which helper line.
+fn assert_refused_as(row: &str, fx: &Fixture, (status, body): &(u16, String), sends: usize) {
     let answer = envelope(body);
-    assert_eq!(*status, 200, "{body}");
-    assert!(answer.get("error").is_none(), "{body}");
-    assert_eq!(answer["result"]["content"][0]["text"], "sent", "{body}");
-    assert_eq!(fx.sends(), sends, "{body}");
+    assert_eq!(answer["error"]["code"], -32002, "{row}not refused: {body}");
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("Relay detection blocked: "),
+        "{row}{body}"
+    );
+    assert!(answer.get("result").is_none(), "{row}{body}");
+    assert_eq!(*status, 403, "{row}{body}");
+    assert_eq!(fx.sends(), sends, "{row}the backend was called: {body}");
+}
+
+fn assert_sent(fx: &Fixture, response: &(u16, String), sends: usize) {
+    assert_sent_as("", fx, response, sends);
+}
+
+/// [`assert_sent`] naming the row.
+fn assert_sent_as(row: &str, fx: &Fixture, (status, body): &(u16, String), sends: usize) {
+    let answer = envelope(body);
+    assert_eq!(*status, 200, "{row}not sent: {body}");
+    assert!(answer.get("error").is_none(), "{row}{body}");
+    assert_eq!(
+        answer["result"]["content"][0]["text"], "sent",
+        "{row}{body}"
+    );
+    assert_eq!(fx.sends(), sends, "{row}{body}");
 }
 
 /// A1: under `block`, B sending what A was delivered is refused before
