@@ -593,7 +593,7 @@ pub(crate) use catalogue::{CatalogueCaller, as_caller};
 #[cfg(feature = "firewall")]
 pub(crate) use delivered::strip_gateway_stamps;
 pub(crate) use delivered::{AnswerShape, GatewayStamps};
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) use staging::commit_capture_hook;
 #[cfg(all(test, feature = "firewall"))]
 pub(crate) use staging::take_staged_for_test;

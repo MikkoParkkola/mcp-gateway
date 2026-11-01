@@ -20,7 +20,7 @@ use super::{RelayKey, receipt_with};
 /// The seam the funnel rows arm (patterned on `refuse_hook`): reached at the
 /// top of each recording funnel, after its caller captured the generation
 /// current at delivery and before the funnel records anything.
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) mod commit_capture_hook {
     use crate::security::firewall::collusion_live_rig::Hook;
 
@@ -113,7 +113,7 @@ impl StagedReceipts {
         allow(clippy::needless_pass_by_value, clippy::unused_self)
     )]
     pub(crate) fn commit(self, delivered: bool, generation: &crate::config_reload::Generation) {
-        #[cfg(test)]
+        #[cfg(all(test, feature = "firewall"))]
         commit_capture_hook::run();
         #[cfg(feature = "firewall")]
         if delivered && let Some(fw) = self.fw.as_deref() {
@@ -258,7 +258,7 @@ pub(crate) fn commit_with(
     delivered: bool,
     generation: &crate::config_reload::Generation,
 ) {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "firewall"))]
     commit_capture_hook::run();
     let receipts = RELAY_RECEIPTS
         .try_with(|receipts| std::mem::take(&mut *receipts.borrow_mut()))

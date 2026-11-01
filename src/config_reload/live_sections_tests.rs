@@ -7,6 +7,7 @@
 //! reload must leave that report, and every other setting in its section must
 //! stay in it, alone or in a combined edit.
 
+#[cfg(feature = "firewall")]
 use std::sync::Arc;
 
 use serde_json::{Value, json};
