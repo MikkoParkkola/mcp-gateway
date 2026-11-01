@@ -166,10 +166,19 @@ fn r38b_both_entry_points_call_the_folder_check() {
             );
         }
     }
+    // It passes the startup policy on, and judges nothing itself. That is
+    // sound only because no request path calls it: it is the embedding API,
+    // judged by the rules the firewall was built from, and every caller is
+    // a test (`#[cfg(test)]` modules and `tests/`). The `live_config` pin
+    // refuses any production call to it outside `firewall/mod.rs`, so a
+    // route can never judge under the startup policy through it.
     let delegate = called(&calls, file, "check_request");
     assert_eq!(
         delegate,
-        BTreeSet::from(["check_request_keyed".to_string()]),
+        BTreeSet::from([
+            "check_request_keyed".to_string(),
+            "startup_policy".to_string(),
+        ]),
         "check_request only delegates"
     );
 }

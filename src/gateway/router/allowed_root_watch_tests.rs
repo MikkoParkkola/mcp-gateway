@@ -120,9 +120,9 @@ async fn watch() -> Watch {
     let firewall = Firewall::from_config(config, None)
         .with_continuations(state.meta_mcp.continuation())
         .with_registries(Arc::clone(&state.backends), slot);
-    Arc::get_mut(&mut state)
-        .expect("the fixture state is not shared yet")
-        .firewall = Some(Arc::new(firewall));
+    let wired = Arc::get_mut(&mut state).expect("the fixture state is not shared yet");
+    super::firewall_publish_fixture::publish_firewall(wired, &firewall);
+    wired.firewall = Some(Arc::new(firewall));
     Watch {
         state,
         seen,

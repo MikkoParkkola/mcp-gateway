@@ -122,6 +122,11 @@ impl Routes {
         wired.backends = Arc::clone(&gateway.backends);
         wired.continuation = meta.continuation();
         wired.meta_mcp = Arc::clone(&meta);
+        // A route judges under the live config's generation: publish the
+        // firewall's rules there, as the router fixtures do.
+        let mut live = (*wired.live_config.get()).clone();
+        live.security.firewall = firewall.config_for_test().clone();
+        wired.live_config.set(live);
         wired.firewall = Some(firewall);
         Self {
             dir,
