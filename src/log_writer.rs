@@ -193,14 +193,21 @@ impl Drop for LogFlush {
         let mut marker = Some(Msg::Flush(ack_tx));
         flush_until(
             Instant::now() + LOG_FLUSH_DEADLINE,
-            || match self.tx.try_send(marker.take().expect("one marker")) {
-                Ok(()) => Sent::Yes,
-                Err(TrySendError::Full(back)) => {
-                    marker = Some(back);
-                    thread::sleep(Duration::from_millis(5));
-                    Sent::Full
+            || {
+                // A Full send hands the marker back, so it is always here;
+                // were it not, there is nothing left to send.
+                let Some(m) = marker.take() else {
+                    return Sent::Gone;
+                };
+                match self.tx.try_send(m) {
+                    Ok(()) => Sent::Yes,
+                    Err(TrySendError::Full(back)) => {
+                        marker = Some(back);
+                        thread::sleep(Duration::from_millis(5));
+                        Sent::Full
+                    }
+                    Err(TrySendError::Disconnected(_)) => Sent::Gone,
                 }
-                Err(TrySendError::Disconnected(_)) => Sent::Gone,
             },
             |left| ack_rx.recv_timeout(left).is_ok(),
             Instant::now,
