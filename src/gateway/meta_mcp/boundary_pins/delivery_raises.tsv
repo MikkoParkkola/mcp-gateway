@@ -1,6 +1,8 @@
 # file	fn	needle	count (see plain_refusals.rs)
 src/capability/executor/client.rs	note_redirect_refusal	refused_while_vouched	1
 src/gateway/delivery_facts.rs	composite_ended	facts.effect =	1
+src/gateway/delivery_facts.rs	echo_refusal_delivered	facts.effect =	1
+src/gateway/delivery_facts.rs	outlet	echo_refusal_delivered	1
 src/gateway/delivery_facts.rs	outlet	raise	1
 src/gateway/delivery_facts.rs	raise	facts.effect =	1
 src/gateway/delivery_facts.rs	refused	raise	1
@@ -11,6 +13,7 @@ src/gateway/delivery_facts.rs	withheld	facts.effect =	1
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	refused	1
 src/gateway/meta_mcp/call_dispatch.rs	dispatch_below_gate_shaped_in_slot	composite_ended	2
 src/gateway/meta_mcp/call_dispatch.rs	handle_tools_call_unsettled	raise	1
+src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	echo_refusal_delivered	1
 src/gateway/meta_mcp/caller_forward.rs	prompt_credential	raise	1
 src/gateway/meta_mcp/invoke/admin.rs	get_cost_report	refused	2
 src/gateway/meta_mcp/invoke/admin.rs	reload_config	refused_while_vouched	1
@@ -22,6 +25,7 @@ src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	refused_while_vouche
 src/gateway/meta_mcp/invoke/egress.rs	firewall_result	raise	1
 src/gateway/meta_mcp/invoke/egress.rs	scan_egress	raise	1
 src/gateway/meta_mcp/invoke/egress.rs	scan_error	raise	1
+src/gateway/meta_mcp/invoke/errors.rs	dispatch_error_result	echo_refusal_delivered	1
 src/gateway/meta_mcp/invoke/gate.rs	absent_answer	withheld	1
 src/gateway/meta_mcp/invoke/gate.rs	backstop	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	withheld	1
@@ -35,9 +39,9 @@ src/gateway/meta_mcp/invoke/post_dispatch.rs	settle_unsent	raise	1
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/propagation.rs	raise	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/propagation.rs	resolve_dispatch	refused_while_vouched	1
+src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	refused	1
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relay	refused_while_vouched	1
 src/gateway/meta_mcp/invoke/relay.rs	refuse_relaying_round	refused_while_vouched	1
-src/gateway/meta_mcp/invoke/relay_catalogue.rs	forward_catalogue	refused	1
 src/gateway/meta_mcp/invoke/send.rs	admit_send	refused_while_vouched	1
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	raise	2
 src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	outlet	1
@@ -47,6 +51,7 @@ src/gateway/meta_mcp/task_replay.rs	deliver	raise	1
 src/gateway/router/backend_handlers.rs	guard_tool_call	raise	1
 src/gateway/router/backend_handlers/direct_audit.rs	audited_call_judged	raise	1
 src/gateway/router/backend_handlers/direct_dispatch.rs	answer_failure	raise	1
+src/gateway/router/backend_handlers/direct_failure.rs	answer	echo_refusal_delivered	1
 src/gateway/router/backend_handlers/direct_idempotency.rs	deliver_replay	refused	2
 src/gateway/router/backend_handlers/key_check.rs	key_refusal	raise	3
 src/gateway/router/direct_guards.rs	after_dispatch	raise	1

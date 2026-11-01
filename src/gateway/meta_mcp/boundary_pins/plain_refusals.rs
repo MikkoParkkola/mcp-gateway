@@ -302,6 +302,10 @@ impl Collect {
     /// `delivery_facts` renamed or globbed. Helper renames are judged once
     /// helpers are known ([`Collect::renames`]).
     fn use_item(&mut self, at: &Place, item: &syn::ItemUse) {
+        // Outside the gateway only an import another module can use matters
+        // to the gateway's constructions; a raise import matters anywhere.
+        let reaches_gateway =
+            at.file.starts_with("src/gateway/") || !matches!(item.vis, syn::Visibility::Inherited);
         let mut leaves = Vec::new();
         use_leaves(&[], &item.tree, &mut leaves);
         for (path, rename) in leaves {
@@ -331,9 +335,9 @@ impl Collect {
                     last.clone()
                 };
                 self.facts_uses.push((at.file.clone(), key, text));
-            } else if error_variant || error_renamed {
+            } else if reaches_gateway && (error_variant || error_renamed) {
                 self.aliases.push((at.file.clone(), text));
-            } else if let Some(rename) = rename {
+            } else if let Some(rename) = rename.filter(|_| reaches_gateway) {
                 self.renames.push((at.file.clone(), last.clone(), rename));
             }
         }
@@ -341,6 +345,13 @@ impl Collect {
 }
 
 impl Sink for Collect {
+    // The address sets name nodes of one parsed file; a later file's nodes
+    // can reuse a freed file's addresses, so each file starts empty.
+    fn file(&mut self, _at: &Place, _file: &syn::File) {
+        self.wrapped.clear();
+        self.callees.clear();
+    }
+
     fn item(&mut self, at: &Place, item: &syn::Item) {
         if !at.file.starts_with("src/") {
             return;
@@ -372,6 +383,8 @@ impl Sink for Collect {
                     && target.path.segments.last().is_some_and(|s| s.ident == "Error")
                     // `crate::Error` anywhere; a bare `Error` where it is the
                     // crate's (the gateway imports no other type by that name).
+                    && (at.file.starts_with("src/gateway/")
+                        || !matches!(alias.vis, syn::Visibility::Inherited))
                     && (crate_error(&segments(&target.path))
                         || (target.path.segments.len() == 1 && at.file.starts_with("src/gateway/")))
                 {

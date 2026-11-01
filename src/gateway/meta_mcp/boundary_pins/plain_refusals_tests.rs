@@ -103,6 +103,7 @@ fn the_raise_set_is_every_effect_writer() {
         derived.effect_writers,
         names(&[
             "composite_ended",
+            "echo_refusal_delivered",
             "outlet",
             "raise",
             "refused",

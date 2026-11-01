@@ -1,4 +1,5 @@
 # file	fn	needle	ordinal	class	cite (classes: see delivery_framing.rs; recorded cites the raise as file::fn)
+src/gateway/meta_mcp/accessors.rs	caller_profile_check	Error::Protocol (as value)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: no session, or a routing profile the caller named that does not exist
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	Error::Protocol(..)	2	not-a-decision	client-protocol rejection: no session, or a routing profile the caller named that does not exist
 src/gateway/meta_mcp/admission.rs	mark_management_dispatch	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: no session, or a routing profile the caller named that does not exist
@@ -13,12 +14,10 @@ src/gateway/meta_mcp/invoke/dispatch.rs	ambiguous_backend	Error::AmbiguousBacken
 src/gateway/meta_mcp/invoke/dispatch.rs	dispatch_to_backend	Error::BackendNotFound(..)	1	not-a-decision	the judged backend is gone after a reload: an availability failure
 src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	via ambiguous_backend	1	not-a-decision	a configuration clash: a registry backend and the capability backend share a name
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_after_credential	via withheld_as_undefined	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_as_undefined
-src/gateway/meta_mcp/invoke/dispatch_guards.rs	admit_named_target	Error::Protocol(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	as_undefined_capability	Error::ToolNotFound(..)	1	feeds	the undefined twin of a rule refusal, returned to check_visible_policy's callers
 src/gateway/meta_mcp/invoke/gate.rs	check_call_level_policy	Error::Protocol(..)	1	not-a-decision	client-protocol rejection: an invalid tool name with an empty server or tool
 src/gateway/meta_mcp/invoke/gate.rs	check_visible_policy	via as_undefined_capability	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	Error::ToolNotFound(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
-src/gateway/meta_mcp/invoke/gate.rs	profile_refusal	Error::Protocol (as value)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
 src/gateway/meta_mcp/invoke/gate.rs	profile_refusal_as_undefined	via profile_withheld_capability	1	feeds	returned to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	profile_withheld_capability	Error::ToolNotFound(..)	1	feeds	returned up the chain to withheld_as_undefined, which raises withheld for it
 src/gateway/meta_mcp/invoke/gate.rs	withheld_as_undefined	Error::ToolNotFound (in macro)	1	not-delivered	predicate: a matches! pattern reads an error, builds none
@@ -59,7 +58,6 @@ src/gateway/meta_mcp/task_confirmation.rs	confirm_destructive_task_with	via refu
 src/gateway/meta_mcp/task_confirmation/helpers.rs	refuse_grant	via refuse (closure)	1	feeds	built by a refuse_* function the refusal scan classifies at each call (not-a-decision)
 src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	Error::BackendNotFound(..)	1	feeds	built by a refusal-named function the refusal scan classifies at each call
 src/gateway/meta_mcp/visibility.rs	grant_evaluation	Error::ToolNotFound(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
-src/gateway/meta_mcp/visibility.rs	may_invoke_before_grants_explained	Error::Protocol(..)	1	recorded	src/gateway/meta_mcp/invoke/gate.rs::withheld_for
 src/gateway/openwebui_adapter.rs	openwebui_adapter_middleware	via refuse (closure)	1	no-record	authentication before a call exists: the OpenWebUI identity header adapter
 src/gateway/openwebui_adapter.rs	openwebui_adapter_middleware	via refuse (closure)	2	no-record	authentication before a call exists: the OpenWebUI identity header adapter
 src/gateway/openwebui_adapter.rs	openwebui_adapter_middleware	via refuse (closure)	3	no-record	authentication before a call exists: the OpenWebUI identity header adapter

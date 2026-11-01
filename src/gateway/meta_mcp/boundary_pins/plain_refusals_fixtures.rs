@@ -227,11 +227,15 @@ fn b1_each_banned_import_form_is_a_hit() {
         ),
         (
             "use crate::gateway::a::helper as other;",
-            "src/other/b.rs: use helper as other",
+            "src/gateway/a.rs: use helper as other",
         ),
     ];
     for (source, want) in cases {
-        assert_eq!(guard_hits(HELPER, source), [want], "{source}");
+        assert_eq!(
+            guard_hits(&format!("{HELPER}\n{source}"), ""),
+            [want],
+            "{source}"
+        );
     }
 }
 
@@ -351,4 +355,14 @@ fn f12_a_refusal_named_helper_is_not_rowed_twice() {
             "missing_refusal Error::ToolNotFound(..) 1"
         ]
     );
+}
+
+/// A private alias outside the gateway reaches no gateway construction;
+/// a `pub(crate)` one does.
+#[test]
+fn b9_only_a_visible_alias_outside_the_gateway_is_a_hit() {
+    let (_dir, collect, _) = fixture("", "use crate::Error as E;\nfn f() {}");
+    assert!(collect.aliases.is_empty(), "{:?}", collect.aliases);
+    let (_dir, collect, _) = fixture("", "pub(crate) use crate::Error as E;");
+    assert_eq!(collect.aliases.len(), 1);
 }
