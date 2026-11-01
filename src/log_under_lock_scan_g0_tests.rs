@@ -71,7 +71,7 @@ const CASES: &[(&str, &str, &str)] = &[
     (
         "move",
         "fn f(m: &M) { let a = m.lock().unwrap(); let b = a; warn!(\"x\"); }",
-        "fn f(m: &M) { let a = m.lock().unwrap(); let b = a; drop(b); drop(a); warn!(\"x\"); }",
+        "fn f(m: &M) { let a = m.lock().unwrap(); let b = a; drop(b); warn!(\"x\"); }",
     ),
     (
         "guard parameter",
@@ -114,6 +114,21 @@ const CASES: &[(&str, &str, &str)] = &[
         "async fn f(m: &M) { tokio::select! { _ = tick() => { warn!(\"x\"); } } }",
     ),
     (
+        "for over a dashmap",
+        "struct S { map: DashMap<u8, u8> } impl S { fn f(&self) { for e in &self.map { warn!(\"x\"); } } }",
+        "struct S { map: DashMap<u8, u8> } impl S { fn f(&self) { let k: Vec<u8> = self.map.iter().map(|e| *e.key()).collect(); warn!(\"x\"); } }",
+    ),
+    (
+        "dashmap RefMut parameter",
+        "fn f(r: dashmap::mapref::one::RefMut<'_, u8, u8>) { warn!(\"x\"); }",
+        "fn f(r: dashmap::mapref::one::RefMut<'_, u8, u8>) { drop(r); warn!(\"x\"); }",
+    ),
+    (
+        "select! under a held guard",
+        "async fn f(m: &M) { let g = m.lock().unwrap(); tokio::select! { _ = tick() => { warn!(\"x\"); } } }",
+        "async fn f(m: &M) { let g = m.lock().unwrap(); drop(g); tokio::select! { _ = tick() => { warn!(\"x\"); } } }",
+    ),
+    (
         "zero-argument read",
         "fn f(l: &L) { let g = l.read(); tracing::event!(Level::WARN, \"x\"); }",
         "fn f(r: &mut R, buf: &mut [u8]) { let n = r.read(buf); warn!(\"x\"); }",
@@ -152,4 +167,17 @@ fn g0_a_hit_is_keyed_by_its_message() {
         "info!: fields backend hit",
         "a record without a message is named by its fields"
     );
+}
+
+/// G0: a `DashMap` field declared in one file is a map in every file, so a
+/// `get` on it elsewhere still holds a shard lock.
+#[test]
+fn g0_a_dashmap_declared_in_another_file_is_seen() {
+    let decl = syn::parse_file("pub struct S { pub map: DashMap<u8, u8> }").expect("planted");
+    let user =
+        syn::parse_file("impl S { fn f(&self) { let r = self.map.get(&1); warn!(\"x\"); } }")
+            .expect("planted");
+    let hits = scan(&[("decl.rs".to_owned(), decl), ("user.rs".to_owned(), user)]);
+    assert_eq!(hits.len(), 1, "{hits:?}");
+    assert_eq!(hits[0].0, "user.rs");
 }

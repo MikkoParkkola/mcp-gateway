@@ -90,9 +90,13 @@ fn type_names(ty: &syn::Type) -> Vec<String> {
 }
 
 fn mentions_guard(ty: &syn::Type, known: &Known) -> bool {
-    type_names(ty)
-        .iter()
-        .any(|w| GUARD_TYPES.contains(&w.as_str()) || known.guard_types.contains(w))
+    // DashMap's `Ref`/`RefMut` are named by path here (`dashmap::mapref::..`),
+    // which tells them from `std::cell::Ref`.
+    let names = type_names(ty);
+    names.iter().any(|w| w == "mapref")
+        || names
+            .iter()
+            .any(|w| GUARD_TYPES.contains(&w.as_str()) || known.guard_types.contains(w))
 }
 
 /// First pass: crate-defined guard aliases and newtypes, then helpers.
@@ -201,13 +205,22 @@ fn receiver_name(expr: &syn::Expr) -> Option<String> {
 /// One file's scan state.
 struct Scan<'k> {
     known: &'k Known,
-    dashmaps: HashSet<String>,
+    /// `DashMap` fields of every scanned file: a field is often declared in
+    /// another file than the one that locks it.
+    dashmaps: &'k HashSet<String>,
     file: String,
     func: String,
     hits: Vec<Hit>,
 }
 
 impl Scan<'_> {
+    /// `for e in &self.map` over a `DashMap`: each item holds a shard lock.
+    /// Only in a loop: a `let m = &self.map;` holds nothing.
+    fn iterates_dashmap(&self, expr: &syn::Expr) -> bool {
+        matches!(expr, syn::Expr::Reference(_))
+            && receiver_name(expr).is_some_and(|n| self.dashmaps.contains(&n))
+    }
+
     /// Whether `expr` yields a guard, given the bindings already `held`.
     fn acquires(&self, expr: &syn::Expr, held: &[String]) -> bool {
         match expr {
@@ -295,6 +308,13 @@ fn bound_names(pat: &syn::Pat) -> Vec<String> {
 
 /// A macro body's tokens with an acquisition call before a tracing macro:
 /// `m . lock ()` (or another `ACQUIRE` call) and later `warn !`.
+/// Whether a macro body's tokens hold a log macro.
+fn logs(tokens: &str) -> bool {
+    LOG_MACROS
+        .iter()
+        .any(|m| tokens.contains(&format!("{m} !")))
+}
+
 fn locks_then_logs(tokens: &str) -> bool {
     let first_lock = ACQUIRE
         .iter()
@@ -383,6 +403,13 @@ impl Scan<'_> {
                         }
                         if self.acquires(&init.expr, &held) {
                             held.extend(bound_names(&local.pat));
+                            // `let b = a;` moves the guard: `a` holds it no more.
+                            if let syn::Expr::Path(moved) = &*init.expr
+                                && let Some(id) = moved.path.get_ident()
+                            {
+                                let id = id.to_string();
+                                held.retain(|h| *h != id);
+                            }
                         }
                     }
                 }
@@ -405,9 +432,14 @@ impl Scan<'_> {
             if !held.is_empty() {
                 self.hit(&format!("{name}!: {}", message(mac)));
             }
-        } else if locks_then_logs(&mac.tokens.to_string()) {
+        } else {
             // Inside a macro body (a `select!` arm, say) syn sees only tokens.
-            self.hit(&format!("{name}! body: lock, then log"));
+            let tokens = mac.tokens.to_string();
+            if locks_then_logs(&tokens) {
+                self.hit(&format!("{name}! body: lock, then log"));
+            } else if !held.is_empty() && logs(&tokens) {
+                self.hit(&format!("{name}! body: log under a held guard"));
+            }
         }
     }
 
@@ -422,7 +454,7 @@ impl Scan<'_> {
             syn::Expr::ForLoop(l) => {
                 self.expr(&l.expr, held);
                 let mut inner = held.to_vec();
-                if self.acquires(&l.expr, held) {
+                if self.acquires(&l.expr, held) || self.iterates_dashmap(&l.expr) {
                     inner.extend(bound_names(&l.pat));
                 }
                 self.block(&l.body, inner);
@@ -622,11 +654,12 @@ fn has_cfg_test(attrs: &[syn::Attribute]) -> bool {
 fn scan(files: &[(String, syn::File)]) -> Vec<Hit> {
     let parsed: Vec<syn::File> = files.iter().map(|(_, f)| f.clone()).collect();
     let known = learn(&parsed);
+    let maps: HashSet<String> = parsed.iter().flat_map(dashmaps).collect();
     let mut hits = Vec::new();
     for (name, file) in files {
         let mut s = Scan {
             known: &known,
-            dashmaps: dashmaps(file),
+            dashmaps: &maps,
             file: name.clone(),
             func: String::new(),
             hits: Vec::new(),
