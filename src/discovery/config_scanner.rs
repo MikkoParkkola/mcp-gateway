@@ -9,6 +9,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::debug;
 
+use crate::cli_support::shown;
 use crate::config::TransportConfig;
 #[cfg(not(target_os = "macos"))]
 use crate::home_dir::config_dir;
@@ -676,17 +677,24 @@ pub(crate) mod client_scan;
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 /// Logs the MCP config file about to be read. Its name is whatever the
-/// directory holds.
+/// directory holds, so it is escaped: a newline in it cannot forge a line.
 fn note_mcp_config_file(path: &Path) {
-    debug!("Scanning MCP config file: {}", path.display());
+    debug!(
+        "Scanning MCP config file: {}",
+        shown(&path.to_string_lossy())
+    );
 }
 
 /// Logs a server found in the environment: the variable name, never its
 /// value. An endpoint URL carries userinfo and query-string tokens often
 /// enough that logging it writes a credential into the log because
-/// discovery ran.
+/// discovery ran. Both are environment text, so both are escaped.
 fn note_environment_server(name: &str, key: &str) {
-    debug!("Found MCP server in environment: {name} (from {key})");
+    debug!(
+        "Found MCP server in environment: {} (from {})",
+        shown(name),
+        shown(key)
+    );
 }
 
 #[cfg(test)]
