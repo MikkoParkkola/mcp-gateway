@@ -121,8 +121,6 @@ mod direct_explicit_cancel_tests;
 mod direct_guards_effect_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
-#[cfg(all(test, feature = "firewall"))]
-mod firewall_publish_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
 #[cfg(test)]
@@ -168,6 +166,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
