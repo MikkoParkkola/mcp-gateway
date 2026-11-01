@@ -78,10 +78,7 @@ OUTPUT = {"windows": ["--show-output"]}
 # fix removes, each as (pattern on the entry name, most allowed, why). It may
 # only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
-# Each entry names the open ticket whose fix removes it: nothing here is
-# unowned.
 KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
-    # MIK-8986 (an audit write) and MIK-9034 (a stdio task record)
     (r"\.tmp[A-Za-z0-9]{6}", 4,
      "a late write that outlives its test's temp dir: an audit write "
      "(transparency_log::bounded_tests up to 3, identity_propagation::audit_fail_closed, "
