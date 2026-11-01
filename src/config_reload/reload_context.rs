@@ -754,6 +754,10 @@ impl ReloadContext {
             // outcome; the honest one is an error.
             return Err(SHUTDOWN_ABORTED_ERROR.to_string());
         }
+        // Test seam: after the patch registered its backends, before the
+        // publish, so a test can drop a reload between the two.
+        #[cfg(test)]
+        super::reload_pause::pause_here(&super::reload_pause::after_apply(&self.config_path)).await;
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.

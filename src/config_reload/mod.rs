@@ -843,6 +843,10 @@ mod grant_change_trigger_tests;
 #[cfg(test)]
 mod grant_reload_trigger_tests;
 
+/// A backend's configured `headers:`/`env:` credentials across a reload
+/// that changes which of them are secret (MIK-9105).
+#[cfg(test)]
+mod configured_secrets_reload_tests;
 #[cfg(test)]
 mod grant_audit_crash_tests;
 #[cfg(test)]

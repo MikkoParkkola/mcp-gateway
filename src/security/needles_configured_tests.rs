@@ -190,3 +190,31 @@ async fn overflow_recovers_with_configured_values_held() {
     assert!(redacted(&needles, "configured-a-value"));
     assert!(redacted(&needles, "configured-b-value"));
 }
+
+/// A configured value a full set refused stays owed: when retirement makes
+/// room, the next unrelated send installs it before the refusal clears, so
+/// answers never flow again with a configured credential missing.
+#[tokio::test(start_paused = true)]
+async fn an_unrelated_send_never_clears_overflow_past_an_owed_value() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for i in 0..MAX_NEEDLES - 1 {
+        needles.insert("b", &format!("sent-value-{i:05}"));
+    }
+    let set = ConfiguredSecrets::of(vec![
+        explicit("headers.A", "configured-a-value"),
+        explicit("headers.B", "configured-b-value"),
+    ]);
+    needles.pin_configured("b", &set);
+    assert!(
+        needles.overflowed(),
+        "premise: one configured value did not fit"
+    );
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    needles.insert("b", "unrelated-later-value");
+    assert!(!needles.overflowed(), "room after the sent values retired");
+    assert!(redacted(&needles, "configured-a-value"));
+    assert!(
+        redacted(&needles, "configured-b-value"),
+        "the owed configured value was never installed"
+    );
+}

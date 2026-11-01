@@ -83,6 +83,10 @@ pub(crate) struct NeedleSet {
     overflowed: AtomicBool,
     /// Rules already warned about a short value (ECHO.6), by name.
     short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
+    /// Configured values a full set could not take. The set stays refused
+    /// until each is installed: room made by retirement goes to them first,
+    /// and an unrelated value never clears the refusal alone.
+    owed: parking_lot::Mutex<Vec<String>>,
     /// Bumped whenever `values` gains or loses a value.
     version: std::sync::atomic::AtomicU64,
     /// The live values compiled once, swapped when the list changes or its
@@ -122,6 +126,7 @@ impl NeedleSet {
             grace,
             overflowed: AtomicBool::new(false),
             short_warned: parking_lot::Mutex::default(),
+            owed: parking_lot::Mutex::default(),
             version: std::sync::atomic::AtomicU64::new(0),
             compiled: RwLock::new(None),
         }
@@ -177,11 +182,31 @@ impl NeedleSet {
         if values.len() != before {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
+        let mut owed = self.owed.lock();
+        while values.len() < MAX_NEEDLES {
+            let Some(due) = owed.pop() else { break };
+            if !values.iter().any(|held| held.value == due) {
+                values.push(Held {
+                    encoded: percent_forms(&due),
+                    value: due,
+                    last_sent: now,
+                    lifetime: Lifetime::Configured,
+                });
+                self.version.fetch_add(1, Ordering::SeqCst);
+            }
+        }
         if values.len() >= MAX_NEEDLES {
+            if lifetime == Lifetime::Configured && !owed.iter().any(|due| due == value) {
+                owed.push(value.to_owned());
+            }
             return !self.overflowed.swap(true, Ordering::SeqCst);
         }
-        // Room again after retirement: answers flow once more.
+        // Room again, and every configured value is in: answers flow again.
         self.overflowed.store(false, Ordering::SeqCst);
+        if values.iter().any(|held| held.value == value) {
+            // It was owed, and the catch-up above installed it.
+            return false;
+        }
         values.push(Held {
             value: value.to_owned(),
             encoded: percent_forms(value),
@@ -246,6 +271,10 @@ impl NeedleSet {
         let now = tokio::time::Instant::now();
         let mut changed = false;
         let mut overflowed = false;
+        // A value no longer configured is no longer owed.
+        self.owed
+            .lock()
+            .retain(|due| wanted.contains(&due.as_str()));
         for held in values.iter_mut() {
             if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
                 held.lifetime = Lifetime::Grace;
