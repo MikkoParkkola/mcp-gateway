@@ -45,16 +45,13 @@ async fn send(stdin: &mut tokio::process::ChildStdin, frames: &[Value]) {
     }
 }
 
-/// One session: initialize, `PINGS` pings, then stdin closes. Asserts every
-/// request is answered and the child exits cleanly within the kill timer;
-/// returns the child's stderr when it is drained.
-async fn session(stderr: Stderr) -> Vec<u8> {
-    let temp = tempfile::tempdir().expect("isolated home");
-    let config = temp.path().join("gateway.yaml");
+/// The shipped binary on `serve --stdio`, logging at trace, every stream piped.
+fn spawn(home: &std::path::Path) -> tokio::process::Child {
+    let config = home.join("gateway.yaml");
     mcp_gateway::gateway::test_helpers::write_owner_only(&config, String::new())
         .expect("write config");
     let mut command = tokio::process::Command::from(gateway_bin::command(
-        temp.path(),
+        home,
         gateway_bin::Inherit::Environment,
     ));
     command
@@ -64,15 +61,23 @@ async fn session(stderr: Stderr) -> Vec<u8> {
             "serve",
             "--stdio",
         ])
-        .current_dir(temp.path())
-        .env("XDG_CONFIG_HOME", temp.path().join("config"))
-        .env("XDG_DATA_HOME", temp.path().join("data"))
+        .current_dir(home)
+        .env("XDG_CONFIG_HOME", home.join("config"))
+        .env("XDG_DATA_HOME", home.join("data"))
         .env("RUST_LOG", "trace")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command.spawn().expect("spawn shipped binary");
+    command.spawn().expect("spawn shipped binary")
+}
+
+/// One session: initialize, `PINGS` pings, then stdin closes. Asserts every
+/// request is answered and the child exits cleanly within the kill timer;
+/// returns the child's stderr when it is drained.
+async fn session(stderr: Stderr) -> Vec<u8> {
+    let temp = tempfile::tempdir().expect("isolated home");
+    let mut child = spawn(temp.path());
     let mut stdin = child.stdin.take().expect("stdin");
     let stdout = child.stdout.take().expect("stdout");
     let err = child.stderr.take().expect("stderr");
@@ -181,5 +186,24 @@ async fn l1j_b_the_last_line_survives_a_full_stderr_at_exit() {
     assert!(
         text.contains(LAST_LINE),
         "the line logged just before exit is flushed: ...{tail}"
+    );
+}
+
+/// L1j-c (structural): the exit flush guard is bound before the runtime runs
+/// and held through it. A guard dropped early flushes at startup and not at
+/// exit, which a process test cannot tell apart while stderr keeps up.
+#[test]
+fn l1j_c_the_flush_guard_outlives_the_runtime() {
+    let main = include_str!("../src/main.rs");
+    let bound = main
+        .find("let _flush_logs = match setup_tracing(")
+        .expect("main binds the flush guard");
+    let runs = main[bound..]
+        .find("runtime::block_on(")
+        .map(|at| bound + at)
+        .expect("the runtime runs after the guard is bound");
+    assert!(
+        !main[bound..runs].contains("drop(_flush_logs"),
+        "the flush guard is dropped before the runtime runs"
     );
 }
