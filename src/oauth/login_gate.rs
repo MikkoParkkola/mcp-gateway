@@ -452,7 +452,7 @@ impl LoginGate {
         }
     }
 
-    /// `stage` of detached work that set out at `since` (MIK-8339): ended by a
+    /// `stage` of detached work that set out at `since`: ended by a
     /// restart or stop, and at the authorization window or `deadline`,
     /// whichever comes first, read through [`Self::classify`].
     pub(crate) async fn bounded<T>(
