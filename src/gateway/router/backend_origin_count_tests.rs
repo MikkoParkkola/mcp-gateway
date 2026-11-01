@@ -305,8 +305,11 @@ fn a_chain_ending_on_a_backends_error_counts_as_backend() {
     assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
 }
 
-/// N13: a chain ending on a backend's refused argument (`INVALID_PARAMS`)
-/// counts once as `backend`: the chain keeps the backend's error.
+/// N13, the routed path: a chain ending on a backend's refused argument
+/// (`INVALID_PARAMS`) counts once as `backend`. Through the router the
+/// dispatch folds the backend's error into the step's `isError` result, so
+/// this runs `chain_step_result`; the typed `step_failure` arm has its own
+/// row (`search/chain_step_origin_tests.rs`).
 #[test]
 fn a_chain_ending_on_a_backends_refused_argument_counts_as_backend() {
     let ((_, answer), text) = counted(async {
@@ -355,3 +358,6 @@ fn a_plan_with_a_backends_error_and_a_gateway_refusal_counts_the_gateways() {
     assert_eq!(counts[3], 0, "counted as the backend's: {answer}\n{text}");
     assert_eq!(counts.iter().sum::<u64>(), 1, "{answer}\n{text}");
 }
+
+#[path = "backend_origin_count_more_tests.rs"]
+mod more;

@@ -93,3 +93,25 @@ async fn a_wrapped_tool_failure_carried_past_keeps_the_steps_fold() {
         "a wrapped tool failure stays the backend's"
     );
 }
+
+/// N5, a control: an attempt folds a backend failure, then the retried
+/// attempt (its own step cell) is served, and the composite delivers that
+/// latest step's answer as its own: it carries nothing, so it counts
+/// nothing. Mutant m5 (`step()` keeps the previous fold when the latest
+/// attempt has none) turns it red.
+#[tokio::test]
+async fn a_served_retry_after_a_failed_attempt_carries_nothing() {
+    let frame = stamped(
+        async {
+            step(async { folded(BACKEND) }).await;
+            step(async {}).await;
+            step_carried(None);
+        },
+        JsonRpcResponse::success(RequestId::Number(1), serde_json::json!({})),
+    )
+    .await;
+    assert_eq!(
+        frame.wire_meta.folded, None,
+        "a served retry carries no fold"
+    );
+}

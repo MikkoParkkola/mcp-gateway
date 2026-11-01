@@ -49,6 +49,8 @@ mod enforced_transform;
 mod input_requests;
 #[path = "tests/invoke_bridge.rs"]
 mod invoke_bridge;
+#[path = "tests/bridged_origin.rs"]
+mod bridged_origin;
 #[path = "tests/modern_connections.rs"]
 mod modern_connections;
 #[path = "tests/narrowed_tool_lists.rs"]
