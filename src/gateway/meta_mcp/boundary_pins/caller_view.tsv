@@ -1,0 +1,26 @@
+# file	calls	class	reason
+src/gateway/meta_mcp/accessors.rs	2	by-design	get_capabilities() defined, and caller_capabilities() reading it: the one filter every call path reads through
+src/gateway/meta_mcp/hiding.rs	1	by-design	the hiding judgment's own catalogue read: it judges the provider, so it cannot read the view it feeds
+src/gateway/router/caller_hiding.rs	1	by-design	the hiding judgment's registration check: a hidden provider is still registered
+src/gateway/meta_mcp/scoped_backends.rs	1	by-design	the scoped view's registration name: absence() and scoped_get() judge hiding after it
+src/gateway/router/backend_choke.rs	1	by-design	the per-backend route's view registration name, as scoped_backends.rs: hiding is judged after it
+src/gateway/meta_mcp/invoke/dispatch.rs	1	by-design	refuse_name_clash: a name that is both a registry backend and the provider is refused for every caller alike, unscoped by design (not-fixed register row 344)
+src/gateway/meta_mcp/admission.rs	1	not-a-call-path	gateway_reload_capabilities: whether a provider is configured at all, for an admin tool
+src/gateway/meta_mcp/counting.rs	1	listing	tool counts per configured server for listings, which judge visibility themselves
+src/gateway/meta_mcp/events_hook.rs	4	not-a-call-path	events and watch catalogue wiring, reload notices: no caller's call
+src/gateway/meta_mcp/handlers.rs	1	listing	the initialize guide, gated by admits_backend
+src/gateway/meta_mcp/invoke/admin.rs	1	not-a-call-path	admin statistics: total tool count
+src/gateway/meta_mcp/invoke/egress.rs	1	not-a-call-path	the whole gateway's target name set for egress rules, not a judgment of the called name
+src/gateway/meta_mcp/search.rs	4	listing	search results, filtered per tool; search under a hidden provider is pinned by search_lists_no_tool_of_a_hidden_provider
+src/gateway/meta_mcp/session_tools.rs	1	listing	visible tool count after a state change, filtered per tool by shows_tool
+src/gateway/meta_mcp/spec_preview.rs	3	listing	spec preview listing and lookup, gated by the routing profile and per tool
+src/gateway/meta_mcp/surfaced.rs	3	listing	surfaced-name listing and target hold check, gated by admits_backend
+src/gateway/meta_mcp/visibility.rs	2	listing	server and tool listings, gated by admits_backend and shows_name
+src/gateway/router/authorization.rs	1	listing	backend_tool_names: the provider's tool names for listing admission
+src/gateway/router/handlers/health.rs	1	not-a-call-path	health: the provider's status
+src/gateway/router/mod.rs	1	not-a-call-path	readiness: the provider's initial scan
+src/gateway/router/view_judge.rs	1	not-a-call-path	the served-list digest names
+src/gateway/router/watch_poll.rs	1	not-a-call-path	watch catalogue generation
+src/gateway/server/run.rs	2	not-a-call-path	startup and reload wiring
+src/gateway/server/stdio_loop.rs	1	not-a-call-path	stdio listing watch startup
+src/gateway/server/stdio_startup.rs	1	not-a-call-path	stdio reload wiring

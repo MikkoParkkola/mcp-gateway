@@ -27,9 +27,13 @@ use crate::key_server::oidc::VerifiedIdentity;
 /// MIK-8382 UNIFY.1b rows on this fixture.
 mod lacked_warn;
 
+/// A per-user backend hidden from the caller, and the caller's own slot.
+mod hidden;
+
 /// The router over one per-user backend, with what it was asked.
 struct Gateway {
     router: axum::Router,
+    state: Arc<super::AppState>,
     backend: Arc<crate::backend::Backend>,
     caller: Arc<Asked>,
     shared: Arc<Asked>,
@@ -133,7 +137,8 @@ fn gateway_on(
     state_mut.meta_mcp = Arc::new(meta);
     state_mut.transparency_log = Some(transparency_logger(&audit[1]));
     Gateway {
-        router: create_router(state),
+        router: create_router(Arc::clone(&state)),
+        state,
         backend: kept,
         caller,
         shared,

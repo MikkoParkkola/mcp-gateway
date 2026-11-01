@@ -41,6 +41,7 @@ pub(crate) use authorization::{
     sanitize_exempt,
 };
 mod backend_handlers;
+pub(crate) mod caller_hiding;
 mod handlers;
 // The web UI's Try-a-tool route runs this one MCP path in process (U12).
 #[cfg(feature = "webui")]
