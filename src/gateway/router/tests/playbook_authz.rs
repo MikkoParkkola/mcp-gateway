@@ -72,6 +72,7 @@ async fn run_step_with_identity(
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),
@@ -295,6 +296,7 @@ async fn authz_ordinary_error_is_not_reclassified_as_forbidden() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let response = Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),
@@ -672,6 +674,7 @@ async fn authz_ordinary_error_carries_no_status_stamp() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     };
     let response = Box::pin(state.meta_mcp.handle_tools_call(
         RequestId::Number(1),

@@ -151,6 +151,7 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
+                        let live = meta_mcp.live_config().map(|live| live.generation());
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -158,7 +159,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            meta_mcp.record_key(),
+                            (meta_mcp.record_key(), live.as_deref()),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -437,7 +438,11 @@ impl Gateway {
         retry: &'a crate::protocol::mrtr::RetryFields,
         request_shape: &crate::protocol::meta::RequestShape,
         client: StdioClient<'a>,
-        record_key: &crate::gateway::record_principal::RecordPrincipalKey,
+        // The record key, and the generation this message is judged by.
+        (record_key, generation): (
+            &crate::gateway::record_principal::RecordPrincipalKey,
+            Option<&'a crate::config_reload::Generation>,
+        ),
     ) -> MetaMcpCallerContext<'a> {
         MetaMcpCallerContext {
             // Filled after the route stage, by the task intent, when the
@@ -505,6 +510,7 @@ impl Gateway {
             // exist here at all.
             confirmation:
                 crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+            generation,
         }
     }
 
@@ -606,6 +612,9 @@ impl Gateway {
             // X14's granted retry fields, when it grants: declared ahead of
             // the caller context that borrows them.
             let granted;
+            // Once per message: its budgets judge the call from admission to
+            // settlement, whatever a reload publishes meanwhile.
+            let live = meta_mcp.live_config().map(|live| live.generation());
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -613,7 +622,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                meta_mcp.record_key(),
+                (meta_mcp.record_key(), live.as_deref()),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload

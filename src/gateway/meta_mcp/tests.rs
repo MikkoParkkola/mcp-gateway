@@ -102,6 +102,7 @@ fn allow_all_ctx_named<'a>(
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
@@ -139,6 +140,7 @@ fn allow_all_ctx() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         // same reasoning that puts `Declared::NONE` on the line above.
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

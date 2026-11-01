@@ -211,6 +211,7 @@ pub(super) fn stdio_caller_context<'a>(
         // cannot confirm is refused rather than asked about. Not "found no session"
         // -- no asker can exist here at all.
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
+        generation: None,
     }
 }
 

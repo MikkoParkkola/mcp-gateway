@@ -178,6 +178,7 @@ fn resuming_ctx<'a>(
         task: None,
         era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

@@ -363,5 +363,8 @@ pub(super) fn caller_context<'a>(
                 }
             }
         },
+        // The generation this request authenticated under: its budgets and
+        // alerts judge the call from admission to settlement.
+        generation: Some(&intake.generation),
     }
 }
