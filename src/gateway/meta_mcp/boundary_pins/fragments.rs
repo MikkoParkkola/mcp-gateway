@@ -7,6 +7,7 @@
 //! under `src/**`, which `Cargo.toml` `include` ships, so the packaged suite
 //! reads it the same way.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use super::packaged::crate_root;
@@ -93,7 +94,7 @@ fn fragment_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if !name.ends_with(".tsv") {
+        if path.extension().is_none_or(|ext| ext != "tsv") {
             continue;
         }
         if !fragment_name_ok(&name) {
@@ -181,23 +182,26 @@ pub(super) fn multiset_delta(
         computed.len()
     );
     if !add.is_empty() {
-        message.push_str(&format!(
-            "rows to add ({}; put these in your fragment {name}.d/<ticket>.tsv):\n{}\n",
+        let _ = writeln!(
+            message,
+            "rows to add ({}; put these in your fragment {name}.d/<ticket>.tsv):\n{}",
             add.len(),
             add.join("\n")
-        ));
+        );
     }
     if !remove.is_empty() {
-        message.push_str(&format!(
-            "rows to remove ({}):\n{}\n",
+        let _ = writeln!(
+            message,
+            "rows to remove ({}):\n{}",
             remove.len(),
             remove.join("\n")
-        ));
+        );
     }
-    message.push_str(&format!(
+    let _ = write!(
+        message,
         "for comparison only; do not paste into any table:\n{}",
         computed.join("\n")
-    ));
+    );
     Some(message)
 }
 
