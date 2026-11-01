@@ -123,10 +123,10 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
         .iter()
         .map(|s| crate::counters::Filter::Server(&s.name))
         .collect();
-    let (windows, counts_since) = call_windows(state, &labels);
-    for (server, (day, prev)) in servers.iter_mut().zip(windows) {
-        server.calls_24h = day;
-        server.calls_prev_24h = prev;
+    let (windows, counts_since, _) = call_windows(state, &labels);
+    for (server, w) in servers.iter_mut().zip(windows) {
+        server.calls_24h = w.day;
+        server.calls_prev_24h = w.prev_day;
     }
 
     json!({

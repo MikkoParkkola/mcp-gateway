@@ -292,7 +292,7 @@ impl Source {
         };
         let filters: Vec<Filter<'_>> = backends.iter().map(|b| Filter::Server(&b.name)).collect();
         let sums = store.window_sums(&filters, *now, &crate::local_day::host_zone());
-        Some(sums.counts.into_iter().map(|(day, _)| day).collect())
+        Some(sums.counts.into_iter().map(|w| w.day).collect())
     }
 
     /// One metric's 24-hour total, the previous 24 hours' total when the
