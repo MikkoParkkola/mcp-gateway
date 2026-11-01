@@ -149,8 +149,27 @@ struct Found {
     stdio_authorizers: Vec<(String, String)>,
 }
 
+impl Found {
+    /// A macro body is not parsed as expressions (`tokio::select!` holds the
+    /// stdio loop's first read): its tokens name the first-line read.
+    fn macro_tokens(&mut self, at: &Place, mac: &syn::Macro) {
+        if mac.tokens.to_string().contains("next_line") {
+            self.events.push((at.file.clone(), Event::FirstLine));
+        }
+    }
+}
+
 impl Sink for Found {
+    fn stmt(&mut self, at: &Place, stmt: &syn::Stmt) {
+        if let syn::Stmt::Macro(m) = stmt {
+            self.macro_tokens(at, &m.mac);
+        }
+    }
+
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
+        if let syn::Expr::Macro(m) = expr {
+            self.macro_tokens(at, &m.mac);
+        }
         match expr {
             syn::Expr::Call(call) => {
                 if let syn::Expr::Path(path) = call.func.as_ref() {

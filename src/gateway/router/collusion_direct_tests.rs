@@ -326,6 +326,9 @@ async fn fixture(setup: Setup) -> Fixture {
     state_mut.firewall = Some(Arc::new(
         Firewall::from_config(config, None).with_continuations(meta.continuation()),
     ));
+    if let Some(firewall) = &state_mut.firewall {
+        crate::gateway::router::direct_guards_fixture::publish_firewall(state_mut, firewall);
+    }
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     state_mut.meta_mcp = Arc::new((setup.arm)(meta));
     Fixture {

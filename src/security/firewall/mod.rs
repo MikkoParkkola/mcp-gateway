@@ -620,6 +620,12 @@ impl Firewall {
     pub(crate) fn response_inspection_counts(&self) -> response_observer::ResponseInspectionCounts {
         self.response_observer.snapshot()
     }
+
+    /// The config this firewall was built from, for a fixture that publishes
+    /// it as a generation's.
+    pub(crate) const fn config_for_test(&self) -> &FirewallConfig {
+        &self.config
+    }
 }
 
 /// Generic refusal text served in place of a blocked response.

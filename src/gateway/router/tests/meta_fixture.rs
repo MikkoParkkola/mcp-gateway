@@ -46,6 +46,9 @@ pub(in crate::gateway::router) async fn test_router_app_state_with_meta_and_fire
             .is_some_and(|keys| Arc::ptr_eq(&keys, &state.meta_mcp.continuation()))),
         "the router's firewall must exempt the gateway's keyring"
     );
+    if let Some(fw) = &firewall {
+        crate::gateway::router::direct_guards_fixture::publish_firewall(&state, fw);
+    }
     Arc::get_mut(&mut state)
         .expect("the fixture state is not shared yet")
         .firewall = firewall;
