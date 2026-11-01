@@ -21,6 +21,7 @@ struct Covering<'a> {
 /// each covering rule decided. Called first by both entry points.
 pub(crate) fn root_check(
     firewall: &super::super::Firewall,
+    policy: &super::super::FirewallPolicy,
     target: RuleTarget<'_>,
     args: &Value,
     backend: Option<&crate::backend::Backend>,
@@ -29,7 +30,9 @@ pub(crate) fn root_check(
     let ServerOf::Backend(server) = target.server else {
         return RootOutcome::default();
     };
-    let covering = covering(firewall, target);
+    // The request's own policy, never the firewall's startup one: folder
+    // rules reload with every other rule.
+    let covering = covering(policy, target);
     let Some(first) = covering.first() else {
         return RootOutcome::default();
     };
@@ -107,9 +110,12 @@ pub(crate) fn root_check(
 
 /// The root rules that apply to `target` under any candidate key, each
 /// once, in rule order: the branch's own coverage, restated nowhere.
-fn covering<'a>(firewall: &'a super::super::Firewall, target: RuleTarget<'a>) -> Vec<Covering<'a>> {
-    let keys = candidate_keys(&firewall.rules, target);
-    firewall
+fn covering<'a>(
+    policy: &'a super::super::FirewallPolicy,
+    target: RuleTarget<'a>,
+) -> Vec<Covering<'a>> {
+    let keys = candidate_keys(&policy.rules, target);
+    policy
         .rules
         .iter()
         .filter_map(|rule| {

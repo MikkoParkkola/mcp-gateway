@@ -160,6 +160,7 @@ pub(super) fn code(reason: RootReason) -> String {
 pub(super) fn both(fx: &Fx, tool: &str, args: &Value) -> Seen {
     let sender = fx.sender();
     let admitted = fx.fw.check_request_keyed(
+        fx.fw.startup_policy(),
         "s1",
         target(tool),
         args,
@@ -168,6 +169,7 @@ pub(super) fn both(fx: &Fx, tool: &str, args: &Value) -> Seen {
         sender.as_deref(),
     );
     let rescanned = fx.fw.rescan(
+        fx.fw.startup_policy(),
         target(tool),
         args,
         ScanSubject::Arguments,
@@ -358,6 +360,7 @@ fn r27_warn_passes_outside_with_a_finding() {
     );
     let sender = fx.sender();
     let verdict = fx.fw.check_request_keyed(
+        fx.fw.startup_policy(),
         "s1",
         target("read_file"),
         &args,

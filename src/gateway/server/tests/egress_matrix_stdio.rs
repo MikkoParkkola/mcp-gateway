@@ -178,7 +178,7 @@ async fn send(meta: &Arc<MetaMcp>, method: &'static str, part: Part) -> String {
         )),
         &writer,
         &reads,
-        Some(meta.notification_screen("stdio", "stdio-egress")),
+        Some(meta.notification_screen(("stdio", "stdio-egress"), None)),
     ))
     .await;
     drop(writer);

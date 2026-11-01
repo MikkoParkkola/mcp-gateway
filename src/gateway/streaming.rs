@@ -380,24 +380,27 @@ impl NotificationMultiplexer {
         let mut sessions = self.sessions.write();
 
         let mut reaped_ids = Vec::new();
+        // Fingerprints, logged once `sessions` is released.
+        let mut reaped_fps = Vec::new();
         sessions.retain(|id, session| {
             if Self::reapable(session, now, ttl) {
                 self.forget_provisional(session);
-                info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
+                reaped_fps.push(id.to_string());
                 reaped_ids.push(id.expose_secret().to_string());
                 false
             } else {
                 true
             }
         });
+        let remaining = sessions.len();
+        drop(sessions);
+        for id in reaped_fps {
+            info!(session_id = %id, "Reaping expired streaming session (no active receivers)");
+        }
 
         let reaped = reaped_ids.len();
         if reaped > 0 {
-            info!(
-                reaped,
-                remaining = sessions.len(),
-                "Session reaper completed"
-            );
+            info!(reaped, remaining, "Session reaper completed");
         }
         reaped_ids
     }
@@ -573,6 +576,7 @@ impl NotificationMultiplexer {
         // The removed key carries its fingerprint (PERF.2a).
         if let Some((id, session)) = sessions.remove_entry(session_id) {
             self.forget_provisional(&session);
+            drop(sessions);
             info!(session_id = %id, "Removed streaming session");
         }
     }
@@ -635,6 +639,7 @@ impl NotificationMultiplexer {
             match self.enqueue(session, notification, None, None, CopyAudience::Any, None) {
                 Ok(_) => true,
                 Err(e) => {
+                    drop(sessions);
                     debug!(session_id = %session_fp(session_id), error = %e, "Failed to send notification");
                     false
                 }

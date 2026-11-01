@@ -178,10 +178,12 @@ impl ProxyManager {
         match pending.get(id) {
             None => false,
             Some(entry) if entry.session_id.expose_secret() != session_id => {
+                let owner_session = entry.session_id.to_string();
+                drop(pending);
                 warn!(
                     %id,
                     attempted_session = %session_fp(session_id),
-                    owner_session = %entry.session_id,
+                    owner_session = %owner_session,
                     "Refused sampling/elicitation POST-back from a session that was not prompted"
                 );
                 false

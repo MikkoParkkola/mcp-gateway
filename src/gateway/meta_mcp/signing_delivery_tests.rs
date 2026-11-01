@@ -78,6 +78,7 @@ async fn finalize(
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,
             chain_nonce: None,
+            generation: None,
         },
     )
     .await

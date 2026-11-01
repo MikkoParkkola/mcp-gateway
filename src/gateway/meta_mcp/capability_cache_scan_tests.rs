@@ -132,6 +132,7 @@ async fn delivered(meta: &MetaMcp) -> (Value, Map<String, Value>) {
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         );
         let mut fields = Map::new();

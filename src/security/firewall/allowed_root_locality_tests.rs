@@ -36,8 +36,22 @@ fn on(server: &str) -> RuleTarget<'_> {
 /// would send; both must agree.
 fn call(fw: &Firewall, server: &str, path: &str, sender: Option<&Backend>) -> Seen {
     let args = json!({"path": path});
-    let admitted = fw.check_request_keyed("s1", on(server), &args, "c", "id-1", sender);
-    let rescanned = fw.rescan(on(server), &args, ScanSubject::Arguments, sender);
+    let admitted = fw.check_request_keyed(
+        fw.startup_policy(),
+        "s1",
+        on(server),
+        &args,
+        "c",
+        "id-1",
+        sender,
+    );
+    let rescanned = fw.rescan(
+        fw.startup_policy(),
+        on(server),
+        &args,
+        ScanSubject::Arguments,
+        sender,
+    );
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree on {server}");
     a

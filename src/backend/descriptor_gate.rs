@@ -199,6 +199,14 @@ pub(crate) struct DescriptorGate {
     saturated: std::sync::atomic::AtomicBool,
 }
 
+impl DescriptorGate {
+    /// Whether another thread could take both locks now (G2).
+    #[cfg(test)]
+    pub(crate) fn locks_free_for_test(&self) -> bool {
+        self.blocked.try_write().is_some() && self.logged.try_lock().is_some()
+    }
+}
+
 /// Record a log line; `true` when it was not recorded before.
 ///
 /// Memory bound: a backend that keeps sending fresh descriptions cannot grow

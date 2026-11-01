@@ -411,3 +411,75 @@ async fn two_stored_pending_logs_both_reach_the_log() {
     assert_eq!(withheld_lines(&buffer).len(), 2);
     drop(guard);
 }
+
+/// G2: run `drive` on a thread of its own under a layer that parks the
+/// withheld-tool line; while it is parked, every lock the line was decided
+/// under can be taken from here.
+fn locks_free_while_the_withheld_line_is_parked(drive: fn(&Backend)) {
+    use crate::log_writer::test_sinks::{Gate, ParkingLayer};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    crate::test_log_capture::keep_interest_open();
+    let (backend, _upstream) = backend(BackendConfig::default(), vec![tool(POISONED, PAYLOAD)]);
+    let gate = Gate::closed();
+    let layer = ParkingLayer::on("AX-010", &gate);
+    let shared = Arc::clone(&backend);
+    let driver = std::thread::spawn(move || {
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || drive(&shared));
+    });
+    assert!(
+        gate.wait_entered(),
+        "the withheld-tool line never reached the layer"
+    );
+    let gate_free = backend.descriptor_gate.locks_free_for_test();
+    let cache_free = backend.shared_entry().tools_cache.writable_for_test();
+    gate.open();
+    driver.join().expect("the driver thread");
+    assert!(
+        gate_free,
+        "the line is written under the gate's blocked or logged lock"
+    );
+    assert!(
+        cache_free,
+        "the line is written under the tools cache's write guard"
+    );
+    assert!(!gate.fired(), "the line waited past the watchdog");
+}
+
+/// G2, a discovery fill: `store_prepared`'s lines are emitted at metadata.rs
+/// after the fill is stored.
+#[test]
+fn g2_a_fill_writes_its_withheld_line_after_every_lock() {
+    locks_free_while_the_withheld_line_is_parked(|backend| {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a current-thread runtime")
+            .block_on(backend.get_tools_shared())
+            .expect("a fill");
+    });
+}
+
+/// G2, a stored listing: the lines decided inside the tools cache's
+/// `replace` callback are emitted after it returns.
+#[test]
+fn g2_a_stored_listing_writes_its_withheld_line_after_every_lock() {
+    locks_free_while_the_withheld_line_is_parked(|backend| {
+        backend.remember_listed_tools(None, false, &[tool(POISONED, PAYLOAD)]);
+    });
+}
+
+/// G2, a truncated listing: judged, never stored, and its lines emitted
+/// once `commit_verdicts` has returned.
+#[test]
+fn g2_a_truncated_listing_writes_its_withheld_line_after_every_lock() {
+    locks_free_while_the_withheld_line_is_parked(|backend| {
+        backend.remember_listed_tools_as(
+            None,
+            false,
+            &[tool(POISONED, PAYLOAD)],
+            crate::backend::descriptor_gate::Listing::Truncated,
+        );
+    });
+}

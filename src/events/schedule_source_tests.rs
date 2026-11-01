@@ -448,10 +448,12 @@ async fn a_blocked_label_is_dead_lettered() {
         }],
         ..FirewallConfig::default()
     };
+    // The delivery scan judges under the live generation, so the rule is in
+    // the published config as well as the firewall's own.
+    let mut config = crate::config::Config::default();
+    config.security.firewall = firewall.clone();
     let services = super::super::Services {
-        live: Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config::Config::default(),
-        )),
+        live: Arc::new(crate::config_reload::LiveConfig::new(config)),
         firewall: Some(Arc::new(Firewall::from_config(firewall, None))),
         audit: None,
         provenance: None,

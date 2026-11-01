@@ -186,9 +186,9 @@ fn glob_rule_matches_prefix() {
         ..FirewallConfig::default()
     };
     let fw = Firewall::from_config(cfg, None);
-    assert!(rule_matches(&fw.rules[0], "exec_command"));
-    assert!(rule_matches(&fw.rules[0], "exec_shell"));
-    assert!(!rule_matches(&fw.rules[0], "list_tools"));
+    assert!(rule_matches(&fw.startup.rules[0], "exec_command"));
+    assert!(rule_matches(&fw.startup.rules[0], "exec_shell"));
+    assert!(!rule_matches(&fw.startup.rules[0], "list_tools"));
 }
 
 #[test]

@@ -16,6 +16,7 @@ const SENTINEL: &str = "SENTINEL-8939-q7";
 fn admit(fx: &Fx, args: &Value) -> FirewallVerdict {
     let sender = fx.sender();
     fx.fw.check_request_keyed(
+        fx.fw.startup_policy(),
         "s1",
         target("read_file"),
         args,
@@ -27,8 +28,13 @@ fn admit(fx: &Fx, args: &Value) -> FirewallVerdict {
 
 fn rescan(fx: &Fx, args: &Value, subject: ScanSubject) -> FirewallVerdict {
     let sender = fx.sender();
-    fx.fw
-        .rescan(target("read_file"), args, subject, sender.as_deref())
+    fx.fw.rescan(
+        fx.fw.startup_policy(),
+        target("read_file"),
+        args,
+        subject,
+        sender.as_deref(),
+    )
 }
 
 /// R28: the route scan saw an inside path, the send carries an outside one:

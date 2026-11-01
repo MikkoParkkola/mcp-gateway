@@ -22,12 +22,22 @@ fn keyed(key: KeyOf<'_>) -> RuleTarget<'_> {
 /// Admission and rescan under `target`; both must agree.
 fn call(fx: &Fx, target: RuleTarget<'_>, args: &Value) -> Seen {
     let sender = fx.sender();
-    let admitted = fx
-        .fw
-        .check_request_keyed("s1", target, args, "c", "id-1", sender.as_deref());
-    let rescanned = fx
-        .fw
-        .rescan(target, args, ScanSubject::Arguments, sender.as_deref());
+    let admitted = fx.fw.check_request_keyed(
+        fx.fw.startup_policy(),
+        "s1",
+        target,
+        args,
+        "c",
+        "id-1",
+        sender.as_deref(),
+    );
+    let rescanned = fx.fw.rescan(
+        fx.fw.startup_policy(),
+        target,
+        args,
+        ScanSubject::Arguments,
+        sender.as_deref(),
+    );
     let (a, r) = (seen(&admitted), seen(&rescanned));
     assert_eq!(a, r, "admission and rescan disagree on {target:?}");
     a
@@ -94,6 +104,7 @@ fn r32b_warn_root_rule_does_not_soften_content_findings() {
     let args = json!({"path": fx.path("safe/f"), "cmd": "; rm -rf / #"});
     let sender = fx.sender();
     let verdict = fx.fw.check_request_keyed(
+        fx.fw.startup_policy(),
         "s1",
         keyed(KeyOf::NoKey),
         &args,

@@ -269,7 +269,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
         }
     })
     .await;
-    let t = transport_with_oauth(&format!("{base}/mcp")).unwrap();
+    let (_dir, t) = transport_with_oauth(&format!("{base}/mcp")).unwrap();
     t.oauth_client
         .as_ref()
         .unwrap()
@@ -289,7 +289,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
 
 #[tokio::test]
 async fn an_unparseable_message_target_gets_no_oauth_token() {
-    let t = transport_with_oauth("http://127.0.0.1:1/mcp").unwrap();
+    let (_dir, t) = transport_with_oauth("http://127.0.0.1:1/mcp").unwrap();
     *t.message_url.write() = Some("not a url".to_string());
 
     let err = t.get_oauth_token().await.expect_err("no target, no token");

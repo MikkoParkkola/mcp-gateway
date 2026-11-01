@@ -17,6 +17,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::mtls::MtlsPolicy;
 use crate::ranking::SearchRanker;
 use crate::routing_profile::ProfileRegistry;
+#[cfg(test)]
 use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
@@ -32,6 +33,9 @@ use crate::{Error, Result};
 /// without duplicating the construction logic.
 pub(super) struct BuiltMetaMcp {
     pub(super) meta_mcp: Arc<MetaMcp>,
+    /// The startup config's tool policy, for the stdio fixtures that build
+    /// their authorizer from it. Production judges under each generation's.
+    #[cfg(test)]
     pub(super) tool_policy: Arc<ToolPolicy>,
     pub(super) mtls_policy: Arc<MtlsPolicy>,
     /// Ranker handle retained for graceful-shutdown persistence (HTTP mode).
@@ -112,6 +116,7 @@ impl Gateway {
         });
 
         // ── Security policies ────────────────────────────────────────────────
+        #[cfg(test)]
         let tool_policy = Arc::new(ToolPolicy::from_config(&self.config.security.tool_policy));
         let mtls_policy = Arc::new(MtlsPolicy::from_config(&self.config.mtls));
 
@@ -489,6 +494,7 @@ impl Gateway {
 
         Ok(BuiltMetaMcp {
             meta_mcp,
+            #[cfg(test)]
             tool_policy,
             mtls_policy,
             ranker,

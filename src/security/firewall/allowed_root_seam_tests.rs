@@ -185,9 +185,15 @@ pub(super) fn seamed(fx: Fx, seams: impl FnOnce(Firewall) -> Firewall) -> Fx {
 
 pub(super) fn forced(fx: &Fx, args: &Value) -> Option<RootReason> {
     let sender = fx.sender();
-    root_check(&fx.fw, target("read_file"), args, sender.as_deref())
-        .forced
-        .map(|refusal| refusal.reason)
+    root_check(
+        &fx.fw,
+        fx.fw.startup_policy(),
+        target("read_file"),
+        args,
+        sender.as_deref(),
+    )
+    .forced
+    .map(|refusal| refusal.reason)
 }
 
 /// R16: a read that outlives the budget refuses the call `timeout`, and no

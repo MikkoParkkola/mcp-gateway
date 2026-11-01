@@ -554,7 +554,7 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
         .with_continuations(meta.continuation()),
     )));
 
-    meta.inspect_discovery_value(&mut surface)
+    meta.inspect_discovery_value(None, &mut surface)
         .expect("a Warn verdict serves the list");
     let description = surface["tools"][0]["description"].as_str().unwrap();
     assert!(

@@ -62,13 +62,16 @@ pub mod input_scanner;
 pub(crate) mod json_literal;
 mod json_valid;
 pub mod memory_scanner;
+mod policy;
 pub mod principal_window;
 pub mod redactor;
 mod response;
+mod stateful_guards;
 mod verdict;
+pub(crate) use policy::{AnswerPolicies, CollusionView, DetectorParams, FirewallPolicy};
 #[cfg(test)]
 use verdict::rule_matches;
-use verdict::{compile_rule, decide_firewall_action, first_matching_rule_action};
+use verdict::{decide_firewall_action, first_matching_rule_action};
 pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
@@ -77,6 +80,8 @@ pub(crate) use crate::security::tenant_reads;
 mod anomaly_learning_tests;
 #[cfg(test)]
 mod anomaly_posture_tests;
+#[cfg(test)]
+mod answer_policies_tests;
 #[cfg(test)]
 mod response_observer;
 #[cfg(test)]
@@ -96,8 +101,10 @@ mod rule_scope_tests;
 /// interior immutability; all mutable state lives in sub-modules behind locks.
 pub struct Firewall {
     config: FirewallConfig,
-    /// Compiled tool-match rules (glob → action).
-    rules: Vec<CompiledRule>,
+    /// The policy compiled from the config this firewall was built with: the
+    /// startup generation's. A check takes the policy of the generation it is
+    /// judged under; this one is for callers that have none yet.
+    startup: Arc<FirewallPolicy>,
     /// Reuse existing response scanner for prompt injection.
     response_scanner: ResponseScanner,
     /// Input pattern scanner for request arguments.
@@ -271,15 +278,7 @@ impl Firewall {
         config: FirewallConfig,
         transition_tracker: Option<Arc<TransitionTracker>>,
     ) -> Self {
-        let rules = config
-            .rules
-            .iter()
-            .enumerate()
-            .map(|(i, rule)| CompiledRule {
-                root: allowed_root::compile(i, rule),
-                ..compile_rule(rule)
-            })
-            .collect();
+        let startup = Arc::new(FirewallPolicy::compile(&config));
         let response_scanner = ResponseScanner::new();
         let input_scanner = input_scanner::InputScanner::new();
         let memory_scanner = memory_scanner::MemoryScanner::new(config.memory_poisoning.clone());
@@ -307,7 +306,7 @@ impl Firewall {
 
         Self {
             config,
-            rules,
+            startup,
             response_scanner,
             input_scanner,
             memory_scanner,
@@ -367,6 +366,7 @@ impl Firewall {
     /// route scan and the send cannot split what was checked from what is sent.
     pub(crate) fn rescan(
         &self,
+        policy: &FirewallPolicy,
         target: RuleTarget<'_>,
         args: &Value,
         subject: ScanSubject,
@@ -376,12 +376,12 @@ impl Firewall {
             return FirewallVerdict::allow();
         }
         let roots = match subject {
-            ScanSubject::Arguments => allowed_root::root_check(self, target, args, backend),
+            ScanSubject::Arguments => allowed_root::root_check(self, policy, target, args, backend),
             ScanSubject::Answers => allowed_root::RootOutcome::default(),
         };
         let mut findings = self.content_findings(target.tool, args);
         let (action, root_findings) =
-            allowed_root::apply_roots(roots, self.resolve_action(target, &findings));
+            allowed_root::apply_roots(roots, Self::resolve_action(policy, target, &findings));
         // A root finding leads: the refusal's wire text is the first finding's.
         findings.splice(0..0, root_findings);
         FirewallVerdict {
@@ -411,6 +411,11 @@ impl Firewall {
     ///
     /// Returns a verdict. If `allowed` is `false`, the caller **must not**
     /// forward the request to the backend.
+    ///
+    /// Judged by the rules this firewall was built from: for a program that
+    /// embeds it, that is the current config. The gateway's own routes never
+    /// call it; they judge under the request's generation
+    /// (the `boundary_pins::live_config` rows).
     pub fn check_request(
         &self,
         session_id: &str,
@@ -425,13 +430,64 @@ impl Firewall {
             tool,
             key: KeyOf::NotKnown,
         };
-        self.check_request_keyed(session_id, target, args, caller, control_identity, None)
+        self.check_request_keyed(
+            self.startup_policy(),
+            session_id,
+            target,
+            args,
+            caller,
+            control_identity,
+            None,
+        )
+    }
+
+    /// The startup generation's policy, for a caller that has no generation
+    /// to judge under.
+    pub(crate) fn startup_policy(&self) -> &FirewallPolicy {
+        &self.startup
+    }
+
+    /// The policy `generation` compiled, so a reload's rules decide the next
+    /// check (ADR-029, amended). With no generation (a `MetaMcp` with no live
+    /// config, which no production server builds: the `boundary_pins::live_config` rows)
+    /// it is the startup policy, logged once per process outside tests.
+    pub(crate) fn policy_under<'a>(
+        &'a self,
+        generation: Option<&'a crate::config_reload::Generation>,
+    ) -> &'a FirewallPolicy {
+        if let Some(generation) = generation {
+            return generation.firewall_policy();
+        }
+        #[cfg(not(test))]
+        {
+            static LOGGED: std::sync::Once = std::sync::Once::new();
+            LOGGED.call_once(|| {
+                tracing::error!("firewall judged with startup policy: no live config");
+            });
+        }
+        &self.startup
+    }
+
+    /// What an answer is judged under (ADR-029, amended, item 5): the
+    /// request's `pinned` generation and the `published` one together, the
+    /// published one alone for an answer no request is behind, and the
+    /// startup policy only with neither ([`Self::policy_under`]).
+    pub(crate) fn answer_policies<'a>(
+        &'a self,
+        pinned: Option<&'a crate::config_reload::Generation>,
+        published: Option<&'a crate::config_reload::Generation>,
+    ) -> AnswerPolicies<'a> {
+        match (pinned, published) {
+            (Some(pinned), Some(published)) => AnswerPolicies::answer(pinned, published),
+            (one, other) => AnswerPolicies::single(self.policy_under(one.or(other))),
+        }
     }
 
     /// [`Self::check_request`] with the caller's proven key, for a rule's
     /// `keys` scope; the entry point every gateway route uses (POLICY.2).
     pub(crate) fn check_request_keyed(
         &self,
+        policy: &FirewallPolicy,
         session_id: &str,
         target: RuleTarget<'_>,
         args: &Value,
@@ -471,8 +527,8 @@ impl Firewall {
         let budget_refuse = self.check_budget(anomaly_identity, server, tool, &mut findings);
 
         // The folder check (allowed_root.rs), the same helper `rescan` calls.
-        let roots = allowed_root::root_check(self, target, args, backend);
-        let content_action = self.resolve_action(target, &findings);
+        let roots = allowed_root::root_check(self, policy, target, args, backend);
+        let content_action = Self::resolve_action(policy, target, &findings);
         let (rooted_action, root_findings) = allowed_root::apply_roots(roots, content_action);
         // A root finding leads: the refusal's wire text is the first finding's.
         findings.splice(0..0, root_findings);
@@ -510,30 +566,6 @@ impl Firewall {
         verdict
     }
 
-    /// MIK-7116.MIN.1: the tenants a request's `args` name under
-    /// `tenant_guard.arg_keys`, whether or not the guard may refuse.
-    pub(crate) fn request_tenants(&self, args: &Value) -> std::collections::BTreeSet<String> {
-        self.tenant_guard.request_tenants(args)
-    }
-
-    /// MIK-7116.MIN.1: the tenants a tool result names (text-JSON included).
-    pub(crate) fn response_tenants(&self, result: &Value) -> std::collections::BTreeSet<String> {
-        self.tenant_guard.response_tenants(result)
-    }
-
-    /// Share `reads` with every other firewall of this process, so one
-    /// caller's reads on `/mcp` and `/mcp/{name}` meet in one history.
-    #[must_use]
-    pub(crate) fn with_reads(mut self, reads: Arc<tenant_reads::ReadHistory>) -> Self {
-        self.reads = reads;
-        self
-    }
-
-    /// The process's cross-tenant read history.
-    pub(crate) const fn reads(&self) -> &Arc<tenant_reads::ReadHistory> {
-        &self.reads
-    }
-
     /// The live backend registry and the capability slot shared with
     /// `MetaMcp`. The folder check classifies a call's backend through them
     /// at check time, so a reload or a runtime-added capability is judged as
@@ -551,115 +583,14 @@ impl Firewall {
         self
     }
 
-    /// The tenant guard, for attribution reads that record nothing (MIN.1).
-    pub(crate) const fn tenant_guard(&self) -> &tenant_guard::TenantGuard {
-        &self.tenant_guard
-    }
-
-    /// Cross-tenant data-minimisation guard (MIK-7116.TENANT.1). Pushes a
-    /// finding into `findings` for a refused or unattributable call and
-    /// returns whether the caller must be force-blocked (unattributable —
-    /// no rule may soften an unmeasured call), mirroring `anomaly_blind`.
-    fn check_tenant_guard(
-        &self,
-        principal: Option<&str>,
-        args: &Value,
-        server: &str,
-        tool: &str,
-        findings: &mut Vec<Finding>,
-    ) -> bool {
-        match self.tenant_guard.check(principal, args) {
-            tenant_guard::TenantVerdict::Allowed => false,
-            tenant_guard::TenantVerdict::Refused { distinct, limit } => {
-                findings.push(Finding {
-                    scan_type: ScanType::CrossTenantReach,
-                    severity: crate::security::Severity::High,
-                    description: format!(
-                        "Cross-tenant reach exceeded: principal touched {distinct} distinct \
-                         tenants (limit {limit})"
-                    ),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::RequestArgs,
-                });
-                false
-            }
-            tenant_guard::TenantVerdict::Unattributable => {
-                tracing::warn!(
-                    server = server,
-                    tool = tool,
-                    "MIK-7116.TENANT.1: tenant guard has no principal to key on; \
-                     refusing rather than passing the call unmeasured"
-                );
-                findings.push(Finding {
-                    scan_type: ScanType::CrossTenantReach,
-                    severity: crate::security::Severity::High,
-                    description:
-                        "Tenant-scoped call has no authenticated principal to key breadth on; \
-                         call refused unmeasured"
-                            .to_string(),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::RequestArgs,
-                });
-                true
-            }
-        }
-    }
-
-    /// Judge one request against the principal-keyed call budget
-    /// (MIK-7215.CONTROL.2), pushing a [`Finding`] and returning `true` when
-    /// the call must be refused.
-    ///
-    /// Split out of [`Self::check_request`] to keep that function under the
-    /// line-count lint; the two `Refused`/`Unattributable` arms are the whole
-    /// control and have no reason to live inline.
-    fn check_budget(
-        &self,
-        identity: Option<&str>,
-        server: &str,
-        tool: &str,
-        findings: &mut Vec<Finding>,
-    ) -> bool {
-        let Some(budget) = self.budget.as_ref() else {
-            return false;
-        };
-        match budget.check(identity, server, tool) {
-            budget_guard::BudgetVerdict::Allowed => false,
-            budget_guard::BudgetVerdict::Refused { total, limit } => {
-                findings.push(Finding {
-                    scan_type: ScanType::BudgetExceeded,
-                    severity: crate::security::Severity::High,
-                    description: format!(
-                        "Call budget exceeded: {total} calls in the window (limit {limit})"
-                    ),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::SequenceAnomaly,
-                });
-                true
-            }
-            budget_guard::BudgetVerdict::Unattributable => {
-                // Same failure shape as an unobservable anomaly check: a
-                // budget with nothing to key on cannot protect, so it must
-                // say so rather than count it under a key nobody chose. The
-                // one deliberate shared key is the keyless session-less
-                // caller (MIK-7971), which arrives here as an identity.
-                findings.push(Finding {
-                    scan_type: ScanType::BudgetExceeded,
-                    severity: crate::security::Severity::High,
-                    description:
-                        "Call budget has no caller identity to key on; call refused unattributed"
-                            .to_string(),
-                    matched: format!("{server}:{tool}"),
-                    location: FindingLocation::SequenceAnomaly,
-                });
-                true
-            }
-        }
-    }
-
     /// Post-invocation check: scan response content for credentials/injection.
     ///
     /// May redact credentials/PII from the response value in place (returns
     /// the potentially-modified value).
+    ///
+    /// Judged by the rules this firewall was built from, as one generation,
+    /// as [`Self::check_request`] is; never called by the gateway's own
+    /// routes, whose answers are judged under two (`AnswerPolicies`).
     pub fn check_response(
         &self,
         session_id: &str,
@@ -688,6 +619,7 @@ impl Firewall {
         // The compatibility API always supplies one target. Keep the defensive
         // error branch fail-closed rather than panicking at an inspection boundary.
         self.check_response_artifact(
+            self.startup_policy(),
             response,
             &targets,
             &correlation,
@@ -710,13 +642,17 @@ impl Firewall {
     /// an `allow` scoped to one type from allowing another type beside it.
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
-    fn resolve_action(&self, target: RuleTarget<'_>, findings: &[Finding]) -> FirewallAction {
-        verdict::candidate_keys(&self.rules, target)
+    fn resolve_action(
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        findings: &[Finding],
+    ) -> FirewallAction {
+        verdict::candidate_keys(&policy.rules, target)
             .into_iter()
             .flat_map(|key| {
                 findings.iter().map(move |finding| {
                     let rule =
-                        first_matching_rule_action(&self.rules, target, key, finding.scan_type);
+                        first_matching_rule_action(&policy.rules, target, key, finding.scan_type);
                     decide_firewall_action(rule, Some(finding.severity))
                 })
             })
@@ -738,6 +674,12 @@ impl Firewall {
 impl Firewall {
     pub(crate) fn response_inspection_counts(&self) -> response_observer::ResponseInspectionCounts {
         self.response_observer.snapshot()
+    }
+
+    /// The config this firewall was built from, for a fixture that publishes
+    /// it as a generation's.
+    pub(crate) const fn config_for_test(&self) -> &FirewallConfig {
+        &self.config
     }
 }
 

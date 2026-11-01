@@ -399,9 +399,15 @@ mod tests {
         ChainRetryPolicy::new(2, std::time::Duration::from_millis(1))
     }
 
-    fn make_executor() -> ChainExecutor {
-        let tmp = std::env::temp_dir().join(format!("chain-test-{}", uuid::Uuid::new_v4()));
-        ChainExecutor::new(ChainCheckpointStore::new(&tmp).unwrap(), fast_policy())
+    /// An executor over a checkpoint store in its own temp folder, which the
+    /// caller holds for the test: dropped, it takes the checkpoints with it.
+    fn make_executor() -> (tempfile::TempDir, ChainExecutor) {
+        let dir = tempfile::tempdir().expect("checkpoint dir");
+        let executor = ChainExecutor::new(
+            ChainCheckpointStore::new(dir.path()).unwrap(),
+            fast_policy(),
+        );
+        (dir, executor)
     }
 
     // ── execute: basic happy path ───────────────────────────────────────────
@@ -409,7 +415,7 @@ mod tests {
     #[tokio::test]
     async fn execute_single_step_success() {
         // GIVEN a chain with one step that succeeds
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new().respond("search_tool", json!({"results": ["a"]}));
         let chain = Chain::new("chain-1")
             .step(ChainStep::new("search", "search_tool").input(json!({"q": "rust"})));
@@ -424,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn execute_multi_step_chain() {
         // GIVEN a two-step chain
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new()
             .respond("step_a_tool", json!({"data": 1}))
             .respond("step_b_tool", json!({"data": 2}));
@@ -445,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn required_step_failure_aborts_chain() {
         // GIVEN a chain where the second step always fails
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new().respond("step_a_tool", json!("ok"));
         // step_b_tool has no response → BackendNotFound (non-retryable)
         let chain = Chain::new("chain-3")
@@ -461,7 +467,7 @@ mod tests {
     #[tokio::test]
     async fn optional_step_failure_continues_chain() {
         // GIVEN a chain with an optional step that fails
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new()
             .respond("step_a_tool", json!("ok"))
             .respond("step_c_tool", json!("done"));
@@ -482,8 +488,9 @@ mod tests {
     #[tokio::test]
     async fn resume_skips_already_completed_steps() {
         // GIVEN a checkpoint exists for step_a
-        let tmp = std::env::temp_dir().join(format!("chain-resume-test-{}", uuid::Uuid::new_v4()));
-        let store = ChainCheckpointStore::new(&tmp).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("checkpoint dir");
+        let tmp = tmp_dir.path();
+        let store = ChainCheckpointStore::new(tmp).unwrap();
         store
             .append(&ChainCheckpoint {
                 chain_id: "chain-5".into(),
@@ -516,7 +523,7 @@ mod tests {
     #[tokio::test]
     async fn resume_fails_when_no_checkpoint_exists() {
         // GIVEN an executor with no checkpoints
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new();
         let chain = Chain::new("never-started");
         // WHEN trying to resume
@@ -615,7 +622,7 @@ mod tests {
     #[tokio::test]
     async fn list_partial_chains_returns_active_chains() {
         // GIVEN two partially-completed chains
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let store_ref = &executor.store;
         store_ref
             .append(&ChainCheckpoint {
@@ -649,8 +656,9 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_deleted_after_successful_completion() {
         // GIVEN a chain that completes successfully
-        let tmp = std::env::temp_dir().join(format!("chain-cleanup-{}", uuid::Uuid::new_v4()));
-        let store = ChainCheckpointStore::new(&tmp).unwrap();
+        let tmp_dir = tempfile::tempdir().expect("checkpoint dir");
+        let tmp = tmp_dir.path();
+        let store = ChainCheckpointStore::new(tmp).unwrap();
         let executor = ChainExecutor::new(store.clone(), fast_policy());
         let invoker = MockInvoker::new().respond("the_tool", json!("ok"));
         let chain = Chain::new("cleanup-chain").step(ChainStep::new("step1", "the_tool"));
@@ -664,7 +672,7 @@ mod tests {
     #[tokio::test]
     async fn step_call_order_is_correct() {
         // GIVEN a three-step chain
-        let executor = make_executor();
+        let (_dir, executor) = make_executor();
         let invoker = MockInvoker::new()
             .respond("t1", json!(1))
             .respond("t2", json!(2))

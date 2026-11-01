@@ -663,7 +663,12 @@ pub(super) async fn forward_notification(
                 crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
             );
             let client = caller.client.as_ref();
-            super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
+            super::super::direct_guards::scan_direct_egress(
+                state,
+                screen,
+                (client, &caller.generation),
+                &mut response,
+            );
             crate::gateway::router::helpers::build_http_response(
                 &Egressed::of(response),
                 StatusCode::INTERNAL_SERVER_ERROR,

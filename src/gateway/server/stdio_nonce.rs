@@ -98,6 +98,7 @@ mod tests {
             crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig::default());
         let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
             tool_policy: &policy,
+            generation: None,
         };
         let caller =
             super::super::stdio_caller_context(&authorizer, crate::protocol::meta::Era::Modern);
