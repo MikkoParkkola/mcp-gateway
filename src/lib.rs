@@ -311,6 +311,10 @@ where
 #[path = "log_filter_tests.rs"]
 mod log_filter_tests;
 
+/// LOG.2: no tracing line is written while a lock guard is held.
+#[cfg(test)]
+mod log_under_lock_scan_tests;
+
 // Unix-only: asserts POSIX mode bits under a child's umask.
 #[cfg(all(test, unix))]
 mod file_mode_inherit_tests;
