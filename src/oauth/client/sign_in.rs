@@ -342,6 +342,29 @@ impl OAuthClient {
         self
     }
 
+    /// What the task that completes a refresh runs once the state is settled:
+    /// publish the stored token's state, so a caller that left earlier still
+    /// sees it. Nothing under a credential key the latest install is not.
+    pub(super) fn settled_publisher(&self, key: &str) -> Option<Box<dyn Fn() + Send + Sync>> {
+        let status = Arc::clone(self.sign_in_status.as_ref()?);
+        let (storage, resource_url, key) = (
+            Arc::clone(&self.storage),
+            self.resource_url.clone(),
+            key.to_owned(),
+        );
+        Some(Box::new(move || {
+            if status
+                .install_key()
+                .is_some_and(|installed| installed != key)
+            {
+                return;
+            }
+            if let Some(token) = storage.load(&key, &resource_url) {
+                status.set_held(token.expires_at, token.refresh_token.is_some());
+            }
+        }))
+    }
+
     /// Whether the latest confirmed sign-in was saved under another issuer
     /// than this client discovered: then no credential of either issuer is
     /// used until the client has re-discovered and agrees.

@@ -254,6 +254,9 @@ pub(crate) struct RefreshRequest {
     /// What the caller keeps beside the issued token, filled in before the
     /// save.
     pub(crate) finish: Box<dyn Fn(TokenInfo) -> TokenInfo + Send + Sync>,
+    /// Run by the task that completes the exchange, once the refresh state is
+    /// settled, so a caller that stopped waiting still sees it published.
+    pub(crate) settled: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 /// What [`refresh_stored`] settled to.
@@ -344,6 +347,7 @@ pub(crate) async fn refresh_stored(
         destination: request.destination,
         route: request.route,
         finish: request.finish,
+        settled: request.settled,
         across,
     };
     let outcome = exchange
@@ -395,6 +399,7 @@ pub(super) struct Exchange {
     pub(super) route: RefreshRoute,
     /// Fills what the caller keeps beside the issued token (MIK-8020).
     pub(super) finish: Box<dyn Fn(TokenInfo) -> TokenInfo + Send + Sync>,
+    pub(super) settled: Option<Box<dyn Fn() + Send + Sync>>,
     /// The flight's other half: other gateway processes sharing the storage
     /// directory wait on it too.
     pub(super) across: ExclusiveFileLock,
@@ -440,6 +445,9 @@ impl Exchange {
         }
         drop(self.across);
         drop(self.guard);
+        if let Some(settled) = &self.settled {
+            settled();
+        }
         outcome
     }
 

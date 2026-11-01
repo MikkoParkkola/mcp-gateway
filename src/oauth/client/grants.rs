@@ -797,6 +797,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
             destination: self.destination,
             route: self.refresh_route,
             finish: Box::new(std::convert::identity),
+            settled: self.settled_publisher(&key),
         })
     }
 }
