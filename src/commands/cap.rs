@@ -14,6 +14,8 @@ use mcp_gateway::{
     registry::Registry,
 };
 
+#[path = "cap_render.rs"]
+mod render;
 mod server_scan;
 use server_scan::cap_discover;
 
