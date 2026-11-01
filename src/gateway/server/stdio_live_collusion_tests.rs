@@ -1,0 +1,166 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Config-timing rows (T4): over stdio the relay witness judges a line under
+//! the generation the line was read under, held through its dispatch, never
+//! the one published when it is checked.
+//!
+//! Driven through the real read loop, as `held_across_a_flip` is: a line is
+//! written, the one-shot dispatch pause is armed after the handshake, a
+//! reload published on the same session lands while the line is held, and the
+//! line is released. A loop that read the live config again after the pause
+//! would judge the held line under the new action.
+//!
+//! An HTTP-side caller was delivered `PROSE` from `alpha:read`, and the stdio
+//! operator sends it through `alpha:send`.
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use super::*;
+use crate::backend::Backend;
+use crate::config::{BackendConfig, FailsafeConfig};
+use crate::protocol::{JsonRpcResponse, RequestId};
+use crate::security::firewall::{CollusionAction, RelayCaller};
+
+const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+    the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
+    August, and which crew pruned the older trees after the second frost. It closes with the \
+    count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
+
+/// A backend `alpha` that serves every `tools/call` and counts them.
+struct Counting(Arc<AtomicUsize>);
+
+#[async_trait::async_trait]
+impl crate::transport::Transport for Counting {
+    async fn request(
+        &self,
+        method: &str,
+        _params: Option<Value>,
+    ) -> crate::Result<JsonRpcResponse> {
+        let id = RequestId::Number(1);
+        if method == "tools/list" {
+            let tool = json!({"name": "send", "description": "A tool.", "inputSchema": {"type": "object"}});
+            return Ok(JsonRpcResponse::success(id, json!({"tools": [tool]})));
+        }
+        self.0.fetch_add(1, Ordering::SeqCst);
+        let sent = json!({"content": [{"type": "text", "text": "sent"}], "isError": false});
+        Ok(JsonRpcResponse::success(id, sent))
+    }
+    async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
+        Ok(())
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+    async fn close(&self) -> crate::Result<()> {
+        Ok(())
+    }
+}
+
+/// The config with the relay action set to `action`, a listed source and a
+/// task store in the test's own directory.
+fn write_action(path: &Path, action: &str) {
+    let tasks = path.with_file_name("tasks");
+    let tasks = tasks.display().to_string().replace('\'', "''");
+    write_owner_only(
+        path,
+        format!(
+            "security:\n  firewall:\n    enabled: true\n    collusion:\n      action: {action}\n      \
+             sources: ['alpha:read']\ntasks:\n  store_dir: '{tasks}'\n"
+        ),
+    )
+    .expect("write");
+}
+
+/// A session under `block` over a counting `alpha`, with `PROSE` delivered to
+/// another caller from `alpha:read`.
+async fn session(dir: &Path, path: &Path) -> (Session, Arc<AtomicUsize>) {
+    let sends = Arc::new(AtomicUsize::new(0));
+    let backend = Arc::new(Backend::new(
+        "alpha",
+        BackendConfig::default(),
+        &FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ));
+    backend.set_transport_for_test(Arc::new(Counting(Arc::clone(&sends))));
+    let s = Session::start_with(dir, path.to_path_buf(), Announce::No, |gateway| {
+        assert!(gateway.backends.register(backend));
+    })
+    .await;
+    let firewall = s.meta.firewall_for_test().expect("stdio builds a firewall");
+    let http = RelayCaller::Keyed("http-caller");
+    firewall.record_delivery(
+        http,
+        "alpha",
+        "read",
+        &json!({"content": [{"type": "text", "text": PROSE}]}),
+    );
+    (s, sends)
+}
+
+/// Publish `action` by a reload on the session.
+async fn publish(s: &mut Session, path: &Path, action: &str) {
+    write_action(path, action);
+    s.reload().await;
+}
+
+/// The operator's relay line is held at the dispatch pause while `to` is
+/// published by a reload on the same session, then released; the answer.
+async fn relay_held_across(s: &mut Session, path: &Path, to: &str) -> Value {
+    let (reached, release) = s.hold.arm();
+    let held = s
+        .send(
+            "tools/call",
+            json!({"name": "gateway_invoke",
+                   "arguments": {"server": "alpha", "tool": "send", "arguments": {"text": PROSE}}}),
+        )
+        .await;
+    crate::test_pause::within("the held line reaches the pause", reached.notified()).await;
+    publish(s, path, to).await;
+    let want = if to == "block" {
+        CollusionAction::Block
+    } else {
+        CollusionAction::Off
+    };
+    assert_eq!(
+        s.live.get().security.firewall.collusion.action,
+        want,
+        "the reload did not land"
+    );
+    release.notify_one();
+    s.answer(held).await
+}
+
+/// T4a: a line read under `block`, `off` published while it is held: still
+/// refused with -32002, and the backend is not called. GREEN pin on base.
+#[tokio::test]
+async fn t4a_a_held_stdio_line_read_under_block_still_refuses() {
+    let dir = tempfile::tempdir().expect("a private folder");
+    let path = dir.path().join("gateway.yaml");
+    write_action(&path, "block");
+    let (mut s, sends) = session(dir.path(), &path).await;
+    let answer = relay_held_across(&mut s, &path, "off").await;
+    assert_eq!(
+        answer["error"]["code"], -32002,
+        "T4a: not refused: {answer}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 0, "the backend was called");
+}
+
+/// T4b: a line read under `off`, `block` published while it is held:
+/// dispatched, the backend called once. RED on base: refused under the
+/// startup `block`.
+#[tokio::test]
+async fn t4b_a_held_stdio_line_read_under_off_still_sends() {
+    let dir = tempfile::tempdir().expect("a private folder");
+    let path = dir.path().join("gateway.yaml");
+    write_action(&path, "block");
+    let (mut s, sends) = session(dir.path(), &path).await;
+    publish(&mut s, &path, "off").await;
+    let answer = relay_held_across(&mut s, &path, "block").await;
+    assert!(answer.get("error").is_none(), "T4b: refused: {answer}");
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "the backend was not called"
+    );
+}
