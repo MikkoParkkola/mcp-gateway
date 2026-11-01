@@ -55,6 +55,10 @@ pub struct ShadowScanReport {
     pub assets: Vec<ShadowAsset>,
     /// Actionability-first grouping for humans and control planes.
     pub action_groups: Vec<ShadowActionGroup>,
+    /// Set when no record key was found, so the asset ids of URL finds are
+    /// keyed for this report alone and differ between runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ids_note: Option<String>,
 }
 
 /// License tier for the scan surface.
@@ -579,11 +583,14 @@ impl ShadowEvidence {
     ) -> Self {
         let executable = server.metadata.command.as_deref().and_then(executable_name);
         Self {
+            // The file's name only: a full path can carry a username, and the
+            // operator can open the file from its client.
             config_path: server
                 .metadata
                 .config_path
-                .as_ref()
-                .map(|path| path.display().to_string()),
+                .as_deref()
+                .and_then(std::path::Path::file_name)
+                .map(|name| name.to_string_lossy().into_owned()),
             pid: server.metadata.pid,
             port: server.metadata.port,
             command_present: server.metadata.command.is_some(),

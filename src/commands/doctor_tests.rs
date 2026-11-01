@@ -101,6 +101,25 @@ fn doctor_report_json_has_stable_schema_and_summary_fields() {
     );
 }
 
+/// A finding whose asset id holds for this run only says so, as the
+/// report's own note does.
+#[test]
+fn shadow_doctor_finding_carries_the_ids_note() {
+    let finding = ShadowDoctorFinding {
+        finding_id: "shadow-doctor:remote-weather".to_string(),
+        asset_id: "remote-weather".to_string(),
+        status: ShadowDoctorStatus::Critical,
+        category: "restricted_shadow_asset".to_string(),
+        detail: "remote-weather is unmanaged via streamable_http".to_string(),
+        remediation_action: ShadowRemediationAction::Quarantine,
+        verification_step: "mcp-gateway cap discover --shadow --format json".to_string(),
+    };
+    let note = "asset ids of URL finds are for this run only: no record key was found";
+    let value = check_result_json_value(&shadow_finding_check_result(finding, Some(note)));
+    let detail = value["detail"].as_str().unwrap_or_default();
+    assert!(detail.ends_with(&format!("Note: {note}.")), "{detail}");
+}
+
 #[test]
 fn shadow_doctor_finding_is_machine_readable_warning() {
     let finding = ShadowDoctorFinding {
@@ -113,7 +132,7 @@ fn shadow_doctor_finding_is_machine_readable_warning() {
         verification_step: "mcp-gateway cap discover --shadow --format json".to_string(),
     };
 
-    let result = shadow_finding_check_result(finding);
+    let result = shadow_finding_check_result(finding, None);
     let value = check_result_json_value(&result);
 
     assert_eq!(value["id"], "shadowradar_remote_weather");

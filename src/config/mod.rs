@@ -70,7 +70,7 @@ pub(crate) use pattern_grammar::tool_pattern_matches;
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
 pub use input_schema::InputSchemaEnforcement;
-pub(crate) use record_key::resolve_record_key_text;
+pub(crate) use record_key::{read_record_key_text, resolve_record_key_text};
 use secret_ref::SecretRef;
 pub(crate) use secret_ref::{is_keychain_name, is_reference, is_template_syntax};
 

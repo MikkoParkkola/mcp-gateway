@@ -277,11 +277,17 @@ async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<
 
     match discovery.discover_all().await {
         Ok(discovered) => {
+            // The record key is only read here, never created.
             let report = ShadowScanReport::from_discovered(
                 &discovered,
                 &registered_names,
                 gateway_config_path,
+                Some(config),
+                &mcp_gateway::config_persistence::gateway_data_dir(),
             );
+            // Asset ids keyed by a one-run key change between runs: each
+            // finding says so, as the report does.
+            let ids_note = report.ids_note.clone();
             let handoff = report.consumer_handoff();
             if handoff.doctor_findings.is_empty() {
                 return vec![
@@ -294,7 +300,7 @@ async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<
             handoff
                 .doctor_findings
                 .into_iter()
-                .map(shadow_finding_check_result)
+                .map(|finding| shadow_finding_check_result(finding, ids_note.as_deref()))
                 .collect()
         }
         Err(e) => vec![
@@ -307,13 +313,19 @@ async fn check_shadow_radar(config: &Config, config_path: Option<&Path>) -> Vec<
     }
 }
 
-fn shadow_finding_check_result(finding: ShadowDoctorFinding) -> CheckResult {
+fn shadow_finding_check_result(
+    finding: ShadowDoctorFinding,
+    ids_note: Option<&str>,
+) -> CheckResult {
     let severity = shadow_doctor_status_label(&finding.status);
     let action = shadow_remediation_label(&finding.remediation_action);
+    let note = ids_note
+        .map(|note| format!(" Note: {note}."))
+        .unwrap_or_default();
     CheckResult::warn(
         format!("ShadowRadar {}", finding.asset_id),
         format!(
-            "{severity}: {} Category: {}. Recommended action: {action}.",
+            "{severity}: {} Category: {}. Recommended action: {action}.{note}",
             finding.detail, finding.category
         ),
     )
