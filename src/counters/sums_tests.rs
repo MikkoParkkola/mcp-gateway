@@ -342,7 +342,11 @@ fn h5_an_uncountable_label_is_null_in_every_point() {
 /// are 0, not null.
 #[test]
 fn h6_points_before_coverage_are_zero() {
+    // Counting began 20 minutes ago, inside bucket nb - 1. A newest bucket 92
+    // half hours ahead stops the ring holding anything before nb - 3, so
+    // without the coverage rule points 0..8 would read null, not 0.
     let store = CounterStore::new(NOW - 1_200);
+    record(&store, Label::Known("t"), NOW + 92 * HALF);
     let w = hours(&store, "t", NOW);
     assert_eq!(w.series, [Some(0); SERIES]);
     assert_eq!((w.hour, w.prev_hour), (Some(0), Some(0)));
