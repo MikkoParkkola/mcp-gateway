@@ -392,17 +392,18 @@ impl OAuthClient {
     /// discovery's own error. A differing issuer fails closed with the sign-in
     /// wait, the in-memory token dropped and the reason raised on the status.
     pub(crate) async fn rediscover_if_moved(&mut self) -> crate::Result<()> {
+        // No cell means no install record to compare against: nothing moved.
+        // `issuer_differs` already answers no then; checked first so no path
+        // below can find the cell missing.
+        let Some(status) = self.sign_in_status.clone() else {
+            return Ok(());
+        };
         if !self.issuer_differs() {
             return Ok(());
         }
         let discovered = self.discover_documents().await?;
         #[cfg(all(test, feature = "webui"))]
         self.rediscovery_pause.pause().await;
-        // `issuer_differs` held, so the client has a cell.
-        let status = self
-            .sign_in_status
-            .clone()
-            .expect("an install under another issuer implies a status cell");
         let found = super::storage_key(&self.backend_name, &discovered.auth.issuer);
         if status.install_key().as_deref() != Some(found.as_str()) {
             *self.current_token.write() = None;
