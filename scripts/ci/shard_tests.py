@@ -79,15 +79,21 @@ OUTPUT = {"windows": ["--show-output"]}
 # only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
 _UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+# Each entry names the open ticket whose fix removes it: nothing here is
+# unowned.
 KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
+    # MIK-9150
     ("oauth_test_[a-z0-9_]+", 10, "oauth::client tests' token stores"),
+    # MIK-9151
     (f"chain-(test|resume-test|cleanup)-{_UUID}", 9, "chains::executor tests"),
+    # MIK-9152
     ("http_transport_tls_guard", 1, "transport::http tests' token store"),
-    ("stdio-tail-[0-9]+", 1, "transport::stdio start-failure test"),
+    # MIK-8986 (an audit write) and MIK-9034 (a stdio task record)
     (r"\.tmp[A-Za-z0-9]{6}", 4,
-     "an audit write that outlives its test's temp dir (transparency_log::bounded_tests up "
-     "to 3, identity_propagation::audit_fail_closed, signing_allocation_tests::"
-     "withheld_parity_stdio); hardened_signing_e2e and mik_7272_task_1_acs"),
+     "a late write that outlives its test's temp dir: an audit write "
+     "(transparency_log::bounded_tests up to 3, identity_propagation::audit_fail_closed, "
+     "signing_allocation_tests::withheld_parity_stdio; hardened_signing_e2e and "
+     "mik_7272_task_1_acs) or a stdio task record"),
 ]
 # Written out, not derived from the list above: a pattern added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
@@ -97,7 +103,6 @@ LEFTOVER_CEILING: dict[str, int] = {
     "oauth_test_[a-z0-9_]+": 10,
     f"chain-(test|resume-test|cleanup)-{_UUID}": 9,
     "http_transport_tls_guard": 1,
-    "stdio-tail-[0-9]+": 1,
     r"\.tmp[A-Za-z0-9]{6}": 4,
 }
 
