@@ -167,6 +167,33 @@ fn diff_backend_disabled_counts_as_removed() {
 // compute_diff: modifications
 // -------------------------------------------------------------------------
 
+/// MIK-9105 (round 1 review): a header literal rewritten as a reference
+/// to the same bytes evaluates to the same config text; only the
+/// configured-secret record differs, and that alone marks the backend
+/// modified, so the reload re-seeds its redaction set.
+#[test]
+fn diff_detects_a_value_newly_marked_secret() {
+    use crate::config::configured_secrets::{ConfiguredSecret, ConfiguredSecrets, SecretOrigin};
+    let mut literal = http_backend("http://localhost:8080/mcp");
+    literal
+        .headers
+        .insert("X-Api-Key".to_string(), "same-token-bytes".to_string());
+    let mut reference = literal.clone();
+    reference.configured_secrets = ConfiguredSecrets::of(vec![ConfiguredSecret {
+        field: "headers.X-Api-Key".to_string(),
+        value: "same-token-bytes".to_string(),
+        origin: SecretOrigin::Explicit,
+    }]);
+    let old = config_with_backends(HashMap::from([("api".to_string(), literal)]));
+    let new = config_with_backends(HashMap::from([("api".to_string(), reference)]));
+    let patch = compute_diff(&old, &new);
+    assert_eq!(
+        patch.backends_modified.len(),
+        1,
+        "the marking change was not seen"
+    );
+}
+
 #[test]
 fn diff_detects_modified_backend_url() {
     // GIVEN: same name, different URL

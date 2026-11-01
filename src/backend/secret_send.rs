@@ -114,10 +114,15 @@ impl Backend {
     /// Adds every value this backend's rules resolve to now, so a value is
     /// removed from what the backend sends before any call injects it (a
     /// tool description, an initialize answer). A rule that does not resolve
-    /// yet adds nothing; its value joins when a send resolves it.
+    /// yet adds nothing; its value joins when a send resolves it. The
+    /// backend's configured `headers:` and `env:` credentials are held first,
+    /// with or without a resolver: they reach the backend on every start.
     pub(crate) fn seed_needles(&self) {
-        let (Some(resolver), Some(needles)) = (self.secret_resolver.get(), self.needles.get())
-        else {
+        let Some(needles) = self.needles.get() else {
+            return;
+        };
+        needles.pin_configured(&self.name, &self.config.configured_secrets);
+        let Some(resolver) = self.secret_resolver.get() else {
             return;
         };
         for rule in &self.config.secrets {

@@ -15,6 +15,7 @@ mod backend_debug;
 mod backend_ownership;
 mod backend_transport;
 mod config_file;
+pub(crate) mod configured_secrets;
 mod env_overlay;
 mod env_provider;
 pub(crate) mod secret_rules;

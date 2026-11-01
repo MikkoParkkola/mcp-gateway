@@ -347,21 +347,30 @@ pub(crate) fn evaluate_backends(
     overlay: &EnvOverlay,
     unresolved: &mut Vec<String>,
 ) {
+    use super::configured_secrets::{ConfiguredSecrets, Slot, record};
     for (name, backend) in backends.iter_mut().filter(|(_, b)| b.enabled) {
+        let mut secrets = ConfiguredSecrets::default();
         let headers = backend
             .headers
             .iter_mut()
-            .map(|(key, value)| (format!("backends.{name}.headers.{key}"), value));
+            .map(|(key, value)| (Slot::Header, "headers", key, value));
         let env = backend
             .env
             .iter_mut()
-            .map(|(key, value)| (format!("backends.{name}.env.{key}"), value));
-        for (field, value) in headers.chain(env) {
+            .map(|(key, value)| (Slot::Env, "env", key, value));
+        for (slot, kind, key, value) in headers.chain(env) {
+            let field = format!("backends.{name}.{kind}.{key}");
             match evaluate_backend_value(&field, value, overlay) {
-                Ok(evaluated) => *value = evaluated,
+                Ok(evaluated) => {
+                    // Read from the written text: after the overwrite a
+                    // reference and a literal look the same.
+                    record(&mut secrets, slot, key, value.as_str(), &evaluated, overlay);
+                    *value = evaluated;
+                }
                 Err(message) => unresolved.push(message),
             }
         }
+        backend.configured_secrets = secrets;
     }
 }
 

@@ -16,7 +16,7 @@ use crate::protocol::{JsonRpcMessage, JsonRpcResponse, RequestId};
 const GRACE: Duration = Duration::from_secs(3_600);
 
 /// Log lines written while `run` runs, as text (thread-scoped subscriber).
-fn logs(run: impl FnOnce()) -> String {
+pub(super) fn logs(run: impl FnOnce()) -> String {
     #[derive(Clone, Default)]
     struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
     impl std::io::Write for Sink {
@@ -43,7 +43,7 @@ fn logs(run: impl FnOnce()) -> String {
 const T0: u64 = 1_800_000_000;
 
 /// The text `needles` leaves of an answer whose result is `text`.
-fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
+pub(super) fn scrubbed(needles: &NeedleSet, text: &str) -> (Scrubbed, String) {
     let mut message = JsonRpcMessage::Response(JsonRpcResponse::success(
         RequestId::Number(1),
         json!({"text": text}),

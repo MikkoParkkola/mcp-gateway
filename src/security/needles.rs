@@ -62,6 +62,18 @@ struct Held {
     /// [`percent_forms`]): what a backend quoting it inside a URL sends back.
     encoded: Vec<String>,
     last_sent: tokio::time::Instant,
+    lifetime: Lifetime,
+}
+
+/// How long a held value stays in the set.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lifetime {
+    /// Until `grace` after its last send: a value a call injected.
+    Grace,
+    /// For as long as the backend's config holds it: a `headers:` or `env:`
+    /// credential is on every request or in the child's environment, so it
+    /// has no last send to count from.
+    Configured,
 }
 
 /// One backend name's injected values. Never printed: `Debug` names the count.
@@ -116,7 +128,8 @@ impl NeedleSet {
     }
 
     fn retired(&self, held: &Held, now: tokio::time::Instant) -> bool {
-        now.saturating_duration_since(held.last_sent) > self.grace
+        held.lifetime == Lifetime::Grace
+            && now.saturating_duration_since(held.last_sent) > self.grace
     }
 
     /// Adds `value`, or renews its last send (empty values are never
@@ -140,6 +153,19 @@ impl NeedleSet {
             }
             return;
         }
+        self.admit(&mut values, backend, value, Lifetime::Grace, now);
+    }
+
+    /// Pushes a value not yet held, dropping retired values first; past the
+    /// bound the set fails closed and keeps every value it holds.
+    fn admit(
+        &self,
+        values: &mut Vec<Held>,
+        backend: &str,
+        value: &str,
+        lifetime: Lifetime,
+        now: tokio::time::Instant,
+    ) {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
@@ -163,13 +189,82 @@ impl NeedleSet {
             value: value.to_owned(),
             encoded: percent_forms(value),
             last_sent: now,
+            lifetime,
         });
         self.version.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Warns once per rule when a value it sent is shorter than
-    /// [`SHORT_VALUE_BYTES`]; names the backend and the rule, never the value.
-    /// Called on a send only, so loading or seeding never warns.
+    /// Makes `secrets` the backend's configured values, as one swap: each is
+    /// held for as long as it stays configured, and a value configured before
+    /// but not now counts from this moment, so an echo of a just-rotated
+    /// credential is still removed until its grace has passed. An inferred
+    /// value too short to be safely treated as a secret is left out and its
+    /// field named once; an explicit one is held at any length and named once.
+    pub(crate) fn pin_configured(
+        &self,
+        backend: &str,
+        secrets: &crate::config::configured_secrets::ConfiguredSecrets,
+    ) {
+        use crate::config::configured_secrets::SecretOrigin;
+        let wanted: Vec<&str> = secrets
+            .iter()
+            .filter(|secret| {
+                if secret.value.len() >= SHORT_VALUE_BYTES {
+                    return true;
+                }
+                match secret.origin {
+                    SecretOrigin::Explicit => {
+                        self.warn_if_short(backend, &secret.field, &secret.value);
+                        true
+                    }
+                    SecretOrigin::Inferred => {
+                        if self.short_warned.lock().insert(secret.field.clone()) {
+                            tracing::warn!(
+                                backend,
+                                field = %secret.field,
+                                bytes = secret.value.len(),
+                                "not redacted: too short to be treated as a secret; write it \
+                                 as an env: reference to mark it secret"
+                            );
+                        }
+                        false
+                    }
+                }
+            })
+            .map(|secret| secret.value.as_str())
+            .collect();
+        let mut values = self.values.write();
+        let now = tokio::time::Instant::now();
+        let mut changed = false;
+        for held in values.iter_mut() {
+            if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
+                held.lifetime = Lifetime::Grace;
+                held.last_sent = now;
+                changed = true;
+            }
+        }
+        for value in wanted {
+            if let Some(held) = values.iter_mut().find(|held| held.value == value) {
+                if held.lifetime != Lifetime::Configured {
+                    // A value sent once and configured now is promoted, never
+                    // held twice; one that had retired is back in the set.
+                    held.lifetime = Lifetime::Configured;
+                    held.last_sent = now;
+                    changed = true;
+                }
+                continue;
+            }
+            self.admit(&mut values, backend, value, Lifetime::Configured, now);
+        }
+        if changed {
+            self.version.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Warns once per rule (or configured field) when its value is shorter
+    /// than [`SHORT_VALUE_BYTES`]; names the backend and the rule, never the
+    /// value. Called on a send, and for a configured value when it is pinned;
+    /// a `secrets:` rule is never warned about at load.
     pub(crate) fn warn_if_short(&self, backend: &str, rule: &str, value: &str) {
         if value.len() < SHORT_VALUE_BYTES && self.short_warned.lock().insert(rule.to_owned()) {
             tracing::warn!(
@@ -208,7 +303,11 @@ impl NeedleSet {
             .flat_map(|held| std::iter::once(&held.value).chain(&held.encoded))
             .cloned()
             .collect();
-        let valid_until = live.iter().map(|held| held.last_sent + self.grace).min();
+        let valid_until = live
+            .iter()
+            .filter(|held| held.lifetime == Lifetime::Grace)
+            .map(|held| held.last_sent + self.grace)
+            .min();
         drop(values);
         let compiled = std::sync::Arc::new(Compiled::new(&secrets));
         // Stored only if no insert or retirement moved the version while this
@@ -619,6 +718,9 @@ fn refusal_message(needles: &NeedleSet) -> &'static str {
 /// The fixed refusal's text for an answer that held an injected value.
 const ECHO_REFUSAL: &str = "the backend's answer contained a credential the gateway injected";
 
+#[cfg(test)]
+#[path = "needles_configured_tests.rs"]
+mod configured_tests;
 #[cfg(test)]
 #[path = "needles_tests.rs"]
 mod tests;

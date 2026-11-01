@@ -46,6 +46,10 @@ pub struct BackendConfig {
     /// HTTP headers (for http/sse). On a `ws_url` backend they go only on the
     /// upgrade request, once per connect, never per message.
     pub headers: HashMap<String, String>,
+    /// Which `headers:` and `env:` values load read from a secret source;
+    /// set by load, never read from or written to a file.
+    #[serde(skip)]
+    pub(crate) configured_secrets: super::configured_secrets::ConfiguredSecrets,
     /// OAuth configuration (optional).
     #[serde(default)]
     pub oauth: Option<OAuthConfig>,
@@ -123,6 +127,7 @@ impl Default for BackendConfig {
             timeout: Duration::from_secs(30),
             env: HashMap::new(),
             headers: HashMap::new(),
+            configured_secrets: super::configured_secrets::ConfiguredSecrets::default(),
             oauth: None,
             secrets: Vec::new(),
             passthrough: false,
