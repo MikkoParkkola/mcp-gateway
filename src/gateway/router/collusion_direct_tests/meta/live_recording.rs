@@ -13,7 +13,6 @@
 //! keeps only in-plan or seam receipts) and sets the Sync key the row
 //! computes; its step labels show the receipts are plan steps.
 
-use crate::config_reload::LiveConfig;
 use crate::security::firewall::StoredKey;
 use sha2::Digest as _;
 
@@ -40,13 +39,10 @@ async fn live_fixture(action: CollusionAction) -> Fixture {
         sources: defaults.sources,
         ..CollusionConfig::default()
     };
-    // Keep the fixture's resolved keys: a fresh `LiveConfig::new` would
-    // resolve auth from the config alone, and the keyed calls would then
-    // carry no verified principal.
-    let auth = Arc::clone(st.live_config.generation().auth());
-    st.live_config = Arc::new(LiveConfig::from_prepared(
-        crate::config_reload::Generation::prepare_startup(cfg, auth),
-    ));
+    // Published on the live config the router and the Meta-MCP already
+    // share (startup hands both the same one), keeping the fixture's
+    // resolved keys; the detector parameters are unchanged, so it applies.
+    st.live_config.set(cfg);
     // The clock is frozen at construction: nothing ages out on a slow run.
     firewall(&fx).advance_collusion_clock_for_test(Duration::ZERO);
     fx

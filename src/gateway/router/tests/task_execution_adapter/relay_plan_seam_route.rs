@@ -84,7 +84,10 @@ async fn seam_state_with(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&state, BACKEND, mock);
     for server in more {
         register(&state, server, mock);
@@ -514,7 +517,10 @@ async fn a_redacted_field_is_no_steps_text() {
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     register(&state, BACKEND, &mock);
     let output = run_seam(&state, json!({})).await;
     let delivered = output["a"].as_str().unwrap_or_default().to_owned();

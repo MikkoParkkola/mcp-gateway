@@ -71,7 +71,10 @@ async fn surfaced_state_with(
         },
     )
     .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&state, BACKEND, mock);
     (state, store)
 }

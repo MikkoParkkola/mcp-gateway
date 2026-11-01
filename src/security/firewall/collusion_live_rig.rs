@@ -50,20 +50,33 @@ fn live_with_collusion_of(live: &LiveConfig, firewall: &Firewall) -> LiveConfig 
     LiveConfig::with_auth(config, Arc::clone(live.generation().auth()))
 }
 
+/// What a fixture's relay firewall contributes to the published config.
+#[derive(Clone, Copy)]
+pub(crate) enum Layer {
+    /// The Meta-MCP's firewall is the fixture's only policy: its whole
+    /// section is published.
+    WholeSection,
+    /// A router firewall already published its section (rules, redaction):
+    /// only the relay firewall's collusion section goes over it.
+    CollusionOnly,
+}
+
 /// Publish, as `state`'s live config and its Meta-MCP's, `firewall`'s
-/// collusion section over what the state already published: for a fixture
-/// that hands its relay firewall to the Meta-MCP beside a router firewall. The Meta-MCP reads the same live config, as startup wires it
-/// (`server/run.rs`), so its records and witnesses read that generation.
-pub(crate) fn pair_state(state: &mut Arc<AppState>, firewall: &Firewall) {
-    let live = Arc::new(live_with_collusion_of(&state.live_config, firewall));
+/// section by `layer`, keeping the state's resolved keys. The Meta-MCP reads
+/// the same live config, as startup wires it (`server/run.rs`).
+pub(crate) fn pair_state(state: &mut Arc<AppState>, firewall: &Firewall, layer: Layer) {
+    let live = Arc::new(match layer {
+        Layer::WholeSection => live_of(&state.live_config, firewall),
+        Layer::CollusionOnly => live_with_collusion_of(&state.live_config, firewall),
+    });
     state.meta_mcp.set_live_config(Arc::clone(&live));
     Arc::get_mut(state).expect("state is unique").live_config = live;
 }
 
 /// [`pair_state`] with the firewall the state's Meta-MCP runs, when it runs one.
-pub(crate) fn pair_state_with_meta(state: &mut Arc<AppState>) {
+pub(crate) fn pair_state_with_meta(state: &mut Arc<AppState>, layer: Layer) {
     if let Some(firewall) = state.meta_mcp.firewall_for_test() {
-        pair_state(state, &firewall);
+        pair_state(state, &firewall, layer);
     }
 }
 

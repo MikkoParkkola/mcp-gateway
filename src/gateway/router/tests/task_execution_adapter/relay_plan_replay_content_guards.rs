@@ -443,7 +443,10 @@ async fn redacting_gateway(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut on);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut on,
+        crate::security::firewall::collusion_live_rig::Layer::CollusionOnly,
+    );
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, &rig.alpha);
     register(&on, BETA, &rig.beta);

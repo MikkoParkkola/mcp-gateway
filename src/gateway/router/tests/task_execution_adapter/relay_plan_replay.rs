@@ -161,7 +161,10 @@ pub(super) async fn rig_with_mocks(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     // `mock` is the probe: bob's relays go to it, and it answers only "ok",
     // so a probe never hands bob a copy of the tested text.
     register(&state, BACKEND, &answering("ok"));
@@ -601,7 +604,10 @@ async fn detection_on_gateway(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut on);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut on,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, erring);
     (on, on_store)
@@ -632,7 +638,10 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text() {
             |meta| meta,
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut off);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut off,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&off, BACKEND, &answering("ok"));
     register(&off, ALPHA, &erring);
     let call = || json!({"server": ALPHA, "tool": TOOL, "arguments": {}});

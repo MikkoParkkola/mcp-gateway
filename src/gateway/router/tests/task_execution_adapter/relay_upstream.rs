@@ -144,7 +144,10 @@ async fn followed_with(
         },
     )
     .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     let backend = Arc::new(Backend::new(
         BACKEND,
         BackendConfig {

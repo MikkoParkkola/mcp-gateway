@@ -119,7 +119,10 @@ async fn off_gateway(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut state,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&state, BACKEND, &answering("ok"));
     register(&state, ALPHA, alpha);
     register(&state, BETA, beta);
@@ -172,7 +175,10 @@ async fn on_gateway_over_off(
             },
         )
         .await;
-    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut on);
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(
+        &mut on,
+        crate::security::firewall::collusion_live_rig::Layer::WholeSection,
+    );
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, alpha);
     register(&on, BETA, beta);
