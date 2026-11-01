@@ -56,6 +56,7 @@ impl MetaMcp {
     /// The generation a gateway would publish for the configuration this
     /// Meta-MCP's firewall was built from.
     #[cfg(test)]
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
     pub(crate) fn paired_generation_for_test(
         &self,
     ) -> std::sync::Arc<crate::config_reload::Generation> {
