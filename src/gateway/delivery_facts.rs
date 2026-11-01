@@ -98,9 +98,8 @@ pub(crate) struct DeliveryFacts {
     /// The latest composite step's fold, until the composite carries it
     /// (`step_carried`), ends on it (`composite_ended`) or moves past it.
     last_step_folded: Option<RpcError>,
-    /// The error about to be delivered wraps the step the composite ended
-    /// on, so it is counted as that step's (`wrapped_step`).
-    wrapped: bool,
+    /// Whose failure the error about to be delivered is (`wrapped_step`).
+    error_of: ErrorOf,
 }
 
 /// The two facts a delivery keeps about its sends. Both can hold at once (a
@@ -113,6 +112,16 @@ struct Sends {
     entered: u32,
     /// The backend's send refused this delivery's call before any byte left.
     refused_before: bool,
+}
+
+/// Whose failure the error about to be delivered is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ErrorOf {
+    /// Its own: counted with the error's own origin.
+    Own,
+    /// The step the composite ended on, which it wraps: counted with that
+    /// step's fold.
+    EndedStep,
 }
 
 /// How a composite's latest step ended, for the composite's own record.
@@ -136,7 +145,7 @@ impl Default for DeliveryFacts {
             sends: Sends::default(),
             folded: None,
             last_step_folded: None,
-            wrapped: false,
+            error_of: ErrorOf::Own,
         }
     }
 }
@@ -241,7 +250,7 @@ pub(crate) fn step_absorbed() {
         // A failure carried past and not reported is not the answer's, and
         // the wrapper built for it is not what is delivered.
         facts.last_step_folded = None;
-        facts.wrapped = false;
+        facts.error_of = ErrorOf::Own;
     });
 }
 
@@ -257,7 +266,7 @@ pub(crate) fn step_tool_failed() {
                 origin: Origin::Backend,
             });
         }
-        facts.wrapped = true;
+        facts.error_of = ErrorOf::EndedStep;
     });
 }
 
@@ -298,7 +307,7 @@ pub(crate) fn step_carried(error: Option<&crate::Error>) {
 /// playbook's `tool_error`, a chain's step failure, the bridge's refusal):
 /// it is counted with the origin of the failure folded into this delivery.
 pub(crate) fn wrapped_step() {
-    with(|facts| facts.wrapped = true);
+    with(|facts| facts.error_of = ErrorOf::EndedStep);
 }
 
 /// Stamp what this delivery's facts say about folded failures on `frame`,
@@ -306,15 +315,15 @@ pub(crate) fn wrapped_step() {
 /// the fold; a frame wrapping the step the composite ended on is counted
 /// with that fold's origin. A frame's own error otherwise wins.
 pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
-    let Ok((folded, wrapped)) = FACTS.try_with(|cell| {
+    let Ok((folded, error_of)) = FACTS.try_with(|cell| {
         let cell = cell.borrow();
-        (cell.folded, cell.wrapped)
+        (cell.folded, cell.error_of)
     }) else {
         return;
     };
     if frame.error.is_none() {
         frame.wire_meta.folded = folded;
-    } else if wrapped
+    } else if error_of == ErrorOf::EndedStep
         && !frame.wire_meta.delivery_refusal
         && let Some(folded) = folded
     {

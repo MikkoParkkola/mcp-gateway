@@ -282,7 +282,7 @@ fn http_status_maps_to_outcome() {
     );
 }
 
-/// C6 and A1 (live): a backend's own INVALID_PARAMS is audited `invalid` as
+/// C6 and A1 (live): a backend's own `INVALID_PARAMS` is audited `invalid` as
 /// the gateway's twin is; a backend's -32001 / -32004 is the backend's
 /// error, never the gateway's denial, which stays `denied` (control).
 #[test]

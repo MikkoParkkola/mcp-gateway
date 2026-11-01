@@ -305,7 +305,7 @@ fn a_chain_ending_on_a_backends_error_counts_as_backend() {
     assert_eq!(all(&text), BACKEND, "{answer}\n{text}");
 }
 
-/// N13: a chain ending on a backend's refused argument (INVALID_PARAMS)
+/// N13: a chain ending on a backend's refused argument (`INVALID_PARAMS`)
 /// counts once as `backend`: the chain keeps the backend's error.
 #[test]
 fn a_chain_ending_on_a_backends_refused_argument_counts_as_backend() {

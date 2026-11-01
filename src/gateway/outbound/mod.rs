@@ -297,6 +297,9 @@ impl OutboundFrame {
 
 /// The outcome of judging a frame that is withheld rather than replaced when
 /// blocked: a notification, a server-to-client request, an event delivery.
+// Admitted is nearly every frame and Blocked is rare: boxing the frame would
+// allocate on every delivery to shrink the rare case.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub(crate) enum Admission {
     /// Write it through a sink.
