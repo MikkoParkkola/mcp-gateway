@@ -73,7 +73,7 @@ impl MetaMcp {
         if let Some(fw) = self.firewall.as_ref() {
             return fw.paired_generation_for_test();
         }
-        crate::config_reload::Generation::placeholder()
+        crate::config_reload::LiveConfig::new(crate::config::Config::default()).generation()
     }
 
     /// The firewall the Meta-MCP records relay evidence into, for a fixture

@@ -155,7 +155,7 @@ where
         .await;
     response
         .extensions_mut()
-        .insert(DeferredReceipts::new(staged, answered));
+        .insert(DeferredReceipts::new(staged, answered, meta.live_config()));
     response
 }
 
@@ -168,24 +168,44 @@ where
 pub(crate) struct DeferredReceipts {
     staged: std::sync::Arc<parking_lot::Mutex<Option<StagedReceipts>>>,
     eligible: bool,
+    /// Where the generation current at delivery is read from.
+    live: Option<std::sync::Arc<crate::config_reload::LiveConfig>>,
 }
 
 impl DeferredReceipts {
-    pub(crate) fn new(staged: StagedReceipts, eligible: bool) -> Self {
+    pub(crate) fn new(
+        staged: StagedReceipts,
+        eligible: bool,
+        live: Option<std::sync::Arc<crate::config_reload::LiveConfig>>,
+    ) -> Self {
         Self {
             staged: std::sync::Arc::new(parking_lot::Mutex::new(Some(staged))),
             eligible,
+            live,
         }
     }
 
-    /// Record what was staged when the answer went out as built.
+    /// Record what was staged when the answer went out as built, under the
+    /// generation current now, captured once before anything records.
     pub(crate) fn commit(&self, written: bool) {
-        if let Some(staged) = self.staged.lock().take() {
-            staged.commit(
-                written && self.eligible,
-                &crate::config_reload::Generation::placeholder(),
-            );
+        let generation = self.live.as_ref().map(|live| live.generation());
+        if let (Some(staged), Some(generation)) = (self.staged.lock().take(), generation) {
+            staged.commit(written && self.eligible, &generation);
         }
+    }
+}
+
+impl MetaMcp {
+    /// Commit `staged` under the generation current at delivery. Before
+    /// startup publishes a live config nothing is judged, so nothing records.
+    #[cfg_attr(not(feature = "firewall"), allow(clippy::unused_self))]
+    pub(crate) fn commit_staged(&self, staged: StagedReceipts, delivered: bool) {
+        #[cfg(feature = "firewall")]
+        if let Some(generation) = self.current_generation() {
+            staged.commit(delivered, &generation);
+        }
+        #[cfg(not(feature = "firewall"))]
+        let _ = (staged, delivered);
     }
 }
 

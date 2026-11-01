@@ -161,10 +161,7 @@ impl MetaMcp {
         let delivered = self
             .record_notification_delivery_attempt(sent, &correlation, reader.credential.clone())
             .await;
-        pending.staged.commit(
-            delivered && !pending.withheld,
-            &crate::config_reload::Generation::placeholder(),
-        );
+        self.commit_staged(pending.staged, delivered && !pending.withheld);
         delivered
     }
 }

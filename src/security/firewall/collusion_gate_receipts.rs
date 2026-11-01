@@ -240,7 +240,12 @@ impl Firewall {
         digest: &DeliveryDigest,
         generation: &crate::config_reload::Generation,
     ) {
-        let _ = generation; // used by the fix
+        // The generation current at delivery decides: an effective `off`
+        // records nothing, and its lists decide retention.
+        let view = generation.collusion_view();
+        if view.action() == super::CollusionAction::Off {
+            return;
+        }
         let Some(detector) = self.relay_detector() else {
             return;
         };
@@ -260,7 +265,6 @@ impl Firewall {
         let source = format!("{server}:{tool}");
         // The source identity and inferred fact are held; the lists decide
         // retention only.
-        let view = &self.relay.view;
         // MIK-8113: a seam of several sources leaves only by a flow every
         // contributing source allows.
         if let Some(sources) = digest.seam_sources.as_deref() {

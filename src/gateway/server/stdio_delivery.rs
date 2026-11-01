@@ -133,10 +133,7 @@ impl super::Gateway {
         if !retained {
             staged.drop_replay_capture();
         }
-        staged.commit(
-            frame.delivers_result(),
-            &crate::config_reload::Generation::placeholder(),
-        );
+        meta.commit_staged(staged, frame.delivers_result());
         frame
     }
 }

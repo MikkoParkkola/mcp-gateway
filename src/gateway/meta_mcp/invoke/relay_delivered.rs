@@ -29,14 +29,17 @@ impl MetaMcp {
             let digest = fw.delivery_digest(server, tool, value)?;
             let (key, keyed) = (who.key.to_owned(), who.keyed);
             let (server, tool) = (server.to_owned(), tool.to_owned());
+            let live = self.live_config();
             Some(crate::gateway::input_bridge::DeliveryCommit::new(
                 move || {
                     let caller = crate::security::firewall::RelayCaller::new(&key, keyed);
+                    // Read when delivery is confirmed, not when built.
+                    let generation = live.as_ref().map(|live| live.generation());
                     #[cfg(all(test, feature = "firewall"))]
                     super::commit_capture_hook::run();
-                    // Read when delivery is confirmed, not when built.
-                    let generation = crate::config_reload::Generation::placeholder();
-                    fw.record_digest(caller, &server, &tool, &digest, &generation);
+                    if let Some(generation) = generation {
+                        fw.record_digest(caller, &server, &tool, &digest, &generation);
+                    }
                 },
             ))
         }

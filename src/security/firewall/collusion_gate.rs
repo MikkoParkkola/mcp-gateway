@@ -357,15 +357,14 @@ impl Firewall {
         self.relay_detector().is_some()
     }
 
-    /// The detector, while the firewall is on and the startup action is not
-    /// `off`: what staging and recording read until each takes the action of
-    /// the generation current at delivery. The detector itself is always
-    /// built.
+    /// The detector, while the firewall is on, whatever the action: staging
+    /// keeps a receipt's facts under `off`, and each record and witness takes
+    /// the action of its own generation.
     fn relay_detector(&self) -> Option<&CollusionDetector> {
         self.relay
             .detector
             .as_deref()
-            .filter(|_| self.config.enabled && self.config.collusion.action != CollusionAction::Off)
+            .filter(|_| self.config.enabled)
     }
 
     /// Egress check: does `params`, sent by `caller` through `server:tool`,

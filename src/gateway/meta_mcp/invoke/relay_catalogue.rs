@@ -92,14 +92,10 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        // The request's pinned generation, else the one published now.
+        // The request's pinned generation, else the one published now;
+        // before startup publishes one there is nothing to judge under.
         let published = self.current_generation();
-        let fallback = crate::config_reload::Generation::placeholder();
-        let generation = caller
-            .generation
-            .as_deref()
-            .or(published.as_deref())
-            .unwrap_or(&fallback);
+        let generation = caller.generation.as_deref().or(published.as_deref())?;
         let message = fw.relay_block_message(
             generation.collusion_view(),
             who,
