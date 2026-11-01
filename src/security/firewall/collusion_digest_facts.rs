@@ -16,11 +16,11 @@ impl DeliveryDigest {
     /// Each contributing source with its inferred fact (tests only).
     #[cfg(test)]
     pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
-        contributor_facts(
+        Some(contributor_facts(
             self.seam_sources.as_deref()?,
             self.seam_inferred.as_deref(),
             self.inferred,
-        )
+        ))
     }
 
     /// This seam's contributors' own inferred facts, in its sources' order;
@@ -52,15 +52,13 @@ pub(super) fn contributor_facts(
     sources: &[String],
     inferred: Option<&[bool]>,
     seam: bool,
-) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
-    Some(
-        sources
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                let fact = inferred.and_then(|f| f.get(i).copied()).unwrap_or(seam);
-                (std::sync::Arc::from(s.as_str()), fact)
-            })
-            .collect(),
-    )
+) -> Vec<(std::sync::Arc<str>, bool)> {
+    sources
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let fact = inferred.and_then(|f| f.get(i).copied()).unwrap_or(seam);
+            (std::sync::Arc::from(s.as_str()), fact)
+        })
+        .collect()
 }

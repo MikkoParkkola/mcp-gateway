@@ -391,12 +391,11 @@ impl MetaMcp {
         if let Some(fw) = self.firewall.as_deref() {
             // Under the generation current at delivery (none only before
             // startup publishes one: see `unpublished`).
-            match self.current_generation() {
-                Some(generation) => commit_with(fw, delivered, &generation),
-                None => {
-                    discard_staged();
-                    staging::unpublished("commit");
-                }
+            if let Some(generation) = self.current_generation() {
+                commit_with(fw, delivered, &generation);
+            } else {
+                discard_staged();
+                staging::unpublished("commit");
             }
             return;
         }

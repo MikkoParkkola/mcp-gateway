@@ -102,11 +102,11 @@ impl ReplayReceipt {
     /// Each contributing source with its inferred fact (tests only).
     #[cfg(test)]
     pub(crate) fn contributor_facts_for_test(&self) -> Option<Vec<(std::sync::Arc<str>, bool)>> {
-        super::facts::contributor_facts(
+        Some(super::facts::contributor_facts(
             self.seam_sources.as_deref()?,
             self.seam_inferred.as_deref(),
             self.inferred,
-        )
+        ))
     }
 
     /// Its real byte size in the store's accounting: fingerprint bytes plus
