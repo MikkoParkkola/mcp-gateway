@@ -752,6 +752,10 @@ mod tests {
 #[path = "relay_delivered_p3_tests.rs"]
 mod p3_tests;
 
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_seam_live_tests.rs"]
+mod seam_live_tests;
+
 #[cfg(all(test, feature = "firewall", feature = "metrics"))]
 #[path = "relay_delivered_replay_count_tests.rs"]
 mod replay_count_tests;

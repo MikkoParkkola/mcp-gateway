@@ -34,7 +34,7 @@ fn observing() -> Firewall {
 /// A part under the 48-char k-gram, so only runs of parts carry k-grams.
 /// Aperiodic (letters from a seeded LCG), so a strict prefix of a part ends
 /// unlike the part itself: `p0[..40] + p2` is no substring of `p0 + p2`.
-fn piece(k: usize) -> String {
+pub(super) fn piece(k: usize) -> String {
     let mut s = 0x8066_2b00_u64 ^ (k as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     let mut out = format!("p{k}:");
     while out.len() < 47 {
