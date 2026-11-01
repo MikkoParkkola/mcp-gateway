@@ -1,0 +1,26 @@
+# file	function	kind	count	class	reason
+src/a2a/client.rs	decode_reply	from_value	1	scrubbed-by	by src/a2a/transport.rs::scrubbed: every A2A answer and error leaves the transport through it (DELTA-16); task ids are read before it
+src/a2a/client.rs	decode_task	from_value	1	scrubbed-by	by src/a2a/transport.rs::scrubbed: every A2A answer and error leaves the transport through it (DELTA-16)
+src/a2a/client.rs	parse_card	from_value	1	scrubbed-by	by src/a2a/transport.rs::scrubbed: the card reaches callers only through initialize and tools/list answers; routing fields are read as sent (DELTA-15)
+src/a2a/client.rs	read_capped_json	from_slice	1	scrubbed-by	by src/a2a/transport.rs::scrubbed: every A2A answer and error leaves the transport through it (DELTA-16)
+src/backend/descriptor_gate.rs	parse_listed	from_value	1	post-transport	reads a tools/list result the transport already scrubbed
+src/backend/metadata.rs	tools_fill	from_value	1	post-transport	reads a tools/list result the transport already scrubbed
+src/backend/metadata_catalogues.rs	get_prompts_for_binding_lent	from_value	1	post-transport	reads a prompts/list result the transport already scrubbed
+src/backend/metadata_catalogues.rs	get_resource_templates_for_binding_lent	from_value	1	post-transport	reads a resources/templates/list result the transport already scrubbed
+src/backend/metadata_catalogues.rs	get_resources_for_binding_lent	from_value	1	post-transport	reads a resources/list result the transport already scrubbed
+src/transport/http/listen.rs	frame	from_str	1	scrubbed-by	by src/transport/http/listen.rs::scrubbed: each listen note passes it before it is sent; the tag routes first (DELTA-5)
+src/transport/http/listen.rs	unsolicited_frame	from_str	1	scrubbed-by	by src/transport/http/listen.rs::scrubbed: the session stream and the legacy sink both pass it after the watch filter
+src/transport/http/mod.rs	peer_refusal	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: the refusal is an error of the answer read_answer returns
+src/transport/http/requests.rs	body_or_stream	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
+src/transport/http/requests.rs	json_body	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
+src/transport/http/requests.rs	json_body	json	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
+src/transport/http/sse_channel.rs	route	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; a response goes to its waiting request, which read_answer returns; a note goes through the sink map, which scrubs (sse_listen.rs)
+src/transport/http/sse_channel.rs	route	from_value	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; the response handed to its waiting request
+src/transport/http/sse_decoder.rs	drain_events	from_str	1	scrubbed	notifications pass withheld before they are published; the response is scrubbed by read_answer
+src/transport/http/sse_listen.rs	request_unscrubbed	from_slice	1	scrubbed-by	by src/transport/http/sse_listen.rs::request: the session's only entry to it
+src/transport/notification_sink.rs	passes_level_filter	from_value	1	not-backend-data	reads a logging level, never forwarded content
+src/transport/notification_sink.rs	set_request_log_level	from_value	1	not-backend-data	reads the caller's logging level
+src/transport/stdio.rs	handle_response	from_line	1	scrubbed	calls ingress_scrub on each line before routing it
+src/transport/websocket.rs	dispatch_inbound	from_text	1	scrubbed	calls scrub_frame on each frame; routing keys are read as sent (DELTA-5)
+src/transport/websocket.rs	from_text	from_str	1	scrubbed-by	by src/transport/websocket.rs::dispatch_inbound: its only production caller
+src/transport/websocket.rs	from_text	from_value	2	scrubbed-by	by src/transport/websocket.rs::dispatch_inbound: its only production caller

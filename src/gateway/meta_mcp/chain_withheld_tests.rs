@@ -166,3 +166,141 @@ fn a_gateway_only_and_a_scoped_removal_in_one_slot_still_verify() {
     let result = verifies(&response);
     assert_eq!(result["result"], json!({"content": []}));
 }
+
+const NEEDLE: &str = "signed-echo-secret-2f9b";
+
+/// A signed answer that echoes an injected value, as the transport scrub and
+/// then ingress leave it. `tamper` changes the signed content first.
+fn signed_echo(tamper: bool) -> JsonRpcResponse {
+    let hop = Hop {
+        prefix: &[],
+        up: Upstream::None,
+        input: None,
+    };
+    let mut result = json!({
+        "content": [{"type": "text", "text": format!("key {NEEDLE}")}],
+        "isError": false,
+        "_security_findings": ["the upstream gateway's own finding"],
+    });
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    attach_link(
+        &signer(),
+        &mut result,
+        &hop,
+        LinkSource::Live,
+        Some(NONCE),
+        now,
+        8,
+    )
+    .expect("the link attaches");
+    if tamper {
+        result["isError"] = json!(true);
+    }
+    let mut response = JsonRpcResponse::success(RequestId::Number(1), result);
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("upstream", NEEDLE);
+    crate::security::needles::scrub_response_with(&needles, &mut response);
+    strip_ingress(
+        "upstream",
+        "tools/call",
+        crate::protocol::member_scope::Declared::Nothing,
+        &mut response,
+    );
+    response
+}
+
+/// T1.29 (DELTA-13): the chain of a signed answer echoing an
+/// injected value verifies over the bytes the backend signed, the
+/// provenance is recorded as verified, and the value never reaches the
+/// result.
+#[test]
+fn a_signed_echo_verifies_over_what_the_backend_signed() {
+    let meta = chained();
+    let response = signed_echo(false);
+    let mut result = response.result.clone().expect("a result");
+    let withheld = response
+        .ingress_withheld
+        .as_deref()
+        .map(crate::protocol::reserved_members::Withheld::members);
+    let (outcome, receipt) = receive(&meta, &mut result, withheld);
+    outcome.expect("the chain verifies over the signed result");
+    let ChainReceipt::Checked(Some(upstream)) = receipt else {
+        panic!("a checked receipt");
+    };
+    assert_eq!(upstream.state, UpstreamState::Verified);
+    let text = result.to_string();
+    assert!(
+        !text.contains(NEEDLE),
+        "the value reached the result: {text}"
+    );
+    assert!(text.contains("[redacted]"), "not redacted: {text}");
+}
+
+/// T1.29 mutant kill: verified over the scrubbed result alone, the digest is
+/// not what the backend signed and `require` refuses.
+#[test]
+fn a_signed_echo_does_not_verify_over_the_scrubbed_result() {
+    let meta = chained();
+    let mut result = signed_echo(false).result.expect("a result");
+    let (outcome, _) = receive(&meta, &mut result, None);
+    assert!(
+        outcome.is_err(),
+        "the scrubbed result matched the signature"
+    );
+}
+
+/// T1.29 control: a signed answer changed after signing is refused, kept
+/// members or not.
+#[test]
+fn a_tampered_signed_echo_is_refused() {
+    let meta = chained();
+    let response = signed_echo(true);
+    let mut result = response.result.clone().expect("a result");
+    let withheld = response
+        .ingress_withheld
+        .as_deref()
+        .map(crate::protocol::reserved_members::Withheld::members);
+    let (outcome, _) = receive(&meta, &mut result, withheld);
+    assert!(outcome.is_err(), "a tampered answer verified");
+}
+
+/// G8 (lead ruling): a signed answer whose top-level key name holds an
+/// injected value is refused with the fixed refusal; no view of it, scrubbed
+/// or as-sent, is served or verified.
+#[test]
+fn a_signed_answer_with_a_value_in_a_key_name_is_refused() {
+    let hop = Hop {
+        prefix: &[],
+        up: Upstream::None,
+        input: None,
+    };
+    let mut result = json!({
+        "content": [{"type": "text", "text": "fine"}],
+        NEEDLE: "a key named by the secret",
+    });
+    let now = crate::clock::unix_secs().expect("a readable clock");
+    attach_link(
+        &signer(),
+        &mut result,
+        &hop,
+        LinkSource::Live,
+        Some(NONCE),
+        now,
+        8,
+    )
+    .expect("the link attaches");
+    let needles =
+        crate::security::needles::NeedleSet::with_grace(std::time::Duration::from_secs(3_600));
+    needles.insert("upstream", NEEDLE);
+    let answer = crate::security::needles::scrub_answer(
+        &needles,
+        Ok(JsonRpcResponse::success(RequestId::Number(1), result)),
+    );
+    let text = format!("{answer:?}");
+    assert!(
+        matches!(answer, Err(crate::Error::JsonRpc { code: -32603, .. })),
+        "not the fixed refusal: {text}"
+    );
+    assert!(!text.contains(NEEDLE), "{text}");
+}
