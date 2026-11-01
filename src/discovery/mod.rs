@@ -344,3 +344,6 @@ mod yaml_redaction_tests {
 #[cfg(test)]
 #[path = "non_client_tests.rs"]
 mod non_client_tests;
+#[cfg(test)]
+#[path = "unique_by_name_tests.rs"]
+mod unique_by_name_tests;

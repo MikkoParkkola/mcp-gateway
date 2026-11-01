@@ -119,6 +119,27 @@ async fn a_changed_client_file_or_an_expired_window_rescans() {
     assert_eq!(fake.scans(), 4, "an expired window rescans");
 }
 
+/// Each kept scan counts the generation up, and a read the window serves
+/// keeps it: the decision set orders listings by it.
+#[tokio::test]
+async fn a_rescan_raises_the_generation_and_a_cached_read_keeps_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let fake = Arc::new(Fake::new(Vec::new(), &dir.path().join("w.json")));
+    let cache = cache(&fake);
+    let generation = |listing: (Arc<Listing>, bool)| listing.0.generation;
+    let first = generation(cache.listing().await.expect("listing"));
+    let cached = generation(cache.listing().await.expect("listing"));
+    assert_eq!(cached, first, "a cached read changed the generation");
+    fake.advance(CACHE_WINDOW);
+    let second = generation(cache.listing().await.expect("listing"));
+    fake.advance(CACHE_WINDOW);
+    let third = generation(cache.listing().await.expect("listing"));
+    assert!(
+        first < second && second < third,
+        "{first}, {second}, {third}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_cold_reads_share_one_scan() {
     let dir = tempfile::tempdir().expect("tempdir");
