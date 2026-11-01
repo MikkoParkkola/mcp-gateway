@@ -46,7 +46,11 @@ async fn a_refresh_in_flight_across_an_issuer_switch_hands_back_no_token() {
 
         let (handed, ()) = tokio::join!(ask, switch);
 
-        assert_eq!(server.requests(), 1, "detached={detached}: the exchange ran");
+        assert_eq!(
+            server.requests(),
+            1,
+            "detached={detached}: the exchange ran"
+        );
         let refused = handed.expect_err("no old-issuer token after the switch");
         assert!(
             matches!(refused, Error::AuthorizationRequired { .. }),
@@ -103,5 +107,9 @@ async fn an_old_issuer_refresh_keeps_the_new_sign_ins_status() {
         matches!(renewal, crate::oauth::client::renewal::Renewal::Renewed),
         "control: the old credential refreshed"
     );
-    assert_eq!(cell.snapshot(), published, "the new sign-in's status stands");
+    assert_eq!(
+        cell.snapshot(),
+        published,
+        "the new sign-in's status stands"
+    );
 }
