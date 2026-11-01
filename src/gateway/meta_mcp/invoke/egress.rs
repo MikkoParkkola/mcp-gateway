@@ -94,7 +94,7 @@ impl MetaMcp {
         frame: &mut JsonRpcResponse,
         at: &Egress<'_>,
     ) -> EgressOutcome {
-        if frame.egress_scanned {
+        if frame.wire_meta.egress_scanned {
             return EgressOutcome::Delivered;
         }
         // Both parts, when a peer sent both: neither may ride past the other.
@@ -112,7 +112,7 @@ impl MetaMcp {
             *frame =
                 JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }
-        frame.egress_scanned = true;
+        frame.wire_meta.egress_scanned = true;
         outcome
     }
 }
@@ -540,7 +540,7 @@ impl Egressed {
     /// A frame the egress scan marked. One it never saw is refused rather
     /// than written, so an exit that skips the scan fails closed.
     pub(crate) fn of(frame: JsonRpcResponse) -> Self {
-        if frame.egress_scanned {
+        if frame.wire_meta.egress_scanned {
             return Self(frame);
         }
         tracing::error!("a frame that skipped the egress scan reached a writer; refused");
@@ -636,7 +636,7 @@ impl MetaMcp {
             *frame =
                 JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }
-        frame.egress_scanned = true;
+        frame.wire_meta.egress_scanned = true;
     }
 }
 

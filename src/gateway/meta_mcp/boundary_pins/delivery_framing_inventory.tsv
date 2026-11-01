@@ -19,7 +19,8 @@ src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	JsonRpcResponse::er
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	begin_task	error_response_preserving_status	1
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	first_unproven	error_response_preserving_status	1
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	error_response_preserving_status	1
-src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	JsonRpcResponse::error	2
+src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	JsonRpcResponse::error	1
+src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	JsonRpcResponse::of_error	1
 src/gateway/meta_mcp/caller_forward.rs	prompt_credential	JsonRpcResponse::error	2
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	error_response_preserving_status	1
 src/gateway/meta_mcp/chain_interim.rs	drive_chain	Error::json_rpc	1
@@ -80,7 +81,7 @@ src/gateway/meta_mcp/response_security.rs	shape_meta_result	Error::json_rpc	1
 src/gateway/meta_mcp/response_security.rs	shape_meta_result	error_response_preserving_status	2
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	JsonRpcResponse::error	1
 src/gateway/meta_mcp/response_security/delivery_record.rs	audit_unavailable_refusal	error_response_preserving_status	1
-src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	JsonRpcResponse::error	1
+src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	JsonRpcResponse::of_error	1
 src/gateway/meta_mcp/response_security/error_answers.rs	error_response_preserving_status	delivery_refusal_error	1
 src/gateway/meta_mcp/response_security/error_answers.rs	recovered_result_error	delivery_refusal_error	1
 src/gateway/meta_mcp/search.rs	code_mode_execute	Error::json_rpc	1
@@ -132,7 +133,7 @@ src/gateway/router/backend_handlers/direct_audit.rs	record	build_http_error_resp
 src/gateway/router/backend_handlers/direct_caller.rs	backend_not_found	build_http_error_response	1
 src/gateway/router/backend_handlers/direct_caller.rs	events_lease	JsonRpcResponse::error	1
 src/gateway/router/backend_handlers/direct_caller.rs	events_lease	JsonRpcResponse::error_with_data	1
-src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	JsonRpcResponse::error	1
+src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	JsonRpcResponse::of_error	1
 src/gateway/router/backend_handlers/direct_caller.rs	forward_notification	build_http_response	1
 src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	build_http_error_response	2
 src/gateway/router/backend_handlers/direct_caller.rs	read_envelope	build_http_response	1
@@ -147,8 +148,7 @@ src/gateway/router/backend_handlers/direct_dispatch.rs	finish_response	build_htt
 src/gateway/router/backend_handlers/direct_dispatch.rs	redeem_retry	build_http_response	1
 src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_plain	build_http_response	1
 src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_sanitized	build_http_response	1
-src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::error	1
-src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::error_with_data	1
+src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::of_error_text	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	build_http_response	2
 src/gateway/router/backend_handlers/direct_gate.rs	guard_before_credential	build_http_response	1
 src/gateway/router/backend_handlers/direct_gate.rs	guard_before_credential	error_response_preserving_status	1

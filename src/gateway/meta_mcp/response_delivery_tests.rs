@@ -271,7 +271,7 @@ fn firewall_delivery_all_targets_and_correlation_reach_enforcement() {
             true,
         );
         let response = fixture.finalize("tools/call", shaped_response(INJECTION), &targets);
-        assert!(response.delivery_refusal);
+        assert!(response.wire_meta.delivery_refusal);
         assert_eq!(
             serde_json::to_value(&response).unwrap(),
             json!({"jsonrpc":"2.0","id":-41,"error":{"code":-32600,"message":REFUSAL}})
@@ -293,7 +293,7 @@ fn firewall_delivery_default_and_explicit_warn_stay_successful() {
         let expected = serde_json::to_value(&original).unwrap();
         let response = fixture.finalize("tools/call", original, &targets());
         assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-        assert!(!response.delivery_refusal);
+        assert!(!response.wire_meta.delivery_refusal);
         fixture.assert_counts(1);
         fixture.assert_audit(&targets(), FirewallAction::Warn);
         let attempts = fixture.attempts();
@@ -324,7 +324,7 @@ fn firewall_delivery_tools_list_success_is_inspected_and_refused_when_blocked() 
         let expected = serde_json::to_value(&original).unwrap();
         let response = fixture.finalize("tools/list", original, &targets);
         if description == INJECTION {
-            assert!(response.delivery_refusal);
+            assert!(response.wire_meta.delivery_refusal);
             assert_eq!(
                 serde_json::to_value(&response).unwrap(),
                 json!({"jsonrpc":"2.0","id":"list-current-id","error":{"code":-32600,"message":REFUSAL}})
@@ -332,7 +332,7 @@ fn firewall_delivery_tools_list_success_is_inspected_and_refused_when_blocked() 
             fixture.assert_audit(&targets, FirewallAction::Block);
         } else {
             assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-            assert!(!response.delivery_refusal);
+            assert!(!response.wire_meta.delivery_refusal);
             fixture.assert_audit(&targets, FirewallAction::Allow);
         }
         fixture.assert_counts(1);
@@ -351,7 +351,7 @@ fn firewall_delivery_absent_firewall_preserves_response_and_attempt() {
     let expected = serde_json::to_value(&original).unwrap();
     let response = fixture.finalize("tools/call", original, &[]);
     assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-    assert!(!response.delivery_refusal);
+    assert!(!response.wire_meta.delivery_refusal);
     fixture.assert_counts(0);
     assert!(fixture.audits().is_empty());
     let attempts = fixture.attempts();
@@ -372,7 +372,7 @@ fn firewall_delivery_allow_hashes_the_complete_shaped_response() {
     let expected = serde_json::to_value(&original).unwrap();
     let response = fixture.finalize("tools/call", original, &targets());
     assert_eq!(serde_json::to_value(&response).unwrap(), expected);
-    assert!(!response.delivery_refusal);
+    assert!(!response.wire_meta.delivery_refusal);
     fixture.assert_counts(1);
     assert_eq!(fixture.audits().len(), 1);
     let attempts = fixture.attempts();
@@ -422,7 +422,7 @@ fn firewall_delivery_redaction_precedes_attempt_digest() {
 fn firewall_delivery_block_is_safe_marked_error_then_attempt() {
     let fixture = Fixture::new(FirewallAction::Block, true, true, true);
     let response = fixture.finalize("tools/call", shaped_response(INJECTION), &targets());
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(
@@ -456,7 +456,7 @@ fn firewall_delivery_blocked_errors_are_refused_then_get_attempts() {
             json!({"jsonrpc":"2.0", "id":"041", "error":{"code":-32600,"message":REFUSAL}}),
             "{method}"
         );
-        assert!(response.delivery_refusal);
+        assert!(response.wire_meta.delivery_refusal);
         assert!(!response.confirmation_refusal);
         fixture.assert_counts(1);
         assert_eq!(fixture.audits().len(), 1, "{method}");
@@ -471,7 +471,7 @@ fn firewall_delivery_blocked_errors_are_refused_then_get_attempts() {
 fn firewall_delivery_empty_targets_refuse_without_scan_or_malformed_audit() {
     let fixture = Fixture::new(FirewallAction::Allow, true, true, true);
     let response = fixture.finalize("tools/call", shaped_response("plain"), &[]);
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert_eq!(
         serde_json::to_value(&response).unwrap(),
         json!({"jsonrpc":"2.0", "id":-41, "error":{"code":-32600,"message":REFUSAL}})
@@ -500,7 +500,7 @@ fn firewall_delivery_wrapped_question_is_screened_as_answer_text() {
         shaped_response(&question.to_string()),
         &targets(),
     );
-    assert!(!response.delivery_refusal, "{response:?}");
+    assert!(!response.wire_meta.delivery_refusal, "{response:?}");
     let delivered = serde_json::to_value(&response).unwrap().to_string();
     assert!(!delivered.contains(CANARY), "{delivered}");
     assert!(delivered.contains("[REDACTED:credential]"), "{delivered}");
@@ -547,7 +547,10 @@ fn firewall_delivery_native_input_required_preserves_questions_and_state() {
             &targets(),
         );
         if matches!(protected, "requestState" | "inputRequests") {
-            assert!(response.delivery_refusal, "protected field {protected}");
+            assert!(
+                response.wire_meta.delivery_refusal,
+                "protected field {protected}"
+            );
             assert_eq!(
                 serde_json::to_value(&response).unwrap(),
                 json!({"jsonrpc":"2.0", "id":"native-current-id", "error":{"code":-32600,"message":REFUSAL}}),
@@ -555,7 +558,7 @@ fn firewall_delivery_native_input_required_preserves_questions_and_state() {
             );
             fixture.assert_audit(&targets(), FirewallAction::Block);
         } else {
-            assert!(!response.delivery_refusal, "control {protected}");
+            assert!(!response.wire_meta.delivery_refusal, "control {protected}");
             assert_eq!(
                 serde_json::to_value(&response).unwrap(),
                 json!({"jsonrpc":"2.0", "id":"native-current-id", "result":expected}),
@@ -592,7 +595,7 @@ fn firewall_delivery_disabled_scanning_still_records_final_attempt() {
 fn firewall_delivery_absent_logger_keeps_enforcement_active() {
     let fixture = Fixture::new(FirewallAction::Block, true, true, false);
     let response = fixture.finalize("tools/call", shaped_response(INJECTION), &targets());
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert_eq!(
         serde_json::to_value(&response).unwrap(),
         json!({"jsonrpc":"2.0", "id":-41, "error":{"code":-32600,"message":REFUSAL}})
@@ -619,7 +622,7 @@ fn firewall_delivery_every_method_is_response_scanned() {
             json!({"jsonrpc":"2.0", "id":-41, "error":{"code":-32600,"message":REFUSAL}}),
             "{method}"
         );
-        assert!(response.delivery_refusal);
+        assert!(response.wire_meta.delivery_refusal);
         fixture.assert_counts(1);
     }
 }
@@ -631,7 +634,7 @@ fn firewall_delivery_every_method_records_its_final_attempt() {
     for method in ["initialize", "ping", "resources/read", "prompts/get"] {
         let fixture = Fixture::new(FirewallAction::Block, true, true, true);
         let response = fixture.finalize(method, shaped_response(INJECTION), &targets());
-        assert!(response.delivery_refusal, "{method}");
+        assert!(response.wire_meta.delivery_refusal, "{method}");
         fixture.assert_counts(1);
         assert_eq!(fixture.audits().len(), 1, "{method}");
         let attempts = fixture.attempts();
@@ -716,7 +719,7 @@ fn firewall_delivery_failed_append_preserves_output_and_consumes_one_shot_fault(
     );
     assert_eq!(wire["id"], -41);
     assert!(wire.get("error").is_none());
-    assert!(!response.delivery_refusal);
+    assert!(!response.wire_meta.delivery_refusal);
     assert_eq!(
         logger.append_attempts_for_test(),
         2,

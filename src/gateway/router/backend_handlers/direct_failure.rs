@@ -11,13 +11,11 @@
 //! whether a retry presents a newer token.
 
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
-use axum::Json;
 use axum::http::StatusCode;
-use serde_json::Value;
 use tracing::error;
 
 use super::super::AppState;
-use super::super::helpers::build_http_response;
+use super::super::helpers::{RpcHttp, build_http_response};
 use super::{record_client_failure, settle_direct_failure};
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
@@ -53,7 +51,7 @@ impl DirectFailure<'_> {
         ),
         error: crate::Error,
         call: &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
-    ) -> (StatusCode, Json<Value>) {
+    ) -> RpcHttp {
         let error = match self.managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
                 crate::gateway::meta_mcp::invoke::audit::after_upstream_401(managed, error).await
@@ -67,20 +65,16 @@ impl DirectFailure<'_> {
         }
         // The code only: the error's text can be the backend's, unscreened.
         error!(backend = %self.name, code = error.to_rpc_code(), "Backend request failed");
-        let (code, text) = (error.to_rpc_code(), refusal_text(&error));
-        let response = match upstream_rejection(&error) {
-            Some(rejection) => JsonRpcResponse::error_with_data(
-                Some(self.id.clone()),
-                code,
-                text,
-                rejection.data(),
-            ),
-            None => JsonRpcResponse::error(Some(self.id.clone()), code, text),
-        };
+        let mut response =
+            JsonRpcResponse::of_error_text(Some(self.id.clone()), &error, refusal_text(&error));
+        if let (Some(rejection), Some(frame_error)) =
+            (upstream_rejection(&error), response.error.as_mut())
+        {
+            frame_error.data = Some(rejection.data());
+        }
         // MIK-8139: a failed dispatch's text can be the backend's own (a
         // non-2xx JSON-RPC refusal), so it gets a result's screening; the
         // screened answer is what the reservation settles with.
-        let mut response = response;
         // An error frame: its method selects nothing, the target is `call`.
         let screen = super::super::direct_guards::scan_direct_egress(
             self.state,

@@ -317,7 +317,7 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
         ),
     };
     crate::gateway::delivery_facts::outlet(error);
-    frame.egress_scanned = true;
+    frame.wire_meta.egress_scanned = true;
     frame
 }
 

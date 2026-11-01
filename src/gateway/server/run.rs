@@ -71,6 +71,7 @@ impl Gateway {
         #[cfg(feature = "metrics")]
         {
             crate::metrics::install();
+            crate::gateway::health_metrics::process::record_start_time(started.wall());
             crate::protocol_revision_telemetry::register_metrics();
         }
 

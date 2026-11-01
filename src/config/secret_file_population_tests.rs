@@ -179,6 +179,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
     ),
     (
+        "src/gateway/health_metrics/process.rs",
+        "/proc/self/statm, the process's own memory counters; nothing secret",
+    ),
+    (
         "src/gateway/mod.rs",
         "test_helpers fixture writer, not a gateway read",
     ),
