@@ -17,7 +17,7 @@ use super::holders::{MAX_RECORDS_PER_CALLER, OVERFLOW_PAIRS_PER_CALLER};
 use super::{CollusionDetector, RelayAction, RelayParams};
 use crate::config_reload::Generation;
 use crate::security::firewall::CollusionAction::Block;
-use crate::security::firewall::collusion_live_rig::{Rig, config, flow, one_fp};
+use crate::security::firewall::collusion_live_rig::{Rig, config, flow, one_fp, two_fp};
 
 const EGRESS: &str = "alpha:send";
 
@@ -232,61 +232,84 @@ fn standalone() -> CollusionDetector {
     detector
 }
 
-/// The overflow bytes one first pair from a new source adds.
-fn first_pair_charge() -> usize {
-    let (rig, t, now) = (rig(&["fill:*", "ov:*"]), one_fp(0), Instant::now());
-    let g = rig.generation();
-    let d = standalone();
-    for i in 0..MAX_RECORDS_PER_CALLER {
-        d.record_delivery_under(
-            g.collusion_view(),
-            (&format!("fill:{i}"), false),
-            "x",
-            &t,
-            now,
-        );
+/// Fill `caller`'s cap for `text` on a standalone detector from `g`'s view.
+fn fill_standalone(d: &CollusionDetector, g: &Generation, caller: &str, text: &str, at: Instant) {
+    for j in 0..MAX_RECORDS_PER_CALLER {
+        let src = format!("fill:{j}");
+        d.record_delivery_under(g.collusion_view(), (&src, false), caller, text, at);
     }
-    let before = d.overflow_bytes().1;
-    d.record_delivery_under(g.collusion_view(), ("ov:00", false), "x", &t, now);
-    d.overflow_bytes().1 - before
 }
 
-/// P8.8d: a full total budget fails closed for the newcomer and keeps what
-/// it already holds. Budget `k` first-pair charges; callers `c0..ck`, each
-/// with its own text and its own source `ov:0i`. RED on base at "allowed":
-/// every overflow refuses.
-#[test]
-fn p8_8d_a_full_total_budget_fails_closed_for_the_newcomer() {
-    const K: u64 = 3;
-    let charge = first_pair_charge();
+/// The overflow bytes a first pair from a new source adds (`c_new`: pair
+/// storage plus the newly interned string), and a second fingerprint's pair
+/// from the same source adds (`c_fp`: the interned string is shared).
+fn pair_charges() -> (usize, usize) {
+    let (rig, now) = (rig(&["fill:*", "ov:*"]), Instant::now());
+    let g = rig.generation();
+    let d = standalone();
+    let (first, second) = (one_fp(900), one_fp(901));
+    fill_standalone(&d, &g, "x", &first, now);
+    fill_standalone(&d, &g, "x", &second, now);
+    let before = d.overflow_bytes().1;
+    d.record_delivery_under(g.collusion_view(), ("ov:00", false), "x", &first, now);
+    let mid = d.overflow_bytes().1;
+    d.record_delivery_under(g.collusion_view(), ("ov:00", false), "x", &second, now);
+    (mid - before, d.overflow_bytes().1 - mid)
+}
+
+/// The budget run: a total of `K` first-pair charges, callers `c0..` each
+/// with its own text (`text_of`) and its own source, each filling its cap and
+/// overflowing once. `per_caller` is what one caller's overflow charges; the
+/// first caller the budget cannot hold is `K * c_new / per_caller` (`K` when
+/// nothing is charged yet). The first caller's pair is kept and plain (not
+/// evicted) and the newcomer fails closed.
+fn run_budget(text_of: fn(u64) -> String, per_caller: impl Fn(usize, usize) -> usize) {
+    const K: usize = 3;
+    let (c_new, c_fp) = pair_charges();
+    let per = per_caller(c_new, c_fp);
+    let newcomer = if per == 0 { K } else { K * c_new / per };
     let (rig, now) = (rig(&["fill:*", "ov:*"]), Instant::now());
     let g0 = rig.generation();
     let mut d = standalone();
-    d.set_overflow_bytes_total(usize::try_from(K).expect("small") * charge);
-    for i in 0..=K {
-        let (caller, text) = (format!("c{i}"), one_fp(i + 1));
-        for j in 0..MAX_RECORDS_PER_CALLER {
-            let src = format!("fill:{j}");
-            d.record_delivery_under(g0.collusion_view(), (&src, false), &caller, &text, now);
-        }
+    d.set_overflow_bytes_total(K * c_new);
+    for i in 0..=newcomer {
+        let (caller, text) = (format!("c{i}"), text_of(i as u64 + 1));
+        fill_standalone(&d, &g0, &caller, &text, now);
         let src = format!("ov:0{i}");
         d.record_delivery_under(g0.collusion_view(), (&src, false), &caller, &text, now);
     }
     rig.reload(|c| c.security.firewall.collusion.sources = vec!["fill:*".to_string()]);
     let g1 = rig.generation();
-    let view = g1.collusion_view();
-    let first = d.check_egress_under(view, "bob", EGRESS, &one_fp(1), now);
+    let first = d.check_egress_under(g1.collusion_view(), "bob", EGRESS, &text_of(1), now);
     assert!(
         first.is_none(),
         "P8.8d: the first caller's pair was lost or refuses"
     );
+    let newcomer_text = text_of(newcomer as u64 + 1);
+    let found = d.check_egress_under(g1.collusion_view(), "bob", EGRESS, &newcomer_text, now);
     assert_eq!(
-        d.overflow_pairs_of(&one_fp(1), "c0"),
-        [("ov:00".into(), false)]
+        found.map(|f| f.reason.label()),
+        Some("capacity"),
+        "newcomer c{newcomer}"
     );
-    let newcomer = d.check_egress_under(view, "bob", EGRESS, &one_fp(K + 1), now);
-    assert_eq!(newcomer.map(|f| f.reason.label()), Some("capacity"));
-    assert!(d.overflow_unattributed(&one_fp(K + 1), &format!("c{K}")));
+    assert!(d.overflow_unattributed(&newcomer_text, &format!("c{newcomer}")));
+}
+
+/// P8.8d, one fingerprint per text: a full total budget fails closed for the
+/// newcomer (caller `K`) and keeps what it already holds. RED on base at the
+/// first caller "allowed": every overflow refuses.
+#[test]
+fn p8_8d_a_full_total_budget_fails_closed_for_the_newcomer() {
+    run_budget(one_fp, |c_new, _| c_new);
+}
+
+/// P8.8d, two fingerprints per text: the second fingerprint's pair shares the
+/// interned source, so a caller charges `c_new + c_fp` and the newcomer lands
+/// at `K * c_new / (c_new + c_fp)`, earlier than in the one-fingerprint run.
+/// RED on base as above.
+#[test]
+fn p8_8d_two_fingerprints_charge_the_shared_string_once() {
+    run_budget(two_fp, |c_new, c_fp| c_new + c_fp);
 }
 
 /// O5.1: overflow bytes bind before the pair count, and a saturated caller
@@ -328,19 +351,44 @@ fn o5_3_the_last_reference_frees_the_interned_source() {
     assert_eq!(detector(&rig).interned_sources_for_test(), before, "O5.3");
 }
 
-/// O5.2a: retention at the cap uses the lists of the generation the record is
-/// made under. Lists change before recording; under cap pressure the source
-/// listed now overflows as a pair and the one no longer listed is dropped.
-/// RED on base at the pairs assertion.
-#[test]
-fn o5_2a_retention_uses_the_recording_generations_lists() {
-    let (rig, t, now) = (rig(&["fill:*", "src:s"]), one_fp(0), Instant::now());
+/// Retention at the cap uses the lists of the generation the record is made
+/// under: lists change before recording; under cap pressure the source listed
+/// now overflows and the one no longer listed is dropped. Returns what the
+/// detector counted for the two records (`fingerprints` each).
+fn retention_under_the_recording_lists(text: &str) -> (Rig, u64) {
+    let (rig, now) = (rig(&["fill:*", "src:s"]), Instant::now());
     rig.reload(|c| {
         c.security.firewall.collusion.sources = vec!["fill:*".to_string(), "src:p".to_string()];
     });
     let g1 = rig.generation();
-    fill_cap(&rig, &g1, "carol", &t, now);
-    record(&rig, &g1, ("src:s", "carol"), &t, now);
-    record(&rig, &g1, ("src:p", "carol"), &t, now);
-    assert_eq!(pairs(&rig, &t, "carol"), [("src:p".to_string(), false)]);
+    fill_cap(&rig, &g1, "carol", text, now);
+    let before = detector(&rig).capped();
+    record(&rig, &g1, ("src:s", "carol"), text, now);
+    record(&rig, &g1, ("src:p", "carol"), text, now);
+    let counted = detector(&rig).capped() - before;
+    (rig, counted)
+}
+
+/// O5.2a, one fingerprint: the listed source overflows as a pair, the other
+/// is dropped; two records are counted. RED on base at the pairs assertion.
+#[test]
+fn o5_2a_retention_uses_the_recording_generations_lists() {
+    let text = one_fp(0);
+    let (rig, counted) = retention_under_the_recording_lists(&text);
+    assert_eq!(pairs(&rig, &text, "carol"), [("src:p".to_string(), false)]);
+    assert_eq!(counted, 2, "one drop and one overflow, one fingerprint");
+}
+
+/// O5.2a, two fingerprints: the counters move once per fingerprint, so four
+/// records are counted, not two. RED on base at the pairs assertion for the
+/// first fingerprint.
+#[test]
+fn o5_2a_counts_per_fingerprint_not_per_delivery() {
+    let text = two_fp(0);
+    let (rig, counted) = retention_under_the_recording_lists(&text);
+    assert_eq!(pairs(&rig, &text, "carol"), [("src:p".to_string(), false)]);
+    assert_eq!(
+        counted, 4,
+        "one drop and one overflow, two fingerprints each"
+    );
 }

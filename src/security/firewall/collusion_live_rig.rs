@@ -298,3 +298,10 @@ impl Rig {
 pub(crate) fn one_fp(i: u64) -> String {
     format!("{i:0>48}")
 }
+
+/// A text of 49 normalised characters: two overlapping k-grams, so with every
+/// k-gram kept it is two fingerprints. Unique per `i`, and disjoint from every
+/// other `i` and from every [`one_fp`] text.
+pub(crate) fn two_fp(i: u64) -> String {
+    format!("{i:0>48}9")
+}
