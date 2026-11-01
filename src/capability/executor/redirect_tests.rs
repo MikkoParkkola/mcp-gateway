@@ -450,13 +450,15 @@ async fn composite_with_refused_step(
             .expect("bounded")
         })
         .await;
-        let error = outcome.expect_err("the redirect is refused");
+        outcome.expect_err("the redirect is refused");
         match end {
             StepEnd::Absorbed => {
                 delivery_facts::step_absorbed();
-                delivery_facts::composite_ended(None);
+                delivery_facts::composite_ended(delivery_facts::CompositeEnd::Succeeded);
             }
-            StepEnd::Terminal => delivery_facts::composite_ended(Some(&error)),
+            StepEnd::Terminal => {
+                delivery_facts::composite_ended(delivery_facts::CompositeEnd::Failed);
+            }
         }
         delivery_facts::snapshot()
     })
