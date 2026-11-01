@@ -121,7 +121,7 @@ async fn a_template_the_loader_refuses_is_refused_before_any_entry() {
 fn with_key(extra: &str) -> String {
     let digest = crate::hashing::sha256_hex(CRED);
     format!(
-        "auth:\n  api_keys:\n    - name: ci\n      key_sha256: \"{digest}\"\n{extra}backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"
+        "auth:\n  api_keys:\n    - name: ci\n      key_sha256: \"sha256:{digest}\"\n{extra}backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n"
     )
 }
 
