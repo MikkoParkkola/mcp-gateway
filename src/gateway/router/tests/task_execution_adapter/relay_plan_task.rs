@@ -62,7 +62,7 @@ async fn plan_state(
         )
         .keyed_for_test(),
     );
-    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
+    let (mut state, store) = super::super::meta_fixture::test_router_app_state_with_meta(
         &two_principal_auth(),
         None,
         |mut meta| {
@@ -72,6 +72,7 @@ async fn plan_state(
         },
     )
     .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
     register(&state, BACKEND, mock);
     (state, store)
 }

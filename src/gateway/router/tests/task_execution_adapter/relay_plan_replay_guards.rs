@@ -104,20 +104,22 @@ async fn off_gateway(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
 ) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
-    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &plan_auth(),
-        None,
-        None,
-        |meta| {
-            let definition: crate::playbook::PlaybookDefinition =
-                crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
-            let mut engine = crate::playbook::PlaybookEngine::new();
-            engine.register(definition);
-            meta.set_playbook_engine(engine);
-            meta
-        },
-    )
-    .await;
+    let (mut state, store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &plan_auth(),
+            None,
+            None,
+            |meta| {
+                let definition: crate::playbook::PlaybookDefinition =
+                    crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
     register(&state, BACKEND, &answering("ok"));
     register(&state, ALPHA, alpha);
     register(&state, BETA, beta);
@@ -152,23 +154,25 @@ async fn on_gateway_over_off(
     relay_fw.advance_collusion_clock_for_test(std::time::Duration::ZERO);
     let admission = Arc::clone(off.meta_mcp.execution_admission());
     let handle = Arc::clone(&relay_fw);
-    let (on, on_store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        &plan_auth(),
-        None,
-        None,
-        move |mut meta| {
-            meta.share_execution_admission_for_test(admission);
-            meta.share_keyring_with_for_test(&handle);
-            meta.set_firewall(Some(handle));
-            let definition: crate::playbook::PlaybookDefinition =
-                crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
-            let mut engine = crate::playbook::PlaybookEngine::new();
-            engine.register(definition);
-            meta.set_playbook_engine(engine);
-            meta
-        },
-    )
-    .await;
+    let (mut on, on_store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            &plan_auth(),
+            None,
+            None,
+            move |mut meta| {
+                meta.share_execution_admission_for_test(admission);
+                meta.share_keyring_with_for_test(&handle);
+                meta.set_firewall(Some(handle));
+                let definition: crate::playbook::PlaybookDefinition =
+                    crate::yaml::from_str(&playbook()).expect("playbook fixture must parse");
+                let mut engine = crate::playbook::PlaybookEngine::new();
+                engine.register(definition);
+                meta.set_playbook_engine(engine);
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut on);
     register(&on, BACKEND, &answering("ok"));
     register(&on, ALPHA, alpha);
     register(&on, BETA, beta);

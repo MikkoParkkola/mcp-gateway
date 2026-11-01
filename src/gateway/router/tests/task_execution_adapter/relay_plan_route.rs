@@ -87,17 +87,19 @@ async fn plan_state_with(
         .with_continuations(router.continuations_for_test().expect("keyed"))
         .keeping_every_kgram(),
     );
-    let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
-        auth,
-        None,
-        Some(router),
-        |mut meta| {
-            meta.share_keyring_with_for_test(&relay);
-            meta.set_firewall(Some(relay));
-            meta
-        },
-    )
-    .await;
+    let (mut state, store) =
+        super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
+            auth,
+            None,
+            Some(router),
+            |mut meta| {
+                meta.share_keyring_with_for_test(&relay);
+                meta.set_firewall(Some(relay));
+                meta
+            },
+        )
+        .await;
+    crate::security::firewall::collusion_live_rig::pair_state_with_meta(&mut state);
     register(&state, BACKEND, mock);
     (state, store)
 }

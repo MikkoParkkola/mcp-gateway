@@ -53,6 +53,13 @@ impl MetaMcp {
         self.reload_context.read().clone()
     }
 
+    /// The firewall the Meta-MCP records relay evidence into, for a fixture
+    /// that pairs its live config with it.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn firewall_for_test(&self) -> Option<Arc<crate::security::firewall::Firewall>> {
+        self.firewall.clone()
+    }
+
     pub(in crate::gateway) fn get_transition_tracker(&self) -> Option<Arc<TransitionTracker>> {
         self.transition_tracker.read().clone()
     }

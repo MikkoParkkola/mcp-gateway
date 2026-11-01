@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::config_reload::LiveConfig;
+use crate::gateway::router::AppState;
 
 use super::{Firewall, FirewallConfig};
 
@@ -21,13 +22,31 @@ use super::{Firewall, FirewallConfig};
 /// authentication from the configuration alone, and a fixture's keyed
 /// callers would then carry no verified principal.
 pub(crate) fn paired(firewall: FirewallConfig, live: &LiveConfig) -> (Firewall, LiveConfig) {
+    let firewall = Firewall::from_config(firewall, None);
+    let live = live_of(live, &firewall);
+    (firewall, live)
+}
+
+/// `live`'s configuration with `firewall`'s own section in place of its
+/// firewall section, and its resolved keys.
+pub(crate) fn live_of(live: &LiveConfig, firewall: &Firewall) -> LiveConfig {
     let mut config = (*live.get()).clone();
-    config.security.firewall = firewall.clone();
-    let auth = Arc::clone(live.generation().auth());
-    (
-        Firewall::from_config(firewall, None),
-        LiveConfig::with_auth(config, auth),
-    )
+    config.security.firewall = firewall.config.clone();
+    LiveConfig::with_auth(config, Arc::clone(live.generation().auth()))
+}
+
+/// Publish, as `state`'s live config, the configuration `firewall` was
+/// built from: for a fixture that hands its relay firewall to the Meta-MCP.
+pub(crate) fn pair_state(state: &mut Arc<AppState>, firewall: &Firewall) {
+    let live = live_of(&state.live_config, firewall);
+    Arc::get_mut(state).expect("state is unique").live_config = Arc::new(live);
+}
+
+/// [`pair_state`] with the firewall the state's Meta-MCP runs, when it runs one.
+pub(crate) fn pair_state_with_meta(state: &mut Arc<AppState>) {
+    if let Some(firewall) = state.meta_mcp.firewall_for_test() {
+        pair_state(state, &firewall);
+    }
 }
 
 /// The firewall's receipt clock frozen at the call: a window of a second
