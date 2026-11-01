@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every production builder of a JSON-RPC error is a reviewed row of
-//! `backend_json_rpc_builders.tsv`: a `JsonRpc {..}` literal or a `json_rpc(..)`
-//! call is the gateway's own error (class `gateway`), a `backend_json_rpc(..)`
-//! call is a backend's, either taken off the wire (`origin`) or rebuilt from
-//! a frame or error that already carried a backend's origin (`rebuild`). A
+//! `backend_json_rpc_builders.tsv` with a one-line reason: a `JsonRpc {..}`
+//! literal or a `json_rpc(..)` call is the gateway's own error (class
+//! `gateway`), a `backend_json_rpc(..)` call is a backend's, either taken
+//! off the wire (`origin`) or rebuilt from a frame or error that already
+//! carried a backend's origin (`rebuild`). A
 //! `BackendJsonRpc {..}` literal outside `src/error.rs` fails outright: the
 //! constructor is the only way to mark an error as the backend's.
 //!
@@ -104,10 +105,13 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let cols: Vec<&str> = line.split('\t').collect();
-        let [file, func, kind, count, class] = cols[..] else {
-            wrong.push(format!("not five columns: {line}"));
+        let [file, func, kind, count, class, reason] = cols[..] else {
+            wrong.push(format!("not six columns: {line}"));
             continue;
         };
+        if reason.trim().is_empty() {
+            wrong.push(format!("no reason: {line}"));
+        }
         let Ok(count) = count.parse::<usize>() else {
             wrong.push(format!("count is not a number: {line}"));
             continue;
@@ -123,10 +127,10 @@ fn diff(found: &Found, listed: &str) -> Vec<String> {
         match want.get(key) {
             Some(listed) if listed == count => {}
             Some(listed) => wrong.push(format!(
-                "listed {listed}, found {count}: {file}\t{func}\t{kind}\t{count}\t{class}"
+                "listed {listed}, found {count}: {file}\t{func}\t{kind}\t{count}\t{class}\t<reason>"
             )),
             None => wrong.push(format!(
-                "unlisted: {file}\t{func}\t{kind}\t{count}\t{class}"
+                "unlisted: {file}\t{func}\t{kind}\t{count}\t{class}\t<reason>"
             )),
         }
     }
@@ -170,13 +174,18 @@ fn an_unlisted_builder_fails() {
         #[cfg(test)] mod tests { fn t() { let _ = Error::json_rpc(1, \"x\"); } }";
     let found = scan_fixture(source).found;
     assert_eq!(found.len(), 1, "{found:?}");
-    assert!(diff(&found, "src/lib.rs\tprobe\tjson_rpc\t1\tgateway\n").is_empty());
+    assert!(diff(&found, "src/lib.rs\tprobe\tjson_rpc\t1\tgateway\tr\n").is_empty());
+    let unreasoned = diff(&found, "src/lib.rs\tprobe\tjson_rpc\t1\tgateway\t \n");
+    assert!(
+        unreasoned.iter().any(|w| w.starts_with("no reason:")),
+        "{unreasoned:?}"
+    );
     let wrong = diff(&found, "");
     assert!(
         wrong.iter().any(|w| w.starts_with("unlisted:")),
         "{wrong:?}"
     );
-    let origin = diff(&found, "src/lib.rs\tprobe\tjson_rpc\t1\torigin\n");
+    let origin = diff(&found, "src/lib.rs\tprobe\tjson_rpc\t1\torigin\tr\n");
     assert!(
         origin.iter().any(|w| w.starts_with("class must be")),
         "{origin:?}"
