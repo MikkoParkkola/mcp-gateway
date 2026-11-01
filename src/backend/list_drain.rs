@@ -73,12 +73,7 @@ async fn drain_pages(
             .request_with_headers(family.method, params, headers, identity_key, permission)
             .await?;
         if let Some(error) = response.error {
-            // The backend's own error frame. Its data is dropped, as it always
-            // was here, so the error the caller sees is byte-identical.
-            return Err(Error::backend_json_rpc(crate::protocol::JsonRpcError {
-                data: None,
-                ..error
-            }));
+            return Err(page_error(error));
         }
         // Readable: a string cursor or none; the list an array, or absent
         // beside a cursor. A mistyped cursor would read as the last page.
@@ -165,4 +160,13 @@ async fn drain_pages(
         );
     }
     Ok((merged, stop.is_some() || unreadable))
+}
+
+/// A backend's own error frame on a list page: the backend's error, its data
+/// dropped as it always was here, so the error the caller sees is unchanged.
+fn page_error(error: crate::protocol::JsonRpcError) -> Error {
+    Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        data: None,
+        ..error
+    })
 }
