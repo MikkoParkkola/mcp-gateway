@@ -361,3 +361,6 @@ fn a_plan_with_a_backends_error_and_a_gateway_refusal_counts_the_gateways() {
 
 #[path = "backend_origin_count_more_tests.rs"]
 mod more;
+
+#[path = "backend_origin_count_plan_tests.rs"]
+mod plan;

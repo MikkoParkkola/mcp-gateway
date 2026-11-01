@@ -183,3 +183,112 @@ fn the_error_counters_help_names_the_counted_tool_results() {
         "{help}"
     );
 }
+
+/// `gateway_execute` of `alpha:read`, single or as a one-step chain,
+/// accepting a streamed answer, as [`invoke_streamed`].
+async fn execute_streamed(fx: &Fx, chain: bool) -> String {
+    let arguments = if chain {
+        json!({"chain": [{"tool": "alpha:read", "arguments": {}}]})
+    } else {
+        json!({"tool": "alpha:read", "arguments": {}})
+    };
+    let params = json!({"name": "gateway_execute", "arguments": arguments,
+        "_meta": {"progressToken": "p1"}});
+    post_streamed(fx, params).await
+}
+
+/// N6, streamed: a plan carrying on past a backend's error counts it once.
+#[test]
+fn a_streamed_plan_carrying_on_past_a_backends_error_counts_it_once() {
+    let (body, text) = counted(async {
+        let fx = serving(Answer::RpcError(-32001), one_step("continue")).await;
+        run_p_streamed(&fx).await
+    });
+    let answer = terminal_answer(&body);
+    assert!(
+        answer.to_string().contains("step_errors"),
+        "premise: the failure is reported: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{body}\n{text}");
+}
+
+/// N8, streamed: a plan aborting on a tool's own `isError` counts `backend`.
+#[test]
+fn a_streamed_plan_ending_on_a_tools_own_is_error_counts_as_backend() {
+    let (body, text) = counted(async {
+        let fx = serving(Answer::IsError, one_step("abort")).await;
+        run_p_streamed(&fx).await
+    });
+    let answer = terminal_answer(&body);
+    assert!(
+        answer.get("error").is_some(),
+        "premise: the plan ended in error: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{body}\n{text}");
+}
+
+/// N10, streamed: a reported backend error then a gateway refusal counts
+/// once, as the gateway's kind.
+#[test]
+fn a_streamed_plan_with_a_backends_error_and_a_gateway_refusal_counts_the_gateways() {
+    let definition = serde_json::from_value(json!({
+        "playbook": "1.0", "name": "p", "description": "two steps",
+        "on_error": "continue",
+        "steps": [
+            {"name": "s0", "tool": "read", "server": "alpha", "arguments": {}},
+            {"name": "s1", "tool": "no_such_tool", "server": "alpha", "arguments": {}}
+        ]
+    }))
+    .expect("the playbook deserialises");
+    let (body, text) = counted(async {
+        let fx = serving(Answer::RpcError(-32001), definition).await;
+        run_p_streamed(&fx).await
+    });
+    terminal_answer(&body);
+    let counts = all(&text);
+    assert_eq!(counts[3], 0, "counted as the backend's: {body}\n{text}");
+    assert_eq!(counts.iter().sum::<u64>(), 1, "{body}\n{text}");
+}
+
+/// N14, streamed: a chain ending on a backend's error counts `backend`.
+#[test]
+fn a_streamed_chain_ending_on_a_backends_error_counts_as_backend() {
+    let (body, text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32001), |_| {}).await;
+        execute_streamed(&fx, true).await
+    });
+    let answer = terminal_answer(&body);
+    assert!(
+        answer.get("error").is_some() || answer["result"]["isError"] == true,
+        "premise: the chain failed: {answer}"
+    );
+    assert_eq!(all(&text), BACKEND, "{body}\n{text}");
+}
+
+/// N15, streamed: a single-tool execute of a backend's error counts `backend`.
+#[test]
+fn a_streamed_single_execute_of_a_backends_error_counts_as_backend() {
+    let (body, text) = counted(async {
+        let fx = fixture(Answer::RpcError(-32001), |_| {}).await;
+        execute_streamed(&fx, false).await
+    });
+    folded_text(&terminal_answer(&body));
+    assert_eq!(all(&text), BACKEND, "{body}\n{text}");
+}
+
+/// N17, streamed, a control: a backend tool's own `isError` result on a
+/// single meta call is the tool's answer: it counts nothing. Mutant m17 (a
+/// tool's own `isError` is folded as a backend failure) turns it red.
+#[test]
+fn a_streamed_tools_own_is_error_result_counts_nothing() {
+    let (body, text) = counted(async {
+        let fx = fixture(Answer::IsError, |_| {}).await;
+        invoke_streamed(&fx).await
+    });
+    let answer = terminal_answer(&body);
+    assert_eq!(
+        answer["result"]["isError"], true,
+        "premise: the tool's own isError result: {answer}"
+    );
+    assert_eq!(all(&text), [0, 0, 0, 0], "{body}\n{text}");
+}
