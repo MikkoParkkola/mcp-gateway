@@ -83,15 +83,7 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
             )
         }),
     );
-    let listener = tokio::time::timeout(
-        crate::test_wait::HANG_BOUND,
-        tokio::net::TcpListener::bind("127.0.0.1:0"),
-    )
-    .await
-    .expect("bounded")
-    .expect("bind");
-    let port = listener.local_addr().expect("addr").port();
-    tokio::spawn(async move { axum::serve(listener, app).await });
+    let port = serve(app).await;
     let client = super::client::build(None);
     let health = crate::failsafe::HealthTracker::new("test");
     let url = format!("http://127.0.0.1:{port}/");
@@ -178,6 +170,18 @@ async fn redirected_in(
 #[tokio::test]
 async fn a_rejected_redirect_hop_records_refused() {
     let (error, effect) = Box::pin(redirected("http://10.255.255.1/")).await;
+    assert_eq!(effect, Some("refused".into()), "{error}");
+}
+
+/// A hop that names loopback is refused before the redirect decision
+/// (`refuse_loopback_name`, then `refuse_hop`), and recorded once.
+#[tokio::test]
+async fn a_redirect_naming_loopback_records_refused() {
+    let (error, effect) = Box::pin(redirected("http://localhost:9/")).await;
+    assert!(
+        crate::security::ssrf::is_ssrf_refusal(&error),
+        "premise: refused as a destination: {error}"
+    );
     assert_eq!(effect, Some("refused".into()), "{error}");
 }
 
