@@ -283,3 +283,39 @@ async fn a_capability_cache_hit_records_its_definitions_effect() {
         "{hit}"
     );
 }
+
+/// A completed-execution replay (the HTTP, stdio and deferred meta replays)
+/// records `replayed` and no declared effect yet, even where the slot holds
+/// evidence: that layer does not hold the binding the replay was admitted
+/// under, and recording nothing beats reading the wrong slot. Pinned, so the
+/// absence is a known state; the change that gives it the binding flips it.
+#[tokio::test]
+async fn a_completed_execution_replay_records_no_declared_effect_yet() {
+    let dir = tempfile::tempdir().unwrap();
+    let (meta, _) = listing(Some(true), &dir);
+    call(&meta, &crate::protocol::mrtr::NO_RETRY).await;
+    let alpha = meta.backends.for_test().get("alpha").expect("alpha");
+    assert_eq!(
+        alpha.declared_effect_for(None, "read"),
+        Some(crate::security::decision_record::Effect::ReadOnly),
+        "premise: the slot holds evidence"
+    );
+    let who = api_key_caller();
+    let replay = JsonRpcResponse::success(RequestId::Number(7), ok_result());
+    let _ = meta
+        .audit_replay(
+            "gateway_invoke",
+            &json!({"server": "alpha", "tool": "read", "arguments": {}}),
+            None,
+            &context(&AllowAll, &who),
+            replay,
+            crate::gateway::meta_mcp::admission::ReplayFacts::default(),
+        )
+        .await;
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    let d = &all[1]["decision"];
+    assert_eq!(d["decided"], "replayed", "{d}");
+    assert!(d.get("declared_effect").is_none(), "{d}");
+    assert!(d.get("declared_effect_source").is_none(), "{d}");
+}
