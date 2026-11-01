@@ -255,6 +255,15 @@ pub(super) fn execution_arguments_cow(arguments: &mut std::borrow::Cow<'_, Value
 }
 
 impl MetaMcp {
+    /// A stored answer about to be replayed to `id`: addressed to this
+    /// request, and scrubbed against the values current now, so a value marked
+    /// secret after it was stored is removed and a refused scrub makes the
+    /// fixed refusal the answer.
+    fn serve_stored(&self, response: &mut JsonRpcResponse, id: &RequestId) {
+        response.id = Some(id.clone());
+        let _ = self.backends.scrub_stored(response);
+    }
+
     pub(crate) fn read_only_target(&self, server: &str, tool: &str) -> bool {
         if let Some(context) = self.reload_context() {
             context
@@ -414,11 +423,7 @@ impl MetaMcp {
                 let (mut response, audit) = stored_response(&bytes).ok_or_else(|| {
                     Error::json_rpc(409, "Secured execution result is unavailable")
                 })?;
-                response.id = Some(request_id.clone());
-                // Scrubbed on the way out against the values current now: a
-                // value marked secret after this answer was stored is removed,
-                // and a refused scrub makes the fixed refusal the answer.
-                let _ = self.backends.scrub_stored(&mut response);
+                self.serve_stored(&mut response, request_id);
                 Ok(SyncAdmission::Replay(
                     response,
                     audit,

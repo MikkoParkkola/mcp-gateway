@@ -66,7 +66,7 @@ async fn a_removed_backends_value_is_scrubbed_from_stored_answers_through_its_gr
     assert!(served_redacted(&registry), "premise: held while registered");
 
     assert!(registry.remove("gone"), "premise: removed");
-    tokio::time::advance(GRACE - Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(3_599)).await;
     assert!(
         served_redacted(&registry),
         "dropped before its grace passed"

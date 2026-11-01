@@ -65,7 +65,7 @@ async fn a_value_dropped_by_a_reload_retires_a_grace_later() {
         "premise: the cached matcher holds it"
     );
     needles.pin_configured("b", &ConfiguredSecrets::default());
-    tokio::time::advance(GRACE - Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(3_599)).await;
     assert!(
         redacted(&needles, "rotated-out-token"),
         "dropped before its grace passed"

@@ -286,6 +286,16 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "remove",
         "is_stopping (test)",
         "stop_all",
+        // MIK-9105: none hands out a backend. The load's configured-credential
+        // record is stored, compared by name (names only back) and scrubbed
+        // against; the two hooks are test-only.
+        "set_load_record",
+        "marking_changes",
+        "scrub_stored",
+        "scrub_stored_value",
+        "scrub_stored_text",
+        "mark_for_test (test)",
+        "overflow_for_test (test)",
     ]
     .into_iter()
     .map(str::to_string)

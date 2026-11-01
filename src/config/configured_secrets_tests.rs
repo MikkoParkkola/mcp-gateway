@@ -14,14 +14,16 @@ const TOKEN: &str = "tok-0c9b4e7a21f35d68";
 
 /// What load records for one backend whose `headers:` and `env:` are the
 /// given written values, with `env_body` as its env file.
-fn recorded(
-    headers: &[(&str, &str)],
-    env: &[(&str, &str)],
-    env_body: &str,
-) -> Vec<(String, String, SecretOrigin)> {
+/// One recorded entry: field, value and how sure load is.
+type Row = (String, String, SecretOrigin);
+
+/// Written `(key, value)` pairs.
+type Pairs<'a> = &'a [(&'a str, &'a str)];
+
+fn recorded(headers: Pairs<'_>, env: Pairs<'_>, env_body: &str) -> Vec<Row> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.env");
-    std::fs::write(&path, env_body).expect("write the env file");
+    crate::gateway::test_helpers::write_owner_only(&path, env_body).expect("write the env file");
     let overlay = EnvOverlay::from_paths(&[PathBuf::from(&path)]);
     let to_map = |pairs: &[(&str, &str)]| {
         pairs
@@ -58,7 +60,7 @@ fn recorded(
     out
 }
 
-fn row(field: &str, value: &str, origin: SecretOrigin) -> (String, String, SecretOrigin) {
+fn row(field: &str, value: &str, origin: SecretOrigin) -> Row {
     (field.to_owned(), value.to_owned(), origin)
 }
 
@@ -71,7 +73,7 @@ fn each_written_form_is_recorded_as_the_ruling_says() {
     let env_body = format!("T={TOKEN}\nONE=1\nA=first-part-77\nB=second-part-88\nH=/home/u\n");
     let explicit = SecretOrigin::Explicit;
     let inferred = SecretOrigin::Inferred;
-    let cases: [(&str, &[(&str, &str)], &[(&str, &str)], Vec<_>); 9] = [
+    let cases: [(&str, Pairs<'_>, Pairs<'_>, Vec<Row>); 9] = [
         (
             "env: reference in env",
             &[],
@@ -158,7 +160,8 @@ fn a_default_template_with_its_variable_set_records_the_variable() {
 fn the_record_never_prints_a_value() {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.env");
-    std::fs::write(&path, format!("T={TOKEN}\n")).expect("write the env file");
+    crate::gateway::test_helpers::write_owner_only(&path, format!("T={TOKEN}\n"))
+        .expect("write the env file");
     let overlay = EnvOverlay::from_paths(&[path]);
     let mut backends = HashMap::from([(
         "b".to_owned(),

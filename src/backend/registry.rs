@@ -459,7 +459,11 @@ impl BackendRegistry {
         );
         backend.stamp_needles(needles);
         let configured = Arc::clone(&*self.configured.read());
-        backend.seed_needles(configured.get(&backend.name).unwrap_or(&Default::default()));
+        backend.seed_needles(
+            configured
+                .get(&backend.name)
+                .unwrap_or(&crate::config::configured_secrets::ConfiguredSecrets::default()),
+        );
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
