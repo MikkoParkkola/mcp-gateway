@@ -358,6 +358,9 @@ mod response_cache_error_tests;
 mod ask_expiry_budget_tests;
 
 #[cfg(test)]
+mod bridge_send_refusal_tests;
+
+#[cfg(test)]
 mod tracing_target_tests;
 
 #[cfg(test)]

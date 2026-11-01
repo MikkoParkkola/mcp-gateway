@@ -83,7 +83,9 @@ async fn gateway(
     url: String,
     mint: FixedMint,
 ) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
-    gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await
+    let (router, dirs, _meta) =
+        gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await;
+    (router, dirs)
 }
 
 /// [`gateway`] with the backend's input-schema enforcement set to `mode`:
@@ -93,7 +95,11 @@ async fn gateway_in(
     url: String,
     mint: FixedMint,
     mode: crate::config::InputSchemaEnforcement,
-) -> (axum::Router, (tempfile::TempDir, super::tests::FixtureDir)) {
+) -> (
+    axum::Router,
+    (tempfile::TempDir, super::tests::FixtureDir),
+    Arc<crate::gateway::meta_mcp::MetaMcp>,
+) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
         BackendConfig {
@@ -141,9 +147,10 @@ async fn gateway_in(
     let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = registry;
-    state_mut.meta_mcp = Arc::new(meta);
+    let meta = Arc::new(meta);
+    state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
-    (super::create_router(state), (log_dir, store))
+    (super::create_router(state), (log_dir, store), meta)
 }
 
 /// POST a direct `tools/call` of [`TOOL`] as a verified caller, with the
@@ -411,7 +418,7 @@ async fn assert_cold_fill_refusal(mode: crate::config::InputSchemaEnforcement) {
         headers: vec![],
         expires_at: i64::MAX,
     };
-    let (router, _dirs) = gateway_in(url, mint, mode).await;
+    let (router, _dirs, _meta) = gateway_in(url, mint, mode).await;
     let (status, answer) = invoke(&router).await;
     assert_eq!(
         calls.load(std::sync::atomic::Ordering::SeqCst),
@@ -426,6 +433,10 @@ async fn assert_cold_fill_refusal(mode: crate::config::InputSchemaEnforcement) {
         !answer.to_string().contains("input schema"),
         "not the unreadable-schema answer: {answer}"
     );
+    assert!(
+        answer.to_string().contains("this call carried none"),
+        "the lender's own refusal reaches the caller: {answer}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -436,4 +447,43 @@ async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_closed() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cold_fill_refused_by_the_lender_is_a_refusal_under_standard() {
     assert_cold_fill_refusal(crate::config::InputSchemaEnforcement::Standard).await;
+}
+
+/// LEND.6, end to end: refusals the real per-user lender makes, on either
+/// route, record nothing in the backend's or the tool's error-budget
+/// window, so no number of them can disable the tool for every caller.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn lend_refusals_on_either_route_record_no_budget_sample() {
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs, meta) =
+        gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await;
+    // Past every window's threshold: the backend's minimum sample count is
+    // the larger, and two more refusals than it would already be judged.
+    let past = crate::kill_switch::ErrorBudgetConfig::default().min_samples + 2;
+    let mut answers = Vec::new();
+    for n in 0..past {
+        answers.push(if n % 2 == 0 {
+            invoke(&router).await
+        } else {
+            call(&router).await
+        });
+    }
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    for (n, (status, answer)) in answers.iter().enumerate() {
+        assert!(
+            answer.to_string().contains("this call carried none"),
+            "refusal {n} of {past} is not the lender's (disabled by its own refusals?): {status} {answer}"
+        );
+    }
+    let switch = meta.kill_switch();
+    assert_eq!(switch.window_counts(BACKEND), (0, 0), "the backend window");
+    assert_eq!(
+        switch.capability_window_counts(BACKEND, TOOL),
+        (0, 0),
+        "the tool's window"
+    );
 }
