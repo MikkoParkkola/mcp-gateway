@@ -21,6 +21,7 @@ fn firewall_response_immutable_challenge_mutation_is_audited_as_block() {
         let mut challenge = original.clone();
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut challenge,
                 &[target("backend-a", "inspect_me")],
                 &correlation(),
@@ -60,6 +61,7 @@ fn firewall_response_immutable_challenge_unchanged_and_disabled_controls() {
         let mut challenge = original.clone();
         let verdict = firewall
             .check_response_artifact(
+                firewall.startup_policy(),
                 &mut challenge,
                 &[target("backend-a", "inspect_me")],
                 &correlation(),
@@ -90,6 +92,7 @@ fn firewall_response_immutable_challenge_unchanged_and_disabled_controls() {
     let mut challenge = original.clone();
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut challenge,
             &[target("backend-a", "inspect_me")],
             &correlation(),

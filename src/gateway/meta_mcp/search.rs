@@ -435,7 +435,7 @@ impl MetaMcp {
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
         self.add_events_to(&mut out, &query, limit, caller, session_id);
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -538,7 +538,7 @@ impl MetaMcp {
                 "status": if killed { "disabled" } else { "active" },
                 "tools": tools
             });
-            self.inspect_discovery_value(&mut out)?;
+            self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
             return Ok(out);
         }
 
@@ -580,7 +580,7 @@ impl MetaMcp {
             "status": if killed { "disabled" } else { "active" },
             "tools": tools
         });
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -679,7 +679,7 @@ impl MetaMcp {
             "tools": all_tools,
             "total": all_tools.len()
         });
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 
@@ -762,7 +762,7 @@ impl MetaMcp {
 
         let mut out = build_search_response(&query, &matches, total_found, &suggestions);
         self.add_events_to(&mut out, &query, limit, caller, session_id);
-        self.inspect_discovery_value(&mut out)?;
+        self.inspect_discovery_value(caller.authorizer.generation(), &mut out)?;
         Ok(out)
     }
 }

@@ -377,6 +377,7 @@ async fn handle_callback(
         .is_some_and(|s| bool::from(s.as_bytes().ct_eq(state.expected_state.as_bytes())));
     if !state_ok {
         let state_len = params.state.as_deref().map_or(0, str::len);
+        drop(state);
         warn!(
             event = "oauth.callback.state_mismatch",
             has_state, state_len, "OAuth state mismatch — possible CSRF attempt"
@@ -394,6 +395,8 @@ async fn handle_callback(
     // Check for errors
     if let Some(ref error) = params.error {
         let description = params.error_description.as_deref().unwrap_or_default();
+        let tx = state.tx.take();
+        drop(state);
         // #143 — structured telemetry: provider error event.
         warn!(
             event = "oauth.callback.provider_error",
@@ -404,7 +407,7 @@ async fn handle_callback(
         let result = Err(Error::OAuth(format!(
             "OAuth error: {error} - {description}"
         )));
-        if let Some(tx) = state.tx.take() {
+        if let Some(tx) = tx {
             let _ = tx.send(result);
         }
         let escaped_error = escape_html(error);
@@ -417,12 +420,14 @@ async fn handle_callback(
 
     // Extract code
     let Some(code) = params.code else {
+        let tx = state.tx.take();
+        drop(state);
         warn!(
             event = "oauth.callback.missing_code",
             "OAuth callback arrived with no authorization code"
         );
         let result = Err(Error::OAuth("No authorization code received".to_string()));
-        if let Some(tx) = state.tx.take() {
+        if let Some(tx) = tx {
             let _ = tx.send(result);
         }
         return Html(
@@ -434,6 +439,8 @@ async fn handle_callback(
 
     // #143 — structured telemetry: successful callback event.
     let code_len = code.len();
+    let tx = state.tx.take();
+    drop(state);
     info!(
         event = "oauth.callback.success",
         code_len, "OAuth authorization code received successfully"
@@ -445,7 +452,7 @@ async fn handle_callback(
         state: params.state.unwrap_or_default(),
         iss: params.iss,
     });
-    if let Some(tx) = state.tx.take() {
+    if let Some(tx) = tx {
         let _ = tx.send(result);
     }
 

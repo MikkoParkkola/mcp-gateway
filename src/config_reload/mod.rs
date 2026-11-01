@@ -317,8 +317,10 @@ impl LiveConfig {
         Arc::clone(self.inner.read().generation.config())
     }
 
-    /// The current generation. A request takes it once, on arrival, and is
-    /// judged by it until it answers; never read it again mid-request.
+    /// The current generation. A request takes it once, on arrival, and its
+    /// request-side checks are judged by that one alone. An answer-side scan
+    /// reads it again when the scan starts and judges the answer under both
+    /// (ADR-029, amended, item 5); nothing else reads it mid-request.
     #[must_use]
     pub fn generation(&self) -> Arc<Generation> {
         Arc::clone(&self.inner.read().generation)
@@ -464,7 +466,7 @@ impl LiveConfig {
         let same_auth = serde_json::to_value(&config.auth).ok()
             == serde_json::to_value(&published.config().auth).ok();
         let prepared = if same_auth {
-            Generation::prepare_startup(config, Arc::clone(published.auth()))
+            Generation::following(config, Arc::clone(published.auth()), &published)
         } else {
             // A test-only path: a source pin keeps production off it.
             // invariant: a config a test cannot prepare is a broken fixture.
@@ -487,7 +489,7 @@ impl LiveConfig {
         overlay: &crate::config::EnvOverlay,
     ) -> Result<Generation, String> {
         let published = self.generation();
-        Generation::prepare(config, overlay, (&*self.running, &**published.auth()))
+        Generation::prepare(config, overlay, (&*self.running, &published))
     }
 
     /// Publish a prepared generation in one swap, with no revision; a reload

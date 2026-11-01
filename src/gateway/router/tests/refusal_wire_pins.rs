@@ -39,20 +39,23 @@ fn http_refusal(
     wire(&refused)
 }
 
-fn deny_list_policy() -> crate::security::ToolPolicy {
-    let config: crate::security::ToolPolicyConfig = serde_json::from_value(json!({
+fn deny_list_config() -> crate::security::ToolPolicyConfig {
+    serde_json::from_value(json!({
         "enabled": true,
         "deny": ["demo:blocked_tool"],
         "use_default_deny": false,
         "log_denied": false
     }))
-    .expect("tool policy config");
-    crate::security::ToolPolicy::from_config(&config)
+    .expect("tool policy config")
+}
+
+fn deny_list_policy() -> crate::security::ToolPolicy {
+    crate::security::ToolPolicy::from_config(&deny_list_config())
 }
 
 #[tokio::test]
 async fn http_refusals_keep_code_status_and_message() {
-    let (mut state, _store) = test_router_app_state().await;
+    let (state, _store) = test_router_app_state().await;
     // router/authorization.rs:340 validate_tool_name
     let syntax = http_refusal(&state, None, None, "demo", "bad tool!");
     // authz.rs:118 authorize_backend
@@ -62,7 +65,10 @@ async fn http_refusals_keep_code_status_and_message() {
     let narrow = scoped_client("c", vec!["*".into()], Some(vec!["only_this".into()]));
     let client_tool = http_refusal(&state, Some(&narrow), None, "demo", "t");
     // router/authorization.rs:344 tool_policy.check, deny list
-    Arc::get_mut(&mut state).expect("sole owner").tool_policy = Arc::new(deny_list_policy());
+    // The router judges under the published generation's policy.
+    let mut config = (*state.live_config.get()).clone();
+    config.security.tool_policy = deny_list_config();
+    state.live_config.set(config);
     let policy = http_refusal(&state, None, None, "demo", "blocked_tool");
     assert_eq!(
         [syntax, backend, client_tool, policy],
@@ -134,6 +140,7 @@ fn stdio_and_admin_refusals_keep_code_status_and_message() {
     let policy = deny_list_policy();
     let stdio = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let refuse = |tool: &'static str| {
         let args = json!({});

@@ -78,26 +78,18 @@ OUTPUT = {"windows": ["--show-output"]}
 # fix removes, each as (pattern on the entry name, most allowed, why). It may
 # only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
 TMP_GUARDED = {"linux"}
-_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
-    ("oauth_test_[a-z0-9_]+", 10, "oauth::client tests' token stores"),
-    (f"chain-(test|resume-test|cleanup)-{_UUID}", 9, "chains::executor tests"),
-    ("http_transport_tls_guard", 1, "transport::http tests' token store"),
-    ("stdio-tail-[0-9]+", 1, "transport::stdio start-failure test"),
     (r"\.tmp[A-Za-z0-9]{6}", 4,
-     "an audit write that outlives its test's temp dir (transparency_log::bounded_tests up "
-     "to 3, identity_propagation::audit_fail_closed, signing_allocation_tests::"
-     "withheld_parity_stdio); hardened_signing_e2e and mik_7272_task_1_acs"),
+     "a late write that outlives its test's temp dir: an audit write "
+     "(transparency_log::bounded_tests up to 3, identity_propagation::audit_fail_closed, "
+     "signing_allocation_tests::withheld_parity_stdio; hardened_signing_e2e and "
+     "mik_7272_task_1_acs) or a stdio task record"),
 ]
 # Written out, not derived from the list above: a pattern added there and not
 # here, or a count raised past its ceiling, fails the self-test, so the list
 # can only lose entries. A leaked TempLog folder is named `audit-log-*` and
 # matches none of these.
 LEFTOVER_CEILING: dict[str, int] = {
-    "oauth_test_[a-z0-9_]+": 10,
-    f"chain-(test|resume-test|cleanup)-{_UUID}": 9,
-    "http_transport_tls_guard": 1,
-    "stdio-tail-[0-9]+": 1,
     r"\.tmp[A-Za-z0-9]{6}": 4,
 }
 
@@ -307,6 +299,12 @@ def self_test() -> int:
         "KNOWN_LEFTOVERS may only shrink"
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
     assert unexpected(["audit-log-Ab12Cd", ".tmpAb12Cd"]) == ["audit-log-Ab12Cd"]
+    # The families whose tests now use their own temp folders are no longer
+    # tolerated, and the plain temp dirs only up to their count.
+    gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
+    assert unexpected(gone) == sorted(gone), unexpected(gone)
+    plain = [f".tmpAb12C{i}" for i in range(5)]
+    assert unexpected(plain) == [".tmpAb12C4"], unexpected(plain)
     print("shard_tests self-test: ok")
     return 0
 

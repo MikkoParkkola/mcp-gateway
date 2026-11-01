@@ -282,14 +282,15 @@ pub(super) async fn fixture_with(auth: Auth, tune: impl FnOnce(MetaMcp) -> MetaM
     meta.set_identity_grants(LocalIdentityGrantStore::from_grants([grant_to_u1()]));
     let state_mut = Arc::get_mut(&mut state).expect("state is uniquely owned here");
     state_mut.meta_mcp = Arc::new(meta);
-    state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-        &crate::security::ToolPolicyConfig {
-            enabled: true,
-            deny: vec!["alpha:alpha_write".to_string()],
-            use_default_deny: false,
-            ..Default::default()
-        },
-    ));
+    // The router judges under the published generation's policy.
+    let mut config = (*state_mut.live_config.get()).clone();
+    config.security.tool_policy = crate::security::ToolPolicyConfig {
+        enabled: true,
+        deny: vec!["alpha:alpha_write".to_string()],
+        use_default_deny: false,
+        ..Default::default()
+    };
+    state_mut.live_config.set(config);
     Fixture {
         router: create_router(Arc::clone(&state)),
         state,

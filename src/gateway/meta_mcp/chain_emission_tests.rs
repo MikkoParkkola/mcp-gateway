@@ -61,6 +61,7 @@ async fn deliver(
             signing,
             chain_source: source,
             chain_nonce: nonce,
+            generation: None,
         },
     )
     .await

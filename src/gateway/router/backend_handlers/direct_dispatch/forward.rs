@@ -106,7 +106,7 @@ pub(super) async fn forward_sanitized(
     let forward = DirectRouteGuards::after_dispatch(
         state,
         (seen, seal),
-        client,
+        (client, admitted.auth.generation),
         (&admission, admitted.cancel_entry.as_ref()),
         forward,
     )
@@ -221,7 +221,7 @@ pub(super) async fn forward_plain(
         let guarded = DirectRouteGuards::after_dispatch(
             state,
             (seen, seal),
-            client,
+            (client, admitted.auth.generation),
             (&admission, admitted.cancel_entry.as_ref()),
             forward,
         )

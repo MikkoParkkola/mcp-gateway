@@ -146,7 +146,10 @@ impl NeedleSet {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
         if values.len() >= MAX_NEEDLES {
-            if !self.overflowed.swap(true, Ordering::SeqCst) {
+            let first = !self.overflowed.swap(true, Ordering::SeqCst);
+            // Logged once the set's write guard is released.
+            drop(values);
+            if first {
                 tracing::warn!(
                     backend,
                     bound = MAX_NEEDLES,

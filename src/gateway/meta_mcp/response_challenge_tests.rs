@@ -188,7 +188,7 @@ fn firewall_response_challenge_error_projection() {
         let (meta, firewall, directory) = fixture(FirewallAction::Block, true, true);
         let input = original.clone();
         let error = meta
-            .enforce_firewall_challenge(&input, &targets(), &correlation())
+            .enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
             .expect_err(
                 "dangerous text in either question's raw field must refuse before exposure",
             );
@@ -209,7 +209,7 @@ fn firewall_challenge_warn_allow_and_clean_controls() {
         let (meta, firewall, directory) = fixture(action, true, true);
         let original = challenge(text);
         let input = original.clone();
-        meta.enforce_firewall_challenge(&input, &targets(), &correlation())
+        meta.enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
             .unwrap();
         assert_eq!(input, original);
         assert_event(
@@ -229,7 +229,7 @@ fn firewall_challenge_required_redaction_is_native_refusal() {
             let (meta, firewall, directory) = fixture(action, true, true);
             let input = original.clone();
             let error = meta
-                .enforce_firewall_challenge(&input, &targets(), &correlation())
+                .enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
                 .expect_err("redacting a backend question changes its bound answer contract");
             assert_projected_refusal(&error);
             assert_eq!(input, original);
@@ -257,7 +257,7 @@ fn firewall_challenge_refuses_injection_in_object_key() {
     let original = challenge_with_key(INJECTION);
     let input = original.clone();
     let error = meta
-        .enforce_firewall_challenge(&input, &targets(), &correlation())
+        .enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
         .expect_err("a marker in a key must refuse like a marker in a value");
     assert_projected_refusal(&error);
     assert_eq!(input, original);
@@ -272,7 +272,7 @@ fn firewall_challenge_refuses_credential_in_object_key() {
         let original = challenge_with_key(CANARY);
         let input = original.clone();
         let error = meta
-            .enforce_firewall_challenge(&input, &targets(), &correlation())
+            .enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
             .expect_err("redacting a key changes the shape the client must echo");
         assert_projected_refusal(&error);
         assert_eq!(input, original);
@@ -287,7 +287,7 @@ fn firewall_challenge_disabled_and_absent_controls() {
     for (enabled, scan_responses) in [(false, true), (true, false), (false, false)] {
         let (meta, firewall, directory) = fixture(FirewallAction::Block, enabled, scan_responses);
         let input = original.clone();
-        meta.enforce_firewall_challenge(&input, &targets(), &correlation())
+        meta.enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
             .unwrap();
         assert_eq!(input, original);
         let observed = firewall.response_inspection_counts();
@@ -298,7 +298,7 @@ fn firewall_challenge_disabled_and_absent_controls() {
     }
     let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
     let input = original.clone();
-    meta.enforce_firewall_challenge(&input, &targets(), &correlation())
+    meta.enforce_firewall_challenge(&input, (&targets(), &correlation()), None)
         .unwrap();
     assert_eq!(input, original);
 }
@@ -310,7 +310,7 @@ fn firewall_challenge_empty_targets_project_only_the_generic_refusal() {
     let original = challenge("plain question");
     let input = original.clone();
     let error = meta
-        .enforce_firewall_challenge(&input, &[], &correlation())
+        .enforce_firewall_challenge(&input, (&[], &correlation()), None)
         .expect_err("missing server-bound targets must not grant admission");
     assert_projected_refusal(&error);
     assert_eq!(input, original);

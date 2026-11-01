@@ -120,8 +120,8 @@ fn client_id_generates_unique_values() {
 
 #[test]
 fn new_client_has_no_valid_token() {
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_no_token")).unwrap());
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -138,8 +138,8 @@ fn new_client_has_no_valid_token() {
 
 #[test]
 fn client_with_valid_token_returns_true() {
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_valid_token")).unwrap());
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -167,8 +167,8 @@ fn client_with_valid_token_returns_true() {
 
 #[test]
 fn client_with_expired_token_returns_false() {
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_expired_token")).unwrap());
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "test-backend".to_string(),
@@ -196,8 +196,8 @@ fn client_with_expired_token_returns_false() {
 
 #[test]
 fn backend_name_returns_configured_name() {
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("oauth_test_backend_name")).unwrap());
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "my-service".to_string(),
@@ -219,9 +219,8 @@ fn backend_name_returns_configured_name() {
 #[test]
 fn needs_proactive_refresh_false_when_no_token() {
     // GIVEN: client with no token
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_no_token")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),
@@ -241,9 +240,8 @@ fn needs_proactive_refresh_false_when_no_token() {
 #[test]
 fn needs_proactive_refresh_false_when_token_no_expiry() {
     // GIVEN: token with no expiry (never expires)
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_no_expiry")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),
@@ -265,9 +263,8 @@ fn needs_proactive_refresh_false_when_token_no_expiry() {
 #[test]
 fn needs_proactive_refresh_true_when_within_buffer() {
     // GIVEN: token expiring in 200s with a 300s buffer
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_within_buf")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),
@@ -296,9 +293,8 @@ fn needs_proactive_refresh_true_when_within_buffer() {
 #[test]
 fn needs_proactive_refresh_false_when_outside_buffer() {
     // GIVEN: token expiring in 1h with 300s buffer
-    let storage = Arc::new(
-        TokenStorage::new(std::env::temp_dir().join("oauth_test_refresh_outside_buf")).unwrap(),
-    );
+    let token_dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(token_dir.path().join("tokens")).unwrap());
     let client = OAuthClient::new(
         Client::new(),
         "backend".to_string(),
