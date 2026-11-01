@@ -439,6 +439,8 @@ fn o5_2a_retention_uses_the_recording_generations_lists() {
         [("src:p".to_string(), false)],
         "O5.2a: carol's overflow pair is not (src:p, non-inferred)"
     );
+    // `capped` counts drops and overflows together, so the plan's
+    // `record_dropped` +1 reads here as one drop plus one overflow.
     assert_eq!(counted, 2, "one drop and one overflow, one fingerprint");
 }
 
@@ -454,6 +456,8 @@ fn o5_2a_counts_per_fingerprint_not_per_delivery() {
         [("src:p".to_string(), false)],
         "O5.2a (two fingerprints): carol's overflow pair is not (src:p, non-inferred)"
     );
+    // `capped` counts drops and overflows together: one of each, per
+    // fingerprint.
     assert_eq!(
         counted, 4,
         "one drop and one overflow, two fingerprints each"

@@ -506,11 +506,28 @@ fn o5_2b_a_replay_re_decides_retention_under_the_current_lists() {
     }
     let replayed = super::DeliveryDigest::of_replay_receipt(&snapshot);
     let alice = super::RelayCaller::Keyed("alice");
+    let detector = rig.firewall.collusion_detector().expect("block runs one");
+    let before = detector.capped();
     rig.firewall
         .record_digest(alice, "alpha", "read", &replayed, &g1);
     let verdict = rig.relays("bob", SEND, &text, &g1);
     assert!(
         !refused(&verdict),
         "O5.2b: the replay kept the stored class"
+    );
+    // The replayed receipt is plain under G1 and does not fit: dropped, so no
+    // overflow pair names its source.
+    let kept: Vec<_> = detector.overflow_pairs_of(&text, "alice");
+    assert!(
+        kept.iter().all(|(source, _)| &**source != "alpha:read"),
+        "O5.2b: the replayed receipt was kept as an overflow pair: {kept:?}"
+    );
+    // `capped` counts drops and overflows together, so this is the one drop
+    // the plan names as `record_dropped` +1; an overflow would move it by the
+    // same amount, which the pairs assertion above separates.
+    assert_eq!(
+        detector.capped() - before,
+        1,
+        "O5.2b: one record not counted"
     );
 }
