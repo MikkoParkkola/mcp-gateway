@@ -33,7 +33,7 @@ pub(super) async fn status(
     // A caller with no credential (a public status path) has no scope to
     // narrow by. A scoped admin gets the counts, within its scope: the full
     // view lists every backend.
-    let scope = BackendGrant::of(client.as_ref());
+    let scope = BackendGrant::for_ui(client.as_ref());
     let view = if is_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
         StatusView::Full
     } else {

@@ -67,7 +67,7 @@ pub(in crate::gateway::ui) fn resolve(
     let Some(client) = client.filter(|c| c.authenticated) else {
         return Err(Refused::Unauthenticated);
     };
-    breadth(client, identity, mapping).map(|breadth| within(breadth, &client.backends))
+    breadth(client, identity, mapping).map(|breadth| within(breadth, client))
 }
 
 /// How much a caller reads, before its backend scope: by the admin flag, else
@@ -97,9 +97,10 @@ fn breadth(
     }
 }
 
-/// `breadth` bounded by the credential's `backends`: unchanged for `*`.
-fn within(breadth: Access, backends: &[String]) -> Access {
-    if BackendGrant::of_list(backends) == BackendGrant::Unscoped {
+/// `breadth` bounded by the credential's UI scope ([`BackendGrant::for_ui`]):
+/// unchanged for `*`, and for an admin key with an empty list.
+fn within(breadth: Access, client: &AuthenticatedClient) -> Access {
+    if BackendGrant::for_ui(Some(client)) == BackendGrant::Unscoped {
         return breadth;
     }
     let owner = match breadth {
@@ -108,6 +109,6 @@ fn within(breadth: Access, backends: &[String]) -> Access {
     };
     Access::Scoped {
         owner,
-        backends: backends.to_vec(),
+        backends: client.backends.clone(),
     }
 }

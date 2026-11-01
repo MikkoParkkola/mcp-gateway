@@ -13,6 +13,7 @@ use crate::gateway::router::tests::http_backend_at;
 const SCOPED_KEY: &str = "scope-alpha-key";
 const SCOPED_ADMIN_KEY: &str = "scope-alpha-admin-key";
 const EMPTY_KEY: &str = "scope-empty-key";
+const UI_ADMIN_KEY: &str = "scope-ui-admin-key";
 
 /// Every caller kind, by its key and the identity it carries.
 #[derive(Clone, Copy, Debug)]
@@ -30,6 +31,9 @@ enum Who {
     /// `backends` from the token's scopes).
     ScopedAdminKey,
     EmptyAuditor,
+    /// An admin key with an empty list: a UI-wide admin that calls no
+    /// backend.
+    UiAdminKey,
 }
 
 impl Who {
@@ -43,6 +47,7 @@ impl Who {
             | Self::ScopedRoleAdmin => SCOPED_KEY,
             Self::ScopedAdminKey => SCOPED_ADMIN_KEY,
             Self::EmptyAuditor => EMPTY_KEY,
+            Self::UiAdminKey => UI_ADMIN_KEY,
         }
     }
 
@@ -51,7 +56,9 @@ impl Who {
             Self::Auditor | Self::ScopedAuditor | Self::EmptyAuditor => Caller::OidcAuditor,
             Self::Developer | Self::ScopedDeveloper => Caller::OidcDeveloper,
             Self::ScopedRoleAdmin => Caller::OidcAdmin,
-            Self::AdminKey | Self::ScopedKey | Self::ScopedAdminKey => return None,
+            Self::AdminKey | Self::ScopedKey | Self::ScopedAdminKey | Self::UiAdminKey => {
+                return None;
+            }
         }
         .identity()
     }
@@ -84,6 +91,7 @@ async fn scoped_fixture() -> Scoped {
             key_on(SCOPED_KEY, false, &["alpha"]),
             key_on(SCOPED_ADMIN_KEY, true, &["alpha"]),
             key_on(EMPTY_KEY, false, &[]),
+            key_on(UI_ADMIN_KEY, true, &[]),
         ],
         public_paths: vec!["/health".to_string()],
         ..AuthConfig::default()
@@ -284,7 +292,7 @@ fn expected(who: Who) -> [String; 6] {
         ]
     };
     match who {
-        Who::AdminKey => [
+        Who::AdminKey | Who::UiAdminKey => [
             "200:full:2".to_string(),
             format!("200:{ALL}+non-call"),
             format!("200:{ALL}"),
@@ -328,7 +336,7 @@ fn expected(who: Who) -> [String; 6] {
     }
 }
 
-const WHO: [Who; 9] = [
+const WHO: [Who; 10] = [
     Who::AdminKey,
     Who::Auditor,
     Who::Developer,
@@ -338,6 +346,7 @@ const WHO: [Who; 9] = [
     Who::ScopedRoleAdmin,
     Who::ScopedAdminKey,
     Who::EmptyAuditor,
+    Who::UiAdminKey,
 ];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

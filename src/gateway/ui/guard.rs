@@ -77,7 +77,7 @@ pub(super) fn decide(need: Need, client: Option<&AuthenticatedClient>) -> Result
         Need::AdminKeyLink => client
             .is_some_and(|c| {
                 c.admin
-                    && BackendGrant::of(Some(c)) == BackendGrant::Unscoped
+                    && BackendGrant::for_ui(Some(c)) == BackendGrant::Unscoped
                     && (c.credential_kind == CredentialKind::StaticBearer
                         || c.api_key_identity().is_some())
             })

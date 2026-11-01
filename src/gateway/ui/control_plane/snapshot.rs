@@ -279,7 +279,7 @@ pub(super) fn can_view_backend(client: Option<&AuthenticatedClient>, backend_nam
         // API key still sees the backends it is scoped to, admin or not: the
         // scope bounds every role.
         client.authenticated
-            && crate::gateway::authz::BackendGrant::of(Some(client)).admits(backend_name)
+            && crate::gateway::authz::BackendGrant::for_ui(Some(client)).admits(backend_name)
     })
 }
 

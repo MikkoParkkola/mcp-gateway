@@ -220,8 +220,9 @@ fn t3d_narrowing_the_key_ends_its_session() {
     );
 }
 
-/// A load warns once per admin key whose backends are not `*`, naming it;
-/// an unscoped admin key and a scoped non-admin key are silent.
+/// A load warns once per admin key with a non-empty list without `*`, naming
+/// it and what its UI scope becomes; an unscoped admin key, an admin key with
+/// an empty list (a UI-wide admin) and a scoped non-admin key are silent.
 #[test]
 fn a_scoped_admin_key_warns_at_load() {
     let mut scoped_admin = key("scoped-admin", A, None);
@@ -230,15 +231,17 @@ fn a_scoped_admin_key_warns_at_load() {
     scoped_plain.admin = false;
     scoped_plain.backends = vec!["alpha".to_string()];
     let full_admin = key("full-admin", "matrix-third-secret", None);
+    let mut ui_admin = key("ui-admin", "matrix-fourth-secret", None);
+    ui_admin.backends = Vec::new();
     let ((), warned) = crate::test_log_capture::capture_warnings(|| {
         let _ = over(
             &Arc::new(AuthRuntime::default()),
-            vec![scoped_admin, scoped_plain, full_admin],
+            vec![scoped_admin, scoped_plain, full_admin, ui_admin],
         );
     });
     let lines: Vec<&str> = warned
         .lines()
-        .filter(|l| l.contains("admin only within its backends"))
+        .filter(|l| l.contains("admin API key lists only some backends"))
         .collect();
     assert_eq!(
         lines.len(),
@@ -252,6 +255,10 @@ fn a_scoped_admin_key_warns_at_load() {
     assert!(
         lines[0].contains("backends: [\"*\"]"),
         "the fix is named: {warned}"
+    );
+    assert!(
+        lines[0].contains("web UI shows it only those"),
+        "the UI scope is named: {warned}"
     );
 }
 
