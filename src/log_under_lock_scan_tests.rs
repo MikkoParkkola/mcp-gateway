@@ -189,6 +189,16 @@ fn last_segment(path: &syn::Path) -> String {
 }
 
 /// The name a receiver ends in: `self.cache` and `cache` are both `cache`.
+/// `self.map` or `&self.map`, through parentheses: a field, not a local.
+fn is_field_access(expr: &syn::Expr) -> bool {
+    match expr {
+        syn::Expr::Field(_) => true,
+        syn::Expr::Paren(p) => is_field_access(&p.expr),
+        syn::Expr::Reference(r) => is_field_access(&r.expr),
+        _ => false,
+    }
+}
+
 fn receiver_name(expr: &syn::Expr) -> Option<String> {
     match expr {
         syn::Expr::Field(f) => match &f.member {
@@ -206,19 +216,28 @@ fn receiver_name(expr: &syn::Expr) -> Option<String> {
 struct Scan<'k> {
     known: &'k Known,
     /// `DashMap` fields of every scanned file: a field is often declared in
-    /// another file than the one that locks it.
-    dashmaps: &'k HashSet<String>,
+    /// another file than the one that locks it. Matched only against a field
+    /// access (`self.map`), since a local of the same name is another value.
+    crate_maps: &'k HashSet<String>,
+    /// `DashMap` fields of this file, matched against any receiver.
+    file_maps: HashSet<String>,
     file: String,
     func: String,
     hits: Vec<Hit>,
 }
 
 impl Scan<'_> {
+    /// Whether `expr` names a `DashMap`: a field of any file, or a name of this file's.
+    fn is_map(&self, expr: &syn::Expr) -> bool {
+        let field = is_field_access(expr);
+        receiver_name(expr)
+            .is_some_and(|n| self.file_maps.contains(&n) || (field && self.crate_maps.contains(&n)))
+    }
+
     /// `for e in &self.map` over a `DashMap`: each item holds a shard lock.
     /// Only in a loop: a `let m = &self.map;` holds nothing.
     fn iterates_dashmap(&self, expr: &syn::Expr) -> bool {
-        matches!(expr, syn::Expr::Reference(_))
-            && receiver_name(expr).is_some_and(|n| self.dashmaps.contains(&n))
+        matches!(expr, syn::Expr::Reference(_)) && self.is_map(expr)
     }
 
     /// Whether `expr` yields a guard, given the bindings already `held`.
@@ -231,8 +250,7 @@ impl Scan<'_> {
                 let name = m.method.to_string();
                 (m.args.is_empty() && ACQUIRE.contains(&name.as_str()))
                     || self.known.helpers.contains(&name)
-                    || (DASHMAP_REFS.contains(&name.as_str())
-                        && receiver_name(&m.receiver).is_some_and(|r| self.dashmaps.contains(&r)))
+                    || (DASHMAP_REFS.contains(&name.as_str()) && self.is_map(&m.receiver))
                     || (PEEL.contains(&name.as_str()) && self.acquires(&m.receiver, held))
             }
             syn::Expr::Call(c) => {
@@ -667,7 +685,8 @@ fn scan(files: &[(String, syn::File)]) -> Vec<Hit> {
     for (name, file) in files {
         let mut s = Scan {
             known: &known,
-            dashmaps: &maps,
+            crate_maps: &maps,
+            file_maps: dashmaps(file),
             file: name.clone(),
             func: String::new(),
             hits: Vec::new(),

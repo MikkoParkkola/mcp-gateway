@@ -16,6 +16,8 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 /// Pings in a session: at trace, well over 1 MiB of log lines.
 const PINGS: u64 = 20_000;
+/// Pings in flight at once, under the gateway's cap of 64.
+const WINDOW: u64 = 32;
 /// Past this the child is taken to have stalled on its stderr.
 const KILL_TIMER: Duration = Duration::from_secs(60);
 /// The last line the stdio path logs before the process exits.
@@ -28,6 +30,16 @@ enum Stderr {
     Unread,
     /// Read to the end and returned.
     Drained,
+}
+
+/// Write `frames` to the child's stdin, one per line.
+async fn send(stdin: &mut tokio::process::ChildStdin, frames: &[Value]) {
+    for frame in frames {
+        stdin
+            .write_all(format!("{frame}\n").as_bytes())
+            .await
+            .expect("stdin accepts the frame");
+    }
 }
 
 /// One session: initialize, `PINGS` pings, then stdin closes. Asserts every
@@ -74,32 +86,53 @@ async fn session(stderr: Stderr) -> Vec<u8> {
         }
     };
 
+    // Sent in windows under the gateway's in-flight cap (64), each answered
+    // before the next is sent: past the cap the gateway refuses as busy, and
+    // the test is about stderr, not about that refusal.
     let run = async {
-        let answers = tokio::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            let mut answered = 0_u64;
-            while let Some(line) = lines.next_line().await.expect("stdout reads") {
-                if serde_json::from_str::<Value>(&line).is_ok_and(|f| f.get("result").is_some()) {
-                    answered += 1;
-                }
-            }
-            answered
-        });
-        let mut frames = vec![
-            json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+        let mut lines = BufReader::new(stdout).lines();
+        let mut answered = 0_u64;
+        let mut replies = 0_u64;
+        send(
+            &mut stdin,
+            &[
+                json!({"jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
                 "protocolVersion": "2025-06-18", "capabilities": {},
                 "clientInfo": {"name": "l1j-stderr", "version": "0"}}}),
-            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
-        ];
-        frames.extend((1..=PINGS).map(|id| json!({"jsonrpc": "2.0", "id": id, "method": "ping"})));
-        for frame in &frames {
-            stdin
-                .write_all(format!("{frame}\n").as_bytes())
-                .await
-                .expect("stdin accepts the frame");
+                json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+            ],
+        )
+        .await;
+        let mut sent = 1_u64;
+        let mut next = 1_u64;
+        loop {
+            while replies < sent {
+                let line = lines
+                    .next_line()
+                    .await
+                    .expect("stdout reads")
+                    .expect("stdout stays open while requests are outstanding");
+                let Ok(frame) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                if frame.get("id").is_some() {
+                    replies += 1;
+                    answered += u64::from(frame.get("result").is_some());
+                }
+            }
+            if next > PINGS {
+                break;
+            }
+            let end = (next + WINDOW - 1).min(PINGS);
+            let window: Vec<Value> = (next..=end)
+                .map(|id| json!({"jsonrpc": "2.0", "id": id, "method": "ping"}))
+                .collect();
+            send(&mut stdin, &window).await;
+            sent += end - next + 1;
+            next = end + 1;
         }
         drop(stdin);
-        let answered = answers.await.expect("the stdout reader");
+        while lines.next_line().await.expect("stdout reads").is_some() {}
         let status = child.wait().await.expect("reap child");
         (answered, status)
     };
