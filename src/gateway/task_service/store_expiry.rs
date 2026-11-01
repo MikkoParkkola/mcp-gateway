@@ -126,18 +126,20 @@ impl TaskStore {
         })
         .await
         .unwrap_or_default();
-        let (sealed, reserved) = {
+        let (sealed, reserved, sealed_names) = {
             let state = self.0.state();
-            if !state.sealed.is_empty() {
-                // Once per sweep while sealed: loud on purpose, names only.
-                let files: Vec<&str> = state.sealed.iter().map(String::as_str).collect();
-                tracing::error!(
-                    ?files,
-                    "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired (its key is kept) or removed (its key is released)"
-                );
-            }
-            (state.sealed.len(), state.reserved.len())
+            // Copied out, so the line below is written after the guard is released.
+            let names: Vec<String> = state.sealed.iter().cloned().collect();
+            (state.sealed.len(), state.reserved.len(), names)
         };
+        if !sealed_names.is_empty() {
+            // Once per sweep while sealed: loud on purpose, names only.
+            let files: Vec<&str> = sealed_names.iter().map(String::as_str).collect();
+            tracing::error!(
+                ?files,
+                "task records with an unreadable key: new keyed calls are refused (409) until each file is repaired (its key is kept) or removed (its key is released)"
+            );
+        }
         for (class, count) in [("sealed", sealed), ("reserved", reserved)] {
             #[allow(clippy::cast_precision_loss)]
             telemetry_metrics::gauge!("mcp_task_store_skipped_records", "class" => class)
@@ -228,18 +230,24 @@ impl TaskStore {
         }
         drop(state);
         let mut state = self.0.state();
+        // Logged once `state` is released.
+        let mut held_past_ttl = Vec::new();
         for id in &kept {
             if state.cancel_hold_warned.insert(id.clone()) {
-                tracing::warn!(
-                    task_id = %id,
-                    "held past its ttl: its upstream cancel is unsent (clock before 1970)"
-                );
-                telemetry_metrics::counter!("mcp_task_cancel_held_past_ttl_total").increment(1);
+                held_past_ttl.push(id);
             }
         }
         // Rows no longer held (sent, given up, deleted) leave the set, so it
         // never outlives the rows it names.
         state.cancel_hold_warned.retain(|id| kept.contains(id));
+        drop(state);
+        for id in held_past_ttl {
+            tracing::warn!(
+                task_id = %id,
+                "held past its ttl: its upstream cancel is unsent (clock before 1970)"
+            );
+            telemetry_metrics::counter!("mcp_task_cancel_held_past_ttl_total").increment(1);
+        }
         out
     }
 
@@ -289,7 +297,7 @@ impl Shared {
         };
         // Every check below holds until the row is applied: a concurrent
         // re-read or mutation cannot move it in between.
-        let _order = self.order();
+        let order = self.order();
         {
             let state = self.state();
             // A closed or poisoned store writes and serves nothing more; a row
@@ -311,19 +319,23 @@ impl Shared {
                 .count()
         };
         if held >= self.limits.per_principal {
+            drop(order);
             tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
             return;
         }
         let Some((record, task)) = row.map(|row| *row) else {
             // Its key reads but its task does not: the key is kept, unserved.
             if !import(binding_of(&admission), id.clone()) {
+                drop(order);
                 tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
                 return;
             }
-            tracing::warn!(record = %name, repaired = true, "sealed task record cleared");
             let mut state = self.state();
             state.sealed.remove(name);
             state.reserved.push((admission, id));
+            drop(state);
+            drop(order);
+            tracing::warn!(record = %name, repaired = true, "sealed task record cleared");
             return;
         };
         let duplicate = {
@@ -334,6 +346,7 @@ impl Shared {
                 })
         };
         if duplicate {
+            drop(order);
             tracing::error!(record = %name, "repaired task record duplicates a served task or key; it stays sealed");
             return;
         }
@@ -350,6 +363,7 @@ impl Shared {
                 // A live row is dated at the store's clock. With none readable
                 // it stays sealed for the next sweep: never settled at 1969.
                 let Ok(now) = self.now() else {
+                    drop(order);
                     tracing::warn!(record = %name, "host clock reads before 1970: repaired task record stays sealed");
                     return;
                 };
@@ -373,16 +387,19 @@ impl Shared {
             }),
         };
         let Ok(Some((task, record))) = written else {
+            drop(order);
             tracing::error!(record = %name, "repaired task record could not be made durable; it stays sealed");
             return;
         };
         if !import(binding_of(&admission), id) {
+            drop(order);
             tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
             return;
         }
         let committed = self.publish(task, record, super::HoldUpdate::Drop);
-        tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
         self.state().sealed.remove(name);
+        drop(order);
+        tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
         if was_live {
             settled.push(committed);
         }
@@ -403,7 +420,7 @@ impl Shared {
         admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
         hold: CancelHold,
     ) -> Result<(), StoreError> {
-        let _order = self.order();
+        let order = self.order();
         let identity = {
             let state = self.state();
             if !state.ready {
@@ -446,17 +463,21 @@ impl Shared {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
+                drop(guard);
+                drop(order);
                 tracing::warn!(%error, task = %id, "task record not deleted");
                 return Err(StoreError::Storage);
             }
         }
         let hook = self.hook();
-        fire(hook.as_ref(), StoreWriteStage::DirectorySync)
-            .and_then(|()| sync_dir(&self.dir))
-            .map_err(|error| {
-                tracing::warn!(%error, task = %id, "task record deletion not made durable");
-                StoreError::Storage
-            })?;
+        if let Err(error) =
+            fire(hook.as_ref(), StoreWriteStage::DirectorySync).and_then(|()| sync_dir(&self.dir))
+        {
+            drop(guard);
+            drop(order);
+            tracing::warn!(%error, task = %id, "task record deletion not made durable");
+            return Err(StoreError::Storage);
+        }
         fire(hook.as_ref(), StoreWriteStage::Deleted).map_err(|_| StoreError::Storage)?;
 
         // Readable view follows the durable one, then the dedupe entry and its

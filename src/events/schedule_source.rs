@@ -242,6 +242,8 @@ impl ScheduleSource {
         let mut guard = self.last.lock();
         let last = guard.get_or_insert_with(|| Self::load(&self.dir));
         self.prune(last, minute);
+        // Logged once `guard` is released.
+        let mut unpersisted = Vec::new();
         for (key, label) in firing {
             // Stopped since it was selected: its state is gone and stays gone.
             if !self.timers.lock().contains_key(&key) {
@@ -267,7 +269,7 @@ impl ScheduleSource {
             if let Err(error) = super::records::write_record(&self.dir, &fired_file(&key), &fired)
                 .and_then(super::records::Placed::durable)
             {
-                tracing::warn!(%error, "events: schedule tick not persisted, so not sent");
+                unpersisted.push(error);
                 continue;
             }
             let at = minute.to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
@@ -283,6 +285,10 @@ impl ScheduleSource {
                 lifecycle_key: None,
                 fence: None,
             });
+        }
+        drop(guard);
+        for error in unpersisted {
+            tracing::warn!(%error, "events: schedule tick not persisted, so not sent");
         }
     }
 

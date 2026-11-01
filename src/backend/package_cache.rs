@@ -205,6 +205,7 @@ async fn start_reporting_with(
         return (Err(error), Repair::NotRepaired);
     };
     let Some(dir) = assigned_cache_to_clear(transport) else {
+        drop(held);
         warn!(
             command = %transport.diagnostic_command(),
             "the package cache was not assigned by this gateway; leaving it alone"
@@ -233,6 +234,7 @@ async fn repair_while_locked(
     discard: fn(PathBuf),
 ) -> (crate::Result<()>, Repair) {
     if !mark_repaired(dir) {
+        drop(held);
         warn!(
             path = %dir.display(),
             "package cache already repaired since the last successful start"
@@ -242,7 +244,8 @@ async fn repair_while_locked(
     // Kept to the end of the retry. If this future is dropped mid-rename, the
     // guard is still inside the blocking task, which Tokio cannot abort.
     let limit = rename_bound(transport.request_timeout());
-    let Ok((retired, _held)) = retire_within(dir, held, retire_now, discard, limit).await else {
+    let Ok((retired, retry_held)) = retire_within(dir, held, retire_now, discard, limit).await
+    else {
         warn!(path = %dir.display(), "moving the package cache aside did not finish in time; abandoning the repair");
         let error = Error::BackendUnavailable(format!(
             "stdio backend {}: moving its package cache aside did not finish within {limit:?}; \
@@ -254,6 +257,7 @@ async fn repair_while_locked(
     // The tombstone's deletion and the latch reset already happened inside
     // the rename's task (see `retire_cache_dir`).
     if retired == Retired::Refused {
+        drop(retry_held);
         warn!(path = %dir.display(), "could not clear package cache");
         return (Err(error), Repair::NotRepaired);
     }

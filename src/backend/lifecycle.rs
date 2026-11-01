@@ -406,7 +406,7 @@ impl Backend {
         &self,
         built_under: crate::security::ssrf::DestinationPolicy,
     ) -> Result<()> {
-        let _pairing = self.replaced_transport_cleanups.lock();
+        let pairing = self.replaced_transport_cleanups.lock();
         if self.destination.get().is_none() {
             self.connected_unpinned
                 .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -415,6 +415,7 @@ impl Backend {
         if self.destination() == built_under {
             return Ok(());
         }
+        drop(pairing);
         debug!(backend = %self.name, "Not connecting: the destination policy changed while it was starting");
         Err(Error::BackendUnavailable(self.name.clone()))
     }

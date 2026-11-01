@@ -120,7 +120,7 @@ impl Transport for HttpTransport {
             // so the two never undo each other; a failed handshake leaves
             // recovery pending for the next caller instead of dropping it.
             let shared = identity_key.is_none();
-            let _held = if shared {
+            let reinit_held = if shared {
                 Some(self.reinit_lock.lock().await)
             } else {
                 None
@@ -144,6 +144,7 @@ impl Transport for HttpTransport {
                     .and_then(|params| params.get("name"))
                     .and_then(Value::as_str)
                     .unwrap_or("-");
+                drop(reinit_held);
                 warn!(target: HTTP_TARGET,
                     url = %sanitize_url_for_diagnostics(&self.base_url),
                     method = %method,

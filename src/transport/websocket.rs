@@ -508,6 +508,17 @@ impl WebSocketTransport {
 
 // ── I/O loop (runs inside the spawned task) ───────────────────────────────────
 
+/// Frame counters, taken outside the `select!` below: inside a macro body the
+/// log-under-lock scan sees only tokens, and a lock there reads as held over
+/// the arm's log lines. The guard is a temporary released at once either way.
+async fn count_received(inner: &Inner) {
+    inner.session.lock().await.messages_received += 1;
+}
+
+async fn count_sent(inner: &Inner) {
+    inner.session.lock().await.messages_sent += 1;
+}
+
 /// Drive reads from the WebSocket stream and writes from the outbound channel
 /// using `tokio::select!`.  Exits when the connection closes or the outbound
 /// channel is dropped.
@@ -528,7 +539,7 @@ async fn run_io_loop(
             maybe_msg = ws_source.next() => {
                 match maybe_msg {
                     Some(Ok(Message::Text(text))) => {
-                        inner.session.lock().await.messages_received += 1;
+                        count_received(&inner).await;
                         let text_str: &str = &text;
                         if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
                             error!(error = %e, "Failed to dispatch inbound WebSocket frame");
@@ -575,7 +586,7 @@ async fn run_io_loop(
                         inner.connected.store(false, Ordering::Relaxed);
                         break;
                     }
-                    inner.session.lock().await.messages_sent += 1;
+                    count_sent(&inner).await;
                 } else {
                     // Channel dropped — application is closing the transport.
                     debug!("WebSocket outbound channel closed; sending close frame");

@@ -71,12 +71,18 @@ impl<'a> ProgressRegistration<'a> {
             .and_then(progress_token_string);
         let token = match wanted {
             None => None,
-            Some(token) => match destinations.entry(token.clone()) {
-                dashmap::mapref::entry::Entry::Vacant(slot) => {
-                    slot.insert(DeliveryHandle::capture(&token));
+            Some(token) => {
+                let registered = match destinations.entry(token.clone()) {
+                    dashmap::mapref::entry::Entry::Vacant(slot) => {
+                        slot.insert(DeliveryHandle::capture(&token));
+                        true
+                    }
+                    dashmap::mapref::entry::Entry::Occupied(_) => false,
+                };
+                // Logged once the entry's shard lock is released.
+                if registered {
                     Some(token)
-                }
-                dashmap::mapref::entry::Entry::Occupied(_) => {
+                } else {
                     // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
                     warn!(
                         token = %token,
@@ -84,7 +90,7 @@ impl<'a> ProgressRegistration<'a> {
                     );
                     None
                 }
-            },
+            }
         };
         Self {
             destinations,
