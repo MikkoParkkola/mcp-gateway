@@ -453,7 +453,9 @@ pub trait ToolInvoker: Send + Sync {
     /// one raised before the request left. Return such an error only when the
     /// request provably never reached the backend (a connection never made,
     /// a backend not ready); any other error is read as "the step may have
-    /// run" and is never sent again.
+    /// run" and is never sent again. A refusal (`Forbidden`, `GatewayRefused`,
+    /// `ResponseFirewallRefused`) is final and never re-sent either, though the
+    /// first two read as raised before the send.
     async fn invoke(&self, server: &str, tool: &str, arguments: Value) -> crate::Result<Value>;
 
     /// Whether `value` carries a continuation envelope this gateway sealed

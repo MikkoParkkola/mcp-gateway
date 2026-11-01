@@ -235,6 +235,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// A late refusal keeps its own code, and its run keeps the key.
+#[cfg(all(test, feature = "firewall"))]
+mod late_refusal_lease_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
