@@ -299,6 +299,12 @@ def self_test() -> int:
         "KNOWN_LEFTOVERS may only shrink"
     # A leaked TempLog folder is never one of the tolerated plain temp dirs.
     assert unexpected(["audit-log-Ab12Cd", ".tmpAb12Cd"]) == ["audit-log-Ab12Cd"]
+    # The families whose tests now use their own temp folders are no longer
+    # tolerated, and the plain temp dirs only up to their count.
+    gone = ["oauth_test_no_token", "chain-test-0b1c", "http_transport_tls_guard", "stdio-tail-1"]
+    assert unexpected(gone) == sorted(gone), unexpected(gone)
+    plain = [f".tmpAb12C{i}" for i in range(5)]
+    assert unexpected(plain) == [".tmpAb12C4"], unexpected(plain)
     print("shard_tests self-test: ok")
     return 0
 

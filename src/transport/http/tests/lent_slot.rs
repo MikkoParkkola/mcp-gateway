@@ -183,7 +183,7 @@ async fn only_a_lent_only_slot_rides_its_starts_session() {
 #[tokio::test]
 async fn a_lent_only_slot_never_sends_a_live_gateway_token() {
     let token = format!("{}-{}", "gateway", "token");
-    let (t, _dir) = transport_with_oauth("http://localhost/mcp").expect("transport");
+    let (_dir, t) = transport_with_oauth("http://localhost/mcp").expect("transport");
     t.oauth_client
         .as_ref()
         .expect("an OAuth client")

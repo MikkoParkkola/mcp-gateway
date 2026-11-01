@@ -118,9 +118,10 @@ fn oauth_client_for(resource: &str) -> (tempfile::TempDir, crate::oauth::OAuthCl
     (dir, client)
 }
 
-/// An OAuth transport for `url`, and the temp folder its token store lives
-/// in, held by the caller for as long as the transport.
-fn transport_with_oauth(url: &str) -> Result<(Arc<HttpTransport>, tempfile::TempDir)> {
+/// The temp folder an OAuth transport's token store lives in, and the
+/// transport for `url`. Bound in this order, the folder outlives the
+/// transport: locals drop in reverse.
+fn transport_with_oauth(url: &str) -> Result<(tempfile::TempDir, Arc<HttpTransport>)> {
     let (dir, client) = oauth_client_for(url);
     HttpTransport::new_with_oauth(
         url,
@@ -130,7 +131,7 @@ fn transport_with_oauth(url: &str) -> Result<(Arc<HttpTransport>, tempfile::Temp
         Some(client),
         None,
     )
-    .map(|transport| (transport, dir))
+    .map(|transport| (dir, transport))
 }
 
 /// Serve one fixed status and body to every POST, substituting the caller's own
@@ -424,7 +425,7 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
         "a gated client's gate is kept"
     );
 
-    let (t, _dir) = transport_with_oauth(url).unwrap();
+    let (_dir, t) = transport_with_oauth(url).unwrap();
     let client_gate = t
         .oauth_client
         .as_ref()
