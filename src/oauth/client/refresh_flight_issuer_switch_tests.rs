@@ -199,9 +199,10 @@ async fn a_revoked_detached_step_hands_back_no_held_token() {
 }
 
 /// A confirm under the other issuer lands while `get_token` (and the detached
-/// step) holds an adopt after its read: the call answers the sign-in wait, the
-/// cache holds nothing of the old issuer, and no refresh is sent. Red before
-/// the adopt step checked the issuer: the old cached token was handed back.
+/// step, as an interactive caller) holds an adopt after its read: the call
+/// answers the sign-in wait, the cache holds nothing of the old issuer, no
+/// refresh is sent and no login of the old issuer starts. Red before the adopt
+/// step checked the issuer: the old cached token was handed back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
     for detached in [false, true] {
@@ -209,9 +210,15 @@ async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
         let dir = tempfile::tempdir().unwrap();
         let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
         let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+        let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let browser = Arc::clone(&opened);
         let owned = client(dir.path(), &server)
             .with_sign_in_status(Arc::clone(&cell))
-            .with_login_gate(Arc::clone(&gate));
+            .with_login_gate(Arc::clone(&gate))
+            .with_open_browser(Arc::new(move |_: &str| {
+                browser.store(true, std::sync::atomic::Ordering::SeqCst);
+                false
+            }));
         hold(&owned, &token("a1", Some("r1"), false));
         cell.record_install(&owned.credential_key().unwrap());
         let (reached, release) = owned.adopt_pause.arm();
@@ -221,7 +228,7 @@ async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
             let answer = futures::executor::block_on(async {
                 if detached {
                     owned
-                        .get_token_detached(false, since, &cohort, deadline)
+                        .get_token_detached(true, since, &cohort, deadline)
                         .await
                 } else {
                     crate::oauth::login_gate::non_interactive(owned.get_token()).await
@@ -248,6 +255,10 @@ async fn a_switch_during_an_adopt_leaves_nothing_of_the_old_issuer() {
             server.requests(),
             0,
             "detached={detached}: nothing was sent"
+        );
+        assert!(
+            !opened.load(std::sync::atomic::Ordering::SeqCst),
+            "detached={detached}: no login of the old issuer started"
         );
     }
 }
