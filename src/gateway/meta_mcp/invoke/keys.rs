@@ -256,7 +256,7 @@ impl MetaMcp {
             dispatch_binding.as_deref(),
         );
         // The effect the record carries, read from the same slot and
-        // definition as the cache's admission (MIK-8914.API2A.19).
+        // definition as the cache's admission.
         if let Some((effect, source)) = self.declared_effect(
             (server, tool),
             backend.as_deref(),

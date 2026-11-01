@@ -69,7 +69,8 @@ src/gateway/meta_mcp/invoke/audit_decision.rs	after_upstream_401	-	on-path, unti
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_refusal_kind	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	decided	-	on-path, untimed: the invocation record's decision, built only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit_decision.rs	refused_by_memo	-	on-path, untimed: withheld targets only; the timed rows are allowed calls
-src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	-	on-path, untimed: called only by note_refused_by
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_decision	http_invoke_tiny	on the HTTP gateway_invoke path: note_declared_effect calls it on every dispatch
+src/gateway/meta_mcp/invoke/audit_decision.rs	note_declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path: every dispatch notes its declared effect
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_refused_by	-	on-path, untimed: refusals only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untimed: failed sends only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
@@ -369,6 +370,7 @@ src/gateway/meta_mcp/invoke/post_dispatch.rs	store_response	-	on-path, untimed: 
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	cache_admits	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path, beside cache_admits
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	derive_prompt_cache_key	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	log_tool_invoked	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	refuse_shared_oauth_login	http_invoke_tiny	on the HTTP gateway_invoke path

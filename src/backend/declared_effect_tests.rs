@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The declared effect (MIK-8914 API2A.19): read from what the tool declared,
+//! The declared effect: read from what the tool declared,
 //! never from the name inference that fills omitted hints.
 use super::*;
 use crate::backend::annotations::{DeclaredHints, declared_effect};

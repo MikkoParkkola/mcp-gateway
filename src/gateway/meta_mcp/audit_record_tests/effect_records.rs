@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! MIK-8914.API2A.19: a dispatched call's record carries the effect the tool
+//! A dispatched call's record carries the effect the tool
 //! declared, read where the cache admits it, never inferred from the name.
 
 use serde_json::{Value, json};

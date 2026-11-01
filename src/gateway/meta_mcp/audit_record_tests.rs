@@ -467,7 +467,7 @@ mod tenants;
 mod surfaced_replay;
 // MIK-8914.API2A.13: refusals answered with a non-refusal code name their check.
 mod decision_kinds;
-// MIK-8914.API2A.19: a dispatched call records the effect its tool declared.
+// A dispatched call records the effect its tool declared.
 mod effect_records;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's

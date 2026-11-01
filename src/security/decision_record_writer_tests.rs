@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The decision object's writer side (MIK-8914 API2A.19): version 2 records,
+//! The decision object's writer side: version 2 records,
 //! and the declared effect noted independently of which check won.
 
 use super::{DECISION_VERSION, Decided, DecisionKind, Effect, EffectSource, Noted, Refused};
