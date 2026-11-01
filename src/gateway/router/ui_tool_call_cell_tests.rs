@@ -202,6 +202,10 @@ fn t20_no_spawn_wraps_the_send() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     let handlers = root.join("src/gateway/router/handlers");
+    let mut dirs = vec![
+        root.join("src/gateway/meta_mcp/call_dispatch"),
+        root.join("src/gateway/meta_mcp/invoke"),
+    ];
     for entry in std::fs::read_dir(&handlers).expect("handlers") {
         let path = entry.expect("entry").path();
         let name = path
@@ -209,13 +213,15 @@ fn t20_no_spawn_wraps_the_send() {
             .and_then(|n| n.to_str())
             .unwrap_or_default();
         if name == "meta_handler.rs" || name.starts_with("dispatch_") {
-            files.push(path);
+            // A dispatch arm's child modules (`dispatch_tools_call/`) are
+            // scanned with it.
+            if path.is_dir() {
+                dirs.push(path);
+            } else {
+                files.push(path);
+            }
         }
     }
-    let mut dirs = vec![
-        root.join("src/gateway/meta_mcp/call_dispatch"),
-        root.join("src/gateway/meta_mcp/invoke"),
-    ];
     files.push(root.join("src/gateway/meta_mcp/call_dispatch.rs"));
     files.push(root.join("src/gateway/meta_mcp/grant_audit.rs"));
     while let Some(dir) = dirs.pop() {
