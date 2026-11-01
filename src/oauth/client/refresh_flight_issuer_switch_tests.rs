@@ -335,3 +335,42 @@ async fn no_install_lands_between_a_publish_check_and_its_write() {
 
     assert!(!landed, "an install landed inside a publish");
 }
+
+/// A client built after a sign-in under the other issuer was confirmed (a
+/// backend restart): it has acknowledged that install, so no adopt runs. Its
+/// own entry check answers the sign-in wait, and no login of its discovered
+/// (old) issuer starts. Red without the entry check: an interactive call fell
+/// through to a login of the old issuer.
+#[tokio::test]
+async fn a_client_built_after_a_switch_starts_no_login_of_the_old_issuer() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    cell.record_install(OTHER_ISSUER_KEY);
+    let opened = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let browser = Arc::clone(&opened);
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_open_browser(Arc::new(move |_: &str| {
+            browser.store(true, std::sync::atomic::Ordering::SeqCst);
+            false
+        }));
+    assert!(
+        !owned.install_stale(),
+        "control: the install is acknowledged"
+    );
+
+    let refused = tokio::time::timeout(HANG_BOUND, owned.get_token())
+        .await
+        .expect("the call answers within the bound")
+        .expect_err("no token while the issuers differ");
+
+    assert!(
+        matches!(refused, Error::AuthorizationRequired { .. }),
+        "{refused}"
+    );
+    assert!(
+        !opened.load(std::sync::atomic::Ordering::SeqCst),
+        "no login of the old issuer started"
+    );
+}
