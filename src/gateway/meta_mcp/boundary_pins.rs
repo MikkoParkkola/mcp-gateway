@@ -28,3 +28,4 @@ mod single_predicate;
 mod single_reader;
 mod to_rpc_code_sites;
 mod transport_waits;
+mod ui_role_mapping;
