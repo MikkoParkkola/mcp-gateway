@@ -127,7 +127,7 @@ pub(super) async fn build(
                 .share_keyring_with_for_test(fw);
         }
         if let Some(fw) = &firewall {
-            crate::gateway::router::direct_guards_fixture::publish_firewall(state, fw);
+            crate::gateway::router::firewall_publish_fixture::publish_firewall(state, fw);
         }
         state.firewall = firewall;
     })

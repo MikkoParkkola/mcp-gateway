@@ -53,7 +53,7 @@ pub(super) fn guard_tenants(
     };
     state.firewall = Some(firewall(config.clone()));
     if let Some(router_firewall) = &state.firewall {
-        crate::gateway::router::direct_guards_fixture::publish_firewall(state, router_firewall);
+        crate::gateway::router::firewall_publish_fixture::publish_firewall(state, router_firewall);
     }
     meta.set_firewall(Some(firewall(config)));
 }

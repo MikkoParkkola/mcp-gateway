@@ -120,6 +120,8 @@ mod direct_explicit_cancel_tests;
 mod direct_guards_effect_tests;
 #[cfg(test)]
 mod direct_guards_fixture;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_publish_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
 #[cfg(test)]

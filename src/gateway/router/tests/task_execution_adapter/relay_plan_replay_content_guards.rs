@@ -411,7 +411,7 @@ fn with_unredacted_router(rig: Rig) -> Rig {
         beta,
     } = rig;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
-    crate::gateway::router::direct_guards_fixture::publish_firewall(&app, &router_fw);
+    crate::gateway::router::firewall_publish_fixture::publish_firewall(&app, &router_fw);
     app.firewall = Some(router_fw);
     Rig {
         state: Arc::new(app),

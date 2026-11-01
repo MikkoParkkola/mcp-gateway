@@ -304,7 +304,7 @@ async fn state_with_firewalls_and_auth(
         subscriptions,
     });
     if let Some(firewall) = &state.firewall {
-        crate::gateway::router::direct_guards_fixture::publish_firewall(&state, firewall);
+        crate::gateway::router::firewall_publish_fixture::publish_firewall(&state, firewall);
     }
     (state, store_dir)
 }
