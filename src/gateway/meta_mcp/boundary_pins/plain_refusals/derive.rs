@@ -264,14 +264,15 @@ impl Collect {
                 }
                 Kind::InMacro(tokens) => {
                     let names = monitored_tokens(tokens, &helpers);
-                    if names.iter().any(|n| n == FACTS) {
+                    let is_facts = |n: &String| n == FACTS || n.starts_with(&format!("{FACTS}*"));
+                    if let Some(facts) = names.iter().find(|n| is_facts(n)) {
                         *raises
-                            .entry(format!("{key}\t{FACTS} (in macro)"))
+                            .entry(format!("{key}\t{facts} (in macro)"))
                             .or_insert(0) += 1;
                     }
                     let plain_names: Vec<&str> = names
                         .iter()
-                        .filter(|n| *n != FACTS)
+                        .filter(|n| !is_facts(n))
                         .map(String::as_str)
                         .collect();
                     if gateway && !plain_names.is_empty() {

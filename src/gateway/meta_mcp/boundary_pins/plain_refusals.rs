@@ -206,17 +206,21 @@ fn module_of(file: &str) -> String {
     }
 }
 
-/// Whether `word` occurs in `text` with no identifier character either side.
-fn has_word(text: &str, word: &str) -> bool {
+/// How often `word` occurs in `text` with no identifier character either side.
+fn word_count(text: &str, word: &str) -> usize {
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
-    text.match_indices(word).any(|(at, _)| {
-        !ident(text[..at].chars().next_back()) && !ident(text[at + word.len()..].chars().next())
-    })
+    text.match_indices(word)
+        .filter(|(at, _)| {
+            !ident(text[..*at].chars().next_back())
+                && !ident(text[at + word.len()..].chars().next())
+        })
+        .count()
 }
 
 /// The monitored names a macro's tokens hold, for its `(in macro)` row: a
 /// construction of one of the twelve, `delivery_facts`, `circuit_open` or a
-/// helper's name.
+/// helper's name, each with its count when above one (`Error::Config*2`), so
+/// a second construction inside an existing invocation changes the row.
 pub(super) fn monitored_tokens(tokens: &str, helpers: &BTreeSet<String>) -> Vec<String> {
     let text = tokens.replace(" :: ", "::");
     let mut found: Vec<String> = TWELVE
@@ -224,7 +228,11 @@ pub(super) fn monitored_tokens(tokens: &str, helpers: &BTreeSet<String>) -> Vec<
         .map(|v| format!("Error::{v}"))
         .chain([FACTS.to_string(), "circuit_open".to_string()])
         .chain(helpers.iter().cloned())
-        .filter(|word| has_word(&text, word))
+        .filter_map(|word| match word_count(&text, &word) {
+            0 => None,
+            1 => Some(word),
+            n => Some(format!("{word}*{n}")),
+        })
         .collect();
     found.sort();
     found.dedup();
@@ -266,7 +274,14 @@ impl Collect {
                     syn::FnArg::Receiver(_) => None,
                 })
                 .collect();
-            if let Some(syn::Stmt::Expr(syn::Expr::Call(call), None)) = block.stmts.last()
+            // The body's last statement, as a tail expression, `return x;` or
+            // `x;`: each hands the raise's result (or nothing) back.
+            let tail = match block.stmts.last() {
+                Some(syn::Stmt::Expr(syn::Expr::Return(ret), _)) => ret.expr.as_deref(),
+                Some(syn::Stmt::Expr(expr, _)) => Some(expr),
+                _ => None,
+            };
+            if let Some(syn::Expr::Call(call)) = tail
                 && let syn::Expr::Path(func) = &*call.func
                 && facts_path(&at.file, &func.path).is_some()
                 && call.args.iter().any(|arg| {

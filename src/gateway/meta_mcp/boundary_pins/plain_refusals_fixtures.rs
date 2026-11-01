@@ -263,8 +263,17 @@ fn b4_an_impl_error_in_the_gateway_is_a_hit() {
 
 #[test]
 fn b5_a_pass_through_raise_wrapper_is_a_hit() {
-    let source = "fn wrap<E>(error: E) -> E { crate::gateway::delivery_facts::refused(error) }";
-    assert_eq!(guard_hits("", source), ["src/other/b.rs: wrapper wrap"]);
+    for source in [
+        "fn wrap<E>(error: E) -> E { crate::gateway::delivery_facts::refused(error) }",
+        "fn wrap<E>(error: E) -> E { return crate::gateway::delivery_facts::refused(error); }",
+        "fn wrap<E>(error: E) { crate::gateway::delivery_facts::refused(error); }",
+    ] {
+        assert_eq!(
+            guard_hits("", source),
+            ["src/other/b.rs: wrapper wrap"],
+            "{source}"
+        );
+    }
 }
 
 #[test]
@@ -298,9 +307,10 @@ fn b7_an_extra_associated_constructor_is_listed() {
     let source = "enum Error {}\nimpl Error {\n\
                   fn circuit_open() -> Self { Self::CircuitOpen { backend, last_failure } }\n\
                   fn not_found(s: &str) -> Self { Error::BackendNotFound(s.into()) }\n\
-                  fn is(&self) -> bool { matches!(self, Self::Config(_)) }\n}";
+                  fn is(&self) -> bool { matches!(self, Self::Config(_)) }\n\
+                  fn tripped(b: &B) -> Self { Self::circuit_open(\"x\", b) }\n}";
     let found: Vec<String> = associated_constructors(source).into_iter().collect();
-    assert_eq!(found, ["circuit_open", "not_found"]);
+    assert_eq!(found, ["circuit_open", "not_found", "tripped"]);
 }
 
 #[test]
@@ -462,5 +472,17 @@ fn f16_a_refusal_helper_value_outside_a_combinator_is_a_row() {
             "a via missing_refusal (as value) 1",
             "missing_refusal Error::ToolNotFound(..) 1"
         ]
+    );
+}
+
+/// Macro rows count each monitored name (code review): a second
+/// construction inside an existing invocation changes the row.
+#[test]
+fn f17_a_second_construction_in_a_macro_changes_its_row() {
+    assert_eq!(
+        plain(
+            "fn f() { debug_assert!(matches!(e, Error::RateLimited(_) | Error::RateLimited(_))); }"
+        ),
+        ["f Error::RateLimited*2 (in macro) 1"]
     );
 }

@@ -477,8 +477,10 @@ fn the_error_variant_list_is_placed() {
 /// The `impl Error` functions in `source` whose body builds one of the twelve.
 pub(super) fn associated_constructors(source: &str) -> BTreeSet<String> {
     use syn::visit::Visit;
-    struct Builds(bool);
-    impl<'ast> Visit<'ast> for Builds {
+    /// Whether a body builds one of the twelve, or calls a constructor in
+    /// `.1` (closed below, so a constructor delegating to another is one).
+    struct Builds<'a>(bool, &'a BTreeSet<String>);
+    impl<'ast> Visit<'ast> for Builds<'_> {
         // Expressions only: a match pattern naming a variant builds nothing.
         fn visit_expr(&mut self, expr: &'ast syn::Expr) {
             let path = match expr {
@@ -495,32 +497,53 @@ pub(super) fn associated_constructors(source: &str) -> BTreeSet<String> {
                     .next()
                     .is_some_and(|s| s.ident == "Self" || s.ident == "Error");
                 self.0 |= variant && owner;
+                let mut segments = path.segments.iter().rev();
+                let known = segments
+                    .next()
+                    .is_some_and(|s| self.1.contains(&s.ident.to_string()));
+                self.0 |= known
+                    && segments
+                        .next()
+                        .is_some_and(|s| s.ident == "Self" || s.ident == "Error");
             }
             syn::visit::visit_expr(self, expr);
         }
     }
     let parsed = syn::parse_file(source).expect("parses");
-    let mut found = BTreeSet::new();
-    for item in &parsed.items {
-        let syn::Item::Impl(block) = item else {
-            continue;
-        };
-        let own = block.trait_.is_none()
-            && matches!(&*block.self_ty, syn::Type::Path(p) if p.path.is_ident("Error"));
-        if !own {
-            continue;
-        }
-        for inner in &block.items {
-            if let syn::ImplItem::Fn(func) = inner {
-                let mut builds = Builds(false);
-                builds.visit_block(&func.block);
-                if builds.0 {
-                    found.insert(func.sig.ident.to_string());
-                }
+    let fns: Vec<&syn::ImplItemFn> = parsed
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            syn::Item::Impl(block)
+                if block.trait_.is_none()
+                    && matches!(&*block.self_ty, syn::Type::Path(p) if p.path.is_ident("Error")) =>
+            {
+                Some(block)
             }
+            _ => None,
+        })
+        .flat_map(|block| &block.items)
+        .filter_map(|inner| match inner {
+            syn::ImplItem::Fn(func) => Some(func),
+            _ => None,
+        })
+        .collect();
+    let mut found = BTreeSet::new();
+    loop {
+        let more: BTreeSet<String> = fns
+            .iter()
+            .filter(|func| {
+                let mut builds = Builds(false, &found);
+                builds.visit_block(&func.block);
+                builds.0
+            })
+            .map(|func| func.sig.ident.to_string())
+            .collect();
+        if more.len() == found.len() {
+            return found;
         }
+        found = more;
     }
-    found
 }
 
 #[test]
@@ -531,4 +554,65 @@ fn the_associated_constructors_are_listed() {
         names(&ASSOCIATED),
         "an impl Error constructor builds one of the twelve: add it to ASSOCIATED"
     );
+}
+
+/// The ordinal, among `refuse(..)` calls in `confirm_destructive_task_with`,
+/// of the one whose reason literal is `unbindable_caller`.
+fn unbindable_ordinal(source: &str) -> usize {
+    use syn::visit::Visit;
+    struct Find {
+        seen: usize,
+        hit: Option<usize>,
+    }
+    impl<'ast> Visit<'ast> for Find {
+        fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+            if let syn::Expr::Path(p) = &*call.func
+                && p.path.is_ident("refuse")
+            {
+                self.seen += 1;
+                let reason = call.args.iter().any(|arg| {
+                    matches!(arg, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. })
+                        if s.value() == "unbindable_caller")
+                });
+                if reason {
+                    self.hit.get_or_insert(self.seen);
+                }
+            }
+            syn::visit::visit_expr_call(self, call);
+        }
+    }
+    let parsed = syn::parse_file(source).expect("task_confirmation.rs parses");
+    let mut find = Find { seen: 0, hit: None };
+    for item in &parsed.items {
+        let syn::Item::Impl(block) = item else {
+            continue;
+        };
+        for inner in &block.items {
+            if let syn::ImplItem::Fn(func) = inner
+                && func.sig.ident == "confirm_destructive_task_with"
+            {
+                find.visit_impl_item_fn(func);
+            }
+        }
+    }
+    find.hit
+        .expect("the unbindable_caller refusal is in confirm_destructive_task_with")
+}
+
+/// Site-pinned like the credential miss (code review): moving the pending
+/// class onto a neighbouring refuse call fails.
+#[test]
+fn the_unbindable_confirmation_is_pending() {
+    let source =
+        std::fs::read_to_string(crate_root().join("src/gateway/meta_mcp/task_confirmation.rs"))
+            .expect("task_confirmation.rs reads");
+    let ordinal = unbindable_ordinal(&source);
+    let key = format!(
+        "src/gateway/meta_mcp/task_confirmation.rs\tconfirm_destructive_task_with\tvia refuse (closure)\t{ordinal}\t"
+    );
+    let line = rows(include_str!("delivery_plain_refusals.tsv"))
+        .into_iter()
+        .find(|l| l.starts_with(&key))
+        .unwrap_or_else(|| panic!("no row for the unbindable refusal: {key}"));
+    assert_eq!(row(line).class, "pending:unbindable-confirmation", "{line}");
 }
