@@ -254,7 +254,11 @@ fn a_later_stamped_sensitive_record_never_gives_way() {
         d.record_delivery_at(&source(i), CAROL, true, &text, now);
     }
     assert!(
-        through_flow_1(&d, BOB, &text, now).is_some(),
+        through_flow_1(&d, BOB, &text, now).is_none(),
+        "at now the later-stamped restriction is not yet held; overflow is judged by its flows"
+    );
+    assert!(
+        through_flow_1(&d, BOB, &text, now + Duration::from_secs(5)).is_some(),
         "a later-stamped restriction gave way"
     );
 }
