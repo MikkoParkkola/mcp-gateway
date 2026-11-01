@@ -111,10 +111,13 @@ pub(super) async fn start(
     // Admission first: the gate's epoch is read before anything slow, so a
     // restart during discovery is seen, and discovery ends at the start window.
     let epoch = backend.login_gate.epoch();
+    // One start window from admission, shared by discovery and the login.
+    let deadline = Instant::now() + windows.start;
+    let admitted_at = crate::clock::system_time_or_before_epoch();
     let discovered = tokio::select! {
         biased;
         () = backend.login_gate.revoked_since(epoch) => return Ok(Started::Cancelled),
-        () = tokio::time::sleep(windows.start) => {
+        () = tokio::time::sleep_until(deadline) => {
             return Err(Error::AuthorizationIncomplete {
                 backend: backend.name.clone(),
                 window_secs: windows.start.as_secs(),
@@ -128,7 +131,6 @@ pub(super) async fn start(
         Begin::Refused => return Ok(Started::Cancelled),
         _ => return Ok(in_progress(backend)),
     };
-    let deadline = Instant::now() + windows.start;
     lead.set_end(deadline);
     let attempt_id = new_attempt_id();
     let (outcome_tx, outcome_rx) = oneshot::channel();
@@ -137,7 +139,7 @@ pub(super) async fn start(
         attempt_id: attempt_id.clone(),
         phase: Phase::AwaitingCallback,
         until: deadline,
-        until_at: crate::clock::system_time_or_before_epoch() + windows.start,
+        until_at: admitted_at + windows.start,
         grant: None,
         wait_generation: 0,
         caller,
