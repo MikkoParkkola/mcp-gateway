@@ -33,7 +33,7 @@ const REVIEWED: [(&str, &str, usize); 14] = [
         "src/gateway/meta_mcp/invoke/legacy_bridge.rs",
         1,
     ),
-    ("presend", "src/backend/ops.rs", 7),
+    ("presend", "src/backend/ops.rs", 8),
     ("refused_before_send", "src/backend/ops.rs", 1),
     (
         "refused_before_send_seen",
