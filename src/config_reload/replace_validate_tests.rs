@@ -165,7 +165,7 @@ async fn a_bearer_duplicating_an_api_key_is_refused_before_any_store_entry() {
 async fn a_running_key_removed_in_the_same_save_no_longer_collides() {
     let dir = tempfile::tempdir().expect("dir");
     let path = dir.path().join("gateway.yaml");
-    write_owner_only(&path, &with_key("")).expect("write config");
+    write_owner_only(&path, with_key("")).expect("write config");
     let ctx = context(&path);
     let store = Counting::new(dir.path());
     let without_key = "auth:\n  bearer_token: {slot}\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
