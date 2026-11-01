@@ -529,7 +529,9 @@ impl Scan<'_> {
             }
             syn::Item::Mod(m) => {
                 if let Some((_, items)) = &m.content {
-                    items.iter().for_each(|i| self.item(i));
+                    for i in items {
+                        self.item(i);
+                    }
                 }
             }
             _ => {}
