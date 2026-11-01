@@ -7,7 +7,7 @@
 use chrono::TimeZone;
 use chrono_tz::{Europe::Amsterdam, UTC};
 
-use super::sums::{SERIES, WindowSums};
+use super::sums::{CallWindows, SERIES, WindowSums};
 use super::*;
 
 const HOUR: u64 = 3600;

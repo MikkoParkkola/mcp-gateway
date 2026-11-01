@@ -48,6 +48,7 @@ impl CallWindows {
     };
 
     /// The two 24-hour windows.
+    #[cfg(test)]
     pub(crate) fn days(&self) -> (Option<u64>, Option<u64>) {
         (self.day, self.prev_day)
     }
