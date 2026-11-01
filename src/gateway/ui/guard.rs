@@ -21,6 +21,7 @@ use serde_json::Value;
 use super::access_table::{self, AdminShape, CpCheck, Need, Row};
 use super::errors::{admin_auth_required, auth_required};
 use crate::gateway::auth::AuthenticatedClient;
+use crate::gateway::authz::BackendGrant;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::security::audit::CredentialKind;
 
@@ -71,9 +72,12 @@ pub(super) fn decide(need: Need, client: Option<&AuthenticatedClient>) -> Result
             Some(c) if !c.admin => Err(Refused::AdminRequired),
             Some(_) => Ok(()),
         },
+        // A dashboard session is unscoped, so only an unscoped admin mints one:
+        // a scoped admin key would otherwise trade its scope for the session's.
         Need::AdminKeyLink => client
             .is_some_and(|c| {
                 c.admin
+                    && BackendGrant::of(Some(c)) == BackendGrant::Unscoped
                     && (c.credential_kind == CredentialKind::StaticBearer
                         || c.api_key_identity().is_some())
             })

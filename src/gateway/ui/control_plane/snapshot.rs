@@ -276,8 +276,10 @@ pub(super) fn can_view_backend(client: Option<&AuthenticatedClient>, backend_nam
         // used when authentication is disabled carries `backends: ["*"]` so
         // that ordinary tool invocation keeps working, which handed it the
         // whole control-plane inventory through `can_access_backend`. A scoped
-        // API key still sees the backends it is scoped to.
-        client.admin || (client.authenticated && client.can_access_backend(backend_name))
+        // API key still sees the backends it is scoped to, admin or not: the
+        // scope bounds every role.
+        client.authenticated
+            && crate::gateway::authz::BackendGrant::of(Some(client)).admits(backend_name)
     })
 }
 

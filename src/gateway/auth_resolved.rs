@@ -27,6 +27,7 @@ fn resolve_api_keys(
         .api_keys
         .iter()
         .map(|k| {
+            warn_if_scoped_admin(k);
             let digest = k.resolve_digest(overlay)?;
             // A previous digest without its expiry is refused at load; never
             // carried, so it can never match by omission.
@@ -54,6 +55,23 @@ fn resolve_api_keys(
             })
         })
         .collect::<Result<Vec<_>>>()
+}
+
+/// An admin key's backend list bounds its admin reach too: say so at each
+/// load, so an operator who meant full admin learns it at startup rather
+/// than from a refused UI route.
+fn warn_if_scoped_admin(key: &crate::config::ApiKeyConfig) {
+    if key.admin
+        && crate::gateway::authz::BackendGrant::of_list(&key.backends)
+            != crate::gateway::authz::BackendGrant::Unscoped
+    {
+        warn!(
+            target: AUTH_TARGET,
+            key = %key.name,
+            backends = ?key.backends,
+            "API key is admin only within its backends; set backends: [\"*\"] for full admin"
+        );
+    }
 }
 
 /// MIK-7973 and ADR-022: refuse a key whose principal or digest another key,
@@ -238,7 +256,9 @@ impl ResolvedAuthConfig {
     /// session minted with it needs at each use, so one minted by a key a
     /// reload then removed, demoted, expired or re-issued (another digest)
     /// ends there. A previous digest in its grace authenticates as its
-    /// current key, so the grace ending alone ends nothing.
+    /// current key, so the grace ending alone ends nothing. The key must
+    /// also be unscoped: a session is, so a reload that narrows the key to
+    /// some backends ends what it minted.
     pub(crate) fn admin_key_live(
         &self,
         minter: &QuotaPrincipal,
@@ -247,6 +267,8 @@ impl ResolvedAuthConfig {
         self.api_keys().iter().any(|k| {
             k.quota_principal == *minter
                 && k.admin
+                && crate::gateway::authz::BackendGrant::of_list(&k.backends)
+                    == crate::gateway::authz::BackendGrant::Unscoped
                 && !crate::config::api_key_expired(k.expires_at, at)
         })
     }

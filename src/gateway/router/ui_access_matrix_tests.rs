@@ -766,3 +766,7 @@ mod control_plane_scope;
 /// The status report against the guards, through the same fixture.
 #[path = "ui_access_report_tests.rs"]
 mod report;
+
+/// A backend-scoped credential's reads, against two backends.
+#[path = "ui_backend_scope_tests.rs"]
+mod backend_scope;
