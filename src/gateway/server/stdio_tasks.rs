@@ -21,7 +21,6 @@ use crate::gateway::task_service::execution::ExpirySweep;
 use crate::gateway::task_service::host::StdioTaskHost;
 use crate::gateway::task_service::{TaskExecutor, TaskService};
 use crate::protocol::tasks::TaskOptions;
-use crate::security::ToolPolicy;
 
 /// The directory stdio's store lives in: `tasks.store_dir` resolved as HTTP
 /// resolves it, then `stdio` (D6 rev 5 item 7).
@@ -81,7 +80,6 @@ impl Drop for TasksDropGuard {
 pub(super) async fn open(
     config: &Config,
     meta_mcp: &Arc<MetaMcp>,
-    tool_policy: &Arc<ToolPolicy>,
     live_config: &Arc<crate::config_reload::LiveConfig>,
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
@@ -110,7 +108,6 @@ pub(super) async fn open(
         executor,
         host: Arc::new(StdioTaskHost {
             meta_mcp: Arc::clone(meta_mcp),
-            tool_policy: Arc::clone(tool_policy),
             nonce: super::StdioNonce::process(),
             live_config: Arc::clone(live_config),
         }),
@@ -410,7 +407,13 @@ impl StdioTasks {
                             )
                             .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                     },
-                    |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
+                    |current, frame| {
+                        self.host.meta_mcp.scan_task_read(
+                            current,
+                            caller.authorizer.generation(),
+                            frame,
+                        );
+                    },
                 )
                 .await
         })

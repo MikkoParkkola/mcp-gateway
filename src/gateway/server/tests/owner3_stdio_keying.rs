@@ -112,6 +112,7 @@ async fn stdio_results_are_keyed_by_transport_not_by_name() {
     let fixture = Fixture::start_mutating().await;
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-ledger");
     complete_with(&fixture, &transport(&authorizer, &retry), MARKER);
@@ -148,6 +149,7 @@ async fn a_named_context_does_not_seed_the_stdio_operators_results() {
     let fixture = Fixture::start_mutating().await;
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-reverse");
     complete_with(&fixture, &named(&authorizer, &retry), "named-result");
@@ -205,6 +207,7 @@ async fn stdio_idempotency_entries_are_keyed_by_transport() {
 
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-cache");
     let _ = fixture
@@ -248,6 +251,7 @@ async fn batched_stdio_calls_are_keyed_by_transport() {
 
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-batch");
     let seen = outcome(admit(&fixture, &named(&authorizer, &retry), 2));
@@ -264,6 +268,7 @@ async fn a_chain_step_keeps_the_stdio_tag() {
     let fixture = Fixture::start_mutating().await;
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-chain");
     let step = transport(&authorizer, &retry).with_retry(&retry);
@@ -297,6 +302,7 @@ async fn reserved_owner_text_is_refused_not_pooled() {
     let fixture = Fixture::start_mutating().await;
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-reserved");
     complete_with(&fixture, &transport(&authorizer, &retry), MARKER);
@@ -317,6 +323,7 @@ async fn reserved_owner_text_keeps_no_idempotency_entry() {
     let fixture = Fixture::start_mutating().await;
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &fixture.tool_policy,
+        generation: None,
     };
     let retry = keyed_retry("owner-3-reserved-cache");
     for id in [1, 2] {

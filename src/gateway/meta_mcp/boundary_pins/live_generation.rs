@@ -25,7 +25,6 @@ const ALLOW: &[(&str, &str, &str)] = &[];
 /// generation without the reload refusals: (file, function).
 const STARTUP_SEEDS: &[(&str, &str)] = &[
     ("src/config_reload/mod.rs", "new"),
-    ("src/config_reload/mod.rs", "set"),
     ("src/gateway/mod.rs", "live_config"),
     ("src/gateway/server/run.rs", "run"),
     ("src/gateway/server/stdio_loop.rs", "run_stdio_on"),

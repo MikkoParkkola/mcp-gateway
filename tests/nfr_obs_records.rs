@@ -116,7 +116,6 @@ mod http {
         AppState, MetaMcp, StoreLimits, auth_state, create_router, open_runtime,
     };
     use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
-    use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
     use serde_json::{Value, json};
     use tower::ServiceExt;
 
@@ -163,7 +162,6 @@ mod http {
             proxy_manager,
             streaming_config: config.streaming.clone(),
             key_server: None,
-            tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
             mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
             trust_configured_backends: false,
             inflight: Arc::new(tokio::sync::Semaphore::new(100)),
