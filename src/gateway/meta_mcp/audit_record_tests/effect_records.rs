@@ -55,18 +55,3 @@ async fn a_tool_with_no_hint_records_undeclared() {
     let d = decision_after(None, false).await;
     assert_eq!(d["declared_effect"], "undeclared", "{d}");
 }
-
-#[tokio::test]
-async fn a_cold_slot_records_no_effect() {
-    let dir = tempfile::tempdir().unwrap();
-    let meta = meta(Ok(ok_result()), &dir);
-    let who = api_key_caller();
-    let caller = context(&AllowAll, &who);
-    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
-    let _ = meta.invoke_tool(&args, None, &caller).await;
-    let all = records(&dir);
-    assert_eq!(all.len(), 1, "{all:?}");
-    let d = &all[0]["decision"];
-    assert!(d.get("declared_effect").is_none(), "{d}");
-    assert!(d.get("declared_effect_source").is_none(), "{d}");
-}

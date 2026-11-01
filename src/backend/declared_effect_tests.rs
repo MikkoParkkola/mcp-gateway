@@ -110,3 +110,18 @@ fn a_name_the_slot_never_listed_records_no_effect() {
         [None]
     );
 }
+
+/// A slot that never listed its tools has no evidence, so the effect is
+/// absent: never undeclared, which claims the tool was seen to omit it. (The
+/// dispatch fills a cold slot before it reads the effect, so this is the
+/// accessor's own answer, not a dispatched call's.)
+#[test]
+fn a_cold_slot_records_no_effect() {
+    let backend = crate::backend::Backend::new(
+        "cold",
+        crate::config::BackendConfig::default(),
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(300),
+    );
+    assert_eq!(backend.declared_effect_for(None, "read"), None);
+}
