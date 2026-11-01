@@ -137,13 +137,13 @@ pub(crate) fn rule_id(
     key: &[u8; 32],
     definition: &serde_json::Value,
 ) -> String {
-    let _ = key;
     let kind = serde_json::to_value(kind)
         .ok()
         .and_then(|v| v.as_str().map(str::to_owned))
         .unwrap_or_default();
-    let digest = crate::hashing::sha256_hex(crate::hashing::canonical_json(definition).as_bytes());
-    format!("{kind}:{}", &digest[..12])
+    let mac =
+        crate::hashing::hmac_sha256_hex(key, crate::hashing::canonical_json(definition).as_bytes());
+    format!("{kind}:{mac}")
 }
 
 /// Whether the record being written is of a refused call.
@@ -166,7 +166,9 @@ impl Refused {
 }
 
 /// Which check decided one call, as its gates noted it: the first refusal,
-/// else the earliest explicit allow.
+/// else the most specific affirmative rule (an unranked allow only when no
+/// ranked one was noted), plus the request findings and the declared effect,
+/// which every decision carries whichever check won.
 ///
 /// One pointer wide, boxed only once a gate notes something: it rides in the
 /// task-local call and route scopes, which move it in and out on every poll,
@@ -177,7 +179,20 @@ pub(crate) struct Noted(Option<Box<NotedChecks>>);
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct NotedChecks {
     refusal: Option<(DecisionKind, Option<String>)>,
-    allow: Option<(DecisionKind, Option<String>)>,
+    allow: Option<NotedAllow>,
+    findings: Option<Vec<DecisionFinding>>,
+    findings_truncated: bool,
+    effect: Option<Effect>,
+}
+
+/// The allow a call names: its kind, rule id, grant id (a matched grant
+/// only), and its rank (`None` for an unranked allow such as a replay).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NotedAllow {
+    kind: DecisionKind,
+    rule_id: Option<String>,
+    grant_id: Option<String>,
+    rank: Option<AllowRank>,
 }
 
 impl Noted {
@@ -217,9 +232,15 @@ impl Noted {
         self.checks().refusal.get_or_insert((kind, rule_id));
     }
 
-    /// An explicit allow; only the earliest in check order counts.
+    /// An unranked allow (a replay, a cache hit): kept only while no allow is
+    /// noted, and replaced by any ranked one.
     pub(crate) fn allowed(&mut self, kind: DecisionKind, rule_id: Option<String>) {
-        self.checks().allow.get_or_insert((kind, rule_id));
+        self.checks().allow.get_or_insert(NotedAllow {
+            kind,
+            rule_id,
+            grant_id: None,
+            rank: None,
+        });
     }
 
     /// An affirmative rule that allowed the call, ranked: the most specific
@@ -231,19 +252,43 @@ impl Noted {
         rule_id: Option<String>,
         grant_id: Option<String>,
     ) {
-        let _ = (rank, grant_id);
-        self.allowed(kind, rule_id);
+        let checks = self.checks();
+        // `AllowRank` orders most specific first; an unranked allow loses to
+        // any ranked one.
+        let wins = checks
+            .allow
+            .as_ref()
+            .is_none_or(|held| held.rank.is_none_or(|held| rank < held));
+        if wins {
+            checks.allow = Some(NotedAllow {
+                kind,
+                rule_id,
+                grant_id,
+                rank: Some(rank),
+            });
+        }
     }
 
     /// Request findings raised for this call, projected to type, severity
     /// and location: added to any noted before, de-duplicated, capped.
     pub(crate) fn note_findings(&mut self, findings: impl IntoIterator<Item = DecisionFinding>) {
-        let _ = findings.into_iter().count();
+        let checks = self.checks();
+        let held = checks.findings.get_or_insert_with(Vec::new);
+        for finding in findings {
+            if held.contains(&finding) {
+                continue;
+            }
+            if held.len() == MAX_REQUEST_FINDINGS {
+                checks.findings_truncated = true;
+                continue;
+            }
+            held.push(finding);
+        }
     }
 
     /// What the tool declares the call could change, as this call read it.
     pub(crate) fn note_effect(&mut self, effect: Effect) {
-        let _ = effect;
+        self.checks().effect = Some(effect);
     }
 
     /// The decision object for this call under the published config `live`.
@@ -257,13 +302,14 @@ impl Noted {
         refused: Refused,
         live: Option<&crate::config_reload::LiveConfig>,
     ) -> Decision {
-        let (kind, rule_id) = match (self.refusal(), refused) {
-            (Some(refusal), _) => refusal.clone(),
-            (None, Refused::No) => self
-                .0
-                .as_ref()
-                .and_then(|checks| checks.allow.clone())
-                .unwrap_or((DecisionKind::DefaultAllow, None)),
+        let checks = self.0.as_deref();
+        let (kind, rule_id, grant_id) = match (self.refusal(), refused) {
+            (Some((kind, rule_id)), _) => (*kind, rule_id.clone(), None),
+            (None, Refused::No) => checks
+                .and_then(|checks| checks.allow.as_ref())
+                .map_or((DecisionKind::DefaultAllow, None, None), |allow| {
+                    (allow.kind, allow.rule_id.clone(), allow.grant_id.clone())
+                }),
             // Kani's assert macros drop the message, so `outcome` reads as
             // unused in its build only.
             #[cfg_attr(
@@ -277,7 +323,7 @@ impl Noted {
                     self.has_refusal(),
                     "a refused call ({outcome:?}) noted no check (MIK-8914.API2A.7)"
                 );
-                (DecisionKind::Unrecorded, None)
+                (DecisionKind::Unrecorded, None, None)
             }
         };
         let applied = live.and_then(crate::config_reload::LiveConfig::applied_now);
@@ -287,7 +333,7 @@ impl Noted {
             .filter(|running| config_revision.as_deref() != Some(*running))
             .map(str::to_owned);
         Decision {
-            v: 1,
+            v: DECISION_VERSION,
             config_revision,
             running_revision,
             pending_restart: applied
@@ -295,10 +341,10 @@ impl Noted {
                 .unwrap_or_default(),
             kind,
             rule_id,
-            grant_id: None,
-            request_findings: None,
-            request_findings_truncated: false,
-            declared_effect: None,
+            grant_id,
+            request_findings: checks.and_then(|checks| checks.findings.clone()),
+            request_findings_truncated: checks.is_some_and(|checks| checks.findings_truncated),
+            declared_effect: checks.and_then(|checks| checks.effect),
             decided,
         }
     }
