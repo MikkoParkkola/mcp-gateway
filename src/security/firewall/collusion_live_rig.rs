@@ -55,6 +55,14 @@ pub(crate) fn pair_state_with_meta(state: &mut Arc<AppState>) {
     }
 }
 
+/// Seed `meta`'s startup live config with the configuration `firewall` was
+/// built from, so the generation a witness or a recording reads is the one
+/// that agrees with the firewall (never a default that says `off`).
+pub(crate) fn seed_meta(meta: &crate::gateway::meta_mcp::MetaMcp, firewall: &Firewall) {
+    let live = live_of(&LiveConfig::new(Config::default()), firewall);
+    meta.set_live_config(Arc::new(live));
+}
+
 /// The firewall's receipt clock frozen at the call: a window of a second
 /// cannot age out on a slow run, and only `advance_collusion_clock_for_test`
 /// moves it.

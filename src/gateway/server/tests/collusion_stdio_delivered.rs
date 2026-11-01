@@ -113,6 +113,7 @@ fn stdio_meta(answer: Value) -> (Arc<MetaMcp>, Arc<Firewall>) {
         .with_continuations(meta.continuation()),
     );
     meta.set_firewall(Some(Arc::clone(&firewall)));
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -127,7 +128,6 @@ async fn dispatch(meta: &Arc<MetaMcp>, request: &Value) -> Value {
         .expect("a request is answered")
 }
 
-/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn a_stdio_answer_is_receipted_as_delivered() {
     let stuffing = stuffing();

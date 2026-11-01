@@ -87,6 +87,7 @@ async fn relay_audit_has_no_injected_secret() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -146,6 +147,7 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -201,6 +203,7 @@ async fn meta_observe_reports_a_relay_and_sends_it() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 
@@ -239,6 +242,7 @@ async fn http_receipts_record_only_when_emit_http_lets_the_answer_out() {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
     let deliver = |delivers: bool| {
         let meta = Arc::clone(&meta);
@@ -311,6 +315,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -469,6 +474,7 @@ fn classified_only_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -689,6 +695,7 @@ async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
     firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
 

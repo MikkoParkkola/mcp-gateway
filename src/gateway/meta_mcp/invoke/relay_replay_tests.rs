@@ -62,6 +62,7 @@ fn relay_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     (Arc::new(meta), firewall)
 }
 
@@ -195,8 +196,6 @@ fn summary(server: &str, tool: &str, step: Option<u32>) -> Summary {
 /// bob's relay of the step's text refusable.
 /// Mutant killed: commit regardless of delivery (bob would already
 /// be refused after the `false` commit).
-///
-/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn g2_an_undelivered_commit_records_no_replayed_receipt() {
     let (meta, fw) = relay_meta();
@@ -643,6 +642,7 @@ async fn g44_a_cache_hit_notes_its_step_and_a_forbidden_outcome_notes_nothing() 
     let mut guarded = MetaMcp::new(registry);
     guarded.set_firewall(Some(Arc::clone(&fw)));
     guarded.share_keyring_with_for_test(&fw);
+    crate::security::firewall::collusion_live_rig::seed_meta(&guarded, &fw);
     fw.record_delivery(
         RelayCaller::Keyed("alice"),
         "alpha",

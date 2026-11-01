@@ -141,6 +141,7 @@ async fn stdio_operator_is_one_principal() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
 
     // An HTTP caller was delivered both texts from `alpha:read`.
@@ -212,6 +213,7 @@ fn judged_stdio(
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     if let Some(log) = audit {
         meta.enable_transparency_log(log);
     }

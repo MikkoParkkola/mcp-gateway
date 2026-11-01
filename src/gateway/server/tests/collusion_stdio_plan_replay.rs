@@ -119,6 +119,7 @@ pub(super) fn stdio_meta(
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     if let Some(playbook) = playbook {
         let definition: crate::playbook::PlaybookDefinition =
             crate::yaml::from_str(playbook).expect("playbook fixture must parse");
@@ -302,6 +303,7 @@ async fn a_detection_off_answer_replayed_on_never_receipts_gateway_text_over_std
     on.share_execution_admission_for_test(Arc::clone(off.execution_admission()));
     on.set_firewall(Some(Arc::clone(&firewall)));
     on.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&on, &firewall);
     let on = Arc::new(on);
     assert!(
         !relayed_by_bob(&firewall, PROSE),

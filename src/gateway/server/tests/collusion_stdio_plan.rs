@@ -76,7 +76,6 @@ fn relayed_by_bob(firewall: &Firewall, text: &str) -> bool {
         .allowed
 }
 
-/// Migrate to paired config when PR1's accessor lands.
 #[tokio::test]
 async fn a_stdio_plan_receipts_each_step_it_delivered() {
     let registry = Arc::new(BackendRegistry::new());
@@ -106,6 +105,7 @@ async fn a_stdio_plan_receipts_each_step_it_delivered() {
     let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
+    crate::security::firewall::collusion_live_rig::seed_meta(&meta, &firewall);
     let meta = Arc::new(meta);
     let policy = Arc::new(crate::security::ToolPolicy::default());
     let mtls = Arc::new(crate::mtls::MtlsPolicy::from_config(
