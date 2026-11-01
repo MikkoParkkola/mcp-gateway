@@ -92,11 +92,15 @@ async fn require_authenticated(
 /// (via a `configured: false` body) when export is not running.
 async fn export_status_handler(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     guard: Guard,
 ) -> impl IntoResponse {
-    let config = state.live_config.get();
     let admitted = guard.admit_control_plane(|client, identity, check| {
-        let actor = actor_from_client(client, identity, &config.control_plane.role_mapping);
+        let actor = actor_from_client(
+            client,
+            identity,
+            &generation.config().control_plane.role_mapping,
+        );
         match check {
             CpCheck::Action(action) if ControlPlaneRbac::authorize(&actor, action).allowed => {
                 Ok(())
