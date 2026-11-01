@@ -66,7 +66,7 @@ const SITES: [(&str, &str, &str, Pass); 6] = [
     ),
     (
         "src/gateway/router/backend_handlers.rs",
-        "guard_tool_call",
+        "firewall_refusal",
         "check_request_keyed",
         Pass::Instance,
     ),
