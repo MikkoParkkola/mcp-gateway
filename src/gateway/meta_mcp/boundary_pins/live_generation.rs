@@ -19,7 +19,11 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// Production sites that may build a generation without `prepare`, and why.
-const ALLOW: &[(&str, &str, &str)] = &[];
+const ALLOW: &[(&str, &str, &str)] = &[(
+    "src/config_reload/generation.rs",
+    "placeholder",
+    "a default generation for a caller that has not yet captured the one current at delivery or at the witness check; no request is judged under it, and it goes with those callers",
+)];
 
 /// The production calls to `Generation::prepare_startup`, which seeds a
 /// generation without the reload refusals: (file, function).
