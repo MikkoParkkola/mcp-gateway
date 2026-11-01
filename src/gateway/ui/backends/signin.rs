@@ -382,6 +382,9 @@ mod fixture;
 #[path = "signin_outcome_tests.rs"]
 mod outcome_tests;
 #[cfg(test)]
+#[path = "signin_owner_tests.rs"]
+mod owner_tests;
+#[cfg(test)]
 #[path = "signin_read_tests.rs"]
 mod read_tests;
 #[cfg(test)]
