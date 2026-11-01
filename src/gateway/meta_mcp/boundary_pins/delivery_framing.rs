@@ -39,7 +39,7 @@ const BUILDERS: [&str; 10] = [
 ];
 
 /// What a refusal site does with respect to the delivery record.
-const CLASSES: [&str; 6] = [
+pub(super) const CLASSES: [&str; 6] = [
     // Frames or returns the delivered refusal and records it: a seal read at
     // an outlet, or a raise here or at the caller that delivers it (the note
     // says which). There is no class for a delivered refusal left unrecorded.
