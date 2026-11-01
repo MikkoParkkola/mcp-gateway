@@ -41,11 +41,14 @@ pub(crate) fn live_of(live: &LiveConfig, firewall: &Firewall) -> LiveConfig {
     LiveConfig::with_auth(config, Arc::clone(live.generation().auth()))
 }
 
-/// Publish, as `state`'s live config, the configuration `firewall` was
-/// built from: for a fixture that hands its relay firewall to the Meta-MCP.
+/// Publish, as `state`'s live config and its Meta-MCP's, the configuration
+/// `firewall` was built from: for a fixture that hands its relay firewall to
+/// the Meta-MCP. The Meta-MCP reads the same live config, as startup wires it
+/// (`server/run.rs`), so its records and witnesses read that generation.
 pub(crate) fn pair_state(state: &mut Arc<AppState>, firewall: &Firewall) {
-    let live = live_of(&state.live_config, firewall);
-    Arc::get_mut(state).expect("state is unique").live_config = Arc::new(live);
+    let live = Arc::new(live_of(&state.live_config, firewall));
+    state.meta_mcp.set_live_config(Arc::clone(&live));
+    Arc::get_mut(state).expect("state is unique").live_config = live;
 }
 
 /// [`pair_state`] with the firewall the state's Meta-MCP runs, when it runs one.

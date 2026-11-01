@@ -328,6 +328,8 @@ async fn fixture(setup: Setup) -> Fixture {
     // fixture's resolved keys stay.
     let (firewall, live) = paired(config, &state_mut.live_config);
     state_mut.live_config = Arc::new(live);
+    // The Meta-MCP reads the same live config, as startup wires it.
+    meta.set_live_config(Arc::clone(&state_mut.live_config));
     // Frozen at construction: nothing ages out on a slow run, only
     // `lapse_window` moves the clock.
     freeze(&firewall);
