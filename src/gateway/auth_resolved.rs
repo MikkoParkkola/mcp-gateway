@@ -258,6 +258,13 @@ impl ResolvedAuthConfig {
         self.runtime.last_used(key.principal().storage_form())
     }
 
+    /// Every last use this table's runtime holds, for a row comparing the
+    /// whole map.
+    #[cfg(test)]
+    pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
+        self.runtime.last_used_all()
+    }
+
     /// Whether `token` is a configured API key past its expiry. Hashed again
     /// only on the reject path, to tell an expired key from a wrong one (D4).
     pub(super) fn is_expired_key(&self, token: &str) -> bool {

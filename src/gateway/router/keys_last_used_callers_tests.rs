@@ -3,10 +3,13 @@
 //! T10, the dashboard-session and OIDC parts (slice B test plan r2): only an
 //! accepted API-key match records a key's last use. A request carried by a
 //! dashboard session, and one carried by a verified OIDC identity, both pass
-//! the real auth middleware and leave every key's last use unset. The OIDC
+//! the real auth middleware and leave the whole last-use map as it was: one
+//! key's time already in it, and a second key never used, so a write that
+//! adds an entry or moves one is seen. The OIDC
 //! request presents a key-server temporary token, as a signed-in browser's
 //! client does, so the identity is verified by the middleware itself.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -24,6 +27,7 @@ use crate::key_server::{InMemoryTokenStore, KeyServer, TemporaryToken};
 
 const BEARER: &str = "t10-static-bearer";
 const ADMIN_KEY: &str = "t10-admin-key";
+const IDLE_KEY: &str = "t10-idle-key";
 const STATUS: &str = "/ui/api/status";
 
 async fn fixture(
@@ -32,13 +36,21 @@ async fn fixture(
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
-        api_keys: vec![ApiKeyConfig {
-            key_sha256: Some(crate::config::api_key_digest_spec(ADMIN_KEY.as_bytes())),
-            name: "admin".to_string(),
-            backends: vec!["*".to_string()],
-            admin: true,
-            ..Default::default()
-        }],
+        api_keys: vec![
+            ApiKeyConfig {
+                key_sha256: Some(crate::config::api_key_digest_spec(ADMIN_KEY.as_bytes())),
+                name: "admin".to_string(),
+                backends: vec!["*".to_string()],
+                admin: true,
+                ..Default::default()
+            },
+            ApiKeyConfig {
+                key_sha256: Some(crate::config::api_key_digest_spec(IDLE_KEY.as_bytes())),
+                name: "idle".to_string(),
+                backends: vec!["*".to_string()],
+                ..Default::default()
+            },
+        ],
         ..AuthConfig::default()
     };
     test_router_app_state_with_auth_and_key_server(&auth, key_server).await
@@ -68,14 +80,9 @@ fn oidc_token() -> TemporaryToken {
     }
 }
 
-/// Every configured key's last use, as the published table reads it.
-fn last_uses(state: &AppState) -> Vec<Option<i64>> {
-    let generation = state.live_config.generation();
-    let auth = generation.auth();
-    auth.api_keys()
-        .iter()
-        .map(|key| auth.key_last_used(key))
-        .collect()
+/// The whole last-use map the published table's runtime holds.
+fn last_uses(state: &AppState) -> BTreeMap<String, i64> {
+    state.live_config.generation().auth().last_used_all()
 }
 
 fn from_here(builder: axum::http::request::Builder) -> Request<Body> {
@@ -93,9 +100,10 @@ async fn send(state: &Arc<AppState>, request: Request<Body>) -> axum::http::Stat
         .status()
 }
 
-/// The control both rows share: an API-key request does record a time, so
-/// an unset time below is the session's or identity's doing, not the probe's.
-async fn assert_a_key_request_records(state: &Arc<AppState>) {
+/// The seed both rows share, and their control: an API-key request records
+/// the admin key's time, so the map compared below holds one entry, and the
+/// idle key none.
+async fn seed(state: &Arc<AppState>) -> BTreeMap<String, i64> {
     let request = from_here(
         Request::builder()
             .uri(STATUS)
@@ -105,16 +113,20 @@ async fn assert_a_key_request_records(state: &Arc<AppState>) {
         send(state, request).await.is_success(),
         "control: the key is admitted"
     );
-    assert!(
-        last_uses(state).iter().all(Option::is_some),
+    let seeded = last_uses(state);
+    assert_eq!(
+        seeded.len(),
+        1,
         "control: an API-key request records its last use"
     );
+    seeded
 }
 
 /// T10b: a dashboard session's request writes no key's last use.
 #[tokio::test]
 async fn t10b_a_session_request_writes_no_last_use() {
     let (state, _dir) = Box::pin(fixture(None)).await;
+    let before = seed(&state).await;
     let limits = SessionLimits::from(&state.live_config.get().auth.dashboard_session);
     let handle = state
         .dashboard_bootstrap
@@ -128,11 +140,11 @@ async fn t10b_a_session_request_writes_no_last_use() {
         send(&state, request).await.is_success(),
         "premise: the session is admitted"
     );
-    assert!(
-        last_uses(&state).iter().all(Option::is_none),
-        "a session request recorded a key's last use"
+    assert_eq!(
+        last_uses(&state),
+        before,
+        "a session request changed the last-use map"
     );
-    assert_a_key_request_records(&state).await;
 }
 
 /// T10c: a verified OIDC identity's request writes no key's last use.
@@ -143,6 +155,7 @@ async fn t10c_an_oidc_request_writes_no_last_use() {
     let bearer = token.token.clone();
     key_server.store.insert(token).await;
     let (state, _dir) = Box::pin(fixture(Some(key_server))).await;
+    let before = seed(&state).await;
     let request = from_here(
         Request::builder()
             .uri(STATUS)
@@ -152,9 +165,9 @@ async fn t10c_an_oidc_request_writes_no_last_use() {
         send(&state, request).await.is_success(),
         "premise: the verified identity is admitted"
     );
-    assert!(
-        last_uses(&state).iter().all(Option::is_none),
-        "an OIDC request recorded a key's last use"
+    assert_eq!(
+        last_uses(&state),
+        before,
+        "an OIDC request changed the last-use map"
     );
-    assert_a_key_request_records(&state).await;
 }

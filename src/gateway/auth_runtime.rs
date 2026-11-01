@@ -76,6 +76,15 @@ impl AuthRuntime {
             .or_insert(at);
     }
 
+    /// Every recorded last use, so a row can compare the whole map.
+    #[cfg(test)]
+    pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
+        self.last_used
+            .iter()
+            .map(|seen| (seen.key().clone(), *seen.value()))
+            .collect()
+    }
+
     /// When the key with `principal` last authenticated in this process.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn last_used(&self, principal: &str) -> Option<i64> {

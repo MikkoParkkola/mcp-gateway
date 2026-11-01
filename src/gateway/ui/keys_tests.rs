@@ -149,7 +149,8 @@ impl Fixture {
         self.auth(keys(&self.mu_file()))
     }
 
-    /// `GET /ui/api/keys` on the UI routes with `auth` pinned, as `client`.
+    /// `GET /ui/api/keys` on the UI routes, behind the admin audit layer as
+    /// deployed, with `auth` pinned, as `client`.
     async fn get(
         &self,
         auth: Arc<ResolvedAuthConfig>,
@@ -165,7 +166,7 @@ impl Fixture {
             .extension(client)
             .body(Body::empty())
             .expect("request builds");
-        let response = crate::gateway::ui::api_router()
+        let response = super::admin_audit::audited_api_router(&self.state)
             .with_state(Arc::clone(&self.state))
             .oneshot(request)
             .await
@@ -195,7 +196,7 @@ impl Fixture {
         if let Some(client) = client {
             request = request.extension(client);
         }
-        let response = crate::gateway::ui::api_router()
+        let response = super::admin_audit::audited_api_router(&self.state)
             .with_state(Arc::clone(&self.state))
             .oneshot(request.body(Body::empty()).expect("request builds"))
             .await
@@ -362,10 +363,28 @@ fn rfc3339(at: DateTime<Utc>) -> String {
     at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-/// T9a: after a restart (a fresh runtime) every key reads null.
+/// T9a: after a restart (a fresh runtime) every key reads null, though the
+/// counter store holds usage for each key under its caller label: the answer
+/// never falls back to it.
 #[tokio::test]
 async fn t9a_after_a_restart_every_key_reads_null() {
+    use crate::counters::{Call, CounterStore, Label, Tally, caller_label};
     let fx = Fixture::new().await;
+    fx.state
+        .meta_mcp
+        .set_counters(Arc::new(CounterStore::new(0)));
+    let store = fx.state.meta_mcp.counters().expect("a counter store");
+    let at = u64::try_from(t(0).timestamp()).expect("after 1970");
+    for name in ["zeta", "alpha", "mu"] {
+        let caller = caller_label(crate::security::audit::CredentialKind::ApiKey, name);
+        let call = Call {
+            caller: &caller,
+            server: Label::Known("fs"),
+            tool: Label::Untrusted,
+            tally: Tally::default(),
+        };
+        store.record(&call, at, &chrono_tz::UTC);
+    }
     let answer = fx.as_bearer(fx.table()).await;
     for name in ["zeta", "alpha", "mu"] {
         assert_eq!(entry(&answer, name)["last_used"], Value::Null, "{name}");
@@ -456,10 +475,32 @@ async fn t9e_a_refused_match_writes_nothing() {
     );
     let answer = fx.as_bearer(table).await;
     assert_eq!(entry(&answer, "zeta")["last_used"], json!(rfc3339(t(9))));
+
+    // The grace alone: it ends before the key does, and a match on the
+    // previous secret after it, with the key still live, writes nothing.
+    let mut early = keys(&fx.mu_file());
+    early[0].previous_expires_at = Some(at("2998-01-01T00:00:00Z"));
+    let table = fx.auth(early);
+    let between = at("2998-06-01T00:00:00Z");
+    assert!(
+        table.validate_token_at(ZETA, between).is_some(),
+        "premise: the key is live"
+    );
+    let before = table.last_used_all();
+    assert!(
+        table.validate_token_at(ZETA_OLD, between).is_none(),
+        "premise: the grace is over"
+    );
+    assert_eq!(
+        table.last_used_all(),
+        before,
+        "a match past the grace wrote"
+    );
 }
 
-/// T10: only an API-key match writes: the static bearer, a dashboard session
-/// and an OIDC identity leave every key null.
+/// T10, the static bearer: its match leaves the whole last-use map as it
+/// was, a time already in it included. The session and OIDC parts are in
+/// router/keys_last_used_callers_tests.rs.
 #[tokio::test]
 async fn t10_only_an_api_key_match_writes() {
     let fx = Fixture::new().await;
@@ -478,14 +519,19 @@ async fn t10_only_an_api_key_match_writes() {
         .expect("resolves")
         .with_runtime(Arc::clone(&fx.runtime)),
     );
+    // A time already recorded, so a write that moves it is seen too.
+    assert!(table.validate_token_at(ZETA, t(1)).is_some(), "premise");
+    let before = table.last_used_all();
+    assert_eq!(before.len(), 1, "the seeded time");
     assert!(
-        table.validate_token_at("keys-route-bearer", t(0)).is_some(),
+        table.validate_token_at("keys-route-bearer", t(5)).is_some(),
         "premise"
     );
-    let answer = fx.as_bearer(table).await;
-    for name in ["zeta", "alpha", "mu"] {
-        assert_eq!(entry(&answer, name)["last_used"], Value::Null, "{name}");
-    }
+    assert_eq!(
+        table.last_used_all(),
+        before,
+        "the static bearer changed the last-use map"
+    );
 }
 
 /// T12: the guard runs before the handler reads the key table: a standard
