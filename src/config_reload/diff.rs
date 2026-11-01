@@ -260,6 +260,7 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
 }
 
 // PR2 of ADR-029's live-collusion work flips this; until then the relay gate judges with its startup lists.
+#[cfg(feature = "firewall")]
 const COLLUSION_LIVE: bool = false;
 
 /// Whether `security.firewall.collusion`'s four live fields (`sources`,

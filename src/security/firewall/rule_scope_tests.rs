@@ -368,7 +368,7 @@ fn resolve(fw: &Firewall, key: KeyOf<'_>, severity: Severity) -> FirewallAction 
         tool: "t",
         key,
     };
-    fw.resolve_action(fw.startup_policy(), target, &[finding])
+    super::Firewall::resolve_action(fw.startup_policy(), target, &[finding])
 }
 
 /// A10d: a key that is not known resolves over every key a rule names, and

@@ -350,7 +350,7 @@ impl Firewall {
             return FirewallVerdict::allow();
         }
         let findings = self.content_findings(target.tool, args);
-        let action = self.resolve_action(policy, target, &findings);
+        let action = Self::resolve_action(policy, target, &findings);
         FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
@@ -479,7 +479,7 @@ impl Firewall {
         let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
             FirewallAction::Block
         } else {
-            self.resolve_action(policy, target, &findings)
+            Self::resolve_action(policy, target, &findings)
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -698,7 +698,6 @@ impl Firewall {
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
     fn resolve_action(
-        &self,
         policy: &FirewallPolicy,
         target: RuleTarget<'_>,
         findings: &[Finding],

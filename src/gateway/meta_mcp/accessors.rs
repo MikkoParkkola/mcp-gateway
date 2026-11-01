@@ -45,7 +45,8 @@ impl MetaMcp {
 
     /// The generation published now, for a check no request generation
     /// reaches (a response, a task result); `None` only before startup sets
-    /// the live config.
+    /// the live config. Every reader is a firewall check.
+    #[cfg(feature = "firewall")]
     pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
         self.live_config().map(|live| live.generation())
     }
