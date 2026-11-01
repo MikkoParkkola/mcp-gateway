@@ -329,6 +329,28 @@ fn dropped(expr: &syn::Expr) -> Option<String> {
     arg.path.get_ident().map(ToString::to_string)
 }
 
+/// A log macro's message: its first string literal that is not a field's
+/// value (`name = "x"`) or a `target:`/`parent:` argument. Empty when the
+/// macro has none, so an allowlist entry names the line, not just its function.
+fn message(mac: &syn::Macro) -> String {
+    let parser = |input: syn::parse::ParseStream<'_>| {
+        let mut is_value = false;
+        while !input.is_empty() {
+            if !is_value && input.peek(syn::LitStr) {
+                return Ok(input.parse::<syn::LitStr>()?.value());
+            }
+            is_value = input.peek(syn::Token![=]) || input.peek(syn::Token![:]);
+            input.step(|c| {
+                c.token_tree()
+                    .map(|(_, rest)| ((), rest))
+                    .ok_or_else(|| c.error("end of the macro"))
+            })?;
+        }
+        Ok(String::new())
+    };
+    syn::parse::Parser::parse2(parser, mac.tokens.clone()).unwrap_or_default()
+}
+
 impl Scan<'_> {
     fn hit(&mut self, what: &str) {
         self.hits
@@ -367,7 +389,7 @@ impl Scan<'_> {
         let name = last_segment(&mac.path);
         if LOG_MACROS.contains(&name.as_str()) {
             if !held.is_empty() {
-                self.hit(&format!("{name}!"));
+                self.hit(&format!("{name}!: {}", message(mac)));
             }
         } else if locks_then_logs(&mac.tokens.to_string()) {
             // Inside a macro body (a `select!` arm, say) syn sees only tokens.
@@ -645,7 +667,9 @@ fn production_files() -> Vec<(String, syn::File)> {
 mod g0;
 
 /// Sites that log under a guard on purpose, each with why it cannot block:
-/// (file, function, macro, reason). Kept empty unless a site truly must.
+/// (file, function, "macro!: message", reason). Keyed by the message, so a
+/// new line in an allowed function is still a hit. None of them can block:
+/// every tracing line goes through the lossy stderr writer, which never waits.
 const ALLOWED: &[(&str, &str, &str, &str)] = &[];
 
 /// G1: no production function writes a tracing line while it holds a guard.
@@ -660,7 +684,7 @@ fn g1_no_production_code_logs_while_holding_a_lock_guard() {
     let new: Vec<&Hit> = found.iter().filter(|h| !allowed.contains(*h)).collect();
     assert!(
         new.is_empty(),
-        "{} log lines are written under a held guard (file, function, macro); log after the guard is released:\n{new:#?}",
+        "{} log lines are written under a held guard (file, function, macro and message); log after the guard is released:\n{new:#?}",
         new.len()
     );
     let stale: Vec<_> = allowed.iter().filter(|a| !found.contains(*a)).collect();

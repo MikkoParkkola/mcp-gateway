@@ -128,3 +128,20 @@ fn g0_every_guard_form_is_found_and_every_released_form_is_not() {
         assert_eq!(planted(released), 0, "{form}, released: still found");
     }
 }
+
+/// G0: a hit names its line by the message, never by a field's value or the
+/// target, so an allowlist entry cannot cover a new line in the same function.
+#[test]
+fn g0_a_hit_is_keyed_by_its_message() {
+    let src = "fn f(m: &M) { let g = m.lock().unwrap(); \
+               warn!(target: \"t\", path = \"p\", n = %x, \"the line {}\", y); }";
+    let file = syn::parse_file(src).expect("planted source");
+    assert_eq!(
+        scan(&[("planted.rs".to_owned(), file)]),
+        [(
+            "planted.rs".to_owned(),
+            "f".to_owned(),
+            "warn!: the line {}".to_owned()
+        )]
+    );
+}
