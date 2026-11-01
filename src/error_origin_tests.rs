@@ -54,3 +54,31 @@ fn a_backend_json_rpc_error_reads_as_its_twin_and_is_the_backends() {
     };
     assert_eq!(frame(&backend), frame(&gateway), "the wire differs");
 }
+
+/// A merge-time decision: `with_may_have_run` moved into its own file after
+/// the backend variant was reviewed. A backend's error keeps its variant,
+/// code, data and origin, and gains the note, as the gateway's twin does.
+#[test]
+fn a_backend_json_rpc_error_keeps_itself_under_the_may_have_run_note() {
+    let backend = Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: -32001,
+        message: "backend says no".to_owned(),
+        data: Some(serde_json::json!({"k": 1})),
+    })
+    .with_may_have_run();
+    let Error::BackendJsonRpc {
+        code,
+        ref message,
+        ref data,
+    } = backend
+    else {
+        panic!("the variant is kept: {backend:?}");
+    };
+    assert_eq!(code, -32001);
+    assert!(
+        message.starts_with("backend says no") && message.ends_with(super::MAY_HAVE_RUN),
+        "{message}"
+    );
+    assert_eq!(data, &Some(serde_json::json!({"k": 1})));
+    assert_eq!(backend.origin(), Origin::Backend);
+}

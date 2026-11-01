@@ -671,6 +671,8 @@ impl Error {
             | Self::Tls(_)
             | Self::CliCredentialRefused { .. }
             | Self::JsonRpcRetryable { .. }
+            // A backend's own answer: its request reached the backend.
+            | Self::BackendJsonRpc { .. }
             | Self::Io(_)
             | Self::Json(_)
             | Self::Http(_)
