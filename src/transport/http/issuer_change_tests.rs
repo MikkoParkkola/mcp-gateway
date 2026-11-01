@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use super::HttpTransport;
-use super::issuer_change_double::{BACKEND_NAME, Disco, cell, client_of, disco, serve};
+use super::issuer_change_fixture::{BACKEND_NAME, Disco, cell, client_of, disco, serve};
 use crate::Error;
 use crate::oauth::TokenInfo;
 use crate::oauth::client::sign_in::{PendingGrant, SignIn, SignInStatus};

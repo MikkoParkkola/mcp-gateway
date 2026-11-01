@@ -504,12 +504,9 @@ impl OAuthClient {
         Ok(token.access_token)
     }
 
-    /// A person's sign-in started from the web UI: the link goes to `ui`
-    /// instead of a browser or the terminal, and the token the code buys is
-    /// held, unsaved, until the person confirms. `deadline` bounds everything
-    /// up to the callback; the code's redemption gets
-    /// [`SIGN_IN_CONFIRM_WINDOW`](super::sign_in::SIGN_IN_CONFIRM_WINDOW)
-    /// from the callback.
+    /// A web-UI sign-in: the link goes to `ui`, and the token is held unsaved
+    /// until the person confirms. `deadline` bounds the wait for the callback;
+    /// the redemption gets [`SIGN_IN_CONFIRM_WINDOW`](super::sign_in::SIGN_IN_CONFIRM_WINDOW).
     #[cfg(feature = "webui")]
     pub(crate) async fn authorize_for_ui(
         &self,
@@ -569,11 +566,10 @@ impl OAuthClient {
         (self.announce)(auth_url_str);
     }
 
-    /// Take the confirmed token from storage. The counter is sampled before
-    /// storage is read and recorded only after the adopt succeeded; if it
-    /// moved meanwhile, adopt again. A token inside the expiry buffer cannot
-    /// be adopted as live, but is still loaded so a refresh can use its
-    /// refresh token; `None` then.
+    /// Take the confirmed token from storage. The counter is sampled before the
+    /// read and recorded only after a successful adopt (adopt again if it moved).
+    /// A token inside the expiry buffer is loaded, not adopted, so a refresh can
+    /// use its refresh token; `None` then.
     // Beside the login code: it reuses `adopt_stored_login`, private to grants.
     pub(super) fn adopt_installed(&self) -> Option<String> {
         let status = self.sign_in_status.as_ref()?;

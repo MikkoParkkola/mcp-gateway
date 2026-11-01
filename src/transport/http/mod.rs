@@ -696,7 +696,7 @@ mod private_redirect_tests;
 mod serving_adopt_tests;
 
 #[cfg(all(test, feature = "webui"))]
-mod issuer_change_double;
+mod issuer_change_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod issuer_change_more_tests;
 #[cfg(all(test, feature = "webui"))]

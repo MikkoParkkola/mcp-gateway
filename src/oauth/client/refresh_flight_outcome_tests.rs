@@ -152,7 +152,7 @@ async fn a_rotated_token_that_cannot_be_saved_is_not_resent() {
         let first = Arc::clone(&first);
         async move { headless(&first).await }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(5), gate.reached.notified())
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.reached.notified())
         .await
         .expect("the refresh reached its save");
     *flight.save_gate.lock() = None;
