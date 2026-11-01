@@ -8,7 +8,7 @@ use std::path::Path;
 use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
-use super::fragments::pin_table;
+use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
 use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
@@ -189,21 +189,8 @@ fn inventory() -> Vec<String> {
 /// added inside the clock module's allow).
 #[test]
 fn t1b_every_production_allow_of_the_ban_is_pinned() {
-    let mut pinned: Vec<String> = pin_table("allows")
-        .text()
-        .lines()
-        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .map(str::to_string)
-        .collect();
-    pinned.sort();
     let actual = inventory();
-    assert!(
-        actual == pinned,
-        "allow inventory changed ({} rows pinned, {} found)\nfull inventory:\n{}",
-        pinned.len(),
-        actual.len(),
-        actual.join("\n")
-    );
+    allows_check(&actual, &pin_table("allows")).unwrap_or_else(|m| panic!("{m}"));
     let classes = [
         "Visibility",
         "Discovery",
@@ -394,14 +381,42 @@ fn t1a_every_classed_read_is_pinned() {
         "unclassifiable operation use: {:?}",
         found.bad
     );
-    let want = pinned(&pin_table("scoped_backends_classes").text());
-    assert!(
-        found.rows == want,
+    classes_check(&found.rows, &pin_table("scoped_backends_classes"))
+        .unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// The allow table check: `actual` against the pinned rows of `table`.
+fn allows_check(actual: &[String], table: &Table) -> Result<(), String> {
+    let mut pinned: Vec<String> = table
+        .text()
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .map(str::to_string)
+        .collect();
+    pinned.sort();
+    if actual == pinned {
+        return Ok(());
+    }
+    Err(format!(
+        "allow inventory changed ({} rows pinned, {} found)\nfull inventory:\n{}",
+        pinned.len(),
+        actual.len(),
+        actual.join("\n")
+    ))
+}
+
+/// The class table check: the found rows against the pinned rows of `table`.
+fn classes_check(found: &[String], table: &Table) -> Result<(), String> {
+    let want = pinned(&table.text());
+    if found == want {
+        return Ok(());
+    }
+    Err(format!(
         "class table changed ({} pinned, {} found)\nfull table:\n{}",
         want.len(),
-        found.rows.len(),
-        found.rows.join("\n")
-    );
+        found.len(),
+        found.join("\n")
+    ))
 }
 
 /// T1d: the `Registry::new` call sites. Mutant T1d-m1: a second one.
@@ -415,4 +430,76 @@ fn t1d_registry_construction_sites_are_pinned() {
         ),
         "unpinned Registry::new"
     );
+}
+
+/// FRAG.2 through the allow check's own path: a real row held only by a
+/// fragment still counts.
+#[test]
+fn allows_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[("1.tsv", &moved)]);
+    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// FRAG.2: a stale row in a fragment fails the allow check, naming the
+/// fragment that holds it.
+#[test]
+fn allows_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tnothing\tstatement\tLifecycle\tgetx1\n";
+    let (_root, table) = scratch_table("allows", &live_base("allows"), &[("1.tsv", stale)]);
+    let err = allows_check(&inventory(), &table).expect_err("a stale fragment row fails");
+    assert!(err.contains("1.tsv"), "{err}");
+}
+
+/// FRAG.2 through the class check's own path: a real row held only by a
+/// fragment still counts.
+#[test]
+fn scoped_classes_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("scoped_backends_classes"));
+    let (_root, table) = scratch_table("scoped_backends_classes", &base, &[("1.tsv", &moved)]);
+    classes_check(&ops().rows, &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// FRAG.2: a stale row in a fragment fails the class check, naming the
+/// fragment that holds it.
+#[test]
+fn scoped_classes_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tnothing\tget\tVisibility\n";
+    let (_root, table) = scratch_table(
+        "scoped_backends_classes",
+        &live_base("scoped_backends_classes"),
+        &[("1.tsv", stale)],
+    );
+    let err = classes_check(&ops().rows, &table).expect_err("a stale fragment row fails");
+    assert!(err.contains("1.tsv"), "{err}");
+}
+
+/// A legitimately repeated allow row (two identical statements in one fn)
+/// may have its copies in different files: the counts add up.
+#[test]
+fn a_legitimate_repeat_may_split_across_files() {
+    let base = live_base("allows");
+    let mut seen = std::collections::BTreeSet::new();
+    let repeated = base
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .find(|l| !seen.insert(*l))
+        .expect("allows.tsv holds a repeated row")
+        .to_owned();
+    let at = base
+        .rfind(&format!("{repeated}\n"))
+        .expect("the second copy");
+    let rest = format!("{}{}", &base[..at], &base[at + repeated.len() + 1..]);
+    let (_root, table) = scratch_table("allows", &rest, &[("1.tsv", &format!("{repeated}\n"))]);
+    allows_check(&inventory(), &table).unwrap_or_else(|m| panic!("{m}"));
+}
+
+/// A row the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn a_missing_allow_row_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("allows"));
+    let (_root, table) = scratch_table("allows", &base, &[]);
+    let err = allows_check(&inventory(), &table).expect_err("a missing row fails");
+    assert!(err.contains("rows to add"), "{err}");
+    assert!(err.contains("allows.d/<ticket>.tsv"), "{err}");
 }

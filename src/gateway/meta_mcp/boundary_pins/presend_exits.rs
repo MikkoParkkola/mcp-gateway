@@ -36,7 +36,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
-use super::fragments::{Table, pin_table};
+use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
@@ -368,5 +368,99 @@ fn only_a_refused_note_is_a_refusal_mark() {
             });
         })),
         1
+    );
+}
+
+/// Every pre-send refusal exit the walk finds, by (file, function).
+fn found() -> Found {
+    let mut exits = Exits::default();
+    walk(crate_root(), &ROOTS, &mut exits).expect("the walk reads every module");
+    exits.found
+}
+
+/// FRAG.2 through the real comparison: a real row held only by a fragment
+/// still counts.
+#[test]
+fn presend_exits_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[("1.tsv", &moved)]);
+    let wrong = differences(&found(), &table);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// FRAG.2: a stale row in a fragment fails, naming the fragment.
+#[test]
+fn presend_exits_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tf\t1\t1\tmarks\tnone\n";
+    let (_root, table) = scratch_table(
+        "presend_exits",
+        &live_base("presend_exits"),
+        &[("1.tsv", stale)],
+    );
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("stale") && l.contains("1.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// FRAG.2: a key held by the base and by a fragment fails, naming both files.
+#[test]
+fn presend_exits_key_repeated_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table(
+        "presend_exits",
+        &live_base("presend_exits"),
+        &[("1.tsv", &moved)],
+    );
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("presend_exits.tsv") && l.contains("1.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key listed twice in one file fails.
+#[test]
+fn presend_exits_key_repeated_in_one_file_fails() {
+    let (_, moved) = without_first_row(&live_base("presend_exits"));
+    let base = format!("{}{moved}", live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[]);
+    let wrong = differences(&found(), &table);
+    assert!(
+        wrong.iter().any(|l| l.contains("repeated")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn presend_exits_missing_key_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("presend_exits"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[]);
+    let wrong = differences(&found(), &table).join("\n");
+    assert!(wrong.contains("rows to add"), "{wrong}");
+    assert!(wrong.contains("presend_exits.d/<ticket>.tsv"), "{wrong}");
+}
+
+/// A row whose value changed under the same key names the file to edit.
+#[test]
+fn presend_exits_changed_value_names_the_owning_file() {
+    let (base, moved) = without_first_row(&live_base("presend_exits"));
+    let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
+    cols[2] = "999";
+    let changed = format!("{}\n", cols.join("\t"));
+    let (_root, table) = scratch_table("presend_exits", &base, &[("1.tsv", &changed)]);
+    let wrong = differences(&found(), &table).join("\n");
+    assert!(
+        wrong.contains("edit this row in") && wrong.contains("1.tsv"),
+        "{wrong}"
     );
 }

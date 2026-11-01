@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
-use super::fragments::{Table, pin_table};
+use super::fragments::{Table, live_base, pin_table, scratch_table, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
@@ -242,4 +242,99 @@ fn a_second_create_in_one_function_changes_its_count() {
     let key = |file: &str| (file.to_owned(), "f".to_owned(), "fs-write".to_owned());
     assert_eq!(sites.counts.get(&key("a.rs")), Some(&1));
     assert_eq!(sites.counts.get(&key("b.rs")), Some(&2));
+}
+
+/// Every creating call the walk counts, by (file, function, kind).
+fn counted() -> Counts {
+    let mut sites = Sites::default();
+    walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
+    sites.counts
+}
+
+/// FRAG.2 through the real comparison: a real row held only by a fragment
+/// still counts.
+#[test]
+fn creation_sites_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[("1.tsv", &moved)]);
+    let wrong = differences(&counted(), &table);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// FRAG.2: a stale row in a fragment fails, naming the fragment.
+#[test]
+fn creation_sites_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tf\tfs-write\t1\thelper\tnone\n";
+    let (_root, table) = scratch_table(
+        "creation_sites",
+        &live_base("creation_sites"),
+        &[("1.tsv", stale)],
+    );
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("stale") && l.contains("1.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// FRAG.2: a key held by the base and by a fragment fails, naming both files
+/// (a map insert would keep only the last).
+#[test]
+fn creation_sites_key_repeated_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table(
+        "creation_sites",
+        &live_base("creation_sites"),
+        &[("1.tsv", &moved)],
+    );
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("creation_sites.tsv") && l.contains("1.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key listed twice in one file fails (a map insert would keep only one).
+#[test]
+fn creation_sites_key_repeated_in_one_file_fails() {
+    let (_, moved) = without_first_row(&live_base("creation_sites"));
+    let base = format!("{}{moved}", live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[]);
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong.iter().any(|l| l.contains("repeated")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn creation_sites_missing_key_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[]);
+    let wrong = differences(&counted(), &table).join("\n");
+    assert!(wrong.contains("rows to add"), "{wrong}");
+    assert!(wrong.contains("creation_sites.d/<ticket>.tsv"), "{wrong}");
+}
+
+/// A row whose value changed under the same key names the file to edit.
+#[test]
+fn creation_sites_changed_value_names_the_owning_file() {
+    let (base, moved) = without_first_row(&live_base("creation_sites"));
+    let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
+    cols[3] = "999";
+    let changed = format!("{}\n", cols.join("\t"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[("1.tsv", &changed)]);
+    let wrong = differences(&counted(), &table).join("\n");
+    assert!(
+        wrong.contains("edit this row in") && wrong.contains("1.tsv"),
+        "{wrong}"
+    );
 }

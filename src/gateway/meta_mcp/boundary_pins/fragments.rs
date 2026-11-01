@@ -20,6 +20,11 @@ pub(super) struct Table {
 }
 
 impl Table {
+    /// The rows with the file each came from, in reading order.
+    pub(super) fn rows(&self) -> &[(PathBuf, String)] {
+        &self.rows
+    }
+
     /// The row lines joined by newlines, for checks that scan the table's
     /// text. Comment and empty lines are not part of it.
     pub(super) fn text(&self) -> String {
@@ -42,13 +47,61 @@ pub(super) fn pin_table(name: &str) -> Table {
 /// consumer keeps its own stricter filter on top. A missing or unreadable
 /// table fails the test, naming the path.
 pub(super) fn pin_table_at(root: &Path, name: &str) -> Table {
+    try_pin_table_at(root, name).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`pin_table_at`], returning the failure instead of panicking.
+pub(super) fn try_pin_table_at(root: &Path, name: &str) -> Result<Table, String> {
     let base = root.join(DIR).join(format!("{name}.tsv"));
     let text = std::fs::read_to_string(&base)
-        .unwrap_or_else(|e| panic!("cannot read pin table {}: {e}", base.display()));
+        .map_err(|e| format!("cannot read pin table {}: {e}", base.display()))?;
     let rows = text
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| (base.clone(), l.to_owned()))
         .collect();
-    Table { rows }
+    Ok(Table { rows })
 }
+
+/// The live base text of table `name` in this checkout.
+pub(super) fn live_base(name: &str) -> String {
+    let path = crate_root().join(DIR).join(format!("{name}.tsv"));
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()))
+}
+
+/// `text` without its first row, and that row with a newline: a real row that
+/// a test can place in a fragment only.
+pub(super) fn without_first_row(text: &str) -> (String, String) {
+    let mut moved = None;
+    let mut rest = String::new();
+    for line in text.lines() {
+        if moved.is_none() && !line.is_empty() && !line.starts_with('#') {
+            moved = Some(format!("{line}\n"));
+        } else {
+            rest.push_str(line);
+            rest.push('\n');
+        }
+    }
+    (rest, moved.expect("the table has a row"))
+}
+
+/// A crate-shaped temporary root holding table `name` (`base` text, and each
+/// `(file, text)` fragment under `name.d/`), and the table read from it.
+pub(super) fn scratch_table(
+    name: &str,
+    base: &str,
+    fragments: &[(&str, &str)],
+) -> (tempfile::TempDir, Table) {
+    let root = tempfile::tempdir().expect("a temp crate");
+    let dir = root.path().join(DIR);
+    std::fs::create_dir_all(dir.join(format!("{name}.d"))).expect("the fragment directory");
+    std::fs::write(dir.join(format!("{name}.tsv")), base).expect("the base table");
+    for (file, text) in fragments {
+        std::fs::write(dir.join(format!("{name}.d")).join(file), text).expect("a fragment");
+    }
+    let table = pin_table_at(root.path(), name);
+    (root, table)
+}
+
+#[path = "fragments_tests.rs"]
+mod tests;
