@@ -594,3 +594,42 @@ async fn a_task_workers_cold_fill_refused_by_the_lender_is_recorded_refused() {
     let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
     assert_eq!(refusals, [2], "the caller's binding, refused twice");
 }
+
+/// LEND.5's boundary: a stale list refreshed under a lend refusal still
+/// answers from what the slot holds (design E). The held schema declares
+/// only `q`, so the call's undeclared key is refused from the stale list;
+/// the refresh's refusal never replaces that answer, and nothing is sent.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_stale_list_refreshed_under_a_lend_refusal_still_answers_from_the_cache() {
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs, (_meta, backend)) =
+        gateway_in(url, mint, crate::config::InputSchemaEnforcement::Closed).await;
+    // The caller's binding: the mint's own (`FixedMint::propagate`).
+    let binding = "alpha@https://lent.internal";
+    let held: crate::protocol::Tool = serde_json::from_value(json!({"name": TOOL,
+        "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}}}))
+    .expect("a tool");
+    backend.store_per_user_tools_for_test(binding, vec![held]);
+    backend.stale_per_user_tools_for_test(binding);
+    let arguments = json!({"server": BACKEND, "tool": TOOL,
+                           "arguments": {"q": "x", "undeclared": 1}});
+    let (status, answer) = meta_call(&router, "gateway_invoke", arguments).await;
+    let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
+    assert!(
+        !refusals.is_empty(),
+        "premise: the stale list's refresh was refused by the lender: {status} {answer}"
+    );
+    assert!(
+        !answer.to_string().contains("this call carried none"),
+        "answered from the held list, not by the refresh's refusal: {status} {answer}"
+    );
+    assert!(
+        answer.to_string().contains("undeclared"),
+        "the held schema refused the key it does not declare: {status} {answer}"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}

@@ -556,3 +556,69 @@ fn a_marked_refusal_and_a_lend_refusal_are_disjoint() {
     assert!(super::gate::is_authorization_refusal(&lend));
     assert!(crate::personal_accounts::refusal::marked(&lend).is_none());
 }
+
+/// An A2A agent's own HTTP 403 is the agent's failure, not the gateway's
+/// refusal of the caller: a folded backend error sampled against its budget,
+/// never the lend refusal's -32001.
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn an_a2a_agents_403_stays_the_agents() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let base = format!("http://{}", listener.local_addr().expect("addr"));
+    let endpoint = format!("{base}/a2a");
+    let sends = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&sends);
+    let app = axum::Router::new()
+        .route(
+            "/.well-known/agent-card.json",
+            axum::routing::get(move || {
+                let endpoint = endpoint.clone();
+                async move {
+                    axum::Json(json!({"name": "stub", "supportedInterfaces": [
+                        {"url": endpoint, "protocolBinding": "JSONRPC", "protocolVersion": "1.0"}]}))
+                }
+            }),
+        )
+        .route(
+            "/a2a",
+            axum::routing::post(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                async { axum::http::StatusCode::FORBIDDEN }
+            }),
+        );
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let backend = Arc::new(Backend::new(
+        "agent",
+        BackendConfig {
+            transport: crate::config::TransportConfig::A2a {
+                a2a_url: base.clone(),
+                a2a_agent_card_path: None,
+            },
+            ..BackendConfig::default()
+        },
+        &FailsafeConfig::default(),
+        Duration::from_secs(300),
+    ));
+    backend.set_transport_for_test(crate::a2a::test_agent::started(&base).await);
+    let registry = Arc::new(BackendRegistry::new());
+    let _ = registry.register(backend);
+    let meta = MetaMcp::new(registry);
+    let caller = ctx(&AllowAll);
+    let args = json!({"server": "agent", "tool": "send_message", "arguments": {"message": "hi"}});
+    let answer = meta.invoke_tool(&args, None, &caller).await;
+    assert!(
+        sends.load(Ordering::SeqCst) >= 1,
+        "premise: the agent was sent to: {answer:?}"
+    );
+    let Ok(value) = &answer else {
+        panic!("an agent's 403 is a folded result, not a gateway refusal: {answer:?}");
+    };
+    assert_eq!(value["isError"], true, "{value}");
+    assert_eq!(
+        meta.kill_switch.window_counts("agent"),
+        (0, 1),
+        "sampled as the agent's failure"
+    );
+}
