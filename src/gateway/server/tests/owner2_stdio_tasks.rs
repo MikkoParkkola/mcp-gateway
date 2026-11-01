@@ -92,14 +92,14 @@ pub(crate) struct Fixture {
     _data: tempfile::TempDir,
 }
 
-pub(super) async fn fixture(policy: Option<ToolPolicy>) -> Fixture {
+pub(super) async fn fixture(policy: Option<ToolPolicyConfig>) -> Fixture {
     fixture_on(backend().await, policy).await
 }
 
 /// [`fixture`] over the backend at `url`.
 pub(super) async fn fixture_on(
     backend: (String, Arc<AtomicUsize>),
-    policy: Option<ToolPolicy>,
+    policy: Option<ToolPolicyConfig>,
 ) -> Fixture {
     Box::pin(fixture_on_with(backend, policy, |_| {})).await
 }
@@ -108,7 +108,7 @@ pub(super) async fn fixture_on(
 /// built (the route x check matrix surfaces a tool through it, MIK-8137 b3).
 pub(crate) async fn fixture_on_with(
     (url, rounds): (String, Arc<AtomicUsize>),
-    policy: Option<ToolPolicy>,
+    policy: Option<ToolPolicyConfig>,
     configure: impl FnOnce(&mut Config),
 ) -> Fixture {
     let store = tempfile::tempdir().expect("store root");
@@ -127,6 +127,9 @@ pub(crate) async fn fixture_on_with(
         },
     );
     configure(&mut config);
+    if let Some(policy) = policy {
+        config.security.tool_policy = policy;
+    }
     let data = tempfile::tempdir().expect("data dir");
     let built = Gateway::new(config.clone())
         .await
@@ -135,11 +138,10 @@ pub(crate) async fn fixture_on_with(
         .build_meta_mcp()
         .await
         .expect("the production builder accepts this configuration");
-    let tool_policy = policy.map_or(built.tool_policy, Arc::new);
+    let tool_policy = built.tool_policy;
     let (tasks, expiry) = stdio_tasks::open(
         &config,
         &built.meta_mcp,
-        &tool_policy,
         &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
             config.clone(),
             std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
@@ -392,10 +394,10 @@ async fn a_stdio_task_s_inner_call_is_cached_under_the_operator() {
 /// through the dispatch chokepoint.
 #[tokio::test]
 async fn a_stdio_task_runs_under_the_current_tool_policy() {
-    let denying = ToolPolicy::from_config(&ToolPolicyConfig {
+    let denying = ToolPolicyConfig {
         deny: vec![DENIED.to_string()],
         ..ToolPolicyConfig::default()
-    });
+    };
     let fixture = Box::pin(fixture(Some(denying))).await;
     let sync = dispatch(&fixture, modern_call(1, DENIED, "u5-denied-sync", false)).await;
     let refused = dispatch(&fixture, modern_call(2, DENIED, "u5-denied", true)).await;
@@ -769,7 +771,6 @@ async fn an_unresolvable_auth_config_leaves_the_stdio_store_open() {
     let opened = stdio_tasks::open(
         &config,
         &fixture.meta,
-        &fixture.policy,
         &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
             config.clone(),
             std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
