@@ -117,6 +117,16 @@ fn a_free_form_fragment_name_fails() {
     assert!(error(root.path()).contains("notes.tsv"));
 }
 
+/// A fragment whose extension is not lower-case `.tsv` fails, naming it,
+/// instead of being skipped and never loaded.
+#[test]
+fn a_wrong_case_extension_fails() {
+    for name in ["1.TSV", "1.Tsv"] {
+        let root = crate_with("a\n", &[(name, b"b\n")]);
+        assert!(error(root.path()).contains(name), "{name} was skipped");
+    }
+}
+
 #[test]
 fn a_non_ascii_digit_fragment_name_fails() {
     let root = crate_with("a\n", &[("\u{663}.tsv", b"b\n")]);

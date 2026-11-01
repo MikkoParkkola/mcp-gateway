@@ -94,7 +94,12 @@ fn fragment_files(dir: &Path) -> Result<Vec<PathBuf>, String> {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        if path.extension().is_none_or(|ext| ext != "tsv") {
+        // Any letter case of `tsv` marks a fragment candidate, so `1.TSV` fails
+        // the name rule below instead of being skipped and never loaded.
+        if path
+            .extension()
+            .is_none_or(|ext| !ext.eq_ignore_ascii_case("tsv"))
+        {
             continue;
         }
         if !fragment_name_ok(&name) {
