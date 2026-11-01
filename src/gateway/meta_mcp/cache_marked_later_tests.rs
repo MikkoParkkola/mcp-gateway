@@ -214,8 +214,9 @@ async fn a_keyed_cached_result_removes_a_value_marked_after_it_was_stored() {
     );
 }
 
-/// 7a: a keyed call's cached error, served again after the value its message
-/// holds was marked, says it redacted; the backend is called once.
+/// 7a: a keyed call's cached error (answered as a result carrying the
+/// error's message), served again after the value its message holds was
+/// marked, comes back redacted; the backend is called once.
 #[tokio::test]
 async fn a_keyed_cached_error_removes_a_value_marked_after_it_was_stored() {
     let (registry, meta, calls) = keyed_gateway(Answer::Error);
@@ -234,7 +235,7 @@ async fn a_keyed_cached_error_removes_a_value_marked_after_it_was_stored() {
             &caller,
         )
         .await
-        .expect_err("the call is refused")
+        .expect("the error is answered as a result")
         .to_string()
     };
     let first = call().await;
