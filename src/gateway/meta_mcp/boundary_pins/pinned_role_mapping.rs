@@ -82,9 +82,11 @@ impl Sink for Reads {
                 member: syn::Member::Named(name),
                 ..
             }) => self.note(key, &name.to_string()),
-            syn::Expr::Macro(mac) => macro_reads(&mac.mac)
-                .into_iter()
-                .for_each(|n| self.note(key.clone(), n)),
+            syn::Expr::Macro(mac) => {
+                for name in macro_reads(&mac.mac) {
+                    self.note(key.clone(), name);
+                }
+            }
             _ => {}
         }
     }
@@ -92,9 +94,9 @@ impl Sink for Reads {
     fn stmt(&mut self, at: &Place, stmt: &syn::Stmt) {
         if let (Some(func), syn::Stmt::Macro(mac)) = (&at.func, stmt) {
             let key = (at.file.clone(), func.clone());
-            macro_reads(&mac.mac)
-                .into_iter()
-                .for_each(|n| self.note(key.clone(), n));
+            for name in macro_reads(&mac.mac) {
+                self.note(key.clone(), name);
+            }
         }
     }
 
