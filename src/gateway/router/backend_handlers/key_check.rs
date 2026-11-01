@@ -75,6 +75,7 @@ pub(super) async fn key_refusal(
         cost_key: None,
         trace_id: tool,
         caller_key: None,
+        generation: None,
     };
     // MIK-8356: on a per-user backend, a tool this caller's own catalogue
     // withholds or lacks answers as an absent name (-32601), whatever the

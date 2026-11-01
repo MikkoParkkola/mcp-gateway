@@ -131,6 +131,7 @@ pub struct MetaMcpCallerContext<'a> {
     /// `None` is a call with no pinned generation; it judges with the live
     /// config's current one. Production sites always pin one
     /// (`boundary_pins::pinned_generation`).
+    #[cfg_attr(not(feature = "cost-governance"), allow(dead_code))]
     pub(crate) generation: Option<&'a crate::config_reload::Generation>,
 }
 

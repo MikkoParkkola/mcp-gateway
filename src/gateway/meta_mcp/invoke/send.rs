@@ -151,6 +151,7 @@ impl MetaMcp {
             cost_key: caller.cost_key(),
             trace_id,
             caller_key: None,
+            generation: caller.generation,
         }) {
             Ok(admission) => admission,
             Err(error) => {
@@ -315,7 +316,7 @@ impl MetaMcp {
             &lent,
             dispatch_binding.as_deref(),
             account_credential,
-            caller.cost_key(),
+            (caller.cost_key(), caller.generation),
             trace_id,
             policy_epoch,
             protocol_revision,
