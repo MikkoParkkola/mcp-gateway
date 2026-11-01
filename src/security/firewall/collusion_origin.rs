@@ -11,7 +11,7 @@ use std::sync::{Arc, LazyLock};
 use super::super::CollusionView;
 
 /// The source identity a record holds: one `server:tool`, or the
-/// contributors of a seam between plan steps (`MIK-8113`), which leaves only
+/// contributors of a seam between plan steps, which leaves only
 /// by a flow every contributor has.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) enum Origin {

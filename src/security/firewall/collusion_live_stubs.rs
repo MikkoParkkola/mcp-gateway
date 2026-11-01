@@ -11,8 +11,8 @@ impl CollusionDetector {
         self.state.get_mut().budget.limit = n;
     }
 
-    /// The overflow pairs `(source, inferred)` `caller` holds for the
-    /// fingerprints of `text` (tests only).
+    /// The distinct overflow pairs `(source, inferred)` `caller` holds for
+    /// the fingerprints of `text` (tests only).
     pub(crate) fn overflow_pairs_of(
         &self,
         text: &str,
@@ -20,7 +20,8 @@ impl CollusionDetector {
     ) -> Vec<(std::sync::Arc<str>, bool)> {
         let principal = self.digest(caller);
         let state = self.state.lock();
-        self.fingerprints(text)
+        let mut pairs: Vec<_> = self
+            .fingerprints(text)
             .iter()
             .filter_map(|fp| match state.entries.get(fp) {
                 Some(Entry {
@@ -30,7 +31,10 @@ impl CollusionDetector {
                 _ => None,
             })
             .flatten()
-            .collect()
+            .collect();
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
     }
 
     /// Whether `caller`'s overflow for a fingerprint of `text` is marked
