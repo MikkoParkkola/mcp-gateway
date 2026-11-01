@@ -195,6 +195,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/fragments.rs",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",
         "cfg(test) source scanner reading Cargo.toml and the crate's own sources for the MIK-8481 unshipped-read guard; no secret",
     ),
