@@ -13,6 +13,11 @@ impl OAuthClient {
     ///
     /// Returns an error if token refresh and re-authorization both fail.
     pub async fn get_token(&self) -> Result<String> {
+        // The install was saved under another issuer: no credential of either
+        // issuer is used until the transport's token step has re-discovered.
+        if self.issuer_differs() {
+            return Err(self.issuer_wait());
+        }
         // A sign-in confirmed elsewhere since this client last adopted: the
         // cache may be an older token, so take the stored one first.
         if self.install_stale()
@@ -57,7 +62,7 @@ impl OAuthClient {
     /// The cached access token, if it is unexpired: one read of the cell, so
     /// no expiry can land between the check and the copy (MIK-8339).
     pub(crate) fn live_token(&self) -> Option<String> {
-        if self.install_stale() {
+        if self.install_stale() || self.issuer_differs() {
             return None;
         }
         self.current_token
@@ -92,6 +97,9 @@ impl OAuthClient {
     ) -> Result<String> {
         if let Some(access) = self.live_token() {
             return Ok(access);
+        }
+        if self.issuer_differs() {
+            return Err(self.issuer_wait());
         }
         if self.install_stale()
             && let Some(access) = self.adopt_installed()

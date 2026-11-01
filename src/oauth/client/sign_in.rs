@@ -112,6 +112,9 @@ pub(crate) struct SignInStatus {
     /// Bumped once a confirmed sign-in is durable in storage, so a client
     /// holding an older token knows to adopt the new one.
     installed: std::sync::atomic::AtomicU64,
+    /// The storage key (which names the issuer) the latest confirmed sign-in
+    /// was saved under; stored before the count is bumped.
+    install_key: parking_lot::Mutex<Option<String>>,
 }
 
 impl SignInStatus {
@@ -120,6 +123,7 @@ impl SignInStatus {
         Self {
             cell: parking_lot::Mutex::new(Stored::Fixed(initial)),
             installed: std::sync::atomic::AtomicU64::new(0),
+            install_key: parking_lot::Mutex::new(None),
         }
     }
 
@@ -128,12 +132,20 @@ impl SignInStatus {
         self.installed.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Record a confirmed sign-in, returning the new count.
+    /// Record a confirmed sign-in saved under `key`, returning the new count.
+    /// The key is stored first, so a reader that sees the new count sees the
+    /// key it belongs to.
     #[cfg(feature = "webui")]
-    pub(crate) fn bump_installed(&self) -> u64 {
+    pub(crate) fn record_install(&self, key: &str) -> u64 {
+        *self.install_key.lock() = Some(key.to_owned());
         self.installed
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
             + 1
+    }
+
+    /// The storage key of the latest confirmed sign-in, if any.
+    pub(crate) fn install_key(&self) -> Option<String> {
+        self.install_key.lock().clone()
     }
 
     /// Replace the value.
@@ -303,6 +315,26 @@ impl OAuthClient {
             .store(status.installed(), std::sync::atomic::Ordering::SeqCst);
         self.sign_in_status = Some(status);
         self
+    }
+
+    /// Whether the latest confirmed sign-in was saved under another issuer
+    /// than this client discovered: then no credential of either issuer is
+    /// used until the client has re-discovered and agrees.
+    pub(super) fn issuer_differs(&self) -> bool {
+        let Some(status) = &self.sign_in_status else {
+            return false;
+        };
+        match (status.install_key(), self.credential_key().ok()) {
+            (Some(installed), Some(own)) => installed != own,
+            _ => false,
+        }
+    }
+
+    /// The sign-in wait a caller gets while the issuers differ.
+    pub(super) fn issuer_wait(&self) -> crate::Error {
+        crate::Error::AuthorizationRequired {
+            backend: self.backend_name.clone(),
+        }
     }
 
     /// Whether a sign-in was confirmed since this client last adopted from

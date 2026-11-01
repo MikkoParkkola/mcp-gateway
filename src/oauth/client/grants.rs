@@ -543,9 +543,9 @@ impl OAuthClient {
         *self.current_token.write() = Some(token);
         self.publish_sign_in();
         // The file is durable: tell every client of this backend.
-        if let Some(status) = &self.sign_in_status {
+        if let (Some(status), Ok(key)) = (&self.sign_in_status, self.credential_key()) {
             self.installed_seen
-                .store(status.bump_installed(), std::sync::atomic::Ordering::SeqCst);
+                .store(status.record_install(&key), std::sync::atomic::Ordering::SeqCst);
         }
         Ok(())
     }
