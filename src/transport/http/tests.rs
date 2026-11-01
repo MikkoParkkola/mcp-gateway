@@ -98,11 +98,13 @@ fn sse_stream(body: impl Into<bytes::Bytes>) -> impl futures::Stream<Item = Resu
     futures::stream::iter(vec![Ok(body.into())])
 }
 
-fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
+/// A client for `resource` over a token store in its own temp folder, which
+/// the caller holds as long as the client: dropped, it takes the store with it.
+fn oauth_client_for(resource: &str) -> (tempfile::TempDir, crate::oauth::OAuthClient) {
     use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
-    let storage =
-        Arc::new(TokenStorage::new(std::env::temp_dir().join("http_transport_tls_guard")).unwrap());
-    OAuthClient::new(
+    let dir = tempfile::tempdir().expect("token dir");
+    let storage = Arc::new(TokenStorage::new(dir.path().join("tokens")).unwrap());
+    let client = OAuthClient::new(
         reqwest::Client::new(),
         "test-backend".to_string(),
         resource.to_string(),
@@ -112,18 +114,23 @@ fn oauth_client_for(resource: &str) -> crate::oauth::OAuthClient {
             token_refresh_buffer_secs: Some(300),
             ..Default::default()
         },
-    )
+    );
+    (dir, client)
 }
 
-fn transport_with_oauth(url: &str) -> Result<Arc<HttpTransport>> {
+/// An OAuth transport for `url`, and the temp folder its token store lives
+/// in, held by the caller for as long as the transport.
+fn transport_with_oauth(url: &str) -> Result<(Arc<HttpTransport>, tempfile::TempDir)> {
+    let (dir, client) = oauth_client_for(url);
     HttpTransport::new_with_oauth(
         url,
         HashMap::new(),
         Duration::from_secs(5),
         true,
-        Some(oauth_client_for(url)),
+        Some(client),
         None,
     )
+    .map(|transport| (transport, dir))
 }
 
 /// Serve one fixed status and body to every POST, substituting the caller's own
@@ -401,7 +408,8 @@ mod status_typing;
 async fn an_oauth_transport_shares_one_gate_with_its_client() {
     let url = "http://127.0.0.1:1/mcp";
     let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
-    let gated = oauth_client_for(url).with_login_gate(Arc::clone(&gate));
+    let (_dir, client) = oauth_client_for(url);
+    let gated = client.with_login_gate(Arc::clone(&gate));
     let t = HttpTransport::new_with_oauth(
         url,
         HashMap::new(),
@@ -416,7 +424,7 @@ async fn an_oauth_transport_shares_one_gate_with_its_client() {
         "a gated client's gate is kept"
     );
 
-    let t = transport_with_oauth(url).unwrap();
+    let (t, _dir) = transport_with_oauth(url).unwrap();
     let client_gate = t
         .oauth_client
         .as_ref()

@@ -226,7 +226,7 @@ fn cleartext_without_oauth_is_unchanged() {
 async fn get_oauth_token_refuses_a_downgraded_message_endpoint() {
     // Row 11: the request-time barrier, independent of construction. The
     // message endpoint is the URL the token is actually posted to.
-    let t = transport_with_oauth("https://backend.example/sse").unwrap();
+    let (t, _dir) = transport_with_oauth("https://backend.example/sse").unwrap();
     *t.message_url.write() = Some("http://backend.example/messages".to_string());
 
     let err = t
