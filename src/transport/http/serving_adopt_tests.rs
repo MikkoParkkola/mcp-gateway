@@ -120,21 +120,36 @@ async fn get_token_s_cached_return_sees_a_confirmed_sign_in() {
 }
 
 // An adoption that cannot read the confirmed token must not be acknowledged,
-// and must not leave the old account's cached token serving as current: the
-// next call retries (here it finds no token and would have to sign in again).
-// Red today: both reads fail, the counter is recorded anyway, and the old
-// token is returned.
+// and must not leave the old account's cached token serving as current. The
+// failing call is a non-interactive one, so it ends at once instead of opening
+// a login; once the file is readable again the next call adopts the install.
+// Red today: both reads fail, the count is recorded anyway, and the old token
+// is returned.
 #[tokio::test]
 async fn a_failed_adoption_does_not_acknowledge_the_install() {
     let pair = pair(&a_token("old", None, 3600)).await;
     assert_eq!(next_token(&pair).await, "old");
     confirm(&pair, a_token("new", Some("r2"), 3600)).await;
-    std::fs::write(pair.confirming.token_path_for_test(), "not json").unwrap();
+    let path = pair.confirming.token_path_for_test();
+    let readable = std::fs::read(&path).unwrap();
+    std::fs::write(&path, "not json").unwrap();
 
-    let served = tokio::time::timeout(HANG_BOUND, pair.serving.get_oauth_token()).await;
+    let failed = tokio::time::timeout(
+        HANG_BOUND,
+        crate::oauth::login_gate::non_interactive(pair.serving.get_oauth_token()),
+    )
+    .await
+    .expect("the probe path answers");
 
     assert!(
-        !matches!(&served, Ok(Ok(Some(token))) if token == "old"),
-        "the old account's token still serves: {served:?}"
+        !matches!(&failed, Ok(Some(token)) if token == "old"),
+        "the old account's token still serves: {failed:?}"
     );
+    let client = pair.serving.oauth_client_for_test().expect("a client");
+    assert!(
+        client.lock().await.install_stale_for_test(),
+        "the install is still unacknowledged"
+    );
+    std::fs::write(&path, readable).unwrap();
+    assert_eq!(next_token(&pair).await, "new", "the next call adopts it");
 }

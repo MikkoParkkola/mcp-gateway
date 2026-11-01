@@ -642,3 +642,72 @@ async fn a_background_refresh_that_retires_the_token_republishes_the_status() {
     assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
     assert_eq!(cell.snapshot(), SignIn::Expired);
 }
+
+/// The same retirement through `get_token` and through `get_token_detached`:
+/// each republishes, so the cell reads `Expired` with no dispatch in between.
+/// Red today: neither republishes after a failed refresh.
+#[tokio::test]
+async fn get_token_and_the_detached_step_republish_after_a_retiring_refresh() {
+    use super::sign_in::{SignIn, SignInStatus};
+    for detached in [false, true] {
+        let server = TokenServer::start(&[]).await;
+        let dir = tempfile::tempdir().unwrap();
+        let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+        let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+        rotating(&owned);
+        hold(&owned, &token("a1", Some("r1"), true));
+        owned.publish_sign_in();
+        token_endpoint(&mut owned, malformed_endpoint().await);
+
+        let outcome = if detached {
+            let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+            let owned = owned.with_login_gate(Arc::clone(&gate));
+            let deadline = tokio::time::Instant::now() + crate::test_wait::HANG_BOUND;
+            let result = owned
+                .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
+                .await;
+            result
+        } else {
+            headless(&owned).await
+        };
+
+        assert!(outcome.is_err(), "detached={detached}: the refresh failed");
+        assert_eq!(cell.snapshot(), SignIn::Expired, "detached={detached}");
+    }
+}
+
+/// A refresh whose caller stopped waiting (its deadline passed in
+/// `get_token_detached`) still publishes: the exchange is held, the caller has
+/// returned, and only then is the exchange released. The task that completes
+/// it settles the state, so the cell shows the new expiry. Red today: the
+/// publish ran in the dropped caller.
+#[tokio::test]
+async fn a_detached_refresh_whose_caller_left_still_publishes() {
+    use super::sign_in::{SignIn, SignInStatus};
+    use crate::test_wait::HANG_BOUND;
+    let server = TokenServer::start(&[super::token_server_fixture::Answer::HoldThenRotate]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let gate = Arc::new(crate::oauth::login_gate::LoginGate::default());
+    let owned = client(dir.path(), &server)
+        .with_sign_in_status(Arc::clone(&cell))
+        .with_login_gate(Arc::clone(&gate));
+    hold(&owned, &token("a1", Some("r1"), true));
+    owned.publish_sign_in();
+    let before = cell.snapshot();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+
+    let left = owned
+        .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
+        .await;
+
+    assert!(left.is_err(), "the caller's deadline passed mid-exchange");
+    assert_eq!(server.sent.lock().unwrap().len(), 1, "the exchange is held");
+    assert_eq!(cell.snapshot(), before, "nothing settled yet");
+    server.release.notify_one();
+    let began = std::time::Instant::now();
+    while cell.snapshot() == before && began.elapsed() < HANG_BOUND {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_ne!(cell.snapshot(), before, "the completing task published");
+}

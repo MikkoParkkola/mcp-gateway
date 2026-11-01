@@ -138,6 +138,8 @@ async fn a_slow_discovery_shortens_the_authorization_window() {
     gw.backend.set_sign_in_windows_for_test(windows(4, 30));
     let (reached, release) = gw.backend.sign_in.discovery_pause.arm();
     let owner = gw.session();
+    let t0 = crate::clock::unix_secs().expect("a readable clock");
+    let clock = crate::clock::test_clock::at_secs(t0);
     tokio::time::pause();
     let admitted = tokio::time::Instant::now();
     let start = tokio::spawn({
@@ -147,6 +149,8 @@ async fn a_slow_discovery_shortens_the_authorization_window() {
     crate::test_pause::within("the start reaches discovery", reached.notified()).await;
 
     tokio::time::advance(Duration::from_secs(2)).await;
+    drop(clock);
+    let _later = crate::clock::test_clock::at_secs(t0 + 2);
     release.notify_one();
     let reply = tokio::time::timeout(HANG_BOUND, start)
         .await
@@ -154,6 +158,14 @@ async fn a_slow_discovery_shortens_the_authorization_window() {
         .expect("the request ran");
 
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    // The promised end the answer carries is also counted from admission.
+    let ends = chrono::DateTime::parse_from_rfc3339(reply.json()["expires_at"].as_str().unwrap())
+        .expect("expires_at is RFC 3339")
+        .timestamp();
+    assert!(
+        ends <= i64::try_from(t0).unwrap() + 4,
+        "expires_at runs from admission: {ends} against {t0}"
+    );
     let until = gw
         .backend
         .with_flow(|slot| slot.as_ref().map(|flow| flow.until))

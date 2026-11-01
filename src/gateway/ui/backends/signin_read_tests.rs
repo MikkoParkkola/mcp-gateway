@@ -8,7 +8,7 @@ use crate::oauth::client::sign_in::SignIn;
 
 /// Every state, and whether a person must sign in for it with no wait
 /// recorded. A wait always needs one.
-fn truth_table() -> [(SignIn, &'static str, bool); 7] {
+fn truth_table() -> [(SignIn, &'static str, bool); 8] {
     let held = SignIn::SignedIn { expires_at: None };
     [
         (SignIn::NotOAuth, "not_o_auth", false),
@@ -22,6 +22,7 @@ fn truth_table() -> [(SignIn, &'static str, bool); 7] {
             true,
         ),
         (SignIn::WaitingElsewhere, "waiting_elsewhere", true),
+        (SignIn::ProviderChanged, "provider_changed", true),
     ]
 }
 

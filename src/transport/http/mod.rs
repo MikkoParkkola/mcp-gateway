@@ -694,3 +694,10 @@ mod private_redirect_tests;
 
 #[cfg(all(test, feature = "webui"))]
 mod serving_adopt_tests;
+
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_double;
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_more_tests;
+#[cfg(all(test, feature = "webui"))]
+mod issuer_change_tests;
