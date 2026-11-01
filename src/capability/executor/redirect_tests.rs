@@ -117,6 +117,7 @@ async fn a_blocked_redirect_is_the_ssrf_refusal_and_leaves_health_alone() {
 
 /// Serves `app` on a fresh loopback port and returns the port.
 async fn serve(app: axum::Router) -> u16 {
+    // port-check: the listener moves into the spawned server and stays bound
     let listener = tokio::time::timeout(
         crate::test_wait::HANG_BOUND,
         tokio::net::TcpListener::bind("127.0.0.1:0"),
@@ -384,13 +385,22 @@ async fn an_allowed_redirect_is_followed_and_records_no_refusal() {
     assert_eq!(body, "ok", "the redirect was not followed to /ok");
 }
 
-/// Negative control: an ordinary transport failure (nothing listening) is
-/// the backend's, not a gateway refusal, and records no refusal.
+/// Negative control: an ordinary transport failure (a connection closed
+/// unanswered) is the backend's, not a gateway refusal, and records no
+/// refusal.
 #[tokio::test]
 async fn an_ordinary_transport_failure_records_no_refusal() {
-    let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-    let port = closed.local_addr().expect("addr").port();
-    drop(closed);
+    // A held listener that closes every connection unanswered: a transport
+    // failure on a port no other process can take in between.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            drop(stream);
+        }
+    });
     let client = super::client::build(None);
     let (ok, effect) = Box::pin(effect_of_send(
         client.get(format!("http://127.0.0.1:{port}/")),
