@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use super::direct_guards_fixture::{Answer, Fx, fixture_built, post_meta_invoke};
 use crate::cost_accounting::config::{AlertAction, AlertRule, CostGovernanceConfig};
 use crate::cost_accounting::enforcer::BudgetEnforcer;
+use crate::cost_accounting::enforcer::crossings::BudgetCrossing;
 use crate::cost_accounting::registry::CostRegistry;
+use crate::gateway::meta_mcp::invoke::dispatch_guards::{BackendCall, DirectOutcome};
 use crate::gateway::meta_mcp::visible::seams;
 
 const KEY: &str = "k-budget";
@@ -262,4 +264,151 @@ async fn t15_governance_turned_on_by_reload_judges_nothing() {
         let body = call(&fx).await;
         assert!(!refused(&body), "call {i}: no enforcer, no budget: {body}");
     }
+}
+
+/// A `Block` rule at `at_percent`, the only alert rule.
+fn block_at(at_percent: u32) -> Vec<AlertRule> {
+    vec![AlertRule {
+        at_percent,
+        action: AlertAction::Block,
+    }]
+}
+
+/// T12c: only a `Block` rule differs between N and N+1. A request that
+/// arrived with no rule keeps judging without one when a reload adds it
+/// mid-request; the next request meets it.
+#[tokio::test]
+async fn t12c_a_request_keeps_the_alert_rules_it_arrived_with() {
+    crate::test_day::same_utc_day_async(|| async move {
+        let mut cfg = governance(|c| Scope::Key.set(c, Some(10.0)));
+        cfg.alerts.clear();
+        let fx = fixture(&cfg).await;
+        spend(&fx, 5).await;
+        seams::after_intake(reload_hook(&fx, |c| c.alerts = block_at(50)));
+        let held = call(&fx).await;
+        assert!(!refused(&held), "N has no Block rule: {held}");
+        let next = call(&fx).await;
+        assert!(refused(&next), "N+1 blocks at 50 %: {next}");
+    })
+    .await;
+}
+
+/// T12c, reversed: arrived under a `Block` at 50 %, the rule removed
+/// mid-request; the held request is refused, the next admitted.
+#[tokio::test]
+async fn t12c_a_request_keeps_the_blocking_rule_it_arrived_with() {
+    crate::test_day::same_utc_day_async(|| async move {
+        let mut cfg = governance(|c| Scope::Key.set(c, Some(10.0)));
+        cfg.alerts = block_at(50);
+        let fx = fixture(&cfg).await;
+        spend(&fx, 4).await;
+        seams::after_intake(reload_hook(&fx, |c| c.alerts.clear()));
+        let held = call(&fx).await;
+        assert!(refused(&held), "N blocks at 50 %: {held}");
+        let next = call(&fx).await;
+        assert!(!refused(&next), "N+1 has no rule: {next}");
+    })
+    .await;
+}
+
+/// A `read` call as the direct route builds it, pinned to `generation`.
+fn backend_call(generation: Option<&crate::config_reload::Generation>) -> BackendCall<'_> {
+    BackendCall {
+        server: "alpha",
+        tool: "read",
+        session_id: None,
+        api_key_name: None,
+        cost_key: None,
+        trace_id: "",
+        caller_key: None,
+        generation,
+    }
+}
+
+/// Crossings the enforcer reports from now on, as `(scope, percent)`.
+fn watch_crossings(fx: &Fx) -> Arc<std::sync::Mutex<Vec<(String, u8)>>> {
+    let seen: Arc<std::sync::Mutex<Vec<(String, u8)>>> = Arc::default();
+    let sink = Arc::clone(&seen);
+    let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+    enforcer.observe(Arc::new(move |c: BudgetCrossing| {
+        sink.lock().unwrap().push((c.scope, c.percent));
+    }));
+    seen
+}
+
+/// T12d: $7.50 spent. A call admitted under N (daily budget 10) settles $1
+/// after N+1 (daily budget 20) publishes. $8.50 crosses N's 80 % mark and no
+/// mark of N+1's (42.5 %), and the crossing is N's alone.
+#[tokio::test]
+async fn t12d_a_delayed_settlement_reports_the_crossings_of_its_own_budget() {
+    crate::test_day::same_utc_day_async(|| async move {
+        let fx = fixture(&governance(|c| c.budgets.daily = Some(10.0))).await;
+        let meta = &fx.state.meta_mcp;
+        meta.budget_enforcer
+            .as_ref()
+            .expect("armed")
+            .record_spend("other", None, 7.5);
+        let seen = watch_crossings(&fx);
+        let admitted_under = fx.state.live_config.generation();
+        let call = backend_call(Some(&admitted_under));
+        let admission = meta.admit_spend_for(&call).expect("fits under N");
+        reload(&fx, |c| c.budgets.daily = Some(20.0));
+        meta.account_dispatch(&call, DirectOutcome::Success { spend: true }, &admission);
+        assert_eq!(*seen.lock().unwrap(), [("global".to_owned(), 80)]);
+    })
+    .await;
+}
+
+/// T17: spent $0; a held call reserves $4; a reload sets the daily budget to
+/// 5; a competing $2 call is refused (6 > 5); settling the held call charges
+/// $4 exactly once.
+#[tokio::test]
+async fn t17_a_reservation_survives_the_reload_and_settles_once() {
+    crate::test_day::same_utc_day_async(|| async move {
+        let cfg = governance(|c| {
+            c.budgets.daily = Some(10.0);
+            c.tool_costs.insert("read".to_owned(), 4.0);
+            c.tool_costs.insert("write".to_owned(), 2.0);
+        });
+        let fx = fixture(&cfg).await;
+        let meta = &fx.state.meta_mcp;
+        let before = fx.state.live_config.generation();
+        let held = backend_call(Some(&before));
+        let admission = meta.admit_spend_for(&held).expect("4 fits under 10");
+        reload(&fx, |c| c.budgets.daily = Some(5.0));
+        let after = fx.state.live_config.generation();
+        let competing = BackendCall {
+            tool: "write",
+            ..backend_call(Some(&after))
+        };
+        assert!(
+            meta.admit_spend_for(&competing).is_err(),
+            "the held 4 counts against the new budget: 4 + 2 > 5"
+        );
+        meta.account_dispatch(&held, DirectOutcome::Success { spend: true }, &admission);
+        let enforcer = meta.budget_enforcer.as_ref().expect("armed");
+        assert!((enforcer.snapshot().global_daily_usd - 4.0).abs() < 1e-9);
+    })
+    .await;
+}
+
+/// A call with no pin judges with the live config's current generation.
+#[tokio::test]
+async fn an_unpinned_call_judges_with_the_live_generation() {
+    crate::test_day::same_utc_day_async(|| async move {
+        let fx = fixture(&governance(|c| c.budgets.daily = Some(10.0))).await;
+        let meta = &fx.state.meta_mcp;
+        meta.set_live_config(Arc::clone(&fx.state.live_config));
+        meta.budget_enforcer
+            .as_ref()
+            .expect("armed")
+            .record_spend("other", None, 6.0);
+        assert!(meta.admit_spend_for(&backend_call(None)).is_ok());
+        reload(&fx, |c| c.budgets.daily = Some(5.0));
+        assert!(
+            meta.admit_spend_for(&backend_call(None)).is_err(),
+            "7 of the live budget 5"
+        );
+    })
+    .await;
 }
