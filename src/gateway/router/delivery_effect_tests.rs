@@ -400,6 +400,13 @@ async fn a_lookalike_echo_refusal_records_no_refusal() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
         let recorded = firewalled_recorded_call(route, Answer::FailsWith(lookalike), None).await;
         let row = only_delivery(route, &recorded.rows);
-        assert_eq!(row["response_effect"], "delivered", "{route:?}: {row}");
+        // The scrub's two effects are absent. The meta route answers a failed
+        // dispatch as a tool result carrying the gateway's recovery hint,
+        // which is an annotation; the direct route frames the error as sent.
+        let expected = match route {
+            HttpRoute::Mcp => "annotated",
+            HttpRoute::Direct => "delivered",
+        };
+        assert_eq!(row["response_effect"], expected, "{route:?}: {row}");
     }
 }
