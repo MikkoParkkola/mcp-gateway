@@ -223,10 +223,15 @@ fn l1d3_dropping_the_flush_guard_waits_for_the_queued_lines() {
         line(&w, &format!("queued-{n}"));
     }
     let seen = out.clone();
+    let (dropping_tx, dropping) = std::sync::mpsc::channel();
     let dropper = std::thread::spawn(move || {
+        dropping_tx.send(()).expect("the test waits for this");
         drop(f);
         seen.lines()
     });
+    // Opened only once the drop is under way: a drop that does not wait
+    // returns before the writer, still parked until now, can catch up.
+    dropping.recv().expect("the flush thread starts");
     gate.open();
     let at_return = dropper.join().expect("the flush thread");
     assert_eq!(

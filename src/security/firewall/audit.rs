@@ -420,7 +420,7 @@ mod tests {
         logger.log_request(
             "sess-lossy",
             "srv",
-            "tool",
+            "l3-lossy-probe",
             "caller",
             &json!({}),
             &clean_verdict(),
@@ -428,7 +428,10 @@ mod tests {
         drop(stalled);
         let lines = read_lines(tmp.path());
         assert!(
-            lines.iter().any(|l| l.contains("sess-lossy")),
+            // The session id is stored hashed; the tool name as written.
+            lines
+                .iter()
+                .any(|l| l.contains("\"tool\":\"l3-lossy-probe\"")),
             "the entry is not in its file: {lines:?}"
         );
     }
