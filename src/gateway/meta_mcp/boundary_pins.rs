@@ -5,11 +5,15 @@
 
 mod allow_pins;
 mod allowed_root_pins;
+mod caller_view;
 mod ci_wiring;
 mod creation_sites;
 mod delivery_framing;
 mod discarded_sends;
+mod echo_rows_real_transports;
+mod fragments;
 mod guard_tests;
+mod inbound_parse_sites;
 mod invoke_stages;
 mod invoke_stages_allow;
 mod invoke_stages_dest;
@@ -18,6 +22,7 @@ mod invoke_stages_rules;
 mod invoke_stages_tests;
 mod keyed_request;
 mod live_generation;
+mod needle_attach_sites;
 mod packaged;
 mod presend_exits;
 mod response_funnels;

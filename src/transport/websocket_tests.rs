@@ -475,7 +475,9 @@ fn test_transport(url: &str) -> Arc<WebSocketTransport> {
 
 const WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-async fn mock_backend(mut script: impl FnMut(Value) -> Vec<Value> + Send + 'static) -> String {
+pub(super) async fn mock_backend(
+    mut script: impl FnMut(Value) -> Vec<Value> + Send + 'static,
+) -> String {
     use futures::{SinkExt, StreamExt};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -508,7 +510,7 @@ async fn mock_backend(mut script: impl FnMut(Value) -> Vec<Value> + Send + 'stat
     url
 }
 
-async fn connected(url: &str) -> Arc<WebSocketTransport> {
+pub(super) async fn connected(url: &str) -> Arc<WebSocketTransport> {
     let t = test_transport(url);
     tokio::time::timeout(WAIT, t.connect())
         .await

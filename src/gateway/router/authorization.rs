@@ -8,6 +8,7 @@ use tracing::warn;
 
 use super::AppState;
 use super::backend_choke::backend_for;
+use super::caller_hiding::{CallerParts, admits_some_tool};
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
@@ -501,14 +502,8 @@ fn backend_admitted(
     if agent.is_none() && !mtls {
         return true;
     }
-    backend_tool_names(state, client, server)
-        .iter()
-        .any(|tool| {
-            agent.is_none_or(|id| {
-                check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
-            }) && (!mtls
-                || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
-        })
+    let tools = backend_tool_names(state, client, server);
+    admits_some_tool(state, (agent, cert_identity), server, &tools)
 }
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
@@ -719,6 +714,7 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
 /// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a
 /// background worker can rebuild the identical borrowed authorizer after the
 /// request future is gone.
+#[derive(Clone)]
 pub(crate) struct OwnedRouterAuthorizer {
     client: Option<AuthenticatedClient>,
     oauth_agent_identity: Option<OAuthAgentIdentity>,
@@ -738,6 +734,15 @@ impl OwnedRouterAuthorizer {
             cert_identity: cert.cloned(),
             principal: refusal_principal(client, oauth, cert),
         }
+    }
+
+    /// The caller's client, agent identity and certificate.
+    pub(super) fn parts(&self) -> CallerParts<'_> {
+        (
+            self.client.as_ref(),
+            self.oauth_agent_identity.as_ref(),
+            self.cert_identity.as_ref(),
+        )
     }
 
     /// The borrowed authorizer, judged by `generation`: the one current when

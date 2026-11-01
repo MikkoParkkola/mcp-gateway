@@ -234,7 +234,7 @@ impl MetaMcp {
         ) {
             return Err(refusal);
         }
-        match self.get_capabilities() {
+        match self.caller_capabilities() {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),

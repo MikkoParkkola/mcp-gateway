@@ -26,8 +26,9 @@ use crate::secret_injection::{
 use crate::secrets::SecretResolver;
 use crate::{Error, Result};
 
-/// What a call is sent with: its params, and its per-call headers.
-pub(super) type Outbound = (Option<Value>, Vec<(String, String)>);
+/// What a call is sent with: its params, its per-call headers, and whether a
+/// rule injected a value (the send then needs a transport that redacts).
+pub(super) type Outbound = (Option<Value>, Vec<(String, String)>, bool);
 
 /// A call's params with the keys its rules own dropped, and the resolved
 /// values held back until the mirror has read the params.
@@ -53,14 +54,14 @@ impl Prepared {
                 .any(|owned| held.eq_ignore_ascii_case(owned))
         });
         let Some((arguments, injected)) = self.injected else {
-            return (self.params, headers);
+            return (self.params, headers, false);
         };
         let mut params = self.params;
         if let Some(Value::Object(map)) = params.as_mut() {
             map.insert("arguments".to_owned(), arguments);
         }
         headers.extend(injected);
-        (params, headers)
+        (params, headers, true)
     }
 }
 
@@ -69,6 +70,61 @@ impl Backend {
     /// wins.
     pub(crate) fn stamp_secret_resolver(&self, resolver: Arc<SecretResolver>) {
         let _ = self.secret_resolver.set(resolver);
+    }
+
+    /// Stamped by the registry with its name's shared set; the first stamp
+    /// wins.
+    pub(crate) fn stamp_needles(&self, needles: Arc<crate::security::needles::NeedleSet>) {
+        let _ = self.needles.set(needles);
+    }
+
+    /// Gives `transport` this backend's injected values, so every answer it
+    /// reads, the startup exchange included, is scrubbed of them.
+    pub(crate) fn attach_needles_to(&self, transport: &crate::transport::HttpTransport) {
+        if let Some(needles) = self.needles.get() {
+            transport.attach_needles(Arc::clone(needles));
+        }
+    }
+
+    /// No injected value goes to a transport that cannot scrub its echo
+    /// (DELTA-10): a construction site that skipped the attach refuses here
+    /// rather than sending.
+    pub(super) fn refuse_unredacted(
+        &self,
+        injects: bool,
+        transport: &dyn crate::transport::Transport,
+    ) -> Result<()> {
+        if injects && !transport.redacts_injected_values() {
+            tracing::error!(
+                backend = %self.name,
+                "a call carrying an injected secret was refused: its transport holds no \
+                 redaction set"
+            );
+            return Err(Error::JsonRpc {
+                code: -32603,
+                message: "the gateway refused to send an injected credential over a transport \
+                          that cannot redact it"
+                    .to_owned(),
+                data: None,
+            });
+        }
+        Ok(())
+    }
+
+    /// Adds every value this backend's rules resolve to now, so a value is
+    /// removed from what the backend sends before any call injects it (a
+    /// tool description, an initialize answer). A rule that does not resolve
+    /// yet adds nothing; its value joins when a send resolves it.
+    pub(crate) fn seed_needles(&self) {
+        let (Some(resolver), Some(needles)) = (self.secret_resolver.get(), self.needles.get())
+        else {
+            return;
+        };
+        for rule in &self.config.secrets {
+            if let Ok(value) = resolver.resolve(&rule.value) {
+                needles.insert(&self.name, &value);
+            }
+        }
     }
 
     /// The rules of this backend that apply to `tool`.
@@ -170,6 +226,26 @@ impl Backend {
             return unchanged(params);
         };
         let injection = inject_rules(&self.config.secrets, resolver, &self.name, &tool, owned)?;
+        // Every value this send carries joins the backend's set before the
+        // send leaves, so its echo is removed from whatever comes back.
+        if let Some(needles) = self.needles.get() {
+            for rule in &rules {
+                let sent = match rule.inject_as {
+                    InjectTarget::Argument => injection
+                        .arguments
+                        .get(&rule.inject_key)
+                        .and_then(Value::as_str),
+                    InjectTarget::Header => {
+                        injection.headers.get(&rule.inject_key).map(String::as_str)
+                    }
+                    InjectTarget::Query => None,
+                };
+                if let Some(value) = sent {
+                    needles.insert(&self.name, value);
+                    needles.warn_if_short(&self.name, &rule.name, value);
+                }
+            }
+        }
         let owned_headers = rules
             .iter()
             .filter(|rule| matches!(rule.inject_as, InjectTarget::Header))
@@ -211,3 +287,7 @@ impl Backend {
 #[cfg(test)]
 #[path = "secret_send_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "secret_attach_refusal_tests.rs"]
+mod attach_refusal_tests;
