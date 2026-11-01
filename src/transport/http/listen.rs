@@ -100,12 +100,14 @@ impl HttpTransport {
             .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"));
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
+        let needles = self.needles.get().cloned();
         tokio::spawn(async move {
+            let needles = needles.as_deref();
             let read = async {
                 if single {
-                    read_single(response, &id, &id_value, &requested, &tx).await;
+                    read_single(response, &id, &id_value, &requested, &tx, needles).await;
                 } else {
-                    read_stream(response, &id, &id_value, &requested, &tx).await;
+                    read_stream(response, &id, &id_value, &requested, &tx, needles).await;
                 }
             };
             tokio::select! {
@@ -217,6 +219,7 @@ impl HttpTransport {
         }
         let (tx, rx) = mpsc::channel(TAP_CAPACITY);
         let cancel = self.listen_cancel.clone();
+        let needles = self.needles.get().cloned();
         tokio::spawn(async move {
             let read = async {
                 let mut decoder = SseDecoder::new(FRAME_CAP);
@@ -226,7 +229,10 @@ impl HttpTransport {
                         return;
                     };
                     for event in events {
+                        // Scrubbed first: the watch filter compares the
+                        // URI a client knows (lead ruling G9).
                         if let Some(note) = unsolicited_frame(&event.data)
+                            .and_then(|note| scrubbed(needles.as_deref(), note))
                             && watched.admits(&note)
                             && tx.send(note).await.is_err()
                         {
@@ -358,6 +364,16 @@ async fn next_events(
     }
 }
 
+/// `note` with the injected values removed from its URIs; `None` when it
+/// must not be handed on (the value set overflowed). The note is projected
+/// from the frame as sent, so its listen tag routed it first (DELTA-5).
+pub(super) fn scrubbed(
+    needles: Option<&crate::security::needles::NeedleSet>,
+    note: UpstreamNote,
+) -> Option<UpstreamNote> {
+    crate::transport::upstream_tap::scrub_note(needles, note)
+}
+
 /// One legacy stream payload as a note: only the three notifications.
 pub(super) fn unsolicited_frame(data: &str) -> Option<UpstreamNote> {
     match serde_json::from_str::<JsonRpcMessage>(data) {
@@ -374,6 +390,7 @@ async fn read_stream(
     id_value: &Value,
     requested: &Requested,
     tx: &mpsc::Sender<UpstreamNote>,
+    needles: Option<&crate::security::needles::NeedleSet>,
 ) {
     let mut decoder = SseDecoder::new(FRAME_CAP);
     let mut first = true;
@@ -388,6 +405,9 @@ async fn read_stream(
                 Frame::Note(note) => {
                     first = false;
                     let end = note.ends();
+                    let Some(note) = scrubbed(needles, note) else {
+                        return;
+                    };
                     // Waiting here only stops reading the socket: TCP flow
                     // control pushes back on the backend (§8).
                     if tx.send(note).await.is_err() || end {
@@ -412,6 +432,7 @@ async fn read_single(
     id_value: &Value,
     requested: &Requested,
     tx: &mpsc::Sender<UpstreamNote>,
+    needles: Option<&crate::security::needles::NeedleSet>,
 ) {
     let mut body = Vec::new();
     // Only a body read to its end is classified: a read error can cut a
@@ -430,7 +451,9 @@ async fn read_single(
     let Ok(text) = std::str::from_utf8(&body) else {
         return;
     };
-    if let Frame::Note(note) = frame(text, id, id_value, requested, true) {
+    if let Frame::Note(note) = frame(text, id, id_value, requested, true)
+        && let Some(note) = scrubbed(needles, note)
+    {
         let _ = tx.send(note).await;
     }
 }
