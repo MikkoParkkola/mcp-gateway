@@ -4,6 +4,8 @@
 
 use std::time::{Duration, Instant};
 
+use tracing_subscriber::layer::SubscriberExt;
+
 use super::test_sinks::{Step, flush, line, notices, parked, parked_on, scripted, scripted_with};
 use super::{LOG_FLUSH_DEADLINE, NoticeFormat, Sent, flush_until, notice_line};
 
@@ -283,4 +285,58 @@ fn l1d2_the_flush_keeps_one_deadline_and_waits_only_for_what_is_left() {
 #[test]
 fn l1d2_the_production_flush_deadline_is_two_seconds() {
     assert_eq!(LOG_FLUSH_DEADLINE, Duration::from_secs(2));
+}
+
+/// An audit-field line is dropped and counted like any other while the queue
+/// is full, and the call that emits it returns (L1a).
+#[test]
+fn l1a_an_audit_field_line_is_dropped_and_counted_when_the_queue_is_full() {
+    crate::test_log_capture::keep_interest_open();
+    let (w, _f, gate, out) = parked(1, 1 << 20);
+    line(&w, "first");
+    assert!(gate.wait_entered(), "the writer never took a line");
+    line(&w, "fills the one slot");
+    let layer = crate::log_layer(NoticeFormat::Text, w.clone());
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::INFO)
+        .with(layer);
+    tracing::subscriber::with_default(subscriber, || {
+        crate::key_server::audit::emit(&crate::key_server::audit::AuditEvent::invalid(
+            "probe", None,
+        ));
+    });
+    assert_eq!(
+        w.dropped_lines(),
+        1,
+        "the audit line was dropped, not waited for"
+    );
+    gate.open();
+    assert!(out.wait_for(|t| t.contains("dropped 1")), "{}", out.text());
+    assert!(!out.text().contains("key_server audit"), "{}", out.text());
+}
+
+/// A text line keeps its escaping through the queue: one line, and no raw
+/// control sequence from a field (L1h).
+#[test]
+fn l1h_a_text_line_is_still_escaped_on_its_way_through_the_queue() {
+    crate::test_log_capture::keep_interest_open();
+    let (w, _f, out) = scripted(vec![]);
+    let layer = crate::log_layer(NoticeFormat::Text, w);
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+        tracing::warn!(
+            agent = %"mtls:runner\n2026-10-28T12:00:00Z  WARN forged: admin granted\x1b[2K",
+            "denied"
+        );
+    });
+    assert!(out.wait_for(|t| t.contains("denied")), "{}", out.text());
+    let text = out.text();
+    assert_eq!(
+        text.matches('\n').count(),
+        1,
+        "one event, one line: {text:?}"
+    );
+    assert!(
+        !text.contains("\x1b[2K"),
+        "a field wrote a raw control sequence: {text:?}"
+    );
 }
