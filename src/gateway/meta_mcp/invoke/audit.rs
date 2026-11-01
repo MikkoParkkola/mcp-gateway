@@ -220,6 +220,13 @@ pub(crate) enum Answered {
     Replay,
 }
 
+/// Whether `answered` answered this call; false outside a dispatch scope.
+pub(crate) fn answered_by(answered: Answered) -> bool {
+    NOTES
+        .try_with(|notes| notes.borrow().cached == Some(answered))
+        .unwrap_or(false)
+}
+
 /// MIK-7116.MIN.1: this call is answered from a store, past every gate. The
 /// answer is not this request's, so its delivery states no effect or findings.
 pub(crate) fn note_cached(answered: Answered) {

@@ -112,8 +112,13 @@ impl Backend {
             return;
         };
         // Whether or not it revokes, a page withdraws the effect it contradicts.
+        // Under the cache's guard, taken first as every writer of these sets
+        // takes it, so no replacement lands between the compare and the
+        // retain and makes an agreeing declaration look contradicted.
         let names: HashSet<String> = listed.iter().cloned().collect();
-        narrow_effect_to_page(&slot, listed, hints(read_only, write, hint, &names));
+        slot.tools_cache.with_cached(|_| {
+            narrow_effect_to_page(&slot, listed, hints(read_only, write, hint, &names));
+        });
         // In flight FIRST (MIK-8393 r7): a fill stores its sets before it
         // clears the mark, so with no fill in flight the reads below see
         // whatever the last fill stored.
