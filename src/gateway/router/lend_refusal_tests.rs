@@ -98,7 +98,10 @@ async fn gateway_in(
 ) -> (
     axum::Router,
     (tempfile::TempDir, super::tests::FixtureDir),
-    Arc<crate::gateway::meta_mcp::MetaMcp>,
+    (
+        Arc<crate::gateway::meta_mcp::MetaMcp>,
+        Arc<crate::backend::Backend>,
+    ),
 ) {
     let backend = Arc::new(crate::backend::Backend::new(
         BACKEND,
@@ -123,7 +126,10 @@ async fn gateway_in(
         std::time::Duration::from_secs(60),
     ));
     let registry = Arc::new(crate::backend::BackendRegistry::new());
-    assert!(registry.register(backend), "the backend registers");
+    assert!(
+        registry.register(Arc::clone(&backend)),
+        "the backend registers"
+    );
     let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&registry));
     meta.set_identity_propagation(Arc::new(mint));
     let log_dir = tempfile::tempdir().expect("a log directory");
@@ -150,7 +156,11 @@ async fn gateway_in(
     let meta = Arc::new(meta);
     state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
-    (super::create_router(state), (log_dir, store), meta)
+    (
+        super::create_router(state),
+        (log_dir, store),
+        (meta, backend),
+    )
 }
 
 /// POST a direct `tools/call` of [`TOOL`] as a verified caller, with the
@@ -469,7 +479,7 @@ async fn lend_refusals_on_either_route_record_no_budget_sample() {
         headers: vec![],
         expires_at: i64::MAX,
     };
-    let (router, _dirs, meta) =
+    let (router, _dirs, (meta, _)) =
         gateway_in(url, mint, crate::config::InputSchemaEnforcement::Off).await;
     // Past every window's threshold: the backend's minimum sample count is
     // the larger, and two more refusals than it would already be judged.
@@ -498,10 +508,9 @@ async fn lend_refusals_on_either_route_record_no_budget_sample() {
     );
 }
 
-/// LEND.5 where no route-stage verdict ran: a playbook step's target is not
-/// a route-stage target, so its cold fill is the dispatch check's own
-/// (`r2_check::answer_refused_fill`). The lender refuses that fill once and
-/// the step answers as a refusal, never as a backend error result to retry.
+/// LEND.5 for a playbook step: the lender refuses the step's cold fill
+/// once, nothing is sent, and the step answers as a refusal, never as a
+/// backend error result to retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
     let (url, calls) = peer().await;
@@ -509,7 +518,7 @@ async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
         headers: vec![],
         expires_at: i64::MAX,
     };
-    let (router, _dirs, meta) =
+    let (router, _dirs, (meta, backend)) =
         gateway_in(url, mint, crate::config::InputSchemaEnforcement::Closed).await;
     let mut engine = crate::playbook::PlaybookEngine::new();
     let definition = json!({
@@ -520,7 +529,6 @@ async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
     meta.set_playbook_engine(engine);
     let (status, answer) =
         meta_call(&router, "gateway_run_playbook", json!({"name": "plan"})).await;
-    let backend = meta.backends().get(BACKEND).expect("the backend");
     let refusals: Vec<usize> = backend.lend_refusals.lock().values().copied().collect();
     assert_eq!(
         refusals,
