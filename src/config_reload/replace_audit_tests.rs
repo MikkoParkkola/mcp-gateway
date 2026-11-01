@@ -346,7 +346,7 @@ async fn an_unreadable_config_appends_no_intent_and_recovers_nothing() {
 }
 
 /// Every `.rs` file under `dir`, test files excluded.
-fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
+pub(super) fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     for entry in std::fs::read_dir(dir).expect("list src") {
         let path = entry.expect("entry").path();
         let name = path

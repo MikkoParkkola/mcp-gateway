@@ -833,6 +833,8 @@ mod replace_secret_tests;
 mod replace_test_support;
 #[cfg(test)]
 mod replace_tests;
+#[cfg(test)]
+mod replace_validate_tests;
 
 #[cfg(test)]
 mod reader_lock_tests;
