@@ -236,7 +236,9 @@ async fn h8_tools_carry_the_hour_windows_and_series() {
     let (state, store, _dir) = state(true, &["alpha"], 2, true).await;
     let store = store.expect("a store");
     let nb = now() / HALF;
-    let recorded = [(nb - 1, 3), (nb - 3, 1), (nb - 6, 2)];
+    // One call in the current half hour too: it belongs to the last point
+    // and to neither hour, so an hour that took the partial bucket fails.
+    let recorded = [(nb, 4), (nb - 1, 3), (nb - 3, 1), (nb - 6, 2)];
     for (bucket, times) in recorded {
         record(&store, "alpha", "tool-1", bucket * HALF + 5, times);
     }
