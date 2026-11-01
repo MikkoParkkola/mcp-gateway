@@ -144,4 +144,12 @@ fn g0_a_hit_is_keyed_by_its_message() {
             "warn!: the line {}".to_owned()
         )]
     );
+    let record = "fn f(m: &M) { let g = m.lock().unwrap(); \
+                  info!(target: \"t\", backend = %n, hit = true); }";
+    let file = syn::parse_file(record).expect("planted source");
+    assert_eq!(
+        scan(&[("planted.rs".to_owned(), file)])[0].2,
+        "info!: fields backend hit",
+        "a record without a message is named by its fields"
+    );
 }

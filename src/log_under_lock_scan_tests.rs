@@ -330,14 +330,28 @@ fn dropped(expr: &syn::Expr) -> Option<String> {
 }
 
 /// A log macro's message: its first string literal that is not a field's
-/// value (`name = "x"`) or a `target:`/`parent:` argument. Empty when the
-/// macro has none, so an allowlist entry names the line, not just its function.
+/// value (`name = "x"`) or a `target:`/`parent:` argument. A record with no
+/// message is named by its field names instead, so an allowlist entry names
+/// the line, not just its function.
 fn message(mac: &syn::Macro) -> String {
+    use syn::ext::IdentExt;
+    // `parse2` refuses input left unread, so the walk goes to the end even
+    // after the message is found.
     let parser = |input: syn::parse::ParseStream<'_>| {
+        let mut message = None;
+        let mut fields = Vec::new();
         let mut is_value = false;
         while !input.is_empty() {
-            if !is_value && input.peek(syn::LitStr) {
-                return Ok(input.parse::<syn::LitStr>()?.value());
+            if message.is_none() && !is_value && input.peek(syn::LitStr) {
+                message = Some(input.parse::<syn::LitStr>()?.value());
+                continue;
+            }
+            if !is_value && input.peek(syn::Ident::peek_any) {
+                let name = input.call(syn::Ident::parse_any)?;
+                if input.peek(syn::Token![=]) {
+                    fields.push(name.to_string());
+                }
+                continue;
             }
             is_value = input.peek(syn::Token![=]) || input.peek(syn::Token![:]);
             input.step(|c| {
@@ -346,7 +360,7 @@ fn message(mac: &syn::Macro) -> String {
                     .ok_or_else(|| c.error("end of the macro"))
             })?;
         }
-        Ok(String::new())
+        Ok(message.unwrap_or_else(|| format!("fields {}", fields.join(" "))))
     };
     syn::parse::Parser::parse2(parser, mac.tokens.clone()).unwrap_or_default()
 }
