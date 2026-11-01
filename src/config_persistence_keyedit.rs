@@ -171,6 +171,8 @@ impl GiveUp {
 pub(crate) struct Template {
     bytes: Vec<u8>,
     slots: Vec<(SlotId, Range<usize>)>,
+    /// The original 1-based lines whose comment the edit dropped.
+    dropped: Vec<usize>,
 }
 
 impl Template {
@@ -191,7 +193,18 @@ impl Template {
             }
             end = range.end;
         }
-        Ok(Self { bytes, slots })
+        Ok(Self {
+            bytes,
+            slots,
+            dropped: Vec::new(),
+        })
+    }
+
+    /// The original 1-based line numbers of the comment lines this edit
+    /// dropped, sorted: a list element's removal takes its comments with it.
+    /// Line numbers only, never text: a `#` in a value can be a secret.
+    pub(crate) fn dropped_comments(&self) -> &[usize] {
+        &self.dropped
     }
 
     /// The bytes as they stand, slots still holding their placeholders.
@@ -205,6 +218,7 @@ impl Template {
         Self {
             bytes,
             slots: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 
