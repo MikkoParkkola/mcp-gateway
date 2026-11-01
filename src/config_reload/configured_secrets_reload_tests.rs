@@ -141,7 +141,11 @@ async fn a_reload_dropped_before_its_publish_leaves_the_new_instance_its_pins() 
         let ctx = Arc::clone(&ctx);
         async move { ctx.reload_outcome().await }
     });
-    pause.reached.notified().await;
+    // Bounded: a reload that applies no patch never reaches this pause, and
+    // the row must fail rather than wait for it.
+    tokio::time::timeout(crate::test_wait::HANG_BOUND, pause.reached.notified())
+        .await
+        .expect("the reload never reached the after-apply pause: it applied no patch");
     running.abort();
     let _ = running.await;
     let replaced = instance(&registry);
