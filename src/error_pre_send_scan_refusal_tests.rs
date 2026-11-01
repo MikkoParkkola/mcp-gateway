@@ -107,9 +107,10 @@ const FORBIDDEN_SITES: &[(&str, usize)] = &[
         1,
     ),
     // A match pattern wrapped in `Err(..)`, which the scan counts: no value is
-    // built there.
+    // built there. The HTTP route stage's authorize step, moved out of
+    // `tools_call` unchanged.
     (
-        "gateway::router::handlers::dispatch_tools_call::tools_call",
+        "gateway::router::handlers::dispatch_tools_call::route_stage::RouteStage::authorize_call_targets",
         1,
     ),
     // `Self::Forbidden` here is the web UI guard's own `Refused` variant, not
