@@ -418,7 +418,13 @@ pub(super) fn record_outcome(
         "admin_ui",
         (caller, None),
         fields,
-        StatusCode::OK,
+        // Not a success: an end nobody confirmed reads as a failure to the
+        // audit consumers that key on the canonical outcome.
+        match outcome {
+            "expired" => StatusCode::GATEWAY_TIMEOUT,
+            "failed" => StatusCode::BAD_GATEWAY,
+            _ => StatusCode::OK,
+        },
     );
 }
 
