@@ -184,7 +184,7 @@ async fn an_idempotency_replay_takes_the_live_lookup() {
 async fn a_capability_tool_records_its_definitions_effect() {
     for (read_only, effect) in [(true, "read_only"), (false, "may_write")] {
         let dir = tempfile::tempdir().unwrap();
-        let mut meta = meta(Ok(ok_result()), &dir);
+        let meta = meta(Ok(ok_result()), &dir);
         let definition = crate::capability::parse_capability(&format!(
             "name: lookup\n\
              description: Look one thing up\n\

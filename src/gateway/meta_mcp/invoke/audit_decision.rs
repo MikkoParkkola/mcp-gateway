@@ -128,8 +128,8 @@ impl DispatchNotes {
         let live = meta.live_config();
         if let Some(answered) = self.cached {
             let decided = match answered {
-                super::audit::Answered::CacheHit => Decided::CacheHitNotRedecided,
-                super::audit::Answered::Replay => Decided::Replayed,
+                super::Answered::CacheHit => Decided::CacheHitNotRedecided,
+                super::Answered::Replay => Decided::Replayed,
             };
             // Not decided again, but it keeps what its admission read.
             self.decision.as_not_redecided().decision(
