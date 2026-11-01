@@ -41,6 +41,7 @@ use uuid::Uuid;
 use super::notification_sink::DeliveryHandle;
 use super::write_claim::WriteClaim;
 use super::{PendingRequestGuard, Transport, sanitize_url_for_diagnostics};
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use crate::protocol::{
     JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION, RequestId, Selectable,
     checked_selection, initialize_params, is_version_mismatch_error, negotiate_best_version,
@@ -609,62 +610,68 @@ async fn run_io_loop(
 #[async_trait]
 impl Transport for WebSocketTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        let id = self.next_id();
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: id.clone(),
-            method: method.to_string(),
-            params,
-        };
+        backend_request(async move {
+            let id = self.next_id();
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: id.clone(),
+                method: method.to_string(),
+                params,
+            };
 
-        // Register before the send: the I/O task can route progress back
-        // before `send_message` returns, and an unregistered token is dropped.
-        let _progress_cleanup = ProgressRegistration::register(
-            &self.inner.progress_destinations,
-            request.params.as_ref(),
-        );
+            // Register before the send: the I/O task can route progress back
+            // before `send_message` returns, and an unregistered token is dropped.
+            let _progress_cleanup = ProgressRegistration::register(
+                &self.inner.progress_destinations,
+                request.params.as_ref(),
+            );
 
-        let (tx, rx) = oneshot::channel();
-        self.inner.pending.insert(id.to_string(), tx);
-        // See StdioTransport::request: removing the entry is the guard's job
-        // so a request future dropped by an OUTER timeout or task abort does
-        // not strand its `pending` entry.
-        let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
-        // Declared after `_cleanup`, so it drops first and still finds the
-        // entry of a request nobody answered.
-        let claim = WriteClaim::new();
-        let mut cancel = cancel::CancelUnanswered::arm(&self.inner, &request, &claim);
+            let (tx, rx) = oneshot::channel();
+            self.inner.pending.insert(id.to_string(), tx);
+            // See StdioTransport::request: removing the entry is the guard's job
+            // so a request future dropped by an OUTER timeout or task abort does
+            // not strand its `pending` entry.
+            let _cleanup = PendingRequestGuard::new(&self.inner.pending, &id.to_string());
+            // Declared after `_cleanup`, so it drops first and still finds the
+            // entry of a request nobody answered.
+            let claim = WriteClaim::new();
+            let mut cancel = cancel::CancelUnanswered::arm(&self.inner, &request, &claim);
 
-        let msg = McpFrame::Request(request).to_ws_message()?;
-        // The timeout covers the enqueue too: a full queue behind a stalled
-        // writer must not outlast the configured backend timeout.
-        let exchange = async {
-            self.enqueue((msg, Some(claim))).await?;
-            Ok::<_, Error>(rx.await)
-        };
-        let outcome = tokio::time::timeout(self.timeout, exchange).await;
-        // Finished, answered or failed: the transport's own timeout is not a
-        // cancel (design Q1).
-        cancel.disarm();
-        match outcome {
-            Ok(Ok(Ok(response))) => Ok(response),
-            Ok(Err(e)) => Err(e),
-            Ok(Ok(Err(_))) => Err(Error::Transport(
-                "WebSocket connection closed before the response arrived".to_string(),
-            )),
-            Err(_) => Err(Error::BackendTimeout(
-                "WebSocket request timed out".to_string(),
-            )),
-        }
+            let msg = McpFrame::Request(request).to_ws_message()?;
+            // The timeout covers the enqueue too: a full queue behind a stalled
+            // writer must not outlast the configured backend timeout.
+            let exchange = async {
+                self.enqueue((msg, Some(claim))).await?;
+                Ok::<_, Error>(rx.await)
+            };
+            let outcome = tokio::time::timeout(self.timeout, exchange).await;
+            // Finished, answered or failed: the transport's own timeout is not a
+            // cancel (design Q1).
+            cancel.disarm();
+            match outcome {
+                Ok(Ok(Ok(response))) => Ok(response),
+                Ok(Err(e)) => Err(e),
+                Ok(Ok(Err(_))) => Err(Error::Transport(
+                    "WebSocket connection closed before the response arrived".to_string(),
+                )),
+                Err(_) => Err(Error::BackendTimeout(
+                    "WebSocket request timed out".to_string(),
+                )),
+            }
+        })
+        .await
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        let msg = McpFrame::Notification {
-            method: method.to_string(),
-            params,
-        }
-        .to_ws_message()?;
-        self.send_message(msg).await
+        backend_wait(async move {
+            let msg = McpFrame::Notification {
+                method: method.to_string(),
+                params,
+            }
+            .to_ws_message()?;
+            self.send_message(msg).await
+        })
+        .await
     }
 
     fn is_connected(&self) -> bool {

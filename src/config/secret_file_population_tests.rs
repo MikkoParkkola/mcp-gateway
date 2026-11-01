@@ -179,6 +179,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
     ),
     (
+        "src/gateway/health_metrics/process.rs",
+        "/proc/self/statm, the process's own memory counters; nothing secret",
+    ),
+    (
         "src/gateway/mod.rs",
         "test_helpers fixture writer, not a gateway read",
     ),
@@ -193,6 +197,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/fragments.rs",
+        "cfg(test) loader reading the boundary-pin tables and their fragment files beside them, and writing scratch copies of them for its own tests; no secret",
     ),
     (
         "src/gateway/meta_mcp/boundary_pins/shipped_reads.rs",

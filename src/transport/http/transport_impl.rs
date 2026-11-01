@@ -16,6 +16,7 @@ use super::modern_meta::{
 use super::{
     HTTP_TARGET, HeaderMode, HttpTransport, is_session_expired_error, is_session_expired_response,
 };
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use crate::protocol::era::PeerEra;
 use crate::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::{Error, Result};
@@ -23,15 +24,18 @@ use crate::{Error, Result};
 #[async_trait]
 impl Transport for HttpTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        // This entry point carries no tool context, so it runs the shared
-        // predicate against an EMPTY permitted set: every `tools/call` is
-        // denied, while the side-effect-free methods that actually reach here
-        // (metadata discovery's `tools/list`, lifecycle's `ping`) keep the
-        // session recovery MIK-5982/MIK-6040 added for them.
-        let permission =
-            resend_permission(method, params.as_ref(), &std::collections::HashSet::new());
-        self.request_with_headers(method, params, &[], None, permission)
-            .await
+        backend_request(async move {
+            // This entry point carries no tool context, so it runs the shared
+            // predicate against an EMPTY permitted set: every `tools/call` is
+            // denied, while the side-effect-free methods that actually reach here
+            // (metadata discovery's `tools/list`, lifecycle's `ping`) keep the
+            // session recovery MIK-5982/MIK-6040 added for them.
+            let permission =
+                resend_permission(method, params.as_ref(), &std::collections::HashSet::new());
+            self.request_with_headers(method, params, &[], None, permission)
+                .await
+        })
+        .await
     }
 
     async fn request_with_headers(
@@ -42,138 +46,141 @@ impl Transport for HttpTransport {
         identity_key: Option<&str>,
         resend: ResendPermission,
     ) -> Result<JsonRpcResponse> {
-        // Read the era once, here, and carry it into the send. Reading it
-        // inside the header builder instead would leave the body half of the
-        // envelope decided somewhere else, and the two must agree about which
-        // dialect this one message is written in.
-        //
-        // The probe is the one request that cannot wait for the era it is
-        // resolving, and an undetermined era shapes everything else legacy.
-        // `server/discover` exists only in the 2026 revision, so a legacy-shaped
-        // probe asks a modern peer a question in a dialect that peer may refuse
-        // — the probe has to be a *valid* 2026 request to be evidence of
-        // anything. Legacy peers may return a non-modern answer or time out;
-        // the existing classifier then selects the legacy fallback. A
-        // determined verdict still takes precedence over this probe default.
-        if identity_key.is_none() {
-            // A stream open's 404 dropped the shared session; heal it first.
-            let _ = self.reinit_if_needed().await;
-        }
-        // A transport still starting has not been told its peer's era: the
-        // cache it reads may hold the verdict of the transport it is about to
-        // replace (a build-first restart, MIK-8012), and after an upgrade that
-        // verdict is Legacy. Its own probe goes out in the dialect the probe
-        // exists in. A started transport keeps the rule above.
-        let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
-            Some(PeerEra::Modern)
-        } else {
-            self.outbound_era()
-                .or_else(|| is_era_probe(method).then_some(PeerEra::Modern))
-        };
-        let params = if era == Some(PeerEra::Modern) {
-            with_modern_meta(method, params)?
-        } else {
-            params
-        };
-
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: self.next_id(),
-            method: method.to_string(),
-            params,
-        };
-
-        let result = self
-            .send_request_with_headers(&request, extra_headers, identity_key, era)
-            .await;
-
-        // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
-        // or a remote invalidating the MCP session on OAuth token refresh), every
-        // request — including circuit-breaker half-open probes — keeps failing
-        // until we re-handshake (observed live 2026-06-11: a memory backend unreachable 6.5h
-        // while healthy). Recovery lives here, inside `request`, so it also rescues
-        // half-open probes and is not gated behind the Backend failsafe/CB.
-        //
-        // The expiry arrives in one of two shapes, handled by one coherent path:
-        //   1. transport `Err` — non-2xx HTTP (404, or -32015 body) or a transport
-        //      failure, classified by `is_session_expired_error` (MIK-5982).
-        //   2. `Ok(JsonRpcResponse)` whose `error` member signals expiry even with
-        //      a 200 status (e.g. remotes returning `-32600`/`-32015`/"session not
-        //      found"), classified by `is_session_expired_response` (MIK-6040, #247).
-        //
-        // On either signature: drop the session, re-run the initialize handshake,
-        // and retry the original request exactly once. Only this caller's session
-        // bucket is dropped (MIK-6784) — one identity's expiry must not evict
-        // another's live session. `initialize()` calls `send_request` directly
-        // (not `request`), so this cannot recurse.
-        let bucket = self.bucket(identity_key);
-        let had_session = self.sessions.read().contains_key(bucket);
-        let session_expired = match &result {
-            Err(err) => is_session_expired_error(err),
-            Ok(resp) => is_session_expired_response(resp),
-        };
-        if had_session && session_expired {
-            // Heal the session on BOTH branches: it really is dead, and leaving
-            // the stale bucket in place poisons every later call through this
-            // identity — including the ones that ARE allowed to be resent.
-            // The shared bucket heals under the stream opens' recovery lock,
-            // so the two never undo each other; a failed handshake leaves
-            // recovery pending for the next caller instead of dropping it.
-            let shared = identity_key.is_none();
-            let reinit_held = if shared {
-                Some(self.reinit_lock.lock().await)
+        backend_request(async move {
+            // Read the era once, here, and carry it into the send. Reading it
+            // inside the header builder instead would leave the body half of the
+            // envelope decided somewhere else, and the two must agree about which
+            // dialect this one message is written in.
+            //
+            // The probe is the one request that cannot wait for the era it is
+            // resolving, and an undetermined era shapes everything else legacy.
+            // `server/discover` exists only in the 2026 revision, so a legacy-shaped
+            // probe asks a modern peer a question in a dialect that peer may refuse
+            // — the probe has to be a *valid* 2026 request to be evidence of
+            // anything. Legacy peers may return a non-modern answer or time out;
+            // the existing classifier then selects the legacy fallback. A
+            // determined verdict still takes precedence over this probe default.
+            if identity_key.is_none() {
+                // A stream open's 404 dropped the shared session; heal it first.
+                let _ = self.reinit_if_needed().await;
+            }
+            // A transport still starting has not been told its peer's era: the
+            // cache it reads may hold the verdict of the transport it is about to
+            // replace (a build-first restart, MIK-8012), and after an upgrade that
+            // verdict is Legacy. Its own probe goes out in the dialect the probe
+            // exists in. A started transport keeps the rule above.
+            let era = if is_era_probe(method) && !self.connected.load(Ordering::Relaxed) {
+                Some(PeerEra::Modern)
             } else {
-                None
+                self.outbound_era()
+                    .or_else(|| is_era_probe(method).then_some(PeerEra::Modern))
             };
-            self.sessions.write().remove(bucket);
-            let handshake = self.initialize_as(extra_headers).await;
-            if shared {
-                self.reinit_needed
-                    .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
-            }
-            if handshake.is_err() {
-                // The caller asked about their request, not about our
-                // handshake; surfacing the re-initialization's error instead
-                // would hide what actually failed.
-                return result;
-            }
-            if resend == ResendPermission::Denied {
-                let tool = request
-                    .params
-                    .as_ref()
-                    .and_then(|params| params.get("name"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("-");
-                drop(reinit_held);
+            let params = if era == Some(PeerEra::Modern) {
+                with_modern_meta(method, params)?
+            } else {
+                params
+            };
+
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0".to_string(),
+                id: self.next_id(),
+                method: method.to_string(),
+                params,
+            };
+
+            let result = self
+                .send_request_with_headers(&request, extra_headers, identity_key, era)
+                .await;
+
+            // MIK-5982 / MIK-6040: when the backend's session expires (daemon restart,
+            // or a remote invalidating the MCP session on OAuth token refresh), every
+            // request — including circuit-breaker half-open probes — keeps failing
+            // until we re-handshake (observed live 2026-06-11: a memory backend unreachable 6.5h
+            // while healthy). Recovery lives here, inside `request`, so it also rescues
+            // half-open probes and is not gated behind the Backend failsafe/CB.
+            //
+            // The expiry arrives in one of two shapes, handled by one coherent path:
+            //   1. transport `Err` — non-2xx HTTP (404, or -32015 body) or a transport
+            //      failure, classified by `is_session_expired_error` (MIK-5982).
+            //   2. `Ok(JsonRpcResponse)` whose `error` member signals expiry even with
+            //      a 200 status (e.g. remotes returning `-32600`/`-32015`/"session not
+            //      found"), classified by `is_session_expired_response` (MIK-6040, #247).
+            //
+            // On either signature: drop the session, re-run the initialize handshake,
+            // and retry the original request exactly once. Only this caller's session
+            // bucket is dropped (MIK-6784) — one identity's expiry must not evict
+            // another's live session. `initialize()` calls `send_request` directly
+            // (not `request`), so this cannot recurse.
+            let bucket = self.bucket(identity_key);
+            let had_session = self.sessions.read().contains_key(bucket);
+            let session_expired = match &result {
+                Err(err) => is_session_expired_error(err),
+                Ok(resp) => is_session_expired_response(resp),
+            };
+            if had_session && session_expired {
+                // Heal the session on BOTH branches: it really is dead, and leaving
+                // the stale bucket in place poisons every later call through this
+                // identity — including the ones that ARE allowed to be resent.
+                // The shared bucket heals under the stream opens' recovery lock,
+                // so the two never undo each other; a failed handshake leaves
+                // recovery pending for the next caller instead of dropping it.
+                let shared = identity_key.is_none();
+                let reinit_held = if shared {
+                    Some(self.reinit_lock.lock().await)
+                } else {
+                    None
+                };
+                self.sessions.write().remove(bucket);
+                let handshake = self.initialize_as(extra_headers).await;
+                if shared {
+                    self.reinit_needed
+                        .store(handshake.is_err(), std::sync::atomic::Ordering::SeqCst);
+                }
+                if handshake.is_err() {
+                    // The caller asked about their request, not about our
+                    // handshake; surfacing the re-initialization's error instead
+                    // would hide what actually failed.
+                    return result;
+                }
+                if resend == ResendPermission::Denied {
+                    let tool = request
+                        .params
+                        .as_ref()
+                        .and_then(|params| params.get("name"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("-");
+                    drop(reinit_held);
+                    warn!(target: HTTP_TARGET,
+                        url = %sanitize_url_for_diagnostics(&self.base_url),
+                        method = %method,
+                        tool = %tool,
+                        reason = "no explicit readOnlyHint/idempotentHint annotation",
+                        "Backend session expired; session healed but the call was NOT resent"
+                    );
+                    telemetry_metrics::counter!(
+                        "mcp_resend_denied_total",
+                        "site" => "http_session_expiry",
+                        "method" => method.to_string()
+                    )
+                    .increment(1);
+                    return result;
+                }
                 warn!(target: HTTP_TARGET,
                     url = %sanitize_url_for_diagnostics(&self.base_url),
                     method = %method,
-                    tool = %tool,
-                    reason = "no explicit readOnlyHint/idempotentHint annotation",
-                    "Backend session expired; session healed but the call was NOT resent"
+                    "Backend session expired; re-initializing and retrying once"
                 );
-                telemetry_metrics::counter!(
-                    "mcp_resend_denied_total",
-                    "site" => "http_session_expiry",
-                    "method" => method.to_string()
-                )
-                .increment(1);
-                return result;
+                // The first request reached the server, so a never-sent error from
+                // the resend no longer proves nothing ran.
+                return self
+                    .send_request_with_headers(&request, extra_headers, identity_key, era)
+                    .await
+                    .map_err(|e| e.after_a_send("after the expired session's request was sent"));
             }
-            warn!(target: HTTP_TARGET,
-                url = %sanitize_url_for_diagnostics(&self.base_url),
-                method = %method,
-                "Backend session expired; re-initializing and retrying once"
-            );
-            // The first request reached the server, so a never-sent error from
-            // the resend no longer proves nothing ran.
-            return self
-                .send_request_with_headers(&request, extra_headers, identity_key, era)
-                .await
-                .map_err(|e| e.after_a_send("after the expired session's request was sent"));
-        }
 
-        result
+            result
+        })
+        .await
     }
 
     /// The typed upstream-tasks entry point. See the trait method for why this
@@ -207,6 +214,7 @@ impl Transport for HttpTransport {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<JsonRpcResponse> {
+        backend_request(async move {
         if !TASK_CAPABILITY_METHODS.contains(&method) {
             return Err(Error::Protocol(format!(
                 "refusing to send `{method}` with the upstream tasks capability: only {allowed} \
@@ -242,6 +250,7 @@ impl Transport for HttpTransport {
             crate::transport::submit_mark::disarm();
         }
         result
+        }).await
     }
 
     // MIK-6710: HTTP is the only transport whose `request_with_headers`
@@ -253,7 +262,7 @@ impl Transport for HttpTransport {
     }
 
     async fn notify(&self, method: &str, params: Option<Value>) -> Result<()> {
-        self.notify_with_headers(method, params, &[], None).await
+        backend_wait(async move { self.notify_with_headers(method, params, &[], None).await }).await
     }
 
     async fn notify_with_headers(
@@ -263,13 +272,16 @@ impl Transport for HttpTransport {
         extra_headers: &[(String, String)],
         identity_key: Option<&str>,
     ) -> Result<()> {
-        self.send_notification(
-            method,
-            params,
-            extra_headers,
-            identity_key,
-            self.outbound_era(),
-        )
+        backend_wait(async move {
+            self.send_notification(
+                method,
+                params,
+                extra_headers,
+                identity_key,
+                self.outbound_era(),
+            )
+            .await
+        })
         .await
     }
 
