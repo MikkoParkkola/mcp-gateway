@@ -215,3 +215,37 @@ pub(crate) fn notices(lines: &[String]) -> Vec<u64> {
         .filter_map(|l| l.split("dropped ").nth(1)?.split(' ').next()?.parse().ok())
         .collect()
 }
+
+/// A thread-local subscriber whose lossy writer is parked with its queue full:
+/// every tracing line on this thread is dropped while it lives. Dropping it
+/// opens the gate.
+pub(crate) struct Stalled {
+    pub(crate) writer: LossyStderr,
+    gate: Gate,
+    _flush: LogFlush,
+    _default: tracing::subscriber::DefaultGuard,
+}
+
+pub(crate) fn stalled_log() -> Stalled {
+    use tracing_subscriber::layer::SubscriberExt;
+    crate::test_log_capture::keep_interest_open();
+    let (writer, flush, gate, _out) = parked(1, 1 << 20);
+    line(&writer, "first");
+    assert!(gate.wait_entered(), "the writer never took a line");
+    line(&writer, "fills the one slot");
+    let subscriber = tracing_subscriber::registry()
+        .with(tracing_subscriber::filter::LevelFilter::TRACE)
+        .with(crate::log_layer(NoticeFormat::Text, writer.clone()));
+    Stalled {
+        writer,
+        gate,
+        _flush: flush,
+        _default: tracing::subscriber::set_default(subscriber),
+    }
+}
+
+impl Drop for Stalled {
+    fn drop(&mut self) {
+        self.gate.open();
+    }
+}

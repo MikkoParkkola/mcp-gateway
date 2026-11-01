@@ -820,6 +820,9 @@ mod hwm_missing_tests;
 #[path = "transparency_log_lease_tests.rs"]
 mod lease_tests;
 #[cfg(test)]
+#[path = "transparency_log_lossy_tests.rs"]
+mod lossy_tests;
+#[cfg(test)]
 #[path = "transparency_log_overflow_tests.rs"]
 mod overflow_tests;
 #[cfg(test)]
