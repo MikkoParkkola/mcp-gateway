@@ -507,3 +507,39 @@ fn a_collusion_edit_reports_a_restart_until_the_relay_gate_reads_it_live() {
     wanted.security.firewall.collusion.action = crate::security::firewall::CollusionAction::Block;
     assert!(pending(&running, wanted).contains(&"security"));
 }
+
+/// ADR-029 (amended): the policy fields the Policies screen edits apply on
+/// reload, so an edit to any one of them alone reports no restart.
+#[cfg(feature = "firewall")]
+#[test]
+fn a_policy_field_edit_alone_reports_no_restart() {
+    use crate::security::firewall::{FirewallAction, FirewallRule};
+    let running = Config::default();
+    let edits: [(&str, fn(&mut Config)); 3] = [
+        ("tool_policy", |c| {
+            c.security.tool_policy.deny = vec!["a:b".to_string()]
+        }),
+        ("firewall.rules", |c| {
+            c.security.firewall.rules = vec![FirewallRule {
+                tool_match: "read".to_string(),
+                action: FirewallAction::Warn,
+                reason: None,
+                scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
+            }];
+        }),
+        ("firewall.credential_redaction", |c| {
+            c.security.firewall.credential_redaction = !c.security.firewall.credential_redaction;
+        }),
+    ];
+    for (field, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !pending(&running, wanted).contains(&"security"),
+            "{field} alone reports a restart"
+        );
+    }
+}

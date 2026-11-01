@@ -244,6 +244,8 @@ mod live_flags_tests;
 /// ADR-023: a request keeps the generation it arrived with.
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod live_policy_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
 #[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;

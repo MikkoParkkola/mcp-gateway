@@ -754,6 +754,11 @@ async fn fixture_inner(
             Firewall::from_config(config.clone(), tracker.clone())
                 .with_continuations(meta.continuation()),
         ));
+        // The published config carries the same firewall section, so a row
+        // that reloads the rules edits the ones this firewall was built with.
+        let mut published = (*state_mut.live_config.get()).clone();
+        published.security.firewall = config.clone();
+        state_mut.live_config.set(published);
         let meta_firewall = Arc::new(
             Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
         );
