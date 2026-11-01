@@ -324,11 +324,9 @@ impl Stdio {
         let dir = tempfile::tempdir().expect("store root");
         let mut config = crate::config::Config::default();
         config.tasks.store_dir = dir.path().display().to_string();
-        let policy = Arc::new(crate::security::ToolPolicy::default());
         let (tasks, expiry) = stdio_tasks::open(
             &config,
             &self.meta,
-            &policy,
             &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
                 config.clone(),
                 std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(

@@ -634,6 +634,7 @@ async fn meta_mcp_dispatch(
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
+        generation: Some(&intake.generation),
     };
     #[cfg(feature = "firewall")]
     let router = state.firewall.as_deref();

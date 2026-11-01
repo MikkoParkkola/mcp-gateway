@@ -622,20 +622,25 @@ fn reject_duplicate(state: &State, id: &str, record: &Record) -> Result<(), Stor
     Ok(())
 }
 
+/// Rows served or reserved for `principal`: what its per-principal cap
+/// counts, at admission and when a sealed row is repaired.
+fn principal_rows(state: &State, principal: &str) -> usize {
+    state
+        .entries
+        .values()
+        .map(|entry| &entry.record.admission)
+        .chain(state.reserved.iter().map(|(admission, _)| admission))
+        .filter(|admission| admission.principal_digest == principal)
+        .count()
+}
+
 fn admit(
     state: &State,
     limits: StoreLimits,
     record: &Record,
     size: usize,
 ) -> Result<(), StoreError> {
-    let principal = &record.admission.principal_digest;
-    let mine = state
-        .entries
-        .values()
-        .map(|entry| &entry.record.admission)
-        .chain(state.reserved.iter().map(|(admission, _)| admission))
-        .filter(|admission| admission.principal_digest == *principal)
-        .count();
+    let mine = principal_rows(state, &record.admission.principal_digest);
     if size > limits.record_bytes || mine >= limits.per_principal {
         return Err(StoreError::Capacity);
     }

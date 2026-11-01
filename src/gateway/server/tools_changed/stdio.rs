@@ -28,7 +28,6 @@ use crate::backend::tools_nudge::ToolsNudge;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::outbound::OutboundFrame;
 use crate::gateway::server::background::AbortOnDrop;
-use crate::security::ToolPolicy;
 
 /// The drain, the sender and their stop, for one stdio session.
 pub(in crate::gateway::server) struct StdioAnnouncer {
@@ -51,7 +50,7 @@ impl StdioAnnouncer {
     /// Start deciding `rx`'s nudges for the client behind `writer`.
     pub(in crate::gateway::server) fn start(
         (backends, meta_mcp): (Arc<BackendRegistry>, Arc<MetaMcp>),
-        tool_policy: Arc<ToolPolicy>,
+        live_config: Arc<crate::config_reload::LiveConfig>,
         rx: mpsc::UnboundedReceiver<ToolsNudge>,
         writer: mpsc::Sender<OutboundFrame>,
     ) -> Self {
@@ -78,7 +77,7 @@ impl StdioAnnouncer {
                 stamp,
                 std::collections::HashMap::from([(
                     String::new(),
-                    stdio_view(&meta_mcp, &tool_policy, ""),
+                    stdio_view(&meta_mcp, &live_config.generation(), ""),
                 )]),
             );
             let shutdown = stop.subscribe();
@@ -91,7 +90,7 @@ impl StdioAnnouncer {
                     if let Some((name, _)) = decide_on((&backends, &meta_mcp), &announced, nudge) {
                         #[cfg(test)]
                         crate::gateway::server::stdio_seams::decided();
-                        let view = stdio_view(&meta_mcp, &tool_policy, &name);
+                        let view = stdio_view(&meta_mcp, &live_config.generation(), &name);
                         stamp += 1;
                         if told.peek(stamp, &name, &view) != crate::gateway::streaming::Peek::Owed
                             || !told.commit(stamp, &name, &view)
@@ -163,13 +162,17 @@ impl Drop for StdioAnnouncer {
 }
 
 /// What the stdio client is shown of `backend` now: the operator's scope,
-/// judged by the global tool policy, exactly as its `tools/list` is.
+/// judged by the published generation's tool policy, exactly as its
+/// `tools/list` is.
 fn stdio_view(
     meta_mcp: &MetaMcp,
-    tool_policy: &ToolPolicy,
+    generation: &crate::config_reload::Generation,
     backend: &str,
 ) -> crate::gateway::streaming::ViewDigest {
-    let policy = crate::gateway::authz::ToolPolicyAuthorizer { tool_policy };
+    let policy = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: generation.tool_policy(),
+        generation: Some(generation),
+    };
     let scope = crate::gateway::meta_mcp::InvokeScope::stdio(
         &policy,
         crate::identity_propagation::CallerProof::new(

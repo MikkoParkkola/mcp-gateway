@@ -103,10 +103,10 @@ async fn twin(side: Side, reason: Reason, surface_tool: bool) -> Twin {
         (Reason::Policy, Side::Withheld) => TOOL,
         _ => "other",
     };
-    let policy = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+    let policy = crate::security::ToolPolicyConfig {
         deny: vec![denied.to_string()],
         ..crate::security::ToolPolicyConfig::default()
-    });
+    };
     let surfaced = [SIBLING, TOOL]
         .into_iter()
         .filter(|tool| surface_tool || *tool != TOOL)
