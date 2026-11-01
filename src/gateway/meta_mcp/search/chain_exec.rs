@@ -367,7 +367,7 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             // The chain's error wraps this step's failure: counted with the
             // failure's own origin, not as the gateway's.
             crate::gateway::delivery_facts::step_carried(Some(&e));
-            crate::gateway::delivery_facts::wrapped_step();
+            crate::gateway::delivery_facts::wrapped_step(INTERNAL_ERROR);
             Error::json_rpc(
                 INTERNAL_ERROR,
                 format!("Chain step {idx} ({tool_ref}) failed: {e}"),

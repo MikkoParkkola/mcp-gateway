@@ -283,7 +283,7 @@ impl MetaMcp {
                         "Bridged input exchange failed for a legacy client"
                     );
                     // The refusal wraps the round that failed: counted as it.
-                    crate::gateway::delivery_facts::wrapped_step();
+                    crate::gateway::delivery_facts::wrapped_step(-32003);
                     return Err(Error::JsonRpc {
                         code: -32003,
                         message: format!(

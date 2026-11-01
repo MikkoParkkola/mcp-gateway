@@ -34,7 +34,7 @@ async fn a_wrap_inside_a_step_counts_with_the_steps_fold() {
         async {
             step(async {
                 folded(BACKEND);
-                wrapped_step();
+                wrapped_step(-32003);
             })
             .await;
             step_carried(None);
@@ -151,5 +151,35 @@ async fn a_reported_backend_failure_and_a_reported_refusal_count_the_gateways() 
         frame.wire_meta.folded.map(|f| f.origin),
         Some(Origin::Gateway),
         "the gateway's refusal outweighs the backend's failure"
+    );
+}
+
+/// A bridged backend failure the gateway wraps in its -32003, then replaces
+/// with an audit outage (-32005, the write failed closed): the delivered
+/// error is the gateway's own, not the wrapper, so it counts as the
+/// gateway's. Mutant m21 (the stamp relabels any error after a wrap, the
+/// code unchecked) turns it red.
+#[tokio::test]
+async fn an_audit_outage_replacing_a_wrapper_counts_as_the_gateways() {
+    let frame = stamped(
+        async {
+            step(async {
+                folded(BACKEND);
+                wrapped_step(-32003);
+            })
+            .await;
+            step_carried(None);
+        },
+        JsonRpcResponse::error(
+            Some(RequestId::Number(1)),
+            crate::Error::AuditUnavailable.to_rpc_code(),
+            "audit unavailable",
+        ),
+    )
+    .await;
+    assert_eq!(
+        frame.wire_meta.origin,
+        Origin::Gateway,
+        "the replacing audit outage is the gateway's"
     );
 }

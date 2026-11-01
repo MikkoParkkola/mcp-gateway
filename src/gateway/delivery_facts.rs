@@ -119,9 +119,11 @@ struct Sends {
 enum ErrorOf {
     /// Its own: counted with the error's own origin.
     Own,
-    /// The step the composite ended on, which it wraps: counted with that
-    /// step's fold.
-    EndedStep,
+    /// The step the composite ended on, which it wraps in an error with
+    /// `code`: counted with that step's fold while the delivered error is
+    /// still that wrapper. An error that replaced it (an audit outage's
+    /// -32005) carries another code and counts as itself.
+    EndedStep { code: i32 },
 }
 
 /// How a composite's latest step ended, for the composite's own record.
@@ -273,7 +275,9 @@ pub(crate) fn step_tool_failed() {
                 origin: Origin::Backend,
             });
         }
-        facts.error_of = ErrorOf::EndedStep;
+        facts.error_of = ErrorOf::EndedStep {
+            code: crate::error::rpc_codes::INTERNAL_ERROR,
+        };
     });
 }
 
@@ -309,7 +313,7 @@ pub(crate) fn step_carried(error: Option<&crate::Error>) {
             origin: e.origin(),
         });
         let carried = match facts.error_of {
-            ErrorOf::EndedStep => fold.or(own),
+            ErrorOf::EndedStep { .. } => fold.or(own),
             ErrorOf::Own => own.or(fold),
         };
         facts.folded = worst(facts.folded, carried);
@@ -319,14 +323,15 @@ pub(crate) fn step_carried(error: Option<&crate::Error>) {
 /// The error about to be delivered wraps the step the composite ended on (a
 /// playbook's `tool_error`, a chain's step failure, the bridge's refusal):
 /// it is counted with the origin of the failure folded into this delivery.
-pub(crate) fn wrapped_step() {
-    with(|facts| facts.error_of = ErrorOf::EndedStep);
+pub(crate) fn wrapped_step(code: i32) {
+    with(|facts| facts.error_of = ErrorOf::EndedStep { code });
 }
 
 /// Stamp what this delivery's facts say about folded failures on `frame`,
 /// where the frame is finalised for delivery: a frame with no error carries
-/// the fold; a frame wrapping the step the composite ended on is counted
-/// with that fold's origin. A frame's own error otherwise wins.
+/// the fold; a frame whose error is still the wrapper of the step the
+/// composite ended on (same code) is counted with that fold's origin. A
+/// frame's own error otherwise wins, a replacing one included.
 pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
     let Ok((folded, error_of)) = FACTS.try_with(|cell| {
         let cell = cell.borrow();
@@ -336,7 +341,8 @@ pub(crate) fn stamp_folded(frame: &mut crate::protocol::JsonRpcResponse) {
     };
     if frame.error.is_none() {
         frame.wire_meta.folded = folded;
-    } else if error_of == ErrorOf::EndedStep
+    } else if let ErrorOf::EndedStep { code } = error_of
+        && frame.error.as_ref().is_some_and(|e| e.code == code)
         && !frame.wire_meta.delivery_refusal
         && let Some(folded) = folded
     {

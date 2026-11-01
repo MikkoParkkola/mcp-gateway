@@ -73,8 +73,12 @@ struct Sites {
     /// Functions that read the error marker off a response
     /// (`get::<RpcError>()`).
     marker_reads: BTreeSet<(String, String)>,
-    /// Functions that put a value on a response's extensions.
-    marker_inserts: BTreeSet<(String, String)>,
+    /// (file, function) -> the names bound from a marker builder
+    /// (`let marker = RpcError::of_frame(..)`, or a `match` yielding one).
+    marker_bindings: BTreeMap<(String, String), BTreeSet<String>>,
+    /// (file, function) -> the names put on a response's extensions
+    /// (`.extensions_mut().insert(name)`).
+    inserted: BTreeMap<(String, String), BTreeSet<String>>,
 }
 
 impl Sites {
@@ -91,9 +95,6 @@ impl Sites {
         let packed: String = text.split_whitespace().collect();
         if packed.contains("get::<RpcError>()") {
             self.marker_reads.insert(place(at));
-        }
-        if packed.contains("extensions_mut().insert(") {
-            self.marker_inserts.insert(place(at));
         }
         for name in SETTERS.iter().chain(&COUNTS) {
             let spelled = format!("{} (", name.replace("::", " :: "));
@@ -121,8 +122,36 @@ impl Sites {
         }
         let inserts = call.method == "insert"
             && matches!(call.receiver.as_ref(), syn::Expr::MethodCall(r) if r.method == "extensions_mut");
-        if inserts {
-            self.marker_inserts.insert(place(at));
+        if inserts
+            && call.args.len() == 1
+            && let Some(syn::Expr::Path(arg)) = call.args.first()
+            && let Some(name) = arg.path.get_ident()
+        {
+            let names = self.inserted.entry(place(at)).or_default();
+            names.insert(name.to_string());
+        }
+    }
+
+    /// A `let` whose value is built by a marker builder binds the marker.
+    fn binding(&mut self, at: &Place, local: &syn::Local) {
+        struct Builds(bool);
+        impl<'ast> syn::visit::Visit<'ast> for Builds {
+            fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
+                if let syn::Expr::Path(p) = call.func.as_ref() {
+                    self.0 |= call_name(&p.path)
+                        .is_some_and(|n| n == "RpcError::of_frame" || n == "RpcError::of_value");
+                }
+                syn::visit::visit_expr_call(self, call);
+            }
+        }
+        let (Some(init), syn::Pat::Ident(name)) = (&local.init, &local.pat) else {
+            return;
+        };
+        let mut builds = Builds(false);
+        syn::visit::Visit::visit_expr(&mut builds, &init.expr);
+        if builds.0 {
+            let names = self.marker_bindings.entry(place(at)).or_default();
+            names.insert(name.ident.to_string());
         }
     }
 
@@ -159,8 +188,10 @@ impl Sink for Sites {
     }
 
     fn stmt(&mut self, at: &Place, stmt: &syn::Stmt) {
-        if let syn::Stmt::Macro(m) = stmt {
-            self.literals(at, &m.mac);
+        match stmt {
+            syn::Stmt::Macro(m) => self.literals(at, &m.mac),
+            syn::Stmt::Local(local) => self.binding(at, local),
+            _ => {}
         }
     }
 }
@@ -175,10 +206,11 @@ fn place(at: &Place) -> (String, String) {
 
 /// The streamed and the buffered count read one marker: every function that
 /// counts an answer reads it off the response (`get::<RpcError>()`), and
-/// every function that builds it (`of_frame`, `of_value`) puts it on the
-/// response it returns. So a delivery path that stops using the marker, or
-/// builds one it never attaches, fails here. Per function, like the rest of
-/// this pin.
+/// every function that builds it (`of_frame`, `of_value`) binds it with a
+/// `let` and puts that binding on the response's extensions. So a delivery
+/// path that stops using the marker, or builds one it never attaches (other
+/// extensions inserted beside it do not count), fails here. Per function,
+/// and by name, like the rest of this pin.
 fn marker_path(sites: &Sites) -> Vec<String> {
     let mut wrong = Vec::new();
     for (key, names) in &sites.setters_in {
@@ -192,7 +224,15 @@ fn marker_path(sites: &Sites) -> Vec<String> {
             wrong.push(format!("counts without reading the marker: {file}\t{func}"));
         }
         let builds = names.contains("RpcError::of_frame") || names.contains("RpcError::of_value");
-        if builds && !sites.marker_inserts.contains(key) {
+        // The marker itself is attached: a name bound from the builder is
+        // what goes on the extensions, not just any extension.
+        let attached = sites.marker_bindings.get(key).is_some_and(|bound| {
+            sites
+                .inserted
+                .get(key)
+                .is_some_and(|put| put.iter().any(|n| bound.contains(n)))
+        });
+        if builds && !attached {
             wrong.push(format!(
                 "builds the marker without attaching it: {file}\t{func}"
             ));
@@ -344,6 +384,11 @@ fn a_count_or_builder_off_the_marker_path_fails() {
         ),
         (
             "fn build(a: A) { let _ = RpcError::of_value(&a, o, f); }",
+            "builds the marker without attaching it",
+        ),
+        (
+            "fn build(a: A) -> R { let marker = RpcError::of_frame(&a); let mut r = R::new(); \
+             r.extensions_mut().insert(other); r }",
             "builds the marker without attaching it",
         ),
     ] {

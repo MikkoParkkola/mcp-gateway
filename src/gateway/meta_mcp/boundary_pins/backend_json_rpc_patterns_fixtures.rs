@@ -121,6 +121,8 @@ fn arms_differing_in_an_operator_are_not_a_carry() {
          Error::BackendJsonRpc { code, .. } if code != 1 => 1, _ => 0 };",
         "match e { Error::JsonRpc { code, .. } => !code, \
          Error::BackendJsonRpc { code, .. } => -code, _ => 0 };",
+        "match e { Error::JsonRpc { mut code, .. } => { code += 1; code }, \
+         Error::BackendJsonRpc { mut code, .. } => { code -= 1; code }, _ => 0 };",
     ] {
         assert_eq!(uncarried(shape), 1, "{shape}");
     }

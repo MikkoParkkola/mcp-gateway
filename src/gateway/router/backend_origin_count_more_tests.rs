@@ -244,7 +244,11 @@ fn a_streamed_plan_with_a_backends_error_and_a_gateway_refusal_counts_the_gatewa
         let fx = serving(Answer::RpcError(-32001), definition).await;
         run_p_streamed(&fx).await
     });
-    terminal_answer(&body);
+    let answer = terminal_answer(&body).to_string();
+    assert!(
+        answer.contains("step_errors") && answer.contains("s0") && answer.contains("s1"),
+        "premise: both steps' failures are reported: {body}"
+    );
     let counts = all(&text);
     assert_eq!(counts[3], 0, "counted as the backend's: {body}\n{text}");
     assert_eq!(counts.iter().sum::<u64>(), 1, "{body}\n{text}");

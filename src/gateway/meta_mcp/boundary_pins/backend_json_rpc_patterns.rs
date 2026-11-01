@@ -90,7 +90,18 @@ impl<'ast> Visit<'ast> for Print {
                 B::Ne(_) => "!=",
                 B::Ge(_) => ">=",
                 B::Gt(_) => ">",
-                _ => "<op=>",
+                B::AddAssign(_) => "+=",
+                B::SubAssign(_) => "-=",
+                B::MulAssign(_) => "*=",
+                B::DivAssign(_) => "/=",
+                B::RemAssign(_) => "%=",
+                B::BitXorAssign(_) => "^=",
+                B::BitAndAssign(_) => "&=",
+                B::BitOrAssign(_) => "|=",
+                B::ShlAssign(_) => "<<=",
+                B::ShrAssign(_) => ">>=",
+                // An operator added to syn later: never equal to a known one.
+                _ => "<op?>",
             }
             .to_owned(),
         );
