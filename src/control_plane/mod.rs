@@ -75,6 +75,10 @@ pub enum ControlPlaneRole {
     Developer,
     /// Read-only audit role.
     Auditor,
+    /// A caller no role rule maps: an API key without admin rights, or an
+    /// identity no rule matches. Reads inventory and evidence, but only its
+    /// own grants and audit events.
+    Viewer,
 }
 
 /// One authenticated actor.
@@ -107,6 +111,10 @@ pub enum ControlPlaneAction {
     MutatePolicy,
     /// Approve or reject server enablement.
     ApproveServer,
+    /// Read every principal's grants and audit events, not only the
+    /// caller's own. Any surface that returns other principals' rows checks
+    /// this, never `ReadEvidence` alone.
+    ReadAllPrincipals,
 }
 
 impl ControlPlaneAction {
@@ -172,6 +180,7 @@ impl ControlPlaneRbac {
                 ControlPlaneRole::Admin,
                 ControlPlaneAction::ReadInventory
                 | ControlPlaneAction::ReadEvidence
+                | ControlPlaneAction::ReadAllPrincipals
                 | ControlPlaneAction::ReviewEvidence
                 | ControlPlaneAction::MutateGrant
                 | ControlPlaneAction::MutatePolicy
@@ -183,6 +192,7 @@ impl ControlPlaneRbac {
                 ControlPlaneRole::SecurityReviewer,
                 ControlPlaneAction::ReadInventory
                 | ControlPlaneAction::ReadEvidence
+                | ControlPlaneAction::ReadAllPrincipals
                 | ControlPlaneAction::ReviewEvidence,
             ) => ControlPlaneAuthorization::allow(
                 "CONTROL_RBAC_REVIEWER",
@@ -199,10 +209,20 @@ impl ControlPlaneRbac {
             ),
             (
                 ControlPlaneRole::Auditor,
-                ControlPlaneAction::ReadInventory | ControlPlaneAction::ReadEvidence,
+                ControlPlaneAction::ReadInventory
+                | ControlPlaneAction::ReadEvidence
+                | ControlPlaneAction::ReadAllPrincipals,
             ) => ControlPlaneAuthorization::allow(
                 "CONTROL_RBAC_AUDITOR_READ",
                 "Auditor read-only access allowed",
+                action,
+            ),
+            (
+                ControlPlaneRole::Viewer,
+                ControlPlaneAction::ReadInventory | ControlPlaneAction::ReadEvidence,
+            ) => ControlPlaneAuthorization::allow(
+                "CONTROL_RBAC_VIEWER_READ",
+                "Viewer read access allowed, to its own grants and audit events",
                 action,
             ),
             _ if action.is_mutation() => ControlPlaneAuthorization::deny(
