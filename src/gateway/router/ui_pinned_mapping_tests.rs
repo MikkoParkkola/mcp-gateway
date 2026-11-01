@@ -70,6 +70,8 @@ async fn answer(
         .extension(LiveConfig::new(pinned.clone()).generation())
         .extension(crate::gateway::auth::AuthenticatedClient {
             authenticated: true,
+            // No credential was presented, so no principal.
+            principal: crate::gateway::record_principal::InternalPrincipal::new(String::new()),
             ..crate::gateway::auth::anonymous_client()
         })
         .extension(identity());
