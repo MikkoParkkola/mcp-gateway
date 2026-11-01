@@ -254,6 +254,8 @@ mod late_refusal_lease_tests;
 /// A lent-only call carrying no credential records `refused`.
 #[cfg(test)]
 mod lend_refusal_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;

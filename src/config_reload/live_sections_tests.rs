@@ -175,6 +175,15 @@ type Report = (String, Vec<&'static str>, bool);
 /// serialized config. Returns the pending report per key, and the keys that
 /// could not be changed generically, so a new field cannot slip past.
 fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) {
+    each_field_alone_from(&Config::default(), section, skip)
+}
+
+/// [`each_field_alone`] over `running` instead of the default config.
+fn each_field_alone_from(
+    running: &Config,
+    section: &str,
+    skip: &[&str],
+) -> (Vec<Report>, Vec<String>) {
     // Fields with no bool or number inside: one hand-picked valid edit each.
     let by_hand: &[(&str, ValueEdit)] = &[
         ("posture", |v| *v = json!("hardened")),
@@ -185,9 +194,10 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
         }),
         ("idempotency_key", |v| *v = json!("required")),
         ("shutdown_timeout", |v| *v = json!("31s")),
+        ("tool_costs", |v| v["edited_tool"] = json!(0.5)),
+        ("alternatives", |v| *v = json!({"edited": ["a", "b"]})),
     ];
-    let running = Config::default();
-    let base = serde_json::to_value(&running).expect("config serializes");
+    let base = serde_json::to_value(running).expect("config serializes");
     let keys: Vec<String> = base[section]
         .as_object()
         .expect("section is an object")
@@ -212,8 +222,8 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
         }
         let wanted: Config = serde_json::from_value(v)
             .unwrap_or_else(|e| panic!("{section}.{key} changed is not a valid config: {e}"));
-        let changed = !compute_diff(&running, &wanted).is_empty();
-        reports.push((key, pending(&running, wanted), changed));
+        let changed = !compute_diff(running, &wanted).is_empty();
+        reports.push((key, pending(running, wanted), changed));
     }
     (reports, stuck)
 }
@@ -448,4 +458,104 @@ async fn f7_a_malformed_file_leaves_the_running_generation() {
     assert!(Arc::ptr_eq(&before, &live.generation()), "published");
     assert!(live.generation().sanitize_input(), "the flag changed");
     assert_eq!(live.seq(), 0, "a refused reload published");
+}
+
+/// A running config with cost governance on and a per-tool budget.
+#[cfg(feature = "cost-governance")]
+fn governed() -> Config {
+    let mut config = Config::default();
+    config.cost_governance.enabled = true;
+    config
+        .cost_governance
+        .budgets
+        .per_tool
+        .insert("read".to_string(), 5.0);
+    config
+}
+
+// T16a (U19 PR3a): with governance on both sides, an edit to only the
+// budgets or the alerts applies on reload: not restart-pending, but still a
+// change.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16a_a_budget_or_alert_only_edit_is_not_restart_pending() {
+    let running = governed();
+    let edits: [(&str, Edit); 2] = [
+        (
+            "budgets",
+            Box::new(|c| {
+                c.cost_governance
+                    .budgets
+                    .per_tool
+                    .insert("read".to_string(), 9.0);
+            }),
+        ),
+        ("alerts", Box::new(|c| c.cost_governance.alerts.truncate(1))),
+    ];
+    for (name, edit) in edits {
+        let mut wanted = running.clone();
+        edit(&mut wanted);
+        assert!(
+            !compute_diff(&running, &wanted).is_empty(),
+            "{name}: no change seen"
+        );
+        let pending = pending(&running, wanted);
+        assert!(!pending.contains(&"cost_governance"), "{name}: {pending:?}");
+    }
+}
+
+// T16b: every other cost_governance field, changed alone with governance on,
+// keeps the section restart-pending.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16b_each_other_cost_governance_field_alone_stays_restart_pending() {
+    let (reports, stuck) =
+        each_field_alone_from(&governed(), "cost_governance", &["budgets", "alerts"]);
+    let missed: Vec<&str> = reports
+        .iter()
+        .filter(|(_, p, _)| !p.contains(&"cost_governance"))
+        .map(|(k, _, _)| k.as_str())
+        .collect();
+    assert!(missed.is_empty(), "not restart-pending: {missed:?}");
+    assert!(stuck.is_empty(), "no generic edit, add one: {stuck:?}");
+}
+
+// T16c: a budget edit together with another field's edit is pending.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16c_a_budget_edit_with_another_field_is_restart_pending() {
+    let running = governed();
+    let mut wanted = running.clone();
+    wanted
+        .cost_governance
+        .budgets
+        .per_tool
+        .insert("read".to_string(), 9.0);
+    wanted.cost_governance.default_cost = 0.25;
+    assert!(pending(&running, wanted).contains(&"cost_governance"));
+}
+
+// T16d: with governance off on either side, a budget-only edit is pending:
+// the mask applies only while governance is on both sides.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn t16d_a_budget_edit_across_an_off_side_is_restart_pending() {
+    let on = governed();
+    let mut off = on.clone();
+    off.cost_governance.enabled = false;
+    for (running, mut wanted) in [(on.clone(), off.clone()), (off.clone(), off.clone())] {
+        wanted
+            .cost_governance
+            .budgets
+            .per_tool
+            .insert("read".to_string(), 9.0);
+        let enabled = (
+            running.cost_governance.enabled,
+            wanted.cost_governance.enabled,
+        );
+        assert!(
+            pending(&running, wanted).contains(&"cost_governance"),
+            "running/wanted enabled {enabled:?}"
+        );
+    }
 }
