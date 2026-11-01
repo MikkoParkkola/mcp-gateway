@@ -321,3 +321,55 @@ async fn p8_14c_a_list_match_does_not_cross_a_redaction() {
         "P8.14c: the list match survived the redaction"
     );
 }
+
+/// P8.9b: a plan staged and redacted while `off`, committed after `block` is
+/// published, snapshots for replay; replayed to alice later, the copy keeps
+/// its inferred fact across the redaction, so bob relaying the redacted
+/// text is refused. RED on base: nothing is staged under a startup `off`.
+#[tokio::test]
+async fn p8_9b_a_replay_staged_and_redacted_while_off_is_held_after_activation() {
+    let lm = live_meta_listing(CollusionAction::Off, 1, &[]);
+    let (classified, delivered) = classified_pair();
+    let meta = &lm.meta;
+    let ((), staged) = meta
+        .collecting_staged(async {
+            super::super::replay::note_sync_capture(
+                "identity".to_owned(),
+                String::new(),
+                "operation".to_owned(),
+            );
+            plan_step(None, async {
+                meta.stage_relay_receipt(
+                    RelayKey::new("alice", true),
+                    ("alpha", "read"),
+                    &classified,
+                );
+            })
+            .await;
+            let snapshot = meta.relay_snapshot(&classified);
+            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
+            meta.rebuild_receipt_from_final(
+                Some(&delivered),
+                GatewayStamps::Legacy,
+                AnswerShape::Literal,
+            );
+        })
+        .await;
+    lm.publish(CollusionAction::Block);
+    staged.commit(true, &lm.live().generation());
+    lm.rig.lapse(Duration::from_secs(2));
+    let entry = lm.firewall().replay_digests(&sync_key());
+    assert!(entry.is_some(), "P8.9b: no snapshot was stored");
+    let g1 = lm.live().generation();
+    for replayed in entry.map(|(digests, _)| digests).unwrap_or_default() {
+        let alice = RelayCaller::Keyed("alice");
+        lm.firewall().record_digest(
+            alice,
+            &replayed.server,
+            &replayed.tool,
+            &replayed.digest,
+            &g1,
+        );
+    }
+    assert!(bob_refused(&lm), "P8.9b: the replayed copy is not held");
+}
