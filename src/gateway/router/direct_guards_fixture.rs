@@ -765,6 +765,8 @@ async fn fixture_inner(
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
+    // The Meta-MCP reads the router's live config, as startup wires it.
+    meta.set_live_config(Arc::clone(&state_mut.live_config));
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));
     Fx {

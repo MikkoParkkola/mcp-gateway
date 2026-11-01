@@ -41,12 +41,21 @@ pub(crate) fn live_of(live: &LiveConfig, firewall: &Firewall) -> LiveConfig {
     LiveConfig::with_auth(config, Arc::clone(live.generation().auth()))
 }
 
-/// Publish, as `state`'s live config and its Meta-MCP's, the configuration
-/// `firewall` was built from: for a fixture that hands its relay firewall to
-/// the Meta-MCP. The Meta-MCP reads the same live config, as startup wires it
+/// `live`'s configuration with only `firewall`'s collusion section in place:
+/// a fixture whose router firewall already published its rules and
+/// redaction keeps them, and the relay firewall adds what it judges.
+fn live_with_collusion_of(live: &LiveConfig, firewall: &Firewall) -> LiveConfig {
+    let mut config = (*live.get()).clone();
+    config.security.firewall.collusion = firewall.config.collusion.clone();
+    LiveConfig::with_auth(config, Arc::clone(live.generation().auth()))
+}
+
+/// Publish, as `state`'s live config and its Meta-MCP's, `firewall`'s
+/// collusion section over what the state already published: for a fixture
+/// that hands its relay firewall to the Meta-MCP beside a router firewall. The Meta-MCP reads the same live config, as startup wires it
 /// (`server/run.rs`), so its records and witnesses read that generation.
 pub(crate) fn pair_state(state: &mut Arc<AppState>, firewall: &Firewall) {
-    let live = Arc::new(live_of(&state.live_config, firewall));
+    let live = Arc::new(live_with_collusion_of(&state.live_config, firewall));
     state.meta_mcp.set_live_config(Arc::clone(&live));
     Arc::get_mut(state).expect("state is unique").live_config = live;
 }
