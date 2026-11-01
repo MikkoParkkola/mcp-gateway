@@ -25,7 +25,6 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
@@ -169,6 +168,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
@@ -260,6 +261,8 @@ mod live_flags_tests;
 /// ADR-023: a request keeps the generation it arrived with.
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod live_policy_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
 #[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;
@@ -435,8 +438,6 @@ pub struct AppState {
     pub task_executor: Arc<crate::gateway::task_service::TaskExecutor>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
-    /// Tool access policy
-    pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
     pub mtls_policy: Arc<MtlsPolicy>,
     /// Whether URLs declared in `backends:` config are pre-authorised
@@ -855,8 +856,10 @@ pub(crate) fn compression() -> CompressionLayer {
 }
 
 /// Pin the published generation on a request before anything else runs. Every
-/// later judgement on the request reads this one, so a reload that publishes
-/// mid-request never mixes two configurations into one answer.
+/// later request-side judgement reads this one, so a reload that publishes
+/// mid-request never mixes two configurations into the request's checks; the
+/// answer side judges under this one and the published one (ADR-029, amended,
+/// item 5).
 async fn pin_generation(
     axum::extract::State(live): axum::extract::State<Arc<crate::config_reload::LiveConfig>>,
     mut request: axum::extract::Request,

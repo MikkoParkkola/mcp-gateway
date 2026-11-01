@@ -74,8 +74,14 @@ pub(crate) async fn poll_capability(
             tool: &target.capability,
             key: crate::security::response_policy::KeyOf::of_client(client.api_key_identity()),
         };
-        let verdict =
-            fw.check_request_keyed(&session, rule_target, &arguments, &client.name, &identity);
+        let verdict = fw.check_request_keyed(
+            state.live_config.generation().firewall_policy(),
+            &session,
+            rule_target,
+            &arguments,
+            &client.name,
+            &identity,
+        );
         if !verdict.allowed {
             return Err(PollRefused::Firewall);
         }
@@ -134,7 +140,8 @@ pub(crate) async fn poll_capability(
     }];
     state
         .meta_mcp
-        .inspect_task_result(&targets, &session, &mut result)
+        // A poll has no request behind it: the published generation alone.
+        .inspect_task_result((&targets, &session), None, &mut result)
         .map_err(|_| PollRefused::Response)?;
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
         return Err(PollRefused::Dispatch);

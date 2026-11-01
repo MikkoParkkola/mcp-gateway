@@ -32,6 +32,7 @@ fn real_stdio_context_carries_principal_and_no_personal_identity() {
     let policy = crate::security::ToolPolicy::default();
     let authorizer = ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let context = super::super::Gateway::build_stdio_caller_context(
         false,

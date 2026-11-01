@@ -369,13 +369,14 @@ async fn authz_four_refusal_branches_carry_the_status() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut policy_state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let unrestricted = scoped_client("scoped", vec!["*".into()], None);
     let policy_refusal = Box::pin(run_step_as(
@@ -420,13 +421,14 @@ async fn authz_3_playbook_step_denied_by_global_tool_policy_is_refused() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
 
@@ -450,13 +452,14 @@ async fn authz_3a_global_policy_does_not_refuse_a_permitted_tool() {
         test_router_app_state_with_backend(http_backend_at("alpha", "http://127.0.0.1:1/")).await;
     {
         let state_mut = Arc::get_mut(&mut state).expect("sole owner during setup");
-        state_mut.tool_policy = Arc::new(crate::security::ToolPolicy::from_config(
-            &crate::security::ToolPolicyConfig {
-                enabled: true,
-                deny: vec!["globally_blocked".to_string()],
-                ..crate::security::ToolPolicyConfig::default()
-            },
-        ));
+        // The router judges under the published generation's policy.
+        let mut config = (*state_mut.live_config.get()).clone();
+        config.security.tool_policy = crate::security::ToolPolicyConfig {
+            enabled: true,
+            deny: vec!["globally_blocked".to_string()],
+            ..crate::security::ToolPolicyConfig::default()
+        };
+        state_mut.live_config.set(config);
     }
     let client = scoped_client("scoped", vec!["*".into()], None);
 

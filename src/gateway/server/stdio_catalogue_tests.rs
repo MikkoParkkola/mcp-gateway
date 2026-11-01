@@ -34,6 +34,7 @@ fn t1a_stdio_caller_has_no_api_key_identity() {
         crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig::default());
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: &policy,
+        generation: None,
     };
     let caller = super::super::stdio_single::stdio_caller_context(
         &authorizer,

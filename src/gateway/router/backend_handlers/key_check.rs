@@ -163,7 +163,7 @@ pub(super) async fn key_refusal(
             super::super::direct_guards::scan_direct_egress(
                 failed.state,
                 screen,
-                failed.client,
+                (failed.client, failed.generation),
                 &mut response,
             );
             Some(build_http_response(&Egressed::of(response), StatusCode::OK))

@@ -284,7 +284,6 @@ async fn state_with_firewalls_and_auth(
         proxy_manager,
         streaming_config,
         key_server: None,
-        tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(8)),
@@ -304,6 +303,9 @@ async fn state_with_firewalls_and_auth(
         task_executor,
         subscriptions,
     });
+    if let Some(firewall) = &state.firewall {
+        crate::gateway::router::firewall_publish_fixture::publish_firewall(&state, firewall);
+    }
     (state, store_dir)
 }
 
@@ -563,6 +565,7 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
     let before = firewall.response_inspection_counts().inspections;
     let verdict = firewall
         .check_response_artifact(
+            firewall.startup_policy(),
             &mut artifact,
             &targets,
             &ResponseCorrelation {
