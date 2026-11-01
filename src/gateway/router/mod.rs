@@ -298,6 +298,9 @@ mod playbook_busy_tests;
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
+/// The key-by-policy barrier: one request, one generation.
+#[cfg(all(test, feature = "firewall"))]
+mod policy_barrier_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
@@ -869,6 +872,8 @@ async fn pin_generation(
     next: middleware::Next,
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::pinned();
     next.run(request).await
 }
 
