@@ -7,7 +7,9 @@
 //! its first request. The firewall's public `check_request` and
 //! `check_response` judge by the rules it was built from, which is current
 //! for a program embedding it but not for the gateway: no gateway file
-//! calls them.
+//! calls them. Every production authorizer's `generation()` answer is
+//! listed too: a request authorizer that answered `None` would send its
+//! checks to the generation published at check time.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -41,7 +43,10 @@ fn module_file(file: &Path, name: &str, path_attr: Option<&str>) -> PathBuf {
     if let Some(path) = path_attr {
         return dir.join(path);
     }
-    let stem = file.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+    let stem = file
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
     let base = if matches!(stem, "mod" | "lib" | "main") {
         dir.to_path_buf()
     } else {
@@ -170,7 +175,10 @@ fn build_meta_mcp_is_called_only_by_the_serving_modes() {
         })
         .collect();
     let modes: BTreeSet<String> = SERVING_MODES.map(|(file, _)| file.to_owned()).into();
-    assert_eq!(callers, modes, "a new serving mode must be listed in SERVING_MODES");
+    assert_eq!(
+        callers, modes,
+        "a new serving mode must be listed in SERVING_MODES"
+    );
 }
 
 #[test]
@@ -189,5 +197,122 @@ fn no_production_file_calls_the_startup_rules_entry_points() {
     assert!(
         callers.is_empty(),
         "these judge by the startup rules; a gateway check takes the request's generation: {callers:?}"
+    );
+}
+
+/// Every production `ToolAuthorizer` and its `generation()` body, whitespace
+/// collapsed. A request authorizer answers the request's generation; the
+/// operator judges no request, so it answers `None` and its checks take the
+/// generation published now.
+const AUTHORIZER_GENERATIONS: [(&str, &str); 4] = [
+    ("RouterAuthorizer<'_>", "Some(self.generation)"),
+    (
+        "HostAuthorizer<'_>",
+        "match self { Self::Http(inner) => inner.generation(), \
+         Self::Stdio(inner) => inner.generation(), }",
+    ),
+    ("ToolPolicyAuthorizer<'_>", "self.generation"),
+    ("Operator", "None"),
+];
+
+/// Every production `StdioLine` and its `generation()` body.
+const STDIO_LINE_GENERATIONS: [(&str, &str); 1] = [(
+    "std::sync::Arc<crate::config_reload::Generation>",
+    "Some(self)",
+)];
+
+const GENERATION_FN: &str = "fn generation(&self) -> Option<&crate::config_reload::Generation> {";
+
+/// Each `impl <trait> for <type>` in `text` with its `generation()` body,
+/// whitespace collapsed.
+fn generation_bodies(text: &str, trait_name: &str) -> Vec<(String, String)> {
+    let marker = format!("{trait_name} for ");
+    let mut out = Vec::new();
+    for (at, _) in text.match_indices(&marker) {
+        let rest = &text[at + marker.len()..];
+        let name = rest[..rest.find(" {").expect("an impl block")].to_owned();
+        let body_at =
+            rest.find(GENERATION_FN).expect("generation() is required") + GENERATION_FN.len();
+        let mut depth = 1_usize;
+        let end = rest[body_at..]
+            .char_indices()
+            .find_map(|(i, c)| {
+                match c {
+                    '{' => depth += 1,
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+                (depth == 0).then_some(i)
+            })
+            .expect("a closed body");
+        let body = rest[body_at..body_at + end]
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        out.push((name, body));
+    }
+    out
+}
+
+fn production_bodies(trait_name: &str) -> BTreeSet<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    production_files(root)
+        .iter()
+        .flat_map(|file| {
+            let text = production_text(&std::fs::read_to_string(file).expect("reads"));
+            generation_bodies(&text, trait_name)
+        })
+        .collect()
+}
+
+fn listed(rows: &[(&str, &str)]) -> BTreeSet<(String, String)> {
+    rows.iter()
+        .map(|(name, body)| {
+            (
+                (*name).to_owned(),
+                body.split_whitespace().collect::<Vec<_>>().join(" "),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_production_authorizer_answers_its_listed_generation() {
+    assert_eq!(
+        production_bodies("ToolAuthorizer"),
+        listed(&AUTHORIZER_GENERATIONS),
+        "a new or changed authorizer must say which generation its checks judge under"
+    );
+    assert_eq!(
+        production_bodies("StdioLine"),
+        listed(&STDIO_LINE_GENERATIONS),
+        "a production stdio line carries its generation"
+    );
+}
+
+/// The stdio authorizer's generation is a field: no production construction
+/// leaves it `None`.
+#[test]
+fn no_production_stdio_authorizer_is_built_without_a_generation() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut sites = 0;
+    for file in production_files(root) {
+        let text = production_text(&std::fs::read_to_string(&file).expect("reads"));
+        for (at, _) in text.match_indices("ToolPolicyAuthorizer {") {
+            let literal = &text[at..text[at..].find('}').map_or(text.len(), |end| at + end)];
+            let Some(field) = literal.split("generation:").nth(1) else {
+                continue;
+            };
+            sites += 1;
+            assert!(
+                !field.trim_start().starts_with("None"),
+                "{}: a stdio authorizer built with no generation",
+                file.display()
+            );
+        }
+    }
+    assert!(
+        sites > 0,
+        "premise: the scan finds the stdio authorizer's constructions"
     );
 }

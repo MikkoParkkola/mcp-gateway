@@ -227,8 +227,10 @@ fn each_field_alone(section: &str, skip: &[&str]) -> (Vec<Report>, Vec<String>) 
 // generic edit flips a restart-only one; they have their own row.
 #[test]
 fn r2_each_other_security_field_alone_stays_restart_pending() {
-    let (reports, stuck) =
-        each_field_alone("security", &["sanitize_input", "ssrf_protection", "tool_policy"]);
+    let (reports, stuck) = each_field_alone(
+        "security",
+        &["sanitize_input", "ssrf_protection", "tool_policy"],
+    );
     let missed: Vec<&str> = reports
         .iter()
         .filter(|(_, p, _)| !p.contains(&"security"))

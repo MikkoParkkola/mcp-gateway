@@ -127,8 +127,7 @@ impl Gateway {
         );
         meta_mcp.set_live_config(Arc::clone(&live_config));
         // MIK-7272.OWNER.2: `<tasks.store_dir>/stdio`, or `None` to serve as before.
-        let task_store =
-            stdio_tasks::open(&self.config, &meta_mcp, &live_config).await;
+        let task_store = stdio_tasks::open(&self.config, &meta_mcp, &live_config).await;
         // MIK-7839.CANCEL.3: a session future dropped before EOF never reaches
         // the async teardown; this guard still stops its task workers.
         let _stop_tasks = task_store.as_ref().map(|(tasks, _)| tasks.stop_on_drop());

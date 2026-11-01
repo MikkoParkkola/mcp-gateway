@@ -285,9 +285,9 @@ pub(crate) const STDIO_CREDENTIAL_PRINCIPAL: &str = "stdio";
 mod gateway_bootstrap_tests;
 
 #[cfg(test)]
-mod stdio_forward_path_tests;
-#[cfg(test)]
 mod live_config_guard_tests;
+#[cfg(test)]
+mod stdio_forward_path_tests;
 
 #[cfg(test)]
 mod tests {
