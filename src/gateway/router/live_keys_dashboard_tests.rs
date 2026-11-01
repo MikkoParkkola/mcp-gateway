@@ -188,3 +188,76 @@ async fn k13_a_kept_key_and_the_bearer_are_unaffected() {
         .expect("a bearer-minted link redeems");
     assert!(session_works(&state, &bearer_session).await);
 }
+
+/// A JSON POST to `uri` as the admin `bearer`, carrying the session cookie
+/// `handle`.
+fn post_json(uri: &str, bearer: &str, handle: &str, body: &str) -> Request<Body> {
+    let mut request = local("POST", uri, Some(bearer), Some(handle));
+    request
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+    *request.body_mut() = Body::from(body.to_owned());
+    request
+}
+
+/// K13 on the sign-in routes: a session whose minting key a reload removed,
+/// demoted, expired or replaced cannot start or confirm a sign-in, even while
+/// the caller presents another admin key. The refusal is the sign-in routes'
+/// own, 403 `dashboard_session_required`, and no flow is started. Before the
+/// reload the same request gets past the session check.
+#[tokio::test]
+async fn a_session_whose_minting_key_a_reload_removed_cannot_sign_in() {
+    use crate::config::{BackendConfig, FailsafeConfig, OAuthConfig};
+    const START: &str = "/ui/api/backends/oauthy/signin";
+    const CONFIRM: &str = "/ui/api/backends/oauthy/signin/confirm";
+    const DECISION: &str = r#"{"decision":"confirm","attempt_id":"earlier"}"#;
+    for (edit, keys) in edits() {
+        let (state, _store) = fixture().await;
+        let backend = Arc::new(crate::backend::Backend::new(
+            "oauthy",
+            BackendConfig {
+                oauth: Some(OAuthConfig {
+                    enabled: true,
+                    scopes: Vec::new(),
+                    client_id: None,
+                    client_secret: None,
+                    callback_host: None,
+                    callback_port: None,
+                    callback_path: None,
+                    token_refresh_buffer_secs: None,
+                    shared_account: false,
+                }),
+                ..BackendConfig::default()
+            },
+            &FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ));
+        assert!(
+            state.backends.register(Arc::clone(&backend)),
+            "registration"
+        );
+        let value = mint(&state, ADMIN).await;
+        let handle = redeem(&state, &value).await.expect("a session");
+        let (before, _, _) = send(&state, post_json(START, OTHER, &handle, "{}")).await;
+        assert_ne!(
+            before,
+            StatusCode::FORBIDDEN,
+            "{edit}: the session passes the check before the reload"
+        );
+
+        reload(&state, keys);
+
+        for (uri, body) in [(START, "{}"), (CONFIRM, DECISION)] {
+            let (status, _, answer) = send(&state, post_json(uri, OTHER, &handle, body)).await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{edit} {uri}: {answer}");
+            assert_eq!(
+                answer["error"], "dashboard_session_required",
+                "{edit} {uri}"
+            );
+        }
+        assert!(
+            backend.with_flow(|slot| slot.is_none()),
+            "{edit}: a flow was started"
+        );
+    }
+}
