@@ -260,7 +260,7 @@ impl ResolvedAuthConfig {
 
     /// Every last use this table's runtime holds, for a row comparing the
     /// whole map.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
         self.runtime.last_used_all()
     }

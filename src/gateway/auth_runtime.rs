@@ -77,7 +77,7 @@ impl AuthRuntime {
     }
 
     /// Every recorded last use, so a row can compare the whole map.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn last_used_all(&self) -> std::collections::BTreeMap<String, i64> {
         self.last_used
             .iter()

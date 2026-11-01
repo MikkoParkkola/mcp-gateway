@@ -515,7 +515,7 @@ async fn t9e_a_refused_match_writes_nothing() {
 
 /// T10, the static bearer: its match leaves the whole last-use map as it
 /// was, a time already in it included. The session and OIDC parts are in
-/// router/keys_last_used_callers_tests.rs.
+/// `router/keys_last_used_callers_tests.rs`.
 #[tokio::test]
 async fn t10_only_an_api_key_match_writes() {
     let fx = Fixture::new().await;
