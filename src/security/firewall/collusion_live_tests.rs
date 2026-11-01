@@ -388,3 +388,60 @@ fn sg6_the_witness_follows_the_view_action_both_ways() {
     let verdict = down.relays("bob", SEND, PROSE, &down.generation());
     assert!(observed(&verdict), "SG6 block->observe: {verdict:?}");
 }
+
+/// Alice's plan receipt of `alpha:read` delivering [`PROSE`], kept to the
+/// plan's answer and snapshotted for replay.
+fn plan_snapshot(rig: &Rig) -> super::collusion_digest::ReplayReceipt {
+    let staged = super::PlanStaging::default();
+    staged.set_caller("alice");
+    let step = serde_json::json!({"body": PROSE});
+    let digest = rig
+        .firewall
+        .receipt_digest("alpha", "read", &step, Some(&staged))
+        .expect("relay detection is on: fixture");
+    let delivered = rig
+        .firewall
+        .delivered_for_plan(&step, Some(&staged))
+        .expect("the answer is under the bound: fixture");
+    let kept = rig
+        .firewall
+        .cap_kept(rig.firewall.retain_delivered(digest, &delivered, None));
+    kept.replay_snapshot(Some(0), "alpha", "read")
+        .expect("a kept plan receipt snapshots: fixture")
+}
+
+/// Bob's verdict after alice's receipt lapses and its snapshot is replayed
+/// to her under the generation published after `reload`.
+fn replayed_verdict(reload: bool) -> crate::security::firewall::FirewallVerdict {
+    let mut cfg = config(Block, &["alpha:*"], vec![]);
+    cfg.security.firewall.collusion.window_secs = 1;
+    let rig = Rig::new(cfg);
+    let snapshot = plan_snapshot(&rig);
+    rig.lapse(std::time::Duration::from_secs(2));
+    if reload {
+        rig.reload(|c| c.security.firewall.collusion.sources = vec![]);
+    }
+    let g1 = rig.generation();
+    let replayed = super::DeliveryDigest::of_replay_receipt(&snapshot);
+    rig.firewall.record_digest(
+        super::RelayCaller::Keyed("alice"),
+        "alpha",
+        "read",
+        &replayed,
+        &g1,
+    );
+    rig.relays("bob", SEND, PROSE, &g1)
+}
+
+/// P8.9a: a replayed receipt follows the current lists, not the combined bit
+/// it was snapshotted with. Control: with no reload the replay is refused.
+/// RED on base: the snapshot carries the list-or-inferred bit.
+#[test]
+fn p8_9a_a_replayed_receipt_follows_the_current_lists() {
+    assert!(refused(&replayed_verdict(false)), "control: replay records");
+    let verdict = replayed_verdict(true);
+    assert!(
+        !refused(&verdict),
+        "P8.9a: the replay kept the old list match"
+    );
+}

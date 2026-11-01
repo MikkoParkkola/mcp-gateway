@@ -130,3 +130,114 @@ async fn t1d_catalogue_admitted_under_off_a_later_block_still_sends() {
     assert_catalogue_sent(&fx, &answer, forwarded + 1);
     assert_ordered(&seen, admitted);
 }
+
+/// Publish the live config with `change` applied.
+fn edit(state: &super::super::AppState, change: impl FnOnce(&mut crate::config::Config)) {
+    let mut config = (*state.live_config.get()).clone();
+    change(&mut config);
+    state.live_config.set(config);
+}
+
+/// P8.4 on the route: an emptied `non_egress` checks the egress again. RED
+/// on base: the gate reads the startup list.
+#[tokio::test]
+async fn p8_4_route_an_emptied_non_egress_checks_the_egress_again() {
+    let fx = fixture(Setup {
+        non_egress: vec!["alpha:send".to_string()],
+        ..Setup::default()
+    })
+    .await;
+    fx.read(Some("a")).await;
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    edit(&fx.state, |c| {
+        c.security.firewall.collusion.non_egress.clear();
+    });
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 1);
+}
+
+/// P8.5a on the route: `off` at startup, `block` published, then a read and
+/// a relay: refused. RED on base: a startup `off` builds no detector.
+#[tokio::test]
+async fn p8_5a_route_off_then_block_refuses_a_later_relay() {
+    let fx = fixture(Setup {
+        action: CollusionAction::Off,
+        ..Setup::default()
+    })
+    .await;
+    publish(&fx.state, CollusionAction::Block);
+    fx.read(Some("a")).await;
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+}
+
+/// P8.11 on the route: an effective `off` lets a relay through. RED on
+/// base: the startup `block` refuses it.
+#[tokio::test]
+async fn p8_11_route_an_effective_off_sends_the_relay() {
+    let fx = alice_read().await;
+    publish(&fx.state, CollusionAction::Off);
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+}
+
+/// SG6 on the route: `observe` at startup, `block` published: refused. RED
+/// on base: the startup `observe` lets it through.
+#[tokio::test]
+async fn sg6_route_observe_then_block_refuses() {
+    let fx = fixture(Setup {
+        action: CollusionAction::Observe,
+        ..Setup::default()
+    })
+    .await;
+    fx.read(Some("a")).await;
+    publish(&fx.state, CollusionAction::Block);
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+}
+
+/// SG7: staging follows the firewall, not the action. A read admitted
+/// under a startup `off` whose delivery finds `observe` published is held:
+/// bob's relay is let through with one audited finding. RED on base: nothing
+/// is staged under a startup `off`.
+#[tokio::test]
+async fn sg7_a_read_admitted_under_off_is_held_once_observe_is_published() {
+    let scratch = tempfile::tempdir().expect("a private folder");
+    let log = scratch.path().join("audit.ndjson");
+    let fx = fixture(Setup {
+        action: CollusionAction::Off,
+        audit_log: Some(log.clone()),
+        ..Setup::default()
+    })
+    .await;
+    let state = Arc::clone(&fx.state);
+    relay_witness_hook::arm(move || publish(&state, CollusionAction::Observe));
+    fx.read(Some("a")).await;
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+    let audited = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        audited.contains("collusion_relay"),
+        "SG7: the relay left no audited finding: {audited}"
+    );
+}
+
+/// R4.3b: the route's funnel records under the generation its caller
+/// captured at delivery. Admitted under a startup `off`, `block` published
+/// by the witness hook, `off` published again after the capture: the read is
+/// still held, so bob's relay is refused once `block` is back. RED on base:
+/// a startup `off` builds no detector.
+#[tokio::test]
+async fn r4_3b_the_route_funnel_records_under_the_captured_generation() {
+    use crate::gateway::meta_mcp::invoke::relay::commit_capture_hook;
+    let fx = fixture(Setup {
+        action: CollusionAction::Off,
+        ..Setup::default()
+    })
+    .await;
+    let (admit, capture) = (Arc::clone(&fx.state), Arc::clone(&fx.state));
+    relay_witness_hook::arm(move || publish(&admit, CollusionAction::Block));
+    commit_capture_hook::arm(move || publish(&capture, CollusionAction::Off));
+    fx.read(Some("a")).await;
+    publish(&fx.state, CollusionAction::Block);
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    assert!(
+        commit_capture_hook::reached() >= 1,
+        "the capture hook never ran"
+    );
+}
