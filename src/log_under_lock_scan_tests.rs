@@ -680,17 +680,14 @@ fn production_files() -> Vec<(String, syn::File)> {
 #[path = "log_under_lock_scan_g0_tests.rs"]
 mod g0;
 
-/// Sites that log under a guard on purpose, each with why it cannot block:
-/// (file, function, "macro!: message", reason). Keyed by the message, so a
-/// new line in an allowed function is still a hit. None of them can block:
-/// every tracing line goes through the lossy stderr writer, which never waits.
-const ALLOWED: &[(&str, &str, &str, &str)] = &[];
+#[path = "log_under_lock_allowed_tests.rs"]
+mod allowed;
 
 /// G1: no production function writes a tracing line while it holds a guard.
 #[test]
 fn g1_no_production_code_logs_while_holding_a_lock_guard() {
     let hits = scan(&production_files());
-    let allowed: BTreeSet<(String, String, String)> = ALLOWED
+    let allowed: BTreeSet<(String, String, String)> = allowed::ALLOWED
         .iter()
         .map(|(f, func, m, _)| ((*f).to_owned(), (*func).to_owned(), (*m).to_owned()))
         .collect();
