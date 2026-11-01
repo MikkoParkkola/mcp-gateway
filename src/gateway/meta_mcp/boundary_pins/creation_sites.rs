@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
+use super::fragments::{Table, pin_table};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
@@ -158,15 +159,16 @@ impl Sink for Sites {
     }
 }
 
-/// The reviewed list: file, function, kind, count, class, reason.
-const LISTED: &str = include_str!("creation_sites.tsv");
 const CLASSES: [&str; 3] = ["helper", "no-secret", "test-only"];
 
-/// The listed counts, and the rows that are malformed or carry no class.
-fn listed() -> (Counts, Vec<String>) {
+/// The listed counts from the reviewed `creation_sites` table (file, function,
+/// kind, count, class, reason), and the rows that are malformed or carry no
+/// class.
+fn listed(table: &Table) -> (Counts, Vec<String>) {
     let mut counts = Counts::new();
     let mut bad = Vec::new();
-    for line in LISTED
+    let listed = table.text();
+    for line in listed
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
@@ -194,9 +196,21 @@ fn listed() -> (Counts, Vec<String>) {
 fn every_file_creation_site_is_classified() {
     let mut sites = Sites::default();
     walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
-    let (want, bad) = listed();
+    let wrong = differences(&sites.counts, &pin_table("creation_sites"));
+    assert!(
+        wrong.is_empty(),
+        "file creation sites differ from creation_sites.tsv ({}):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+/// What differs between the counted sites and the reviewed table: malformed
+/// rows, changed counts, unlisted sites and stale rows.
+fn differences(found: &Counts, table: &Table) -> Vec<String> {
+    let (want, bad) = listed(table);
     let mut wrong: Vec<String> = bad;
-    for (key, n) in &sites.counts {
+    for (key, n) in found {
         match want.get(key) {
             Some(m) if m == n => {}
             Some(m) => wrong.push(format!("count {m} -> {n}: {}\t{}\t{}", key.0, key.1, key.2)),
@@ -206,15 +220,10 @@ fn every_file_creation_site_is_classified() {
             )),
         }
     }
-    for key in want.keys().filter(|k| !sites.counts.contains_key(*k)) {
+    for key in want.keys().filter(|k| !found.contains_key(*k)) {
         wrong.push(format!("stale: {}\t{}\t{}", key.0, key.1, key.2));
     }
-    assert!(
-        wrong.is_empty(),
-        "file creation sites differ from creation_sites.tsv ({}):\n{}",
-        wrong.len(),
-        wrong.join("\n")
-    );
+    wrong
 }
 
 /// The scanner sees a second create inside a function it has already counted.

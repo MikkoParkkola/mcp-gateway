@@ -36,6 +36,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
+use super::fragments::{Table, pin_table};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, test_only, walk};
 
@@ -187,17 +188,16 @@ impl Sink for Exits {
     }
 }
 
-/// The reviewed list: file, function, exits, marks, class, reason.
-const LISTED: &str = include_str!("presend_exits.tsv");
-
 /// (file, function) -> (exits, marks, class) as listed.
 type Listed = BTreeMap<(String, String), (usize, usize, String)>;
 
-/// The listed rows, and the ones that are malformed.
-fn listed() -> (Listed, Vec<String>) {
+/// The listed rows from the reviewed `presend_exits` table (file, function,
+/// exits, marks, class, reason), and the ones that are malformed.
+fn listed(table: &Table) -> (Listed, Vec<String>) {
     let mut rows = BTreeMap::new();
     let mut bad = Vec::new();
-    for line in LISTED
+    let listed = table.text();
+    for line in listed
         .lines()
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
@@ -228,9 +228,21 @@ fn listed() -> (Listed, Vec<String>) {
 fn every_pre_send_refusal_exit_is_marked_or_excluded() {
     let mut exits = Exits::default();
     walk(crate_root(), &ROOTS, &mut exits).expect("the walk reads every module");
-    let (want, bad) = listed();
+    let wrong = differences(&exits.found, &pin_table("presend_exits"));
+    assert!(
+        wrong.is_empty(),
+        "pre-send refusal exits differ from presend_exits.tsv ({}):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
+}
+
+/// What differs between the found exits and the reviewed table: malformed
+/// rows, changed counts or classes, unlisted functions and stale rows.
+fn differences(found: &Found, table: &Table) -> Vec<String> {
+    let (want, bad) = listed(table);
     let mut wrong = bad;
-    for ((file, func), (e, m, class)) in &exits.found {
+    for ((file, func), (e, m, class)) in found {
         match want.get(&(file.clone(), func.clone())) {
             Some((we, wm, c)) if we == e && wm == m && c == class => {}
             Some((we, wm, c)) => wrong.push(format!(
@@ -241,15 +253,10 @@ fn every_pre_send_refusal_exit_is_marked_or_excluded() {
             )),
         }
     }
-    for (file, func) in want.keys().filter(|k| !exits.found.contains_key(*k)) {
+    for (file, func) in want.keys().filter(|k| !found.contains_key(*k)) {
         wrong.push(format!("stale: {file}\t{func}"));
     }
-    assert!(
-        wrong.is_empty(),
-        "pre-send refusal exits differ from presend_exits.tsv ({}):\n{}",
-        wrong.len(),
-        wrong.join("\n")
-    );
+    wrong
 }
 
 /// The scanner tells the three classes apart, and counts a hand-released

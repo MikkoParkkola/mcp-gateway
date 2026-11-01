@@ -8,6 +8,7 @@ use std::path::Path;
 use syn::visit::Visit;
 
 use super::ci_wiring::{assert_ci_registry_ban_conf_dir, checked_in_workflow};
+use super::fragments::pin_table;
 use super::packaged::{PinnedFile, repo_file};
 use super::scan::{Place, Sink, expr_attrs, item_attrs, walk};
 
@@ -188,7 +189,8 @@ fn inventory() -> Vec<String> {
 /// added inside the clock module's allow).
 #[test]
 fn t1b_every_production_allow_of_the_ban_is_pinned() {
-    let mut pinned: Vec<String> = include_str!("allows.tsv")
+    let mut pinned: Vec<String> = pin_table("allows")
+        .text()
         .lines()
         .filter(|l| !l.starts_with('#') && !l.trim().is_empty())
         .map(str::to_string)
@@ -392,7 +394,7 @@ fn t1a_every_classed_read_is_pinned() {
         "unclassifiable operation use: {:?}",
         found.bad
     );
-    let want = pinned(include_str!("scoped_backends_classes.tsv"));
+    let want = pinned(&pin_table("scoped_backends_classes").text());
     assert!(
         found.rows == want,
         "class table changed ({} pinned, {} found)\nfull table:\n{}",
