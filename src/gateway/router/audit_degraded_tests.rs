@@ -394,6 +394,7 @@ async fn delivery_attempt_append_is_bounded() {
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         )
         .await;
@@ -445,6 +446,7 @@ async fn withheld_call_leaves_no_delivery_attempt_row() {
                 signing: None,
                 chain_source: crate::gateway::meta_mcp::response_security::ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         )
         .await;

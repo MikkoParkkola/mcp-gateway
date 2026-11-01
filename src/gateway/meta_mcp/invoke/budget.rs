@@ -67,6 +67,8 @@ impl MetaMcp {
             let cap_disabled = self
                 .kill_switch
                 .record_capability_failure(server, tool, &cap_cfg);
+            drop(cap_cfg);
+            drop(cfg);
             if auto_killed {
                 warn!(server, "Server auto-killed by error budget exhaustion");
             }

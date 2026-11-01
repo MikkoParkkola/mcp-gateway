@@ -46,7 +46,7 @@ impl EraCache {
     /// caller owns the lock.
     pub(super) fn store<I>(
         &self,
-        guard: &mut determination::Guard<'_>,
+        guard: &mut determination::ObservationGuard<'_>,
         trigger: ProbeTrigger,
         probe: DetachedProbe,
         install: I,
@@ -125,7 +125,7 @@ impl DetachedProbe {
 /// the candidate's probe (MIK-8012).
 pub(crate) struct EraInstall<'a> {
     pub(super) cache: &'a EraCache,
-    pub(super) guard: determination::Guard<'a>,
+    pub(super) guard: determination::ObservationGuard<'a>,
 }
 
 impl EraInstall<'_> {

@@ -94,7 +94,8 @@ impl MetaMcp {
                     // covers both reads. A refusal sends the minimal frame, so
                     // the subscriber still hears the task ended.
                     let outcome = match (stored, params.as_mut()) {
-                        (Some(task), Some(value)) => self.scan_stored_task(task, value),
+                        // A task notification has no request behind it.
+                        (Some(task), Some(value)) => self.scan_stored_task(task, None, value),
                         _ => super::invoke::egress::EgressOutcome::Delivered,
                     };
                     if outcome == super::invoke::egress::EgressOutcome::Refused {

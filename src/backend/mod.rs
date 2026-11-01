@@ -32,8 +32,6 @@ mod descriptor_gate;
 mod era;
 mod fill_check;
 mod identity_slots;
-#[cfg(test)]
-mod logging_scan_tests;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;

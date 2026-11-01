@@ -152,10 +152,10 @@ async fn mcp_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
 #[tokio::test]
 async fn stdio_withheld_surfaced_task_leaves_what_a_missing_name_leaves() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let denying = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+    let denying = crate::security::ToolPolicyConfig {
         deny: vec!["echo".to_string()],
         ..crate::security::ToolPolicyConfig::default()
-    });
+    };
     let traced = |policy, surfacing, file: &str| {
         let audit = dir.path().join(file);
         async move { Box::pin(stdio::stdio_task_traced(policy, surfacing, &audit)).await }
@@ -218,7 +218,7 @@ fn assert_refused_as_missing(
 /// [`stdio::stdio_task_read`] on a current-thread runtime, with the warnings
 /// it logged on this thread.
 fn stdio_logged(
-    policy: Option<crate::security::ToolPolicy>,
+    policy: Option<crate::security::ToolPolicyConfig>,
     surfacing: Surfacing,
 ) -> ((serde_json::Value, usize), String) {
     crate::test_log_capture::capture_warnings(|| {
@@ -236,10 +236,10 @@ fn stdio_logged(
 /// warning names it. No X14 challenge, no task, no backend call.
 #[test]
 fn stdio_withheld_surfaced_task_answers_as_a_missing_name() {
-    let denying = crate::security::ToolPolicy::from_config(&crate::security::ToolPolicyConfig {
+    let denying = crate::security::ToolPolicyConfig {
         deny: vec!["echo".to_string()],
         ..crate::security::ToolPolicyConfig::default()
-    });
+    };
     let ((withheld, withheld_calls), warnings) = stdio_logged(Some(denying), Surfacing::On);
     let ((missing, _), _) = stdio_logged(None, Surfacing::Off);
     assert_eq!(

@@ -81,7 +81,6 @@ async fn test_stdio_initialize_produces_valid_response() {
         AgentAuthState, AgentRegistry, GatewayKeyPair, ProxyManager, ResolvedAuthConfig,
     };
     use mcp_gateway::mtls::MtlsPolicy;
-    use mcp_gateway::security::ToolPolicy;
     use std::sync::Arc;
 
     let config = minimal_config();
@@ -92,7 +91,6 @@ async fn test_stdio_initialize_produces_valid_response() {
     ));
     let proxy_manager = Arc::new(ProxyManager::new(Arc::clone(&multiplexer)));
     let auth_config = Arc::new(ResolvedAuthConfig::from_config(&config.auth, KEY));
-    let tool_policy = Arc::new(ToolPolicy::from_config(&config.security.tool_policy));
     let mtls_policy = Arc::new(MtlsPolicy::from_config(&config.mtls));
     let agent_registry = Arc::new(AgentRegistry::new());
     let agent_auth = AgentAuthState::new(false, agent_registry);
@@ -127,7 +125,6 @@ async fn test_stdio_initialize_produces_valid_response() {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy,
         mtls_policy,
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(10_000)),

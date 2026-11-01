@@ -239,10 +239,11 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     // ADR-023: the two request-path flags apply on reload, so `security` is
     // compared without them; a change to any other field in it still counts.
     // Pushed here, not listed above, so nothing has to find it to mask it.
+    let collusion = collusion_fields(running, wanted);
     sections.push((
         "security",
-        security_restart_only_json(&running.security)
-            != security_restart_only_json(&wanted.security),
+        security_restart_only_json(&running.security, collusion)
+            != security_restart_only_json(&wanted.security, collusion),
     ));
     // `meta_mcp.surfaced_tools` is applied by the reload (the surfaced
     // snapshot is swapped under `lock_reload`), so it is masked out on both
@@ -258,12 +259,66 @@ pub(super) fn tracked_sections(running: &Config, wanted: &Config) -> Vec<(&'stat
     sections
 }
 
+// PR2 of ADR-029's live-collusion work flips this; until then the relay gate judges with its startup lists.
+#[cfg(feature = "firewall")]
+const COLLUSION_LIVE: bool = false;
+
+/// Whether `security.firewall.collusion`'s four live fields (`sources`,
+/// `non_egress`, `allowed_flows`, `action`) count for a restart.
+#[derive(Clone, Copy)]
+enum CollusionFields {
+    /// Compared: an edit to them needs a restart.
+    Compared,
+    /// Applied on reload, so left out of the comparison.
+    #[cfg_attr(
+        not(feature = "firewall"),
+        expect(dead_code, reason = "collusion exists only with the firewall")
+    )]
+    Masked,
+}
+
+/// The four live collusion fields apply on reload only when the running
+/// detector runs `wanted` (ADR-029, amended): the firewall is on and the
+/// detector's window and thresholds are the ones `wanted` asks for.
+#[cfg_attr(not(feature = "firewall"), expect(unused_variables))]
+fn collusion_fields(running: &Config, wanted: &Config) -> CollusionFields {
+    #[cfg(feature = "firewall")]
+    if COLLUSION_LIVE
+        && crate::security::firewall::DetectorParams::of(&running.security.firewall)
+            .runs(&wanted.security.firewall)
+    {
+        return CollusionFields::Masked;
+    }
+    CollusionFields::Compared
+}
+
 /// `security` with the fields that apply on reload set to one fixed value, so
 /// only the restart-only remainder is compared.
-fn security_restart_only_json(security: &crate::config::SecurityConfig) -> String {
+fn security_restart_only_json(
+    security: &crate::config::SecurityConfig,
+    collusion: CollusionFields,
+) -> String {
     let mut view = security.clone();
     view.sanitize_input = false;
     view.ssrf_protection = false;
+    // ADR-029 (amended): the policy fields the Policies screen edits apply on
+    // reload through the request's generation.
+    view.tool_policy = crate::security::ToolPolicyConfig::default();
+    #[cfg(feature = "firewall")]
+    {
+        view.firewall.rules.clear();
+        view.firewall.credential_redaction = false;
+    }
+    #[cfg(feature = "firewall")]
+    if matches!(collusion, CollusionFields::Masked) {
+        let live = &mut view.firewall.collusion;
+        live.sources.clear();
+        live.non_egress.clear();
+        live.allowed_flows.clear();
+        live.action = crate::security::firewall::CollusionAction::default();
+    }
+    #[cfg(not(feature = "firewall"))]
+    let _ = collusion;
     canonical_json(&view)
 }
 
