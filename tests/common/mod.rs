@@ -143,6 +143,7 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         meta.set_firewall(f.firewall.clone());
     }
     let app = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: f.session_lifecycle,
         env: None,
@@ -152,7 +153,6 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -167,7 +167,10 @@ pub async fn state(f: Fixture) -> (Arc<AppState>, tempfile::TempDir) {
         agent_identity_config: f.agent_identity,
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(config.clone())),
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            config.clone(),
+            Arc::new(ResolvedAuthConfig::from_config(&config.auth, RECORD_KEY)),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

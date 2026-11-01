@@ -31,7 +31,7 @@ fn result() -> Value {
         "content": [{"type": "text", "text": "the backend's answer"}],
         "_cost_warnings": ["the gateway's advice"],
         "_cost_suggestion": {"message": "a cheaper tool answers the same", "alternative": "beta:read"},
-        "trace_id": "gw-trace-0000-0000-0000-000000000001",
+        "_trace_id": "gw-trace-0000-0000-0000-000000000001",
     })
 }
 
@@ -106,7 +106,7 @@ async fn real_writes() -> WriteRecord {
         let value = result();
         note(Layer::Value, &["_cost_warnings"], &value);
         note(Layer::Value, &["_cost_suggestion"], &value);
-        note(Layer::Value, &["trace_id"], &value);
+        note(Layer::Value, &["_trace_id"], &value);
         recorded()
     })
     .await
@@ -161,7 +161,7 @@ async fn a_row_with_room_keeps_its_result_and_its_record() {
         "{row}"
     );
     let stored = row["model"]["task"].to_string();
-    for member in ["_cost_warnings", "_cost_suggestion", "trace_id"] {
+    for member in ["_cost_warnings", "_cost_suggestion", "_trace_id"] {
         assert!(stored.contains(member), "{member} was not stored: {row}");
     }
 }
@@ -187,7 +187,7 @@ async fn a_row_with_no_room_for_its_record_stores_no_gateway_member() {
     assert_eq!(row["model"]["task"]["status"], "completed", "{row}");
     let stored = row["model"]["task"].to_string();
     assert!(stored.contains("the backend's answer"), "{row}");
-    for member in ["_cost_warnings", "_cost_suggestion", "trace_id"] {
+    for member in ["_cost_warnings", "_cost_suggestion", "_trace_id"] {
         assert!(
             !stored.contains(member),
             "{member} stored unrecorded: {row}"

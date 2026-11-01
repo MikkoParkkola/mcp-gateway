@@ -617,6 +617,8 @@ pub(super) struct Dispatches {
     /// Run once, as the next `tools/call` is answered (F13: empties the slot
     /// between a bridged exchange's rounds).
     on_call: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    /// How each named backend answers `tools/list` ([`dispatches::ListShape`]).
+    list_shapes: Mutex<std::collections::BTreeMap<String, dispatches::ListShape>>,
 }
 
 /// One scripted backend answer (A11 cells).
@@ -639,59 +641,6 @@ fn http_status_error(status: u16) -> crate::Error {
         .error_for_status()
         .expect_err("a fixture status is non-2xx");
     crate::Error::Http(error)
-}
-
-impl Dispatches {
-    /// Answer the next dispatches with these HTTP statuses (A11 cells).
-    /// Run `hook` once, as the next `tools/call` is answered.
-    pub(super) fn on_next_call(&self, hook: impl FnOnce() + Send + 'static) {
-        *self.on_call.lock() = Some(Box::new(hook));
-    }
-
-    /// Let the script answer `tools/list` as well as `tools/call`.
-    pub(super) fn script_lists(&self) {
-        self.lists_scripted
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-
-    pub(super) fn answer_with(&self, statuses: &[u16]) {
-        let answers = statuses.iter().copied().map(Answer::Status);
-        self.answers.lock().extend(answers);
-    }
-
-    /// Answer the next dispatches with this script (A11 cells).
-    pub(super) fn script(&self, answers: &[Answer]) {
-        self.answers.lock().extend(answers.iter().cloned());
-    }
-
-    pub(super) fn count(&self) -> usize {
-        self.calls.lock().len()
-    }
-
-    /// Every dispatch, whatever its method (#2231's listings).
-    pub(super) fn all(&self) -> Vec<Dispatch> {
-        self.calls.lock().clone()
-    }
-
-    /// The `tools/call` dispatches, in order. `count()` still counts every
-    /// method, so a refusal proved by `count() == 0` also rules out the
-    /// gateway's own cold-slot `tools/list` (F13).
-    pub(super) fn calls(&self) -> Vec<Dispatch> {
-        self.calls
-            .lock()
-            .iter()
-            .filter(|d| d.method == "tools/call")
-            .cloned()
-            .collect()
-    }
-
-    /// The single dispatch expected by a positive case; panics loudly if the
-    /// count is anything else, so "reached transport" is never assumed.
-    pub(super) fn only(&self) -> Dispatch {
-        let calls = self.calls();
-        assert_eq!(calls.len(), 1, "expected exactly one backend call");
-        calls.into_iter().next().expect("checked above")
-    }
 }
 
 /// The backend's answer: its one tool `read` (a free map) for the cold-slot
@@ -748,6 +697,11 @@ impl crate::transport::Transport for CapturingTransport {
         {
             hook();
         }
+        if method == "tools/list"
+            && let Some(delay) = self.dispatches.list_delay(&self.server)
+        {
+            tokio::time::sleep(delay).await;
+        }
         // The scripted answers are for `tools/call`; the cold-slot
         // `tools/list` R2 sends first (F13) keeps the fixture's catalogue.
         if method != "tools/list"
@@ -767,6 +721,11 @@ impl crate::transport::Transport for CapturingTransport {
                 None => {}
             }
         }
+        if method == "tools/list"
+            && let Some(renamed) = self.dispatches.renamed_list(&self.server)
+        {
+            return Ok(renamed);
+        }
         Ok(answer(method))
     }
 
@@ -780,6 +739,9 @@ impl crate::transport::Transport for CapturingTransport {
         Ok(())
     }
 }
+
+#[path = "account_resolver_fixture_dispatches.rs"]
+mod dispatches;
 
 #[path = "account_resolver_gateway.rs"]
 mod gateway;

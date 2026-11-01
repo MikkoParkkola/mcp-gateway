@@ -169,8 +169,8 @@ impl Setup {
     }
 }
 
-/// A gateway with idempotency ON and the counting backend registered. The
-/// `TempDir` holds the task store and must outlive the test.
+/// A gateway with idempotency ON and the counting backend; the `TempDir` must outlive it.
+#[allow(clippy::too_many_lines, reason = "builds every AppState field by hand")]
 async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, tempfile::TempDir) {
     let config = Config {
         auth: setup.auth,
@@ -219,6 +219,7 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         env: None,
         meta_mcp,
@@ -227,10 +228,6 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(
-            &config.auth,
-            crate::record_key::RECORD_KEY,
-        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -245,9 +242,13 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new(flags_off(
-            &config,
-        ))),
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            flags_off(&config),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &config.auth,
+                crate::record_key::RECORD_KEY,
+            )),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

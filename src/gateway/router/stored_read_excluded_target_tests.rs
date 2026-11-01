@@ -73,11 +73,13 @@ async fn fixture_scoped(excluded_scope: &'static str) -> Gateway {
         Surfaced::Yes,
         (|_| {}, |_| {}),
         |state| {
-            state.auth_config =
+            state.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                (*state.live_config.get()).clone(),
                 std::sync::Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
                     &auth(excluded_scope),
                     crate::gateway::record_principal::TEST_RECORD_KEY,
-                ));
+                )),
+            ));
         },
     )
     .await
@@ -256,7 +258,7 @@ async fn s7a_0_the_two_keys_share_the_owner_and_the_touch_is_observable() {
 }
 
 /// S7a-warm: the excluded key's stored read must leave the target's warm
-/// slot untouched. RED on the tip: `settle_caller_view` reads the unscoped
+/// slot untouched. RED on the tip: `claim_caller_view` reads the unscoped
 /// registry and touches the slot (`task_replay.rs:221`) before any scope
 /// check, so the aged slot survives the eviction.
 #[tokio::test]
@@ -279,7 +281,7 @@ async fn s7a_warm_an_excluded_read_does_not_touch_the_targets_slot() {
 /// mint counter: this backend's custody is the propagation mint, it has no
 /// managed account), no cold claim and no upstream list. A managed-account
 /// target's account resolution is outside this fixture (S7a-c-m1 below). Green on the tip: account resolution skips refused
-/// targets (`task_replay.rs:136`) and `settle_caller_view` returns before
+/// targets (`task_replay.rs:136`) and `claim_caller_view` returns before
 /// any claim (`:245`). The control, the included key's own cold read, moves
 /// each mark on its own, so no assertion can pass on a dead observable.
 /// Mutants: S7a-c-m2 (the `:245` return removed), and m3a/m3b (m2 observed

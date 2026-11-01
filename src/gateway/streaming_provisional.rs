@@ -67,7 +67,7 @@ impl InFlightHold {
 
 impl Drop for InFlightHold {
     fn drop(&mut self) {
-        *self.0.last_active.write() = Instant::now();
+        self.0.touch();
         self.0.in_flight.fetch_sub(1, Ordering::SeqCst);
     }
 }

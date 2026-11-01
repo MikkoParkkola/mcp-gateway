@@ -115,6 +115,7 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
             records_examined: scan.records_examined,
             bytes_examined: 0,
             cursor_reset: false,
+            unreadable: None,
         })
     }
 }

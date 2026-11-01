@@ -175,3 +175,191 @@ async fn a_record_still_observed_as_it_was_is_sent() {
         "not buried"
     );
 }
+
+/// A bearer token that expires at `exp`, as a lease takes it.
+fn token_until(exp: u64) -> zeroize::Zeroizing<String> {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+    let part = |s: &str| URL_SAFE_NO_PAD.encode(s);
+    zeroize::Zeroizing::new(format!(
+        "Bearer {}.{}.sig",
+        part(r#"{"alg":"RS256"}"#),
+        part(&format!(r#"{{"sub":"p","exp":{exp}}}"#))
+    ))
+}
+
+/// Lease `pt` for `person()` until `exp`; the key it is held under.
+async fn leased(hub: &EventsHub, services: &Services, exp: u64) -> crate::events::lease::LeaseKey {
+    let config = services.live.get();
+    let obs = crate::events::observation::binding(&config, "pt")
+        .expect("per-user")
+        .observe(&person())
+        .expect("observed");
+    let key = crate::events::lease::LeaseKey {
+        backend: "pt".into(),
+        obs,
+    };
+    hub.leases
+        .install(key.clone(), token_until(exp), u64::MAX, 0)
+        .await
+        .expect("leased");
+    key
+}
+
+/// A record read under one lease and still queued when the lease is
+/// replaced is buried at its delivery attempt, and nothing reaches the
+/// callback: it was never authorized by the new token.
+#[tokio::test]
+async fn a_record_read_under_a_replaced_lease_is_buried_not_sent() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    let key = leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_replaced");
+    hub.leases
+        .install(key, token_until(now + 7200), u64::MAX, 0)
+        .await
+        .expect("replaced");
+    hub.attempt(&services, "evt_replaced").await;
+    let dead = hub.store.dead_letter_by_id("evt_replaced").expect("buried");
+    assert_eq!(dead.reason, "observation_changed");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// The same once the lease is past its deadline, before any expiry sweep.
+#[tokio::test]
+async fn a_record_read_under_an_expired_lease_is_buried_before_any_sweep() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let exp = crate::clock::unix_secs().expect("clock") + 120;
+    leased(&hub, &services, exp).await;
+    queued_observed(&hub, &services, port, "evt_expired");
+    let _clock = crate::clock::test_clock::at_secs(exp);
+    hub.attempt(&services, "evt_expired").await;
+    let dead = hub.store.dead_letter_by_id("evt_expired").expect("buried");
+    assert_eq!(dead.reason, "observation_changed");
+    assert_eq!(accepted.load(Ordering::SeqCst), 0, "nothing was sent");
+}
+
+/// Control for the two rows above: a record read under a lease that is
+/// still held and unexpired is sent, so their burials come from the replace
+/// and the deadline, not from leased records never being deliverable.
+#[tokio::test]
+async fn a_record_read_under_a_held_lease_is_sent() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, accepted) = counting_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_held");
+    let row = hub.store.subscriptions().pop().expect("row");
+    let stamped = hub
+        .observed_now(&row, &services.live.get(), None)
+        .expect("observable");
+    assert!(
+        stamped.is_some_and(|o| o.lease.is_some()),
+        "premise: the record is stamped with the held lease, not unleased"
+    );
+    hub.attempt(&services, "evt_held").await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while accepted.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(accepted.load(Ordering::SeqCst) >= 1, "sent");
+    assert!(
+        hub.store.dead_letter_by_id("evt_held").is_none(),
+        "not buried"
+    );
+}
+
+/// A callback that takes one connection, reports once the client's first
+/// bytes (its TLS hello) arrive, and hangs up only once released: a delivery
+/// handoff held on the wire whose outcome the sender cannot know.
+async fn held_callback() -> (u16, Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>) {
+    use tokio::io::AsyncReadExt;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    let (reached, release) = (
+        Arc::new(tokio::sync::Notify::new()),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    let (arrived, hang_up) = (Arc::clone(&reached), Arc::clone(&release));
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut hello = vec![0u8; 16 * 1024];
+        let _ = stream.read(&mut hello).await;
+        arrived.notify_one();
+        hang_up.notified().await;
+        drop(stream);
+    });
+    (port, reached, release)
+}
+
+/// The queued record for `event_id` in the outbox under `dir`, if any.
+fn queued_record(dir: &std::path::Path, event_id: &str) -> Option<serde_json::Value> {
+    std::fs::read_dir(dir.join("outbox"))
+        .ok()?
+        .flatten()
+        .filter_map(|e| serde_json::from_slice(&std::fs::read(e.path()).ok()?).ok())
+        .find(|record: &serde_json::Value| record["event_id"] == event_id)
+}
+
+/// LEASE-T7, the committed half: a handoff already on the wire when the
+/// lease is replaced is not recalled. Its attempt completes as possibly sent:
+/// counted, and left for its retry to judge, never buried by the replace.
+#[tokio::test]
+async fn lease_t7_a_handoff_on_the_wire_at_a_replace_completes() {
+    let dir = tempfile::tempdir().expect("dir");
+    let config = crate::config::EventsConfig {
+        callback_allow_private: vec!["127.0.0.0/8".into()],
+        ..crate::config::EventsConfig::default()
+    };
+    let hub = EventsHub::open(&config, dir.path()).expect("hub");
+    let services = services(dir.path());
+    let (port, reached, release) = held_callback().await;
+    offer(&hub, &[NAME]);
+    let now = crate::clock::unix_secs().expect("clock");
+    let key = leased(&hub, &services, now + 3600).await;
+    queued_observed(&hub, &services, port, "evt_wire");
+    let replace = async {
+        crate::test_pause::within("the handoff on the wire", reached.notified()).await;
+        hub.leases
+            .install(key, token_until(now + 7200), u64::MAX, 0)
+            .await
+            .expect("replaced");
+        release.notify_one();
+    };
+    tokio::join!(hub.attempt(&services, "evt_wire"), replace);
+    assert!(
+        hub.store.dead_letter_by_id("evt_wire").is_none(),
+        "not buried by the replace"
+    );
+    let record = queued_record(dir.path(), "evt_wire").expect("still queued for its retry");
+    assert!(
+        record["attempt"].as_u64().is_some_and(|n| n >= 1),
+        "the attempt on the wire is counted: {record}"
+    );
+}

@@ -263,6 +263,15 @@ impl GrantAuditor {
         let mut examined = 0;
         loop {
             let page = self.store.read_audit(&filter).map_err(|e| e.to_string())?;
+            // A skipped over-cap line may hold one of the planned records, so
+            // what is missing cannot be inferred past it: refuse, as a failed
+            // read does, rather than append a record twice.
+            if let Some(hole) = page.unreadable {
+                return Err(format!(
+                    "the audit log has a line over the record cap ({hole:?}); \
+                     the planned records cannot be checked past it"
+                ));
+            }
             examined += page.events.len();
             seen.extend(page.events.into_iter().map(|e| e.event_id));
             match page.next_cursor {

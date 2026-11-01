@@ -1,0 +1,3 @@
+src/transport/http/mod.rs	mark_per_user_slot	1	critical	d	HttpTransport::mark_per_user_slot	Marks a per-user slot's transport single-tenant, gives it the slot's lender and, for a required binding, makes it lent-only; a mistake would let a per-user slot send static headers or a gateway token
+src/transport/http/mod.rs	bucket	1	critical	d	HttpTransport::bucket	Selects the session bucket: a per-user slot's one bucket, else the caller's own; a mistake would put one caller's session on another's request
+src/transport/http/mod.rs	is_lent_only	1	standard	borderline	HttpTransport::is_lent_only	Reads the lent-only flag the header builder and close consult; a mistake would skip the lent-only refusal

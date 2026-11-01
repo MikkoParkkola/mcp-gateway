@@ -44,7 +44,7 @@ use super::account_rest_fixture::{
     caching_context, caching_executor, call, capability, capability_requiring_argument,
     capture_endpoint, context, declared_only, external, installed_expired_external,
     installed_gateway, managed, meta_execute, multi_user_caching_backend, prepared_caching_context,
-    shared,
+    shared, tls_capture_endpoint,
 };
 
 /// The gateway-held login a fallback would reach for. Seeded in the caching

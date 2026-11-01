@@ -20,7 +20,7 @@ use tower::ServiceExt;
 use super::create_router;
 use crate::config::{ApiKeyConfig, AuthConfig, SurfacedToolConfig, api_key_digest_spec};
 use crate::gateway::meta_mcp::account_resolver_fixture::direct_bridge::{
-    BACKEND, Binding, DirectAccountGateway,
+    BACKEND, Binding, DirectAccountGateway, PERSONAL_BACKEND, Second,
 };
 use crate::security::TransparencyLogger;
 use crate::security::transparency_log::TransparencyLogConfig;
@@ -29,6 +29,11 @@ const OPERATOR_KEY: &str = "sole-operator-key";
 const TOOL: &str = "read";
 
 fn sole_operator() -> AuthConfig {
+    operator_granted(&["*"])
+}
+
+/// The sole operator, whose key grants only `backends`.
+fn operator_granted(backends: &[&str]) -> AuthConfig {
     AuthConfig {
         enabled: true,
         api_keys: vec![ApiKeyConfig {
@@ -37,7 +42,7 @@ fn sole_operator() -> AuthConfig {
             expires_at: None,
             name: "operator".to_string(),
             rate_limit: 0,
-            backends: vec!["*".to_string()],
+            backends: backends.iter().map(|b| (*b).to_string()).collect(),
             allowed_tools: None,
             denied_tools: None,
             admin: false,
@@ -51,12 +56,14 @@ fn sole_operator() -> AuthConfig {
 
 struct Fx {
     router: axum::Router,
-    gateway: DirectAccountGateway,
     /// The Meta-MCP the router serves (its kill switch, MIK-8439).
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// The router's state (its task store, MIK-8439 R7).
     state: Arc<super::AppState>,
-    dirs: (tempfile::TempDir, tempfile::TempDir),
+    dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 /// The router over the sole operator's managed backend, [`TOOL`] surfaced,
@@ -75,6 +82,27 @@ async fn fixture_armed(
     binding: &Binding,
     arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
 ) -> Fx {
+    fixture_for(sole_operator(), binding, arm).await
+}
+
+/// [`fixture_armed`] for the operator `auth` describes.
+async fn fixture_for(
+    auth: AuthConfig,
+    binding: &Binding,
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Fx {
+    let gateway = DirectAccountGateway::new(auth.clone(), binding);
+    fixture_on(gateway, &auth, &[(BACKEND, TOOL)], arm).await
+}
+
+/// The router over `gateway`, [`TOOL`] surfaced on each of `surfaced`, each
+/// one's shared slot warm with a valid [`TOOL`] and the operator's slots cold.
+async fn fixture_on(
+    mut gateway: DirectAccountGateway,
+    auth: &AuthConfig,
+    surfaced: &[(&str, &str)],
+    arm: impl FnOnce(&mut crate::gateway::meta_mcp::MetaMcp),
+) -> Fx {
     let audit = tempfile::tempdir().unwrap();
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
@@ -89,31 +117,34 @@ async fn fixture_armed(
         }))
         .expect("open log"),
     );
-    let auth = sole_operator();
-    let mut gateway = DirectAccountGateway::new(auth.clone(), binding);
-    let (mut state, store) = super::tests::test_router_app_state_with_auth(&auth).await;
+    let (mut state, store) = super::tests::test_router_app_state_with_auth(auth).await;
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     state_mut.backends = gateway.backends();
-    let mut meta = gateway
-        .take_meta()
-        .with_surfaced_tools(vec![SurfacedToolConfig {
-            server: BACKEND.to_string(),
-            tool: TOOL.to_string(),
-        }]);
+    let mut meta = gateway.take_meta().with_surfaced_tools(
+        surfaced
+            .iter()
+            .map(|(server, tool)| SurfacedToolConfig {
+                server: (*server).to_string(),
+                tool: (*tool).to_string(),
+            })
+            .collect(),
+    );
     meta.enable_transparency_log(Arc::clone(&log));
     arm(&mut meta);
     let meta = Arc::new(meta);
     state_mut.meta_mcp = Arc::clone(&meta);
     state_mut.transparency_log = Some(log);
-    let tool: crate::protocol::Tool = serde_json::from_value(json!({
-        "name": TOOL, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
-    }))
-    .expect("a tool");
-    gateway
-        .backends()
-        .get(BACKEND)
-        .expect("the backend")
-        .store_shared_tools_for_test(vec![tool]);
+    for (server, tool) in surfaced {
+        let tool: crate::protocol::Tool = serde_json::from_value(json!({
+            "name": tool, "inputSchema": {"type": "object", "properties": {"folder": {"type": "string"}}}
+        }))
+        .expect("a tool");
+        gateway
+            .backends()
+            .get(server)
+            .expect("the backend")
+            .store_shared_tools_for_test(vec![tool]);
+    }
     Fx {
         router: create_router(Arc::clone(&state)),
         gateway,
@@ -202,8 +233,10 @@ async fn listed_schema_has_folder(fx: &Fx, id: u64) -> bool {
 /// A rotated grant's slot is never a listing view (HTTP). The operator's slot
 /// is warmed by a real `gateway_list_tools` fill (schema A, no properties);
 /// the shared slot holds schema B. After the grant rotates the old slot is
-/// still warm and indexed, but `tools/list` must not serve A: the now-cold
-/// caller sees the shared view B (SLOTVIS.6). RED without the recheck.
+/// still warm and indexed, but `tools/list` must not serve it: the now-cold
+/// caller's view is re-established under the current grant, a fresh fill on a
+/// slot of its own, and never the shared view B. RED without the
+/// recheck.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn tools_list_never_serves_a_rotated_grants_slot_http() {
     let fx = fixture().await;
@@ -233,9 +266,34 @@ async fn tools_list_never_serves_a_rotated_grants_slot_http() {
             .contains(&old),
         "premise: rotation leaves the old slot warm, so this is the listing's check"
     );
+    // The rotated grant selects a new slot: attach its upstream there.
+    let binding = fx
+        .state
+        .meta_mcp
+        .account_strategies()
+        .managed_vault(Some("work-gmail"))
+        .expect("the managed vault")
+        .view_binding(crate::personal_accounts::identity::Principal::SoleOperator)
+        .await
+        .expect("premise: the rotated grant has a view");
+    assert_ne!(binding, old, "premise: rotation selects a new slot");
+    fx.gateway.rearm_operator_slot_at_for_test(&binding);
+    let fills = fx.gateway.lists_to(BACKEND);
     assert!(
-        listed_schema_has_folder(&fx, 3).await,
-        "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
+        !listed_schema_has_folder(&fx, 3).await,
+        "tools/list served the shared view B to a backend with per-user sessions only"
+    );
+    assert_eq!(
+        fx.gateway.lists_to(BACKEND),
+        fills + 1,
+        "the rotated caller's view was not re-established by a fresh fill"
+    );
+    assert!(
+        backend
+            .populated_per_user_bindings_for_test()
+            .iter()
+            .any(|binding| *binding != old),
+        "the fresh fill did not land on the current grant's own slot"
     );
 }
 
@@ -549,5 +607,38 @@ async fn no_grant_operator_direct_call_is_the_same_for_a_withheld_name() {
     );
 }
 
+/// A backend with no identity propagation, its shared slot holding one tool.
+fn shared_backend(fx: &Fx) -> Arc<crate::backend::Backend> {
+    let backend = Arc::new(crate::backend::Backend::new(
+        "shared-ledger",
+        crate::config::BackendConfig {
+            enabled: true,
+            transport: crate::config::TransportConfig::Http {
+                http_url: "https://shared-ledger.invalid/mcp".to_string(),
+                streamable_http: Some(true),
+                protocol_version: None,
+            },
+            ..crate::config::BackendConfig::default()
+        },
+        &crate::config::FailsafeConfig::default(),
+        std::time::Duration::from_secs(60),
+    ));
+    let tool: crate::protocol::Tool =
+        serde_json::from_value(json!({"name": "ledger_read", "inputSchema": {"type": "object"}}))
+            .expect("a tool");
+    backend.store_shared_tools_for_test(vec![tool]);
+    assert!(
+        fx.gateway.backends().register(Arc::clone(&backend)),
+        "premise: the shared backend registers"
+    );
+    backend
+}
+
 #[path = "slot_verdict_g2_managed_http_noview_cooldown_tests.rs"]
 mod noview_cooldown;
+
+#[path = "slot_verdict_g2_managed_http_listing_tests.rs"]
+mod listing;
+
+#[path = "slot_verdict_g2_managed_http_held_view_tests.rs"]
+mod held_view;

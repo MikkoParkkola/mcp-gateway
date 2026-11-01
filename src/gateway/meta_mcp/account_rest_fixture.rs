@@ -41,6 +41,7 @@
         reason = "test code reads the host clock (MIK-8202 AC.14)"
     )
 )]
+use crate::security::transparency_log::temp::TempLog;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -175,20 +176,32 @@ pub(super) async fn capture_endpoint_answering(statuses: &[u16]) -> (u16, Arc<Ca
     (port, captured)
 }
 
+/// As [`capture_endpoint`], served over https at the fixture host: the
+/// endpoint a CACHING case's credential is sent to (see [`cacheable_base_url`]).
+pub(super) async fn tls_capture_endpoint() -> (u16, Arc<Captured>) {
+    let captured = Arc::new(Captured::default());
+    let router = axum::Router::new()
+        .route("/read", axum::routing::get(capture_handler))
+        .with_state(Arc::clone(&captured));
+    (
+        crate::test_fixture_host::serve_https(router).await,
+        captured,
+    )
+}
+
 // ── Configuration and installation ───────────────────────────────────────────
 
 /// A durable audit sink. A managed descriptor compiles to `required: true`, and
 /// the mint path refuses to hand out a credential with no durable audit record,
-/// so every managed fixture needs one. Leaked for the process, as the existing
-/// propagation fixtures do.
-fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
+/// so every managed fixture needs one. The returned [`TempLog`] holds the log
+/// and its sidecars: keep it alive until the logger is dropped.
+fn temp_transparency_logger() -> (TempLog, Arc<crate::security::TransparencyLogger>) {
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
-    Arc::new(
+    let log = TempLog::new();
+    let path = log.path().to_string_lossy().to_string();
+    let logger = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
             path,
@@ -196,7 +209,8 @@ fn leaked_transparency_logger() -> Arc<crate::security::TransparencyLogger> {
             ..TransparencyLogConfig::default()
         }))
         .expect("logger opens"),
-    )
+    );
+    (log, logger)
 }
 
 /// The `accounts` block. Store settings are SYNTHETIC and nothing here opens
@@ -271,14 +285,15 @@ pub(super) fn shared(id: &str) -> crate::personal_accounts::config::AccountDescr
 /// A gateway whose account strategies were installed by the PRODUCTION
 /// installer, with the transparency log the mint path requires.
 ///
-/// Returns the `MetaMcp` (the `MetaMcp` control needs it) and the registry both
-/// consumers share. The registry is the SAME object the installer wrote to and
+/// Returns the log's [`TempLog`] first, so a caller's `let (_log, meta, registry)`
+/// drops it last, after the logger; then the `MetaMcp` (the `MetaMcp` control
+/// needs it) and the registry both consumers share. The registry is the SAME object the installer wrote to and
 /// the same one the executor reads, so an MCP backend and a REST capability
 /// naming one descriptor hold one strategy instance, not two.
 pub(super) fn installed_gateway(
     descriptors: &[(&str, crate::personal_accounts::config::AccountDescriptor)],
     custody: &Arc<dyn crate::personal_accounts::AccountCustody>,
-) -> (Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
+) -> (TempLog, Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
     installed_gateway_built(descriptors, custody, |meta| meta)
 }
 
@@ -288,15 +303,16 @@ fn installed_gateway_built(
     descriptors: &[(&str, crate::personal_accounts::config::AccountDescriptor)],
     custody: &Arc<dyn crate::personal_accounts::AccountCustody>,
     build: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> (Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
+) -> (TempLog, Arc<MetaMcp>, Arc<AccountStrategyRegistry>) {
     let mut meta = build(MetaMcp::new(Arc::new(BackendRegistry::new())));
-    meta.enable_transparency_log(leaked_transparency_logger());
+    let (log, logger) = temp_transparency_logger();
+    meta.enable_transparency_log(logger);
     let gateway_key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     let config = rest_config(descriptors);
     install_account_strategies(&config, Some(custody), &gateway_key, &meta, ServeMode::Http)
         .expect("the shared installer must accept the fixture configuration");
     let registry = meta.account_strategies();
-    (Arc::new(meta), registry)
+    (log, Arc::new(meta), registry)
 }
 
 /// A registry that has DECLARED the descriptors but installed no strategy for
@@ -433,21 +449,14 @@ pub(super) fn cacheable_capability(
 ///
 /// `allow_loopback_egress` is what lets the other cases reach an IP literal —
 /// and it also disables the response cache by design, so a warm-cache test
-/// cannot use it. `localhost` is a NAME, so it clears the SSRF guard on its own
-/// and the enforcing (uncached-flag-free) context applies. Only DNS pinning is
-/// then in the way, which is why these cases swap the client below.
+/// cannot use it. The fixture host is a non-loopback NAME, so it clears the
+/// SSRF guard on its own and the enforcing (uncached-flag-free) context
+/// applies. Only DNS is then in the way, which is why these cases swap in a
+/// client that resolves that name to the listener. A credential goes in
+/// cleartext only to a loopback host, so the endpoint is
+/// [`tls_capture_endpoint`]'s https one.
 pub(super) fn cacheable_base_url(port: u16) -> String {
-    format!("http://localhost:{port}")
-}
-
-/// Finite-timeout client for the swapped-client caching fixtures, mirroring
-/// `capability::executor::tests::cache_partitioning::finite_http_client`: a bare client has no
-/// request timeout and a hung listener would stall the suite.
-fn finite_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("the fixture HTTP client must build")
+    crate::test_fixture_host::fixture_https_url(port)
 }
 
 /// An executor whose response cache is LIVE for these dispatches.
@@ -485,7 +494,9 @@ pub(super) fn caching_executor(
     };
     executor
         .with_account_strategies(Arc::clone(registry))
-        .with_test_http_client(finite_http_client())
+        .with_test_http_client(crate::test_fixture_host::fixture_client(
+            std::time::Duration::from_secs(5),
+        ))
 }
 
 /// A CACHING capability backend that declares itself MULTI-USER, exactly as
@@ -574,6 +585,7 @@ impl crate::identity_propagation::IdentityPropagation for AlreadyExpiredStrategy
     > {
         let subject_key = identity.stable_actor_id();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {EXPIRED_EXTERNAL_TOKEN}"),

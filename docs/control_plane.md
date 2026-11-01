@@ -127,12 +127,15 @@ or SIEM/OTel sinks.
   admin surface (meta-tools and `/ui/api/*`), and a `role: admin` rule whose
   only condition is `domain` fails to load. See `docs/MULTI_USER.md`.
 - `security_reviewer`: can read inventory/evidence and record reviews, but cannot mutate grants or policies.
-- `developer`: can read inventory/evidence.
-- `auditor`: read-only inventory/evidence role.
+- `developer`: can read inventory/evidence, but only its own grants and audit events.
+- `auditor`: read-only inventory/evidence role, over every principal's grants and audit events.
+- `viewer`: a caller no role rule maps (an API key without admin rights, or a signed-in identity no rule matches). Reads inventory/evidence, but only its own grants and audit events.
+
+Admin, security reviewer and auditor read every principal's grants and audit events in the snapshot; viewer and developer read only rows about themselves (grants under their own subject, events they performed). `auditor` is only ever an explicit role rule.
 
 All mutations require an audit event whose actor, action, and target match the requested mutation, plus a rollback plan.
 
-Reading the audit log is bounded work: each query returns one page of at most `limit` events newest-first, examining at most `scan_budget` records (default and maximum 50,000) and, on the file backend, at most 1 MiB of the log per call; when the scan stops before the start of the log it returns a cursor to continue from, so a filter that matches nothing stays cheap and is never silently truncated.
+Reading the audit log is bounded work: each query returns one page of at most `limit` events newest-first, examining at most `scan_budget` records (default and maximum 50,000) and, on the file backend, at most 1 MiB of the log per call (plus one record of up to 4 MiB when a record is longer than that window; a line over the 4 MiB cap is reported in the page as `unreadable` and skipped); when the scan stops before the start of the log it returns a cursor to continue from, so a filter that matches nothing stays cheap and is never silently truncated.
 
 ## License Split
 

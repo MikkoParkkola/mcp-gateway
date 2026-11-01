@@ -3,9 +3,11 @@
 //! Environment variables and HTTP headers a discovered server carries (#1876).
 //!
 //! Both routinely hold credentials: API keys in `env`, bearer tokens in
-//! `headers`. The values reach exactly one place, the backend written to the
+//! `headers`. The values reach one place, the backend written to the
 //! owner-only gateway config (`SecretMap::expose` feeds
-//! [`super::DiscoveredServer::to_backend_config`]). Everything else that
+//! [`super::DiscoveredServer::to_backend_config`]), which an adopt splits
+//! further: its literal values go to the secret store and only their
+//! references to the config (`adopt::adoption`). Everything else that
 //! formats a discovered server (`Debug`, discovery JSON/YAML and shadow
 //! reports, logs, errors) sees the keys only.
 

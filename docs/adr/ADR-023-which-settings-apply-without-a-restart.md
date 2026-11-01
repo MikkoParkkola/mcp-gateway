@@ -33,6 +33,8 @@ Option 2.
 
 **Amended 2026-10-26 (U19).** The firewall's `collusion.sources` and `collusion.allowed_flows` do not go live in U19. The relay tracker classifies each delivery when it is recorded: whether its source was sensitive, and which `allowed_flows` entries it may leave through, one bit per entry by position. A live edit would leave evidence already held classified under the old lists: a source just made sensitive has no sensitive evidence on record, and after entries are reordered or removed a held bit can name a different flow, in some edits letting a copy leave through a flow the new rules forbid. That is a fail-open window, so both lists stay restart-only and are reported as needing a restart. They go live with the policy schema work, once sensitivity and allowed flows are judged against the current rules when a relay is witnessed. New policy fields (sensitivity, exceptions) are defined and made live by that same work, not by U19.
 
+**Amended 2026-10-28 (U19 PR2).** Per-client rate limits no longer use `governor`. A reload that changes a key's `rate_limit` keeps the usage already spent under the new rate, and a `governor` limiter can neither change its rate nor report its usage. The per-client bucket (`gateway/auth_runtime.rs`) runs the same GCRA as `governor`'s `Quota::per_minute(rate)`, in integer nanoseconds, and rows pin it to `governor`'s allow and deny sequence. Do not swap it back without a resize that keeps usage. Buckets and breakers live in one store shared across reloads, keyed by the credential, so rebuilding the key list resets nothing.
+
 ## Consequences
 
 - The copy "Reach and role apply at once" and "Limits apply at once" becomes true when U19 ships, and is blocked until then.

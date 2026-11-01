@@ -40,6 +40,9 @@ fn fixture(
                     action,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -57,6 +60,7 @@ fn targets() -> [ResponsePolicyTarget; 1] {
     [ResponsePolicyTarget {
         server: "origin-backend".into(),
         tool: "ask_user".into(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }]
 }
 
@@ -68,6 +72,7 @@ fn correlation() -> ResponseCorrelation<'static> {
         external_tool: "gateway_invoke",
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::NotKnown,
     }
 }
 
@@ -165,7 +170,7 @@ fn assert_projected_refusal(error: &crate::Error) {
     assert_eq!(error.to_rpc_code(), -32600);
     let response =
         error_response_preserving_status(RequestId::String("caller-current-17".into()), error);
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(

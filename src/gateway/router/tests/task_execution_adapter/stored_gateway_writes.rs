@@ -15,7 +15,9 @@ fn text(text: &str) -> Value {
 
 /// The suite's state with `mock` registered and a `block` relay detector over
 /// every `mock` tool, so the gateway's receipts are live.
-async fn relay_state(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn relay_state(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -84,21 +86,22 @@ async fn a_task_row_records_the_trace_id_the_gateway_wrote() {
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
     let row = row(&store, &task);
     assert!(
-        row.to_string().contains("trace_id"),
+        row.to_string().contains("_trace_id"),
         "premise: the stored result carries the gateway's trace_id: {row}"
     );
-    let entries = written(&row, &["trace_id"]);
+    let entries = written(&row, &["_trace_id"]);
     assert_eq!(
         entries.len(),
         1,
         "the row records the trace_id the gateway wrote: {row}"
     );
     assert_eq!(entries[0]["layer"], "value", "{row}");
-    assert_eq!(entries[0]["dest"], json!(["trace_id"]), "{row}");
+    assert_eq!(entries[0]["dest"], json!(["_trace_id"]), "{row}");
 }
 
-/// STORE.2: a member the backend sent under a name the gateway also writes
-/// elsewhere is the backend's, so the row does not record it.
+/// STORE.2: a member the backend sent under a name only the gateway writes
+/// is never the gateway's. Ingress removes it, so the row neither stores it
+/// nor records it as a gateway write.
 #[tokio::test]
 async fn a_task_row_never_records_a_backend_member_as_the_gateways() {
     let mut answer = text("the backend's answer");
@@ -109,10 +112,14 @@ async fn a_task_row_never_records_a_backend_member_as_the_gateways() {
     let task = task_id(&created);
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
+    assert!(
+        !settled.to_string().contains("_cost_warnings"),
+        "the client got the backend's copy of a gateway member: {settled}"
+    );
     let row = row(&store, &task);
     assert!(
-        row.to_string().contains("written by the backend"),
-        "premise: the backend's member is stored: {row}"
+        !row.to_string().contains("_cost_warnings"),
+        "the backend's copy of a gateway member was stored: {row}"
     );
     assert!(
         written(&row, &["_cost_warnings"]).is_empty(),
@@ -145,11 +152,11 @@ async fn a_chain_task_row_records_each_steps_gateway_writes_under_the_step() {
     let settled = poll_until_terminal(&state, "key-a", &task).await;
     assert_eq!(status_of(&settled), "completed", "premise: {settled}");
     let row = row(&store, &task);
-    let entries = written(&row, &["trace_id"]);
+    let entries = written(&row, &["_trace_id"]);
     let dests: Vec<&Value> = entries.iter().map(|entry| &entry["dest"]).collect();
     for step in ["0", "1"] {
         assert!(
-            dests.contains(&&json!(["results", step, "result", "trace_id"])),
+            dests.contains(&&json!(["results", step, "result", "_trace_id"])),
             "step {step}'s trace_id is recorded under its step: {dests:?}; row: {row}"
         );
     }
@@ -180,7 +187,7 @@ async fn a_state_only_rounds_notes_are_not_recorded() {
         "a resumed round's continuation was recorded: {row}"
     );
     assert_eq!(
-        written(&row, &["trace_id"]).len(),
+        written(&row, &["_trace_id"]).len(),
         1,
         "only the final round's trace_id: {row}"
     );

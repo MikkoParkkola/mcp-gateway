@@ -316,3 +316,52 @@ async fn f3_a_first_dispatch_takes_the_flag_current_at_dispatch() {
     assert!(got.to_string().contains("null bytes"), "{got}");
     assert_eq!(calls(&fx), 0, "dispatched");
 }
+
+/// A readmission refused at first dispatch is the gateway's refusal
+/// and is tied to its task: the settlement writes the task's record, traced
+/// by the task id (the refusal carries no invocation trace of its own).
+#[tokio::test]
+async fn a_refused_readmission_is_tied_to_its_task() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let (_dir, log) = temp_log(None);
+    let logged = std::sync::Arc::clone(&log);
+    let fx = Box::pin(sanitizing(
+        false,
+        fixture_built(Answer::Ok, move |mut meta| {
+            meta.enable_transparency_log(logged);
+            meta
+        }),
+    ))
+    .await;
+    let live = std::sync::Arc::clone(&fx.state.live_config);
+    crate::gateway::meta_mcp::visible::seams::before_task_dispatch(move || {
+        live.edit(|c| c.security.sanitize_input = true);
+    });
+    let got = task_with_nul(&fx, "taskjoin-readmit").await;
+    assert!(got.to_string().contains("null bytes"), "premise: {got}");
+    assert_eq!(calls(&fx), 0, "premise: dispatched");
+    let task = got
+        .pointer("/result/taskId")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("no task id: {got}"));
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    let records: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| entry["route"] == "task_settlement" && entry["task_id"] == task)
+        .collect();
+    let [record] = records.as_slice() else {
+        panic!("task {task}: one task_settlement record: {entries:#?}");
+    };
+    assert_eq!(record["response_effect"], "refused", "{record}");
+    assert_eq!(record["outcome"], "denied", "{record}");
+    // The readmission's protocol refusal, the code the task settles with.
+    assert_eq!(record["error_code"], -32600, "{record}");
+    assert_eq!(record["server"], "alpha", "{record}");
+    assert_eq!(record["tool"], "read", "{record}");
+    assert_eq!(record["trace_id"], task, "{record}");
+}

@@ -397,7 +397,9 @@ impl CapabilityExecutor {
         } else {
             None
         };
+        // A web UI call runs the capability itself; it may still store.
         if let Some(ref cache_key) = cache_key
+            && !crate::gateway::ui_call_runs_live()
             && let Some((cached, read, _writes)) = self.cache.get_read(cache_key)
         {
             // A hit restores, into the caller's read scope, the attribution
@@ -808,6 +810,9 @@ impl Default for CapabilityExecutor {
 
 #[cfg(test)]
 mod redirect_tests;
+
+#[cfg(test)]
+mod proxy_ssrf_tests;
 #[cfg(test)]
 mod ssrf_denial_tests;
 

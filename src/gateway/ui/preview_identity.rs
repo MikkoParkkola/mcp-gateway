@@ -5,7 +5,7 @@
 
 use serde_json::{Value, json};
 
-use crate::cli_support::is_hidden_char;
+use crate::cli_support::display_text;
 
 /// Characters kept of a reported name or version. Counted in characters, so
 /// a multibyte name is never cut inside one.
@@ -18,7 +18,7 @@ pub(super) fn package(info: Option<&Value>) -> Value {
     let field = |key: &str| {
         info.and_then(|info| info.get(key))
             .and_then(Value::as_str)
-            .and_then(display_text)
+            .and_then(|raw| display_text(raw, CAP))
     };
     let (name, version) = (field("name"), field("version"));
     if name.is_none() && version.is_none() {
@@ -34,19 +34,6 @@ pub(super) fn package(info: Option<&Value>) -> Value {
     })
 }
 
-/// `raw` without controls (Cc), formats (Cf: bidi overrides, zero-width
-/// marks) or line and paragraph separators (Zl, Zp), trimmed and capped, with
-/// whether the cap cut it; `None` when nothing is left. A server picks these
-/// strings, so they must not be able to reorder or hide what is shown.
-fn display_text(raw: &str) -> Option<(String, bool)> {
-    let kept: String = raw.chars().filter(|&c| !is_hidden_char(c)).collect();
-    let kept = kept.trim();
-    if kept.is_empty() {
-        return None;
-    }
-    Some((kept.chars().take(CAP).collect(), kept.chars().count() > CAP))
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::{Value, json};
@@ -58,7 +45,7 @@ mod tests {
     #[test]
     fn display_text_keeps_backslashes_and_drops_hidden_characters() {
         assert_eq!(
-            display_text("a\\b\u{202e}c\u{2028}d"),
+            display_text("a\\b\u{202e}c\u{2028}d", super::CAP),
             Some(("a\\bcd".to_string(), false))
         );
     }

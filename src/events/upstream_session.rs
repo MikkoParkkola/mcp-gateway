@@ -17,8 +17,10 @@ use super::upstream_listener::Shared;
 use super::upstream_need::Coalescer;
 use crate::backend::{Backend, BackendRegistry};
 use crate::protocol::era::PeerEra;
+#[cfg(test)]
+use crate::transport::upstream_tap::UpstreamNote;
 use crate::transport::upstream_tap::{
-    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, UpstreamNote, Watched,
+    FrameStream, KindSet, NoteKind, Refused, Requested, UpstreamListen, Watched,
 };
 
 /// How often the loop looks at timers; also bounds coalescing latency.
@@ -155,6 +157,9 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
     // One receiver for the task's life (T35): a revival sent at any point
     // after the registry check below is seen by the park that follows it.
     let mut wake = shared.wake.subscribe();
+    // The lease the last run sent under; a wake that moved it cuts the backoff.
+    let mut ran_under: Option<u128> = None;
+    let mut cut = run::LeaseCut::default();
     loop {
         if shared.stop.is_cancelled() {
             return;
@@ -191,7 +196,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         let outcome = if backend.is_a2a() {
             poll::poll(&shared, &backend, &hub, &registry).await
         } else {
-            session(&shared, &backend, &hub, &registry).await
+            session(&shared, &backend, &hub, &registry, &mut ran_under).await
         };
         let delay = match outcome {
             Outcome::Stopped => return,
@@ -214,7 +219,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
         shared.before_backoff.pause().await;
         // A revival cuts the wait; a filter change does not, so churn on the
         // subscriptions cannot reconnect a failing backend early (T35).
-        let deadline = tokio::time::Instant::now() + delay;
+        let mut deadline = cut.deadline(&shared, &hub, ran_under, delay, BACKOFF_FIRST);
         #[cfg(test)]
         shared.waits.begin();
         loop {
@@ -231,6 +236,7 @@ pub(super) async fn run(shared: Arc<Shared>, registry: Arc<BackendRegistry>, hub
                         shared.waits.ended(WaitEnd::Revival);
                         break;
                     }
+                    deadline = cut.on_wake(&shared, &hub, ran_under, deadline, BACKOFF_FIRST);
                 }
             }
         }
@@ -289,173 +295,6 @@ fn requested(shared: &Shared) -> Requested {
     Requested { kinds, uris }
 }
 
-/// One connection's life.
-async fn session(
-    shared: &Arc<Shared>,
-    backend: &Arc<Backend>,
-    hub: &Weak<EventsHub>,
-    registry: &BackendRegistry,
-) -> Outcome {
-    let Some(run) = begin_run(shared, backend, hub).await else {
-        return failed();
-    };
-    let started = Instant::now();
-    let modern = run.era == PeerEra::Modern;
-    let mut state = State::new(shared, run.era);
-    state.fence.clone_from(&run.fence);
-    // The first catalogue read doubles as the legacy HTTP session's first
-    // request on the shared bucket (§3).
-    state.read_snapshot(backend, hub, false).await;
-    if !modern && shared.key.obs.is_none() {
-        // A legacy GET names a session that exists: one shared-bucket request
-        // first, even when no URI is watched (§3). A per-user listener's own
-        // session makes its own handshake.
-        let _ = backend.read_resource_snapshot(false).await;
-    }
-    if let Err(ended) = open_first(shared, &mut state, &run.handle, modern).await {
-        return ended;
-    }
-    state.handle = Some(run.handle.clone());
-    let synced = tokio::select! {
-        () = shared.stop.cancelled() => false,
-        () = state.sync_legacy(backend, &run.handle) => true,
-    };
-    if !synced {
-        state.release(backend).await;
-        return Outcome::Stopped;
-    }
-    let mut tick = tokio::time::interval(TICK);
-    let mut wake = shared.wake.subscribe();
-    // The tools refill a notice starts. Polled as one arm of the loop's select,
-    // never awaited inline, so a hanging `tools/list` (bounded by OPEN_LIMIT)
-    // does not stop the session draining its other notices (MIK-7937).
-    let mut refill: Option<Refill> = None;
-    loop {
-        let event = tokio::select! {
-            () = shared.stop.cancelled() => {
-                state.release(backend).await;
-                return Outcome::Stopped;
-            }
-            note = recv(&mut state.current) => Ev::Current(note),
-            note = recv_pending(&mut state.pending) => Ev::Pending(note),
-            filled = refilled(&mut refill) => Ev::Refilled(filled),
-            opened = replacement_opened(&mut state.opening) => Ev::Opened(opened),
-            _ = wake.changed() => Ev::Wake,
-            _ = tick.tick() => Ev::Tick,
-        };
-        match event {
-            Ev::Current(Some(note)) => {
-                if state.note(note, false) {
-                    return finish_refill(&mut state, shared, backend, hub, refill, started).await;
-                }
-            }
-            Ev::Current(None) => {
-                return finish_refill(&mut state, shared, backend, hub, refill, started).await;
-            }
-            Ev::Pending(Some(note)) => {
-                state.note(note, true);
-            }
-            Ev::Pending(None) => state.pending_ended(),
-            Ev::Opened((opened, requested)) => state.on_opened(opened, requested),
-            Ev::Refilled(filled) => {
-                // The refill ended (filled or timed out): the hub may hear now.
-                refill = None;
-                state.refill_ended(filled);
-            }
-            Ev::Wake | Ev::Tick => {}
-        }
-        if grant_moved(shared, run.fence.as_deref(), &mut state).await {
-            // Nothing observed under the old grant is announced: the
-            // session's notices and refill go with it.
-            return state.ended(started);
-        }
-        if refill.is_none() {
-            refill = start_due_refill(&mut state, backend);
-        }
-        // A per-user run's transport is its own: only a replaced backend
-        // (a reload) ends it.
-        let current = match &run.transport {
-            Some(transport) => backend_still_current(backend, transport),
-            None => !registered_anew(registry, &shared.name, backend),
-        };
-        if !current {
-            debug!(backend = %shared.name, "upstream listener: transport replaced");
-            return finish_refill(&mut state, shared, backend, hub, refill, started).await;
-        }
-        if run.transport.is_some() && backend.connected_streamable() != run.flavour {
-            debug!(backend = %shared.name, "upstream listener: transport flavour changed; reconnecting");
-            return finish_refill(&mut state, shared, backend, hub, refill, started).await;
-        }
-        let stopped = tokio::select! {
-            () = shared.stop.cancelled() => true,
-            () = state.maintain(backend, hub, &run.handle, modern) => false,
-        };
-        if stopped {
-            state.release(backend).await;
-            return Outcome::Stopped;
-        }
-        // Kept only to release keys (D5 cleanup), and nothing is left.
-        shared.cancel_if_idle();
-        let tick = on_tick(backend.connected_streamable(), || shared.is_ineligible());
-        if (state.flush(hub) || tick == OnTick::EndIneligible) && end_ineligible(shared, hub).await
-        {
-            state.release(backend).await;
-            return Outcome::Stopped;
-        }
-    }
-}
-
-/// Whether a minted run's grant moved: a refused mint says so at once, and
-/// the run reads its fence every [`FENCE_EVERY`] so a quiet stream notices
-/// too. A moved run's pending tools debounce goes with it. A per-user key
-/// has no snapshot or confirm clock to drop: it never reads the catalogue
-/// (`read_snapshot`, `authorize_uri`).
-async fn grant_moved(
-    shared: &Shared,
-    fence: Option<&crate::events::listener_credential::RunFence>,
-    state: &mut State<'_>,
-) -> bool {
-    let Some(fence) = fence else {
-        return false;
-    };
-    // Once the run's first request fixed its grant, before any refill: a
-    // tools notice another run left pending was heard under that grant.
-    if fence.is_fixed() {
-        run::forget_foreign_debt(&mut shared.tools.lock(), fence.binding().as_deref());
-    }
-    if Instant::now() >= state.fence_due {
-        state.fence_due = Instant::now() + FENCE_EVERY;
-        fence.recheck().await;
-    }
-    if !fence.ended() {
-        return false;
-    }
-    debug!(backend = %shared.name, "upstream listener: the grant moved; ending the run");
-    *shared.tools.lock() = ToolsDebt::default();
-    true
-}
-
-/// What a tick does about the backend's live transport (MIK-7969 H2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum OnTick {
-    Keep,
-    EndIneligible,
-}
-
-/// A listener runs only for a backend that was eligible when subscribed.
-/// Once its live connection reads the SSE handshake (`live`, as
-/// `Backend::connected_streamable` reads it), a quiet stream would never
-/// notice, so the tick asks the shared predicate (`refused`, the costlier
-/// read) whether the backend is now refused. An undetected transport is not
-/// a refusal: a stopped slot reconnects through the loop head.
-fn on_tick(live: Option<bool>, refused: impl FnOnce() -> bool) -> OnTick {
-    if live == Some(false) && refused() {
-        OnTick::EndIneligible
-    } else {
-        OnTick::Keep
-    }
-}
-
 fn failed() -> Outcome {
     Outcome::Ended {
         acked: false,
@@ -463,47 +302,11 @@ fn failed() -> Outcome {
     }
 }
 
-fn backend_still_current(backend: &Backend, handle: &Weak<dyn UpstreamListen>) -> bool {
-    backend.listens_on(handle)
-}
-
-enum Ev {
-    Current(Option<UpstreamNote>),
-    Pending(Option<UpstreamNote>),
-    Refilled(bool),
-    Opened((Result<FrameStream, Refused>, Requested)),
-    Wake,
-    Tick,
-}
-
 /// A replacement listen being opened (D2): polled as one arm of the loop's
 /// select, so the current stream keeps draining while it opens.
 type Opening = std::pin::Pin<
     Box<dyn std::future::Future<Output = (Result<FrameStream, Refused>, Requested)> + Send>,
 >;
-
-async fn replacement_opened(
-    opening: &mut Option<Opening>,
-) -> (Result<FrameStream, Refused>, Requested) {
-    match opening {
-        Some(future) => future.await,
-        None => std::future::pending().await,
-    }
-}
-
-async fn recv(current: &mut Option<(FrameStream, Requested)>) -> Option<UpstreamNote> {
-    match current {
-        Some((stream, _)) => stream.rx.recv().await,
-        None => std::future::pending().await,
-    }
-}
-
-async fn recv_pending(pending: &mut Option<Pending>) -> Option<UpstreamNote> {
-    match pending {
-        Some(p) => p.stream.rx.recv().await,
-        None => std::future::pending().await,
-    }
-}
 
 /// A replacement listen waiting for its acknowledgement (make before break).
 struct Pending {
@@ -551,6 +354,8 @@ struct State<'a> {
     fence: Option<Arc<crate::events::listener_credential::RunFence>>,
     /// When the run next reads its fence.
     fence_due: Instant,
+    /// A leased run's generation, stamped on every occurrence emitted.
+    lease: Option<u128>,
 }
 
 impl<'a> State<'a> {
@@ -582,6 +387,7 @@ impl<'a> State<'a> {
             legacy_cursor: None,
             fence: None,
             fence_due: now + FENCE_EVERY,
+            lease: None,
         }
     }
 
@@ -770,11 +576,12 @@ impl<'a> State<'a> {
 
 #[path = "upstream_session_open.rs"]
 mod opening;
-use opening::{open, open_first};
+use opening::open;
 
 #[path = "upstream_session_refill.rs"]
 mod refill;
-use refill::{Refill, finish_refill, refilled, start_due_refill};
+#[cfg(test)]
+use refill::{Refill, finish_refill, start_due_refill};
 
 #[path = "upstream_session_notes.rs"]
 mod notes;
@@ -787,8 +594,13 @@ mod poll;
 
 #[path = "upstream_session_run.rs"]
 mod run;
+
+#[path = "upstream_session_conn.rs"]
+mod conn;
+use conn::session;
+#[cfg(test)]
+use conn::{OnTick, on_tick};
 use legacy::watched_by;
-use run::begin_run;
 #[cfg(test)]
 use run::{pick_session, runs_modern};
 
@@ -799,3 +611,7 @@ mod tests;
 #[cfg(test)]
 #[path = "upstream_session_seam_tests.rs"]
 mod seam_tests;
+
+#[cfg(test)]
+#[path = "upstream_session_iso_tests.rs"]
+mod iso_tests;

@@ -470,7 +470,9 @@ async fn l7b_passthrough_fills_publish_no_index_entry() {
             .any(|b| b == BINDING),
         "premise: alpha's passthrough slot holds a catalogue"
     );
-    fx.meta.remember_caller_slot(&backend, proof, Some(BINDING));
+    fx.meta
+        .remember_caller_slot(&backend, proof, Some(BINDING))
+        .await;
     assert!(
         backend.indexed_bindings_for_test().is_empty(),
         "L7b: a passthrough fill published an index entry"
@@ -593,12 +595,13 @@ async fn l3b_multi_user_keeps_the_isolated_backend_out_of_spec_preview() {
     );
 }
 
-/// L6c (SLOTVIS.6 third clause, control): a cold caller's surfaced list in
-/// plain `tools/list` keeps today's shared view. alpha's own catalogue would
-/// withhold the tool (invalid schema), but its slot is cold, so the shared
-/// entry is listed, by design. Green on base.
+/// L6c (SLOTVIS.6 third clause): a cold caller's surfaced list in plain
+/// `tools/list` no longer keeps the shared view of a backend with per-user
+/// sessions only: that backend has no shared session, so its
+/// shared entry would describe a catalogue no caller can reach. alpha's slot
+/// is cold, and the entry is withheld until alpha's own fill lands.
 #[tokio::test]
-async fn l6c_cold_surfaced_list_keeps_the_shared_view() {
+async fn l6c_cold_surfaced_list_withholds_a_per_user_only_backend() {
     let fx = per_user(
         CallerSlot::Invalid,
         &valid(),
@@ -611,8 +614,8 @@ async fn l6c_cold_surfaced_list_keeps_the_shared_view() {
     fx.meta.set_multi_user(false);
     let entry = surfaced_entry_for_alpha(&fx.meta);
     assert!(
-        entry.is_some(),
-        "L6c: a cold caller's surfaced list dropped the shared entry"
+        entry.is_none(),
+        "L6c: a cold caller's surfaced list kept the shared entry: {entry:?}"
     );
 }
 

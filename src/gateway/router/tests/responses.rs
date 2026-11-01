@@ -3,6 +3,7 @@
 //! Response builders and the backend handler.
 
 use super::*;
+use crate::gateway::router::helpers::RpcHttp;
 use pretty_assertions::assert_eq;
 
 // =====================================================================
@@ -70,7 +71,7 @@ fn attach_session_header_skips_invalid_session_header_without_panicking() {
 
 #[tokio::test]
 async fn build_http_error_response_sets_status_and_jsonrpc_body() {
-    let (status, body) = build_http_error_response(
+    let RpcHttp { status, body, .. } = build_http_error_response(
         Some(RequestId::String("req-403".to_string())),
         -32003,
         "Forbidden",
@@ -91,7 +92,7 @@ async fn build_http_error_response_sets_status_and_jsonrpc_body() {
 
 #[tokio::test]
 async fn build_http_error_response_without_request_id_includes_null_id_field() {
-    let (status, body) =
+    let RpcHttp { status, body, .. } =
         build_http_error_response(None, -32700, "Parse error", StatusCode::BAD_REQUEST);
     let response = (status, body).into_response();
 
@@ -395,7 +396,7 @@ async fn backend_handler_required_mint_without_route_audit_fails_closed_generica
         &FailsafeConfig::default(),
         Duration::from_secs(60),
     ));
-    let (state, _store) = test_router_app_state_minting_without_route_audit(backend).await;
+    let (_log, state, _store) = test_router_app_state_minting_without_route_audit(backend).await;
     let router = create_router(state);
 
     let mut request = axum::http::Request::builder()

@@ -21,11 +21,10 @@ use crate::config::AuthConfig;
 /// The one asset U17 ships, by its content-hashed name.
 const SHELL: &[u8] = include_bytes!("../ui/shell/index.html");
 const CLASSIC: &[u8] = include_bytes!("../ui/index.html");
-/// The shell's policy as the design states it, written out here so the
-/// served header is checked against the spec, not against its own constant.
-const SHELL_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
-     img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; \
-     form-action 'self'; frame-ancestors 'none'";
+/// The shell's policy, from the checked-in golden the fixture server is
+/// also held to, so the served header is checked against one written copy,
+/// not against the constant that builds it.
+const SHELL_CSP: &str = include_str!("../ui/csp.golden");
 
 struct Reply {
     status: StatusCode,
@@ -40,7 +39,7 @@ impl Reply {
 }
 
 /// Auth on with a static bearer, so `/ui/api` answers its auth refusal.
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some("u17-bearer".to_string()),
@@ -100,7 +99,7 @@ async fn t1_a_deep_link_answers_the_shell_document() {
         );
         assert_eq!(
             reply.header(header::CONTENT_SECURITY_POLICY),
-            Some(SHELL_CSP),
+            Some(SHELL_CSP.trim_end()),
             "{uri}"
         );
         assert_eq!(

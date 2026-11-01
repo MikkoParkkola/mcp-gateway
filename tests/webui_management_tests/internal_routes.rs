@@ -77,7 +77,7 @@ struct Row {
 const AUDITOR_KEY: &str = "auditor-key";
 
 /// The auth-on posture: the admin bearer plus the Auditor API key from
-/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_auditor`).
+/// registry.rs (`test_control_plane_endpoint_projects_non_admin_api_key_as_viewer`).
 fn auth_on() -> AuthConfig {
     AuthConfig {
         enabled: true,
@@ -112,10 +112,10 @@ async fn gateway(fixture: Fixture) -> Gateway {
             Fixture::AuthOff => Config::default().auth,
             Fixture::AuthOn | Fixture::Configured => auth_on(),
         };
-        s.auth_config = Arc::new(ResolvedAuthConfig::from_config(
-            &auth,
-            crate::record_key::RECORD_KEY,
-        ));
+        let resolved = ResolvedAuthConfig::from_config(&auth, crate::record_key::RECORD_KEY);
+        let current = (*s.live_config.get()).clone();
+        let live = mcp_gateway::gateway::test_helpers::live_config(current, Arc::new(resolved));
+        s.live_config = Arc::new(live);
         if fixture == Fixture::Configured {
             s.control_plane_store = Some(Arc::new(InMemoryControlPlaneStore::new()));
             s.export_status = Some(Arc::new(ExportStatus::default()));
@@ -156,16 +156,19 @@ fn concrete_uri(uri: &str) -> String {
         return uri.to_string();
     }
     let document = include_str!("../../src/gateway/ui/shell/index.html");
+    // The stylesheet link itself: the document also names screen stylesheets
+    // (the screens table), which load only when their screen does.
     let name = document
-        .split("/ui/assets/")
-        .skip(1)
-        .filter_map(|rest| rest.split(['"', '\'']).next())
-        .find(|name| {
-            std::path::Path::new(name)
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
+        .split(r#"<link rel="stylesheet" href="/ui/assets/"#)
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .filter(|name| {
+            name.starts_with("shell.")
+                && std::path::Path::new(name)
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("css"))
         })
-        .expect("the shell document links a stylesheet");
+        .expect("the shell document links the shell stylesheet");
     format!("/ui/assets/{name}")
 }
 
@@ -206,6 +209,11 @@ async fn send(gw: &Gateway, req: Request<Body>) -> (StatusCode, String, Vec<u8>)
         .and_then(|v| v.to_str().ok())
         .unwrap_or_default()
         .to_string();
+    // A live stream has no end: its status and headers are the answer here;
+    // its frames are read by the router tests beside the route.
+    if content_type.starts_with("text/event-stream") {
+        return (status, content_type, Vec::new());
+    }
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap()
@@ -314,6 +322,15 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 200, 200, 200],
     ),
+    // src/gateway/ui/stream/mod.rs (stream): any signed-in caller gets its
+    // own kinds; `send` reads an event stream's headers only.
+    row(
+        "/ui/api/stream",
+        Method::GET,
+        "/ui/api/stream",
+        Payload::None,
+        [401, 200, 200, 200],
+    ),
     // src/gateway/ui/overview.rs (overview)
     row(
         "/ui/api/overview",
@@ -372,56 +389,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 401, 200],
     ),
-    // src/gateway/ui/capabilities.rs:217 (list_capabilities)
-    row(
-        "/ui/api/capabilities",
-        Method::GET,
-        "/ui/api/capabilities",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:397 (create_capability; `{}` returns the template)
-    row(
-        "/ui/api/capabilities",
-        Method::POST,
-        "/ui/api/capabilities",
-        Payload::Json("{}"),
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:319 (put_capability)
-    // The admin reaches the handler, which refuses a save without If-Match.
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::PUT,
-        "/ui/api/capabilities/test_cap",
-        Payload::Yaml,
-        [401, 403, 403, 428],
-    ),
-    // src/gateway/ui/capabilities.rs (validate_capability_route; writes nothing)
-    row(
-        "/ui/api/capabilities/{name}/validate",
-        Method::POST,
-        "/ui/api/capabilities/test_cap/validate",
-        Payload::Yaml,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:278 (get_capability)
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::GET,
-        "/ui/api/capabilities/test_cap",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // src/gateway/ui/capabilities.rs:486 (delete_capability)
-    // The admin reaches the handler, which refuses a delete without If-Match.
-    row(
-        "/ui/api/capabilities/{name}",
-        Method::DELETE,
-        "/ui/api/capabilities/test_cap",
-        Payload::None,
-        [401, 403, 403, 428],
-    ),
     // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
     // with no Activity role 403); mod.rs (admit: no transparency log 404)
     row(
@@ -477,22 +444,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 403, 403, 200],
     ),
-    // backends.rs:510 (list_registry)
-    row(
-        "/ui/api/registry",
-        Method::GET,
-        "/ui/api/registry",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
-    // backends.rs:527 (search_registry)
-    row(
-        "/ui/api/registry/search",
-        Method::GET,
-        "/ui/api/registry/search?q=tavily",
-        Payload::None,
-        [401, 403, 403, 200],
-    ),
     // src/gateway/ui/events.rs:106 (list), :59 (admin), :71 (404: events not enabled)
     row(
         "/ui/api/events/dead-letters",
@@ -532,6 +483,23 @@ const ROWS: &[Row] = &[
         "/ui/api/events/leases",
         Payload::None,
         [401, 403, 403, 404],
+    ),
+    // src/gateway/ui/discovery.rs (list_discovery)
+    row(
+        "/ui/api/discovery",
+        Method::GET,
+        "/ui/api/discovery",
+        Payload::None,
+        [401, 403, 403, 200],
+    ),
+    // src/gateway/ui/discovery_adopt.rs (adopt_discovery; `{}` is not a find,
+    // so the admin's answer is the fixed invalid_body refusal)
+    row(
+        "/ui/api/discovery/adopt",
+        Method::POST,
+        "/ui/api/discovery/adopt",
+        Payload::Json("{}"),
+        [401, 403, 403, 422],
     ),
     // src/gateway/ui/preview.rs (preview_backend): describe step
     row(
@@ -595,9 +563,16 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-/// Every row: this table, then the control-plane group beside it.
+const GROUPS: [&[Row]; 5] = [
+    control_plane::ROWS,
+    gateway_rows::ROWS,
+    pending::ROWS,
+    capabilities::ROWS,
+    registry::ROWS,
+];
+/// Every row: this table, then the groups beside it (`GROUPS`, in their own files).
 fn all_rows() -> impl Iterator<Item = &'static Row> {
-    ROWS.iter().chain(control_plane::ROWS)
+    ROWS.iter().chain(GROUPS.iter().copied().flatten())
 }
 
 /// Send one row as one caller and record any answer that is not today's.
@@ -766,8 +741,16 @@ async fn internal_routes_refuse_every_other_method() {
     );
 }
 
+#[path = "internal_routes_capabilities.rs"]
+mod capabilities;
 #[path = "internal_routes_control_plane_tests.rs"]
 mod control_plane;
+#[path = "internal_routes_gateway.rs"]
+mod gateway_rows;
+#[path = "internal_routes_decisions.rs"]
+mod pending;
+#[path = "internal_routes_registry.rs"]
+mod registry;
 #[path = "internal_routes_served.rs"]
 mod served;
 #[path = "internal_routes_status.rs"]

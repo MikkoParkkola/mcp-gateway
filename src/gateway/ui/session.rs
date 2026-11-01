@@ -18,12 +18,13 @@ use axum::{Json, Router};
 use serde_json::json;
 
 use super::errors::{admin_auth_required, flat_error};
+use super::guard::Guard;
 use crate::gateway::auth::{
-    AuthenticatedClient, Now, SessionLimits, cookies_are_secure, dashboard_session_who,
-    session_cookie, session_cookie_value,
+    Now, SessionLimits, cookies_are_secure, dashboard_session_who, session_cookie,
+    session_cookie_value,
 };
 use crate::gateway::router::AppState;
-use crate::security::audit::{AuditEnvelope, CredentialKind};
+use crate::security::audit::AuditEnvelope;
 
 /// Path of the logout route.
 pub const LOGOUT_PATH: &str = routes::DASHBOARD_LOGOUT;
@@ -60,13 +61,14 @@ async fn handoff_form() -> Response {
 /// The body is read by the extractor, under the router's configured limit.
 async fn handoff_code(
     State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
     let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
     crate::gateway::auth::redeem_handoff(
         &state.dashboard_bootstrap,
-        &state.live_config,
+        (&state.live_config, generation.auth()),
         origin,
         &body,
         crate::gateway::auth::Navigation::of(&headers),
@@ -92,7 +94,9 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
         let mut fields = serde_json::Map::new();
         fields.insert("route".into(), LOGOUT_PATH.into());
         fields.insert("method".into(), "POST".into());
-        let envelope = AuditEnvelope::ok(dashboard_session_who(state.auth_config.record_key()));
+        let envelope = AuditEnvelope::ok(dashboard_session_who(
+            state.live_config.generation().auth().record_key(),
+        ));
         let written = log
             .append_bounded(move |l| {
                 l.append_admin_action("admin_ui", fields, &envelope)
@@ -123,12 +127,14 @@ async fn logout(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Respo
 /// link would be refused at redemption. Replaces any unused value.
 pub(super) async fn dashboard_link(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
 ) -> Response {
-    let Some(Extension(client)) = client.filter(|Extension(c)| {
-        c.admin
-            && (c.credential_kind == CredentialKind::StaticBearer || c.api_key_identity().is_some())
-    }) else {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
+    }
+    // Admitted: an admin holding the static bearer or an API key.
+    let Some(client) = guard.client else {
         return admin_auth_required().into_response();
     };
     // A session opened by this link ends no later than the key that minted
@@ -138,7 +144,8 @@ pub(super) async fn dashboard_link(
     // not the live file, so a reload cannot split them. A key that is not
     // found cannot prove its expiry, so it may not mint: fail closed.
     let not_after = if client.api_key_identity().is_some() {
-        let keys = state.auth_config.api_keys();
+        // The table that authenticated this request: its pinned generation.
+        let keys = generation.auth().api_keys();
         let Some(key) = keys
             .iter()
             // By the credential, not the name: two keys may share a name
@@ -165,7 +172,19 @@ pub(super) async fn dashboard_link(
         )
         .into_response();
     }
-    let value = state.dashboard_bootstrap.rearm_until(not_after);
+    // Bound to the minting key, by its quota identity, so the link and the
+    // session it opens end with that key on a reload (K13). The bearer binds
+    // nothing: it is restart-only.
+    // An API-key client that carries no quota identity cannot be bound to
+    // its key, so it may not mint: fail closed.
+    let key = match (client.api_key_identity(), client.quota_principal.clone()) {
+        (None, _) => None,
+        (Some(_), Some(key)) => Some(key),
+        (Some(_), None) => return admin_auth_required().into_response(),
+    };
+    let value = state
+        .dashboard_bootstrap
+        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
     let scheme = if running.mtls.enabled {
         "https"
     } else {
@@ -231,12 +250,12 @@ mod mik_8659_dashboard_tests {
         let gateway_key_pair =
             Arc::new(crate::gateway::oauth::GatewayKeyPair::generate().expect("gateway key"));
         let authorizer = crate::gateway::auth::AuthState {
-            auth_config: Arc::clone(auth_config),
             key_server: None,
             dashboard_bootstrap: Arc::default(),
             tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(crate::config::Config::default()),
+                Arc::clone(auth_config),
             )),
             agent_auth: agent_auth.clone(),
         };
@@ -254,6 +273,7 @@ mod mik_8659_dashboard_tests {
             .await
             .expect("task store opens");
         Arc::new(super::super::super::router::AppState {
+            process: std::sync::Arc::default(),
             session_lifecycle: None,
             continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
             env: None,
@@ -263,7 +283,6 @@ mod mik_8659_dashboard_tests {
             multiplexer,
             proxy_manager,
             streaming_config,
-            auth_config: Arc::clone(auth_config),
             key_server: None,
             tool_policy: Arc::new(crate::security::ToolPolicy::default()),
             mtls_policy: Arc::new(crate::mtls::MtlsPolicy::from_config(
@@ -280,8 +299,9 @@ mod mik_8659_dashboard_tests {
             agent_identity_config: crate::config::AgentIdentityConfig::default(),
             control_plane_store: None,
             control_plane_base: None,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(crate::config::Config::default()),
+                Arc::clone(auth_config),
             )),
             export_status: None,
             transparency_log: None,
@@ -341,13 +361,85 @@ mod mik_8659_dashboard_tests {
         let state = t1f_app_state(&auth_config, store_dir.path()).await;
         let response = super::dashboard_link(
             axum::extract::State(Arc::clone(&state)),
-            Some(axum::extract::Extension(unauthenticated)),
+            axum::extract::Extension(state.live_config.generation()),
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(unauthenticated),
+            ),
         )
         .await;
         assert_eq!(
             response.status(),
             axum::http::StatusCode::FORBIDDEN,
             "unauthenticated admin key is refused by the auth check"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_api_key_client_with_no_bindable_identity_mints_no_link() {
+        use std::sync::Arc;
+        let secret = "k13-unbindable-admin-secret";
+        let auth = crate::config::AuthConfig {
+            enabled: true,
+            bearer_token: None,
+            api_keys: vec![crate::config::ApiKeyConfig {
+                key: None,
+                key_sha256: Some(crate::config::api_key_digest_spec(secret.as_bytes())),
+                expires_at: None,
+                name: "k".to_owned(),
+                rate_limit: 0,
+                backends: vec!["*".to_owned()],
+                allowed_tools: None,
+                denied_tools: None,
+                admin: true,
+                kind: crate::config::ApiKeyKind::Shared,
+                ..Default::default()
+            }],
+            ..crate::config::AuthConfig::default()
+        };
+        let auth_config = Arc::new(
+            crate::gateway::auth::ResolvedAuthConfig::try_from_config(
+                &auth,
+                &crate::config::EnvOverlay::none(),
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )
+            .expect("fixture auth resolves"),
+        );
+        let real = auth_config
+            .validate_token(secret)
+            .expect("admin key validates");
+        // K13: an API-key client with no quota identity cannot bind the link
+        // to its key, so the mint fails closed rather than minting a link no
+        // reload can end.
+        let mut unbindable = real;
+        unbindable.quota_principal = None;
+        let store_dir = tempfile::tempdir().expect("task store dir");
+        let state = t1f_app_state(&auth_config, store_dir.path()).await;
+        // Premise: the access table admits this client, so a 403 below is
+        // the mint's own refusal, not the guard's.
+        assert!(
+            super::super::guard::decide(
+                super::super::access_table::Need::AdminKeyLink,
+                Some(&unbindable)
+            )
+            .is_ok(),
+            "premise: the guard admits an admin API key"
+        );
+        let response = super::dashboard_link(
+            axum::extract::State(Arc::clone(&state)),
+            axum::extract::Extension(state.live_config.generation()),
+            super::super::guard::Guard::for_route(
+                crate::gateway::routes::UI_DASHBOARD_LINK,
+                &axum::http::Method::POST,
+                Some(unbindable),
+            ),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::FORBIDDEN,
+            "an unbindable API-key client minted a link"
         );
     }
 }

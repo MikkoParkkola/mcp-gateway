@@ -1,1 +1,1 @@
-src/gateway/task_service/execution/worker.rs	inspect_settled_pinned	1	critical	d	inspect_settled_pinned	Runs the response firewall on a native task result under the recorded surfaced server's targets; a refusal is what the task settles on.
+src/gateway/task_service/execution/worker_inspect.rs	inspect_settled_pinned	1	critical	d	inspect_settled_pinned	Runs the response firewall on a native task result under the recorded surfaced server's targets; a refusal is what the task settles on.

@@ -54,7 +54,16 @@
 //! Both are compile limits, not behaviour findings, and the receipt reports them
 //! under a separate heading for exactly that reason.
 
+/// A backend's `allowed_tools` narrowed between a task's intake and its run.
+#[cfg(feature = "firewall")]
+mod allowed_tools_task;
+#[cfg(feature = "firewall")]
+mod live_key_tasks;
 mod support;
+
+/// A gateway refusal inside a task worker's dispatch is tied to its task.
+#[cfg(feature = "firewall")]
+mod dispatch_refusal_task;
 
 #[cfg(feature = "firewall")]
 mod egress_task;
@@ -125,6 +134,9 @@ mod input_round_races;
 mod interlock;
 mod lifecycle;
 mod pending_input_policy;
+/// A call refused in its own send is no call a backend ran (tasks, plans).
+#[cfg(feature = "firewall")]
+mod presend_refused_send;
 mod proven_subject_admission;
 /// MIK-8398 C1d: a task the worker runs stores a sealed result.
 mod provenance_seal;
@@ -133,7 +145,12 @@ mod provide_input_guards;
 /// authenticated reader alike.
 mod query_serialization;
 mod refusals;
+/// A call refused before its backend is no call a backend ran.
+#[cfg(feature = "firewall")]
+mod refused_step_targets;
 mod replay_policy;
+/// No backend-planted gateway member in a task result or a replay.
+mod reserved_members_task;
 mod result_shapes;
 mod settlement;
 /// MIK-7116.MIN.1 gap 1: the settlement record of a recovered upstream task.

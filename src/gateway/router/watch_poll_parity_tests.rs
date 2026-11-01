@@ -25,7 +25,7 @@ const NOT_ON_POLLS: [&str; 1] = ["session_profile"];
 /// the response firewall.
 const POLL_STAGES: [&str; 5] = [
     "check_authenticated_client_rate_limit(",
-    "fw.check_request(",
+    "fw.check_request_keyed(",
     "read_only_call_as(",
     "dispatch_below_gate_native_result(",
     "inspect_task_result(",
@@ -228,6 +228,7 @@ fn a_poll_runs_its_stages_in_order_and_no_primitive() {
 /// One read-day capability served by a loopback endpoint, `read_only` as the
 /// executor will find it.
 fn served(port: u16, read_only: bool) -> Arc<crate::capability::CapabilityBackend> {
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: probe\n\
          description: Read one day\n\
@@ -238,15 +239,12 @@ fn served(port: u16, read_only: bool) -> Arc<crate::capability::CapabilityBacken
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://localhost:{port}\n\
+         \x20     base_url: {base_url}\n\
          \x20     path: /read\n\
          \x20     method: GET\n"
     ))
     .expect("the capability parses");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("client");
+    let client = crate::test_fixture_host::fixture_client(std::time::Duration::from_secs(5));
     let executor =
         Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
     let backend = Arc::new(crate::capability::CapabilityBackend::new(
@@ -285,7 +283,9 @@ async fn a_poll_runs_only_what_the_executor_finds_read_only() {
             .set_capabilities(served(endpoint.port, read_only));
         let client = fx
             .state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key(
                 "k-budget",
                 crate::gateway::auth::principal_of("k-budget").storage_form(),

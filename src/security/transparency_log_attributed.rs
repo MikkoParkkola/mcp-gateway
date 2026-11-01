@@ -21,6 +21,8 @@ pub(crate) const MAX_RECORDED_TENANTS: usize = 1024;
 
 /// The `route` of a settlement record ([`TransparencyLogger::log_task_settlement`]).
 const TASK_RECOVERY_ROUTE: &str = "task_recovery";
+/// The `route` of a gateway-run task's settlement record.
+const TASK_SETTLEMENT_ROUTE: &str = "task_settlement";
 /// Its `correlation_source`: the `session_id` field holds the gateway task id.
 const TASK_ID_CORRELATION: &str = "task_id";
 
@@ -58,9 +60,12 @@ struct Record<'a> {
 
 /// The invocation fields an `extra` key may not name, whether or not this
 /// call's record carries them.
-const INVOCATION_FIELDS: [&str; 9] = [
+const INVOCATION_FIELDS: [&str; 10] = [
     "caller",
     "correlation_source",
+    // Written only by the writer, from its own argument: a caller's
+    // attribution can never forge or overwrite the decision.
+    crate::security::decision_record::FIELD,
     "request_hash",
     "response_hash",
     "route",
@@ -79,6 +84,10 @@ impl TransparencyLogger {
     /// As [`Self::log_invocation_correlated`], and when an `extra` key is a
     /// chain, envelope or invocation field: attribution never overwrites what
     /// the record says about the call.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the record's parts, each owned by a different stage of the call"
+    )]
     pub(crate) fn log_invocation_attributed(
         &self,
         key: CorrelationKey<'_>,
@@ -87,6 +96,7 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: Option<&str>,
         extra: Map<String, Value>,
+        decision: Option<&crate::security::decision_record::Decision>,
     ) -> io::Result<()> {
         let fp = (key.source == CorrelationSource::SessionId).then(|| session_fp(key.id));
         let record = Record {
@@ -96,13 +106,22 @@ impl TransparencyLogger {
             server: target.server,
             tool: target.tool,
         };
-        self.append_record(record, envelope, request_hash, response_hash, extra)
+        self.append_record(
+            record,
+            envelope,
+            request_hash,
+            response_hash,
+            extra,
+            decision,
+        )
     }
 
-    /// MIN.1 gap 1: the settlement record of a recovered upstream task.
-    /// Route `task_recovery`, joined to its submission record by `task_id`,
-    /// which is also its correlation key. Crate-private record strings: the
-    /// public `InvocationRoute` and `CorrelationSource` stay as they are.
+    /// The settlement record of a task: route `task_recovery` for a recovered
+    /// upstream task, `task_settlement` for a task the gateway ran itself whose
+    /// settlement refused or rewrote the answer. Joined to its task by
+    /// `task_id`, which is also its correlation key. Crate-private record
+    /// strings: the public `InvocationRoute` and `CorrelationSource` stay as
+    /// they are.
     ///
     /// # Errors
     ///
@@ -110,6 +129,7 @@ impl TransparencyLogger {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn log_task_settlement(
         &self,
+        route: TaskSettlementRoute,
         task_id: &str,
         envelope: &AuditEnvelope,
         server: &str,
@@ -120,13 +140,18 @@ impl TransparencyLogger {
     ) -> io::Result<()> {
         extra.insert("task_id".into(), task_id.into());
         let record = Record {
-            route: TASK_RECOVERY_ROUTE,
+            route: match route {
+                TaskSettlementRoute::Recovery => TASK_RECOVERY_ROUTE,
+                TaskSettlementRoute::Settlement => TASK_SETTLEMENT_ROUTE,
+            },
             correlation_source: TASK_ID_CORRELATION,
             session_id: task_id.into(),
             server,
             tool: Some(tool),
         };
-        self.append_record(record, envelope, request_hash, response_hash, extra)
+        // A settlement carries no decision of its own: the submission record
+        // it joins by `task_id` holds the one the call was decided by.
+        self.append_record(record, envelope, request_hash, response_hash, extra, None)
     }
 
     fn append_record(
@@ -136,6 +161,7 @@ impl TransparencyLogger {
         request_hash: &str,
         response_hash: Option<&str>,
         mut extra: Map<String, Value>,
+        decision: Option<&crate::security::decision_record::Decision>,
     ) -> io::Result<()> {
         Self::reject_reserved_keys(&extra)?;
         // MIK-7646: the overflow count is derived here alone, never supplied.
@@ -177,6 +203,12 @@ impl TransparencyLogger {
             )));
         }
         fields.extend(extra);
+        if let Some(decision) = decision {
+            fields.insert(
+                crate::security::decision_record::FIELD.into(),
+                serde_json::to_value(decision).map_err(io::Error::other)?,
+            );
+        }
 
         self.append_core(fields, envelope, false).map(|_| ())
     }
@@ -194,4 +226,13 @@ fn cap_tenants(extra: &mut Map<String, Value>) {
         tenants.truncate(MAX_RECORDED_TENANTS);
         extra.insert("tenants_total".into(), total.into());
     }
+}
+
+/// Which settlement a task settlement record describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TaskSettlementRoute {
+    /// A recovered upstream task (`task_recovery`).
+    Recovery,
+    /// A task the gateway ran itself (`task_settlement`).
+    Settlement,
 }

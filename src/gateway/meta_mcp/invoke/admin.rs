@@ -43,10 +43,12 @@ impl MetaMcp {
         // narrowing the report: a caller that asked for every session and got
         // one has no way to tell that it was scoped rather than empty.
         if (include_all_sessions || include_all_keys) && !caller.is_admin {
-            return Err(crate::Error::Config(
-                "include_all_sessions and include_all_keys are admin views and require an \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "include_all_sessions and include_all_keys are admin views and require an \
                  admin credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
 
@@ -58,10 +60,12 @@ impl MetaMcp {
             && !caller.is_admin
             && Some(requested) != session_id
         {
-            return Err(crate::Error::Config(
-                "reporting on another session is an admin view and requires an admin \
+            return Err(crate::gateway::delivery_facts::refused(
+                crate::Error::Config(
+                    "reporting on another session is an admin view and requires an admin \
                  credential"
-                    .to_string(),
+                        .to_string(),
+                ),
             ));
         }
         let target_session_id = requested.or(session_id);
@@ -296,7 +300,12 @@ impl MetaMcp {
             // admin API's 409 says (MIK-8058); anything else stays -32603.
             Err(e) => Err(Error::json_rpc(
                 match crate::config_reload::reload_failure(&e) {
-                    crate::config_reload::ReloadFailure::PostureRefused => INVALID_REQUEST,
+                    crate::config_reload::ReloadFailure::PostureRefused => {
+                        // The posture policy refusing the operator's request is
+                        // a gateway refusal; a file that fails to load is not.
+                        crate::gateway::delivery_facts::refused_while_vouched();
+                        INVALID_REQUEST
+                    }
                     _ => INTERNAL_ERROR,
                 },
                 e,
@@ -470,36 +479,50 @@ mod cost_section_tests {
 /// file watcher uses, so the drain refreshes the webhook routes and announces
 /// the new tool list, as after a file reload.
 #[cfg(test)]
-mod reload_tests {
+#[path = "admin_reload_tests.rs"]
+mod reload_tests;
+
+/// `gateway_cost_report` refusing a non-admin caller an admin view is the
+/// gateway refusing the call: it records refused.
+#[cfg(test)]
+mod cost_report_refusal_tests {
     use std::sync::Arc;
 
+    use serde_json::{Value, json};
+
     use crate::backend::BackendRegistry;
-    use crate::capability::{CapabilityBackend, CapabilityExecutor};
+    use crate::gateway::delivery_facts;
     use crate::gateway::meta_mcp::MetaMcp;
+    use crate::gateway::meta_mcp::test_callers::anonymous_caller;
+
+    /// The report for `args` from session `own`, within a delivery cell: the
+    /// answer and the effect the cell records.
+    async fn report_effect(args: Value) -> (crate::Result<Value>, Option<Value>) {
+        let meta = MetaMcp::new(Arc::new(BackendRegistry::new()));
+        delivery_facts::scope(async move {
+            let answer = meta
+                .get_cost_report(&args, Some("own"), &anonymous_caller())
+                .await;
+            let mut fields = serde_json::Map::new();
+            delivery_facts::record_fields(delivery_facts::snapshot().as_ref(), false, &mut fields);
+            (answer, fields.get("response_effect").cloned())
+        })
+        .await
+    }
 
     #[tokio::test]
-    async fn an_admin_reload_reports_the_change_like_a_file_reload() {
-        let dir = tempfile::tempdir().expect("dir");
-        let caps = Arc::new(CapabilityBackend::new(
-            "hooks",
-            Arc::new(CapabilityExecutor::new()),
-        ));
-        caps.load_from_directory(dir.path().to_str().expect("utf8"))
-            .await
-            .expect("load");
-        let registry = Arc::new(BackendRegistry::new());
-        let (feed, mut drain) = tokio::sync::mpsc::unbounded_channel();
-        registry.set_change_feed(feed);
-        let meta = MetaMcp::new(registry);
-        meta.set_capabilities(caps);
-        meta.reload_capabilities().await.expect("reload");
-        assert!(
-            matches!(
-                drain.try_recv(),
-                Ok(crate::backend::tools_nudge::ToolsNudge::Catalogue { name }) if name == "hooks"
-            ),
-            "the drain hears of the reload"
-        );
-        assert!(drain.try_recv().is_err(), "once, not twice");
+    async fn an_admin_view_refused_to_a_non_admin_records_refused() {
+        for args in [
+            json!({"include_all_sessions": true}),
+            json!({"include_all_keys": true}),
+            json!({"session_id": "someone-else"}),
+        ] {
+            let (answer, effect) = report_effect(args.clone()).await;
+            assert!(answer.is_err(), "premise: refused: {args} {answer:?}");
+            assert_eq!(effect, Some(json!("refused")), "{args}");
+        }
+        let (own, effect) = report_effect(json!({})).await;
+        assert!(own.is_ok(), "control: the caller's own report: {own:?}");
+        assert_ne!(effect, Some(json!("refused")), "control");
     }
 }

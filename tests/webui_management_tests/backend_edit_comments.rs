@@ -324,16 +324,6 @@ async fn a_tab_separated_comment_is_not_lost_silently() {
     .await;
 }
 
-/// T7 guard: a file with no comments loses nothing, so the rewrite applies.
-#[tokio::test]
-async fn an_edit_of_a_comment_free_file_applies() {
-    let (router, path, _keep) = served("backends: {a: {command: x}}\n", Route::File).await;
-    let (status, body) = patch(&router, "a", json!({"description": "new"})).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let config = Config::load_literal(Some(&path)).expect("loads");
-    assert_eq!(config.backends["a"].description, "new");
-}
-
 /// T8 guard (green since #3090): add and remove over HTTP keep every comment.
 #[tokio::test]
 async fn add_and_remove_over_http_keep_comments() {
@@ -395,3 +385,6 @@ async fn a_delete_without_comments_keeps_no_content() {
     let (status, body) = send_json(&router, Method::DELETE, "/ui/api/backends/a", None).await;
     assert_eq!(status, StatusCode::NO_CONTENT, "{body}");
 }
+
+#[path = "backend_edit_layout.rs"]
+mod layout;

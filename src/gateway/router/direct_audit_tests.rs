@@ -28,10 +28,12 @@ mod extras;
 use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
 mod anon_key;
 mod backend_oracle;
+mod composite_refusals;
 mod counting;
 mod delivery;
 mod delivery_who;
 mod empty_grant;
+mod late_refusals;
 mod lost_round;
 mod meta_malformed_retry;
 mod meta_refusal;
@@ -40,7 +42,9 @@ mod refused_effect;
 /// MIK-8689 R-RECJUDGE: the judge's verdict rides the delivery record.
 #[cfg(feature = "firewall")]
 mod response_judge;
+mod rewritten_effect;
 mod route_records;
+mod sealed_refusal;
 #[cfg(feature = "firewall")]
 mod session_less;
 #[cfg(feature = "firewall")]
@@ -88,7 +92,7 @@ impl Transport for Scripted {
             if self.extras.contains(&Extra::ListFail) {
                 return Err(crate::Error::Transport("connection refused".into()));
             }
-            let tool = json!({"name": "t", "inputSchema": {"type": "object"}});
+            let tool = json!({"name": "t", "inputSchema": extras::listed_schema(self.extras)});
             return Ok(JsonRpcResponse::success(id, json!({ "tools": [tool] })));
         }
         self.calls.fetch_add(1, Ordering::SeqCst);
@@ -132,7 +136,7 @@ struct Fixture {
     path: std::path::PathBuf,
     calls: Arc<AtomicUsize>,
     lists: Arc<AtomicUsize>,
-    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    _dirs: (tempfile::TempDir, crate::gateway::router::tests::FixtureDir),
 }
 
 /// A direct `tools/call` of `t` naming `customer_id`, optionally keyed.

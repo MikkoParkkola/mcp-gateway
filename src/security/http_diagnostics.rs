@@ -445,7 +445,8 @@ mod tests {
     /// The end-to-end proof that the counter actually moves on a followed
     /// redirect is
     /// `a_connect_failure_after_a_followed_redirect_is_not_pre_dispatch` in
-    /// `src/transport/http/tests.rs` -- this row only pins the classifier.
+    /// `src/transport/http/tests/notifications.rs` -- this row only pins the
+    /// classifier.
     #[tokio::test]
     async fn a_connect_failure_the_caller_cannot_vouch_for_stays_coarse() {
         let (url, _held) = closed_port().await;

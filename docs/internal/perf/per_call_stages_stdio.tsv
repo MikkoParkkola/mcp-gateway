@@ -64,6 +64,7 @@ src/gateway/server/events_wiring.rs	mint	-	off-path: the events hub's per-user l
 src/gateway/server/identity_grants.rs	audit_startup	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	from	-	startup identity-grant audit error conversion, before serving
 src/gateway/server/identity_grants.rs	identity_grant_sink_for	-	startup and reload grant-sink construction, not per call
+src/gateway/server/identity_grants.rs	into_startup	-	startup grants into the startup revision inputs, before serving
 src/gateway/server/identity_grants.rs	load_configured_identity_grants	-	startup identity-grant loading, before serving
 src/gateway/server/identity_grants.rs	snapshot_time	-	startup identity-grant audit, before serving
 src/gateway/server/identity_grants.rs	start_identity_grant_audit	-	startup identity-grant audit, before serving
@@ -199,6 +200,7 @@ src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, unti
 src/gateway/server/stdio_startup.rs	install_stdio_startup_catalogue	-	startup step of the stdio loop, once per serve
 src/gateway/server/stdio_startup.rs	key_error	-	startup error of the stdio loop, once per serve
 src/gateway/server/stdio_tasks.rs	advertised	-	initialize and server/discover answers only
+src/gateway/server/stdio_tasks.rs	default_auth	-	builds stdio's auth once at session start
 src/gateway/server/stdio_tasks.rs	degraded	-	task store open failure at session start
 src/gateway/server/stdio_tasks.rs	dispatch	-	tasks/* methods only, not the tools/call path
 src/gateway/server/stdio_tasks.rs	dispatch_get	-	tasks/* methods only, not the tools/call path
@@ -244,11 +246,13 @@ src/gateway/server/task_runtime.rs	within	-	shutdown deadline helper, off the re
 src/gateway/server/test_seams.rs	bound_port_for_test	-	test seam setter, used only by tests
 src/gateway/server/test_seams.rs	data_dir	-	startup data-directory resolution, once per serve
 src/gateway/server/test_seams.rs	inflight_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	new	-	startup seam construction, once per gateway; in tests it also records the starting test's name
 src/gateway/server/test_seams.rs	report_bound_port	-	startup bind reporting to a test channel (no channel in production)
 src/gateway/server/test_seams.rs	report_inflight	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	report_stdio_meta_mcp	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	shutdown_signal_or_trigger	-	shutdown signal handling, off the request path
 src/gateway/server/test_seams.rs	shutdown_trigger_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	spawner	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	stdio_drain_seams_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	stdio_meta_mcp_for_test	-	test-only seam (cfg(test))
 src/gateway/server/test_seams.rs	take_shutdown_trigger	-	test-only seam (cfg(test))
@@ -401,24 +405,24 @@ src/gateway/server/warmstart.rs	apply	-	hot-reload registration warming, off the
 src/gateway/server/warmstart.rs	build_warm_start_list	-	startup warm-start, before serving
 src/gateway/server/warmstart.rs	cancel	-	warm-start guard teardown (shutdown or reload), off the request path
 src/gateway/server/warmstart.rs	closed	-	hot-reload registration warming, off the request path
-src/gateway/server/warmstart.rs	default	-	warm-start retry policy default, read at startup
-src/gateway/server/warmstart.rs	dormant_action	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	drop	-	warm-start guards dropped at shutdown or reload
-src/gateway/server/warmstart.rs	effective_attempt_timeout	-	startup warm-start retry loop, off the request path
-src/gateway/server/warmstart.rs	gap_before_attempt	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	hook	-	hot-reload registration warming hook, off the request path
-src/gateway/server/warmstart.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
-src/gateway/server/warmstart.rs	is_transient_io	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	lock	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	new	-	hot-reload warmer registration, off the request path
 src/gateway/server/warmstart.rs	resolve_warm_start_names	-	startup warm-start, before serving
-src/gateway/server/warmstart.rs	retry_warm_start_attempts	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart.rs	seal_and_abort	-	hot-reload registration warming teardown, off the request path
 src/gateway/server/warmstart.rs	spawn	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	warm	-	hot-reload registration warming (tools/list on (re)registration), off the request path
 src/gateway/server/warmstart.rs	warm_locked	-	hot-reload registration warming, off the request path
 src/gateway/server/warmstart.rs	warm_start_prefetches_tools	-	startup warm-start (tools/list prefetch), before serving
 src/gateway/server/warmstart.rs	warm_start_until_cached	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	default	-	warm-start retry policy default, read at startup
+src/gateway/server/warmstart/retry.rs	dormant_action	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	effective_attempt_timeout	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	gap_before_attempt	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	is_readiness_error	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	is_transient_io	-	startup warm-start retry loop, off the request path
+src/gateway/server/warmstart/retry.rs	retry_warm_start_attempts	-	startup warm-start retry loop, off the request path
 src/gateway/server/warmstart/tests.rs	a_backend_that_becomes_reachable_later_is_still_cached	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_backend_that_really_has_no_tools_is_accepted	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	a_dormant_backend_whose_cache_was_filled_elsewhere_finishes	-	test-only (the module is cfg(test))
@@ -445,10 +449,14 @@ src/gateway/server/warmstart/tests.rs	the_attempt_ceiling_follows_the_operators_
 src/gateway/server/warmstart/tests.rs	unreachable_backend	-	test-only (the module is cfg(test))
 src/gateway/server/warmstart/tests.rs	warm_start_prefetches_tools_in_both_modes	-	test-only (the module is cfg(test))
 src/gateway/server/window_saver.rs	checkpoint_detached	-	U1 window checkpoint on a detached thread every 5 s, off the request path
+src/gateway/server/window_saver.rs	drop	-	U1 window writer thread end (Running guard), off the request path
+src/gateway/server/window_saver.rs	finished	-	U1 window writer count on a writer's end, off the request path
 src/gateway/server/window_saver.rs	global_counts	-	U1 window counts for the saver's ticks and seal, off the request path
+src/gateway/server/window_saver.rs	idle	-	U1 window writer drain, once at shutdown
 src/gateway/server/window_saver.rs	open_detached	-	U1 window segment open, once per serve before serving
 src/gateway/server/window_saver.rs	open_into	-	U1 window segment open and its tick retries, off the request path
 src/gateway/server/window_saver.rs	production	-	startup saver settings, once per serve
+src/gateway/server/window_saver.rs	spawn	-	U1 window writer thread start for the open and each checkpoint, off the request path
 src/gateway/server/window_saver.rs	start_window_saver	-	startup U1 window saver, once per serve; seals at shutdown
 src/gateway/server/window_seal_http_backend.rs	answer	-	test-only (the module is cfg(test))
 src/gateway/server/window_seal_http_backend.rs	received	-	test-only (the module is cfg(test))

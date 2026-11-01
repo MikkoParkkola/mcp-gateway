@@ -97,9 +97,7 @@ impl IdentityHeaderRefusal {
 
 /// The HTTP answer to a refused identity header. The header value is never
 /// echoed: the reason names the rule, not the input.
-pub(super) fn identity_refusal_response(
-    refusal: IdentityHeaderRefusal,
-) -> (StatusCode, axum::Json<serde_json::Value>) {
+pub(super) fn identity_refusal_response(refusal: IdentityHeaderRefusal) -> super::helpers::RpcHttp {
     super::helpers::build_http_error_response(
         None,
         INVALID_REQUEST,
@@ -682,7 +680,9 @@ mod mik_8659_caller_tests {
         let (status, body) = post_dashboard_link(&state, secret).await;
         assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{body}");
         let client = state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .validate_token(secret)
             .expect("the refused key still validates");
         assert_eq!(client.api_key_identity(), Some("k-user"));

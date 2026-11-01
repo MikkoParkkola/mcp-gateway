@@ -8,8 +8,9 @@
 //! `list_servers`, spec preview) judges a tool by the caller's own slot,
 //! found through the caller-slot index, never by the shared one. Without a
 //! warm slot for this caller the backend's tools are withheld, except where
-//! the stated SLOTVIS.6 residual keeps today's shared view (the surfaced list
-//! in plain `tools/list`).
+//! SLOTVIS.6 keeps the shared view (the surfaced list in plain `tools/list`).
+//! A backend with per-user sessions only has no shared view: its cold
+//! caller's own view is warmed before `tools/list` is built.
 
 use std::sync::Arc;
 
@@ -44,8 +45,10 @@ pub(crate) enum ListingView {
 pub(crate) enum ColdRule {
     /// Name nothing (every name-only listing).
     Withhold,
-    /// Keep today's shared view (the surfaced list in plain `tools/list`,
-    /// SLOTVIS.6's stated residual).
+    /// Keep the shared view (the surfaced list in plain `tools/list`,
+    /// SLOTVIS.6), except on a backend with per-user sessions only, which has
+    /// none: there the caller's own view is warmed before the list is built
+    /// and withheld until it is.
     SharedView,
 }
 
@@ -70,9 +73,24 @@ impl MetaMcp {
             return ListingView::NoView;
         }
         match backend.caller_slot_binding(&id) {
-            Some(binding) => ListingView::Caller(binding),
-            None => ListingView::Cold,
+            Some(binding) if Self::held_binding_current(backend, &binding) => {
+                ListingView::Caller(binding)
+            }
+            _ => ListingView::Cold,
         }
+    }
+
+    /// Whether `binding`, the caller's held slot on `backend`, is still the
+    /// binding this request's account read gave. A rotated grant's slot reads
+    /// as cold, never as the old grant's view, however its publish raced the
+    /// listing. With no account read in this request there is nothing to
+    /// judge it by, and the held slot stands, as a stored read's revalidation
+    /// keeps it.
+    fn held_binding_current(backend: &Backend, binding: &str) -> bool {
+        let account = backend
+            .account_descriptor_id()
+            .map(|account| super::visible::memo::DescriptorId(account.to_owned()));
+        super::visible::memo::held_binding_current(&backend.name, account.as_ref(), binding)
     }
 
     /// Whether `caller` has no principal on `backend`, a `required` per-user
@@ -134,8 +152,10 @@ impl MetaMcp {
         match self.listing_view(&backend, scope) {
             ListingView::Shared => self.shows_shared_name(server, tool, scope, session_id),
             ListingView::Cold => match cold {
-                ColdRule::Withhold => false,
-                ColdRule::SharedView => self.shows_shared_name(server, tool, scope, session_id),
+                ColdRule::SharedView if !backend.shared_slot_refused() => {
+                    self.shows_shared_name(server, tool, scope, session_id)
+                }
+                ColdRule::Withhold | ColdRule::SharedView => false,
             },
             ListingView::NoView => false,
             ListingView::Caller(binding) => backend
@@ -175,7 +195,8 @@ impl MetaMcp {
     }
 
     /// The surfaced tool as this caller's listing shows it: the caller's own
-    /// entry on a per-user backend with a warm slot, else the shared one.
+    /// entry on a per-user backend with a warm slot, else the shared one, and
+    /// none on a backend with per-user sessions only, which has no shared one.
     pub(crate) fn listing_tool(
         &self,
         backend: &Backend,
@@ -184,6 +205,7 @@ impl MetaMcp {
     ) -> Option<Tool> {
         match self.listing_view(backend, scope) {
             ListingView::Caller(binding) => backend.get_cached_tool_for(Some(&binding), tool),
+            ListingView::Cold if backend.shared_slot_refused() => None,
             ListingView::Shared | ListingView::Cold => backend.get_cached_tool(tool),
             ListingView::NoView => None,
         }

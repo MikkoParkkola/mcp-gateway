@@ -37,6 +37,10 @@ pub(super) struct TestSeams {
     /// write touch the window file mid-row.
     #[cfg(test)]
     window_save_every: Option<std::time::Duration>,
+    /// The test that built this gateway (its thread's name), so a late write
+    /// by the HTTP window saver, which starts on a runtime worker, names it.
+    #[cfg(test)]
+    spawner: Option<String>,
     /// A pause at the start of this gateway's stdio dispatches, before the
     /// request is observed (MIK-8364 drain-window row). Per gateway, so no
     /// other session in the test binary stops on it.
@@ -67,6 +71,24 @@ impl TestSeams {
     #[cfg(test)]
     pub(super) fn telemetry_save_every(&self) -> Option<std::time::Duration> {
         self.telemetry_save_every
+    }
+
+    /// Seams for a gateway built on this thread: in a test, a late write
+    /// is attributed to this thread's (the test's) name.
+    pub(super) fn new() -> Self {
+        #[allow(unused_mut)]
+        let mut seams = Self::default();
+        #[cfg(test)]
+        {
+            seams.spawner = std::thread::current().name().map(str::to_owned);
+        }
+        seams
+    }
+
+    /// The test that built this gateway, for the window saver.
+    #[cfg(test)]
+    pub(super) fn spawner(&self) -> Option<String> {
+        self.spawner.clone()
     }
 
     /// The HTTP window saver's interval a test set, if any (MIK-7211).
@@ -218,3 +240,7 @@ mod shutdown_order_tests;
 #[cfg(test)]
 #[path = "counter_restart_tests.rs"]
 mod counter_restart_tests;
+
+#[cfg(all(test, feature = "webui"))]
+#[path = "gateway_status_start_tests.rs"]
+mod gateway_status_start_tests;

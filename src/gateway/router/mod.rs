@@ -13,7 +13,8 @@ use axum::{
 };
 use tower_http::{catch_panic::CatchPanicLayer, compression::CompressionLayer, trace::TraceLayer};
 
-use super::auth::{AuthState, ResolvedAuthConfig, auth_middleware};
+use super::auth::{AuthState, auth_middleware};
+use super::health_metrics::layers::{error_layer, latency_layer};
 use super::meta_mcp::MetaMcp;
 use super::oauth::{AgentAuthState, GatewayKeyPair, agent_auth_middleware, jwks_handler};
 use super::openwebui_adapter::{OpenWebUiAdapterState, openwebui_adapter_middleware};
@@ -41,6 +42,9 @@ pub(crate) use authorization::{
 };
 mod backend_handlers;
 mod handlers;
+// The web UI's Try-a-tool route runs this one MCP path in process (U12).
+#[cfg(feature = "webui")]
+pub(in crate::gateway) use handlers::meta_mcp_handler;
 mod hardened_elicitation;
 mod hardened_identity;
 mod identity;
@@ -49,10 +53,15 @@ mod meta_refusal_audit;
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the
 // production constructor instead of reimplementing it; see its doc comment.
-#[cfg(test)]
+// The one verified-identity-to-subject conversion, shared with the control-plane
+// snapshot so its own-grant matching cannot drift from dispatch's. The snapshot
+// is web UI code, its only production caller, so the re-export shares its gate.
+#[cfg(any(test, feature = "webui"))]
 pub(crate) use identity::grant_subject_from_verified_identity;
 pub(crate) mod helpers;
 mod origin_guard;
+mod process_facts;
+pub use process_facts::{ProcessFacts, ProcessStart};
 mod view_judge;
 mod watch_poll;
 pub(crate) use watch_poll::GatewayWatchHost;
@@ -110,13 +119,19 @@ mod direct_continuation_tests;
 #[cfg(test)]
 mod direct_explicit_cancel_tests;
 #[cfg(test)]
+mod direct_guards_effect_tests;
+#[cfg(test)]
 mod direct_guards_fixture;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod direct_guards_fixture_a2a;
 #[cfg(test)]
 mod direct_guards_tests;
 #[cfg(test)]
+mod direct_lent_arms_tests;
+#[cfg(test)]
 mod direct_list_scope_tests;
+#[cfg(test)]
+mod direct_log_escape_tests;
 #[cfg(test)]
 mod direct_modern_shape_tests;
 #[cfg(test)]
@@ -144,12 +159,16 @@ mod e5_dashboard_session_tests;
 mod egress_matrix_tests;
 #[cfg(test)]
 mod era_refusal_http_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod error_count_tests;
 #[cfg(all(test, feature = "a2a", feature = "firewall"))]
 mod errscan_a2a_tests;
 #[cfg(test)]
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "webui"))]
+mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
 #[cfg(test)]
 mod hardened_elicitation_tests;
@@ -159,6 +178,10 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+#[cfg(all(test, feature = "webui"))]
+mod live_keys_dashboard_tests;
+#[cfg(test)]
+mod live_keys_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -169,23 +192,63 @@ mod mcp_nonce_witness_tests;
 mod mcp_refusal_kind_tests; // MIK-8353 3d-1: refusal kinds on the invoke path
 #[cfg(test)]
 mod meta_fingerprint_tests;
+#[cfg(all(test, feature = "metrics"))]
+mod metrics_scrape_tests;
 /// MIK-8154.LEASE.1 rows: the direct route takes the shared execution lease.
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
 #[cfg(all(test, feature = "webui"))]
+mod overview_sources_tests;
+#[cfg(all(test, feature = "webui"))]
 mod overview_tests;
+/// A call refused in its own send releases its key on the direct route.
+#[cfg(test)]
+mod presend_refusal_tests;
+/// A backend's protocol directives reach the client only where allowed.
+#[cfg(test)]
+mod protocol_member_scope_tests;
+/// A backend's gateway-only members never reach the client.
+#[cfg(test)]
+mod reserved_member_ingress_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod rule_keys_route_tests;
+/// Secret injection applies on the direct route as through gateway_invoke.
+#[cfg(test)]
+mod secret_injection_direct_tests;
+#[cfg(test)]
+mod step_parent_key_tests;
+#[cfg(test)]
+mod transport_double_run_tests;
 /// U17: the UI shell at deep links, hashed assets, /ui/classic (MIK-8870).
 #[cfg(all(test, feature = "webui"))]
 mod u17_ui_shell_tests;
+/// The web UI API's access answers per path, method and caller, pinned.
+#[cfg(all(test, feature = "webui"))]
+mod ui_access_matrix_tests;
+/// The web UI compressed by the router's one rule.
+#[cfg(all(test, feature = "webui"))]
+mod ui_compression_tests;
+/// U3: the UI live stream.
+#[cfg(all(test, feature = "webui"))]
+mod ui_stream_tests;
 // MIK-8697: the credential canary over the router's request paths.
 #[cfg(test)]
 mod canary_tests;
+/// The capability editor's audit record: the change, never the content.
+#[cfg(all(test, feature = "webui"))]
+mod capability_edit_audit_tests;
 /// A delivery record says what the gateway did to the answer.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// A late refusal keeps its own code, and its run keeps the key.
+#[cfg(all(test, feature = "firewall"))]
+mod late_refusal_lease_tests;
+/// A lent-only call carrying no credential records `refused`.
+#[cfg(test)]
+mod lend_refusal_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;
@@ -253,6 +316,9 @@ mod stored_read_order_tests;
 /// MIK-8392 STORED.2: stored single-call results need a live account.
 #[cfg(test)]
 mod stored_replay_liveness_tests;
+/// A UI write's admin record outlives a client cancel with its handler.
+#[cfg(all(test, feature = "webui"))]
+mod ui_audit_cancel_tests;
 #[cfg(test)]
 mod webhook_mount_tests;
 /// MIK-8340: a withheld surfaced name answers as an absent one.
@@ -319,6 +385,12 @@ pub(crate) mod tests;
 mod trace_span;
 #[cfg(test)]
 mod trace_span_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_cell_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_gates_tests;
+#[cfg(all(test, feature = "webui"))]
+mod ui_tool_call_tests;
 #[cfg(test)]
 mod webhook_scope_tests;
 
@@ -338,8 +410,6 @@ pub struct AppState {
     pub proxy_manager: Arc<ProxyManager>,
     /// Streaming configuration
     pub streaming_config: StreamingConfig,
-    /// Authentication configuration (static keys)
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Single-use value that opens the dashboard from the link `serve` prints.
     pub dashboard_bootstrap: Arc<crate::gateway::auth::DashboardBootstrap>,
     /// Listeners on open `subscriptions/listen` streams.
@@ -422,6 +492,9 @@ pub struct AppState {
     /// without lifecycle wiring — tests and any embedder that does not run
     /// the reaper — in which case tracking and sweeping are both no-ops.
     pub session_lifecycle: Option<Arc<crate::gateway::session_lifecycle::SessionLifecycle>>,
+    /// When this process started and what it recorded while starting. Set
+    /// where server start builds the state; the web UI's uptime counts from it.
+    pub process: Arc<ProcessFacts>,
 }
 
 /// Create the router.
@@ -472,12 +545,12 @@ async fn readyz(
     }
 }
 
-/// The `AuthState` needed by [`auth_middleware`], split out of
-/// [`create_router_with`] purely to keep that function under the line
-/// budget — logic and ordering are unchanged.
-fn build_auth_state(state: &Arc<AppState>) -> AuthState {
+/// The one `AuthState` builder: ingress ([`auth_middleware`], wired in
+/// [`create_router_with`]) and the UI stream's per-second credential
+/// re-check both judge with it, so a stream can never decide differently
+/// from the request that opened it.
+pub(crate) fn build_auth_state(state: &AppState) -> AuthState {
     AuthState {
-        auth_config: Arc::clone(&state.auth_config),
         key_server: state.key_server.clone(),
         live_config: Arc::clone(&state.live_config),
         dashboard_bootstrap: Arc::clone(&state.dashboard_bootstrap),
@@ -521,14 +594,17 @@ fn authenticate(
 
 /// `/metrics`, carrying the scrape token resolved once at router build.
 #[cfg(feature = "metrics")]
-fn metrics_route(config: &crate::config::Config) -> Router {
+fn metrics_route(
+    config: &crate::config::Config,
+    multiplexer: Arc<NotificationMultiplexer>,
+) -> Router {
     let token = config
         .server
         .resolve_metrics_token(&config.env_overlay())
         .map(Arc::<str>::from);
     Router::new()
         .route(routes::METRICS, get(handlers::metrics_handler))
-        .with_state(token)
+        .with_state(handlers::MetricsState { token, multiplexer })
 }
 
 /// Routes on the app state that run outside authentication and the E1-f audit
@@ -562,6 +638,24 @@ fn bind_multiplexer(state: &AppState, auth_state: &AuthState) {
     }
 }
 
+/// RFC 9728 protected-resource metadata, unauthenticated: clients fetch it
+/// before they hold a token.
+fn protected_resource_route(state: &Arc<AppState>, bind_origin: Option<String>) -> Router {
+    Router::new()
+        .route(
+            routes::PROTECTED_RESOURCE,
+            get(
+                move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
+                    let bind_origin = bind_origin.clone();
+                    async move {
+                        well_known::oauth_protected_resource_handler(state, bind_origin).await
+                    }
+                },
+            ),
+        )
+        .with_state(Arc::clone(state))
+}
+
 /// [`create_router_with`] plus the managed-account handles, which only a
 /// gateway that brought custody up has.
 pub(crate) fn create_router_with_accounts(
@@ -571,6 +665,9 @@ pub(crate) fn create_router_with_accounts(
 ) -> Router {
     let auth_state = build_auth_state(&state);
     bind_multiplexer(&state, &auth_state);
+    // `state` moves into the router below; `/metrics` keeps this handle.
+    #[cfg(feature = "metrics")]
+    let multiplexer = Arc::clone(&state.multiplexer);
 
     // Agent auth middleware state (cloned to avoid Arc wrapping AgentAuthState).
     let agent_auth_state = state.agent_auth.clone();
@@ -597,21 +694,7 @@ pub(crate) fn create_router_with_accounts(
         well_known::bind_fallback_origin(&startup_config.server.host, startup_config.server.port);
     let origin_policy = Arc::new(origin_guard::OriginPolicy::from_live(&state.live_config));
     let pin_source = Arc::clone(&state.live_config);
-    let protected_resource_route =
-        Router::new()
-            .route(
-                routes::PROTECTED_RESOURCE,
-                get({
-                    let bind_origin = bind_origin.clone();
-                    move |axum::extract::State(state): axum::extract::State<Arc<AppState>>| {
-                        let bind_origin = bind_origin.clone();
-                        async move {
-                            well_known::oauth_protected_resource_handler(state, bind_origin).await
-                        }
-                    }
-                }),
-            )
-            .with_state(Arc::clone(&state));
+    let protected_resource_route = protected_resource_route(&state, bind_origin);
 
     #[allow(unused_mut)]
     let mut routes = Router::new()
@@ -627,13 +710,16 @@ pub(crate) fn create_router_with_accounts(
         .route(routes::API_COSTS, get(backend_handlers::costs_handler))
         .route(
             routes::MCP,
-            post(handlers::meta_mcp_handler)
+            timed_post(handlers::meta_mcp_handler)
                 .get(handlers::mcp_sse_handler)
                 .delete(handlers::mcp_delete_handler),
         )
         // No sub-path alias: one with a wildcard tail never served, because
         // `backend_handler` extracts the name alone and answered 500 (MIK-7650).
-        .route(routes::MCP_BACKEND, post(backend_handlers::backend_handler))
+        .route(
+            routes::MCP_BACKEND,
+            timed_post(backend_handlers::backend_handler),
+        )
         // Helpful error for deprecated SSE endpoint (common misconfiguration)
         .route(
             routes::SSE,
@@ -671,7 +757,7 @@ pub(crate) fn create_router_with_accounts(
     let mut app = authenticate(routes, agent_auth_state, openwebui_adapter, auth_state)
         .merge(unauthenticated_routes())
         .layer(CatchPanicLayer::new())
-        .layer(CompressionLayer::new())
+        .layer(compression())
         // Method and route only (#1529). Routes merged below are outside it.
         .layer(TraceLayer::new_for_http().make_span_with(trace_span::span_for))
         .with_state(state);
@@ -690,13 +776,14 @@ pub(crate) fn create_router_with_accounts(
     // Merge /metrics outside auth: it checks its own scrape token, not the bearer
     #[cfg(feature = "metrics")]
     {
-        app = app.merge(metrics_route(&startup_config));
+        app = app.merge(metrics_route(&startup_config, multiplexer));
     }
 
-    // Merge web UI HTML route (unauthenticated — static HTML, no data)
+    // Merge web UI HTML route (unauthenticated — static HTML, no data). Outside
+    // the TraceLayer as before, but compressed by the same one rule as the rest.
     #[cfg(feature = "webui")]
     {
-        app = app.merge(super::ui::html_router());
+        app = app.merge(super::ui::html_router().layer(compression()));
     }
 
     if let Some(extra) = extra {
@@ -728,10 +815,32 @@ pub(crate) fn create_router_with_accounts(
         origin_policy,
         origin_guard::origin_guard_middleware,
     ));
+    outermost(app, pin_source)
+}
 
-    // Added last so it runs first, on every route merged above and the
-    // fallback, whether or not the route authenticates (ADR-023).
+/// The layers added last, so they run first on every route merged above and
+/// the fallback, whether or not the route authenticates. The generation is
+/// pinned before anything else runs (ADR-023); the error count wraps that, so
+/// it sees the final answer of every route, authentication's and the admin
+/// routes' refusals included.
+fn outermost(app: Router, pin_source: Arc<crate::config_reload::LiveConfig>) -> Router {
     app.layer(middleware::from_fn_with_state(pin_source, pin_generation))
+        .layer(middleware::from_fn(error_layer))
+}
+
+/// A `POST` route whose calls leave an added-latency sample.
+fn timed_post<H, T>(handler: H) -> axum::routing::MethodRouter<Arc<AppState>>
+where
+    H: axum::handler::Handler<T, Arc<AppState>>,
+    T: 'static,
+{
+    post(handler).layer(middleware::from_fn(latency_layer))
+}
+
+/// The gateway's one compression rule, tower-http's default predicate, and
+/// `src/gateway/ui/compression.json` writes it down for the fixture server.
+pub(crate) fn compression() -> CompressionLayer {
+    CompressionLayer::new()
 }
 
 /// Pin the published generation on a request before anything else runs. Every
@@ -744,6 +853,14 @@ async fn pin_generation(
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
     next.run(request).await
+}
+
+impl AppState {
+    /// The process's record key: resolved once at startup, the same in every
+    /// generation, so any generation's copy is this one.
+    pub(crate) fn record_key(&self) -> Arc<crate::gateway::record_principal::RecordPrincipalKey> {
+        self.live_config.generation().auth().shared_record_key()
+    }
 }
 
 /// The refusal for a request that reached a reader without a pinned

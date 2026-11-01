@@ -123,7 +123,7 @@ pub(super) struct BridgeDispatcher<'a> {
     pub(super) caller_proof: CallerProof<'a>,
     /// Names an MCP child when nothing else does (MIK-7825).
     pub(super) credential_owner: Option<&'a str>,
-    pub(super) headers: &'a [(String, String)],
+    pub(super) headers: &'a crate::transport::LentCredential,
     pub(super) cache_binding: Option<&'a str>,
     pub(super) account_credential: super::propagation::DispatchAccount,
     pub(super) api_key_name: Option<&'a str>,
@@ -176,6 +176,7 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
         let targets = [crate::security::response_policy::ResponsePolicyTarget {
             server: self.server.to_owned(),
             tool: self.tool.to_owned(),
+            origin: crate::security::response_policy::TargetOrigin::Routed,
         }];
         let correlation = crate::security::response_policy::ResponseCorrelation {
             session_id: self.session_id.unwrap_or_default(),
@@ -184,6 +185,8 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             external_tool: "gateway_invoke",
             subject: None,
             trace_id: None,
+            // The caller is known here: its proven API key, or none.
+            key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
             .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
@@ -203,7 +206,11 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         retry_params: Value,
     ) -> std::result::Result<Value, crate::gateway::input_bridge::BridgeError> {
         // The kill switch is read once at the top of the call, so re-read it per round.
-        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+        // The bridged kill switch ends the exchange with the delivered
+        // refusal; per round, so raised only while the cell is vouched.
+        refuse_if_killed(&self.meta.kill_switch, self.server).inspect_err(|_| {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        })?;
 
         // Admitted here as well as at the first dispatch, because the spend
         // check is per backend call and `invoke_tool` ran it once, before the
@@ -228,8 +235,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 trace_id: "",
                 caller_key: None,
             })
-            .map_err(|e| crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                message: e.to_string(),
+            .map_err(|e| {
+                // A spend refusal ends the exchange as the delivered refusal.
+                crate::gateway::delivery_facts::refused_while_vouched();
+                crate::gateway::input_bridge::BridgeError::NotAdmitted {
+                    message: e.to_string(),
+                }
             })?;
         #[cfg(not(feature = "cost-governance"))]
         let admission = dispatch_guards::Admission::default();
@@ -245,7 +256,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             self.tool,
             self.arguments,
             self.cache_binding,
-            self.headers,
+            self.headers.clone(),
             (self.scope, self.session_id),
         );
         let refusal = match refusal.await {
@@ -261,15 +272,23 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             }
         };
         if let Some(refusal) = refusal {
+            let message = refusal.answer["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default();
+            // An undeclared key ends the exchange as the delivered refusal.
+            if refusal.kind.refuses() {
+                crate::gateway::delivery_facts::refused_while_vouched();
+            }
             return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted {
-                message: refusal["content"][0]["text"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_owned(),
+                message: message.to_owned(),
             });
         }
         // The check above may have awaited a cold `tools/list`: re-read the kill.
-        refuse_if_killed(&self.meta.kill_switch, self.server)?;
+        // The bridged kill switch ends the exchange with the delivered
+        // refusal; per round, so raised only while the cell is vouched.
+        refuse_if_killed(&self.meta.kill_switch, self.server).inspect_err(|_| {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        })?;
         let outbound = OutboundRetry {
             request_state: retry_params
                 .get("requestState")
@@ -295,6 +314,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 Ok(permit) => permit,
                 Err(refused) => {
                     let message = refused.to_string();
+                    // The exchange ends with this refusal, as above.
+                    crate::gateway::delivery_facts::refused_while_vouched();
                     *self.relay_refused.lock() = Some(refused);
                     return Err(crate::gateway::input_bridge::BridgeError::NotAdmitted { message });
                 }
@@ -334,14 +355,19 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         drop(admission);
         let error = match dispatched {
             Ok(value) => {
-                // Asked again: the backend has not acted on this round.
+                // Asked again, inside this one legacy call: no client
+                // continuation receives the key, and stopping to ask does not
+                // prove the backend has not acted, so a drop from here on
+                // settles as may-have-run.
                 if crate::protocol::mrtr::InputRequired::claims_input_required(&value) {
-                    arm(self.reservation, false);
+                    arm(self.reservation, true);
                 }
                 return Ok(value);
             }
             Err(error) => error,
         };
+        // A later round's send can be refused as the first one's can.
+        super::audit::note_send_refusal(&error);
         // A11-c: a 401 on a managed credential forces at most one refresh.
         let classified = classify_bridged_dispatch_error(&error);
         if matches!(
@@ -355,7 +381,8 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         if let Some(managed) = self.managed
             && is_upstream_unauthorized(&error)
         {
-            *self.account_refusal.lock() = Some(managed.after_upstream_401(error).await);
+            *self.account_refusal.lock() =
+                Some(super::audit::after_upstream_401(managed, error).await);
         }
         Err(classified)
     }

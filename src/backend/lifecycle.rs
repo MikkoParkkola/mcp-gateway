@@ -19,6 +19,7 @@ use tracing::{debug, info, warn};
 use super::pool::{PoolKey, PooledEntry};
 
 use super::Backend;
+use super::era::EraResolution;
 use crate::config::{BackendConfig, TransportConfig};
 use crate::runtime::RuntimePlan;
 use crate::transport::{HttpTransport, Transport};
@@ -74,20 +75,28 @@ impl Backend {
         Self {
             name: name.to_string(),
             metric_label: Arc::<str>::from(name).into(),
+            notify_origin: Arc::from(name),
             config,
             runtime_plan,
-            pool: {
+            pool: Arc::new({
                 let pool = DashMap::new();
                 pool.insert(
                     PoolKey::Shared,
                     Arc::new(PooledEntry::new(name, failsafe_config)),
                 );
                 pool
-            },
+            }),
             caller_slots: DashMap::new(),
+            caller_slot_stored: tokio::sync::Notify::new(),
             failsafe_config: failsafe_config.clone(),
+            #[cfg(all(test, feature = "webui"))]
+            server_state_evaluations: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
             after_reprobe_lookup: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_lease_lookup: crate::test_pause::Slot::default(),
+            #[cfg(test)]
+            before_listing_prepass: crate::test_pause::Slot::default(),
             #[cfg(test)]
             cold_winner: crate::test_pause::Slot::default(),
             #[cfg(test)]
@@ -118,6 +127,7 @@ impl Backend {
             connected_unpinned: std::sync::atomic::AtomicBool::new(false),
             login_gate: Arc::default(),
             destination: std::sync::OnceLock::new(),
+            secret_resolver: std::sync::OnceLock::new(),
             started: std::sync::OnceLock::new(),
             #[cfg(test)]
             mark_window_gate: parking_lot::Mutex::new(None),
@@ -474,6 +484,7 @@ impl Backend {
         entry: &PooledEntry,
         era: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
+        self.refuse_shared_start(key)?;
         let started = self.start_entry_inner(key, entry, era).await;
         match &started {
             Ok(_) => {
@@ -555,22 +566,24 @@ impl Backend {
                 built_under = self.destination();
                 #[cfg(test)]
                 self.hold_in_mark_window().await;
-                let oauth_client = self.create_oauth_client(http_url, built_under)?;
+                let (slot, statics, oauth_client) =
+                    self.slot_gateway_credentials(key, http_url, built_under)?;
                 let transport = HttpTransport::with_destination(
                     http_url,
-                    self.config.headers.clone(),
+                    statics,
                     self.config.timeout,
                     *streamable_http,
                     oauth_client,
                     protocol_version.clone(),
                     built_under,
                 )?;
-                // MIK-6735 fix 2: a per-user pool slot's transport serves
-                // exactly one caller identity for its whole lifetime, which
-                // is what makes the transport's internal session-map
-                // single-tenant debug_assert provably safe -- tell it so.
-                if matches!(key, PoolKey::PerUser { .. }) {
-                    transport.mark_single_tenant();
+                // A per-user pool slot's transport serves one caller identity
+                // for life (MIK-6735 fix 2): tell it so, with the slot's
+                // lender its dispatches lend through. It marks itself single
+                // tenant only when lent-only, the one kind holding a single
+                // session.
+                if let Some(slot) = slot {
+                    transport.mark_per_user_slot(slot, Arc::clone(&entry.lender));
                 }
                 #[cfg(test)]
                 {
@@ -593,7 +606,7 @@ impl Backend {
                 let era = match era_mode {
                     EraResolution::Shared => self.resolve_era(&peer, entry).await,
                     EraResolution::Deferred => {
-                        let probe = self.probe_candidate_era(&peer).await;
+                        let probe = self.probe_candidate_era(&peer, entry).await;
                         let era = probe.era();
                         deferred = Some(probe);
                         era
@@ -634,7 +647,7 @@ impl Backend {
                 built_under = self.mark_connecting();
                 self.begin_connecting(built_under)?;
                 listen = None;
-                self.start_a2a(built_under).await?
+                self.start_a2a(key, entry, built_under).await?
             }
         };
 
@@ -762,15 +775,4 @@ pub(super) fn pre_send_start_error(backend: &str, error: Error) -> Error {
         }
         other => other,
     }
-}
-
-/// How a start resolves its slot's era (MIK-8012).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EraResolution {
-    /// Discard and probe under the slot cache's lock: nothing else serves
-    /// from the slot while it starts.
-    Shared,
-    /// Probe without the lock and install at the publish: the transport being
-    /// replaced still serves from the slot (a build-first restart).
-    Deferred,
 }

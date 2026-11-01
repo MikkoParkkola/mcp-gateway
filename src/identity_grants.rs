@@ -239,6 +239,20 @@ fn grants_reader() -> GrantsReader {
 /// Returns an error if the file cannot be read, parsed, or uses an unsupported
 /// schema version.
 pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile, String> {
+    read_identity_grants_file_with_bytes(path)
+        .await
+        .map(|(file, _)| file)
+}
+
+/// [`read_identity_grants_file`], with the bytes it parsed: the config
+/// revision names the grants by these, never by a second read.
+///
+/// # Errors
+///
+/// As [`read_identity_grants_file`].
+pub(crate) async fn read_identity_grants_file_with_bytes(
+    path: &Path,
+) -> Result<(IdentityGrantFile, crate::config_reload::revision::RawBytes), String> {
     // Mode-checked off the runtime (F18 I3): readable, not writable, by others.
     let (owned, what) = (
         path.to_path_buf(),
@@ -266,7 +280,7 @@ pub async fn read_identity_grants_file(path: &Path) -> Result<IdentityGrantFile,
         ));
     }
 
-    Ok(file)
+    Ok((file, content.into_bytes()))
 }
 
 /// Replace the identity-grants file at `path` atomically.
@@ -364,9 +378,41 @@ impl IdentityGrant {
         scope: &GrantScope,
         now: DateTime<Utc>,
     ) -> bool {
+        self.agent.matches(agent_id) && self.covers_fields(identity, capability, tool, scope, now)
+    }
+
+    /// Whether this row would have allowed a call a grant-decision note
+    /// refused for a missing grant, read from the note's fields: the agent is
+    /// its `source:id` spelling, as the note writes it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn covers_noted(
+        &self,
+        subject: &GrantSubject,
+        agent: &str,
+        capability: &str,
+        tool: Option<&str>,
+        scope: &GrantScope,
+        now: DateTime<Utc>,
+    ) -> bool {
+        self.agent.matches_qualified(agent)
+            && self.covers_fields(subject, capability, tool, scope, now)
+    }
+
+    /// Every check of [`Self::covers`] but the agent's, so dispatch and a
+    /// note's re-check can never disagree on them. A row's owner must be
+    /// absent or the caller: `evaluate` reaches a row only once the
+    /// capability's owner is the caller, so this is its owner rule.
+    fn covers_fields(
+        &self,
+        identity: &GrantSubject,
+        capability: &str,
+        tool: Option<&str>,
+        scope: &GrantScope,
+        now: DateTime<Utc>,
+    ) -> bool {
         self.is_active_at(now)
             && &self.subject == identity
-            && self.agent.matches(agent_id)
+            && self.owner.as_ref().is_none_or(|owner| owner == identity)
             && self.capability == capability
             && self
                 .tool

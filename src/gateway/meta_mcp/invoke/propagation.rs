@@ -10,6 +10,7 @@ use crate::events::FenceRead;
 use crate::gateway::meta_mcp::MetaMcp;
 use crate::identity_propagation::{CallerProof, CallerProvenance, audit_subject};
 use crate::personal_accounts::identity::Principal;
+use crate::security::decision_record::DecisionKind;
 use crate::{Error, Result};
 
 impl MetaMcp {
@@ -62,7 +63,7 @@ impl MetaMcp {
             )));
         };
         let caller = CallerProof::new(Some(identity), CallerProvenance::Anonymous);
-        let minted = self
+        let mut minted = self
             .resolve_caller_credential_as(server, backend.as_deref(), &idp_cfg, caller)
             .await?;
         if minted.headers.is_empty() {
@@ -79,7 +80,7 @@ impl MetaMcp {
                 Error::Config(format!("events listener for backend '{server}': {error}"))
             })?;
         Ok(crate::events::ListenerGrant {
-            headers: minted.headers,
+            headers: std::mem::take(&mut minted.headers),
             fence,
         })
     }
@@ -143,7 +144,10 @@ impl MetaMcp {
         );
         self.resolve_propagation_credential_held_for(server, backend.as_deref(), caller)
             .await
-            .map(|(headers, cache_binding, _)| (headers, cache_binding))
+            // A public API that has returned a plain `Vec` since before the
+            // send recheck: the secret is moved out, never copied, and from
+            // here its owner is the caller. Changing the type is an API change.
+            .map(|(mut lent, cache_binding, _)| (std::mem::take(&mut *lent.headers), cache_binding))
     }
 
     /// [`Self::resolve_propagation_credential`] for the caller `caller` proves,
@@ -189,17 +193,27 @@ impl MetaMcp {
     ) -> Result<(DispatchCredential, bool, Option<Error>)> {
         let Some(idp_cfg) = backend.and_then(|b| b.identity_propagation_config().cloned()) else {
             Self::refuse_unbound_account_backend(server, backend)?;
-            return Ok(((Vec::new(), None, None), false, None));
+            return Ok((
+                (crate::transport::LentCredential::default(), None, None),
+                false,
+                None,
+            ));
         };
-        let cred = self
+        let mut cred = self
             .resolve_caller_credential_as(server, backend, &idp_cfg, caller)
             .await?;
         let unproven = cred
             .cache_binding
             .is_none()
             .then(|| super::stored_proof::unminted_refusal(server));
+        // Moved, not cloned: no second copy of the caller's secret is left
+        // behind outside the zeroizing holder.
+        let lent = crate::transport::LentCredential {
+            headers: std::mem::take(&mut cred.headers),
+            check: cred.check.take(),
+        };
         Ok((
-            (cred.headers, cred.cache_binding, cred.managed),
+            (lent, cred.cache_binding, cred.managed),
             cred.attempted,
             unproven,
         ))
@@ -270,6 +284,31 @@ impl MetaMcp {
         }
     }
 
+    /// A minted credential as a dispatch carries it, with the per-send check
+    /// every lent-only send of it runs first: the managed lease's recheck,
+    /// else its expiry.
+    fn minted_credential(
+        &self,
+        cred: crate::identity_propagation::PropagatedCredential,
+        managed: Option<crate::personal_accounts::ManagedLease>,
+        descriptor_id: Option<&str>,
+    ) -> CallerCredential {
+        let expiry = account_mint::expiry_of(&cred);
+        let check = account_mint::send_check_for(
+            &self.account_strategies,
+            (descriptor_id, managed.as_ref()),
+            (expiry, &cred.headers),
+        );
+        CallerCredential {
+            headers: cred.headers.into(),
+            cache_binding: Some(cred.cache_binding),
+            managed,
+            attempted: false,
+            expiry: Some(expiry),
+            check: Some(check),
+        }
+    }
+
     /// With the caller's provenance, so the sole operator can be served (#1961).
     pub(super) async fn resolve_caller_credential_as(
         &self,
@@ -295,6 +334,9 @@ impl MetaMcp {
         let vault = idp_cfg.strategy == crate::identity_propagation::PropagationStrategyKind::Vault;
         let refuse = async |msg: String| -> Result<CallerCredential> {
             if idp_cfg.required || vault {
+                // The caller's identity standing (MIK-8914.API2A.13): no kind
+                // names it yet.
+                super::audit::note_refused_by(DecisionKind::Unrecorded, None);
                 // Refused either way; the helper logs a failed audit write.
                 Self::audit_refused_credential(audit_logger, &subject_id, server, audience, &msg)
                     .await;
@@ -338,7 +380,9 @@ impl MetaMcp {
         }
 
         let Some(principal) = principal else {
-            return refuse("the request carries no verified end-user identity".to_string()).await;
+            // The one refusal here that is a decision about the caller; the
+            // others are configuration the operator has not finished.
+            return refuse(NO_IDENTITY.into()).await.inspect_err(raise);
         };
         // An explicit account reference requires its own installed strategy.
         // A missing or stale install must never borrow an unrelated global
@@ -385,12 +429,7 @@ impl MetaMcp {
                         )
                         .await?;
                     }
-                    Ok(CallerCredential {
-                        headers: cred.headers,
-                        cache_binding: Some(cred.cache_binding),
-                        managed,
-                        attempted: false,
-                    })
+                    Ok(self.minted_credential(cred, managed, descriptor_id.as_deref()))
                 }
                 // A busy custody at the mint released nothing (MIK-8428):
                 // the one transient record and sealed retryable answer
@@ -562,7 +601,10 @@ impl MetaMcp {
                 Self::refuse_unbound_account_backend(server, backend)?;
                 CallerCredential::default()
             };
-        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)?;
+        // The OAuth-isolation denial is delivered as this call's answer;
+        // inside a composite step it is raised only while vouched.
+        self.refuse_shared_oauth_login(server, tool, &caller_credential, backend)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         let resolving = self.resolve_capability_account_credential(server, tool, caller_proof);
         let (capability_account, account_credential) = self
             .with_connect_offer(resolving.await, verified_identity)
@@ -667,4 +709,13 @@ impl ResolvedDispatch {
     pub(super) fn minted(&self) -> bool {
         self.caller_credential.cache_binding.is_some() || self.caller_credential.attempted
     }
+}
+
+/// The required-identity denial's reason.
+const NO_IDENTITY: &str = "the request carries no verified end-user identity";
+
+/// The delivered answer is the gateway refusing the caller: raised while the
+/// cell still vouches for it, so a composite that goes on is not marked.
+fn raise(_: &Error) {
+    crate::gateway::delivery_facts::refused_while_vouched();
 }

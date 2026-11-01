@@ -32,9 +32,12 @@ mod descriptor_gate;
 mod era;
 mod fill_check;
 mod identity_slots;
+#[cfg(test)]
+mod logging_scan_tests;
 /// The identity-slot budget, which also bounds per-user event listeners.
 pub(crate) use identity_slots::{MAX_IDENTITY_SLOTS, MAX_SLOTS_PER_PRINCIPAL};
 mod input_keys;
+mod lend;
 mod lifecycle;
 mod list_drain;
 pub(crate) mod listen;
@@ -48,6 +51,8 @@ mod registry;
 mod repin;
 mod restart;
 mod runtime_launch;
+mod secret_send;
+mod send_scope;
 // The web UI's status rows are its only reader.
 #[cfg(feature = "webui")]
 pub(crate) mod server_state;
@@ -75,7 +80,7 @@ pub(crate) use era::removed_method_refusal_message;
 // listing that neither caches nor commits verdicts.
 #[cfg(feature = "webui")]
 pub(crate) use era::start_detached_http;
-pub(crate) use input_keys::Lens;
+pub(crate) use input_keys::{KeyAnswer, KeyAnswerKind, Lens};
 #[cfg(feature = "webui")]
 pub(crate) use metadata::{PreviewListing, list_tools_for_preview};
 #[cfg(test)]
@@ -92,6 +97,7 @@ pub(crate) use descriptor_gate::descriptor_digest;
 pub(crate) use descriptor_gate::{Judging, Listing};
 pub(crate) use fill_check::{LIST_FILL_COOLDOWN, text_absent};
 pub(crate) use identity_slots::passthrough_binding;
+pub(crate) use registry::PER_USER_SESSIONS;
 pub use registry::{
     BackendLifecycle, BackendRegistry, BackendRuntimeState, BackendRuntimeStatus, BackendStatus,
 };
@@ -104,10 +110,18 @@ pub struct Backend {
     /// `name` as the `backend` metric label, shared so that recording a
     /// metric costs a reference count, not a copy of the name (MIK-8014.PERF.5).
     metric_label: telemetry_metrics::SharedString,
+    /// `name` as the sender a notification raised in this backend's calls
+    /// names (`transport::notify_ingress`), built once so a send costs a
+    /// reference count.
+    notify_origin: Arc<str>,
     /// Configuration
     config: BackendConfig,
     /// Runtime plan compiled from the backend's configured runtime profile.
     runtime_plan: Option<RuntimePlan>,
+    /// Runs of `server_state`, so a row can prove how many backends the
+    /// Overview evaluated.
+    #[cfg(all(test, feature = "webui"))]
+    server_state_evaluations: std::sync::atomic::AtomicUsize,
     /// Per-identity transport/session pool (MIK-6735). Always holds the
     /// canonical [`PoolKey::Shared`] slot; gains one [`PoolKey::PerUser`] slot
     /// per caller identity when identity propagation is configured, whatever
@@ -115,12 +129,15 @@ pub struct Backend {
     /// own transport and start lock, so concurrent warm-start/client requests do
     /// not spawn duplicate connections for the same slot and distinct users
     /// never share a session (IDP.7).
-    pool: DashMap<PoolKey, Arc<PooledEntry>>,
+    pool: Arc<DashMap<PoolKey, Arc<PooledEntry>>>,
     /// Which per-user slot holds each caller's own catalogue (MIK-8356,
     /// design R3.5): caller principal id to that slot's binding and entry.
     /// Written when a fill stores into the slot, removed with the entry
     /// (`retire`), so an entry lives exactly as long as its slot.
     caller_slots: DashMap<String, caller_slots::CallerSlot>,
+    /// Woken when a caller's own slot is recorded or a cold view published,
+    /// so a listing waiting on another's lease serves its result.
+    caller_slot_stored: tokio::sync::Notify,
     /// Failsafe configuration, cloned so a freshly created pool slot
     /// (`pooled_entry`) can build its own independent `Failsafe` (MIK-6735
     /// fix 1). The per-backend `Failsafe` this replaced is gone; every slot,
@@ -130,6 +147,14 @@ pub struct Backend {
     /// the era, so a removal can land inside that window (MIK-7643).
     #[cfg(test)]
     after_reprobe_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing whose claim found the view taken pauses before
+    /// it looks for the running lease, so a publish can land in between.
+    #[cfg(test)]
+    pub(crate) before_lease_lookup: crate::test_pause::Slot,
+    /// Test-only: a listing's claims pause before its account pre-pass, so a
+    /// row can let the step's deadline cut the pre-pass short.
+    #[cfg(test)]
+    pub(crate) before_listing_prepass: crate::test_pause::Slot,
     /// Test-only: a stored read that won a cold claim pauses before it
     /// resolves (MIK-8392 C3, C4, L1, L1b).
     #[cfg(test)]
@@ -272,6 +297,10 @@ pub struct Backend {
     /// Where this backend's transports may connect; stamped by its registry.
     /// Unstamped means `Configured`: a backend no config governs.
     destination: std::sync::OnceLock<crate::security::ssrf::DestinationPolicy>,
+    /// Resolves this backend's `secrets:` values; stamped by its registry.
+    /// Unstamped, a call a rule applies to is refused: it never resolves
+    /// against the process environment in place of the gateway's own.
+    secret_resolver: std::sync::OnceLock<Arc<crate::secrets::SecretResolver>>,
     /// Where this backend says its shared start succeeded; stamped by its
     /// registry (MIK-8347). Unstamped: nobody listens.
     started: std::sync::OnceLock<tokio::sync::broadcast::Sender<String>>,
@@ -430,6 +459,8 @@ impl Backend {
     #[cfg(feature = "a2a")]
     async fn start_a2a(
         &self,
+        key: &pool::PoolKey,
+        entry: &pool::PooledEntry,
         destination: crate::security::ssrf::DestinationPolicy,
     ) -> crate::Result<Arc<crate::a2a::transport::A2aTransport>> {
         let crate::config::TransportConfig::A2a {
@@ -442,12 +473,18 @@ impl Backend {
                 self.name
             )));
         };
+        // A lent-only per-user slot sends only what its dispatches lend: the
+        // transport takes the slot's lender and no static header.
+        let lender = (matches!(key, pool::PoolKey::PerUser { .. })
+            && self.per_user_slot_credential() == crate::transport::SlotCredential::LentOnly)
+            .then(|| Arc::clone(&entry.lender));
         crate::a2a::transport::A2aTransport::start(
             a2a_url,
             a2a_agent_card_path.as_deref(),
             &self.config.headers,
             self.config.timeout,
             destination,
+            lender,
         )
         .await
     }
@@ -575,6 +612,11 @@ pub(crate) mod tests;
 #[path = "resend_isolation_tests.rs"]
 mod resend_isolation_tests;
 
+/// A backend's gateway-only members are gone at ingress.
+#[cfg(test)]
+#[path = "reserved_ingress_tests.rs"]
+mod reserved_ingress_tests;
+
 #[cfg(test)]
 #[path = "silence_resend_tests.rs"]
 mod silence_resend_tests;
@@ -582,6 +624,10 @@ mod silence_resend_tests;
 #[cfg(test)]
 #[path = "slot_eviction_tests.rs"]
 mod slot_eviction_tests;
+
+#[cfg(test)]
+#[path = "send_check_eviction_tests.rs"]
+mod send_check_eviction_tests;
 
 #[cfg(test)]
 #[path = "caller_slots_g3_tests.rs"]
@@ -622,6 +668,14 @@ mod era_start_own_probe_tests;
 #[cfg(test)]
 #[path = "era_per_slot_tests.rs"]
 mod era_per_slot_tests;
+
+#[cfg(test)]
+#[path = "era_lent_reprobe_tests.rs"]
+mod era_lent_reprobe_tests;
+
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_lent_slot_tests.rs"]
+mod a2a_lent_slot_tests;
 
 #[cfg(all(test, unix))]
 #[path = "frame_limit_start_tests.rs"]

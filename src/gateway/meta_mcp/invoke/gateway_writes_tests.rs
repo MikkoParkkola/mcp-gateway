@@ -9,14 +9,14 @@ use super::*;
 #[tokio::test]
 async fn a_note_removes_only_what_was_written() {
     scope(async {
-        let written = json!({"trace_id": "t-1", "text": "x"});
-        note(Layer::Value, &["trace_id"], &written);
+        let written = json!({"_trace_id": "t-1", "text": "x"});
+        note(Layer::Value, &["_trace_id"], &written);
         let mut same = written.clone();
         strip(&mut same, Layer::Value);
-        assert!(same.get("trace_id").is_none(), "{same}");
-        let mut replaced = json!({"trace_id": "backend", "text": "x"});
+        assert!(same.get("_trace_id").is_none(), "{same}");
+        let mut replaced = json!({"_trace_id": "backend", "text": "x"});
         strip(&mut replaced, Layer::Value);
-        assert_eq!(replaced["trace_id"], "backend");
+        assert_eq!(replaced["_trace_id"], "backend");
     })
     .await;
 }
@@ -26,23 +26,23 @@ async fn a_note_removes_only_what_was_written() {
 #[tokio::test]
 async fn a_rebind_follows_only_owned_members() {
     scope(async {
-        let written = json!({"recovery": {"hint": "a b"}});
-        note(Layer::Value, &["recovery"], &written);
-        let redacted = json!({"recovery": {"hint": "a [redacted]"}});
+        let written = json!({"_recovery": {"hint": "a b"}});
+        note(Layer::Value, &["_recovery"], &written);
+        let redacted = json!({"_recovery": {"hint": "a [redacted]"}});
         rebind(Layer::Value, &written, &redacted);
         let mut delivered = redacted.clone();
         strip(&mut delivered, Layer::Value);
-        assert!(delivered.get("recovery").is_none(), "{delivered}");
+        assert!(delivered.get("_recovery").is_none(), "{delivered}");
 
-        let replaced = json!({"recovery": {"hint": "backend"}});
+        let replaced = json!({"_recovery": {"hint": "backend"}});
         rebind(
             Layer::Value,
             &replaced,
-            &json!({"recovery": {"hint": "back"}}),
+            &json!({"_recovery": {"hint": "back"}}),
         );
-        let mut later = json!({"recovery": {"hint": "back"}});
+        let mut later = json!({"_recovery": {"hint": "back"}});
         strip(&mut later, Layer::Value);
-        assert_eq!(later["recovery"]["hint"], "back", "a stale note revived");
+        assert_eq!(later["_recovery"]["hint"], "back", "a stale note revived");
     })
     .await;
 }
@@ -53,7 +53,7 @@ async fn a_rebind_follows_only_owned_members() {
 #[tokio::test]
 async fn a_record_since_a_mark_holds_only_its_own_notes() {
     let advice = json!({"_cost_suggestion": {"message": "cheaper"}, "text": "x"});
-    let traced = json!({"trace_id": "t-1", "text": "x"});
+    let traced = json!({"_trace_id": "t-1", "text": "x"});
     let record = scope(async {
         note(Layer::Value, &["_cost_suggestion"], &advice);
         let mark = mark();
@@ -61,16 +61,16 @@ async fn a_record_since_a_mark_holds_only_its_own_notes() {
             snapshot_since(mark).0.is_empty(),
             "an earlier step's note is in this call's record"
         );
-        note(Layer::Value, &["trace_id"], &traced);
+        note(Layer::Value, &["_trace_id"], &traced);
         // Drops the earlier step's note, which sits before the mark.
         rebind(Layer::Value, &traced, &traced);
         snapshot_since(mark)
     })
     .await;
     assert_eq!(record.0.len(), 1, "{record:?}");
-    let both = json!({"trace_id": "t-1", "_cost_suggestion": {"message": "cheaper"}});
+    let both = json!({"_trace_id": "t-1", "_cost_suggestion": {"message": "cheaper"}});
     let cached = without(&both, &record);
-    assert!(cached.get("trace_id").is_none(), "{cached}");
+    assert!(cached.get("_trace_id").is_none(), "{cached}");
     assert!(cached.get("_cost_suggestion").is_some(), "{cached}");
     assert!(
         matches!(without(&both, &WriteRecord::default()), Cow::Borrowed(_)),
@@ -80,7 +80,7 @@ async fn a_record_since_a_mark_holds_only_its_own_notes() {
         restore(&record);
         let mut delivered = both.clone();
         strip(&mut delivered, Layer::Value);
-        assert!(delivered.get("trace_id").is_none(), "{delivered}");
+        assert!(delivered.get("_trace_id").is_none(), "{delivered}");
         assert!(delivered.get("_cost_suggestion").is_some(), "{delivered}");
     })
     .await;
@@ -93,8 +93,8 @@ async fn a_record_since_a_mark_holds_only_its_own_notes() {
 #[tokio::test]
 async fn a_stored_record_round_trips_every_noted_path() {
     let value = json!({
-        "recovery": {"hint": "retry"}, "_signature": {"sig": "s"}, "taskId": "t-9",
-        "trace_id": "t-1", "predicted_next": ["b"], "_meta": {"provenance": {"p": 1}},
+        "_recovery": {"hint": "retry"}, "_signature": {"sig": "s"}, "taskId": "t-9",
+        "_trace_id": "t-1", "_predicted_next": ["b"], "_meta": {"provenance": {"p": 1}},
         "_security_findings": ["f"], "_cost_warnings": ["w"],
         "_cost_suggestion": {"message": "m"}, "requestState": "rs-1", "resultType": "complete",
         "cacheScope": "private", "ttlMs": 5000,
@@ -103,7 +103,7 @@ async fn a_stored_record_round_trips_every_noted_path() {
     });
     let stored = scope(async {
         for layer in [Layer::Value, Layer::Answer] {
-            for &path in NOTED_PATHS {
+            for path in crate::protocol::reserved_members::noted() {
                 note(layer, path, &value);
             }
         }
@@ -111,10 +111,11 @@ async fn a_stored_record_round_trips_every_noted_path() {
     })
     .await;
     let mut entries = stored.as_array().expect("a list").clone();
-    assert_eq!(entries.len(), 2 * NOTED_PATHS.len(), "{stored}");
+    let noted = crate::protocol::reserved_members::noted().count();
+    assert_eq!(entries.len(), 2 * noted, "{stored}");
     entries.push(json!({"layer": "value", "path": ["not_noted"], "digest": 1}));
     let decoded: WriteRecord = serde_json::from_value(Value::Array(entries)).expect("deserializes");
-    assert_eq!(decoded.0.len(), 2 * NOTED_PATHS.len(), "{decoded:?}");
+    assert_eq!(decoded.0.len(), 2 * noted, "{decoded:?}");
     let receipt = without(&value, &decoded);
     assert_eq!(
         receipt.as_ref(),
@@ -122,7 +123,7 @@ async fn a_stored_record_round_trips_every_noted_path() {
         "{receipt}"
     );
     scope(async {
-        note(Layer::Value, &["trace_id"], &value);
+        note(Layer::Value, &["_trace_id"], &value);
         let mark = mark();
         restore(&decoded);
         assert_eq!(snapshot_since(mark).0.len(), decoded.0.len());
@@ -172,7 +173,7 @@ fn a_damaged_record_drops_only_its_bad_entries() {
         assert!(decoded.is_empty(), "{whole}");
     }
     let good = json!({
-        "layer": "value", "dest": ["results", "0", "result", "trace_id"], "kind": ["trace_id"],
+        "layer": "value", "dest": ["results", "0", "result", "_trace_id"], "kind": ["_trace_id"],
         "within": [], "digest": "636810988c0638ebda7b64c4fcac77cae55b300084dd6c553983f9c1aaf350db",
     });
     let with = |key: &str, value: Value| {
@@ -342,9 +343,9 @@ fn a_mapping_path_names_the_paths_it_reaches() {
 /// the notes made before it.
 #[tokio::test]
 async fn taking_since_a_mark_leaves_the_earlier_notes() {
-    let value = json!({"trace_id": "t-1", "_cost_warnings": ["w"]});
+    let value = json!({"_trace_id": "t-1", "_cost_warnings": ["w"]});
     let (taken, left) = scope(async {
-        note(Layer::Value, &["trace_id"], &value);
+        note(Layer::Value, &["_trace_id"], &value);
         let mark = mark();
         note(Layer::Value, &["_cost_warnings"], &value);
         let taken = take_since(mark);
@@ -352,7 +353,7 @@ async fn taking_since_a_mark_leaves_the_earlier_notes() {
     })
     .await;
     assert_eq!(dests(&taken), vec![path(&["_cost_warnings"])]);
-    assert_eq!(dests(&left), vec![path(&["trace_id"])]);
+    assert_eq!(dests(&left), vec![path(&["_trace_id"])]);
 }
 
 /// `MIK-7993` r4 M1: the response-contract annotations the gateway writes,
@@ -419,18 +420,18 @@ async fn the_strip_removes_a_noted_member_only_at_its_path() {
     let stored = json!({
         "content": [{"type": "text", "text": "{\"_contract_violation\":true}"}],
         "_contract_violation": true,
-        "trace_id": "gw-1",
-        "structuredContent": {"_contract_violation": true, "trace_id": "gw-1"},
+        "_trace_id": "gw-1",
+        "structuredContent": {"_contract_violation": true, "_trace_id": "gw-1"},
     });
-    let record = noted(&stored, &[CONTRACT_VIOLATION, &["trace_id"]]).await;
+    let record = noted(&stored, &[CONTRACT_VIOLATION, &["_trace_id"]]).await;
     let mut result = stored.clone();
     let stripped = strip_recorded(&mut result, &record);
     assert_eq!(
         stripped,
-        vec!["_contract_violation".to_owned(), "trace_id".to_owned()]
+        vec!["_contract_violation".to_owned(), "_trace_id".to_owned()]
     );
     assert!(result.get("_contract_violation").is_none(), "{result}");
-    assert!(result.get("trace_id").is_none(), "{result}");
+    assert!(result.get("_trace_id").is_none(), "{result}");
     assert_eq!(
         result["structuredContent"], stored["structuredContent"],
         "{result}"
@@ -462,5 +463,182 @@ async fn noted_array_elements_become_null() {
     assert_eq!(
         receipt.as_ref(),
         &json!({"items": [null, "the backend's", null]})
+    );
+}
+
+/// A record stored before the rename names the plain kinds.
+/// Each decodes as its renamed row with its stored `dest` and `within` kept
+/// (a composite's rebased path and a projected part included), and is
+/// written back under the new kind.
+#[test]
+fn a_pre_rename_kind_decodes_as_its_renamed_row() {
+    let digest = "636810988c0638ebda7b64c4fcac77cae55b300084dd6c553983f9c1aaf350db";
+    for (old, new, dest, within) in [
+        ("recovery", "_recovery", json!(["recovery"]), json!([])),
+        (
+            "trace_id",
+            "_trace_id",
+            json!(["results", "0", "result", "trace_id"]),
+            json!([]),
+        ),
+        (
+            "predicted_next",
+            "_predicted_next",
+            json!(["output", "p"]),
+            json!(["0"]),
+        ),
+    ] {
+        let stored = json!([{
+            "layer": "value", "dest": dest, "kind": [old], "within": within, "digest": digest,
+        }]);
+        let decoded: WriteRecord = serde_json::from_value(stored).expect("never fails");
+        assert_eq!(decoded.0.len(), 1, "{old} was dropped");
+        let entry = &decoded.0[0];
+        assert_eq!(entry.kind, &[new][..], "{old}");
+        assert_eq!(json!(entry.dest), dest, "{old}: the stored dest moved");
+        assert_eq!(json!(entry.within), within, "{old}");
+        let again = serde_json::to_value(&decoded).expect("serializes");
+        assert_eq!(
+            again[0]["kind"],
+            json!([new]),
+            "{old} written back: {again}"
+        );
+        assert_eq!(again[0]["dest"], dest, "{old} written back: {again}");
+    }
+}
+
+/// The raise reads the reserved-member table: noting a counted member raises
+/// `annotated`, noting an identity stamp leaves `delivered`, and neither
+/// needs a write record open.
+#[tokio::test]
+async fn noting_a_counted_member_raises_annotated() {
+    let value = json!({"_security_findings": ["f"], "_trace_id": "t-1"});
+    let counted: &'static [&'static str] = &["_security_findings"];
+    let stamp: &'static [&'static str] = &["_trace_id"];
+    for (path, expected) in [(counted, "annotated"), (stamp, "delivered")] {
+        let effect = crate::gateway::delivery_facts::scope(async {
+            note(Layer::Value, path, &value);
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields["response_effect"].clone()
+        })
+        .await;
+        assert_eq!(effect, expected, "{path:?}");
+    }
+}
+
+/// The response-contract gate's annotations make the delivery `annotated`
+/// on both branches that write them (no contract declared; a declared
+/// contract violated), and an answer the declared contract admits stays
+/// `delivered`: each noted contract member is counted where it is written.
+///
+/// "No contract declared" annotates by design, not by accident: with
+/// `fail_closed` on, a tool with no declared contract is itself a violation,
+/// and in observe mode (`action_mode` off) the gate writes
+/// `_contract_violation: true` and `_contract_reason: "no_contract_declared"`
+/// through `write_contract` (src/gateway/meta_mcp/invoke/policy.rs:527-547).
+#[tokio::test]
+async fn a_contract_annotation_records_annotated() {
+    use std::sync::Arc;
+    let declared = crate::config::ToolContractConfig {
+        max_bytes: Some(1),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    let roomy = crate::config::ToolContractConfig {
+        max_bytes: Some(1 << 20),
+        forbidden_patterns: Vec::new(),
+        action_mode: None,
+    };
+    // (tool, the effect, the reason the gate writes: `None` writes none).
+    let cases = [
+        ("undeclared", "annotated", Some("no_contract_declared")),
+        ("declared", "annotated", Some("max_bytes_exceeded")),
+        ("roomy", "delivered", None),
+    ];
+    // Every case's effect is collected and compared at once, so a failure
+    // shows each branch's answer, not only the first that differs.
+    let mut effects = Vec::new();
+    for (tool, _, reason) in cases {
+        let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::new(
+            crate::backend::BackendRegistry::new(),
+        ));
+        meta.set_response_contract(crate::config::ResponseContractConfig {
+            enabled: true,
+            action_mode: false,
+            fail_closed: true,
+            tools: [
+                ("declared".to_owned(), declared.clone()),
+                ("roomy".to_owned(), roomy.clone()),
+            ]
+            .into(),
+            ..Default::default()
+        });
+        let (effect, written) = crate::gateway::delivery_facts::scope(async {
+            let mut result = json!({"content": [{"type": "text", "text": "longer than one byte"}]});
+            meta.apply_response_contract_gate("alpha", tool, "t-1", &mut result)
+                .expect("observe mode annotates");
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            (
+                fields["response_effect"].clone(),
+                (
+                    result.get("_contract_violation").cloned(),
+                    result.get("_contract_reason").cloned(),
+                ),
+            )
+        })
+        .await;
+        // Premise: each case reached the branch it names.
+        let annotation = reason.map(|reason| (json!(true), json!(reason)));
+        assert_eq!(
+            written,
+            annotation.map_or((None, None), |(v, r)| (Some(v), Some(r))),
+            "premise {tool}: the gate's annotation"
+        );
+        effects.push((tool, effect));
+    }
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|&(tool, effect, _)| (tool, json!(effect)))
+        .collect();
+    assert_eq!(effects, expected);
+}
+
+/// Each contract member is counted on its own: noting either one alone
+/// makes the delivery `annotated`, so neither can lose its counted status
+/// behind the other (the gate always writes both together).
+#[tokio::test]
+async fn each_contract_member_alone_records_annotated() {
+    let value = json!({"_contract_violation": true, "_contract_reason": "r"});
+    let mut effects = Vec::new();
+    for path in [CONTRACT_VIOLATION, CONTRACT_REASON] {
+        let effect = crate::gateway::delivery_facts::scope(async {
+            note(Layer::Value, path, &value);
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields["response_effect"].clone()
+        })
+        .await;
+        effects.push((path[0], effect));
+    }
+    assert_eq!(
+        effects,
+        [
+            ("_contract_violation", json!("annotated")),
+            ("_contract_reason", json!("annotated")),
+        ]
     );
 }

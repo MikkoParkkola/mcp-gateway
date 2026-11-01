@@ -276,10 +276,15 @@ impl MetaMcp {
         (caller, control_identity, target): (&str, &str, ScanTarget),
     ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
-        let verdict = firewall.check_request(
-            session_id,
-            server,
+        // stdio only: no API keys on that transport.
+        let rule_target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(server),
             tool,
+            key: crate::security::response_policy::KeyOf::NoKey,
+        };
+        let verdict = firewall.check_request_keyed(
+            session_id,
+            rule_target,
             arguments,
             caller,
             control_identity,
@@ -324,15 +329,24 @@ impl MetaMcp {
         };
         let decision = authorizer.decide(target);
         let refusal = if decision.verdict.is_err() {
-            decision.emit(Emit::Audit).map_err(|e| Error::Forbidden {
-                code: e.code,
-                status: e.status.as_u16(),
-                message: e.message,
+            decision.emit(Emit::Audit).map_err(|e| {
+                super::audit::note_refused_by(e.kind, None);
+                Error::Forbidden {
+                    code: e.code,
+                    status: e.status.as_u16(),
+                    message: e.message,
+                }
             })
         } else {
             // Allowed: the record, when this stage owns it, then the admin rule.
             let _allowed = decision.emit(on_allow);
             self.admin_capability_rule(server, tool, scope.is_admin)
+                .inspect_err(|_| {
+                    super::audit::note_refused_by(
+                        crate::security::decision_record::DecisionKind::AdminCapability,
+                        None,
+                    );
+                })
         };
         if let Err(e) = refusal {
             let (transport, name) = (authorizer.transport(), authorizer.caller_name());
@@ -376,9 +390,20 @@ impl MetaMcp {
                 message: "inputResponses must be an object".to_owned(),
             });
         }
-        let mut verdict = firewall.rescan(tool, outbound.arguments);
+        // The proven key when the scope carries one; otherwise not known, never
+        // "no key": an internal scope (`unscoped`, `allow_all`) has no caller
+        // to prove it, and not known can only fail closed.
+        let target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(server),
+            tool,
+            key: scope.grant_key.map_or(
+                crate::security::response_policy::KeyOf::NotKnown,
+                crate::security::response_policy::KeyOf::Key,
+            ),
+        };
+        let mut verdict = firewall.rescan(target, outbound.arguments);
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(tool, answers);
+            let answered = firewall.rescan(target, answers);
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }
@@ -395,6 +420,7 @@ impl MetaMcp {
             external_tool: tool,
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         };
         firewall.audit_dispatch(&labels, outbound.arguments, &verdict, source.as_str());
         if verdict.allowed {
@@ -407,6 +433,10 @@ impl MetaMcp {
             );
             return Ok(());
         }
+        super::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
         // The stateless rescan has no anomaly findings, so this is the
         // `-32600` arm of the one shared wording.
         let (code, message) = verdict.request_refusal().unwrap_or_else(|| {

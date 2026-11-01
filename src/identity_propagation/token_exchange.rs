@@ -91,6 +91,8 @@ const MAX_CACHE_ENTRIES: usize = 10_000;
 struct CachedExchange {
     access_token: String,
     expires_at: i64,
+    /// `expires_at` is the default TTL, not an `expires_in` the issuer sent.
+    synthetic_expiry: bool,
     scopes: Vec<String>,
 }
 
@@ -250,6 +252,7 @@ impl TokenExchangeStrategy {
             return None;
         }
         Some(PropagatedCredential {
+            expiry_synthetic: entry.synthetic_expiry,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {}", entry.access_token),
@@ -361,7 +364,7 @@ impl TokenExchangeStrategy {
 ///
 /// It follows no redirect: see [`token_exchange_redirect_policy`].
 fn default_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
+    crate::debug_trust_roots::extra_roots(reqwest::Client::builder())
         .https_only(true)
         .timeout(std::time::Duration::from_secs(10))
         .redirect(token_exchange_redirect_policy())
@@ -411,6 +414,7 @@ impl IdentityPropagation for TokenExchangeStrategy {
         let body = self.exchange(endpoint, &subject_token, backend).await?;
 
         let now = SignedAssertionStrategy::now_secs()?;
+        let synthetic_expiry = body.expires_in.is_none();
         let ttl = body
             .expires_in
             .unwrap_or(DEFAULT_EXCHANGED_TOKEN_TTL_SECS)
@@ -441,11 +445,13 @@ impl IdentityPropagation for TokenExchangeStrategy {
             CachedExchange {
                 access_token: body.access_token.clone(),
                 expires_at,
+                synthetic_expiry,
                 scopes: scopes.clone(),
             },
         );
 
         Ok(PropagatedCredential {
+            expiry_synthetic: synthetic_expiry,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer {}", body.access_token),
@@ -466,3 +472,7 @@ mod tests;
 #[cfg(test)]
 #[path = "token_exchange_refusal_tests.rs"]
 mod refusal_tests;
+
+#[cfg(test)]
+#[path = "token_exchange_expiry_tests.rs"]
+mod expiry_tests;

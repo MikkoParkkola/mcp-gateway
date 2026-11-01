@@ -21,9 +21,12 @@ were deleted is lowered in the same diff, where review sees it.
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 
 SDK = "a_real_sdk_job_outlives_the_gateway_and_its_owner_reads_the_result"
 BURST = "mik_7479_full_burst"
@@ -69,6 +72,35 @@ EXAMPLES = {"linux": "int-b", "macos": "int", "windows": "int-b"}
 # Windows printed every test's output (`--show-output`) before sharding.
 OUTPUT = {"windows": ["--show-output"]}
 
+# A test leaves nothing in the temp directory. The Linux shards run
+# cargo with TMPDIR set to a fresh private directory and fail on any entry left
+# there that KNOWN_LEFTOVERS does not allow. The list holds only what a pending
+# fix removes, each as (pattern on the entry name, most allowed, why). It may
+# only shrink: the self-test holds each pattern and count to LEFTOVER_CEILING.
+TMP_GUARDED = {"linux"}
+_UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+KNOWN_LEFTOVERS: list[tuple[str, int, str]] = [
+    ("oauth_test_[a-z0-9_]+", 10, "oauth::client tests' token stores"),
+    (f"chain-(test|resume-test|cleanup)-{_UUID}", 9, "chains::executor tests"),
+    ("http_transport_tls_guard", 1, "transport::http tests' token store"),
+    ("stdio-tail-[0-9]+", 1, "transport::stdio start-failure test"),
+    (r"\.tmp[A-Za-z0-9]{6}", 4,
+     "an audit write that outlives its test's temp dir (transparency_log::bounded_tests up "
+     "to 3, identity_propagation::audit_fail_closed, signing_allocation_tests::"
+     "withheld_parity_stdio); hardened_signing_e2e and mik_7272_task_1_acs"),
+]
+# Written out, not derived from the list above: a pattern added there and not
+# here, or a count raised past its ceiling, fails the self-test, so the list
+# can only lose entries. A leaked TempLog folder is named `audit-log-*` and
+# matches none of these.
+LEFTOVER_CEILING: dict[str, int] = {
+    "oauth_test_[a-z0-9_]+": 10,
+    f"chain-(test|resume-test|cleanup)-{_UUID}": 9,
+    "http_transport_tls_guard": 1,
+    "stdio-tail-[0-9]+": 1,
+    r"\.tmp[A-Za-z0-9]{6}": 4,
+}
+
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 RUNNING = re.compile(r"^running (\d+) tests?$")
@@ -103,7 +135,11 @@ def selected(lines: list[str]) -> int:
     return total
 
 
-def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, list[str]]:
+def cargo(
+    args: list[str],
+    program: tuple[str, ...] = ("cargo",),
+    env: dict[str, str] | None = None,
+) -> tuple[int, list[str]]:
     """Run cargo with output mirrored to this job's log.
 
     Bytes are mirrored as they arrive and decoded (UTF-8, lossy) only for
@@ -111,7 +147,9 @@ def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, 
     Windows: cp1252 turned an output byte into U+FFFD, which cp1252 stdout
     cannot encode (#3944, Windows int-a).
     """
-    p = subprocess.Popen([*program, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(
+        [*program, *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env
+    )
     lines = []
     assert p.stdout is not None
     out = sys.stdout.buffer
@@ -123,10 +161,51 @@ def cargo(args: list[str], program: tuple[str, ...] = ("cargo",)) -> tuple[int, 
     return p.wait(), lines
 
 
-def run(os_kind: str, shard: str) -> int:
+def unexpected(names: list[str], known: list[tuple[str, int, str]] = KNOWN_LEFTOVERS) -> list[str]:
+    """The entries `known` does not allow, each pattern up to its count."""
+    used: dict[str, int] = {}
+    bad = []
+    for name in sorted(names):
+        for pattern, most, _why in known:
+            if re.fullmatch(pattern, name) and used.get(pattern, 0) < most:
+                used[pattern] = used.get(pattern, 0) + 1
+                break
+        else:
+            bad.append(name)
+    return bad
+
+
+def contents(path: str, most: int = 3) -> str:
+    """The first few files under a leftover entry, with sizes, so a guard failure
+    names the writer instead of a random folder name."""
+    try:
+        if not os.path.isdir(path):
+            return f"{os.lstat(path).st_size}B"
+        files = [os.path.join(root, f) for root, _dirs, fs in os.walk(path) for f in fs]
+        found = sorted(f"{os.path.relpath(f, path)} {os.lstat(f).st_size}B" for f in files)
+    except OSError as error:
+        return f"unreadable: {error}"
+    shown = ", ".join(found[:most]) or "empty"
+    return shown + (f", +{len(found) - most} more" if len(found) > most else "")
+
+
+def run(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> int:
+    failed = run_steps(os_kind, shard, program)
+    for f in failed:
+        print(f"::error::{os_kind} {shard} {f}")
+    return 1 if failed else 0
+
+
+def run_steps(os_kind: str, shard: str, program: tuple[str, ...] = ("cargo",)) -> list[str]:
     failed = []
+    tmp = tempfile.mkdtemp(prefix="shard-tmp-") if os_kind in TMP_GUARDED else None
+    env = {**os.environ, "TMPDIR": tmp} if tmp else None
     for step, cargo_args, test_args, floor in SHARDS[os_kind][shard]:
-        rc, lines = cargo([*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]])
+        rc, lines = cargo(
+            [*BASE, *cargo_args, "--", *test_args, *OUTPUT.get(os_kind, []), *SKIPS[os_kind]],
+            program,
+            env,
+        )
         n = selected(lines)
         results = [tuple(map(int, m.groups())) for m in map(RESULT.search, lines) if m]
         print(f"::notice::{os_kind} {shard} {step}: selected {n} (floor {floor}), "
@@ -137,12 +216,20 @@ def run(os_kind: str, shard: str) -> int:
         if n < floor:
             failed.append(f"{step}: selected {n} tests, below the floor of {floor}")
     if EXAMPLES.get(os_kind) == shard:
-        rc, _ = cargo(["build", "--all-features", "--examples"])
+        rc, _ = cargo(["build", "--all-features", "--examples"], program, env)
         if rc != 0:
             failed.append(f"examples: cargo build exited {rc}")
-    for f in failed:
-        print(f"::error::{os_kind} {shard} {f}")
-    return 1 if failed else 0
+    if tmp:
+        names = os.listdir(tmp)
+        bad = unexpected(names)
+        # Tolerated entries are printed too: which ones count against the
+        # allowance is only sort order, so the cause can sit in either list.
+        for name in sorted(set(names) - set(bad)):
+            print(f"::notice::{os_kind} {shard} tolerated in TMPDIR: {name} "
+                  f"({contents(os.path.join(tmp, name))})")
+        failed += [f"left in TMPDIR: {name} ({contents(os.path.join(tmp, name))})" for name in bad]
+        shutil.rmtree(tmp, ignore_errors=True)
+    return failed
 
 
 def self_test() -> int:
@@ -188,6 +275,38 @@ def self_test() -> int:
     for os_kind, shards in SHARDS.items():
         for name, steps in shards.items():
             assert steps and all(floor > 0 for *_, floor in steps), (os_kind, name)
+    # The TMPDIR guard. A planted test that leaks one file turns a
+    # guarded shard red on that file alone, and the same run without the leak
+    # stays green. The fake cargo clears the shard's floor.
+    fake = (sys.executable, "-c", (
+        "import os\n"
+        "print('     Running unittests src/lib.rs (x)')\n"
+        "print('running 99999 tests')\n"
+        "print('test result: ok. 99999 passed; 0 failed; 0 ignored')\n"
+        "if os.environ.get('PLANT_LEAK'):\n"
+        "    open(os.path.join(os.environ['TMPDIR'], '.tmpAbC123.hwm'), 'w').close()\n"
+    ))
+    os.environ["PLANT_LEAK"] = "1"
+    try:
+        planted = run_steps("linux", "lib-a", fake)
+    finally:
+        del os.environ["PLANT_LEAK"]
+    assert planted == ["left in TMPDIR: .tmpAbC123.hwm (0B)"], planted
+    with tempfile.TemporaryDirectory() as leftover:
+        os.makedirs(os.path.join(leftover, "tasks"))
+        for name in ("task-a.json", "task-b.json", "task-c.json", "task-d.json"):
+            with open(os.path.join(leftover, "tasks", name), "w") as f:
+                f.write("{}")
+        shown = contents(leftover)
+        assert shown == (f"{os.path.join('tasks', 'task-a.json')} 2B, "
+                         f"{os.path.join('tasks', 'task-b.json')} 2B, "
+                         f"{os.path.join('tasks', 'task-c.json')} 2B, +1 more"), shown
+    assert run_steps("linux", "lib-a", fake) == [], "the control run must stay green"
+    assert unexpected(["a", "b"], [("[ab]", 1, "one allowed")]) == ["b"], "the count bounds a pattern"
+    assert all(n <= LEFTOVER_CEILING.get(p, 0) for p, n, _ in KNOWN_LEFTOVERS), \
+        "KNOWN_LEFTOVERS may only shrink"
+    # A leaked TempLog folder is never one of the tolerated plain temp dirs.
+    assert unexpected(["audit-log-Ab12Cd", ".tmpAb12Cd"]) == ["audit-log-Ab12Cd"]
     print("shard_tests self-test: ok")
     return 0
 

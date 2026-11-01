@@ -96,7 +96,7 @@ fn a_new_extractor_arm_reopens_mik_8707() {
 }
 
 /// Stdio's finalize step is `/mcp`'s with no router firewall: `finalize_content`
-/// only calls `finalize_routed(.., None)` (`response_security.rs:224-230`), so
+/// only calls `finalize_routed(.., None)` (its body in `response_security.rs`), so
 /// stdio's seal-then-sign and sign-then-record order is the one R-SIGN and
 /// R-RECSIGN drive on `/mcp`. A stdio tail that stops delegating fails here.
 #[test]
@@ -214,8 +214,9 @@ fn the_tail_takes_no_case_or_era() {
 
 /// Stdio's `SignRebuild` pin: the stdio tail signs inside `finalize_content`
 /// and rebuilds the relay receipt after it, so the rebuild reads the signed
-/// answer with the gateway's `_signature` noted, as on `/mcp`
-/// (`rows::r_signrebuild_sign_precedes_relay_rebuild`).
+/// answer with the gateway's `_signature` noted, as on `/mcp`. The order is
+/// invisible by outcome (`IngressStripsBackendSignature`); the note is driven
+/// by `rows::r_ownsig_the_gateway_signature_is_not_receipted`.
 #[test]
 fn stdio_rebuilds_after_finalize_content() {
     let stdio = "src/gateway/server/stdio_dispatch.rs";

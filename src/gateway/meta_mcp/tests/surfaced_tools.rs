@@ -541,6 +541,9 @@ fn inspect_discovery_value_redacts_credentials_when_not_blocking() {
                     action: FirewallAction::Warn,
                     reason: None,
                     scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -626,4 +629,26 @@ fn exactly_the_three_parsing_meta_tools_decode_inside() {
         .map(|(name, _)| *name)
         .collect();
     assert_eq!(chained, ["gateway_execute"]);
+}
+
+/// Exactly the two plan-running meta-tools are composite, by name
+/// too, and a name outside the meta-tools is not.
+#[test]
+fn only_execute_and_playbook_are_composite() {
+    use super::super::dispatch_names::{MetaArm, is_composite_meta_tool};
+    let composite: Vec<&str> = MetaArm::ALL
+        .iter()
+        .filter(|arm| arm.is_composite())
+        .map(|arm| arm.name())
+        .collect();
+    assert_eq!(composite, ["gateway_execute", "gateway_run_playbook"]);
+    for arm in MetaArm::ALL {
+        assert_eq!(
+            is_composite_meta_tool(arm.name()),
+            arm.is_composite(),
+            "{}",
+            arm.name()
+        );
+    }
+    assert!(!is_composite_meta_tool("echo"));
 }

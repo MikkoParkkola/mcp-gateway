@@ -81,7 +81,7 @@ async fn resolve(fx: &Fx, captured: &Arc<Backend>) -> Result<(), u16> {
     )
     .await
     .map(|_| ())
-    .map_err(|(status, _)| status.as_u16())
+    .map_err(|refused| refused.status.as_u16())
 }
 
 fn shared_login() -> BackendConfig {
@@ -252,7 +252,7 @@ async fn an_a2a_question_on_this_route_is_bound_to_the_key_holder() {
             &RequestId::Number(1),
         )
         .await
-        .unwrap_or_else(|(status, _)| panic!("refused with {status}"));
+        .unwrap_or_else(|refused| panic!("refused with {}", refused.status));
         keys.push(propagation.identity_key);
     }
     assert_eq!(
@@ -314,7 +314,7 @@ async fn an_unminted_a2a_key_holder_is_bound_but_not_proven() {
         &RequestId::Number(1),
     )
     .await
-    .unwrap_or_else(|(status, _)| panic!("premise: the optional fallback refused: {status}"));
+    .unwrap_or_else(|refused| panic!("premise: the optional fallback refused: {}", refused.status));
     assert_eq!(
         propagation.identity_key.as_deref(),
         Some(crate::hashing::sha256_hex(b"a2a-client:alice-digest").as_str()),
@@ -408,4 +408,23 @@ async fn an_unminted_a2a_key_holder_is_not_served_a_7b_replay() {
         ),
         "D-a2a e2e: the A2A binding got the stored result past the refusal: {again}"
     );
+}
+
+/// The direct route keeps the credential it resolved in the zeroizing holder
+/// the lender uses: the type it stores is pinned here, so a change that hands
+/// the secret to a plain `Vec` fails to build.
+#[test]
+fn a_direct_route_credential_is_wiped_on_drop() {
+    type Held = zeroize::Zeroizing<Vec<(String, String)>>;
+    type Propagation = super::direct_preflight::Propagation;
+    fn stored(propagation: &Propagation) -> &Held {
+        &propagation.headers
+    }
+    let pinned: for<'a> fn(&'a Propagation) -> &'a Held = stored;
+    let empty: Held = Held::default();
+    assert!(
+        empty.is_empty(),
+        "premise: the holder type is the zeroizing one"
+    );
+    let _ = pinned;
 }

@@ -54,12 +54,10 @@ async fn scripted_executor(
 
     let mut executor =
         CapabilityExecutor::new().with_policy_epoch(Arc::new(std::sync::atomic::AtomicU64::new(0)));
-    // `localhost` clears SSRF without relaxing loopback egress; a finite
+    // The fixture host clears SSRF without relaxing loopback egress; a finite
     // timeout keeps a hung listener from stalling the suite.
-    executor.client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(2))
-        .build()
-        .unwrap();
+    executor.client = crate::test_fixture_host::fixture_client(Duration::from_secs(2));
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let capability = crate::capability::parse_capability(&format!(
         r"
 name: cache_error_probe
@@ -73,7 +71,7 @@ providers:
   primary:
     service: rest
     config:
-      base_url: http://localhost:{port}
+      base_url: {base_url}
       path: /probe
       method: GET
 "
@@ -155,4 +153,21 @@ async fn a_capability_payload_carrying_result_type_is_still_cached() {
         assert_eq!(delivered, body, "the second call is served from the cache");
     }
     assert_eq!(hits.load(Ordering::SeqCst), 1, "the second call is a hit");
+}
+
+/// U12 (code review): a web UI call runs the capability itself. Inside one,
+/// both calls reach the upstream, where outside one the second is a hit (C2).
+/// Mutant: the web UI bypass of the capability cache removed.
+#[cfg(feature = "webui")]
+#[tokio::test]
+async fn a_web_ui_call_is_never_served_from_the_capability_cache() {
+    use crate::gateway::ui_call::{Confirm, UiCall};
+    let (executor, capability, hits) = scripted_executor(json!({"ok": true})).await;
+    let call = UiCall::new("caps", "cache_error_probe", "p", Confirm::Confirmed);
+    for _ in 0..2 {
+        call.scope(executor.execute_with_context(&capability, json!({}), cacheable_context()))
+            .await
+            .unwrap();
+    }
+    assert_eq!(hits.load(Ordering::SeqCst), 2, "both reached upstream");
 }

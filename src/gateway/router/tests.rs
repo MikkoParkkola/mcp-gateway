@@ -73,6 +73,8 @@ mod playbook_authz;
 /// MIK-8158: no authorization server, no protected-resource metadata.
 mod prm_without_issuer;
 mod quota_principal;
+mod refusal_kind_private;
+mod refusal_wire_pins;
 mod request_parsing;
 mod responses;
 mod session_hold_direct;
@@ -81,6 +83,11 @@ mod session_routing;
 use meta_state_fixtures::{
     test_router_app_state_minting_without_route_audit, test_router_app_state_with_meta,
 };
+
+/// A router fixture's temporary directory, shared with the task store it
+/// holds: the directory is removed only after both the test and the store's
+/// last write let go, so a worker's late write cannot leave it behind.
+pub(crate) type FixtureDir = Arc<tempfile::TempDir>;
 
 /// The durable task runtime every fixture in this file is built on.
 ///
@@ -105,9 +112,9 @@ async fn test_task_runtime(
 ) -> (
     Arc<crate::gateway::task_service::TaskService>,
     Arc<crate::gateway::task_service::TaskExecutor>,
-    tempfile::TempDir,
+    FixtureDir,
 ) {
-    let store_dir = tempfile::tempdir().expect("a private task-store directory");
+    let store_dir = Arc::new(tempfile::tempdir().expect("a private task-store directory"));
     let (service, executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         crate::config::TasksConfig::default().max_workers,
@@ -117,6 +124,10 @@ async fn test_task_runtime(
     )
     .await
     .expect("the fixture task store opens");
+    // The store holds a share of its directory, so the directory is removed
+    // only after both the test and the store's last write let go: a worker's
+    // late write landing while the test removed it left the folder behind.
+    service.store.keep_test_dir(Arc::clone(&store_dir));
     (service, executor, store_dir)
 }
 
@@ -125,25 +136,24 @@ async fn test_task_runtime(
 /// notifications to a listener set no client is on. Re-validates against the
 /// fixture's own credentials and agent registry, so it agrees with the
 /// request middleware.
+/// It judges with the fixture's own `live_config`, so a reload reaches its
+/// listeners as it reaches requests.
 fn test_subscriptions(
-    auth_config: &Arc<ResolvedAuthConfig>,
+    live_config: &Arc<crate::config_reload::LiveConfig>,
     key_server: Option<Arc<crate::key_server::KeyServer>>,
     agent_auth: &AgentAuthState,
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
     let authorizer = crate::gateway::auth::AuthState {
-        auth_config: Arc::clone(auth_config),
         key_server,
         dashboard_bootstrap: Arc::default(),
         tls_enabled: false,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(live_config),
         agent_auth: agent_auth.clone(),
     };
     Arc::new(crate::gateway::subscription_registry::SubscriptionRegistry::new(64, authorizer))
 }
 
-type Fixture = (Arc<AppState>, tempfile::TempDir);
+type Fixture = (Arc<AppState>, FixtureDir);
 
 pub(super) async fn test_router_app_state_with_streaming(
     streaming_config: StreamingConfig,
@@ -160,8 +170,11 @@ pub(super) async fn test_router_app_state_with_streaming(
 async fn test_router_app_state_with(
     streaming_config: StreamingConfig,
     config: crate::config::Config,
-) -> (Arc<AppState>, tempfile::TempDir) {
-    let backends = Arc::new(BackendRegistry::new());
+) -> (Arc<AppState>, FixtureDir) {
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let multiplexer = Arc::new(NotificationMultiplexer::new(
         Arc::clone(&backends),
@@ -175,11 +188,16 @@ async fn test_router_app_state_with(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(config),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -189,7 +207,6 @@ async fn test_router_app_state_with(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -204,9 +221,7 @@ async fn test_router_app_state_with(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(config),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -217,12 +232,15 @@ async fn test_router_app_state_with(
     (state, store_dir)
 }
 
-pub(super) async fn test_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn test_router_app_state() -> (Arc<AppState>, FixtureDir) {
     test_router_app_state_with_streaming(StreamingConfig::default()).await
 }
 
-async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, tempfile::TempDir) {
-    let backends = Arc::new(BackendRegistry::new());
+async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, FixtureDir) {
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -237,11 +255,16 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
     let agent_auth = AgentAuthState::new(true, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -251,7 +274,6 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -266,9 +288,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -281,7 +301,7 @@ async fn test_router_app_state_with_agent_auth_enabled() -> (Arc<AppState>, temp
 
 pub(super) async fn test_router_app_state_with_backend(
     backend: Arc<Backend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let (state, store_dir) = test_router_app_state().await;
     let _ = state.backends.register(backend);
     (state, store_dir)
@@ -328,7 +348,7 @@ pub(crate) async fn audience_state(
         Option<Arc<AgentRegistry>>,
     ),
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let agent_auth = match agents {
         Some(registry) => AgentAuthState::new(true, registry),
         None => AgentAuthState::new(false, Arc::new(AgentRegistry::new())),
@@ -369,8 +389,11 @@ pub(crate) fn view_judge_for(
 pub(super) async fn test_router_app_state_with_auth_and_config(
     auth: &AuthConfig,
     config: crate::config::Config,
-) -> (Arc<AppState>, tempfile::TempDir) {
-    let backends = Arc::new(BackendRegistry::new());
+) -> (Arc<AppState>, FixtureDir) {
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -385,8 +408,13 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
-    let store_dir = tempfile::tempdir().expect("a private configured task-store directory");
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(config.clone()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
+    let store_dir =
+        Arc::new(tempfile::tempdir().expect("a private configured task-store directory"));
     let (task_service, task_executor) = crate::gateway::task_service::open_runtime_with_admission(
         &store_dir.path().join("tasks"),
         config.tasks.max_workers,
@@ -403,8 +431,13 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
     )
     .await
     .expect("the configured fixture task store opens");
+    // The store holds a share of its directory, so the directory is removed
+    // only after both the test and the store's last write let go: a worker's
+    // late write landing while the test removed it left the folder behind.
+    task_service.store.keep_test_dir(Arc::clone(&store_dir));
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -414,7 +447,6 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -429,9 +461,7 @@ pub(super) async fn test_router_app_state_with_auth_and_config(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(config),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -631,7 +661,7 @@ fn authz_refusal_principal_names_the_authenticated_identity() {
 /// Without it every modern request stops at `unsupported protocol version`,
 /// and a test asserting an absence — no session header, no profile switch —
 /// passes on the refusal rather than on the behaviour it names.
-async fn modern_router_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn modern_router_app_state() -> (Arc<AppState>, FixtureDir) {
     let mut config = crate::config::Config::default();
     config.server.modern_protocol = true;
     test_router_app_state_with(StreamingConfig::default(), config).await
@@ -646,7 +676,7 @@ mod openwebui_adapter;
 /// a client bypasses by changing the path.
 pub(crate) async fn direct_route_state_with_identity(
     config: crate::config::AgentIdentityConfig,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, FixtureDir) {
     let backend = Arc::new(Backend::new(
         "demo",
         BackendConfig::default(),
@@ -700,3 +730,8 @@ pub(crate) fn modern_meta() -> serde_json::Value {
 
 #[path = "history_route_tests.rs"]
 mod history_route_tests;
+#[cfg(feature = "webui")]
+#[path = "status_wire_values_tests.rs"]
+mod status_wire_values_tests;
+#[path = "tool_counts_route_tests.rs"]
+mod tool_counts_route_tests;

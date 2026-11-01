@@ -68,7 +68,10 @@ async fn fixture_with(
     agent_auth: AgentAuthState,
     configure: impl FnOnce(MetaMcp) -> MetaMcp,
 ) -> Fixture {
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let meta_mcp = Arc::new(configure(MetaMcp::new(Arc::clone(&backends))));
     let streaming_config = StreamingConfig::default();
     let multiplexer = Arc::new(NotificationMultiplexer::new(
@@ -82,11 +85,16 @@ async fn fixture_with(
     ));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, key_server.clone(), &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, key_server.clone(), &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -96,7 +104,6 @@ async fn fixture_with(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -111,9 +118,7 @@ async fn fixture_with(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),

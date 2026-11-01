@@ -62,7 +62,9 @@ fn key_for_alpha(kind: ApiKeyKind) -> AuthConfig {
 
 /// The fixture with signing on under `posture`, through the production entry
 /// point. `hardened` refuses a shared key, so its caller holds a personal one.
-async fn signed_state(posture: SecurityPosture) -> (Arc<AppState>, tempfile::TempDir) {
+async fn signed_state(
+    posture: SecurityPosture,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let kind = match posture {
         SecurityPosture::Hardened => ApiKeyKind::Personal,
         SecurityPosture::Standard => ApiKeyKind::Shared,
@@ -73,7 +75,10 @@ async fn signed_state(posture: SecurityPosture) -> (Arc<AppState>, tempfile::Tem
     // The route reads the posture the process started with.
     let mut config = (*app.live_config.get()).clone();
     config.security.posture = posture;
-    app.live_config = Arc::new(crate::config_reload::LiveConfig::new(config));
+    app.live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        config,
+        std::sync::Arc::clone(app.live_config.generation().auth()),
+    ));
     // The key's own backend exists, so `alpha` is allowed, not absent
     // (MIK-8387 S1 answers an unregistered in-scope name as missing); `gamma`
     // is registered outside the key's scope, R1's parity cell.

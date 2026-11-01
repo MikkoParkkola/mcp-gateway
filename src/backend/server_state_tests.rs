@@ -26,6 +26,7 @@ fn fresh() -> StateInputs {
         reaped: false,
         ever_started: false,
         start_failed: false,
+        slow: None,
     }
 }
 
@@ -244,6 +245,75 @@ fn api4_1_precedence_worst_first() {
     );
 }
 
+#[test]
+fn api4_2_a_running_server_far_over_its_usual_reads_slow() {
+    let view = decide(
+        &StateInputs {
+            running: true,
+            ever_started: true,
+            slow: Some(crate::failsafe::Slow {
+                recent_ms: 400,
+                usual_ms: 100,
+            }),
+            ..fresh()
+        },
+        now(),
+    );
+    assert_eq!(view.state, ServerState::Slow);
+    assert_eq!(view.next_retry_at, None);
+    assert!(
+        view.reason.contains("400 ms") && view.reason.contains("100 ms"),
+        "the reason names both: {}",
+        view.reason
+    );
+}
+
+#[test]
+fn api4_2_worse_states_win_over_slow() {
+    let slow = Some(crate::failsafe::Slow {
+        recent_ms: 400,
+        usual_ms: 100,
+    });
+    let paused = StateInputs {
+        running: true,
+        ever_started: true,
+        breaker: CircuitState::Open,
+        healthy: false,
+        consecutive_failures: 5,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(state_of(&paused), ServerState::Paused);
+    let unhealthy = StateInputs {
+        running: true,
+        ever_started: true,
+        healthy: false,
+        consecutive_failures: 2,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(state_of(&unhealthy), ServerState::Unhealthy);
+    let reaped = StateInputs {
+        reaped: true,
+        ever_started: true,
+        slow,
+        ..fresh()
+    };
+    assert_eq!(
+        state_of(&reaped),
+        ServerState::Dormant,
+        "a server that is not running cannot be slow"
+    );
+}
+
+#[test]
+fn api4_2_slow_is_serialised_as_slow() {
+    assert_eq!(
+        serde_json::to_value(ServerState::Slow).expect("serialises"),
+        serde_json::json!("slow")
+    );
+}
+
 // ── The signals, written by the real start, dispatch and fill paths ─────────
 
 mod through_a_backend {
@@ -354,6 +424,25 @@ mod through_a_backend {
                 .expect("signed in");
             assert_eq!(state(&backend), ServerState::Running, "{}", error());
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn api4_2_a_running_backend_far_over_its_usual_reads_slow() {
+        let backend = http(
+            "slowing",
+            crate::backend::publish_order_tests::upstream().await,
+        );
+        backend.ensure_started().await.expect("starts");
+        assert_eq!(state(&backend), ServerState::Running, "premise");
+        let tracker = &backend.shared_entry().failsafe.health_tracker;
+        for _ in 0..500 {
+            tracker.record_success(Duration::from_millis(100));
+        }
+        assert_eq!(state(&backend), ServerState::Running, "a steady usual");
+        for _ in 0..99 {
+            tracker.record_success(Duration::from_millis(1000));
+        }
+        assert_eq!(state(&backend), ServerState::Slow);
     }
 
     #[tokio::test]

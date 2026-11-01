@@ -32,6 +32,8 @@ impl MetaMcp {
             change_feed: std::sync::OnceLock::new(),
             events: std::sync::OnceLock::new(),
             counters: std::sync::OnceLock::new(),
+            #[cfg(feature = "webui")]
+            decisions: std::sync::OnceLock::new(),
             capabilities: RwLock::new(None),
             cache,
             default_cache_ttl,
@@ -57,6 +59,7 @@ impl MetaMcp {
             session_profiles: Arc::new(SessionProfileStore::new()),
             session_lifecycle: std::sync::OnceLock::new(),
             reload_context: RwLock::new(None),
+            startup_live_config: std::sync::OnceLock::new(),
             identity_propagation: RwLock::new(None),
             backend_identity_propagation: RwLock::new(std::collections::HashMap::new()),
             account_strategies: Arc::new(
@@ -66,7 +69,6 @@ impl MetaMcp {
             code_mode_enabled: false,
             multi_user: std::sync::atomic::AtomicBool::new(false),
             projection_mode: crate::projection::ProjectionMode::default(),
-            secret_injector: crate::secret_injection::SecretInjector::empty(),
             cost_tracker: Arc::new(CostTracker::new()),
             tool_registry: None,
             #[cfg(feature = "cost-governance")]
@@ -99,7 +101,7 @@ impl MetaMcp {
             require_nonce: false,
             transparency_logger: None,
             rejection_audit: std::sync::OnceLock::new(),
-            response_inspection_action_mode: false,
+            response_inspection: crate::security::response_inspect::ResponseInspectionMode::Observe,
             response_contract: None,
             attestation_validator: None,
             attestation_mode: crate::attestation::AttestationMode::Observe,
@@ -110,7 +112,17 @@ impl MetaMcp {
             context_integrity_kernel: RwLock::new(ContextIntegrityKernel::default()),
             firewall: None,
             inflight_calls: Arc::default(),
+            #[cfg(feature = "webui")]
+            ui_calls: Arc::new(tokio::sync::Semaphore::new(
+                crate::gateway::ui_call::MAX_UI_CALLS,
+            )),
         }
+    }
+
+    /// The permits web UI tool calls run under (U12).
+    #[cfg(feature = "webui")]
+    pub(crate) fn ui_call_permits(&self) -> &Arc<tokio::sync::Semaphore> {
+        &self.ui_calls
     }
 
     /// The registry a client's explicit cancel is looked up in.

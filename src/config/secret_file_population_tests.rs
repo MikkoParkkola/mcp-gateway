@@ -111,6 +111,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     ("src/config/secret_file.rs", "the checked reader itself"),
     ("src/config_persistence.rs", "owner-only atomic writer"),
     (
+        "src/config_persistence_scratch.rs",
+        "the scratch-and-rename writer: creates its scratch file owner-only (0600 / owner-only DACL)",
+    ),
+    (
         "src/config_persistence_atomic.rs",
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
@@ -140,12 +144,13 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
          back is owner-only",
     ),
     (
-        "src/control_plane/export.rs",
-        "audit export cursor and log; no secret, append-only",
+        "src/config_reload/replace_audit.rs",
+        "reads gateway.yaml under the config lock only to hash it for a recovery intent's base \
+         revision; the bytes are hashed, never kept or logged",
     ),
     (
-        "src/control_plane/export_segments.rs",
-        "reads sealed audit log segments for export; no secret",
+        "src/control_plane/export.rs",
+        "audit export cursor and log; no secret, append-only",
     ),
     (
         "src/control_plane/store/file_io.rs",
@@ -172,6 +177,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/events/records.rs",
         "events store records read through read_checked_bytes (EventsRecord, 0600); File::open only opens the store directory to fsync it",
+    ),
+    (
+        "src/gateway/health_metrics/process.rs",
+        "/proc/self/statm, the process's own memory counters; nothing secret",
     ),
     (
         "src/gateway/mod.rs",
@@ -217,14 +226,6 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "src/gateway/task_service/execution/pause_hook.rs",
         "debug-build test hook writing a task id marker (#2298); compiled out of release",
     ),
-    (
-        "src/gateway/ui/activity/reader.rs",
-        "reads audit log segments for the Activity list; hash-only, no secret",
-    ),
-    (
-        "src/gateway/ui/activity/seek.rs",
-        "reads audit log segments to find one receipt; hash-only, no secret",
-    ),
     ("src/gateway/ui/capabilities.rs", "capability YAML; public"),
     (
         "src/identity_grants/journal.rs",
@@ -241,6 +242,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/open_nonblocking.rs",
         "the loader's mode-checked read (config_persistence read_text), the guarded secret-file read and the CLI's gateway.yaml re-read (commands/regular_file.rs); opens with O_NONBLOCK|O_NOCTTY so a FIFO is refused, not waited on",
+    ),
+    (
+        "src/personal_accounts/commit.rs",
+        "creates a commit's scratch file owner-only (0600, create_new) to write it; reads no secret file",
     ),
     (
         "src/personal_accounts/migration_source.rs",
@@ -297,6 +302,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "append-only audit log; no secret",
     ),
     (
+        "src/security/transparency_log.rs",
+        "the logger's bounded reads of its own audit log files (the tail at open); no secret",
+    ),
+    (
         "src/security/transparency_log_anchor.rs",
         "reads an operator-copied audit high-water mark, bounded; no secret",
     ),
@@ -345,7 +354,7 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "reads an Activity export bundle given to audit verify; no secret",
     ),
     (
-        "src/trust/provenance_public.rs",
+        "src/trust/provenance_public_cli.rs",
         "`provenance verify` CLI: the operator-named public-key trust set, receipt and result; public data, read once by an offline command the running gateway never consults",
     ),
     (
@@ -378,18 +387,24 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Files whose non-test code has a raw read or write. The body is cut at the
-/// first inline `#[cfg(test)] mod name {`, not at any `#[cfg(test)]` item: a
-/// test-only `use` or constant near the top must not hide the production reads
-/// after it. Comment lines are skipped.
+/// Whether a source file's non-test code has a raw read or write. Each
+/// `#[cfg(test)]` item is left out by its own extent (an early test module
+/// or test-only `use` never hides the production code after it). Comment
+/// lines are skipped.
+fn has_raw_io(text: &str) -> bool {
+    static RAW: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"fs::read\b|read_to_string|File::open|OpenOptions::new|fs::write|fs::copy|from_pem",
+        )
+        .expect("pattern")
+    });
+    crate::test_source_text::production_text(text)
+        .lines()
+        .any(|line| !line.trim_start().starts_with("//") && RAW.is_match(line))
+}
+
+/// Files whose non-test code has a raw read or write ([`has_raw_io`]).
 fn population(root: &Path) -> BTreeSet<String> {
-    let raw = regex::Regex::new(
-        r"fs::read\b|read_to_string|File::open|OpenOptions::new|fs::write|fs::copy|from_pem",
-    )
-    .expect("pattern");
-    let inline_test_mod =
-        regex::Regex::new(r"#\[cfg\(test\)\]\s*(?:pub\s*(?:\([^)]*\))?\s*)?mod\s+\w+\s*\{")
-            .expect("pattern");
     let mut files = Vec::new();
     rust_files(&root.join("src"), &mut files);
     files
@@ -400,14 +415,48 @@ fn population(root: &Path) -> BTreeSet<String> {
                 return None;
             }
             let text = std::fs::read_to_string(&path).expect("read source");
-            let body = inline_test_mod
-                .find(&text)
-                .map_or(text.as_str(), |m| &text[..m.start()]);
-            body.lines()
-                .any(|line| !line.trim_start().starts_with("//") && raw.is_match(line))
-                .then(|| rel.to_string_lossy().replace('\\', "/"))
+            has_raw_io(&text).then(|| rel.to_string_lossy().replace('\\', "/"))
         })
         .collect()
+}
+
+/// A raw open placed after an early inline test module is production code
+/// and counts: the test module's own block is what is left out, not the
+/// rest of the file.
+#[test]
+fn a_raw_open_after_an_early_test_module_counts() {
+    let source = "\
+fn product() {}
+
+#[cfg(test)]
+pub(crate) mod seam {
+    pub(crate) fn hook() {}
+}
+
+pub fn reader(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::open(path)
+}
+";
+    assert!(
+        has_raw_io(source),
+        "the open after the test module was not seen"
+    );
+}
+
+/// The test module's own raw I/O does not count.
+#[test]
+fn raw_io_inside_an_inline_test_module_does_not_count() {
+    let source = "\
+fn product() {}
+
+#[cfg(test)]
+mod tests {
+    fn fixture() -> String {
+        std::fs::read_to_string(\"x\").unwrap()
+    }
+}
+";
+    assert!(!has_raw_io(source));
 }
 
 #[test]

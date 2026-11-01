@@ -337,28 +337,31 @@ pub(crate) async fn read_then_relay(text: &'static str, record_fails: bool) -> R
 pub(crate) const DELIVERED_PROSE: &str =
     "Harbour dues for the winter quarter rise by four percent across every berth class.";
 
-/// Backend text stuffed into the top-level `cacheScope`, which the scope
-/// clamp overwrites, so the client never receives it.
-pub(crate) const STUFFED_SCOPE: &str =
-    "Undelivered stuffing: the backend hid this sentence in a member the gateway rewrites.";
+/// Backend text in its own `_meta` `serverInfo`, which the shaper overwrites
+/// with the gateway's on a modern answer after the receipt is first staged,
+/// so the client never receives it.
+pub(crate) const STUFFED_INFO: &str =
+    "Undelivered stuffing: the backend hid this sentence in the serverInfo the gateway stamps.";
 
 /// A Native result carrying [`DELIVERED_PROSE`] as its text and
-/// [`STUFFED_SCOPE`] as its `cacheScope`.
-fn stuffed_scope() -> Value {
+/// [`STUFFED_INFO`] as its own `serverInfo` name.
+fn stuffed_info() -> Value {
     json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
-           "cacheScope": STUFFED_SCOPE})
+           "_meta": {"io.modelcontextprotocol/serverInfo": {"name": STUFFED_INFO}}})
 }
 
-/// Backend text in a top-level `_signature` member, which the gateway's
-/// message signature overwrites, so the client never receives it.
-pub(crate) const STUFFED_SIGNATURE: &str =
-    "Undelivered signature stuffing: the backend hid this in the member signing replaces.";
+/// A Native result carrying [`DELIVERED_PROSE`] as its text.
+fn prose_only() -> Value {
+    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false})
+}
 
-/// A Native result carrying [`DELIVERED_PROSE`] as its text and
-/// [`STUFFED_SIGNATURE`] as its own `_signature`.
-fn stuffed_signature() -> Value {
-    json!({"content": [{"type": "text", "text": DELIVERED_PROSE}], "isError": false,
-           "_signature": STUFFED_SIGNATURE})
+/// What the second relayed send carries.
+#[derive(Clone, Copy)]
+enum Relayed {
+    /// This text.
+    Text(&'static str),
+    /// The `sig` of the gateway's own message signature on the read.
+    OwnSignature,
 }
 
 /// What a read followed by two relayed sends saw.
@@ -372,20 +375,20 @@ pub(crate) struct Rebuilt {
 }
 
 /// On the signed, relayed fixture with `alpha`'s `read` surfaced, the backend
-/// answering [`stuffed_scope`]: `k-std` reads on `route` (a modern call, as
+/// answering [`stuffed_info`]: `k-std` reads on `route` (a modern call, as
 /// the hardened posture requires; on `/mcp` by the surfaced name, so the
 /// backend envelope is the result), then `k-budget`
 /// sends the delivered prose and the stuffing on the same route. The relay
 /// receipt is rebuilt from the delivered bytes, so only the prose is caught.
 pub(crate) async fn read_then_relay_rebuilt(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, stuffed_scope, STUFFED_SCOPE).await
+    read_then_relay_stuffed(route, stuffed_info, Relayed::Text(STUFFED_INFO)).await
 }
 
-/// [`read_then_relay_rebuilt`] with the backend answering
-/// [`stuffed_signature`]: its own `_signature`, which the gateway's message
-/// signature overwrites, is the stuffing sent on (R-SIGNREBUILD).
-pub(crate) async fn read_then_relay_signature_stuffed(route: HttpRoute) -> Rebuilt {
-    read_then_relay_stuffed(route, stuffed_signature, STUFFED_SIGNATURE).await
+/// [`read_then_relay_rebuilt`] with the backend answering [`prose_only`]:
+/// the second send carries the `sig` of the gateway's own signature on the
+/// read (R-OWNSIG).
+pub(crate) async fn read_then_relay_own_signature(route: HttpRoute) -> Rebuilt {
+    read_then_relay_stuffed(route, prose_only, Relayed::OwnSignature).await
 }
 
 /// The signed, relayed read of `answer`, then `k-budget` sending the
@@ -393,7 +396,7 @@ pub(crate) async fn read_then_relay_signature_stuffed(route: HttpRoute) -> Rebui
 async fn read_then_relay_stuffed(
     route: HttpRoute,
     answer: fn() -> Value,
-    stuffed: &'static str,
+    relayed: Relayed,
 ) -> Rebuilt {
     let (_dir, log) = temp_log(None);
     let fx = fixture::fixture_signed_relayed_logged(Answer::Built(answer), log, surfacing).await;
@@ -437,6 +440,17 @@ async fn read_then_relay_stuffed(
         }
     };
     let prose = send("b1", DELIVERED_PROSE).await;
+    let stuffed = match relayed {
+        Relayed::Text(text) => text,
+        // Leaked once per test that asks, as `planted_credential` is.
+        Relayed::OwnSignature => Box::leak(
+            read.pointer("/result/_signature/sig")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("the read carries the gateway's signature: {read}"))
+                .to_owned()
+                .into_boxed_str(),
+        ),
+    };
     let stuffing = send("b2", stuffed).await;
     Rebuilt {
         read,
@@ -445,25 +459,28 @@ async fn read_then_relay_stuffed(
     }
 }
 
-/// The chain nonce the R-LINK calls carry.
-pub(crate) const CHAIN_NONCE: &str = "resp-nonce";
+/// A final `resources/read` answer claiming `cacheScope: "public"`: the one
+/// kind of answer a backend may still send the member on, so the clamp has
+/// something to change.
+fn public_read() -> Value {
+    json!({"contents": [{"uri": "file:///notes.txt", "text": "notes"}], "cacheScope": "public"})
+}
 
-/// One legacy `read` on `route` with the chain signer emitting on request
-/// and the call carrying [`CHAIN_NONCE`], the backend claiming
-/// `cacheScope: "public"` (`/mcp` by the surfaced name, so the backend
-/// envelope is the result the link covers).
-pub(crate) async fn chained_public_scope(route: HttpRoute) -> Value {
-    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
-    let fx = fixture::fixture_built(Answer::PublicScope, |meta| {
-        let mut meta = surfacing(meta);
-        meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
-        meta
-    })
-    .await;
-    let params = json!({ "name": "read", "arguments": {}, "_meta": { NONCE_KEY: CHAIN_NONCE } });
-    fixture::send(&fx, route.uri(), "k-std", "tools/call", params, None)
-        .await
-        .1
+/// One legacy `resources/read` on the direct route, the backend answering
+/// [`public_read`].
+pub(crate) async fn direct_public_read() -> Value {
+    let fx = fixture::fixture_built(Answer::Built(public_read), |meta| meta).await;
+    let params = json!({ "uri": "file:///notes.txt" });
+    fixture::send(
+        &fx,
+        HttpRoute::Direct.uri(),
+        "k-std",
+        "resources/read",
+        params,
+        None,
+    )
+    .await
+    .1
 }
 
 /// The reviewed Node verifier's verdict on a delivered, message-signed body

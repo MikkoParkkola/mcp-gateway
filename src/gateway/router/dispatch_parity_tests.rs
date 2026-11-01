@@ -95,7 +95,9 @@ async fn poll(fx: &Fx, key: &str, arguments: Value) -> Value {
     use crate::events::watch_source::{Charge, CredentialUse, Target};
     let client = fx
         .state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .client_for_key(key, crate::gateway::auth::principal_of(key).storage_form())
         .expect("the fixture key is live");
     let target = Target {
@@ -478,13 +480,14 @@ const BANNED: &[&str] = &[
 ];
 
 /// Every source file that makes up the direct backend route.
-const DIRECT_ROUTE: [&str; 6] = [
+const DIRECT_ROUTE: [&str; 7] = [
     include_str!("backend_handlers.rs"),
     include_str!("backend_handlers/direct_caller.rs"),
     include_str!("backend_handlers/direct_preflight.rs"),
     include_str!("backend_handlers/direct_dispatch.rs"),
     include_str!("backend_handlers/direct_audit.rs"),
     include_str!("backend_handlers/direct_list.rs"),
+    include_str!("backend_handlers/direct_dispatch/forward.rs"),
 ];
 
 /// The stage functions, in the order `backend_handler_inner` must call them.

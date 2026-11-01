@@ -1,0 +1,1 @@
+src/gateway/task_service/execution/worker_inspect.rs	inspect_and_record	1	critical	d	inspect_and_record	Writes a task's settlement record when its settlement inspection refused or rewrote the answer, before the terminal commit; under fail-closed audit a failed write withholds the answer (-32005, no content).

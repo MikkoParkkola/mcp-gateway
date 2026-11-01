@@ -11,24 +11,20 @@
 use std::sync::Arc;
 
 use axum::{body::Body, extract::State, http::Request, middleware::Next, response::Response};
-use dashmap::DashMap;
-use governor::{
-    RateLimiter,
-    clock::DefaultClock,
-    state::{InMemoryState, NotKeyed},
-};
 use tracing::{debug, warn};
 
 use super::middleware::{
     bearer_unauthorized_response, circuit_open_response, rate_limited_response,
 };
 use crate::config::CircuitBreakerConfig;
-use crate::failsafe::CircuitBreaker;
 use crate::gateway::record_principal::InternalPrincipal;
 use crate::key_server::KeyServer;
 
 #[path = "auth_live.rs"]
 pub(crate) mod live;
+
+#[path = "auth_runtime.rs"]
+pub(crate) mod runtime;
 use live::key_server_credential;
 #[path = "auth_quota.rs"]
 mod quota;
@@ -40,7 +36,7 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -56,9 +52,6 @@ pub(crate) use handoff::{handoff_form, private as handoff_private, redeem_handof
 /// child included: code moved into a child module keeps the target a log
 /// filter already names.
 const AUTH_TARGET: &str = module_path!();
-
-/// Type alias for our rate limiter
-type ClientRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock>;
 
 /// Short, non-reversible fingerprint of a secret for log correlation (CWE-532).
 ///
@@ -143,12 +136,11 @@ pub struct ResolvedAuthConfig {
     api_keys: Vec<ResolvedApiKey>,
     /// Public paths
     pub public_paths: Vec<String>,
-    /// Rate limiters per client, keyed by credential (`client_state_key`).
-    rate_limiters: DashMap<String, Arc<ClientRateLimiter>>,
     /// Optional client circuit-breaker policy shared across per-client breaker instances.
     client_circuit_breaker: Option<CircuitBreakerConfig>,
-    /// Circuit breakers per client, keyed by credential (`client_state_key`).
-    client_circuit_breakers: DashMap<String, Arc<CircuitBreaker>>,
+    /// Per-client rate-limit buckets and circuit breakers, keyed by credential
+    /// (`client_state_key`): one store shared by every config built over it.
+    runtime: Arc<runtime::AuthRuntime>,
     /// The record key every client minted here computes its record principal
     /// with (MIK-8697 §16): resolved once at startup and injected, never picked.
     record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
@@ -375,7 +367,7 @@ impl AuthenticatedClient {
 
         // If allowlist is set, ONLY tools in the list are permitted
         if let Some(ref allowed) = self.allowed_tools
-            && !Self::matches_any_pattern(allowed, tool, &qualified)
+            && !crate::config::tool_pattern_matches(allowed, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is not in the allowlist for client '{}'",
@@ -385,7 +377,7 @@ impl AuthenticatedClient {
 
         // If denylist is set, tools in the list are blocked
         if let Some(ref denied) = self.denied_tools
-            && Self::matches_any_pattern(denied, tool, &qualified)
+            && crate::config::tool_pattern_matches(denied, tool, &qualified)
         {
             return Err(format!(
                 "Tool '{tool}' on server '{server}' is blocked by client '{}' policy",
@@ -394,20 +386,6 @@ impl AuthenticatedClient {
         }
 
         Ok(())
-    }
-
-    /// Check if a tool name matches any pattern in the list.
-    /// Supports exact match and glob suffix patterns (e.g., `"search_*"`).
-    fn matches_any_pattern(patterns: &[String], tool: &str, qualified: &str) -> bool {
-        patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                // Glob pattern: check prefix match on both tool and qualified name
-                tool.starts_with(prefix) || qualified.starts_with(prefix)
-            } else {
-                // Exact match on both tool and qualified name
-                tool == pattern || qualified == pattern
-            }
-        })
     }
 }
 
@@ -490,14 +468,13 @@ mod clients;
 pub(crate) use clients::presented_bearer_sha256;
 pub use clients::{anonymous_client, session_cookie_value};
 use clients::{
-    dashboard_client, is_poll, presented_credential, public_client, session_ended_response,
+    dashboard_client, is_poll, is_ui_stream, presented_credential, public_client,
+    session_ended_response,
 };
 
 /// Combined auth state: static config + optional key server.
 #[derive(Clone)]
 pub struct AuthState {
-    /// Static key / bearer token configuration.
-    pub auth_config: Arc<ResolvedAuthConfig>,
     /// Key server for OIDC-issued temporary tokens (optional).
     pub key_server: Option<Arc<KeyServer>>,
     /// Single-use value that opens the dashboard from a printed link.
@@ -505,8 +482,10 @@ pub struct AuthState {
     /// Whether this listener speaks TLS, so the session cookie is `Secure`.
     /// A live HTTPS `public_url` also makes it `Secure` (`cookie_secure`).
     pub tls_enabled: bool,
-    /// The live config, whose `control_plane.role_mapping` confers admin per
-    /// request (E1-a).
+    /// The live config: its generations hold the API key table and the
+    /// running `auth` settings, and its `control_plane.role_mapping` confers
+    /// admin per request (E1-a). A request is judged by the generation the
+    /// router pinned on it; a held credential by the one current at delivery.
     pub live_config: Arc<crate::config_reload::LiveConfig>,
     /// Agent authentication, holding the same registry the agent middleware
     /// validates against at ingress, so a held agent token is re-judged by
@@ -526,7 +505,10 @@ pub async fn auth_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let auth_config = &state.auth_config;
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
+    };
+    let auth_config = &*pinned;
 
     // If auth is disabled, pass through with anonymous client
     if !auth_config.enabled {
@@ -554,16 +536,21 @@ pub async fn auth_middleware(
     // live once the clock reads (MIK-8202).
     let mut keep_cookie = false;
     if let Some(handle) = session_cookie_value(request.headers()) {
-        let touch = if has_authorization || is_poll(&request) {
+        let touch = if has_authorization || is_poll(&request) || is_ui_stream(&request) {
             Touch::No
         } else {
             Touch::Yes
         };
         let limits = session_limits(&state);
-        match state
-            .dashboard_bootstrap
-            .check_session(&handle, Now::read(), &limits, touch)
-        {
+        // Judged by the request's pinned key table: a session whose minting
+        // key a reload removed, demoted or expired ends here (K13).
+        match state.dashboard_bootstrap.check_session_with(
+            &handle,
+            Now::read(),
+            &limits,
+            touch,
+            auth_config,
+        ) {
             SessionCheck::Valid if !has_authorization && !is_bootstrap => {
                 request.extensions_mut().insert(dashboard_client());
                 return next.run(request).await;
@@ -627,7 +614,10 @@ async fn authenticate_request(
     mut request: Request<Body>,
     next: Next,
 ) -> Response {
-    let auth_config = &state.auth_config;
+    let Some(pinned) = live::pinned_auth(&request) else {
+        return live::unpinned();
+    };
+    let auth_config = &*pinned;
     let path = request.uri().path();
 
     // A public path skips the credential REQUIREMENT, not the credential. An
@@ -683,7 +673,7 @@ async fn authenticate_request(
     // The dashboard bootstrap link. A browser navigation carries no header and
     // no cookie yet, so this is the one path where a credential arrives in the
     // URL — which is why the value is single-use and is not the admin token.
-    if let Some(response) = try_dashboard_bootstrap(&state, &request) {
+    if let Some(response) = try_dashboard_bootstrap(&state, auth_config, &request) {
         return handoff::private(response);
     }
 

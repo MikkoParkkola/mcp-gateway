@@ -288,6 +288,20 @@ async fn a_gateway_invalid_refusal_still_settles_invalid() {
     assert_eq!(record["error_code"], json!(-32602), "{record}");
 }
 
+/// The firewall withholds a recovered failure under the peer's own code, so a
+/// peer `-32602` reads as `invalid`; the refusal the gate noted still settles
+/// `denied`, with the committed code.
+#[tokio::test]
+async fn a_firewall_withheld_invalid_params_failure_settles_denied() {
+    let notes = DispatchNotes {
+        refusal: Some(AuditOutcome::Denied(-32600)),
+        ..DispatchNotes::default()
+    };
+    let record = settle_failure(-32602, &notes).await;
+    assert_eq!(record["outcome"], json!("denied"), "{record}");
+    assert_eq!(record["error_code"], json!(-32602), "{record}");
+}
+
 /// Settle a recovered task that failed with `code` and return its record.
 async fn settle_failure(code: i32, notes: &DispatchNotes) -> serde_json::Value {
     let dir = tempfile::tempdir().unwrap();

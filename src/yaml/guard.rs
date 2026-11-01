@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 
 /// Largest text the guard lets through: 16 MiB, the protocol-import limit
 /// now on every path. A text of exactly this length is accepted.
-const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_YAML_BYTES: usize = 16 * 1024 * 1024;
 
 /// Deepest nesting the guard lets through, matching the backend's own cap.
 const MAX_DEPTH: usize = 128;

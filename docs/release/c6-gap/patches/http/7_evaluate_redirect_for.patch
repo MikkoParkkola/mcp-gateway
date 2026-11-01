@@ -1,10 +1,10 @@
 diff --git a/src/transport/http/redirect_policy.rs b/src/transport/http/redirect_policy.rs
-index 5618df8cf..fc6866e0a 100644
+index f7c3d1a8d..df0555142 100644
 --- a/src/transport/http/redirect_policy.rs
 +++ b/src/transport/http/redirect_policy.rs
-@@ -62,7 +62,7 @@ pub(super) fn evaluate_redirect_for(
-     if let Err(e) = destination.check_configured_url(target.as_str()) {
-         return RedirectDecision::Reject(e.to_string());
+@@ -49,7 +49,7 @@ pub(super) fn evaluate_redirect_for(
+         Err(e) => return RedirectDecision::Reject(e.to_string()),
+         Ok(()) => {}
      }
 -    if !same_origin(base, target) {
 +    if false && !same_origin(base, target) {

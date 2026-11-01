@@ -205,8 +205,10 @@ subtle = "2.6"
 # read-modify-write (MIK-6685). Already a transitive dep (tempfile, clap →
 # terminal_size); promoted to direct with the `fs` feature — no new crate is
 # compiled, only a manifest entry (verified via `cargo tree`).
-# `process` gives geteuid for the CONFIG.2 config/env-file mode check.
-rustix = { version = "1.1", features = ["fs", "process"] }
+# `process` gives geteuid for the CONFIG.2 config/env-file mode check;
+# `system` gives uname, the host name the UI's environment chip defaults to.
+# `param` gives page_size, which turns /proc/self/statm pages into bytes.
+rustix = { version = "1.1", features = ["fs", "param", "process", "system"] }
 # Wipes credential bytes held in memory on drop with volatile writes: the
 # passthrough token lease and revocation material.
 # Already transitive; pinned to the locked version.
@@ -324,6 +326,12 @@ task-sdk-recovery = []
 ## enables the `runtime compile` CLI subcommand and the hardened provisioning
 ## call path (src/runtime/provision.rs). NOT in default — foundation code.
 runtime-substrate = []
+
+## Test-only seams for the command preview's fetch phase (ADR-027 P1 rows S1-S8).
+## NEVER in a release build: the crate refuses to compile it without
+## debug_assertions, and release clippy takes its list from
+## scripts/ci/release_features.py, which leaves it out.
+sandbox-fixtures = []
 
 [[bin]]
 name = "mcp-gateway"

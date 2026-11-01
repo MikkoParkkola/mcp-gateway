@@ -75,6 +75,9 @@ impl Gateway {
         env: Arc<crate::config::LiveEnv>,
         config_path: Option<std::path::PathBuf>,
     ) -> Result<Self> {
+        // Before any await: in a test, this thread is the test's own.
+        #[cfg(test)]
+        let test_seams = test_seams::TestSeams::new();
         // A config built in memory never passed through `Config::load`.
         // Before validation, so the ranges of what it forces are checked.
         posture::resolve(&mut config, posture::FirewallBuild::CURRENT)?;
@@ -88,7 +91,12 @@ impl Gateway {
         }
         posture::log_startup(&config);
 
-        let backends = Arc::new(BackendRegistry::new());
+        // The one resolver every backend's `secrets:` values go through, over
+        // the same env this config was validated against; each backend
+        // registered, at boot or on reload, is stamped with it.
+        let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+            crate::secrets::SecretResolver::new().with_env(Arc::clone(&env)),
+        )));
         #[allow(
             clippy::disallowed_methods,
             reason = "Lifecycle: gateway startup, wiring or shutdown; no caller request"
@@ -138,10 +146,13 @@ impl Gateway {
         if let Some(warning) = config.remote_provenance_warning() {
             warn!("{warning}");
         }
+        for warning in config.per_user_dropped_header_warnings() {
+            warn!("{warning}");
+        }
 
         Ok(Self {
             #[cfg(test)]
-            test_seams: test_seams::TestSeams::default(),
+            test_seams,
             config,
             config_path,
             watched_config: None,

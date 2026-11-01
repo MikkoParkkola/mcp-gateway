@@ -29,6 +29,14 @@ pub(super) fn miss_with_hint(
     }
 }
 
+/// The key check's answer on this route: the `isError` result the caller
+/// gets, and its kind, which the delivery record reads instead of the text.
+#[derive(Debug)]
+pub(super) struct KeyRefusal {
+    pub(super) answer: Value,
+    pub(super) kind: crate::backend::KeyAnswerKind,
+}
+
 impl MetaMcp {
     /// MIK-7570.SCHEMA.1 (R2): the `isError` result refusing a call to an MCP
     /// backend whose arguments carry keys the tool's schema does not declare.
@@ -47,9 +55,9 @@ impl MetaMcp {
         tool: &str,
         arguments: &Value,
         identity_key: Option<&str>,
-        headers: &[(String, String)],
+        headers: crate::transport::LentCredential,
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
-    ) -> Result<Option<Value>> {
+    ) -> Result<Option<KeyRefusal>> {
         self.undeclared_key_refusal_through(
             (server, backend),
             tool,
@@ -69,10 +77,10 @@ impl MetaMcp {
         (server, backend): (&str, Option<&std::sync::Arc<crate::backend::Backend>>),
         tool: &str,
         arguments: &Value,
-        (identity_key, headers): (Option<&str>, &[(String, String)]),
+        (identity_key, headers): (Option<&str>, crate::transport::LentCredential),
         (scope, session_id): (super::super::InvokeScope<'_>, Option<&str>),
         lens: crate::backend::Lens,
-    ) -> Result<Option<Value>> {
+    ) -> Result<Option<KeyRefusal>> {
         if self
             .get_capabilities()
             .is_some_and(|cap| server == cap.name && cap.has_capability(tool))
@@ -87,27 +95,31 @@ impl MetaMcp {
             .await;
         // An F13 fill stores this caller's catalogue: index its slot
         // (MIK-8356 R3.5). A slot left unfilled is not recorded.
-        self.remember_caller_slot(backend, scope.caller, identity_key);
-        let text = text?;
+        self.remember_caller_slot(backend, scope.caller, identity_key)
+            .await;
+        let answer = text?;
         // F13 text A (the backend's complete list lacks the tool) is a miss.
         // It keeps the design's exact wording on both routes; on this route
         // only, the profile-scoped "did you mean?" hint the miss after
         // dispatch gave before is appended (amendment: text A plus an
         // optional hint, keeping the #555 / MIK-7518 suggestion contract).
-        let text = text.map(|text| {
-            if text != crate::backend::text_absent(tool) {
-                return text;
+        Ok(answer.map(|crate::backend::KeyAnswer { kind, text }| {
+            let text = if kind == crate::backend::KeyAnswerKind::Absent {
+                let names = backend.get_cached_tool_names_for(identity_key);
+                let tools = backend.get_cached_tools_snapshot_for(identity_key);
+                let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
+                match did_you_mean(tool, &candidates, 3, 3) {
+                    Some(hint) => format!("{text}. {hint}"),
+                    None => text,
+                }
+            } else {
+                text
+            };
+            KeyRefusal {
+                answer: json!({ "content": [{ "type": "text", "text": text }], "isError": true }),
+                kind,
             }
-            let names = backend.get_cached_tool_names_for(identity_key);
-            let tools = backend.get_cached_tools_snapshot_for(identity_key);
-            let candidates = self.miss_hint_pool((&names, &tools), server, (scope, session_id));
-            match did_you_mean(tool, &candidates, 3, 3) {
-                Some(hint) => format!("{text}. {hint}"),
-                None => text,
-            }
-        });
-        Ok(text
-            .map(|text| json!({ "content": [{ "type": "text", "text": text }], "isError": true })))
+        }))
     }
 
     /// The answer to a tool the caller's own per-user catalogue withholds or
@@ -175,7 +187,7 @@ impl MetaMcp {
     ) -> std::result::Result<(Value, Error), Error> {
         let error = match managed {
             Some(managed) if is_upstream_unauthorized(&error) => {
-                managed.after_upstream_401(error).await
+                super::audit::after_upstream_401(managed, error).await
             }
             _ => error,
         };

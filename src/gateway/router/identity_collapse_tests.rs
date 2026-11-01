@@ -99,7 +99,7 @@ fn stored(bearer: &str, subject: &str) -> TemporaryToken {
 /// Auth on with `/mcp` public, a key server trusting the one issuer for
 /// delegated bearers, and two stored temporary tokens: one named, one whose
 /// identity names nobody.
-async fn gateway(idp: &Idp) -> (Arc<AppState>, tempfile::TempDir) {
+async fn gateway(idp: &Idp) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let config = KeyServerConfig {
         enabled: true,
         delegated_bearer: true,
@@ -469,11 +469,12 @@ async fn nameless_certificates_never_share_a_per_caller_child() {
 /// A personal, cacheable REST capability `name`, owned by mTLS subject
 /// `owner`, served by `port`'s `/probe`.
 fn personal_probe(name: &str, owner: &str, port: u16) -> String {
+    let base_url = crate::test_fixture_host::fixture_url(port);
     format!(
         "name: {name}\ndescription: Personal cacheable probe\ncache:\n  ttl: 60\n  \
          strategy: memory\nmetadata:\n  read_only: true\n  exposure: personal\n  identity_owner:\n    \
          authority: mtls\n    subject: '{owner}'\nproviders:\n  primary:\n    service: rest\n    \
-         config:\n      base_url: http://localhost:{port}\n      path: /probe\n      method: GET\n"
+         config:\n      base_url: {base_url}\n      path: /probe\n      method: GET\n"
     )
 }
 
@@ -550,7 +551,11 @@ async fn nameless_certificates_never_share_a_cached_personal_result() {
         personal_probe("named_probe", "agent-a", port),
     )
     .unwrap();
-    let executor = CapabilityExecutor::new().with_test_http_client(reqwest::Client::new());
+    let executor = CapabilityExecutor::new().with_test_http_client(
+        crate::test_fixture_host::fixture_client_builder()
+            .build()
+            .unwrap(),
+    );
     let caps = Arc::new(CapabilityBackend::new("caps", Arc::new(executor)));
     caps.load_from_directory(dir.path().to_str().unwrap())
         .await

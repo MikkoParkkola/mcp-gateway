@@ -21,6 +21,7 @@ mod fill_lease;
 mod idle_clock;
 mod idle_stop;
 mod recovery_and_shutdown;
+mod shared_refusal;
 mod slots;
 
 // ---- MIK-6735: per-user transport/session pool ----
@@ -71,11 +72,19 @@ impl Transport for SessionMock {
 }
 
 fn per_user_backend() -> Arc<Backend> {
+    per_user_backend_with(true, crate::identity_propagation::SessionMode::PerUser)
+}
+
+/// [`per_user_backend`] with its binding's `required` and `session_mode`.
+fn per_user_backend_with(
+    required: bool,
+    session_mode: crate::identity_propagation::SessionMode,
+) -> Arc<Backend> {
     let idp = crate::identity_propagation::IdentityPropagationConfig {
         strategy: crate::identity_propagation::PropagationStrategyKind::SignedAssertion,
         audience: "https://mem.internal".to_string(),
-        required: true,
-        session_mode: crate::identity_propagation::SessionMode::PerUser,
+        required,
+        session_mode,
         token_exchange_endpoint: None,
         token_exchange_scope: None,
     };

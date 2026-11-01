@@ -31,20 +31,27 @@ mod emit;
 mod error;
 mod guard;
 mod mapping;
+mod nodes;
 mod number;
 mod rep;
 mod resolve;
 mod ser;
+mod spans;
 mod tagged;
 mod value;
 mod value_de;
 
+/// Any string as one valid double-quoted YAML scalar.
+pub(crate) use emit::quote_double as double_quoted;
 pub(crate) use error::{Error, Limit, Location, redact_message};
+pub(crate) use guard::MAX_YAML_BYTES;
 use guard::guard;
 #[cfg(test)]
 pub(crate) use guard::guard_work;
 pub(crate) use mapping::Mapping;
+pub(crate) use nodes::{Node, Shape, Step, block_nodes};
 pub(crate) use number::Number;
+pub(crate) use spans::{ValueSpan, mapping_values};
 pub(crate) use tagged::{Tag, TaggedValue};
 pub(crate) use value::{Sequence, Value};
 

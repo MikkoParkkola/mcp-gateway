@@ -26,6 +26,7 @@ use crate::Error;
 use crate::Result;
 use crate::oauth::login_gate::{Provenance, fill_scope};
 use crate::protocol::{Tool, ToolsListResult};
+use crate::transport::LentCredential;
 
 // MIK-8014 PERF.12: the fresh-slot answer and completeness `tools_for_check` reads.
 #[path = "metadata_fresh_check.rs"]
@@ -271,6 +272,27 @@ impl Backend {
         self.get_cached_tools_snapshot_for(None)
     }
 
+    /// F13: a stale-hit refresh that failed within [`LIST_FILL_COOLDOWN`] is
+    /// refused before the guard is armed, so a refusal here never stamps.
+    fn refuse_during_refresh_cooldown(
+        &self,
+        entry: &super::pool::PooledEntry,
+        family: &ListFamily,
+    ) -> Result<()> {
+        let recent = || {
+            let failed = entry.tools_refresh_failed_at.lock();
+            failed.is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
+        };
+        if family.stale_hit && recent() {
+            return Err(Error::BackendUnavailable(format!(
+                "{}: a stale tools refresh failed within the last {}s",
+                self.name,
+                LIST_FILL_COOLDOWN.as_secs()
+            )));
+        }
+        Ok(())
+    }
+
     /// Fill or serve one metadata list ON THE CALLER'S POOL SLOT
     /// (MIK-7334.CATALOGUE.1).
     ///
@@ -302,7 +324,7 @@ impl Backend {
         binding: Option<&str>,
         select: S,
         family: ListFamily,
-        extra_headers: &[(String, String)],
+        extra_headers: LentCredential,
         bound: FillBound,
         parse: F,
     ) -> Result<Arc<Vec<T>>>
@@ -330,10 +352,13 @@ impl Backend {
         // `Option`, and both sites where a `None` binding arises return empty
         // headers with it. `stateless_tools_slot_tests` keeps a cell that fails
         // if this is deleted, because every other cell would still pass.
-        let fetch_headers: &[(String, String)] = identity_key.map_or(&[], |_| extra_headers);
+        let fetch = identity_key.map_or_else(LentCredential::default, |_| extra_headers);
+        let fetch_headers: &[(String, String)] = &fetch.headers;
         // Resolve the slot ONCE and keep it for both the cache and the fetch.
         let lease = self.begin_internal_activity_for(&key)?;
         let entry = Arc::clone(lease.entry());
+        // A lent-only slot's fill, its start included, sends as this caller.
+        let loan = self.lend_to_slot(&key, &entry, &fetch)?;
         // MIK-8399: what a tools fill read, for the permit's abandon hook.
         let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
         let tools = family.truncated_flag.is_some();
@@ -341,98 +366,114 @@ impl Backend {
             tools.then(|| self.abandoned_fill_hook(Arc::clone(&entry), Arc::clone(&seen)));
         // Boxed: the fill's state is large, and every caller of this (and of
         // its callers) would otherwise carry it inline (clippy large_futures).
-        Box::pin(select(&entry).get_or_fetch_shared_then(
-            self.cache_ttl,
-            |mark| {
-                fill_scope(mark, async {
-                    // F13: breaker, cooldown, token, in that order, before the
-                    // guard is armed, so a refusal here never stamps.
-                    let refresh_failed = || entry.tools_refresh_failed_at.lock();
-                    if family.stale_hit
-                        && refresh_failed().is_some_and(|at| at.elapsed() < LIST_FILL_COOLDOWN)
-                    {
-                        return Err(Error::BackendUnavailable(format!(
-                            "{}: a stale tools refresh failed within the last {}s",
-                            self.name,
-                            LIST_FILL_COOLDOWN.as_secs()
-                        )));
-                    }
-                    let counted = (self.name.as_str(), &self.list_fills);
-                    admit_fill(&entry, counted, bound, family.cooldown)?;
-                    let mut guard = family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
-                    let drained = run_bounded(&entry, &self.name, bound, async {
-                        // A cold fill on the dispatch path has sent no tools/call
-                        // yet, so a failed start is a pre-send refusal (MIK-7979).
-                        let transport = self
-                            .ensure_entry_started(&key)
-                            .await
-                            .map_err(|e| super::lifecycle::pre_send_start_error(&self.name, e))?;
-                        Provenance::mark_started();
-                        let (merged, truncated) = drain_list_pages(
-                            transport.as_ref(),
-                            &self.name,
-                            &family,
-                            (fetch_headers, identity_key),
-                            tools.then_some(&*seen),
-                        )
-                        .await?;
-                        let (items, prepared) = match merged {
-                            Some(result) => parse(result)?,
-                            None => (Vec::new(), None),
-                        };
-                        Ok((items, truncated, prepared))
-                    })
-                    .await;
-                    let end = FillEnd::of(&drained);
-                    if family.stale_hit && drained.is_err() && !matches!(end, FillEnd::Pending) {
-                        *refresh_failed() = Some(tokio::time::Instant::now());
-                    }
-                    if let Some(guard) = guard.as_mut() {
-                        guard.end(end);
-                    }
-                    let (items, truncated, prepared) = drained?;
+        // The log sink lives inside the box too: held in this frame across the
+        // await, it grew every caller's boxed copy of this future past the
+        // allocator's 2 KiB size class (ALLOC.2).
+        Box::pin(async {
+            // Log lines decided on under the cache's write guard, written after it.
+            let pending_logs = crate::backend::descriptor_gate::PendingSink::default();
+            let stored = select(&entry)
+                .get_or_fetch_shared_then(
+                    self.cache_ttl,
+                    |mark| {
+                        fill_scope(mark, async {
+                            // F13: breaker, cooldown, token, in that order, before the
+                            // guard is armed, so a refusal here never stamps.
+                            self.refuse_during_refresh_cooldown(&entry, &family)?;
+                            // A fill that would have to start a refused shared slot is
+                            // refused before its admission, so it charges and counts
+                            // nothing; one over a transport already in place starts
+                            // nothing and is not a start.
+                            if entry.transport.read().is_none() {
+                                self.refuse_shared_start(&key)?;
+                            }
+                            let counted = (self.name.as_str(), &self.list_fills);
+                            admit_fill(&entry, counted, bound, family.cooldown)?;
+                            let mut guard =
+                                family.cooldown.then(|| FillGuard::arm(Arc::clone(&entry)));
+                            let drained = run_bounded(&entry, &self.name, bound, async {
+                                // A cold fill on the dispatch path has sent no tools/call
+                                // yet, so a failed start is a pre-send refusal (MIK-7979).
+                                let transport =
+                                    self.start_lent(&key, &entry, loan.as_ref()).await.map_err(
+                                        |e| super::lifecycle::pre_send_start_error(&self.name, e),
+                                    )?;
+                                Provenance::mark_started();
+                                let (merged, truncated) = drain_list_pages(
+                                    transport.as_ref(),
+                                    &self.name,
+                                    &family,
+                                    (fetch_headers, identity_key),
+                                    tools.then_some(&*seen),
+                                )
+                                .await?;
+                                let (items, prepared) = match merged {
+                                    Some(result) => parse(result)?,
+                                    None => (Vec::new(), None),
+                                };
+                                Ok((items, truncated, prepared))
+                            })
+                            .await;
+                            let end = FillEnd::of(&drained);
+                            if family.stale_hit
+                                && drained.is_err()
+                                && !matches!(end, FillEnd::Pending)
+                            {
+                                *entry.tools_refresh_failed_at.lock() =
+                                    Some(tokio::time::Instant::now());
+                            }
+                            if let Some(guard) = guard.as_mut() {
+                                guard.end(end);
+                            }
+                            let (items, truncated, prepared) = drained?;
 
-                    debug!(
-                        backend = %self.name,
-                        kind = family.kind,
-                        count = items.len(),
-                        per_user = identity_key.is_some(),
-                        "Backend metadata cached"
-                    );
+                            debug!(
+                                backend = %self.name,
+                                kind = family.kind,
+                                count = items.len(),
+                                per_user = identity_key.is_some(),
+                                "Backend metadata cached"
+                            );
 
-                    Ok((items, (truncated, guard, prepared)))
-                })
-            },
-            |(truncated, guard, prepared)| {
-                // Written only once the store is accepted, and on every
-                // accepted store, so a complete fill clears it (design D).
-                if let Some(flag) = family.truncated_flag {
-                    flag(&entry).store(truncated, Ordering::SeqCst);
-                }
-                // Only this accepted store's own set and verdicts (F13,
-                // #1441).
-                if let Some(prepared) = prepared {
-                    self.store_prepared(&entry, identity_key, truncated, prepared);
-                }
-                // The only place a guard reaches `Stored`: a voided store
-                // drops it unrun, still `Drained`, and so stamps (F13).
-                if let Some(mut guard) = guard {
-                    guard.end(FillEnd::Stored);
-                }
-            },
-            // A joiner classifies its deadline by this fill (MIK-8046), and
-            // counts as a fill: waiting on another request's fill under way is
-            // an effect, so a check that joined one keeps the nonce spent
-            // (MIK-8353, r4 §70). `None` is this caller running the fill
-            // itself, already counted by `admit_fill`.
-            |mark| {
-                if mark.is_some() {
-                    self.list_fills.fetch_add(1, Ordering::SeqCst);
-                }
-                Provenance::joined(mark);
-            },
-            on_abandon,
-        ))
+                            Ok((items, (truncated, guard, prepared)))
+                        })
+                    },
+                    |(truncated, guard, prepared)| {
+                        // Written only once the store is accepted, and on every
+                        // accepted store, so a complete fill clears it (design D).
+                        if let Some(flag) = family.truncated_flag {
+                            flag(&entry).store(truncated, Ordering::SeqCst);
+                        }
+                        // Only this accepted store's own set and verdicts (F13,
+                        // #1441).
+                        if let Some(prepared) = prepared {
+                            let logs =
+                                self.store_prepared(&entry, identity_key, truncated, prepared);
+                            pending_logs.store(logs);
+                        }
+                        // The only place a guard reaches `Stored`: a voided store
+                        // drops it unrun, still `Drained`, and so stamps (F13).
+                        if let Some(mut guard) = guard {
+                            guard.end(FillEnd::Stored);
+                        }
+                    },
+                    // A joiner classifies its deadline by this fill (MIK-8046), and
+                    // counts as a fill: waiting on another request's fill under way is
+                    // an effect, so a check that joined one keeps the nonce spent
+                    // (MIK-8353, r4 §70). `None` is this caller running the fill
+                    // itself, already counted by `admit_fill`.
+                    |mark| {
+                        if mark.is_some() {
+                            self.list_fills.fetch_add(1, Ordering::SeqCst);
+                        }
+                        Provenance::joined(mark);
+                    },
+                    on_abandon,
+                )
+                .await;
+            pending_logs.emit();
+            stored
+        })
         .await
     }
 
@@ -440,13 +481,33 @@ impl Backend {
     ///
     /// Returns an error if the backend cannot start or the tools request fails.
     pub async fn get_tools_shared(&self) -> Result<Arc<Vec<Tool>>> {
-        self.get_tools_for_binding(None, &[]).await
+        self.get_tools_for_binding_lent(None, LentCredential::default())
+            .await
+    }
+
+    /// Start `key`'s slot as `loan`'s dispatch: the start sends no call's
+    /// headers, so a lent-only slot sends it under that loan.
+    async fn start_lent(
+        &self,
+        key: &PoolKey,
+        entry: &super::pool::PooledEntry,
+        loan: Option<&crate::transport::Loan>,
+    ) -> Result<Arc<dyn crate::transport::Transport>> {
+        let _starting = loan.map(|held| entry.lender.starting(held.id()));
+        // A fill's start is not inside a send: its handshake names this
+        // backend here.
+        crate::transport::notify_ingress::in_backend(
+            Arc::clone(&self.notify_origin),
+            self.ensure_entry_started(key),
+        )
+        .await
     }
 
     /// Startup warm-up's fill: recorded on the breaker, never admitted or
     /// charged a token (#1300). Warm-start is its only caller.
     pub(crate) async fn warm_tools(&self) -> Result<Arc<Vec<Tool>>> {
-        self.tools_fill(None, &[], FillBound::Warmup, false).await
+        self.tools_fill(None, LentCredential::default(), FillBound::Warmup, false)
+            .await
     }
 
     /// The tool catalogue THIS CALLER's pool slot serves.
@@ -471,6 +532,17 @@ impl Backend {
         binding: Option<&str>,
         extra_headers: &[(String, String)],
     ) -> Result<Arc<Vec<Tool>>> {
+        self.get_tools_for_binding_lent(binding, LentCredential::unchecked(extra_headers))
+            .await
+    }
+
+    /// [`Self::get_tools_for_binding`] for a credential the mint core produced,
+    /// which may carry the send check the plain-slice entry cannot express.
+    pub(crate) async fn get_tools_for_binding_lent(
+        &self,
+        binding: Option<&str>,
+        extra_headers: LentCredential,
+    ) -> Result<Arc<Vec<Tool>>> {
         let tools = self
             .tools_fill(binding, extra_headers, FillBound::DrainBudget, false)
             .await?;
@@ -485,7 +557,7 @@ impl Backend {
     async fn tools_fill(
         &self,
         binding: Option<&str>,
-        extra_headers: &[(String, String)],
+        extra_headers: LentCredential,
         bound: FillBound,
         stale_hit: bool,
     ) -> Result<Arc<Vec<Tool>>> {
@@ -532,6 +604,12 @@ impl Backend {
         .await
     }
 
+    /// The longest one fill for a check may take: the backend's call timeout
+    /// and the list wait's grace.
+    pub(crate) fn tools_fill_bound(&self) -> std::time::Duration {
+        self.config.timeout + super::fill_check::LIST_FILL_WAIT_GRACE
+    }
+
     /// The caller's tool list for R2's check, and whether it is the slot's
     /// whole catalogue (design §2 step 2).
     ///
@@ -542,7 +620,7 @@ impl Backend {
     pub(crate) async fn tools_for_check(
         &self,
         binding: Option<&str>,
-        headers: &[(String, String)],
+        headers: LentCredential,
         stale_hit: bool,
     ) -> Result<(Arc<Vec<Tool>>, Completeness)> {
         // A fresh slot fetches nothing, so no lease, hook or deadline (PERF.12).
@@ -550,10 +628,14 @@ impl Backend {
             return Ok(held);
         }
         let limit = self.config.timeout;
-        let fill = self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit);
+        // Boxed: the fill's future is large, and inline it would make every
+        // check's future large, the fresh hit above included; boxed, only a
+        // check that really fetches pays for it.
+        let fill =
+            Box::pin(self.tools_fill(binding, headers, FillBound::CallTimeout(limit), stale_hit));
         // MIK-7982 C3/C4: both deadlines below read this caller's provenance.
         let bounded = async {
-            tokio::time::timeout(limit + super::fill_check::LIST_FILL_WAIT_GRACE, fill)
+            tokio::time::timeout(self.tools_fill_bound(), fill)
                 .await
                 .unwrap_or_else(|_| {
                     Err(Provenance::expired(

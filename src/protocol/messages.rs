@@ -41,6 +41,39 @@ pub struct JsonRpcNotification {
     pub params: Option<Value>,
 }
 
+/// The server-owned flags a response carries beside its wire members. Never
+/// on the wire in either direction.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct WireMeta {
+    /// Server-owned response security refusal. Never accepted from wire data
+    /// or serialized; it excludes both client strikes and success resets.
+    pub(crate) delivery_refusal: bool,
+    /// Server-owned: the egress scan screened this frame (or a discovery
+    /// handler did, on its canonical value before serialisation,
+    /// `MIK-7407.RESPONSE.3`), so no later exit scans it again. Never on the
+    /// wire, so no caller can set it.
+    pub(crate) egress_scanned: bool,
+    /// Server-owned: who wrote an error in this frame. `Backend` only from
+    /// `backend_request`, `BackendFailure` only from `Error::origin` through
+    /// `of_error`; never on the wire, so no caller can set it.
+    pub(crate) origin: Origin,
+}
+
+/// Who an error frame blames, for the error count: the gateway's own fault or
+/// refusal, a backend failure the gateway reports, or a backend's own answer
+/// the gateway forwarded.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Origin {
+    /// The gateway's own error or policy refusal.
+    #[default]
+    Gateway,
+    /// A backend-side failure the gateway built (timeout, unavailable, circuit
+    /// open, transport); the gateway itself is healthy.
+    BackendFailure,
+    /// A frame a backend's transport returned.
+    Backend,
+}
+
 /// JSON-RPC response
 ///
 /// `Deserialize` is implemented by hand rather than derived: a frame carrying
@@ -68,16 +101,10 @@ pub struct JsonRpcResponse {
     /// keep a refusal out of client failure accounting.
     #[serde(skip)]
     pub confirmation_refusal: bool,
-    /// Server-owned response security refusal. Never accepted from wire data
-    /// or serialized; it excludes both client strikes and success resets.
+    /// Server-owned off-wire flags; never accepted from wire data or
+    /// serialized, so no caller can set them.
     #[serde(skip)]
-    pub(crate) delivery_refusal: bool,
-    /// Server-owned: the egress scan screened this frame (or a discovery
-    /// handler did, on its canonical value before serialisation,
-    /// `MIK-7407.RESPONSE.3`), so no later exit scans it again. Never on the
-    /// wire, so no caller can set it.
-    #[serde(skip)]
-    pub(crate) egress_scanned: bool,
+    pub(crate) wire_meta: WireMeta,
     /// Server-owned chain eligibility; never on the wire, `NotEligible` by default.
     #[serde(skip)]
     pub(crate) chain_source: super::ChainSource,
@@ -89,6 +116,12 @@ pub struct JsonRpcResponse {
     /// on the wire, so no caller and no backend can set it.
     #[serde(skip)]
     pub(crate) invocation_trace: Option<std::sync::Arc<str>>,
+    /// Server-owned: the top-level gateway-only members ingress removed from
+    /// the backend's result, kept only so a signature chain is
+    /// verified over the content the backend signed. Never on the wire and
+    /// never put back into the result.
+    #[serde(skip)]
+    pub(crate) ingress_withheld: Option<Box<super::reserved_members::Withheld>>,
 }
 
 #[path = "messages_classify.rs"]
@@ -105,11 +138,11 @@ impl JsonRpcResponse {
             result,
             error,
             confirmation_refusal: false,
-            delivery_refusal: false,
-            egress_scanned: false,
+            wire_meta: WireMeta::default(),
             chain_source: super::ChainSource::NotEligible,
             chain_upstream: None,
             invocation_trace: None,
+            ingress_withheld: None,
         }
     }
 
@@ -180,12 +213,30 @@ impl JsonRpcResponse {
 }
 
 impl JsonRpcResponse {
+    /// The one constructor of an error frame from a [`crate::Error`]: code from
+    /// `to_rpc_code`, text from `Display`, origin from `Error::origin`.
+    pub(crate) fn of_error(id: Option<RequestId>, error: &crate::Error) -> Self {
+        Self::of_error_text(id, error, error.to_string())
+    }
+
+    /// [`Self::of_error`] with the wire text a site already chose (a redacted
+    /// or inner message), so the frame keeps the bytes it always had.
+    pub(crate) fn of_error_text(
+        id: Option<RequestId>,
+        error: &crate::Error,
+        text: impl Into<String>,
+    ) -> Self {
+        let mut response = Self::error(id, error.to_rpc_code(), text);
+        response.wire_meta.origin = error.origin();
+        response
+    }
+
     /// Only gateway-owned finalization failures acquire this private marker.
     pub(crate) fn delivery_refusal_error(id: Option<RequestId>, code: i32, message: &str) -> Self {
         let mut response = Self::error(id, code, message);
-        response.delivery_refusal = true;
+        response.wire_meta.delivery_refusal = true;
         // The gateway's own refusal carries no backend text to screen.
-        response.egress_scanned = true;
+        response.wire_meta.egress_scanned = true;
         response
     }
 
@@ -197,7 +248,7 @@ impl JsonRpcResponse {
         message: impl Into<String>,
     ) -> Self {
         let mut response = Self::error(id, code, message);
-        response.egress_scanned = true;
+        response.wire_meta.egress_scanned = true;
         response
     }
 
@@ -210,7 +261,7 @@ impl JsonRpcResponse {
 
     /// Policy refusals neither consume a failure strike nor reset prior strikes.
     pub(crate) fn excludes_client_accounting(&self) -> bool {
-        self.confirmation_refusal || self.delivery_refusal
+        self.confirmation_refusal || self.wire_meta.delivery_refusal
     }
 }
 

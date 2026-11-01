@@ -22,7 +22,7 @@ use crate::protocol::{JsonRpcResponse, RequestId};
 
 /// The caller's credential for one backend: minted headers and the cache
 /// binding that selects its pool slot. Empty for an identity-free caller.
-pub(super) type ForwardCredential = (Vec<(String, String)>, Option<String>);
+pub(super) type ForwardCredential = (crate::transport::LentCredential, Option<String>);
 
 impl MetaMcp {
     /// What a protocol-level handler's caller proved: its verified identity,
@@ -88,6 +88,11 @@ impl MetaMcp {
             let carries_identity = backend.fetch_carries_caller_identity(binding);
             self.enforce_oauth_isolation_for(backend, &backend.name, carries_identity)
                 .map_err(|e| {
+                    // The isolation denial is the delivered refusal; the mint
+                    // failure below is not a decision and raises nothing.
+                    crate::gateway::delivery_facts::raise(
+                        crate::gateway::delivery_facts::ResponseEffect::Refused,
+                    );
                     Box::new(JsonRpcResponse::error(
                         Some(id.clone()),
                         e.to_rpc_code(),
@@ -112,7 +117,7 @@ impl MetaMcp {
                     ))
                 })?
         } else {
-            (Vec::new(), None)
+            (crate::transport::LentCredential::default(), None)
         };
         isolation(credential.1.as_deref())?;
         Ok(credential)
@@ -130,14 +135,19 @@ impl MetaMcp {
     ) -> JsonRpcResponse {
         let (headers, binding) = credential;
         match backend
-            .request_with_headers(method, Some(params), &headers, binding.as_deref())
+            .request_with_headers_lent(method, Some(params), headers, binding.as_deref())
             .await
         {
             Ok(resp) => match resp.error {
-                Some(error) => JsonRpcResponse::error(Some(id), error.code, error.message),
+                Some(error) => {
+                    // Rebuilt for the caller; still the backend's error.
+                    let mut frame = JsonRpcResponse::error(Some(id), error.code, error.message);
+                    frame.wire_meta.origin = resp.wire_meta.origin;
+                    frame
+                }
                 None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
             },
-            Err(e) => JsonRpcResponse::error(Some(id), e.to_rpc_code(), e.to_string()),
+            Err(e) => JsonRpcResponse::of_error(Some(id), &e),
         }
     }
 }

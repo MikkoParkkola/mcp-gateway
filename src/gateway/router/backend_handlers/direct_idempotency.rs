@@ -269,8 +269,8 @@ pub(super) fn mark(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.mark_dispatched());
 }
 
-/// The backend provably did not act (it stopped to ask, or the failure was
-/// raised before dispatch): the lease releases on drop.
+/// The backend provably did not act (the failure was raised before
+/// dispatch): the lease releases on drop.
 pub(super) fn withdraw(lease: Option<&SyncLease>) {
     lease.inspect(|lease| lease.withdraw_dispatch());
 }

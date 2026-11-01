@@ -9,11 +9,10 @@
 use serde_json::Value;
 
 use crate::gateway::router::route_matrix_driver_tests::response::{
-    BackendAnswer, CHAIN_NONCE, DELIVERED_PROSE, HttpRoute, STUFFED_SCOPE, STUFFED_SIGNATURE,
-    chained_public_scope, node_verifies, planted_credential, read_then_relay,
-    read_then_relay_rebuilt, read_then_relay_signature_stuffed, signed_call,
-    signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call, signed_replay,
-    trust_set,
+    BackendAnswer, DELIVERED_PROSE, HttpRoute, STUFFED_INFO, direct_public_read, node_verifies,
+    planted_credential, read_then_relay, read_then_relay_own_signature, read_then_relay_rebuilt,
+    signed_call, signed_legacy_then_modern_replay, signed_recorded_call, signed_redacted_call,
+    signed_replay, trust_set,
 };
 use crate::protocol::meta::Era;
 use crate::trust::provenance_public::{VerifyRefusal, VerifyStatus, verify_public};
@@ -61,29 +60,31 @@ async fn r_shape_shape_precedes_seal() {
     }
 }
 
-/// R-CLAMP `scope_clamp_precedes_seal` (`ScopeClamp` < `Seal`; `Mcp`,
-/// `Direct` × `Fresh` × both eras). The backend claims `cacheScope: "public"`; the clamp
-/// delivers `private`. The receipt is Bound to the delivered bytes and
-/// refuses the pre-clamp body, so the row tells the two orders apart.
+/// R-STAMP `stamp_precedes_seal` (`ProvenanceStamp` < `Seal`; `Mcp`,
+/// `Direct` × `Fresh` × both eras). A seal needs a receipt this request
+/// minted, so a sealed, Bound receipt shows the stamp ran first. The backend
+/// claims `cacheScope: "public"`, which ingress removes from a `tools/call`
+/// answer, so the receipt is Bound to the delivered bytes and refuses the
+/// backend's.
 #[tokio::test]
-async fn r_clamp_scope_clamp_precedes_seal() {
+async fn r_stamp_seal_binds_the_delivered_bytes() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
         for era in [Era::Modern, Era::Legacy] {
-            let row = format!("R-CLAMP {route:?} {era:?}");
+            let row = format!("R-STAMP {route:?} {era:?}");
             let body = signed_call(route, era, BackendAnswer::PublicScope).await;
             let result = delivered(&body);
             assert_eq!(
-                result.get("cacheScope").and_then(Value::as_str),
-                Some("private"),
-                "{row}: the clamp delivers private: {result}"
+                result.get("cacheScope"),
+                None,
+                "{row}: ingress removed the backend's scope: {result}"
             );
             assert_sealed_bound(&row, result);
-            let mut pre_clamp = result.clone();
-            pre_clamp["cacheScope"] = Value::from("public");
+            let mut sent = result.clone();
+            sent["cacheScope"] = Value::from("public");
             assert_eq!(
-                verify_public(receipt(result), &trust_set(), Some(&pre_clamp)).err(),
+                verify_public(receipt(result), &trust_set(), Some(&sent)).err(),
                 Some(VerifyRefusal::ResultMismatch),
-                "{row}: the receipt does not bind the pre-clamp body"
+                "{row}: the receipt does not bind the backend's body"
             );
         }
     }
@@ -210,11 +211,10 @@ async fn r_commit_delivery_record_precedes_relay_commit() {
 }
 
 /// R-REBUILD `relay_receipt_reflects_the_delivered_bytes` (`Mcp`, `Direct` ×
-/// `Fresh` × `Modern`): the relay receipt is rebuilt from the delivered,
-/// clamped bytes. It is not the `Sign` < `RelayRebuild` row (that is
-/// R-SIGNREBUILD; red check f7, run 1, survived here).
-/// The backend stuffs prose into `cacheScope`, which the clamp overwrites,
-/// beside the prose it delivers. The relay receipt is rebuilt from the
+/// `Fresh` × `Modern`): the relay receipt is rebuilt from the delivered
+/// bytes. Beside the prose it delivers, the backend stuffs prose into its own
+/// `_meta` `serverInfo`, which the shaper overwrites with the gateway's after
+/// the receipt is first staged. The relay receipt is rebuilt from the
 /// delivered bytes: relaying the delivered prose is refused, and relaying the
 /// stuffing runs. A receipt taken from the backend's own answer would catch
 /// the stuffing too.
@@ -225,8 +225,8 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
         let seen = read_then_relay_rebuilt(route).await;
         let read = seen.read.to_string();
         assert!(
-            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_SCOPE),
-            "{row}: the read delivers the prose and the clamp removed the stuffing: {read}"
+            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_INFO),
+            "{row}: the read delivers the prose under the gateway's serverInfo: {read}"
         );
         assert_eq!(
             seen.prose["error"]["code"], -32002,
@@ -241,23 +241,22 @@ async fn r_rebuild_relay_receipt_reflects_the_delivered_bytes() {
     }
 }
 
-/// R-SIGNREBUILD `sign_precedes_relay_rebuild` (`Sign` < `RelayRebuild`;
-/// `Mcp`, `Direct` × `Fresh` × `Modern`). The backend's answer carries its own
-/// `_signature` prose, which the gateway's message signature overwrites.
-/// Signing notes `_signature` as a gateway write by the digest of the value it
-/// wrote (`meta_mcp/signing.rs:772`), and the rebuild strips only that, so a
-/// rebuild after signing digests the delivered answer: relaying the delivered
-/// prose is refused and relaying the overwritten stuffing runs. A rebuild
-/// before signing has nothing noted, keeps the backend's `_signature` text,
-/// and would refuse the stuffing the client never received.
+/// R-OWNSIG (`Mcp`, `Direct` × `Fresh` × `Modern`): the relay receipt leaves
+/// out the gateway's own message signature. Signing notes `_signature` as a
+/// gateway write (`meta_mcp/signing.rs`, the note after the signature), and
+/// the rebuild strips what was noted: relaying the delivered prose is refused,
+/// and relaying the signature's `sig`, which the backend never wrote, runs.
+/// Without the note, the receipt would hold the gateway's own `sig`. The
+/// `Sign` < `RelayRebuild` order is invisible by outcome
+/// (`IngressStripsBackendSignature`).
 #[tokio::test]
-async fn r_signrebuild_sign_precedes_relay_rebuild() {
+async fn r_ownsig_the_gateway_signature_is_not_receipted() {
     for route in [HttpRoute::Mcp, HttpRoute::Direct] {
-        let row = format!("R-SIGNREBUILD {route:?}");
-        let seen = read_then_relay_signature_stuffed(route).await;
+        let row = format!("R-OWNSIG {route:?}");
+        let seen = read_then_relay_own_signature(route).await;
         let read = seen.read.to_string();
         assert!(
-            read.contains(DELIVERED_PROSE) && !read.contains(STUFFED_SIGNATURE),
+            read.contains(DELIVERED_PROSE) && read.contains("\"_signature\""),
             "{row}: the read delivers the prose under the gateway's own signature: {read}"
         );
         assert_eq!(
@@ -267,43 +266,27 @@ async fn r_signrebuild_sign_precedes_relay_rebuild() {
         );
         assert!(
             seen.stuffing.get("error").is_none(),
-            "{row}: the overwritten _signature text is not receipted, so its send runs: {}",
+            "{row}: the gateway's own signature is not receipted, so its send runs: {}",
             seen.stuffing
         );
     }
 }
 
-/// R-LINK `scope_clamp_precedes_origin_link` (`ScopeClamp` < `OriginLink`;
-/// `Mcp`, `Direct` × `Fresh` × `Legacy`). The backend claims
-/// `cacheScope: "public"` on a chained call; the clamp delivers `private`,
-/// and the origin link verifies over the delivered content's digest and
-/// refuses the pre-clamp body's, so a link signed before the clamp fails.
+/// R-CLAMP-READ: where a backend may still send `cacheScope`, a final
+/// `resources/read`, its `public` claim is delivered `private` on the direct
+/// route. On `tools/call` ingress removes the member, and the direct route
+/// links and seals no cacheable method, so no order is stated here; this row
+/// keeps the clamp's own effect at route level.
 #[tokio::test]
-async fn r_link_scope_clamp_precedes_origin_link() {
-    use crate::gateway::chain_test_support::{chain_of, verify_self};
-    use crate::security::signature_chain::content_digest;
-    for route in [HttpRoute::Mcp, HttpRoute::Direct] {
-        let row = format!("R-LINK {route:?}");
-        let body = chained_public_scope(route).await;
-        let result = delivered(&body);
-        assert_eq!(
-            result.get("cacheScope").and_then(Value::as_str),
-            Some("private"),
-            "{row}: the clamp delivers private: {result}"
-        );
-        let chain = chain_of(result)
-            .unwrap_or_else(|| panic!("{row}: the answer carries an origin link: {body}"));
-        let digest = content_digest(result).expect("a hashable result");
-        verify_self(chain, &digest, CHAIN_NONCE)
-            .unwrap_or_else(|e| panic!("{row}: the link verifies over the delivered bytes: {e:?}"));
-        let mut pre_clamp = result.clone();
-        pre_clamp["cacheScope"] = Value::from("public");
-        let pre_digest = content_digest(&pre_clamp).expect("a hashable result");
-        assert!(
-            verify_self(chain, &pre_digest, CHAIN_NONCE).is_err(),
-            "{row}: the link does not cover the pre-clamp body"
-        );
-    }
+async fn r_clamp_read_delivers_private() {
+    let body = direct_public_read().await;
+    let result = delivered(&body);
+    assert_eq!(
+        result.get("cacheScope").and_then(Value::as_str),
+        Some("private"),
+        "the clamp delivers private: {result}"
+    );
+    assert_eq!(result["contents"][0]["text"], "notes", "{result}");
 }
 
 /// R-SIGN `seal_precedes_sign` (`Seal` < `Sign`; `Mcp`, `Direct` × `Fresh` ×
@@ -404,6 +387,9 @@ fn r_fwstamp_redaction_keeps_the_counted_text() {
                 action: FirewallAction::Warn,
                 reason: None,
                 scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
             }],
             ..FirewallConfig::default()
         },
@@ -500,7 +486,7 @@ mod stdio {
 
     use super::{assert_sealed_bound, delivered, receipt};
     use crate::gateway::router::route_matrix_driver_tests::response::{
-        CHAIN_NONCE, planted_credential, trust_set,
+        planted_credential, trust_set,
     };
     use crate::gateway::server::route_matrix_driver_tests::response::{
         StdioSetup, stdio_legacy_then_modern_replay, stdio_sealed, stdio_sealed_replay,
@@ -532,26 +518,27 @@ mod stdio {
         assert_sealed_bound("R-SHAPE Stdio", result);
     }
 
-    /// R-CLAMP on stdio (`Stdio` × `Fresh` × both eras): a `public` claim is
-    /// delivered `private`, Bound to the delivered bytes, never the pre-clamp.
+    /// R-STAMP on stdio (`Stdio` × `Fresh` × both eras): a sealed, Bound
+    /// receipt shows the stamp ran first; the backend's `public` claim is
+    /// removed at ingress, and the receipt refuses the backend's body.
     #[tokio::test]
-    async fn r_clamp_stdio_scope_clamp_precedes_seal() {
+    async fn r_stamp_stdio_seal_binds_the_delivered_bytes() {
         for era in [Era::Modern, Era::Legacy] {
-            let row = format!("R-CLAMP Stdio {era:?}");
+            let row = format!("R-STAMP Stdio {era:?}");
             let body = stdio_sealed(StdioSetup::Plain, era, public_scope()).await;
             let result = delivered(&body);
             assert_eq!(
-                result.get("cacheScope").and_then(Value::as_str),
-                Some("private"),
-                "{row}: the clamp delivers private: {result}"
+                result.get("cacheScope"),
+                None,
+                "{row}: ingress removed the backend's scope: {result}"
             );
             assert_sealed_bound(&row, result);
-            let mut pre_clamp = result.clone();
-            pre_clamp["cacheScope"] = Value::from("public");
+            let mut sent = result.clone();
+            sent["cacheScope"] = Value::from("public");
             assert_eq!(
-                verify_public(receipt(result), &trust_set(), Some(&pre_clamp)).err(),
+                verify_public(receipt(result), &trust_set(), Some(&sent)).err(),
                 Some(VerifyRefusal::ResultMismatch),
-                "{row}: the receipt does not bind the pre-clamp body"
+                "{row}: the receipt does not bind the backend's body"
             );
         }
     }
@@ -582,33 +569,6 @@ mod stdio {
                 "{row}: the receipt does not bind the unredacted body"
             );
         }
-    }
-
-    /// R-LINK on stdio (`Stdio` × `Fresh` × `Legacy`): the origin link covers
-    /// the clamped answer, not the backend's `public` claim.
-    #[tokio::test]
-    async fn r_link_stdio_scope_clamp_precedes_origin_link() {
-        use crate::gateway::chain_test_support::{chain_of, verify_self};
-        use crate::security::signature_chain::content_digest;
-        let body = stdio_sealed(StdioSetup::Chained, Era::Legacy, public_scope()).await;
-        let result = delivered(&body);
-        assert_eq!(
-            result.get("cacheScope").and_then(Value::as_str),
-            Some("private"),
-            "R-LINK Stdio: the clamp delivers private: {result}"
-        );
-        let chain = chain_of(result)
-            .unwrap_or_else(|| panic!("R-LINK Stdio: the answer carries an origin link: {body}"));
-        let digest = content_digest(result).expect("a hashable result");
-        verify_self(chain, &digest, CHAIN_NONCE)
-            .unwrap_or_else(|e| panic!("R-LINK Stdio: the link verifies: {e:?}"));
-        let mut pre_clamp = result.clone();
-        pre_clamp["cacheScope"] = Value::from("public");
-        let pre_digest = content_digest(&pre_clamp).expect("a hashable result");
-        assert!(
-            verify_self(chain, &pre_digest, CHAIN_NONCE).is_err(),
-            "R-LINK Stdio: the link does not cover the pre-clamp body"
-        );
     }
 
     /// R-REPLAY-Stdio, `Stdio` × `IdempotentReplay` (`NotApplicable`:

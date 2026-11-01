@@ -29,9 +29,22 @@ impl DirectRouteGuards {
     /// G7 applies where the signed envelope is `gateway_invoke`-only. Under
     /// `hardened` this route signs its own results (GH1942.HARDEN.1 row 7).
     pub(crate) fn run(meta: &MetaMcp, call: &BackendCall<'_>, scope: SigningScope) -> Result<()> {
-        meta.admit_target(call)?;
+        // The session profile's refusal (the only `Protocol` error here) and
+        // the G7 signing refusal are gateway refusals with no seal: raised
+        // here, where the direct route delivers them. The kill switch and the
+        // capability disable are sealed and raise where they are framed.
+        meta.admit_target(call).inspect_err(|e| {
+            if matches!(e, Error::Protocol(_)) {
+                crate::gateway::delivery_facts::raise(
+                    crate::gateway::delivery_facts::ResponseEffect::Refused,
+                );
+            }
+        })?;
         if meta.signing_enabled() && scope == SigningScope::InvokeOnly {
-            return Err(Error::json_rpc(-32001, SIGNING_REFUSAL));
+            return Err(crate::gateway::delivery_facts::refused(Error::json_rpc(
+                -32001,
+                SIGNING_REFUSAL,
+            )));
         }
         Ok(())
     }
@@ -145,10 +158,20 @@ impl DirectRouteGuards {
             meta.chain_receive_for(
                 &meta.scoped(crate::gateway::authz::BackendGrant::of(client)),
                 call.server,
-                result,
+                (
+                    result,
+                    // Taken: the withheld members are for this check only.
+                    response
+                        .ingress_withheld
+                        .take()
+                        .as_deref()
+                        .map(crate::protocol::reserved_members::Withheld::members),
+                ),
                 challenge,
                 &slot,
-            )?;
+            )
+            // A refused receipt is the delivered refusal of the backend's answer.
+            .map_err(crate::gateway::delivery_facts::refused)?;
         }
         let receipt = std::mem::take(&mut *slot.lock());
         // MIK-8078 (MRTR.2a): the backend's state is sealed after the raw
@@ -181,6 +204,13 @@ impl DirectRouteGuards {
         if let Some(result) = response.result.take() {
             match meta.gate_payload(call, result) {
                 Ok((mut result, effect)) => {
+                    if effect == crate::gateway::meta_mcp::response_security::GateEffect::Withheld {
+                        // The direct route answers one call: its whole result
+                        // was withheld, a refusal.
+                        crate::gateway::delivery_facts::raise(
+                            crate::gateway::delivery_facts::ResponseEffect::Refused,
+                        );
+                    }
                     if !warnings.is_empty()
                         && let Some(obj) = result.as_object_mut()
                     {
@@ -225,7 +255,11 @@ impl DirectRouteGuards {
             && !response.excludes_client_accounting()
             && let Some(client) = client
         {
-            state.auth_config.record_client_success(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_success(client);
         }
         Ok(response)
     }
@@ -271,10 +305,16 @@ pub(super) fn refusal(id: Option<RequestId>, error: &Error) -> JsonRpcResponse {
         Error::ResponseFirewallRefused => {
             JsonRpcResponse::delivery_refusal_error(id, error.to_rpc_code(), &error.to_string())
         }
-        Error::JsonRpc { code, message, .. } => JsonRpcResponse::error(id, *code, message.clone()),
-        _ => JsonRpcResponse::error(id, error.to_rpc_code(), error.to_string()),
+        // The raw text for a JSON-RPC error or a sealed refusal, Display for
+        // the rest: one authority with the meta route.
+        _ => JsonRpcResponse::error(
+            id,
+            error.to_rpc_code(),
+            crate::gateway::meta_mcp::signing::wire_error_message(error),
+        ),
     };
-    frame.egress_scanned = true;
+    crate::gateway::delivery_facts::outlet(error);
+    frame.wire_meta.egress_scanned = true;
     frame
 }
 
@@ -294,6 +334,7 @@ pub(super) fn scan_direct_egress(
     let targets = [ResponsePolicyTarget {
         server: call.server.to_owned(),
         tool: call.tool.to_owned(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let correlation = ResponseCorrelation {
         session_id: &session_id,
@@ -302,6 +343,9 @@ pub(super) fn scan_direct_egress(
         external_tool: call.tool,
         subject: None,
         trace_id: None,
+        key: crate::security::response_policy::KeyOf::of_client(
+            client.and_then(AuthenticatedClient::api_key_identity),
+        ),
     };
     // The router's own instance judges the direct route (MIK-7669).
     #[cfg(feature = "firewall")]

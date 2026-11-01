@@ -32,8 +32,7 @@ use serde_json::{Value, json};
 
 use super::super::auth::AuthenticatedClient;
 use super::super::router::AppState;
-use super::errors::{admin_auth_required, structured_error};
-use super::is_admin;
+use super::errors::structured_error;
 use crate::capability::file_writer::{
     self, Base, Change, Committed, Edit, FieldError, PinChange, PinUpdate, Refused,
 };
@@ -227,13 +226,12 @@ fn extract_description(yaml: &str) -> Option<String> {
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
 /// `GET /ui/api/capabilities` — list all YAML files with metadata.
-pub async fn list_capabilities(
+pub(super) async fn list_capabilities(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let dirs = state.capability_dirs.as_slice();
@@ -290,14 +288,13 @@ pub async fn list_capabilities(
 }
 
 /// `GET /ui/api/capabilities/:name` — return raw YAML content.
-pub async fn get_capability(
+pub(super) async fn get_capability(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     if !is_safe_name(&name) {
@@ -433,18 +430,18 @@ pub struct ValidateQuery {
 /// That check runs before `If-Match`, so a blur never answers 428. A save
 /// needs `If-Match` (428 without it) and an existing file (404; `POST`
 /// creates).
-pub async fn put_capability(
+pub(super) async fn put_capability(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     identity: Option<Extension<VerifiedIdentity>>,
     AxumPath(name): AxumPath<String>,
     Query(query): Query<ValidateQuery>,
     headers: HeaderMap,
     body: String,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    let client = guard.client.clone();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
@@ -500,15 +497,14 @@ pub async fn put_capability(
 /// `POST /ui/api/capabilities/:name/validate` — validate only (D4a). This
 /// handler has no writer: it reads the current file and answers what a save
 /// would write. The admin audit layer does not record it (by route).
-pub async fn validate_capability_route(
+pub(super) async fn validate_capability_route(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
     body: String,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
@@ -604,15 +600,15 @@ pub struct CreateCapabilityBody {
 /// # Panics
 ///
 /// Does not panic; the `unwrap()` on `yaml` is guarded by the `is_empty` check above.
-pub async fn create_capability(
+pub(super) async fn create_capability(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     identity: Option<Extension<VerifiedIdentity>>,
     body: Option<Json<CreateCapabilityBody>>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    let client = guard.client.clone();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Json(req) = body.unwrap_or_default();
@@ -699,16 +695,16 @@ pub async fn create_capability(
 
 /// `DELETE /ui/api/capabilities/:name` — remove the named file through the
 /// writer: `If-Match` required, never follows a link.
-pub async fn delete_capability(
+pub(super) async fn delete_capability(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     identity: Option<Extension<VerifiedIdentity>>,
     AxumPath(name): AxumPath<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    let client = guard.client.clone();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     if !is_safe_name(&name) {
         return bad_name(&name).into_response();
@@ -748,6 +744,7 @@ pub async fn delete_capability(
 
 #[path = "capabilities_answers.rs"]
 mod answers;
+use super::guard::Guard;
 use answers::{field_errors, refused};
 
 #[cfg(test)]

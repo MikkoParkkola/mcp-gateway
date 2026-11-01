@@ -128,6 +128,12 @@ pub(crate) enum Invisible {
     /// too. So a replay's clamp changes nothing before the fresh link it mints (the stored link
     /// is stripped: "a replay mints its own", `meta_mcp/admission.rs:147`).
     StoredBytesAlreadyClamped,
+    /// Ingress removes a backend's own `_signature` (a gateway-only member),
+    /// so the message signature overwrites nothing a receipt could hold, and
+    /// a rebuild before or after signing digests the same backend text. The
+    /// rebuild still leaves out the gateway's own signature, which signing
+    /// notes: `rows::r_ownsig_the_gateway_signature_is_not_receipted`.
+    IngressStripsBackendSignature,
 }
 
 /// Why a cell cannot occur.
@@ -157,6 +163,13 @@ pub(crate) enum RespNa {
     /// The stored task tail is the clamp and the seal over the worker's mint;
     /// the delivery stages run on the `tasks/get` route that reads it.
     TaskTailIsClampAndSeal,
+    /// The matrix drives `tools/call`, whose answer may not carry
+    /// `cacheScope`: ingress removes a backend's copy, so the clamp has
+    /// nothing to change there. On the direct route no cacheable method is
+    /// linked or sealed (`finish_direct` links only `tools/call`, and only
+    /// `tools/call` is sealed and signed), so no clamp order exists to state;
+    /// `rows::r_clamp_read_delivers_private` keeps the clamp's own effect.
+    IngressRemovesToolCallScope,
 }
 
 /// What a cell asserts.
@@ -296,8 +309,8 @@ pub(crate) const fn expect(
     pair: RespPair,
 ) -> RespExpect {
     use Invisible::{
-        JudgeOnlyReplaces, JudgeReadsNothingSigningAdds, SealWritesOnlyExcludedMeta,
-        StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
+        IngressStripsBackendSignature, JudgeOnlyReplaces, JudgeReadsNothingSigningAdds,
+        SealWritesOnlyExcludedMeta, StampIgnoresShapedMembers, StoredBytesAlreadyClamped,
     };
     use RespCase::{CacheHit, Fresh, IdempotentReplay, Task as TaskCase};
     use RespExpect::{ExpectedGap, NotApplicable, OrderInvisibleByOutcome, Ordered};
@@ -318,7 +331,11 @@ pub(crate) const fn expect(
             ShapeSeal | FirewallSeal | SealSign | SignRecord | JudgeRecord | RecordCommit
             | JudgeCommit | SignRebuild | FirewallStamp | JudgeRebuild | StampShape | SignJudge,
         ) => NotApplicable(RespNa::TaskTailIsClampAndSeal),
+        (Task, TaskCase, _, ClampSeal) => NotApplicable(RespNa::IngressRemovesToolCallScope),
         (Direct, CacheHit, _, _) => NotApplicable(RespNa::NoCacheOnDirect),
+        (Mcp | Stdio | Direct, Fresh | CacheHit, _, ClampLink | ClampSeal) => {
+            NotApplicable(RespNa::IngressRemovesToolCallScope)
+        }
         (_, _, Era::Legacy, ShapeSeal | StampShape) => NotApplicable(RespNa::NoModernShapeOnLegacy),
         // On /mcp and stdio a replay runs the tail on the stored, already
         // sealed bytes: no mint, so nothing is sealed anew; it does mint a
@@ -349,12 +366,13 @@ pub(crate) const fn expect(
         (_, _, _, StampShape) => OrderInvisibleByOutcome(StampIgnoresShapedMembers),
         (_, _, _, LinkSeal) => OrderInvisibleByOutcome(SealWritesOnlyExcludedMeta),
         (_, _, _, SignJudge) => OrderInvisibleByOutcome(JudgeReadsNothingSigningAdds),
+        (_, _, _, SignRebuild) => OrderInvisibleByOutcome(IngressStripsBackendSignature),
         (
             _,
             _,
             _,
-            ShapeSeal | FirewallSeal | ClampLink | ClampSeal | StampSeal | SealSign | SignRecord
-            | JudgeRecord | RecordCommit | JudgeCommit | SignRebuild | FirewallStamp,
+            ShapeSeal | FirewallSeal | StampSeal | SealSign | SignRecord | JudgeRecord
+            | RecordCommit | JudgeCommit | FirewallStamp,
         ) => Ordered,
     }
 }

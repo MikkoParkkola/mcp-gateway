@@ -80,16 +80,12 @@ impl Drop for TasksDropGuard {
 /// at EOF, before the store closes.
 pub(super) async fn open(
     config: &Config,
-    overlay: &crate::config::EnvOverlay,
     meta_mcp: &Arc<MetaMcp>,
     tool_policy: &Arc<ToolPolicy>,
-    (record_key, live_config): (
-        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
-        &Arc<crate::config_reload::LiveConfig>,
-    ),
+    live_config: &Arc<crate::config_reload::LiveConfig>,
 ) -> Option<(Arc<StdioTasks>, ExpirySweep)> {
     let dir = store_dir(config);
-    let subscriptions = subscriptions(overlay, (record_key, live_config));
+    let subscriptions = subscriptions(live_config);
     // No upstream adapter on stdio: every interrupted row it holds is settled
     // on open, and none is kept for an upstream read (D6 rev 5 item 4).
     let opened = super::task_runtime::open(config, &dir, subscriptions, meta_mcp, &[]).await;
@@ -129,29 +125,19 @@ pub(super) async fn open(
 
 /// The executor publishes task notifications to a registry. Stdio has no
 /// listener route, so nothing subscribes: the registry admits none, and its
-/// authorizer is built from the default auth configuration, which holds no
-/// secret to resolve. The gateway's own auth configuration is never read here,
-/// so one that does not resolve cannot turn stdio's tasks off (MIK-7638).
-/// Publishing never consults the authorizer; only a delivery would.
+/// authorizer judges with `live_config`'s generations, whose auth is
+/// [`default_auth`]: no secret to resolve. The gateway's own auth
+/// configuration is never read here, so one that does not resolve cannot turn
+/// stdio's tasks off (MIK-7638). Publishing never consults the authorizer;
+/// only a delivery would.
 fn subscriptions(
-    overlay: &crate::config::EnvOverlay,
-    (record_key, live_config): (
-        &Arc<crate::gateway::record_principal::RecordPrincipalKey>,
-        &Arc<crate::config_reload::LiveConfig>,
-    ),
+    live_config: &Arc<crate::config_reload::LiveConfig>,
 ) -> Arc<crate::gateway::subscription_registry::SubscriptionRegistry> {
-    use crate::gateway::auth::{AuthState, DashboardBootstrap, ResolvedAuthConfig};
-    let auth_config = ResolvedAuthConfig::try_from_config_keyed(
-        &crate::config::AuthConfig::default(),
-        overlay,
-        Arc::clone(record_key),
-    )
-    .expect("the default auth configuration holds no secret to resolve");
+    use crate::gateway::auth::{AuthState, DashboardBootstrap};
     Arc::new(
         crate::gateway::subscription_registry::SubscriptionRegistry::new(
             0,
             AuthState {
-                auth_config: Arc::new(auth_config),
                 key_server: None,
                 dashboard_bootstrap: Arc::new(DashboardBootstrap::new()),
                 tls_enabled: false,
@@ -163,6 +149,22 @@ fn subscriptions(
             },
         ),
     )
+}
+
+/// stdio's auth: the default configuration, which holds no secret to
+/// resolve, under the process's record key. Its generations judge every
+/// stdio listener; the gateway's own `auth` is never resolved here.
+pub(super) fn default_auth(
+    overlay: &crate::config::EnvOverlay,
+    record_key: Arc<crate::gateway::record_principal::RecordPrincipalKey>,
+) -> crate::gateway::auth::ResolvedAuthConfig {
+    // invariant: the default auth config names no secret reference to resolve.
+    crate::gateway::auth::ResolvedAuthConfig::try_from_config_keyed(
+        &crate::config::AuthConfig::default(),
+        overlay,
+        record_key,
+    )
+    .expect("the default auth configuration holds no secret to resolve")
 }
 
 fn degraded(dir: &Path, cause: &str) {
@@ -397,13 +399,16 @@ impl StdioTasks {
                     params,
                     |_| std::future::ready(()),
                     |current| {
-                        self.host.meta_mcp.refuse_stored_delivery(
-                            &id,
-                            current,
-                            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
-                            Some(session_id),
-                            caller,
-                        )
+                        self.host
+                            .meta_mcp
+                            .refuse_stored_delivery(
+                                &id,
+                                current,
+                                crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                                Some(session_id),
+                                caller,
+                            )
+                            .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                     },
                     |current, frame| self.host.meta_mcp.scan_task_read(current, frame),
                 )

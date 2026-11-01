@@ -73,7 +73,7 @@ impl crate::transport::Transport for Wire {
 struct Fixture {
     router: axum::Router,
     calls: Calls,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// One `edits` backend; `warm` lists its tools through the caller's slot.
@@ -268,11 +268,11 @@ async fn injected_secret_key_not_refused() {
         "name": "k", "value": "s3cret", "inject_key": "api_key"
     }))
     .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(
-        [("edits".to_string(), vec![rule])].into_iter().collect(),
-    );
-    let customize: Customize = Box::new(move |meta| meta.with_secret_injector(injector));
-    let fx = fixture_with(BackendConfig::default(), true, Some(customize)).await;
+    let config = BackendConfig {
+        secrets: vec![rule],
+        ..BackendConfig::default()
+    };
+    let fx = fixture(config, true).await;
     let (_, body) = post(&fx.router, "/mcp", invoke(&json!({"edits": []}))).await;
     assert!(!is_error(&body), "{body}");
     let calls = fx.calls.lock();

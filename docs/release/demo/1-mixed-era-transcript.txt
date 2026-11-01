@@ -13,7 +13,7 @@ modern_peer -> {
       "type": "text"
     }
   ],
-  "trace_id": "gw-7f7f125b-d995-494b-a3d2-04fda8b5f3c8"
+  "_trace_id": "gw-7f7f125b-d995-494b-a3d2-04fda8b5f3c8"
 }
 legacy_peer -> {
   "content": [
@@ -22,7 +22,7 @@ legacy_peer -> {
       "type": "text"
     }
   ],
-  "trace_id": "gw-d001c77a-736a-4231-b297-098f3b0b36c0"
+  "_trace_id": "gw-d001c77a-736a-4231-b297-098f3b0b36c0"
 }
 [PASS] S1.MODERN_CALL_SUCCEEDS
         expected: modern_peer answered: mixed-era present

@@ -171,6 +171,11 @@ pub(super) fn parse(
     config_path: &Path,
 ) -> Option<DiscoveredServer> {
     let description = format!("MCP server from {source:?}");
+    let entry_digest = crate::hashing::canonical_json_sha256(&serde_json::json!([
+        config_path.to_string_lossy(),
+        name,
+        config
+    ]));
     if let Some(program) = config.get("command").and_then(Value::as_str) {
         let mut uncarried = Vec::new();
         if client_expands(program) {
@@ -224,6 +229,7 @@ pub(super) fn parse(
             &mut uncarried,
         );
         server.uncarried = uncarried;
+        server.entry_digest = entry_digest;
         return Some(server);
     }
 
@@ -258,6 +264,7 @@ pub(super) fn parse(
             &[("url", Value::is_string), ("headers", Value::is_object)],
             &mut server.uncarried,
         );
+        server.entry_digest = entry_digest;
         return Some(server);
     }
 

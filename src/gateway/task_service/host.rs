@@ -92,7 +92,10 @@ impl LiveHost {
         }
         let request = serde_json::json!({"jsonrpc": "2.0", "method": "tools/call",
             "params": {"name": call.tool, "arguments": call.arguments}});
+        // A refusal here is the gateway's, raised into the worker's dispatch
+        // cell so the settlement ties it to the task (no-op outside a cell).
         let refused = |e: crate::Error| {
+            let e = crate::gateway::delivery_facts::refused(e);
             Box::new(JsonRpcResponse::error(
                 Some(RequestId::Number(0)),
                 e.to_rpc_code(),
@@ -124,7 +127,10 @@ impl LiveHost {
             let arguments = request
                 .pointer_mut("/params/arguments")
                 .map_or(serde_json::Value::Null, serde_json::Value::take);
-            Ok((arguments, Judged::default()))
+            // What `sanitize_exempt` recorded while judging, as the exempt
+            // branch returns: a playbook's digest is recorded whether or not
+            // the call is exempt, and the run compares against it.
+            Ok((arguments, crate::gateway::meta_mcp::visible::memo::judged()))
         })
         .await
     }
@@ -135,6 +141,31 @@ impl LiveHost {
             Self::Http(_) => None,
             Self::Stdio(host) => Some(host.nonce),
         }
+    }
+
+    /// K15: the captured HTTP identity as `generation`'s key table holds it
+    /// now, for queued or continued work about to dispatch. `Ok(None)` keeps
+    /// the captured one (not an API-key caller, or a stdio host, which holds
+    /// none). `Err` is the dispatch's answer: the key that admitted the work
+    /// is gone, expired, re-issued or demoted, and nothing is sent.
+    pub(crate) fn rejudge(
+        &self,
+        router: &OwnedRouterAuthorizer,
+        generation: &crate::config_reload::Generation,
+    ) -> Result<Option<OwnedRouterAuthorizer>, Box<JsonRpcResponse>> {
+        let Self::Http(_) = self else {
+            return Ok(None);
+        };
+        router
+            .rejudged(generation.auth(), crate::clock::utc_now().ok())
+            .map_err(|_| {
+                Box::new(JsonRpcResponse::error(
+                    Some(crate::protocol::RequestId::Number(0)),
+                    -32003,
+                    "The API key this task was created with is no longer valid: a config \
+                     reload removed, expired, re-issued or demoted it.",
+                ))
+            })
     }
 
     /// The transport's own authorizer. `router` is the creating request's

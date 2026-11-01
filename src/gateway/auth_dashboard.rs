@@ -17,7 +17,7 @@ use std::time::{Duration, Instant, SystemTime};
 pub struct DashboardBootstrap {
     /// The unused value, and the wall-clock time a session it opens must end
     /// by: the expiry of the credential that minted it, when that has one.
-    value: Mutex<Option<(Secret, Option<SystemTime>)>>,
+    value: Mutex<Option<(Secret, Bound)>>,
     /// The port the listener bound, 0 until known: `server.port: 0` asks the
     /// OS for one, and a link must name the real one.
     bound_port: AtomicU16,
@@ -29,6 +29,10 @@ pub struct DashboardBootstrap {
     /// unused: at most one, since the bootstrap value it comes from is single use.
     #[cfg(feature = "webui")]
     handoff: Mutex<Option<Handoff>>,
+    /// The UI live stream's caps and shared watcher: one per gateway, and it
+    /// lives here because every gateway builds exactly one of these.
+    #[cfg(feature = "webui")]
+    stream: crate::gateway::ui::stream::StreamHub,
 }
 
 /// How long a handoff code may wait to be entered on the public origin.
@@ -42,14 +46,43 @@ pub(crate) const HANDOFF_TTL: Duration = Duration::from_secs(60);
 struct Handoff {
     value: Secret,
     minted: Now,
-    cap: Option<SystemTime>,
+    cap: Bound,
 }
 
-/// A redeemed bootstrap value: when the session it opens must end by, if the
-/// credential that minted it expires.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Redemption {
+/// What a link, a handoff code and the session they open stay bound to: the
+/// minting credential's expiry, and the API key that minted it, by its quota
+/// identity. `key` is `None` for the bearer and the startup link, which are
+/// bearer-class by design (K13).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Bound {
     pub(crate) not_after: Option<SystemTime>,
+    pub(crate) key: Option<crate::gateway::auth::QuotaPrincipal>,
+}
+
+impl Bound {
+    /// Bound by an expiry alone.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn until(not_after: Option<SystemTime>) -> Self {
+        Self {
+            not_after,
+            key: None,
+        }
+    }
+
+    /// Whether the minting key is gone from `keys`, no longer admin, or past
+    /// its expiry at `now`: then the link, code or session dies at this use.
+    fn key_dead(&self, keys: &crate::gateway::auth::ResolvedAuthConfig, now: Now) -> bool {
+        self.key
+            .as_ref()
+            .is_some_and(|key| !keys.admin_key_live(key, chrono::DateTime::from(now.wall)))
+    }
+}
+
+/// A redeemed bootstrap value: what the session it opens stays bound to.
+#[derive(Debug, Clone)]
+pub(crate) struct Redemption {
+    pub(crate) bound: Bound,
     /// The clocks the redemption was checked against, which the session or
     /// code it yields is issued at: a second read could land on a clock that
     /// stepped before 1970 in between (MIK-8202).
@@ -57,12 +90,13 @@ pub(crate) struct Redemption {
 }
 
 /// When a session was issued and when it last saw operator activity.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct SessionTimes {
     issued: Now,
     last_seen: Now,
-    /// Ends here even inside the limits: the minting credential's expiry.
-    not_after: Option<SystemTime>,
+    /// Ends at the minting credential's expiry even inside the limits, and
+    /// with the minting key.
+    bound: Bound,
 }
 
 impl SessionTimes {
@@ -72,7 +106,10 @@ impl SessionTimes {
         wall_unreadable(now)
             || exceeds(self.last_seen, now, limits.idle)
             || exceeds(self.issued, now, limits.absolute)
-            || self.not_after.is_some_and(|cap| cap_reached(now, cap))
+            || self
+                .bound
+                .not_after
+                .is_some_and(|cap| cap_reached(now, cap))
     }
 }
 
@@ -113,15 +150,15 @@ impl DashboardBootstrap {
     /// nothing on disk means nothing to steal from disk.
     #[cfg(test)]
     pub(crate) fn issue_session_at(&self, now: Now, limits: &SessionLimits) -> String {
-        self.issue_session_until(now, limits, None)
+        self.issue_session_until(now, limits, Bound::default())
     }
 
-    /// A session that also ends at `not_after`, when a cap is given.
+    /// A session that also ends at `bound`'s cap and with its key.
     pub(crate) fn issue_session_until(
         &self,
         now: Now,
         limits: &SessionLimits,
-        not_after: Option<SystemTime>,
+        bound: Bound,
     ) -> String {
         let handle = random_value();
         if let Ok(mut sessions) = self.sessions.lock() {
@@ -137,7 +174,7 @@ impl DashboardBootstrap {
                 SessionTimes {
                     issued: now,
                     last_seen: now,
-                    not_after,
+                    bound,
                 },
             );
         }
@@ -163,12 +200,20 @@ impl DashboardBootstrap {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            value: Mutex::new(Some((Secret(random_value()), None))),
+            value: Mutex::new(Some((Secret(random_value()), Bound::default()))),
             bound_port: AtomicU16::new(0),
             sessions: Mutex::new(HashMap::new()),
             #[cfg(feature = "webui")]
             handoff: Mutex::new(None),
+            #[cfg(feature = "webui")]
+            stream: crate::gateway::ui::stream::StreamHub::new(),
         }
+    }
+
+    /// The UI live stream's hub.
+    #[cfg(feature = "webui")]
+    pub(crate) fn stream_hub(&self) -> &crate::gateway::ui::stream::StreamHub {
+        &self.stream
     }
 
     /// The value to print, while it remains unused.
@@ -190,12 +235,17 @@ impl DashboardBootstrap {
         self.take_matching(candidate).is_some()
     }
 
-    /// Consume the value if it matches, returning the cap it was minted with.
-    /// A wall clock before 1970 refuses every candidate unspent, decided before
-    /// any compare, so the answer is the same for the live value and a guess:
-    /// the session could not be dated, and the operator keeps a working link
-    /// (MIK-8202).
-    pub(crate) fn consume_capped(&self, candidate: &str) -> Redeem {
+    /// Consume the value if it matches, returning what it was minted bound
+    /// to. A wall clock before 1970 refuses every candidate unspent, decided
+    /// before any compare, so the answer is the same for the live value and a
+    /// guess: the session could not be dated, and the operator keeps a
+    /// working link (MIK-8202). A link whose minting key `keys` no longer
+    /// holds as a live admin key is spent and refused.
+    pub(crate) fn consume_capped(
+        &self,
+        candidate: &str,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+    ) -> Redeem {
         let now = Now::read();
         if wall_unreadable(now) {
             tracing::warn!(
@@ -204,7 +254,8 @@ impl DashboardBootstrap {
             return Redeem::ClockUnreadable;
         }
         match self.take_matching(candidate) {
-            Some((_, not_after)) => Redeem::Issued(Redemption { not_after, now }),
+            Some((_, bound)) if bound.key_dead(keys, now) => Redeem::Refused,
+            Some((_, bound)) => Redeem::Issued(Redemption { bound, now }),
             None => Redeem::Refused,
         }
     }
@@ -212,7 +263,7 @@ impl DashboardBootstrap {
     /// Take the value and its cap if `candidate` matches it. An empty slot
     /// still runs the compare, against a dummy, so whether a live link is
     /// outstanding cannot be timed.
-    fn take_matching(&self, candidate: &str) -> Option<(Secret, Option<SystemTime>)> {
+    fn take_matching(&self, candidate: &str) -> Option<(Secret, Bound)> {
         let mut guard = self.value.lock().ok()?;
         let matches = if let Some((expected, _)) = guard.as_ref() {
             expected.matches(candidate)
@@ -226,13 +277,22 @@ impl DashboardBootstrap {
     /// Whether some live session at `now` has a handle whose SHA-256 is
     /// `digest`: the delivery re-check of an events subscription made from a
     /// dashboard session (MIK-7769), which keeps only the digest. Never
-    /// extends a session; a logout or expiry answers `false`.
-    pub(crate) fn live_digest(&self, digest: &str, now: Now, limits: &SessionLimits) -> bool {
+    /// extends a session; a logout, expiry or the minting key leaving `keys`
+    /// answers `false`.
+    pub(crate) fn live_digest(
+        &self,
+        digest: &str,
+        now: Now,
+        limits: &SessionLimits,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+    ) -> bool {
         let Ok(sessions) = self.sessions.lock() else {
             return false;
         };
         sessions.iter().any(|(handle, times)| {
-            !times.expired(now, limits) && crate::hashing::sha256_hex(handle.as_bytes()) == digest
+            !times.expired(now, limits)
+                && !times.bound.key_dead(keys, now)
+                && crate::hashing::sha256_hex(handle.as_bytes()) == digest
         })
     }
 
@@ -241,12 +301,40 @@ impl DashboardBootstrap {
     /// An expired handle is removed by the check that finds it. `Touch::Yes`
     /// restarts the idle clock of a valid session; `Touch::No` checks without
     /// extending, for background refreshes and delivery re-checks.
+    /// Test fixtures, whose sessions carry no minting key: production checks
+    /// through [`Self::check_session_with`], against a key table.
+    #[cfg(test)]
     pub(crate) fn check_session(
         &self,
         handle: &str,
         now: Now,
         limits: &SessionLimits,
         touch: Touch,
+    ) -> SessionCheck {
+        self.check(handle, now, limits, touch, None)
+    }
+
+    /// [`Self::check_session`], and a session minted by an API key ends when
+    /// `keys` no longer holds that key as a live admin key (K13): `keys` is
+    /// the request's pinned table, or the one current at a delivery.
+    pub(crate) fn check_session_with(
+        &self,
+        handle: &str,
+        now: Now,
+        limits: &SessionLimits,
+        touch: Touch,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+    ) -> SessionCheck {
+        self.check(handle, now, limits, touch, Some(keys))
+    }
+
+    fn check(
+        &self,
+        handle: &str,
+        now: Now,
+        limits: &SessionLimits,
+        touch: Touch,
+        keys: Option<&crate::gateway::auth::ResolvedAuthConfig>,
     ) -> SessionCheck {
         let Ok(mut sessions) = self.sessions.lock() else {
             return SessionCheck::Unknown;
@@ -257,7 +345,7 @@ impl DashboardBootstrap {
         if wall_unreadable(now) {
             return SessionCheck::ClockUnreadable;
         }
-        if times.expired(now, limits) {
+        if times.expired(now, limits) || keys.is_some_and(|keys| times.bound.key_dead(keys, now)) {
             sessions.remove(handle);
             return SessionCheck::Expired;
         }
@@ -288,11 +376,19 @@ impl DashboardBootstrap {
     }
 
     /// Like [`Self::rearm`], with a wall-clock cap for the session it opens.
-    #[cfg(any(test, feature = "webui"))]
+    #[cfg(test)]
     pub(crate) fn rearm_until(&self, not_after: Option<SystemTime>) -> String {
+        self.rearm_bound(Bound::until(not_after))
+    }
+
+    /// Like [`Self::rearm`], bound to `bound`: its cap and the API key that
+    /// minted the link, which must still be a live admin key when the link
+    /// and the session it opens are used (K13).
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn rearm_bound(&self, bound: Bound) -> String {
         let fresh = random_value();
         if let Ok(mut value) = self.value.lock() {
-            *value = Some((Secret(fresh.clone()), not_after));
+            *value = Some((Secret(fresh.clone()), bound));
         }
         fresh
     }
@@ -300,7 +396,7 @@ impl DashboardBootstrap {
     /// Mint the code a loopback redemption shows, replacing any unused one. It
     /// carries `cap`, the redeemed link's credential cap, to the session.
     #[cfg(feature = "webui")]
-    pub(crate) fn mint_handoff(&self, now: Now, cap: Option<SystemTime>) -> String {
+    pub(crate) fn mint_handoff(&self, now: Now, cap: Bound) -> String {
         let value = random_value();
         if let Ok(mut slot) = self.handoff.lock() {
             *slot = Some(Handoff {
@@ -317,7 +413,12 @@ impl DashboardBootstrap {
     /// value spends nothing: anyone could otherwise cancel an operator's
     /// sign-in. Compared in constant time; every code has the same length.
     #[cfg(feature = "webui")]
-    pub(crate) fn take_handoff(&self, candidate: &str, now: Now) -> Option<Redemption> {
+    pub(crate) fn take_handoff(
+        &self,
+        candidate: &str,
+        now: Now,
+        keys: &crate::gateway::auth::ResolvedAuthConfig,
+    ) -> Option<Redemption> {
         let mut slot = self.handoff.lock().ok()?;
         let (expired, matches) = {
             let Some(live) = slot.as_ref() else {
@@ -328,7 +429,8 @@ impl DashboardBootstrap {
             (
                 wall_unreadable(now)
                     || exceeds(live.minted, now, HANDOFF_TTL)
-                    || live.cap.is_some_and(|cap| cap_reached(now, cap)),
+                    || live.cap.not_after.is_some_and(|cap| cap_reached(now, cap))
+                    || live.cap.key_dead(keys, now),
                 live.value.matches(candidate),
             )
         };
@@ -344,7 +446,7 @@ impl DashboardBootstrap {
             return None;
         }
         slot.take().map(|live| Redemption {
-            not_after: live.cap,
+            bound: live.cap,
             now,
         })
     }

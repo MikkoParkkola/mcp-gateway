@@ -65,7 +65,7 @@ fn json_result_with_session(session: &'static [u8]) -> impl Fn(&Method) -> Respo
 async fn handshake(status: StatusCode, body: String) -> crate::Result<String> {
     let (base, _) = peer(move |_| reply(status, "text/event-stream", body.clone())).await;
     make_transport_sse(&format!("{base}/sse"))
-        .establish_sse_connection()
+        .establish_sse_connection(&[])
         .await
 }
 
@@ -117,7 +117,7 @@ async fn the_endpoint_event_is_found_past_other_events_and_its_session_kept() {
     let (base, _) = peer(move |_| reply(StatusCode::OK, "text/event-stream", body.clone())).await;
     let t = make_transport_sse(&format!("{base}/sse"));
 
-    let endpoint = t.establish_sse_connection().await.unwrap();
+    let endpoint = t.establish_sse_connection(&[]).await.unwrap();
 
     assert_eq!(endpoint, "/messages?session_id=abc");
     assert_eq!(default_session(&t).as_deref(), Some("abc"));
@@ -143,7 +143,7 @@ async fn an_endpoint_that_does_not_parse_is_returned_without_a_session() {
     let t = make_transport_sse(&format!("{base}/sse"));
 
     assert_eq!(
-        t.establish_sse_connection().await.unwrap(),
+        t.establish_sse_connection(&[]).await.unwrap(),
         ":x?session_id=abc"
     );
     assert_eq!(default_session(&t), None);
@@ -221,6 +221,34 @@ async fn a_single_tenant_transport_never_holds_a_second_callers_session() {
     let _ = t.request("tools/call", None).await;
 }
 
+// An optional binding's per-user slot holds the session its start opened as
+// the gateway and, apart, its subscriber's own: two sessions, one caller's.
+// Only a lent-only slot, whose start runs as its subscriber, holds one.
+#[tokio::test]
+async fn an_optional_binding_slot_keeps_its_starts_session_beside_the_callers() {
+    let (base, _) = peer(json_result_with_session(b"callers-session")).await;
+    let t = make_transport(&format!("{base}/mcp"));
+    t.mark_per_user_slot(
+        crate::transport::SlotCredential::Configured,
+        std::sync::Arc::new(crate::transport::Lender::default()),
+    );
+    t.sessions
+        .write()
+        .insert(String::new(), "starts-session".to_string());
+    t.request_with_headers(
+        "tools/call",
+        None,
+        &[],
+        Some("subscriber"),
+        crate::transport::ResendPermission::Permitted,
+    )
+    .await
+    .unwrap();
+    let sessions = t.sessions.read();
+    assert_eq!(sessions.get("").map(String::as_str), Some("starts-session"));
+    assert_eq!(sessions.len(), 2, "{sessions:?}");
+}
+
 // =========================================================================
 // OAuth token on the wire
 // =========================================================================
@@ -250,7 +278,7 @@ async fn a_live_oauth_token_is_sent_as_a_bearer_on_requests_and_the_sse_stream()
         .install_live_token_for_test(&token);
 
     t.request("tools/call", None).await.unwrap();
-    t.establish_sse_connection().await.unwrap();
+    t.establish_sse_connection(&[]).await.unwrap();
 
     let seen = seen.lock().unwrap();
     assert_eq!(seen.len(), 2);

@@ -7,8 +7,10 @@
 //! every early return is the order `backend_handler_inner` always had.
 
 use crate::error::rpc_codes::{INVALID_REQUEST, PARSE_ERROR};
+use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
-use axum::{Json, http::HeaderMap, http::StatusCode};
+use crate::security::decision_record::DecisionKind;
+use axum::{http::HeaderMap, http::StatusCode};
 use serde_json::Value;
 
 use super::super::AppState;
@@ -16,13 +18,13 @@ use super::super::authorization::{refusal_principal, slot_principal};
 use super::super::hardened_identity::hardened_identity_refusal;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::oauth::OAuthAgentIdentity;
-use crate::gateway::router::helpers::build_http_error_response;
+use crate::gateway::router::helpers::{RpcHttp, build_http_error_response};
 use crate::identity_grants::GrantSubject;
 use crate::key_server::oidc::VerifiedIdentity;
 use crate::mtls::CertIdentity;
 
 /// A refusal already shaped as the route's HTTP answer.
-pub(super) type Rejection = (StatusCode, Json<Value>);
+pub(super) type Rejection = RpcHttp;
 
 /// Everything the route learns about the caller before the body is read.
 pub(super) struct Caller {
@@ -105,6 +107,7 @@ fn validate_agent(
                 crate::security::IdentityAudit::Clean,
                 Some(&reason),
             );
+            note_refused_by(DecisionKind::AgentScope, None);
             Err(build_http_error_response(
                 None,
                 INVALID_REQUEST,
@@ -132,9 +135,9 @@ pub(super) async fn resolve_caller(
     // Fail closed: a reader never falls back to the current generation.
     let generation =
         crate::gateway::router::pinned_generation(request.extensions()).ok_or_else(|| {
-            (
+            RpcHttp::gateway(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": crate::gateway::router::UNPINNED })),
+                serde_json::json!({ "error": crate::gateway::router::UNPINNED }),
             )
         })?;
     let client = request.extensions().get::<AuthenticatedClient>().cloned();
@@ -187,7 +190,11 @@ pub(super) async fn resolve_caller(
     .await
     {
         Ok(admission) => admission.subject,
-        Err(refusal) => return Err(super::super::identity::identity_refusal_response(refusal)),
+        Err(refusal) => {
+            // The caller's identity standing: no kind names it yet.
+            note_refused_by(DecisionKind::Unrecorded, None);
+            return Err(super::super::identity::identity_refusal_response(refusal));
+        }
     };
     caller.spend_key = super::super::identity::caller_key(
         caller.grant_subject.as_ref(),
@@ -199,6 +206,7 @@ pub(super) async fn resolve_caller(
         caller.cert_identity.as_ref(),
     );
     if let Some(no) = hardened_identity_refusal(state, key.as_deref(), request.extensions().get()) {
+        note_refused_by(DecisionKind::Unrecorded, None);
         return Err(no);
     }
     // The caller holds its generation; a reload from here on must not reach it.
@@ -224,6 +232,33 @@ pub(super) struct Envelope {
     pub(super) declared: crate::protocol::meta::Declared,
 }
 
+/// A backend the caller cannot see: an out-of-scope one keeps its `-32003`
+/// for the call's one record, and the refusal names its check.
+fn note_absent(
+    (name, tool): (&str, Option<&str>),
+    method: &str,
+    absence: crate::gateway::meta_mcp::scoped_backends::Absence,
+) {
+    let out_of_scope = absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope;
+    if out_of_scope
+        && method == "tools/call"
+        && let Some(tool) = tool
+    {
+        crate::gateway::meta_mcp::visible::memo::note_denial_code(
+            name,
+            tool,
+            -32003,
+            Some(DecisionKind::BackendScope),
+        );
+    }
+    let kind = if out_of_scope {
+        DecisionKind::BackendScope
+    } else {
+        DecisionKind::NotFound
+    };
+    note_refused_by(kind, None);
+}
+
 /// Stage 2: read and parse the body, fill the D2-a audit slot, refuse a keyed
 /// call with no execution principal (MIK-8382 intake), then refuse what the
 /// envelope and the key's scope forbid. Consumes `request`.
@@ -243,6 +278,7 @@ pub(super) async fn read_envelope(
     let mut json_request: Value = match serde_json::from_slice(&body_bytes) {
         Ok(v) => v,
         Err(e) => {
+            note_refused_by(DecisionKind::Syntax, None);
             return Err(build_http_error_response(
                 None,
                 PARSE_ERROR,
@@ -258,7 +294,7 @@ pub(super) async fn read_envelope(
         &json_request,
         caller.client.as_ref(),
         caller.grant_subject.as_ref(),
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     );
     reads.capture(state, &json_request, || caller.spend_key.clone());
 
@@ -275,6 +311,8 @@ pub(super) async fn read_envelope(
         validated(&json_request)?;
     }
     if let Some(refusal) = intake_refusal(state, &json_request, caller) {
+        // The caller's identity standing: no kind names it yet.
+        note_refused_by(DecisionKind::Unrecorded, None);
         return Err(refusal);
     }
     if sanitize_input {
@@ -285,6 +323,7 @@ pub(super) async fn read_envelope(
     let (id, method, params) = match crate::gateway::router::helpers::parse_request(&json_request) {
         Ok(parsed) => parsed,
         Err(response) => {
+            note_refused_by(DecisionKind::Syntax, None);
             return Err(crate::gateway::router::helpers::build_http_response(
                 &Egressed::gateway_own(response),
                 StatusCode::BAD_REQUEST,
@@ -303,12 +342,7 @@ pub(super) async fn read_envelope(
             .as_ref()
             .and_then(|p| p.get("name"))
             .and_then(Value::as_str);
-        if absence == crate::gateway::meta_mcp::scoped_backends::Absence::OutOfScope
-            && method == "tools/call"
-            && let Some(tool) = tool
-        {
-            crate::gateway::meta_mcp::visible::memo::note_denial_code(name, tool, -32003);
-        }
+        note_absent((name, tool), &method, absence);
         return Err(backend_not_found(name));
     }
     // D2-b: scope is checked after the parse, so its refusal names the tool,
@@ -316,6 +350,7 @@ pub(super) async fn read_envelope(
     if let Some(ref client) = caller.client
         && !client.can_access_backend(name)
     {
+        note_refused_by(DecisionKind::BackendScope, None);
         return Err(build_http_error_response(
             None,
             -32003,
@@ -343,6 +378,7 @@ pub(super) async fn read_envelope(
         id.as_ref(),
         (&reading.0, reading.1),
     ) {
+        note_refused_by(DecisionKind::Syntax, None);
         return Err(refusal);
     }
     // Every modern request reaching here passed the `/mcp` checks above, so
@@ -409,6 +445,7 @@ pub(super) fn route<'a>(
         crate::gateway::authz::BackendGrant::of(caller.client.as_ref()),
         name,
     ) else {
+        note_refused_by(DecisionKind::NotFound, None);
         return Err(backend_not_found(name));
     };
 
@@ -428,6 +465,7 @@ pub(super) fn route<'a>(
         session_id,
         &state.meta_mcp.window_seal,
     ) {
+        note_refused_by(DecisionKind::Syntax, None);
         return Err(crate::gateway::router::helpers::window_sealed_response(
             &envelope.json_request,
         ));
@@ -444,6 +482,7 @@ pub(super) fn route<'a>(
         caller.proven.as_deref(),
         name,
     ) {
+        note_refused_by(DecisionKind::AdminCapability, None);
         return Err(build_http_error_response(
             envelope.id.clone(),
             e.code,
@@ -477,7 +516,7 @@ pub(super) async fn events_lease(
             );
             let principal = crate::gateway::router::handlers::events::principal(
                 &owners.events,
-                state.auth_config.enabled,
+                state.live_config.generation().auth().enabled,
             );
             let token = caller
                 .inbound_headers
@@ -500,9 +539,9 @@ pub(super) async fn events_lease(
             crate::protocol::JsonRpcResponse::error(Some(id), code, message)
         }
     };
-    (
+    RpcHttp::gateway(
         StatusCode::OK,
-        Json(serde_json::to_value(reply).unwrap_or(Value::Null)),
+        serde_json::to_value(reply).unwrap_or(Value::Null),
     )
 }
 
@@ -534,7 +573,7 @@ pub(super) async fn forward_notification(
             .and_then(|id| explicit_cancel_key(name, caller, route.session_id, id))
             .is_some_and(|key| state.meta_mcp.inflight_calls().cancel(&key));
         tracing::debug!(backend = %name, aborted, "Client cancel never forwarded");
-        return (StatusCode::ACCEPTED, Json(serde_json::json!({})));
+        return RpcHttp::gateway(StatusCode::ACCEPTED, serde_json::json!({}));
     }
     let Ok(super::notification_key::Resolved { headers, binding }) =
         super::notification_key::resolve(
@@ -552,34 +591,33 @@ pub(super) async fn forward_notification(
         // Refused as this caller's request would be (#2240): nothing is
         // forwarded, and the client breaker is untouched, as for
         // `direct_refusal`. `{}` is what an accepted notification gets.
-        return (StatusCode::FORBIDDEN, Json(serde_json::json!({})));
+        return RpcHttp::gateway(StatusCode::FORBIDDEN, serde_json::json!({}));
     };
     match route
         .backend
-        .notify_with_headers(
+        .notify_in_scope(
             &envelope.method,
             envelope.params,
-            &headers,
+            headers,
             binding.as_deref(),
         )
         .await
     {
         Ok(()) => {
             super::record_client_success(state, caller.client.as_ref());
-            (StatusCode::ACCEPTED, Json(serde_json::json!({})))
+            RpcHttp::gateway(StatusCode::ACCEPTED, serde_json::json!({}))
         }
         // No free caller slot (#2300): dropped, counted at admission, and
         // answered with no JSON-RPC body, as a notification must be.
         Err(e @ crate::Error::IdentitySlotsExhausted { .. }) => {
             tracing::warn!(backend = %name, error = %e, "Notification dropped");
-            (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({})))
+            RpcHttp::gateway(StatusCode::TOO_MANY_REQUESTS, serde_json::json!({}))
         }
         Err(e) => {
             super::record_client_failure(state, caller.client.as_ref());
             // The code only: the error's text can be the backend's.
             tracing::error!(backend = %name, code = e.to_rpc_code(), "Backend notification failed");
-            let mut response =
-                crate::protocol::JsonRpcResponse::error(None, e.to_rpc_code(), e.to_string());
+            let mut response = crate::protocol::JsonRpcResponse::of_error(None, &e);
             let call = crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall {
                 server: name,
                 tool: &envelope.method,
@@ -605,6 +643,8 @@ pub(super) async fn forward_notification(
 
 /// A refusal of the sanitize step's: HTTP 400 with the error's code and text.
 fn refused(id: Option<crate::protocol::RequestId>, e: &crate::Error) -> Rejection {
+    // The request's own shape refused it, before any gate.
+    note_refused_by(DecisionKind::Syntax, None);
     build_http_error_response(id, e.to_rpc_code(), e.to_string(), StatusCode::BAD_REQUEST)
 }
 

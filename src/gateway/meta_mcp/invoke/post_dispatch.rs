@@ -23,9 +23,7 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::support::{
     CachePrincipal, augment_with_predictions, augment_with_trace, response_cache_key_for,
 };
-use crate::gateway::recovery::{
-    MetaSurface, RecoveryContext, attach_recovery, recovery_for_surface,
-};
+use crate::gateway::recovery::{MetaSurface, RecoveryContext, recovery_for_surface};
 use crate::idempotency::IdempotencyReservation;
 use crate::security::http_diagnostics::is_upstream_unauthorized;
 use crate::{Error, Result};
@@ -40,12 +38,13 @@ pub(super) fn attach_tool_error_recovery(
     // (schema validation, executor failure) it sets `isError: true`
     // in the JSON value without propagating a Rust `Err`.  Attach a
     // recovery hint so the LLM has structured guidance to fix the
-    // call — but only when the `recovery` field is not already set.
+    // call — but only when the gateway has not set `_recovery` already;
+    // a backend's own `recovery` is its data and does not count.
     if value
         .get("isError")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false)
-        && value.get("recovery").is_none()
+        && value.get("_recovery").is_none()
     {
         let detail = value
             .get("content")
@@ -70,9 +69,16 @@ pub(super) fn attach_tool_error_recovery(
             },
             surface,
         );
-        let value = attach_recovery(value, hint);
         // MIK-7939: the hint is the gateway's text, never a receipt's.
-        super::gateway_writes::note(super::gateway_writes::Layer::Value, &["recovery"], &value);
+        let mut value = value;
+        if let Ok(hint) = serde_json::to_value(hint) {
+            super::gateway_writes::insert_noted(
+                super::gateway_writes::Layer::Value,
+                &["_recovery"],
+                &mut value,
+                hint,
+            );
+        }
         value
     } else {
         value
@@ -93,22 +99,42 @@ impl MetaMcp {
         verified_identity: Option<&crate::key_server::oidc::VerifiedIdentity>,
         (server, tool, surface): (&str, &str, MetaSurface),
     ) -> Result<Value> {
+        // Every failure of a sent call: a web UI call answers "may have run",
+        // unless the backend cannot have acted.
+        #[cfg(feature = "webui")]
+        crate::gateway::ui_call::note_send_error(matches!(
+            e,
+            Error::BackendNotFound(_) | Error::ToolNotFound(_)
+        ));
         // A11-c: a 401 on a managed credential forces at most one
         // refresh, then either asks the user to reconnect (an offer,
         // returned as the refusal it is) or tells the caller whether a
         // retry can help (the recovery hint below).
         let e = match managed {
-            Some(managed) if is_upstream_unauthorized(&e) => managed.after_upstream_401(e).await,
+            Some(managed) if is_upstream_unauthorized(&e) => {
+                super::audit::after_upstream_401(managed, e).await
+            }
             _ => e,
         };
+        super::audit::note_send_refusal(&e);
+        // Sent nothing (no counted send, and a pre-dispatch error or a refusal
+        // the backend's own send recorded): the one rule for releasing a key.
+        let unsent = crate::gateway::delivery_facts::unsent(&e);
         // MIK-8139: the account marker rides on the backend's own error, so
         // it is honoured only when the shared screen passes that error clean;
         // otherwise the error becomes the result the gates and firewall read.
         if crate::personal_accounts::refusal::marked(&e).is_some()
             && self.backend_error_screens_clean(server, tool, &e)
         {
-            // Settled like every dispatched failure (ADR-012).
-            if let Some(reservation) = idem_reservation.as_mut() {
+            // Settled like every dispatched failure (ADR-012). A marked refusal
+            // comes only from `after_upstream_401`, on an upstream 401: one a
+            // sent call answered keeps the key; one the backend's own start
+            // met before the tools/call was sent (a managed slot started
+            // cold) sent nothing, so it is settled as unsent, and then
+            // answered with the offer as any marked refusal is.
+            if unsent {
+                settle_unsent(idem_reservation, execution);
+            } else if let Some(reservation) = idem_reservation.as_mut() {
                 reservation.commit(&withheld_side_effect());
             }
             return self.with_connect_offer(Err(e), verified_identity).await;
@@ -126,16 +152,8 @@ impl MetaMcp {
         // reservation left in the `Option` would be picked up by that
         // commit and re-inserted as a completed entry, which makes the
         // release a no-op and the key permanently wrong.
-        if e.is_pre_dispatch() {
-            if let Some(mut reservation) = idem_reservation.take() {
-                reservation.release();
-            }
-            // The outer lease was marked before this call; a refusal the
-            // backend never saw is not retained there either, or a keyed
-            // retry replays a stale refusal and its hint (MIK-7974).
-            if let Some(execution) = execution {
-                execution.withdraw_dispatch();
-            }
+        if unsent {
+            settle_unsent(idem_reservation, execution);
         }
         // MIK-7979: a lost round settles with the uncertainty notice, and the
         // reservation leaves the `Option` for the same reason as above: the
@@ -172,17 +190,12 @@ impl MetaMcp {
         //
         // `_cost_warnings` — active at ≥80% budget consumption (Notify tier).
         // `_cost_suggestion` — present when a cheaper alternative exists.
-        if !cost_warnings.is_empty()
-            && let Some(obj) = result.as_object_mut()
-        {
-            obj.insert(
-                "_cost_warnings".to_string(),
-                serde_json::json!(cost_warnings),
-            );
-            super::gateway_writes::note(
+        if !cost_warnings.is_empty() {
+            super::gateway_writes::insert_noted(
                 super::gateway_writes::Layer::Value,
                 &["_cost_warnings"],
                 result,
+                serde_json::json!(cost_warnings),
             );
         }
 
@@ -195,21 +208,17 @@ impl MetaMcp {
                     suggestions::suggest_cheaper(tool, cost, &all_costs, alternatives)
                     // Never point a caller at a tool it could not call (A3).
                     && self.admits_tool_named(&suggestion.alternative, caller.scope(), session_id)
-                    && let Some(obj) = result.as_object_mut()
                 {
-                    obj.insert(
-                        "_cost_suggestion".to_string(),
+                    super::gateway_writes::insert_noted(
+                        super::gateway_writes::Layer::Value,
+                        &["_cost_suggestion"],
+                        result,
                         serde_json::json!({
                             "message": suggestion.reason,
                             "alternative": suggestion.alternative,
                             "savings_per_call": suggestion.savings_per_call,
                             "alternative_cost": suggestion.alternative_cost,
                         }),
-                    );
-                    super::gateway_writes::note(
-                        super::gateway_writes::Layer::Value,
-                        &["_cost_suggestion"],
-                        result,
                     );
                 }
             }
@@ -364,7 +373,8 @@ impl MetaMcp {
         // survives the refusal. Relaying it instead leaves the client holding
         // an `inputRequests` entry it has no handler for and the backend
         // holding an exchange that can never be completed.
-        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)?;
+        undeclared_gate::refuse_undeclared(result, caller, server, tool, trace_id)
+            .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
 
         if let Some(answer) = self
             .bridge_legacy_ask(
@@ -513,6 +523,11 @@ impl MetaMcp {
             caller_key: None,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
+        if effect == super::super::response_security::GateEffect::Withheld {
+            // Per step in a composite: refused only while this request still
+            // vouches for the delivery, so a plan that goes on is not marked.
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         // The gates have run on the payload; the worker takes it, unminted.
         if let Some(withheld) = withheld
             && worker_clock::hand_to_worker(withheld, gated.clone())
@@ -520,7 +535,12 @@ impl MetaMcp {
             return Err(unbindable_continuation(server, tool));
         }
         result = gated;
-        self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        // A dispatch error the backend never saw, answered as a tool result,
+        // is the gateway's text: no receipt names the backend for it.
+        if super::audit::pre_send_now() != crate::gateway::meta_mcp::dispatch_log::PreSend::Refused
+        {
+            self.stage_relay_receipt(caller.relay_caller(session_id), (server, tool), &result);
+        }
         // A chained backend is eligible only with a checked upstream outcome.
         let (source, upstream) = super::super::response_security::chain_after_gates(
             effect,
@@ -618,4 +638,27 @@ fn refuse_unbindable(server: &str, tool: &str, trace_id: &str) -> crate::Error {
         "Cannot mint a continuation for this caller; refusing"
     );
     unbindable_continuation(server, tool)
+}
+
+/// A dispatch that provably sent nothing is refused before its backend: the
+/// invocation is marked refused, its key released (`take()`, or the commit
+/// that follows would re-insert it), and the outer lease withdrawn, or a keyed
+/// retry replays a stale refusal and its hint (MIK-7974). A refusal the
+/// backend's own send recorded is the gateway's: its delivery says refused.
+fn settle_unsent(
+    idem_reservation: &mut Option<IdempotencyReservation>,
+    execution: Option<&crate::gateway::meta_mcp::admission::SyncLease>,
+) {
+    super::audit::note_pre_send(crate::gateway::meta_mcp::dispatch_log::PreSend::Refused);
+    if crate::gateway::delivery_facts::refused_before_send_seen() {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+    }
+    if let Some(mut reservation) = idem_reservation.take() {
+        reservation.release();
+    }
+    if let Some(execution) = execution {
+        execution.withdraw_dispatch();
+    }
 }

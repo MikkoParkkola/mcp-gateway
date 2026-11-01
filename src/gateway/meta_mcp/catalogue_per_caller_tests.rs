@@ -45,6 +45,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     > {
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -59,11 +60,13 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
 }
 
 /// Let `meta` mint for a verified caller: [`PerIdentityMint`] plus the durable
-/// audit log a `required` mint refuses to run without.
-pub(super) fn install_minting(meta: &mut MetaMcp) {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
+/// audit log a `required` mint refuses to run without, in `log`. The caller
+/// creates `log` before `meta`, so it drops after the logger.
+pub(super) fn install_minting(
+    meta: &mut MetaMcp,
+    log: &crate::security::transparency_log::temp::TempLog,
+) {
+    let path = log.path().to_string_lossy().to_string();
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -170,15 +173,20 @@ const STATIC_TOOL: &str = "gateway_static_ledger";
 /// without one — a mint must never reach a caller without a durable audit
 /// record — so omitting it would make every case below pass for that reason
 /// rather than for the one under test.
-async fn per_identity_gateway() -> (MetaMcp, Arc<PerIdentityCatalogue>) {
-    per_identity_gateway_logging_to(None).await
+/// The log comes first, so a caller's `let (_log, ..)` drops it last.
+async fn per_identity_gateway() -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<PerIdentityCatalogue>,
+) {
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let (meta, wire) = per_identity_gateway_logging_to(&log.path().to_string_lossy()).await;
+    (log, meta, wire)
 }
 
-/// The same fixture, optionally writing its transparency log to a known path so
-/// a case can count the records a request produced.
-async fn per_identity_gateway_logging_to(
-    log_path: Option<&str>,
-) -> (MetaMcp, Arc<PerIdentityCatalogue>) {
+/// The same fixture, writing its transparency log to `log_path` so a case can
+/// count the records a request produced.
+async fn per_identity_gateway_logging_to(log_path: &str) -> (MetaMcp, Arc<PerIdentityCatalogue>) {
     let registry = Arc::new(BackendRegistry::new());
 
     let wire = Arc::new(PerIdentityCatalogue {
@@ -243,15 +251,7 @@ async fn per_identity_gateway_logging_to(
     let mut meta = MetaMcp::new(registry)
         .with_profile_registry(ProfileRegistry::from_config(&configs, "open"));
 
-    let path = log_path.map_or_else(
-        || {
-            let file = tempfile::NamedTempFile::new().expect("tempfile");
-            let path = file.path().to_string_lossy().to_string();
-            std::mem::forget(file);
-            path
-        },
-        str::to_string,
-    );
+    let path = log_path.to_string();
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
@@ -303,7 +303,7 @@ pub(super) async fn listed_for(
 /// fix for the first from becoming a blanket loosening of the isolation guard.
 #[tokio::test]
 async fn each_identity_sees_its_own_catalogue_and_no_one_elses() {
-    let (meta, wire) = per_identity_gateway().await;
+    let (_log, meta, wire) = per_identity_gateway().await;
     let alpha_id = identity("alpha");
     let beta_id = identity("beta");
 
@@ -422,11 +422,10 @@ fn audit_actions(path: &str) -> Vec<String> {
 /// simply broken.
 #[tokio::test]
 async fn an_unidentified_caller_mints_nothing_and_audits_nothing() {
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
 
-    let (meta, _wire) = per_identity_gateway_logging_to(Some(&path)).await;
+    let (meta, _wire) = per_identity_gateway_logging_to(&path).await;
 
     let anonymous = listed_for(&meta, &super::anonymous_caller()).await;
     let after_anonymous = audit_actions(&path);
@@ -578,9 +577,14 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
     let (backend, wire) = expiring_backend(Duration::from_millis(30));
     let headers = [("Authorization".to_string(), "Bearer alpha".to_string())];
 
-    let first = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
-        .await
-        .expect("first read fills the slot");
+    let first = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        Some("alpha"),
+        crate::transport::LentCredential::unchecked(&headers),
+    )
+    .await
+    .expect("first read fills the slot");
     assert_eq!(
         first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::FIRST],
@@ -588,11 +592,17 @@ async fn a_per_user_slot_past_its_ttl_is_refetched_not_served_stale() {
          below is measuring a cold fill rather than a stale one"
     );
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
 
-    let second = MetaMcp::backend_tools_for_discovery(&backend, true, Some("alpha"), &headers)
-        .await
-        .expect("second read");
+    let second = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        Some("alpha"),
+        crate::transport::LentCredential::unchecked(&headers),
+    )
+    .await
+    .expect("second read");
     assert_eq!(
         second.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::SECOND],
@@ -631,9 +641,14 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
     // row reads, with no sleep to line up against the cache's clock.
     let (backend, wire) = expiring_backend(Duration::ZERO);
 
-    let first = MetaMcp::backend_tools_for_discovery(&backend, true, None, &[])
-        .await
-        .expect("first read fills the shared slot");
+    let first = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        true,
+        None,
+        crate::transport::LentCredential::default(),
+    )
+    .await
+    .expect("first read fills the shared slot");
     assert_eq!(
         first.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
         vec![ChangingCatalogue::FIRST],
@@ -646,7 +661,12 @@ async fn a_shared_slot_past_its_ttl_still_serves_without_a_synchronous_refetch()
          fetched inline: its snapshot is served while a background task \
          refreshes behind it, and making it synchronous would put a network \
          round trip on the busiest path in the gateway)",
-        MetaMcp::backend_tools_for_discovery(&backend, true, None, &[]),
+        MetaMcp::backend_tools_for_discovery(
+            &backend,
+            true,
+            None,
+            crate::transport::LentCredential::default(),
+        ),
     )
     .await
     .expect("second read");
@@ -720,8 +740,15 @@ async fn a_shared_slot_withholding_every_tool_still_refreshes_past_its_ttl() {
     );
     assert_eq!(wire.fetches.load(std::sync::atomic::Ordering::SeqCst), 1);
 
+    // timing: lower-bound
     tokio::time::sleep(Duration::from_millis(60)).await;
-    let served = MetaMcp::backend_tools_for_discovery(&backend, false, None, &[]).await;
+    let served = MetaMcp::backend_tools_for_discovery(
+        &backend,
+        false,
+        None,
+        crate::transport::LentCredential::default(),
+    )
+    .await;
     assert!(served.is_none(), "nothing servable: {served:?}");
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);

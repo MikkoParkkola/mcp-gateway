@@ -131,6 +131,35 @@ fn refuse_agent_scope(key: &str, scope: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether `tool` (or `qualified`, `server:tool`) matches any pattern in a
+/// tool list: an exact name, or a trailing `prefix*`. The one matcher every
+/// tool list uses (an API key's `allowed_tools`/`denied_tools`, a backend's
+/// `allowed_tools`), so the grammar refused above and the one matched here
+/// cannot drift apart.
+pub(crate) fn tool_pattern_matches(patterns: &[String], tool: &str, qualified: &str) -> bool {
+    patterns.iter().any(|pattern| {
+        if let Some(prefix) = pattern.strip_suffix('*') {
+            tool.starts_with(prefix) || qualified.starts_with(prefix)
+        } else {
+            tool == pattern || qualified == pattern
+        }
+    })
+}
+
+/// Refuse a backend's `allowed_tools` that is empty or holds a pattern that
+/// matches nothing. The loader and the web UI's add and edit both ask this,
+/// so a list the file would refuse is refused at the request too.
+pub(crate) fn check_backend_allowed_tools(name: &str, list: &[String]) -> Result<()> {
+    let at = format!("backends.{name}.allowed_tools");
+    if list.is_empty() {
+        return Err(Error::ConfigValidation(format!(
+            "{at} is empty, so the backend would offer no tool. List the tools it should \
+             offer, or remove the key to offer every tool."
+        )));
+    }
+    refuse(&at, list, Grammar::ToolPrefix(Role::Allow))
+}
+
 impl Config {
     /// Refuse a pattern its section cannot match (MIK-8298).
     pub(super) fn validate_pattern_grammar(&self) -> Result<()> {
@@ -179,6 +208,11 @@ impl Config {
                 &rule.scopes.tools,
                 Grammar::ToolPrefix(Role::Allow),
             )?;
+        }
+        for (name, backend) in &self.backends {
+            if let Some(list) = &backend.allowed_tools {
+                check_backend_allowed_tools(name, list)?;
+            }
         }
         // The capability backend is a backend too: '*' is never in a name.
         let name = &self.capabilities.name;

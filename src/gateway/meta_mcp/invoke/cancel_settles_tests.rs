@@ -276,10 +276,13 @@ async fn a_bridged_round_cancelled_mid_dispatch_is_not_executed_again() {
     assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
 }
 
-/// T3: cancelled while the client is being asked. The backend stopped to ask
-/// and nothing has been re-sent, so the key is released and a retry runs.
+/// T3: cancelled while the client is being asked. Round one reached the
+/// backend and asked, and stopping to ask does not prove it has not acted; a
+/// legacy client has no continuation to take the key, so it is kept as
+/// may-have-run: the retry is served the uncertainty notice
+/// and is not run again.
 #[tokio::test]
-async fn a_call_cancelled_while_asking_the_client_releases_its_key() {
+async fn a_call_cancelled_while_asking_the_client_keeps_its_key() {
     let (meta, wire) = gateway(vec![Step::Answer(interim())]);
     let asking = Client {
         park: true,
@@ -287,15 +290,19 @@ async fn a_call_cancelled_while_asking_the_client_releases_its_key() {
     };
     let asked = Arc::clone(&asking.asked);
     cancel_at(&meta, &asking, &asked).await;
-    assert_eq!(wire.calls.load(Ordering::SeqCst), 1);
-
-    let retry = cancel_at(&meta, &asking, &asked);
-    retry.await;
     assert_eq!(
         wire.calls.load(Ordering::SeqCst),
-        2,
-        "a key released before any re-dispatch lets the retry run"
+        1,
+        "premise: round one was sent"
     );
+
+    let retry = call(&meta, &answering()).await;
+    assert_eq!(
+        wire.calls.load(Ordering::SeqCst),
+        1,
+        "the same-key retry ran again after round one was sent: {retry:?}"
+    );
+    assert!(format!("{retry:?}").contains(UNCERTAIN), "{retry:?}");
 }
 
 /// Run a keyed call that fails once with `first`, then retry it.
@@ -424,3 +431,6 @@ fn a_lost_round_leaves_an_already_settled_key_alone() {
         other => panic!("the stored answer changed: {other:?}"),
     }
 }
+
+#[path = "cancel_settles_relay_tests.rs"]
+mod relay;

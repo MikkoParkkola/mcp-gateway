@@ -85,7 +85,7 @@ backend" and "fails a capability file" first.**
 | 58 | The gateway mints every legacy session id: a client-supplied `Mcp-Session-Id` that names no live session is replaced, an empty one counts as absent, and logs, audit and the dashboard carry an 8-hex fingerprint instead of the id | Use the `Mcp-Session-Id` the response returns; to separate users, turn auth on and keep `/mcp` off the public paths; match new audit and log entries by fingerprint (entries from before the upgrade by raw id); library users: `first_session_id` is removed |
 | 59 | A call to a tool not yet listed for that caller lists the backend first, as the caller; under `closed`, an unreadable list or a tool the complete list lacks is refused | To forward such calls, set the backend's `input_schema_enforcement: standard`; a rate limit of 1 can refuse a cold call, since its list spends a token |
 | 60 | Capability pins read CRLF line endings as LF | Windows only: re-run `mcp-gateway cap pin` on a file you pinned while it had CRLF line endings |
-| 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
+| 61 | A backend 401 on a managed account forces one token refresh, then answers with the reconnect offer or `UPSTREAM_AUTH_REJECTED`; HTTP 401 and 403 are no longer retried; a REST 401's audit `error_code` is -32000 | Handle `_recovery.error_code`; do not roll back to an earlier 4.0 beta after a forced refresh |
 | 62 | A bridged input exchange that runs out of rounds returns the backend's last question with a continuation instead of `-32003` | A client that treated `-32003` as final: answer the returned `inputRequests` and resend with the `requestState` it carries, or treat it as unfinished |
 | 63 | An error result (`isError: true`) is never served from the response cache or the capability cache; the next call is dispatched again | None; to shed load from a failing backend, rely on the circuit breaker and `failsafe.rate_limit` |
 | 64 | Text after a line break (lone CR, NEL, LS, PS) inside a capability's `sha256:` line is hashed | Inspect, then re-pin, a pinned file whose pin line contains one |
@@ -129,7 +129,7 @@ backend" and "fails a capability file" first.**
 | 102 | A backend with identity propagation admits at most 64 per-caller slots, 8 per caller; all anonymous callers count as one caller. Past a limit the request is refused | With auth off, expect at most 8 passthrough credentials served at once per backend; turn auth on to give each user their own 8 |
 | 103 | Each grant decision on a personal capability writes an `identity_grant_decision` record to the audit log; under `FailClosed` a failed write answers `-32005` | Where a SIEM rule counts audit records per call, filter on `kind`; a call now carries a decision record beside its invocation record |
 | 104 | A streaming session belongs to the caller's proven subject and its credential, not the credential alone: callers that share one API key, bearer token or no credential but prove different subjects no longer resume or delete each other's sessions | A client that proves a subject and renews its bearer token (a delegated OIDC bearer, an agent JWT) gets a new session with the new token: re-initialize after a refresh. None for other clients |
-| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record, unless it repeats the last one written for that task, caller and target within 10 minutes (item 117). Task records name the calls that produced them (record version 5); a failed upstream task whose error is the peer's own records that (record version 6) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
+| 105 | `tasks/get`, and a repeat of a task-augmented call, re-check a finished task against current policy before returning its result. Under attestation `enforce` the read needs a valid recovery token (else -32002); a task whose dispatch an identity grant refused reads back as the current grant denial (-32004); each such read of a personal capability writes an `identity_grant_decision` audit record, unless it repeats the last one written for that task, caller and target within 10 minutes (item 117). Task records name the calls that produced them (record version 5); a failed upstream task whose error is the peer's own records that (record version 6), and a task whose call the gateway refused before its backend records the gateway as its answer's author, so no receipt quotes that answer as the backend's (record version 6 or later; every row 4.0.0 creates is version 9, so this adds no rollback boundary) | Send a fresh `_meta["io.mcp-gateway/recovery"].attestation` on every read of a finished task; before rolling back to a beta, read item 105 and back up `tasks.store_dir` |
 | 106 | Under `security.posture: hardened`, an HTTP MCP request with no per-caller identity is refused with 403 (`-32600`): a shared API key, the static bearer and a dashboard session alone are refused | Give each caller an identity: an IdP (OIDC or Access), a trusted proxy header, an mTLS client certificate or an agent JWT; or mark a key held by one person `kind: personal`. Dashboard MCP calls need an IdP or Access subject |
 | 107 | A backend can be set to verify or require an upstream gateway's signature chain; this gateway then preserves it and appends its own link | Nothing unless you chain gateways; to chain, set `signature_chain`, `chain_origins` and `chain_signer` on the upstream backend |
 | 108 | A `cacheScope` the gateway delivers is always `private`: a backend's `public` (or a malformed value) is rewritten on every route, and `CacheScope::Public` can no longer be built | A cache in front of the gateway that relied on a backend's `public` no longer shares across callers; that sharing was never safe. Rust users of the library: `CacheScope::Public` now holds `std::convert::Infallible` and `CacheScope::for_list` is removed; use `CacheScope::Private` |
@@ -173,7 +173,7 @@ backend" and "fails a capability file" first.**
 | 146 | An OAuth backend whose authorization server, authorization endpoint, token endpoint or registration endpoint is `http://` to a host off this machine fails at connect, and so does a redirect from one to such a URL; a capability that sends a credential (`auth.required`, or a header, query or body template that fills in `{env.X}` or `{keychain.X}`) and names an `http://` `base_url` or `endpoint` off this machine fails to load, and a templated one is refused at call time. `http://` to a loopback host is allowed, and is no longer proxied | Serve the authorization server and the capability's API over `https://`, or on a loopback host (`localhost`, `127.0.0.1`, `[::1]`). `allow_cleartext_credentials` does not cover either |
 | 147 | A capability whose declared output root is not object-shaped (an array, a string, a type list) advertises `outputSchema` as an object and publishes `structuredContent` under `items` | Read `structuredContent.items` for the nine shipped capabilities listed below, and for your own; the text content is unchanged |
 | 148 | An `http_url` backend with no `streamable_http` key POSTs `initialize` first and falls back to the legacy SSE `GET` only when that POST is refused with a 4xx that is not about the credential or a retry (any but 401, 403, 407, 408, 429); `add --url` no longer writes `streamable_http: false`. An explicit `true` or `false` is tried first, and when the server refuses it with such a 4xx the other transport is tried once, with a warning naming the backend and the value to set. `TransportConfig::Http::streamable_http` is now `Option<bool>` | None. A config the old `add --url` wrote keeps working; to skip the refused request, set the value the warning names or remove the key. MCP Events follow the transport the backend connected with; a subscribe starts an undetected backend first, a failed start answers `-32000`, and SSE is refused with `-32014` |
-| 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `recovery` hint instead |
+| 149 | A meta-tool result whose payload says `isError: true` (a failed `gateway_invoke`, or a backend's own tool error) carries `isError: true` on the outer `tools/call` result; it was always `false`, with the failure only in the text | A client that read failure from the text alone keeps working; one that treated `isError: true` as a protocol failure should read the text and its `_recovery` hint instead |
 | 150 | `mcp_gateway::cli::invoke::resolve_args` takes a fourth parameter, `kv_schema: Option<&Value>`: `key=value` text is typed by that input schema; `None` keeps the old behaviour | An embedder passes the tool's input schema, or `None` |
 | 151 | A legacy client that calls without a credential (authentication off, or on with the path in `auth.public_paths`, as `/mcp` is in the shipped presets) and does not resume a session the gateway issued is counted under one shared identity by the anomaly detector, the tenant guard and the call budget; in 3.x each such request was a new session and the first call in it | None unless these controls refuse such clients: give them a credential, have them keep the `mcp-session-id` from `initialize`, or raise the limit |
 | 152 | A weekday step `*/n` in a cron expression matches only the days `n` divides; the old match also tried each day plus 7, so `*/2` matched every day and `*/3` to `*/13` (except `*/7`) matched extra days; `*/1`, `*/7` and `*/14` up are unchanged | Check each scheduled job and `schedule.tick` subscription whose weekday field uses `/`; one meant to run daily uses `*` |
@@ -487,7 +487,7 @@ profile, the transport's authorizer (backend scope, `tool_policy`, the key's `al
 This covers `tools/list`, `tools/list?query=`, `tools/resolve`, `gateway_search_tools`,
 `gateway_search`, `gateway_list_tools`, `gateway_list_servers` (and its `tools_count`), the
 `initialize` instructions and their counts, the meta-tool descriptions, did-you-mean hints,
-`predicted_next`, `_cost_suggestion`, `gateway_list_disabled_capabilities` and the
+`_predicted_next`, `_cost_suggestion`, `gateway_list_disabled_capabilities` and the
 `gateway_set_state` count. There is no opt-out: an opt-out would be a disclosure switch.
 
 What changes for callers:
@@ -2003,7 +2003,7 @@ same dead token each time, for up to the token's lifetime, which is often an hou
   provider answers `invalid_grant`, the account is marked reconnect-required and the call is
   refused with the reconnect offer (JSON-RPC -32001 on `gateway_invoke`, HTTP 403 and -32003
   on `/mcp/{backend}`), exactly as an expired grant is today.
-- **Otherwise the caller is told whether a retry can help.** The tool result's `recovery`
+- **Otherwise the caller is told whether a retry can help.** The tool result's `_recovery`
   (or, on `/mcp/{backend}`, the error's `data`) carries `error_code: UPSTREAM_AUTH_REJECTED`
   with `retry: true` when the token rotated or the provider was unreachable, and
   `UPSTREAM_AUTH_REJECTED_PERSISTENT` with `retry: false` when this token was already
@@ -2502,6 +2502,10 @@ capabilities:
   Private-range enforcement for names becomes the proxy's job; IP-literal destinations are
   still refused. A plain `http://` destination sends its URL and headers, credentials
   included, to the proxy.
+- A destination, OAuth token endpoint or redirect hop whose host is `localhost` or
+  `*.localhost` (any case, trailing dots included) is refused before any lookup, with or
+  without a proxy. Any other name goes to the proxy, including a public-looking name whose
+  DNS points at loopback: configure the proxy to refuse loopback and private ranges.
 - The value must be an `http://` or `https://` URL with a host; anything else fails the
   config load. It applies at restart. Startup logs a warning naming the proxy (without
   credentials).
@@ -3143,7 +3147,8 @@ as above, and a row that holds backend output without recoverable provenance, ev
 playbook or `gateway_execute` row included, is refused -32003 (item 120). Only beta task stores contain such rows.
 
 **Rollback:** a record that carries calls is written as version 5, and a failed upstream task
-whose error is the peer's own as version 6 (MIK-7887), a cancelled task whose upstream
+whose error is the peer's own, or whose call the gateway refused before its backend, as
+version 6 (a row 4.0.0 creates is already version 9 and stays so), a cancelled task whose upstream
 task was sent a cancel as version 7 (MIK-7642), and a cancelled task whose upstream cancel is
 claimed from 4.0.0 on as version 8 (MIK-8347: an unconfirmed cancel is kept and retried); a
 version 4, 5, 6, 7 or 8 row makes a beta (which reads versions 1 to 3) refuse to open the task
@@ -3400,6 +3405,9 @@ settlement now writes its own invocation record, before the result is committed:
   live call's record gives that refusal (`denied` for a response-firewall refusal), and
   `error_code` is the code the task committed;
 - `who` names only the principal the task was admitted under, with no credential kind.
+- when the recovery's gates refuse or rewrite the answer, `response_effect` and
+  `response_findings` as on a delivery record (see the `task_settlement` record for a task the
+  gateway runs itself).
 
 The submission record carries the same `task_id` whenever the backend's task handle was captured.
 Under `FailClosed`, a failed settlement write settles the task `-32005 "audit log unavailable"`
@@ -4074,7 +4082,7 @@ the outer `tools/call` result. It was always `false`, with the failure only in
 the text.
 
 A client that read failure from the text alone keeps working. One that treated
-`isError: true` as a protocol failure should read the text and its `recovery`
+`isError: true` as a protocol failure should read the text and its `_recovery`
 hint instead.
 
 ## 150. `resolve_args` takes the tool's input schema
@@ -4780,14 +4788,21 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
 | `/ui/api/activity/{id}` | hidden | one Activity row's receipt, same access as the list; 404 for a row the caller may not read |  |
-| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/status`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/config`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/decisions` | hidden | admin only; the decisions an admin has open (access requests refused for a missing grant, and capabilities whose file no longer matches its pin), each with an opaque id, what it waits on and display-safe fields only; read-only, answered from memory, 503 naming each source still being read |  |
+| `/ui/api/discovery` | hidden | admin only; servers named in other MCP clients' config files on this host (ADR-021), with whether each could be adopted; read-only, no value, argument or full path |  |
+| `/ui/api/discovery/adopt` | hidden | admin only; write: adopts one discovered server as a disabled backend in gateway.yaml (ADR-021, ADR-024), its literal values to the secret store; the body names a find and a revision, never a command, URL or value |  |
 | `/ui/api/events/dead-letters` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; MIK-8697: a row names its subscription as `subscriptionAlias` (keyed) and `subscriptionId` is removed, and the `subscription` filter takes the alias or a stored id |  |
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
 | `/ui/api/events/leases` | hidden | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token |  |
+| `/ui/api/gateway` | hidden | admin only; the Gateway page's facts: version, uptime, environment, reload counts, TLS state, upgrade, clients by the name they reported, and what was refused at start |  |
 | `/ui/api/markers` | hidden | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts |  |
 | `/ui/api/metrics/series` | hidden | admin only; windowed call counters for the charts (ADR-017) |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
 | `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/status` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface. Its `access` member reports, per caller, which UI pages and tabs it may open, decided from `src/gateway/ui/access_table.rs`, the table every `/ui/api` route admits its caller through; an auth-on caller with no credential gets none |  |
+| `/ui/api/stream` | hidden | live server-sent events for the bundled UI: `hello`, then `status` for every caller (counts only below admin) and `reload` for admins; never extends a session; capped at 32 streams and 4 per credential; documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/tools/call` | hidden | admin-only: runs one tool through the MCP `gateway_invoke` dispatch; 4xx did not run, 200 ran, 5xx may have run |  |
 | `/ui/assets/{file}` | hidden | none: the UI's own files, not an integration surface |  |
 ### Library items
 
@@ -4795,5 +4810,6 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 |---|---|---|---|
 | `mcp_gateway::Error`, `mcp_gateway::InitializedStore`, `mcp_gateway::MCP_PROTOCOL_VERSION`, `mcp_gateway::MigratedCredential`, `mcp_gateway::OfflineInitError`, `mcp_gateway::OfflineMigrationError`, `mcp_gateway::Result`, `mcp_gateway::SecretStoreReport`, `mcp_gateway::attestation`, `mcp_gateway::autotag`, `mcp_gateway::backend`, `mcp_gateway::cache`, `mcp_gateway::capability`, `mcp_gateway::chains`, `mcp_gateway::cli`, `mcp_gateway::config`, `mcp_gateway::config_persistence`, `mcp_gateway::config_reload`, `mcp_gateway::context_compression`, `mcp_gateway::context_integrity`, `mcp_gateway::control_plane`, `mcp_gateway::cost_accounting`, `mcp_gateway::discovery`, `mcp_gateway::doctor_report`, `mcp_gateway::error`, `mcp_gateway::failsafe`, `mcp_gateway::gateway`, `mcp_gateway::honest_task_tokens`, `mcp_gateway::idempotency`, `mcp_gateway::identity_grants`, `mcp_gateway::identity_propagation`, `mcp_gateway::initialize_store_offline`, `mcp_gateway::key_server`, `mcp_gateway::kill_switch`, `mcp_gateway::kubernetes`, `mcp_gateway::lock_directory_finding`, `mcp_gateway::metrics`, `mcp_gateway::migrate_legacy_credential_offline`, `mcp_gateway::mtls`, `mcp_gateway::oauth`, `mcp_gateway::playbook`, `mcp_gateway::preview_sandbox`, `mcp_gateway::projection`, `mcp_gateway::protocol`, `mcp_gateway::protocol_imports`, `mcp_gateway::protocol_revision_telemetry`, `mcp_gateway::provider`, `mcp_gateway::ranking`, `mcp_gateway::registry`, `mcp_gateway::routing_profile`, `mcp_gateway::runtime`, `mcp_gateway::scheduler`, `mcp_gateway::secret_injection`, `mcp_gateway::secrets`, `mcp_gateway::security`, `mcp_gateway::semantic_search`, `mcp_gateway::setup_tracing`, `mcp_gateway::simhash`, `mcp_gateway::skills`, `mcp_gateway::stats`, `mcp_gateway::tool_profiles`, `mcp_gateway::tool_registry`, `mcp_gateway::tracing_context`, `mcp_gateway::transform`, `mcp_gateway::transition`, `mcp_gateway::transport`, `mcp_gateway::trust`, `mcp_gateway::validator` | hidden | `#[doc(hidden)] pub`, path unchanged; off docs.rs, no stability promise |  |
 | `mcp_gateway::cli_support` | hidden | `#[doc(hidden)] pub`; off docs.rs, no stability promise |  |
+| `mcp_gateway::upgrade_notice` | hidden | `#[doc(hidden)] pub`, new path; crate-internal API for the CLI binary, off docs.rs, no stability promise |  |
 
 <!-- surface-appendix:end -->

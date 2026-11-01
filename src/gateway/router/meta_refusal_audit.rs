@@ -44,6 +44,9 @@ struct Refusal<'t> {
     server: &'t str,
     tool: Option<&'t str>,
     tenants: BTreeSet<String>,
+    /// The kind of a refusal decided before any gate could note one; `None`
+    /// when a gate decides it, so an unnoted one records `unrecorded`.
+    unnoted: Option<crate::security::decision_record::DecisionKind>,
 }
 
 impl<'a> Refused<'a> {
@@ -81,6 +84,11 @@ impl<'a> Refused<'a> {
         message: String,
         status: StatusCode,
     ) -> axum::response::Response {
+        // Every caller answers the whole request with this refusal: the
+        // route authorization, the request firewall, a refused step.
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
         // MIK-7116.MIN.1: the tenants the refused request named; nothing was
         // fetched, so there is no response side and no data class.
         let tenants = state.meta_mcp.request_tenants(target.arguments);
@@ -89,6 +97,7 @@ impl<'a> Refused<'a> {
             server: target.server,
             tool: Some(target.tool),
             tenants,
+            unnoted: None,
         };
         self.record(state, refusal, id, code, message, status).await
     }
@@ -107,6 +116,7 @@ impl<'a> Refused<'a> {
             server: "",
             tool: None,
             tenants: BTreeSet::new(),
+            unnoted: Some(crate::security::decision_record::DecisionKind::Syntax),
         };
         self.record(
             state,
@@ -138,6 +148,9 @@ impl<'a> Refused<'a> {
             server,
             tool: Some(tool),
             tenants: BTreeSet::new(),
+            // No execution principal: the caller's identity standing, which no
+            // kind names yet (MIK-8914.API2A.13), so recorded as unrecorded.
+            unnoted: Some(crate::security::decision_record::DecisionKind::Unrecorded),
         };
         // The predicate needs an `id` member; an unrecognised one is still
         // answered, with no id, and recorded.
@@ -184,6 +197,7 @@ impl<'a> Refused<'a> {
             server: target.server,
             tool: Some(target.tool),
             tenants,
+            unnoted: None,
         };
         crate::security::security_metrics::meta_refused(code);
         let error = match self.write(state, refusal).await? {
@@ -223,7 +237,12 @@ impl<'a> Refused<'a> {
             .as_ref()
             .map(|log| log.failure_policy());
         match written {
-            Ok(_) => build_error_response(Some(id), code, message, self.session_id, status),
+            Ok(trace) => {
+                let mut response =
+                    build_error_response(Some(id), code, message, self.session_id, status);
+                super::helpers::trace_error_frame(&mut response, trace);
+                response
+            }
             Err(error) if failure_policy == Some(AuditFailurePolicy::FailClosed) => {
                 tracing::error!(%error, "meta-route refusal audit write failed; answering 503");
                 let error = crate::Error::AuditUnavailable;
@@ -283,6 +302,17 @@ impl<'a> Refused<'a> {
         let tool = refusal.tool.map(str::to_string);
         let attribution =
             DispatchNotes::default().attribution(&state.meta_mcp, refusal.tenants, None);
+        let mut noted = crate::gateway::meta_mcp::invoke::audit::take_route_noted();
+        if !noted.has_refusal()
+            && let Some(kind) = refusal.unnoted
+        {
+            noted.refused(kind, None);
+        }
+        let decision = Box::new(noted.decision(
+            crate::security::decision_record::Decided::Fresh,
+            crate::security::decision_record::Refused::of(refusal.outcome),
+            state.meta_mcp.live_config().as_deref(),
+        ));
         let session = self.session_id.to_string();
         let recorded = trace_id.clone();
         // The meta writer's correlation ladder; a modern call's session is
@@ -302,6 +332,7 @@ impl<'a> Refused<'a> {
                     &request_hash,
                     None,
                     attribution,
+                    Some(decision.as_ref()),
                 )
             })
             .await;

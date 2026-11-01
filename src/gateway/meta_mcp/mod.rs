@@ -93,6 +93,8 @@ mod direct_route;
 mod discovery_fetch;
 pub(crate) mod dispatch_log;
 mod dispatch_names;
+pub(in crate::gateway::meta_mcp) mod publish_gate;
+pub(crate) use dispatch_names::is_composite_meta_tool;
 mod effects;
 mod events_hook;
 pub(crate) mod grant_audit;
@@ -100,6 +102,9 @@ mod interim_promotion;
 #[cfg(test)]
 mod interim_promotion_tests;
 pub(crate) mod invoke;
+mod listing_warm;
+#[cfg(test)]
+pub(crate) use listing_warm::LISTING_DEADLINE_CAP;
 mod prompt_cache;
 mod protocol;
 pub(crate) mod refund_witness;
@@ -122,6 +127,10 @@ pub(crate) use surfaced::{ArgsPolicy, args_policy};
 mod task_confirmation;
 pub(crate) mod task_notify;
 mod task_replay;
+/// The cold claim's retry backoff, for the rows that wait it out.
+#[cfg(test)]
+pub(crate) use task_replay::COLD_RETRY_BACKOFF;
+pub(crate) use task_replay::StoredAnswer;
 pub(crate) mod upstream;
 mod visibility;
 pub(crate) mod visible;
@@ -180,6 +189,9 @@ pub struct MetaMcp {
     pub(super) events: std::sync::OnceLock<Arc<crate::events::EventsHub>>,
     /// The web UI's windowed call counters; set by the HTTP server.
     pub(super) counters: std::sync::OnceLock<Arc<crate::counters::CounterStore>>,
+    /// The web UI's open decisions; set by the HTTP server.
+    #[cfg(feature = "webui")]
+    pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
     pub(super) capabilities: RwLock<Option<Arc<CapabilityBackend>>>,
     pub(super) cache: Option<Arc<ResponseCache>>,
     pub(super) default_cache_ttl: Duration,
@@ -226,6 +238,9 @@ pub struct MetaMcp {
     session_lifecycle:
         std::sync::OnceLock<std::sync::Weak<crate::gateway::session_lifecycle::SessionLifecycle>>,
     pub(super) reload_context: RwLock<Option<Arc<ReloadContext>>>,
+    /// The live config built at startup, with or without a config file, so
+    /// every record names a revision (a reload context shares the same one).
+    pub(super) startup_live_config: std::sync::OnceLock<Arc<crate::config_reload::LiveConfig>>,
     /// End-user identity-propagation strategy (MIK-6704 / ADR-007). `Some` when
     /// at least one backend is configured for propagation; the dispatch path
     /// uses it to mint a per-user credential for such backends. `None` disables
@@ -275,7 +290,6 @@ pub struct MetaMcp {
     /// capability carrying a `projection` spec changes no response contract
     /// until an operator opts in. `experimental` drives the A/B split.
     pub(super) projection_mode: crate::projection::ProjectionMode,
-    pub(super) secret_injector: crate::secret_injection::SecretInjector,
     /// Cost tracker — per-session and per-API-key spend accounting.
     pub(super) cost_tracker: Arc<CostTracker>,
     /// Engram-inspired O(1) tool registry with prefetching (optional).
@@ -403,12 +417,10 @@ pub struct MetaMcp {
     /// MIK-7116.MIN.2: auditor of withheld frames, built on first use.
     rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
 
-    /// Response-side anomaly screening action mode (issue #133, D2).
-    ///
-    /// When `true`, responses with HIGH/CRITICAL inspection findings are blocked
-    /// before delivery to the client.  When `false` (default), findings are
-    /// logged but the response passes through.
-    pub(super) response_inspection_action_mode: bool,
+    /// Response-side anomaly screening (issue #133, D2): off, observe (the
+    /// default: findings logged and annotated) or action (a HIGH/CRITICAL
+    /// finding blocks the answer).
+    pub(super) response_inspection: crate::security::response_inspect::ResponseInspectionMode,
 
     /// Response contract config (issue #133, D1). Set when enabled.
     pub(super) response_contract: Option<Arc<crate::config::ResponseContractConfig>>,
@@ -477,6 +489,10 @@ pub struct MetaMcp {
     /// Calls a client may cancel explicitly by its own request id (MIK-7642
     /// PR.C). Held here because both HTTP routes dispatch through this handler.
     pub(super) inflight_calls: Arc<crate::gateway::router::inflight_calls::InFlightCalls>,
+    /// Web UI tool calls running at once (U12): a call that answered at its
+    /// deadline keeps its permit until it ends.
+    #[cfg(feature = "webui")]
+    pub(super) ui_calls: Arc<tokio::sync::Semaphore>,
 }
 
 /// The session a request belongs to, if it has one.
@@ -711,6 +727,9 @@ mod grant_slot_wrap_tests;
 mod grant_withheld_parity_tests;
 #[cfg(test)]
 mod guide_alloc_tests;
+/// A published pre-release's task row is refused, never stripped, when served.
+#[cfg(test)]
+mod legacy_row_planted_tests;
 #[cfg(test)]
 mod oracle_audit_tests;
 #[cfg(test)]

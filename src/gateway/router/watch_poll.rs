@@ -51,7 +51,9 @@ pub(crate) async fn poll_capability(
 ) -> Result<Value, PollRefused> {
     // The bucket the key's `/mcp` calls draw from: polls cannot exceed it.
     if !state
-        .auth_config
+        .live_config
+        .generation()
+        .auth()
         .check_authenticated_client_rate_limit(client)
     {
         return Err(PollRefused::RateLimited);
@@ -61,20 +63,19 @@ pub(crate) async fn poll_capability(
     let session = format!(
         "watch:{}",
         crate::gateway::record_principal::InternalPrincipal::new(principal.to_owned())
-            .record_form(state.auth_config.record_key())
+            .record_form(state.live_config.generation().auth().record_key())
             .as_str()
     );
     let identity = super::identity::caller_key(None, None, Some(client));
     #[cfg(feature = "firewall")]
     if let Some(fw) = &state.firewall {
-        let verdict = fw.check_request(
-            &session,
-            &target.backend,
-            &target.capability,
-            &arguments,
-            &client.name,
-            &identity,
-        );
+        let rule_target = crate::security::response_policy::RuleTarget {
+            server: crate::security::response_policy::ServerOf::Backend(&target.backend),
+            tool: &target.capability,
+            key: crate::security::response_policy::KeyOf::of_client(client.api_key_identity()),
+        };
+        let verdict =
+            fw.check_request_keyed(&session, rule_target, &arguments, &client.name, &identity);
         if !verdict.allowed {
             return Err(PollRefused::Firewall);
         }
@@ -93,7 +94,7 @@ pub(crate) async fn poll_capability(
         // matches that credential's other records (MIK-8697).
         crate::gateway::auth::AuthenticatedClient::record_principal_of(
             Some(client),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         crate::gateway::meta_mcp::Authentication::of(Some(client)),
         crate::security::audit::CredentialKind::of(Some(client)),
@@ -129,6 +130,7 @@ pub(crate) async fn poll_capability(
     let targets = [crate::security::response_policy::ResponsePolicyTarget {
         server: target.backend.clone(),
         tool: target.capability.clone(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     state
         .meta_mcp
@@ -163,11 +165,14 @@ impl GatewayWatchHost {
         }
     }
 
-    /// The live caller the holder's key authenticates as now; `None` when
-    /// the key is gone, expired or was re-issued (another digest).
+    /// The live caller the holder's key authenticates as now, by the key
+    /// table current at this poll; `None` when the key is gone, expired or
+    /// was re-issued (another digest), by reload too.
     fn client(state: &AppState, holder: &Holder) -> Option<AuthenticatedClient> {
         state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key(&holder.api_key.name, &holder.api_key.principal)
     }
 }
@@ -198,9 +203,11 @@ impl WatchHost for GatewayWatchHost {
         let Some(state) = self.state.upgrade() else {
             return false;
         };
-        // The key's expiry on the caller's reading, never a second read
-        // (MIK-8202).
-        let Some(client) = state.auth_config.client_for_key_at(
+        // One generation for the whole check: the key table that finds the
+        // key and the policy that judges it. The key's expiry on the caller's
+        // reading, never a second read (MIK-8202).
+        let generation = state.live_config.generation();
+        let Some(client) = generation.auth().client_for_key_at(
             &holder.api_key.name,
             &holder.api_key.principal,
             now,
@@ -208,7 +215,6 @@ impl WatchHost for GatewayWatchHost {
             return false;
         };
         let owned = OwnedRouterAuthorizer::capture(Some(&client), None, None);
-        let generation = state.live_config.generation();
         let authorizer = owned.borrow(&state, &generation);
         let scope = InvokeScope {
             authorizer: &authorizer,

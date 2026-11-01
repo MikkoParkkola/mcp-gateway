@@ -33,7 +33,16 @@ pub enum BackendLifecycle {
     /// Never started. The gateway starts backends lazily, so this is the normal
     /// state for a configured backend nothing has used yet.
     NotStarted,
+    /// Per-user sessions only: there is no shared session to be up
+    /// or down, the health loop never probes it, and each user's own session
+    /// starts on that user's first call. [`PER_USER_SESSIONS`] says so.
+    #[serde(rename = "per_user")]
+    PerUser,
 }
+
+/// What an operator is told about a backend with per-user sessions only,
+/// where a shared backend shows its running state and era.
+pub(crate) const PER_USER_SESSIONS: &str = "per-user: starts on each user's first call";
 
 impl std::fmt::Display for BackendLifecycle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,6 +51,7 @@ impl std::fmt::Display for BackendLifecycle {
             Self::Dormant => "dormant",
             Self::Unhealthy => "unhealthy",
             Self::NotStarted => "not_started",
+            Self::PerUser => "per_user",
         };
         f.write_str(s)
     }
@@ -210,6 +220,12 @@ pub struct BackendRegistry {
     breaker_observer: crate::observer::Observer<crate::failsafe::HealthChange>,
     /// Names of backends whose shared start just succeeded (MIK-8347).
     started: tokio::sync::broadcast::Sender<String>,
+    /// Resolves every registered backend's `secrets:` values; stamped on each
+    /// in [`BackendRegistry::register`], which boot and reload both call.
+    /// `None` (a registry the gateway did not build) stamps nothing, and a
+    /// backend with a rule then refuses its call rather than resolve against
+    /// the process environment.
+    secret_resolver: Option<Arc<crate::secrets::SecretResolver>>,
 }
 
 impl BackendRegistry {
@@ -226,6 +242,17 @@ impl BackendRegistry {
             breaker_observer: crate::observer::Observer::default(),
             destination: std::sync::OnceLock::new(),
             started: tokio::sync::broadcast::channel(STARTED_FEED).0,
+            secret_resolver: None,
+        }
+    }
+
+    /// A registry whose backends resolve their `secrets:` values with
+    /// `resolver`: the gateway's own, built over its live env files.
+    #[must_use]
+    pub fn with_secret_resolver(resolver: Arc<crate::secrets::SecretResolver>) -> Self {
+        Self {
+            secret_resolver: Some(resolver),
+            ..Self::new()
         }
     }
 
@@ -312,6 +339,9 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
+        if let Some(resolver) = &self.secret_resolver {
+            backend.stamp_secret_resolver(Arc::clone(resolver));
+        }
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {

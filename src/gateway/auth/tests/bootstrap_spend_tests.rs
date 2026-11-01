@@ -29,8 +29,8 @@ fn redeem_body(
         request = request.header("x-forwarded-for", "203.0.113.9");
     }
     let request = request.body(Body::empty()).expect("request builds");
-    let response =
-        try_dashboard_bootstrap(state, &request).expect("a bootstrap link is always answered here");
+    let response = try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
+        .expect("a bootstrap link is always answered here");
     let status = response.status();
     let body = futures::executor::block_on(axum::body::to_bytes(response.into_body(), usize::MAX))
         .expect("body");

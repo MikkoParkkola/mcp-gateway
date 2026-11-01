@@ -18,6 +18,52 @@ use super::super::helpers::{build_http_error_response, build_http_response};
 use super::direct_caller::{Caller, Envelope, Rejection, Route};
 use crate::protocol::RequestId;
 
+/// Whether the caller may see this direct-route target: the refusal code of
+/// the authorizer or the routing profile, and whether a description block
+/// withholds it too. Each notes the check that decided it.
+pub(super) fn withheld_verdict(
+    state: &AppState,
+    auth: super::BackendAuthContext<'_>,
+    target: super::super::authorization::ToolTarget<'_>,
+    (backend, session_id): (&crate::backend::Backend, Option<&str>),
+) -> (Option<i32>, bool) {
+    use crate::gateway::meta_mcp::invoke::audit::note_refused_by;
+    use crate::security::decision_record::DecisionKind;
+    let (backend_name, tool_name) = (target.server, target.tool);
+    let withheld_code = super::super::authorization::authorize_tool_target(
+        state,
+        auth.generation,
+        auth.client,
+        auth.oauth_agent_identity,
+        auth.cert_identity,
+        target,
+    )
+    .err()
+    .map(|refusal| {
+        note_refused_by(refusal.kind, None);
+        refusal.code
+    })
+    .or_else(|| {
+        state
+            .meta_mcp
+            .profile_refusal(backend_name, tool_name, session_id)
+            .map(|refusal| {
+                note_refused_by(DecisionKind::RoutingProfile, None);
+                refusal.to_rpc_code()
+            })
+    });
+    // A name its description withholds is the gate's too, judged here before
+    // any credential (the caller verdict leaves it to the gate).
+    let withheld = withheld_code.is_some() || {
+        let blocked = backend.blocked_tool_refusal(None, tool_name).is_some();
+        if blocked {
+            note_refused_by(backend.blocked_tool_kind(tool_name), None);
+        }
+        blocked
+    };
+    (withheld_code, withheld)
+}
+
 /// What stage 4 decided for this request.
 pub(super) struct Preflight {
     pub(super) retry: crate::protocol::mrtr::RetryFields,
@@ -60,6 +106,10 @@ fn take_nonces(
             Ok(nonce) => nonce,
             Err(e) => {
                 let message = crate::gateway::meta_mcp::signing::wire_error_message(&e);
+                crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                    crate::security::decision_record::DecisionKind::Syntax,
+                    None,
+                );
                 return Err(build_http_error_response(
                     Some(id.clone()),
                     e.to_rpc_code(),
@@ -91,6 +141,10 @@ fn parse_direct_arguments(envelope: &mut Envelope, id: &RequestId) -> Result<(),
         Ok(std::borrow::Cow::Borrowed(_)) => return Ok(()),
         Ok(std::borrow::Cow::Owned(parsed)) => parsed,
         Err(e) => {
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Syntax,
+                None,
+            );
             return Err(build_http_error_response(
                 Some(id.clone()),
                 e.to_rpc_code(),
@@ -124,6 +178,10 @@ fn check_attestation(
         "direct_route",
     ) {
         let (code, message) = (e.to_rpc_code(), e.to_string());
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Attestation,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             code,
@@ -149,6 +207,10 @@ pub(super) fn preflight(
     // task. The owner-checked task arms serve `/mcp` only. Refused before
     // propagation, attestation and idempotency, so a refusal mints nothing.
     if super::is_task_method(&envelope.method, envelope.params.as_ref()) {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             METHOD_NOT_FOUND,
@@ -165,6 +227,10 @@ pub(super) fn preflight(
     // would fake the replay protection a destructive call asked for.
     let retry = crate::protocol::mrtr::RetryFields::from_params(envelope.params.as_ref());
     if retry.is_malformed() {
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Syntax,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             INVALID_PARAMS,
@@ -226,7 +292,12 @@ pub(super) struct Propagation {
     /// A11-e': the managed lease the headers were released under, for the 401
     /// site.
     pub(super) managed: Option<crate::personal_accounts::ManagedLease>,
-    pub(super) headers: Vec<(String, String)>,
+    /// Wiped on drop: the caller's credential never leaves a zeroizing
+    /// holder on this route.
+    pub(super) headers: zeroize::Zeroizing<Vec<(String, String)>>,
+    /// The check every send of `headers` runs first (the mint core's, or a
+    /// forwarded credential's own); `None` when no credential was resolved.
+    pub(super) check: Option<crate::transport::SendCheck>,
     /// The backend's admitted list fills when propagation began, so nonce
     /// admission can tell whether anything before it filled a tool list
     /// (MIK-8379).
@@ -241,14 +312,25 @@ pub(super) struct Propagation {
     pub(super) unproven: Option<crate::Error>,
 }
 
+impl Propagation {
+    /// The resolved headers with the check that guards their every send.
+    pub(super) fn lent(&self) -> crate::transport::LentCredential {
+        crate::transport::LentCredential {
+            headers: self.headers.clone(),
+            check: self.check.clone(),
+        }
+    }
+}
+
 type IdpConfig = crate::identity_propagation::IdentityPropagationConfig;
 /// The headers to forward, or the refusal text.
-type Headers = Result<Vec<(String, String)>, String>;
+type Headers = Result<zeroize::Zeroizing<Vec<(String, String)>>, String>;
 
 /// What resolving the headers produced, before the audit decides whether the
 /// call may proceed.
 struct Resolution {
     result: Headers,
+    check: Option<crate::transport::SendCheck>,
     identity_key: Option<String>,
     managed: Option<crate::personal_accounts::ManagedLease>,
     typed: Option<crate::Error>,
@@ -268,7 +350,8 @@ async fn resolve_headers(
     idp_cfg: Option<&IdpConfig>,
 ) -> Resolution {
     let mut resolution = Resolution {
-        result: Ok(Vec::new()),
+        result: Ok(zeroize::Zeroizing::default()),
+        check: None,
         identity_key: None,
         managed: None,
         typed: None,
@@ -298,7 +381,9 @@ async fn resolve_headers(
                     caller.slot.as_deref(),
                     binding,
                 );
-                Ok(headers)
+                let lent = crate::identity_propagation::send_check::dispatch_scoped(headers);
+                resolution.check = lent.check;
+                Ok(lent.headers)
             }
             Err(e) => Err(e),
         };
@@ -315,7 +400,8 @@ async fn resolve_headers(
             resolution.managed = held;
             resolution.attempted = attempted;
             resolution.unproven = unproven;
-            Ok(headers)
+            resolution.check = headers.check;
+            Ok(headers.headers)
         }
         Err(e) => {
             let text = crate::personal_accounts::refusal::refusal_text(&e);
@@ -364,7 +450,7 @@ async fn audit_mint(
     (caller, route): (&Caller, &Route<'_>),
     id: &RequestId,
     (idp_cfg, result, typed): (Option<&IdpConfig>, Headers, Option<crate::Error>),
-) -> Result<Vec<(String, String)>, Rejection> {
+) -> Result<zeroize::Zeroizing<Vec<(String, String)>>, Rejection> {
     // The principal resolved for (passthrough: the verified identity).
     let subject = state
         .meta_mcp
@@ -422,6 +508,12 @@ async fn audit_mint(
                     "identity-propagation refuse audit write failed"
                 );
             }
+            // The caller's identity standing (MIK-8914.API2A.13): no kind
+            // names it yet.
+            crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::Unrecorded,
+                None,
+            );
             let who = caller.verified_identity.as_ref();
             Err(state
                 .meta_mcp
@@ -448,7 +540,8 @@ pub(super) async fn propagate_identity(
     let mut propagation = Propagation {
         identity_key: None,
         managed: None,
-        headers: Vec::new(),
+        headers: zeroize::Zeroizing::default(),
+        check: None,
         fills_before: route.backend.list_fills(),
         attempted: false,
         unproven: None,
@@ -459,6 +552,7 @@ pub(super) async fn propagate_identity(
     let idp_cfg = route.backend.identity_propagation_config();
     let Resolution {
         result,
+        check,
         identity_key,
         managed,
         typed,
@@ -476,6 +570,7 @@ pub(super) async fn propagate_identity(
         propagation.identity_key = a2a_round_binding(caller);
     }
     propagation.managed = managed;
+    propagation.check = check;
     propagation.headers =
         audit_mint(state, name, (caller, route), id, (idp_cfg, result, typed)).await?;
 
@@ -490,6 +585,11 @@ pub(super) async fn propagate_identity(
         name,
         !propagation.headers.is_empty(),
     ) {
+        // Identity propagation's isolation: no kind names it yet.
+        crate::gateway::meta_mcp::invoke::audit::note_refused_by(
+            crate::security::decision_record::DecisionKind::Unrecorded,
+            None,
+        );
         return Err(build_http_error_response(
             Some(id.clone()),
             e.to_rpc_code(),

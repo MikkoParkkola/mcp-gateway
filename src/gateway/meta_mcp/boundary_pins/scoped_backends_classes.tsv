@@ -18,16 +18,19 @@ src/gateway/meta_mcp/invoke/admin.rs	reload_capabilities	nudge_catalogue_for	Adm
 src/gateway/meta_mcp/invoke/admin.rs	revive_server	get_for	Admin
 src/gateway/meta_mcp/invoke/caller_verdict.rs	caller_verdict	scoped_get	scoped
 src/gateway/meta_mcp/invoke/caller_verdict.rs	dispatch_resolution	scoped_get	scoped
+src/gateway/meta_mcp/invoke/dispatch.rs	refuse_name_clash	scoped_get	scoped
 src/gateway/meta_mcp/invoke/caller_verdict.rs	live_refusal	scoped_get	scoped
 src/gateway/meta_mcp/invoke/chokepoint.rs	authorize_requested_target	scoped_get	scoped
 src/gateway/meta_mcp/invoke/dispatch_guards.rs	defers_error_rate_cooldown	scoped_get	scoped
-src/gateway/meta_mcp/invoke/gate.rs	fill_marks	get_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	fill_marks	membership_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	filled_since	get_for	Discovery
-src/gateway/meta_mcp/invoke/gate.rs	filled_since	membership_for	Discovery
+# expand_targets: reads backend names only, to expand a firewall rule target that names no backend; evaluates nothing, never dispatches to or contacts a backend, resolves no credential (POLICY.2).
+src/gateway/meta_mcp/invoke/egress.rs	expand_targets	all_for	Visibility
 src/gateway/meta_mcp/invoke/gate.rs	invisible_at_route	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	named_gate_answer	scoped_get	scoped
 src/gateway/meta_mcp/invoke/gate.rs	withheld_invoke_target	scoped_get	scoped
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	get_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	fill_marks	membership_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	get_for	Discovery
+src/gateway/meta_mcp/invoke/gate/fill_marks.rs	filled_since	membership_for	Discovery
 src/gateway/meta_mcp/invoke/policy.rs	check_invocation_policy	scoped_get	scoped
 src/gateway/meta_mcp/invoke/propagation.rs	listener_fence_binding	get_for	Background
 src/gateway/meta_mcp/invoke/propagation.rs	mint_listener_credential	get_for	Background
@@ -35,6 +38,8 @@ src/gateway/meta_mcp/invoke/propagation.rs	resolve_propagation_credential	get_fo
 src/gateway/meta_mcp/invoke/step_fingerprint.rs	step_fingerprint	scoped_get	scoped
 src/gateway/meta_mcp/listing_view.rs	listing_names	get_for	Visibility
 src/gateway/meta_mcp/listing_view.rs	promoted_tools_for_caller	get_for	Visibility
+src/gateway/meta_mcp/listing_warm.rs	running_cold_lease	scoped_get	scoped
+src/gateway/meta_mcp/listing_warm.rs	warm_listing_views	get_for	Visibility
 src/gateway/meta_mcp/passthrough.rs	passthrough_instance	scoped_get	scoped
 src/gateway/meta_mcp/protocol.rs	handle_logging_set_level	all_for	Background
 src/gateway/meta_mcp/protocol.rs	handle_prompts_get	scoped_get	scoped
@@ -55,7 +60,7 @@ src/gateway/meta_mcp/surfaced.rs	surfaced_schema_withheld	get_for	Visibility
 src/gateway/meta_mcp/surfaced.rs	surfaced_kind	get_for	Visibility
 src/gateway/meta_mcp/task_confirmation.rs	classify_surfaced	get_for	Visibility
 src/gateway/meta_mcp/task_replay.rs	cold_lease_remaining	scoped_get	scoped
-src/gateway/meta_mcp/task_replay.rs	settle_caller_view	scoped_get	scoped
+src/gateway/meta_mcp/task_replay.rs	claim_caller_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	settle_shared_view	scoped_get	scoped
 src/gateway/meta_mcp/task_replay.rs	target_refused_without_catalogue	scoped_get	scoped
 src/gateway/meta_mcp/task_replay/judging.rs	unknown_server_refusal	scoped_get	scoped
@@ -65,7 +70,7 @@ src/gateway/meta_mcp/upstream.rs	recover_gated	get_for	Background
 src/gateway/meta_mcp/upstream.rs	started	subscribe_started_for	Background
 src/gateway/meta_mcp/visibility.rs	admits_tool_named	all_for	Visibility
 src/gateway/meta_mcp/visibility.rs	admitted_counts	all_for	Visibility
-src/gateway/meta_mcp/visible.rs	descriptor_blocked	get_for	Visibility
+src/gateway/meta_mcp/visible.rs	gate_withholding	get_for	Visibility
 src/gateway/meta_mcp/visible.rs	keeps_per_user_catalogues	get_for	Visibility
 src/gateway/meta_mcp/visible.rs	stored_target_view	get_for	Visibility
 src/gateway/meta_mcp/visible.rs	visible_tool	get_for	Visibility

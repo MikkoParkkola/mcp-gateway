@@ -103,6 +103,7 @@ fn known_backend_keys_match_struct() {
             passthrough: true,
             input_schema_enforcement: crate::config::InputSchemaEnforcement::Standard,
             allow_flagged_tools: [("t".to_string(), "0".repeat(64))].into(),
+            allowed_tools: Some(vec!["t".into()]),
             allow_cleartext_credentials: true,
             runtime_profile: Some("p".into()),
             identity_propagation: Some(identity.clone()),

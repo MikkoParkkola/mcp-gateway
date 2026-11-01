@@ -39,15 +39,18 @@ async fn a_passthrough_backend_is_checked() {
     assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
-/// A11: a delivery is sensitive when its context-integrity classes name
-/// personal, financial or guarded material, or its source matches a
-/// `sources` glob; a public class alone is not.
+/// A11: a delivery is sensitive when its source matches a `sources` glob,
+/// or when the gateway's own context-integrity verdict names personal,
+/// financial or guarded material (A15 below). A verdict the backend planted
+/// is not the gateway's: ingress removes it, so whatever class it names, the
+/// relay decision is the one the same answer gets without it (this
+/// reverses the backend-planted classes this row used to accept).
 #[tokio::test]
-async fn sensitivity_comes_from_the_class_or_the_sources_glob() {
+async fn sensitivity_comes_from_the_sources_glob_never_a_planted_class() {
     let cases = [
-        ("personal_data", None, true),
-        ("financial_data", None, true),
-        ("guarded_material", None, true),
+        ("personal_data", None, false),
+        ("financial_data", None, false),
+        ("guarded_material", None, false),
         ("public", None, false),
         ("public", Some("alpha:r*"), true),
         ("public", Some("alpha:rea"), false),
@@ -67,6 +70,27 @@ async fn sensitivity_comes_from_the_class_or_the_sources_glob() {
             assert_sent(&fx, &sent, 1);
         }
     }
+}
+
+/// Text a backend hides under a planted `_context_integrity`, a
+/// member the relay walk skips, is never delivered, so it is in no receipt
+/// and nobody can relay it. Control: the same text delivered as content is
+/// receipted and its relay refused.
+#[tokio::test]
+async fn text_hidden_in_a_planted_integrity_verdict_is_never_delivered() {
+    let fx = fixture(Setup::default()).await;
+    fx.answer_read(Read::HiddenInIntegrity);
+    let delivered = fx.read(Some("a")).await;
+    assert!(
+        !delivered.contains("orchard ledger"),
+        "the hidden text was delivered: {delivered}"
+    );
+    assert_sent(&fx, &fx.send(Some("b"), PROSE).await, 1);
+
+    let fx = fixture(Setup::default()).await;
+    fx.answer_read(Read::Text(PROSE.to_string()));
+    fx.read(Some("a")).await;
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
 }
 
 /// A12: a response carrying both a result and an error delivers both, so the

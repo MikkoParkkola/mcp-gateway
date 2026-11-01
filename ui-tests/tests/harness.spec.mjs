@@ -4,6 +4,12 @@
 // The harness's own checks: the fixture server answers like the gateway, the
 // network is closed, and axe runs. Screen behaviour lives in its own specs.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
+import { fileURLToPath } from 'node:url';
+
+test('the fixture server answering is this worktree\'s own, never another lane\'s left on the port', async ({ request }) => {
+  const reply = await request.get('/ui/classic');
+  expect(reply.headers()['x-fixture-root']).toBe(fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, ''));
+});
 
 test('a deep link answers the shell document with the gateway CSP', async ({ request }) => {
   const reply = await request.get('/ui/servers/status', { maxRedirects: 0 });
@@ -50,6 +56,9 @@ test('every asset the shell document names is served, cached immutable', async (
   const asset = (url) => new URL(url).pathname.startsWith('/ui/assets/');
   page.on('requestfailed', (r) => { if (asset(r.url())) failed.push(`failed ${r.url()}`); });
   page.on('response', (r) => { if (asset(r.url()) && r.status() >= 400) failed.push(`${r.status()} ${r.url()}`); });
+  // The fixture stream is held open by default and would keep the network busy;
+  // a 404 is retried only at the 30 s ceiling, so the network goes idle.
+  await page.route('**/ui/api/stream', (r) => r.fulfill({ status: 404, body: '' }));
   await page.goto('/ui/overview');
   await page.waitForLoadState('networkidle');
   expect(failed).toEqual([]);

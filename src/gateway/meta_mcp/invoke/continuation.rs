@@ -209,6 +209,12 @@ impl OutboundRetry {
 pub(super) fn rejected_continuation(
     reason: &crate::protocol::continuation::ContinuationError,
 ) -> Error {
+    // A spent, forged or expired handle: no kind names redemption yet
+    // (MIK-8914.API2A.17), and `syntax` would call it malformed.
+    super::audit::note_refused_by(
+        crate::security::decision_record::DecisionKind::Unrecorded,
+        None,
+    );
     Error::JsonRpc {
         code: INVALID_PARAMS,
         message: reason.client_message().to_string(),
@@ -661,8 +667,9 @@ impl crate::gateway::meta_mcp::MetaMcp {
         // the client, so they face the same gate.
         let asked = super::undeclared_gate::asked_requests(result);
         if let Some(refused) = asked.as_ref().and_then(|a| a.undeclared(declared)) {
-            return Err(super::undeclared_gate::refusal(
-                &refused, server, tool, "direct",
+            // The direct route's delivered refusal (no composite runs there).
+            return Err(crate::gateway::delivery_facts::refused(
+                super::undeclared_gate::refusal(&refused, server, tool, "direct"),
             ));
         }
         let Some(interim) = crate::protocol::mrtr::InputRequired::from_result(result) else {

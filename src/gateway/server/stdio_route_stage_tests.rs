@@ -34,6 +34,7 @@ impl ToolAuthorizer for RefusesArguments {
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         if target.arguments.as_object().is_some_and(|a| !a.is_empty()) {
             return Decision::of(Err(AuthorizationError::forbidden(
+                crate::security::decision_record::DecisionKind::ToolPolicy,
                 CODE,
                 "refused for its arguments".to_owned(),
             )));
@@ -123,7 +124,6 @@ async fn a_lone_withheld_target_records_refused() {
         let mut fields = serde_json::Map::new();
         crate::gateway::delivery_facts::record_fields(
             crate::gateway::delivery_facts::snapshot().as_ref(),
-            false,
             false,
             &mut fields,
         );

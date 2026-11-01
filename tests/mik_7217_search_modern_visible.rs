@@ -131,6 +131,7 @@ fn backend_for(url: &str) -> Arc<Backend> {
         signature_chain: mcp_gateway::config::ChainMode::default(),
         chain_origins: Vec::new(),
         chain_signer: None,
+        ..BackendConfig::default()
     };
     Arc::new(Backend::new(
         BACKEND,
@@ -162,6 +163,7 @@ async fn state(backends: Arc<BackendRegistry>) -> (Arc<AppState>, tempfile::Temp
     .await
     .expect("the fixture task store opens");
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
@@ -171,10 +173,6 @@ async fn state(backends: Arc<BackendRegistry>) -> (Arc<AppState>, tempfile::Temp
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(
-            &config.auth,
-            crate::record_key::RECORD_KEY,
-        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -189,14 +187,13 @@ async fn state(backends: Arc<BackendRegistry>) -> (Arc<AppState>, tempfile::Temp
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-            // Flags off, as this fixture set them on `AppState` before they
-            // moved into the published config (ADR-023).
-            let mut config = Config::default();
-            config.security.sanitize_input = false;
-            config.security.ssrf_protection = false;
-            config
-        })),
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            mcp_gateway::gateway::test_helpers::flags_off(Config::default()),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &config.auth,
+                crate::record_key::RECORD_KEY,
+            )),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

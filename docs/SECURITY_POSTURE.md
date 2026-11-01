@@ -14,6 +14,7 @@ with source files, is in the [OWASP Agentic AI self-assessment](OWASP_AGENTIC_AI
 | Response firewall | Credentials leaking out in tool results, which are redacted. Prompt-injection text in a result is flagged and stays in place |
 | Memory-poisoning scanner | Control tokens and role-confusion text written through memory tools such as `remember` and `kv_set` |
 | Tool policy (`security.tool_policy`) | A fixed list of high-risk tool names, such as `write_file`, `run_command`, `drop_table` and `shutdown`, is refused. Any other name is allowed unless you add it to the deny list |
+| Backend tool selection (`backends.<name>.allowed_tools`, opt-in) | A backend offering tools you did not choose, including ones its server adds later. Unset, every tool is offered. With an API key's tool lists and `tool_policy` it is one of three scopes a call must pass, each judged when the call is admitted |
 | SSRF guard (`security.ssrf_protection`) | Tool arguments that point the gateway at private, loopback, link-local or cloud-metadata addresses |
 | Tool-description screening | Backend tools whose descriptions carry poisoning patterns. They are withheld from tool lists |
 | Per-caller visibility | A credentialled caller seeing or reaching backends it was not granted, once auth is on |

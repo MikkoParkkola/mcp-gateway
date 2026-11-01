@@ -8,6 +8,7 @@
 
 pub(crate) mod account_bindings;
 mod account_refs;
+mod applied_inputs;
 pub(crate) mod backend_add;
 mod backend_config;
 mod backend_debug;
@@ -16,6 +17,7 @@ mod backend_transport;
 mod config_file;
 mod env_overlay;
 mod env_provider;
+pub(crate) mod secret_rules;
 use env_provider::{EnvFileConfig, Expansion, OverlayEnv, Tolerance};
 mod features;
 pub(crate) mod load_error;
@@ -34,6 +36,7 @@ mod keychain_windows;
 pub(crate) mod log_once;
 mod meta_mcp_config;
 mod pattern_grammar;
+mod per_user_headers_posture;
 mod record_key;
 mod remote_provenance_posture;
 mod secret_file;
@@ -53,12 +56,16 @@ use std::{
 use figment::Figment;
 use serde::{Deserialize, Serialize};
 
+use crate::config_reload::revision::RawInputs;
 use crate::mtls::MtlsConfig;
 use crate::routing_profile::RoutingProfileConfig;
 use crate::security::{posture, verify_remote_server_provenance};
 use crate::{Error, Result};
 pub(crate) use backend_transport::transport_key_for;
 use config_file::ConfigFile;
+#[cfg(feature = "webui")]
+pub(crate) use pattern_grammar::check_backend_allowed_tools;
+pub(crate) use pattern_grammar::tool_pattern_matches;
 
 pub use env_overlay::{EnvOverlay, Evaluated, HomeResolver, LiveEnv, ResolvedEnvFiles, SystemHome};
 use env_overlay::{SecretFileDigests, SecretRefsRead, digest};
@@ -528,6 +535,16 @@ impl Config {
             let (names, account_files) = config.record_account_refs();
             secret_refs.extend(names);
             files.extend(account_files);
+        }
+        // Before the digests move into the overlay: they are the `file:`
+        // secrets this evaluation read.
+        let inputs = match expansion {
+            Expansion::Resolve => {
+                Self::raw_inputs(path, &overlay, &env_paths, &secret_refs, &files)
+            }
+            Expansion::Literal => RawInputs::default(),
+        };
+        if expansion == Expansion::Resolve {
             overlay.record_secret_files(files);
         }
         Ok(Evaluated {
@@ -535,6 +552,7 @@ impl Config {
             overlay: std::sync::Arc::new(overlay),
             env_paths,
             secret_refs,
+            inputs,
         })
     }
 
@@ -706,6 +724,10 @@ mod cwe532_debug_redaction;
 #[cfg(test)]
 #[path = "cleartext_credential_guard_tests.rs"]
 mod cleartext_credential_guard;
+
+#[cfg(all(test, feature = "a2a"))]
+#[path = "a2a_secrets_tests.rs"]
+mod a2a_secrets;
 
 #[cfg(test)]
 #[path = "account_custody_tests.rs"]

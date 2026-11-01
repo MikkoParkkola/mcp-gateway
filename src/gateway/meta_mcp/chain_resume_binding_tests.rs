@@ -160,6 +160,7 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
     > {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![("Authorization".to_string(), "Bearer minted".to_string())],
             expires_at: i64::MAX,
             cache_binding: BINDING.to_string(),
@@ -174,7 +175,13 @@ impl crate::identity_propagation::IdentityPropagation for FixedBinding {
 /// transport is `stub`: its calls dispatch under a per-user binding, so a
 /// continuation is minted under that binding, not the identity. Returned with
 /// the count of credentials minted.
-fn propagating_meta_over(stub: Arc<AsksOnce>) -> (MetaMcp, Arc<std::sync::atomic::AtomicUsize>) {
+fn propagating_meta_over(
+    stub: Arc<AsksOnce>,
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    MetaMcp,
+    Arc<std::sync::atomic::AtomicUsize>,
+) {
     let registry = Arc::new(BackendRegistry::new());
     let config = BackendConfig {
         transport: crate::config::TransportConfig::Http {
@@ -211,9 +218,9 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> (MetaMcp, Arc<std::sync::atomic
     let mints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     meta.set_identity_propagation(Arc::new(FixedBinding(Arc::clone(&mints))));
     // A required mint needs a durable audit record (MIK-6740).
-    let log = tempfile::NamedTempFile::new().expect("tempfile");
+    // Returned first, so the caller's `let (_log, ..)` drops it last.
+    let log = crate::security::transparency_log::temp::TempLog::new();
     let path = log.path().to_string_lossy().to_string();
-    std::mem::forget(log); // the logger appends to it for the whole test
     let config = Arc::new(crate::security::transparency_log::TransparencyLogConfig {
         enabled: true,
         path,
@@ -223,7 +230,7 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> (MetaMcp, Arc<std::sync::atomic
     meta.enable_transparency_log(Arc::new(
         crate::security::TransparencyLogger::open(config).expect("logger opens"),
     ));
-    (meta, mints)
+    (log, meta, mints)
 }
 
 /// R6: a step behind an identity-propagating backend is minted under the
@@ -231,7 +238,7 @@ fn propagating_meta_over(stub: Arc<AsksOnce>) -> (MetaMcp, Arc<std::sync::atomic
 #[tokio::test]
 async fn a_chain_step_minted_under_a_dispatch_binding_resumes() {
     let stub = Arc::new(AsksOnce::default());
-    let (meta, _) = propagating_meta_over(Arc::clone(&stub));
+    let (_log, meta, _) = propagating_meta_over(Arc::clone(&stub));
     let (who, caps) = (identity(), elicitation_caps());
     let no_retry = &crate::protocol::mrtr::NO_RETRY;
     let stop = run(&meta, 1, ctx(Some(&who), None, &caps, no_retry)).await;
@@ -263,7 +270,7 @@ async fn a_resume_mints_nothing_for_a_substituted_chain_or_a_refused_caller() {
     use std::sync::atomic::Ordering;
 
     let stub = Arc::new(AsksOnce::default());
-    let (meta, mints) = propagating_meta_over(Arc::clone(&stub));
+    let (_log, meta, mints) = propagating_meta_over(Arc::clone(&stub));
     let (who, caps) = (identity(), elicitation_caps());
     let no_retry = &crate::protocol::mrtr::NO_RETRY;
     let stop = run(&meta, 1, ctx(Some(&who), None, &caps, no_retry)).await;
@@ -318,7 +325,7 @@ async fn g3_c13_resume_fingerprint_reuses_carried_dispatch() {
     use std::sync::atomic::Ordering;
 
     let stub = Arc::new(AsksOnce::default());
-    let (meta, mints) = propagating_meta_over(Arc::clone(&stub));
+    let (_log, meta, mints) = propagating_meta_over(Arc::clone(&stub));
     let (who, caps) = (identity(), elicitation_caps());
     let no_retry = &crate::protocol::mrtr::NO_RETRY;
     let before = mints.load(Ordering::SeqCst);

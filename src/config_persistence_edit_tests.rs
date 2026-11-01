@@ -238,8 +238,10 @@ fn the_cli_keeps_no_copy_of_the_comment_compare() {
 /// CAS.4: no public config writer takes a `bool`.
 #[test]
 fn no_public_config_writer_takes_a_bool() {
-    let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/config_persistence.rs");
-    let text = std::fs::read_to_string(lib).expect("read");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let text = ["config_persistence.rs", "config_persistence_scratch.rs"]
+        .map(|file| std::fs::read_to_string(src.join(file)).expect("read"))
+        .concat();
     let flagged: Vec<&str> = text
         .lines()
         .filter(|line| line.starts_with("pub fn ") && line.contains(": bool"))

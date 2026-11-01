@@ -103,7 +103,7 @@ pub(super) fn plan_auth() -> AuthConfig {
 async fn off_gateway(
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = super::super::meta_fixture::test_router_app_state_with_meta_and_firewall(
         &plan_auth(),
         None,
@@ -131,7 +131,7 @@ async fn on_gateway_over_off(
     off: &Arc<AppState>,
     alpha: &Arc<MockBackend>,
     beta: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let relay_fw = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -179,7 +179,7 @@ async fn on_gateway_over_off(
 /// `tasks_dir`, whose first custodian was dropped: G32's restart
 /// and G25-T's reopen, by `state_with_record_budget`'s runtime swap.
 /// The custody lease frees with the old state, so the open retries.
-async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf) -> Arc<AppState> {
+pub(super) async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf) -> Arc<AppState> {
     let Rig { state, .. } = second;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -211,7 +211,7 @@ async fn state_over_tasks(second: Rig, tasks_dir: std::path::PathBuf) -> Arc<App
 /// The shared tail of G32 and G25-T: on the reopened `on`, alice's
 /// re-read of `task` still serves its stored answer and renews
 /// nothing, counted absent, while a live delivery receipts (control).
-async fn renews_nothing_after_reopen(on: &Arc<AppState>, task: &str, id: i64) {
+pub(super) async fn renews_nothing_after_reopen(on: &Arc<AppState>, task: &str, id: i64) {
     let measured = get_task(on, "key-a", task);
     #[cfg(feature = "metrics")]
     let (read, absent) = crate::gateway::count_plan_replay_skipped("absent", measured);

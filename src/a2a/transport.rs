@@ -13,6 +13,7 @@
 //! `-32601`, `server/discover` included, so the era probe settles on legacy.
 
 use crate::error::rpc_codes::{INVALID_PARAMS, METHOD_NOT_FOUND};
+use crate::gateway::health_metrics::clock::{backend_request, backend_wait};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -32,7 +33,7 @@ use super::translator::{
 use super::types::{AgentCard, Message, SendMessageResponse, Task, TaskState};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::ssrf::DestinationPolicy;
-use crate::transport::Transport;
+use crate::transport::{Lender, Transport};
 use crate::{Error, Result};
 
 /// The MCP revision the synthetic `initialize` reports: the legacy one, since
@@ -73,6 +74,7 @@ impl A2aTransport {
         headers: &HashMap<String, String>,
         timeout: Duration,
         destination: DestinationPolicy,
+        lender: Option<Arc<Lender>>,
     ) -> Result<Arc<Self>> {
         let origin = url::Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
@@ -87,12 +89,17 @@ impl A2aTransport {
             destination,
             Arc::new(AtomicU64::new(0)),
         )?;
-        let headers = headers
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
-        let client = A2aClient::new(a2a_url, card_path, headers, http)?;
-        let card = client.fetch_card().await?;
+        let client = if let Some(lender) = lender {
+            A2aClient::new_lent_only(a2a_url, card_path, http, lender)?
+        } else {
+            let headers = headers
+                .iter()
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect();
+            A2aClient::new(a2a_url, card_path, headers, http)?
+        };
+        // On a lent-only client this goes out as the start's own loan.
+        let card = client.fetch_card(&client.start_call()).await?;
         let endpoint = client.endpoint(&card)?;
         let canceller = Canceller::new(client.clone(), endpoint.clone());
         let transport = Arc::new(Self {
@@ -140,6 +147,26 @@ impl A2aTransport {
         self.canceller.spawn(pending.task_id, pending.headers);
     }
 
+    /// The headers a deferred cancel would carry. A lent-only slot sends no
+    /// deferred cancel, so it keeps none of the caller's credential.
+    fn cancel_headers(&self, extra_headers: &[(String, String)]) -> Vec<(String, String)> {
+        if self.client.is_lent_only() {
+            Vec::new()
+        } else {
+            extra_headers.to_vec()
+        }
+    }
+
+    /// The call's headers for a card read. Only a lent-only slot sends them,
+    /// as its loan; any other keeps its configured headers alone.
+    fn card_headers<'a>(&self, extra_headers: &'a [(String, String)]) -> &'a [(String, String)] {
+        if self.client.is_lent_only() {
+            extra_headers
+        } else {
+            &[]
+        }
+    }
+
     /// Run `call` unless the transport is, or becomes, closed.
     async fn unless_closed<T>(&self, call: impl Future<Output = Result<T>>) -> Result<T> {
         let mut closed = self.closed.subscribe();
@@ -173,11 +200,13 @@ impl A2aTransport {
                 }),
             )),
             "ping" => {
-                self.unless_closed(self.client.fetch_card()).await?;
+                self.unless_closed(self.client.fetch_card(&[])).await?;
                 Ok(JsonRpcResponse::success(id, json!({})))
             }
             "tools/list" => {
-                let card = self.unless_closed(self.client.fetch_card()).await?;
+                let card = self
+                    .unless_closed(self.client.fetch_card(self.card_headers(extra_headers)))
+                    .await?;
                 Ok(JsonRpcResponse::success(
                     id,
                     json!({"tools": [card_to_tool(&card)]}),
@@ -232,7 +261,8 @@ impl A2aTransport {
                 "`{TOOL_NAME}` requires a `message` string argument"
             ));
         };
-        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
+        let mut guard =
+            CancelGuard::new(self.canceller.clone(), self.cancel_headers(extra_headers));
         self.delegate(
             id,
             Message::user_text(text),
@@ -270,7 +300,8 @@ impl A2aTransport {
         };
         // The map no longer owns the task; this guard does, from here on, so
         // a retry abandoned midway still cancels it.
-        let mut guard = CancelGuard::new(self.canceller.clone(), extra_headers.to_vec());
+        let mut guard =
+            CancelGuard::new(self.canceller.clone(), self.cancel_headers(extra_headers));
         guard.arm(&pending.task_id);
         let answer = params.and_then(|p| p.pointer(&format!("/inputResponses/{ASK_KEY}")));
         let accepted = answer
@@ -413,16 +444,28 @@ impl A2aTransport {
     }
 
     /// The answer when the deadline passes. The caller's guard, still armed,
-    /// requests the task's cancellation as it drops.
+    /// requests the task's cancellation as it drops, except on a per-user
+    /// slot, which has no credential left to cancel with.
     fn timed_out(&self, id: RequestId) -> JsonRpcResponse {
         JsonRpcResponse::success(
             id,
             error_result(&format!(
-                "the A2A agent did not finish within the backend timeout ({}s); cancellation of \
-                 its task was requested",
-                self.timeout.as_secs()
+                "the A2A agent did not finish within the backend timeout ({}s); {}",
+                self.timeout.as_secs(),
+                self.cancel_outcome("cancellation of its task was requested")
             )),
         )
+    }
+
+    /// What became of an unfinished task's cancellation, for the caller:
+    /// `requested` on a slot that cancels, and on a per-user slot that the
+    /// task was left running.
+    fn cancel_outcome(&self, requested: &'static str) -> &'static str {
+        if self.client.is_lent_only() {
+            "its task was not cancelled and may still be running at the agent"
+        } else {
+            requested
+        }
     }
 
     /// The agent's question as an MCP input round. Its task is parked under an
@@ -442,13 +485,14 @@ impl A2aTransport {
             task.id.clone(),
             task.context_id.clone(),
             identity,
-            extra_headers.to_vec(),
+            self.cancel_headers(extra_headers),
             std::time::Instant::now(),
             self.canceller.hold(),
         ) {
             Ok(token) => token,
             Err(refused) => {
-                self.canceller.spawn(task.id, extra_headers.to_vec());
+                self.canceller
+                    .spawn(task.id, self.cancel_headers(extra_headers));
                 let why = match refused {
                     ParkRefused::Full => "too many unanswered agent questions",
                     ParkRefused::Closed => "the A2A backend is closing",
@@ -456,7 +500,8 @@ impl A2aTransport {
                 return JsonRpcResponse::success(
                     id,
                     error_result(&format!(
-                        "{why}; cancellation of the agent's task was requested"
+                        "{why}; {}",
+                        self.cancel_outcome("cancellation of the agent's task was requested")
                     )),
                 );
             }
@@ -492,7 +537,7 @@ fn agent_error(id: RequestId, code: i32, message: &str) -> JsonRpcResponse {
 #[async_trait]
 impl Transport for A2aTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        self.dispatch(method, params, &[], None).await
+        backend_request(async move { self.dispatch(method, params, &[], None).await }).await
     }
 
     /// Per-request headers (a propagated end-user credential) go on this one
@@ -505,8 +550,11 @@ impl Transport for A2aTransport {
         identity_key: Option<&str>,
         _resend: crate::transport::ResendPermission,
     ) -> Result<JsonRpcResponse> {
-        self.dispatch(method, params, extra_headers, identity_key)
-            .await
+        backend_request(async move {
+            self.dispatch(method, params, extra_headers, identity_key)
+                .await
+        })
+        .await
     }
 
     fn carries_identity_headers(&self) -> bool {
@@ -515,7 +563,7 @@ impl Transport for A2aTransport {
 
     /// A2A has no notification channel.
     async fn notify(&self, _method: &str, _params: Option<Value>) -> Result<()> {
-        Ok(())
+        backend_wait(async move { Ok(()) }).await
     }
 
     fn is_connected(&self) -> bool {

@@ -19,6 +19,9 @@ use crate::gateway::trace;
 #[path = "cache_read_only_tests.rs"]
 mod cache_read_only;
 
+#[path = "secret_capability_tests.rs"]
+mod secret_capability;
+
 #[path = "order2_fsm_tests.rs"]
 mod order2_fsm;
 
@@ -34,6 +37,8 @@ mod session_fp;
 mod admin_exposure;
 #[path = "tests/backend_lists.rs"]
 mod backend_lists;
+#[path = "tests/bridge_drop_tests.rs"]
+mod bridge_drop;
 #[path = "tests/code_mode.rs"]
 mod code_mode;
 #[path = "tests/confirmation_binding.rs"]
@@ -243,14 +248,26 @@ mod attestation_plan;
 #[cfg(test)]
 #[path = "chain_strip_tests.rs"]
 mod chain_strip;
+/// A chain verifies over the members ingress withheld.
+#[cfg(test)]
+#[path = "chain_withheld_tests.rs"]
+mod chain_withheld;
 /// MIK-8202 P2: the meta route's clock reads on a clock before 1970.
 #[cfg(test)]
 #[path = "clock_p2_tests.rs"]
 mod clock_p2;
+/// A playbook step the policy refuses at dispatch records refused.
+#[cfg(test)]
+#[path = "playbook_dispatch_refusal_tests.rs"]
+mod playbook_dispatch_refusal;
 /// `MIK-7993` r5: a playbook's step notes are carried onto its answer.
 #[cfg(test)]
 #[path = "playbook_writes_tests.rs"]
 mod playbook_writes;
+/// Both gateway refusals read as never sent.
+#[cfg(test)]
+#[path = "refusal_stage_rows_tests.rs"]
+mod refusal_stage_rows;
 
 /// A caller the gateway can name, and so can bind a continuation to.
 ///

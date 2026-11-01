@@ -62,7 +62,7 @@ fn recording(
         calls.fetch_add(1, Ordering::SeqCst);
         seen.lock()
             .unwrap()
-            .extend(headers.into_iter().map(|(_, v)| v));
+            .extend(headers.iter().map(|(_, v)| v.clone()));
         Box::pin(async { Ok(ok_response()) })
     })
 }
@@ -213,21 +213,55 @@ async fn e5_a_stale_rejection_leaves_the_newer_lease() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// E5, replace racing replace: B replaces the original while its drain is
+/// held open, and C queues behind B on the store lock (tokio's mutex is
+/// fair, so C runs after B). The last replace wins, exactly one lease is
+/// held, and B's generation can no longer send.
 #[tokio::test]
-async fn e5_concurrent_replaces_leave_one_lease() {
+async fn e5_a_replace_racing_a_replace_leaves_the_last_one() {
     let s = Arc::new(store());
-    let a = {
-        let s = s.clone();
-        tokio::spawn(async move { s.install(key("p"), token_until(now() + 3600), FAR, 0).await })
+    s.install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
     };
-    let b = {
+    let in_flight = token.read_owned().await;
+    let replace = |exp: u64| {
         let s = s.clone();
-        tokio::spawn(async move { s.install(key("p"), token_until(now() + 3600), FAR, 0).await })
+        tokio::spawn(async move { s.install(key("p"), token_until(exp), FAR, 0).await })
     };
-    let (a, b) = (a.await.unwrap().unwrap(), b.await.unwrap().unwrap());
-    let current = s.generation(&key("p")).await.expect("one lease");
-    assert!(current == a || current == b);
-    assert_eq!(s.held.lock().await.len(), 1);
+    let b = replace(now() + 7200);
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "B never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    let c = replace(now() + 9000);
+    tokio::task::yield_now().await;
+    assert!(!b.is_finished() && !c.is_finished(), "premise: both wait");
+    drop(in_flight);
+    let b = b.await.unwrap().unwrap();
+    let c = c.await.unwrap().unwrap();
+    assert_ne!(b, c, "two replaces, two generations");
+    assert_eq!(
+        s.held_generation(&key("p")),
+        Some(c),
+        "the last replace wins"
+    );
+    assert_eq!(s.held.lock().await.len(), 1, "exactly one lease");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assert!(
+        s.with_credential(&key("p"), b, recording(seen, calls.clone()))
+            .await
+            .is_err(),
+        "B's generation is refused"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "and never sends");
 }
 
 /// D1: a wipe cancels a send that is still in flight, waits for it to let
@@ -259,6 +293,125 @@ async fn d1_a_wipe_cancels_and_drains_an_in_flight_send() {
     .expect("the wipe drains instead of deadlocking");
     assert!(in_flight.await.unwrap().is_err(), "the send was cancelled");
     assert_eq!(s.generation(&key("p")).await, None);
+}
+
+/// LEASE-T7, bump order (design §3.5): a replace bumps the generation before
+/// it drains the old lease's sends, so while they drain a record observed
+/// under the old generation no longer reads as live, and no new delivery
+/// handoff for it can begin. The drain is held open by holding the old
+/// token's read guard, as an in-flight send not yet polled since its cancel.
+#[tokio::test]
+async fn lease_t7_a_replace_bumps_the_generation_before_it_drains() {
+    let s = Arc::new(store());
+    let old = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let replace = {
+        let s = s.clone();
+        tokio::spawn(async move { s.install(key("p"), token_until(now() + 7200), FAR, 0).await })
+    };
+    // The replace has fired the old cancel and now waits on the drain.
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the replace never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    assert!(!replace.is_finished(), "premise: the drain is held open");
+    // Between the old lease and the new no lease is held, so a delivery
+    // check and a listener start both fail closed (credential needed).
+    assert_eq!(
+        s.held_generation(&key("p")),
+        None,
+        "while the old lease drains, no generation reads as live"
+    );
+    assert!(!s.is_held(&key("p")), "no lease is held in the window");
+    // A send that asks in the window waits out the drain, then is refused:
+    // it neither runs nor hangs.
+    let calls = Arc::new(AtomicUsize::new(0));
+    let late = {
+        let (s, calls) = (s.clone(), calls.clone());
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        tokio::spawn(async move {
+            s.with_credential(&key("p"), old, recording(seen, calls))
+                .await
+        })
+    };
+    drop(in_flight);
+    let new = replace.await.unwrap().unwrap();
+    assert_eq!(s.held_generation(&key("p")), Some(new));
+    assert!(
+        late.await.unwrap().is_err(),
+        "the old generation is refused"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "and never sends");
+}
+
+/// LEASE-T7 for a wipe: `wipe_by` wipes the lease of generation `g` while a
+/// send still holds its token, and the generation must already be retired,
+/// so no new handoff begins under a lease that is being wiped.
+async fn retired_before_the_drain(
+    wipe_by: impl FnOnce(Arc<LeaseStore>, u128) -> tokio::task::JoinHandle<()>,
+) {
+    let s = Arc::new(store());
+    let old = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let wiping = wipe_by(s.clone(), old);
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the wipe never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    assert!(!wiping.is_finished(), "premise: the drain is held open");
+    assert_ne!(
+        s.held_generation(&key("p")),
+        Some(old),
+        "while the lease drains, its generation no longer reads as live"
+    );
+    drop(in_flight);
+    wiping.await.unwrap();
+    assert_eq!(s.held_generation(&key("p")), None);
+}
+
+/// Revocation, the last row gone or a config change.
+#[tokio::test]
+async fn lease_t7_a_wipe_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, _| {
+        tokio::spawn(async move { s.wipe(&key("p"), WipeReason::Released).await })
+    })
+    .await;
+}
+
+/// A backend that refused the token.
+#[tokio::test]
+async fn lease_t7_a_rejection_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, g| {
+        tokio::spawn(async move { s.on_rejection(&key("p"), g).await })
+    })
+    .await;
+}
+
+/// A lease past its deadline.
+#[tokio::test]
+async fn lease_t7_an_expiry_retires_the_generation_before_it_drains() {
+    retired_before_the_drain(|s, _| tokio::spawn(async move { s.wipe_expired(u64::MAX).await }))
+        .await;
 }
 
 #[test]
@@ -353,4 +506,112 @@ async fn an_unused_lease_is_zeroized_at_its_deadline() {
     s.wipe_expired(now() + 121).await;
     assert_eq!(s.generation(&key("p")).await, None);
     assert!(!s.is_held(&key("p")));
+}
+
+/// LEASE-T3 at the deadline: a lease past it holds no generation at once,
+/// before any expiry sweep, so delivery refuses its records and its
+/// listener's session ends at its next check.
+#[tokio::test]
+async fn an_expired_lease_holds_no_generation_before_the_sweep() {
+    let s = store();
+    let exp = now() + 3600;
+    let g = s.install(key("p"), token_until(exp), FAR, 0).await.unwrap();
+    {
+        let _clock = crate::clock::test_clock::at_secs(exp - 1);
+        assert_eq!(s.held_generation(&key("p")), Some(g), "a second before");
+    }
+    let _clock = crate::clock::test_clock::at_secs(exp);
+    assert_eq!(
+        s.held_generation(&key("p")),
+        None,
+        "at the deadline, before any sweep"
+    );
+    assert!(
+        s.held.lock().await.contains_key(&key("p")),
+        "premise: no sweep ran"
+    );
+}
+
+/// A replace whose call is dropped during the drain leaves no lease: neither
+/// the old generation nor the new one reads as held, and the rows ask for a
+/// credential again.
+#[tokio::test]
+async fn a_replace_dropped_during_the_drain_leaves_no_lease() {
+    let s = Arc::new(store());
+    s.install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    let (token, old_cancel) = {
+        let held = s.held.lock().await;
+        let h = held.get(&key("p")).expect("held");
+        (Arc::clone(&h.token), h.cancel.clone())
+    };
+    let in_flight = token.read_owned().await;
+    let replace = {
+        let s = s.clone();
+        tokio::spawn(async move { s.install(key("p"), token_until(now() + 7200), FAR, 0).await })
+    };
+    let mut turns = 0;
+    while !old_cancel.is_cancelled() {
+        assert!(turns < 10_000, "the replace never reached the drain");
+        turns += 1;
+        tokio::task::yield_now().await;
+    }
+    replace.abort();
+    assert!(
+        replace.await.is_err_and(|e| e.is_cancelled()),
+        "premise: dropped mid-drain"
+    );
+    drop(in_flight);
+    assert_eq!(s.held_generation(&key("p")), None);
+    assert!(
+        !s.held.lock().await.contains_key(&key("p")),
+        "no lease was installed"
+    );
+    assert_eq!(s.state(&key("p")).await, LeaseState::CredentialNeeded);
+}
+
+/// A lease lends a non-empty `Authorization` or nothing: an empty token is
+/// never installed, and with no current lease of the generation the send
+/// never runs. A per-user slot of a required binding takes a lease-lent send
+/// as the subscriber's own, so this source is where "never lend empty" is
+/// held.
+#[tokio::test]
+async fn a_lease_lends_a_credential_or_nothing() {
+    let s = store();
+    assert_eq!(
+        s.install(key("p"), Zeroizing::new(String::new()), FAR, 0)
+            .await,
+        Err(LeaseRefusal::NoExpiry),
+        "an empty token is never leased"
+    );
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    assert!(
+        s.with_credential(&key("p"), 7, recording(seen.clone(), calls.clone()))
+            .await
+            .is_err(),
+        "no lease: refused"
+    );
+    let g = s
+        .install(key("p"), token_until(now() + 3600), FAR, 0)
+        .await
+        .unwrap();
+    assert!(
+        s.with_credential(&key("p"), g ^ 1, recording(seen.clone(), calls.clone()))
+            .await
+            .is_err(),
+        "another generation: refused"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "a refused lend ran its send"
+    );
+    s.with_credential(&key("p"), g, recording(seen.clone(), calls.clone()))
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    assert!(!seen[0].is_empty(), "a lent credential is never empty");
 }

@@ -3,7 +3,6 @@
 //! One spawned owner: admit/create, dispatch, settle, drop permit, drop
 //! ownership — in that order, and on every path including the ones that unwind.
 
-use crate::error::rpc_codes::INVALID_REQUEST;
 use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, oneshot, watch};
@@ -21,7 +20,6 @@ use super::{
     BeginOutcome, CreateWrite, Handoff, TaskCall, TaskExecutor, TaskIntent, UpstreamAnswer,
     UpstreamHandle,
 };
-use crate::gateway::meta_mcp::invoke::relay::AnswerShape;
 use crate::gateway::meta_mcp::upstream::UpstreamSubmission;
 use crate::gateway::task_service::ErrorAuthor;
 use crate::gateway::task_service::Target;
@@ -220,7 +218,14 @@ async fn run_dispatched(
     crate::gateway::meta_mcp::visible::seams::task_dispatch_starts();
     // A queued dispatch is judged by the generation current now (ADR-023).
     let generation = state.generation();
-    let authorizer = state.authorizer(intent.owned.authorizer(), &generation);
+    // K15: the key that queued this task, as the current table holds it. A
+    // refusal is the dispatch's answer below, before anything is sent.
+    let (rejudged, key_refused) = match state.rejudge(intent.owned.authorizer(), &generation) {
+        Ok(rejudged) => (rejudged, None),
+        Err(refused) => (None, Some(refused)),
+    };
+    let owned_authorizer = rejudged.as_ref().unwrap_or(intent.owned.authorizer());
+    let authorizer = state.authorizer(owned_authorizer, &generation);
     // Held through the call and an upstream job's follow, released before
     // settling: a parked round ends this worker, and its caller is idle then.
     let key_hold = intent.owned.hold_caller_key(&state);
@@ -241,6 +246,9 @@ async fn run_dispatched(
     let meta = state.meta_mcp();
     // The pin covers the readmission as well as the dispatch.
     let dispatch = meta.with_surfaced_pin(&call.tool, recorded, async {
+        if let Some(refused) = key_refused {
+            return *refused;
+        }
         // A task whose intake judged nothing (sanitising was off, or nothing
         // was exempt) is re-admitted under this step's generation, as a resume
         // is, so one admitted while sanitising was off is sanitised if a reload
@@ -252,15 +260,22 @@ async fn run_dispatched(
                 .readmit(&call, &caller, (session_id.as_deref(), &generation))
                 .await
         } else {
-            // The intake's own judgement, not an empty one: the inner scope
-            // shadows the worker's, so an empty one would switch off the
-            // playbook and backend-instance guards this task was admitted under.
+            // The intake's own judgement, which the dispatch compares against;
+            // it also stands as the enclosing scope's, so an empty inner one
+            // would keep the same guards (`with_judged`).
             Ok((call.arguments.clone(), intent.owned.judged()))
         };
         let (arguments, judged) = match readmitted {
             Ok(readmitted) => readmitted,
             Err(refused) => return *refused,
         };
+        // The test seam a reload lands in between a re-admission's judgement
+        // and the run (the C2e6 row). A task whose intake judged something
+        // was not re-admitted, so it does not fire.
+        #[cfg(test)]
+        if intent.owned.judged().is_empty() {
+            crate::gateway::meta_mcp::visible::seams::readmitted();
+        }
         crate::gateway::meta_mcp::visible::memo::with_judged(
             judged,
             meta.dispatch_below_gate_native_result(
@@ -293,13 +308,17 @@ async fn run_dispatched(
         .dispatch_log()
         .worker()
         .arm(&executor.service.store);
+    // A round starts unrefused; its invocations decide it.
+    intent.owned.dispatch_log().reset_round();
     // MIK-8154 C2e, F2: the run and its sends compare against what the
     // submit's intake judged, as a synchronous call does.
     let dispatch =
         crate::gateway::meta_mcp::visible::memo::with_judged(intent.owned.judged(), dispatch);
-    let mut dispatch = Box::pin(crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
-        Arc::clone(intent.owned.dispatch_log()),
-        dispatch,
+    let mut dispatch = Box::pin(dispatched_in_cell(
+        crate::gateway::meta_mcp::dispatch_log::with_dispatch_log(
+            Arc::clone(intent.owned.dispatch_log()),
+            dispatch,
+        ),
     ));
 
     // Awaited into its own binding so the dispatch future — which borrows both
@@ -353,7 +372,7 @@ async fn run_dispatched(
         .await;
     } else {
         drop(key_hold);
-        let response = inspect_settled(&state, &call, &id, response);
+        let response = inspect_and_record(&state, &call, (&*principal, &*id), response).await;
         Settling::new(
             &executor,
             &state,
@@ -442,55 +461,64 @@ async fn follow_handle(
     // same implementation, in the dispatch scope so the gates' attribution
     // notes travel with the transition (MIN.1 gap 1). The write record from
     // here on is what that processing wrote into the result (MIK-7993).
-    let writes_mark = crate::gateway::gateway_writes::mark();
-    let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
-        match answer {
-            Terminal::Completed(result) => (
-                match state
-                    .meta_mcp()
-                    .recover_task_result(&job.server, &job.tool, None, id, result)
-                {
-                    Ok(processed) => {
-                        let processed = backend_output(processed);
-                        let target = (job.server.as_str(), job.tool.as_str());
-                        stage_followed_result(state, relay, target, &processed);
-                        TaskTransition::Complete(processed)
-                    }
-                    Err(error) => TaskTransition::Fail(
-                        crate::gateway::meta_mcp::response_security::recovered_result_error(&error),
-                    ),
-                },
-                ErrorAuthor::Gateway,
-            ),
-            // The failure half of that same processing: the peer's message and
-            // nested data are screened before this settles, keeping the code.
-            Terminal::Failed(error) => screened_peer_failure(state, job, id, error),
-            // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
-            Terminal::Substituted(error) => (
-                TaskTransition::Fail(strip_http_status(error)),
-                ErrorAuthor::Gateway,
-            ),
-        }
+    // One cell for this settlement: the recovery's gates and its record.
+    crate::gateway::delivery_facts::scope(async {
+        let writes_mark = crate::gateway::gateway_writes::mark();
+        let processed = crate::gateway::meta_mcp::invoke::audit::with_dispatch_scope(async {
+            match answer {
+                Terminal::Completed(result) => (
+                    match state.meta_mcp().recover_task_result(
+                        &job.server,
+                        &job.tool,
+                        None,
+                        id,
+                        result,
+                    ) {
+                        Ok(processed) => {
+                            let processed = backend_output(processed);
+                            let target = (job.server.as_str(), job.tool.as_str());
+                            stage_followed_result(state, relay, target, &processed);
+                            TaskTransition::Complete(processed)
+                        }
+                        Err(error) => TaskTransition::Fail(
+                            crate::gateway::meta_mcp::response_security::recovered_result_error(
+                                &error,
+                            ),
+                        ),
+                    },
+                    ErrorAuthor::Gateway,
+                ),
+                // The failure half of that same processing: the peer's message and
+                // nested data are screened before this settles, keeping the code.
+                Terminal::Failed(error) => screened_peer_failure(state, job, id, error),
+                // The gateway's own words, never the peer's (MIK-7887.RECEIPT.1).
+                Terminal::Substituted(error) => (
+                    TaskTransition::Fail(strip_http_status(error)),
+                    ErrorAuthor::Gateway,
+                ),
+            }
+        })
+        .await;
+        let (outcome, notes) = processed;
+        let followed = FollowedJob {
+            job,
+            relay,
+            id,
+            principal,
+            revision,
+            bindings,
+        };
+        let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
+        settle_followed(
+            executor,
+            state,
+            &followed,
+            (outcome, writes),
+            &notes,
+            cancel_rx,
+        )
+        .await;
     })
-    .await;
-    let (outcome, notes) = processed;
-    let followed = FollowedJob {
-        job,
-        relay,
-        id,
-        principal,
-        revision,
-        bindings,
-    };
-    let writes = crate::gateway::gateway_writes::snapshot_since(writes_mark);
-    settle_followed(
-        executor,
-        state,
-        &followed,
-        (outcome, writes),
-        &notes,
-        cancel_rx,
-    )
     .await;
     lease.release(executor, id).await;
 }
@@ -641,75 +669,6 @@ pub(super) async fn settle_surfaced_refused(
         .await;
 }
 
-/// The response firewall on a native task result, under the targets the
-/// synchronous call would use (#2351): a refusal is what the task settles on.
-pub(super) fn inspect_settled(
-    state: &crate::gateway::task_service::host::LiveHost,
-    call: &TaskCall,
-    id: &str,
-    response: crate::protocol::JsonRpcResponse,
-) -> crate::protocol::JsonRpcResponse {
-    // A surfaced task's result is inspected as the recorded server's answer:
-    // a reload that moved the name during the call must not lend it the new
-    // server's targets.
-    crate::gateway::meta_mcp::MetaMcp::with_surfaced_pin_sync(
-        &call.tool,
-        call.surfaced_server.as_ref(),
-        || inspect_settled_pinned(state, call, id, response),
-    )
-}
-
-fn inspect_settled_pinned(
-    state: &crate::gateway::task_service::host::LiveHost,
-    call: &TaskCall,
-    id: &str,
-    mut response: crate::protocol::JsonRpcResponse,
-) -> crate::protocol::JsonRpcResponse {
-    if response.error.is_some() || response.egress_scanned {
-        return response;
-    }
-    let Some(result) = response.result.as_mut() else {
-        return response;
-    };
-    let backend = crate::gateway::router::backend_tool_targets_for_call(
-        state.meta_mcp(),
-        &call.tool,
-        &call.arguments,
-        crate::gateway::meta_mcp::visible::TargetView::Dispatched,
-    );
-    #[cfg(test)]
-    crate::gateway::meta_mcp::visible::seams::inspected_under(
-        backend.iter().map(|target| target.server.clone()).collect(),
-    );
-    let targets =
-        crate::gateway::meta_mcp::response_security::meta_response_targets(&call.tool, &backend);
-    let snapshot = state.meta_mcp().relay_snapshot(result);
-    let refused = state
-        .meta_mcp()
-        .inspect_task_result(&targets, id, result)
-        .is_err();
-    // A redaction changed what the task will deliver: its receipt is rebuilt
-    // from it. A task holds the backend's native result, never a wrapper.
-    state
-        .meta_mcp()
-        .restage_if_changed(snapshot, Some(&*result), AnswerShape::Literal);
-    // A task stores the backend's native result, never a `gateway_invoke`
-    // wrapper, whatever tool started it.
-    rebuild_task_receipt(
-        state,
-        &super::settlement::stored_result(result.clone()),
-        AnswerShape::Literal,
-    );
-    if refused {
-        response = crate::protocol::JsonRpcResponse::delivery_refusal_error(
-            response.id,
-            INVALID_REQUEST,
-            "Response blocked by security firewall",
-        );
-    }
-    response
-}
-
 impl TaskExecutor {
     /// Whether this record can still hold the complete recovery descriptor for
     /// `job`, plus the widest handle the store would accept for it.
@@ -786,6 +745,10 @@ mod settle;
 #[path = "worker_held.rs"]
 mod held;
 use held::{cancel_held_upstream, follow_upstream_job};
+
+#[path = "worker_inspect.rs"]
+mod inspect;
+pub(super) use inspect::{dispatched_in_cell, inspect_and_record};
 
 #[cfg(test)]
 #[path = "worker_rescue_seam.rs"]

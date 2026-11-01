@@ -16,7 +16,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::{Admission, Assessment, OutboundFrame, Payload};
-use crate::protocol::{JsonRpcError, JsonRpcResponse};
+use crate::protocol::{JsonRpcError, JsonRpcResponse, WireMeta};
 use crate::security::firewall::Firewall;
 use crate::security::firewall::tenant_guard::{CrossTenantReads, TenantGuard};
 use crate::security::tenant_reads::{ReadAttribution, ReadTicket, ReadVerdict, RejectionEvidence};
@@ -64,11 +64,11 @@ fn emitted_document(payload: &Payload) -> Option<Value> {
                     data: placeholder(&e.data),
                 }),
                 confirmation_refusal: false,
-                delivery_refusal: false,
-                egress_scanned: false,
+                wire_meta: WireMeta::default(),
                 chain_source: crate::protocol::ChainSource::NotEligible,
                 chain_upstream: None,
                 invocation_trace: None,
+                ingress_withheld: None,
             };
             serde_json::to_value(view).ok()
         }
@@ -244,6 +244,7 @@ pub(crate) fn delivered(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     }
 }
 
@@ -279,6 +280,7 @@ pub(crate) fn admit(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     })
 }
 
@@ -330,6 +332,7 @@ pub(crate) fn admit_stream_item(
         key: key.map(Arc::from),
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
+        origin: crate::gateway::health_metrics::Origin::Gateway,
     })
 }
 
@@ -338,7 +341,7 @@ mod emitted_document_tests {
     use serde_json::{Value, json};
 
     use super::{Payload, emitted_document};
-    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId};
+    use crate::protocol::{JsonRpcError, JsonRpcResponse, RequestId, WireMeta};
 
     /// The member names of `doc` and of its `error` object.
     fn key_set(doc: &Value) -> Vec<String> {
@@ -368,11 +371,15 @@ mod emitted_document_tests {
                 data,
             }),
             confirmation_refusal: true,
-            delivery_refusal: true,
-            egress_scanned: true,
+            wire_meta: WireMeta {
+                delivery_refusal: true,
+                egress_scanned: true,
+                origin: crate::protocol::Origin::Gateway,
+            },
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
             invocation_trace: None,
+            ingress_withheld: None,
         }
     }
 

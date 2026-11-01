@@ -95,7 +95,7 @@ struct Fixture {
     backend: Arc<Backend>,
     calls: Arc<AtomicUsize>,
     poisoned: Arc<AtomicBool>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 impl Fixture {

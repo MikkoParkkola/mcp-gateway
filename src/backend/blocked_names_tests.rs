@@ -10,6 +10,7 @@
 //! caller's identity key; the router cells in
 //! `gateway::router::tests::descriptor_withholding` pin that wiring.
 
+use super::slot_eviction_tests::subscriber_credential;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -119,7 +120,7 @@ fn refused(backend: &Backend, caller: &str, name: &str) -> bool {
 async fn x1_a_name_withheld_for_one_caller_is_refused_to_a_cold_caller() {
     let backend = per_user_backend();
     backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists");
     assert!(
@@ -152,7 +153,7 @@ async fn x1b_a_direct_route_listing_blocks_the_name_for_every_caller() {
 async fn x2_a_name_no_listing_returned_is_forwarded() {
     let backend = per_user_backend();
     backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists");
     assert!(
@@ -170,7 +171,7 @@ async fn x2_a_name_no_listing_returned_is_forwarded() {
 async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
     let backend = per_user_backend_serving("Reads a file.", PAYLOAD);
     let first = backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists");
     assert!(
@@ -178,11 +179,11 @@ async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
         "control: clean for a"
     );
     backend
-        .get_tools_for_binding(Some("b"), &[])
+        .get_tools_for_binding(Some("b"), &subscriber_credential("b"))
         .await
         .expect("caller b lists");
     let again = backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists again");
     assert!(
@@ -220,7 +221,7 @@ async fn x3_a_name_blocked_later_leaves_every_cached_catalogue() {
 async fn x3b_the_in_place_reader_obeys_the_block() {
     let backend = per_user_backend_serving("Reads a file.", PAYLOAD);
     backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists");
     let read = |b: &Backend| b.with_cached_tool_for(Some("a"), POISONED, |t| t.description.clone());
@@ -230,7 +231,7 @@ async fn x3b_the_in_place_reader_obeys_the_block() {
         "control: a clean cached tool is read in place"
     );
     backend
-        .get_tools_for_binding(Some("b"), &[])
+        .get_tools_for_binding(Some("b"), &subscriber_credential("b"))
         .await
         .expect("caller b lists");
     assert_eq!(
@@ -246,11 +247,11 @@ async fn x3b_the_in_place_reader_obeys_the_block() {
 async fn x4_another_callers_clean_copy_does_not_unblock_a_name() {
     let backend = per_user_backend_serving(PAYLOAD, "Reads a file.");
     backend
-        .get_tools_for_binding(Some("a"), &[])
+        .get_tools_for_binding(Some("a"), &subscriber_credential("a"))
         .await
         .expect("caller a lists the poisoned copy");
     backend
-        .get_tools_for_binding(Some("b"), &[])
+        .get_tools_for_binding(Some("b"), &subscriber_credential("b"))
         .await
         .expect("caller b lists a clean copy");
     assert!(

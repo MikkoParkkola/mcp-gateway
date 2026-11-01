@@ -25,12 +25,14 @@ const BINDING: &str = "rev:alpha";
 
 /// A per-user slot serving `peer`, whose Modern era is cached, with a request
 /// still in flight on it; then a `-32601` contradicts the era and a re-probe
-/// of `peer` is held mid-flight.
+/// of `peer` is held mid-flight. Returns the task making that re-probe call,
+/// which each row awaits: a call that panicked stored nothing, and a row
+/// asserting nothing was stored must not pass on that.
 async fn busy_slot_probing(
     backend: &Arc<Backend>,
     peer: &Arc<Peer>,
     handles: &mut Handles,
-) -> (Arc<dyn Transport>, Arc<PooledEntry>) {
+) -> (tokio::task::JoinHandle<()>, Arc<PooledEntry>) {
     let transport: Arc<dyn Transport> = peer.clone();
     backend.set_pooled_transport_for_test(&slot(BINDING), Arc::clone(&transport));
     let entry = entry_of(backend, BINDING);
@@ -39,14 +41,29 @@ async fn busy_slot_probing(
     entry.in_flight.fetch_add(1, Ordering::SeqCst);
 
     peer.hold.store(true, Ordering::SeqCst);
-    backend
-        .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
-        .await;
+    // Called from its own task, as a dispatch calls it: a lent-only slot (this
+    // backend's binding is required) runs its re-probe inside that call, so
+    // the held probe would otherwise hold this test too.
+    let reprobing = Arc::clone(backend);
+    let probed = Arc::clone(&transport);
+    let reprobe = tokio::spawn(async move {
+        reprobing
+            .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &probed, &[])
+            .await;
+    });
     tokio::time::timeout(WAIT, &mut handles.started)
         .await
         .expect("the re-probe reached the peer in time")
         .expect("the re-probe reaches the peer");
-    (transport, entry)
+    (reprobe, entry)
+}
+
+/// The re-probe call returned, and did not panic.
+async fn finished(reprobe: tokio::task::JoinHandle<()>) {
+    tokio::time::timeout(WAIT, reprobe)
+        .await
+        .expect("the re-probe call returned in time")
+        .expect("the re-probe call did not panic");
 }
 
 /// MIK-7643: the revocation removes the busy slot while its re-probe is on the
@@ -56,7 +73,7 @@ async fn busy_slot_probing(
 async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
     let backend = per_user_backend("era-retired");
     let (peer, mut handles) = Peer::new(Answer::Modern);
-    let (_transport, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
+    let (reprobe, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
 
     assert_eq!(
         backend.evict_identity_slots("rev:"),
@@ -68,6 +85,7 @@ async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
     let era = tokio::time::timeout(WAIT, entry.era.cached())
         .await
         .expect("the re-probe decided in time");
+    finished(reprobe).await;
     assert_eq!(
         era, None,
         "an answer about a slot the pool no longer serves is not stored as its era"
@@ -80,12 +98,13 @@ async fn a_reprobe_answer_for_a_revoked_busy_slot_is_not_stored() {
 async fn a_reprobe_answer_before_the_revocation_is_stored() {
     let backend = per_user_backend("era-retired-guard");
     let (peer, mut handles) = Peer::new(Answer::Modern);
-    let (_transport, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
+    let (reprobe, entry) = busy_slot_probing(&backend, &peer, &mut handles).await;
 
     let _ = handles.release.send(());
     let era = tokio::time::timeout(WAIT, entry.era.cached())
         .await
         .expect("the re-probe decided in time");
+    finished(reprobe).await;
     assert_eq!(
         era,
         Some(PeerEra::Modern),
@@ -196,7 +215,7 @@ async fn a_contradiction_from_a_revoked_slot() {
         let backend = Arc::clone(&backend);
         async move {
             backend
-                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport)
+                .reprobe_if_code_contradicts(DISCOVER, METHOD_NOT_FOUND, &transport, &[])
                 .await;
         }
     });

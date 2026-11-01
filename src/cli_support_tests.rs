@@ -157,14 +157,17 @@ fn d7_a_refused_server_is_skipped_with_its_reasons_and_no_value() {
             Outcome::Skipped {
                 name: capabilities.clone(),
                 reasons: vec![("capabilities_name", "name".to_string())],
+                skip: Skip::ByRule,
             },
             Outcome::Skipped {
                 name: "x/y".to_string(),
                 reasons: vec![("invalid_name", "name".to_string())],
+                skip: Skip::Refused,
             },
             Outcome::Skipped {
                 name: "client-only".to_string(),
                 reasons: vec![("needs_client_only_secret", "env.API_KEY".to_string())],
+                skip: Skip::Refused,
             },
             Outcome::Adopted {
                 name: "good".to_string()
@@ -223,6 +226,7 @@ fn a_value_the_store_cannot_keep_skips_its_server_only() {
         Outcome::Skipped {
             name: "big".to_string(),
             reasons: vec![("value_too_large", "env.B".to_string())],
+            skip: Skip::Refused,
         }
     );
     adoption.settle(&Ok(()));
@@ -264,6 +268,7 @@ fn a_repeated_name_is_skipped_and_stores_nothing() {
         Outcome::Skipped {
             name: "tool".to_string(),
             reasons: vec![("duplicate_name", "name".to_string())],
+            skip: Skip::Refused,
         }
     );
     adoption.settle(&Ok(()));
@@ -359,6 +364,7 @@ fn a_skipped_field_is_escaped_for_the_terminal() {
     let shown = describe_skipped(&[Outcome::Skipped {
         name: "a\u{202e}b".to_string(),
         reasons: vec![("needs_client_only_secret", "env.K\u{1b}[31m".to_string())],
+        skip: Skip::Refused,
     }]);
     assert!(!shown.contains('\u{202e}'), "{shown}");
     assert!(!shown.contains('\u{1b}'), "{shown}");
@@ -424,6 +430,48 @@ fn a_skip_warning_quotes_the_escaped_name() {
     let shown_skip = describe_skipped(&[Outcome::Skipped {
         name: "a\u{1b}b".to_string(),
         reasons: vec![("invalid_name", "name".to_string())],
+        skip: Skip::Refused,
     }]);
     assert_eq!(shown_skip, "\"a\\u{1b}b\": invalid_name (name)");
+}
+
+/// A run whose only find is left out by rule (the gateway's own entry,
+/// named like `capabilities.name`) imports nothing and succeeds; no store is
+/// opened.
+#[test]
+fn a_run_skipped_only_by_rule_succeeds_with_nothing_adopted() {
+    let mut config = Config::default();
+    let own = config.capabilities.name.clone();
+    let servers = [server(&own, &[])];
+    let adoption = adopt_with(&mut config, &servers, || {
+        panic!("no store is opened when nothing is adopted")
+    })
+    .expect("a by-rule skip is not a failure");
+    assert_eq!(
+        adoption.outcomes,
+        [Outcome::Skipped {
+            name: own,
+            reasons: vec![("capabilities_name", "name".to_string())],
+            skip: Skip::ByRule,
+        }]
+    );
+    assert!(config.backends.is_empty());
+}
+
+/// A refusal with nothing adopted fails the run, by-rule skips beside it
+/// or not, and the message names every skipped server.
+#[test]
+fn a_refusal_with_nothing_adopted_fails_the_run() {
+    let mut config = Config::default();
+    let own = config.capabilities.name.clone();
+    let servers = [server(&own, &[]), server("x/y", &[])];
+    let error = adopt_with(&mut config, &servers, || {
+        panic!("no store is opened when nothing is adopted")
+    })
+    .err()
+    .expect("a refusal with nothing adopted fails");
+    assert!(error.contains("nothing was written"), "{error}");
+    assert!(error.contains("invalid_name"), "{error}");
+    assert!(error.contains("capabilities_name"), "{error}");
+    assert!(config.backends.is_empty());
 }

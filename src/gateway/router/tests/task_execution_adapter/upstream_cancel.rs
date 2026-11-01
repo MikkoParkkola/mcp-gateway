@@ -187,7 +187,7 @@ enum Release {
 
 struct Rig {
     state: Arc<AppState>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     parked: Arc<tokio::sync::Notify>,
     delivered: Arc<AtomicBool>,
     dropped: Arc<AtomicBool>,

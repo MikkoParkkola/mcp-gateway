@@ -59,6 +59,34 @@ async fn each_subscriber_of_a_backend_is_its_own_listener() {
     assert_eq!(ep.name, "b");
 }
 
+/// ISO-T4c: one subscriber's legacy unsubscribe leaves another's subscribe
+/// owed. The session fills a ledger; none runs here, so each subscriber's
+/// ledger is told its wanted URI directly.
+#[tokio::test]
+async fn one_subscribers_unsubscribe_keeps_anothers_subscribe() {
+    let l = listeners();
+    let (p, q) = (as_user("p"), as_user("q"));
+    let uri = "file:///a";
+    for key in [&p, &q] {
+        l.hold(key, &watched(uri)).expect("counted");
+    }
+    let q_ledger = {
+        let map = l.backends.lock();
+        for key in [&p, &q] {
+            map[key].ledger().lock().want(uri).expect("room");
+        }
+        map[&q].ledger()
+    };
+    l.remove(&p, &watched(uri));
+    assert!(
+        q_ledger
+            .lock()
+            .due(std::time::Instant::now())
+            .contains(&(uri.to_owned(), true)),
+        "q's subscribe is still owed after p unsubscribed"
+    );
+}
+
 #[tokio::test]
 async fn removing_one_subscribers_interest_leaves_the_others() {
     let l = listeners();
@@ -85,7 +113,8 @@ async fn each_listener_has_its_own_confirm_clock() {
 }
 
 /// A per-user key with no snapshot of its own admits without a confirming
-/// read. That it never reads as the gateway is pinned end to end by ISO-T7.
+/// read. That it never reads as the gateway is pinned end to end by ISO-T7
+/// (`tests/per_subscriber_isolation.rs`, the `iso_t7_*` rows).
 #[tokio::test]
 async fn a_per_user_key_without_a_snapshot_admits() {
     let l = listeners();
@@ -156,4 +185,18 @@ async fn a_parked_key_refuses_a_uri_past_the_budget() {
     }
     assert!(l.hold(&p, &watched("file:///over")).is_err());
     assert!(l.hold(&p, &Interest::ToolsChanged).is_ok(), "no URI budget");
+}
+
+/// ISO-T4a, map half: two subscribers' tools interest on one per-user backend
+/// keeps two listener entries, so their coalescers, snapshots and tasks are
+/// two. A key that ignored the observation would fold them into one.
+#[tokio::test]
+async fn iso_t4a_two_subscribers_tools_interest_keeps_two_listeners() {
+    let l = listeners();
+    let (p, q) = (as_user("p"), as_user("q"));
+    l.hold(&p, &Interest::ToolsChanged).expect("counted");
+    l.hold(&q, &Interest::ToolsChanged).expect("counted");
+    let map = l.backends.lock();
+    assert_eq!(map.len(), 2, "one listener per subscriber");
+    assert!(!Arc::ptr_eq(&map[&p], &map[&q]), "no shared listener state");
 }

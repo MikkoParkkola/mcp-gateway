@@ -15,8 +15,11 @@ use super::{
 pub(super) async fn test_router_app_state_with_meta(
     backend: Arc<Backend>,
     configure: impl FnOnce(&mut MetaMcp),
-) -> (Arc<AppState>, tempfile::TempDir) {
-    let backends = Arc::new(BackendRegistry::new());
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     configure(&mut meta);
@@ -34,11 +37,16 @@ pub(super) async fn test_router_app_state_with_meta(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -48,7 +56,6 @@ pub(super) async fn test_router_app_state_with_meta(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -63,9 +70,7 @@ pub(super) async fn test_router_app_state_with_meta(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -86,21 +91,27 @@ pub(super) async fn test_router_app_state_with_meta(
 /// per-user credential without recording it on this route.
 pub(super) async fn test_router_app_state_minting_without_route_audit(
     backend: Arc<Backend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (
+    crate::security::transparency_log::temp::TempLog,
+    Arc<AppState>,
+    crate::gateway::router::tests::FixtureDir,
+) {
     use crate::identity_propagation::SignedAssertionStrategy;
     use crate::security::TransparencyLogger;
     use crate::security::transparency_log::TransparencyLogConfig;
 
-    let backends = Arc::new(BackendRegistry::new());
+    // As the gateway builds it: one resolver for every backend's secrets.
+    let backends = Arc::new(BackendRegistry::with_secret_resolver(Arc::new(
+        crate::secrets::SecretResolver::new(),
+    )));
     let _ = backends.register(backend);
     let mut meta = MetaMcp::new(Arc::clone(&backends));
     let key = Arc::new(GatewayKeyPair::generate().expect("keygen"));
     meta.set_identity_propagation(Arc::new(SignedAssertionStrategy::new(key, 300)));
-    // Meta-MCP side gets an audit sink (leaked tempfile — reclaimed at process
-    // exit); the DIRECT route deliberately does NOT (`transparency_log: None`).
-    let file = tempfile::NamedTempFile::new().expect("tempfile");
-    let path = file.path().to_string_lossy().to_string();
-    std::mem::forget(file);
+    // Meta-MCP side gets an audit sink, returned first so the caller drops it
+    // last; the DIRECT route deliberately does NOT (`transparency_log: None`).
+    let log = crate::security::transparency_log::temp::TempLog::new();
+    let path = log.path().to_string_lossy().to_string();
     let cfg = Arc::new(TransparencyLogConfig {
         enabled: true,
         path,
@@ -125,11 +136,16 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -139,7 +155,6 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -154,9 +169,7 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -164,5 +177,5 @@ pub(super) async fn test_router_app_state_minting_without_route_audit(
         task_executor,
         subscriptions,
     });
-    (state, store_dir)
+    (log, state, store_dir)
 }

@@ -4,6 +4,7 @@
 //! caller it carries, with that caller's headers and binding
 //! (`BridgeDispatcher.headers` / `.cache_binding`).
 
+use crate::transport::LentCredential;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -143,7 +144,7 @@ async fn f13_t9c_a_bridged_round_fills_as_its_own_caller() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &headers,
+        headers: &LentCredential::unchecked(&headers),
         cache_binding: Some("beta@edits"),
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -218,7 +219,7 @@ async fn f13_a3_a_bridged_fill_failure_is_not_admitted() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -278,7 +279,7 @@ async fn mik_1989_a_bridged_round_after_the_server_is_killed_is_not_admitted() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -340,7 +341,7 @@ async fn mik_1989_a_kill_during_the_schema_check_stops_the_round() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -389,6 +390,9 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
                     action: FirewallAction::Block,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -414,7 +418,7 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
         caller_identity: None,
         caller_proof: CallerProof::Anonymous,
         credential_owner: None,
-        headers: &[],
+        headers: &LentCredential::default(),
         cache_binding: None,
         account_credential: super::propagation::DispatchAccount::default(),
         api_key_name: None,
@@ -492,7 +496,7 @@ async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
             caller_identity: None,
             caller_proof: CallerProof::Anonymous,
             credential_owner: None,
-            headers: &[],
+            headers: &LentCredential::default(),
             cache_binding: None,
             account_credential: super::propagation::DispatchAccount::default(),
             api_key_name: None,
@@ -530,3 +534,84 @@ async fn a_bridged_round_whose_answers_the_firewall_blocks_is_not_sent() {
         }
     }
 }
+
+/// R23/R24: a bridged round refused by the kill switch ends the exchange with
+/// the gateway's refusal, so the delivery records refused; inside a composite
+/// (the cell already unvouched) the same refusal marks nothing.
+#[tokio::test]
+async fn a_killed_bridged_round_records_refused_only_while_vouched() {
+    async fn effect(composite: bool) -> serde_json::Map<String, Value> {
+        crate::gateway::delivery_facts::scope(async move {
+            if composite {
+                crate::gateway::delivery_facts::unvouched();
+            }
+            let backend = Arc::new(Backend::new(
+                "edits",
+                BackendConfig::default(),
+                &FailsafeConfig::default(),
+                Duration::from_secs(60),
+            ));
+            let slot = Arc::new(Slot::default());
+            backend
+                .set_transport_for_test(Arc::clone(&slot) as Arc<dyn crate::transport::Transport>);
+            let registry = Arc::new(BackendRegistry::new());
+            assert!(registry.register(backend));
+            let meta = MetaMcp::new(registry);
+            meta.kill_switch().kill("edits");
+            let arguments = json!({"edits": []});
+            let round = BridgeDispatcher {
+                meta: &meta,
+                caller: &crate::gateway::meta_mcp::authz_tests::ctx(
+                    &crate::gateway::authz::AllowAll,
+                ),
+                server: "edits",
+                tool: "edit",
+                arguments: &arguments,
+                prompt_cache_key: None,
+                inbound_meta: None,
+                want_full: false,
+                session_id: None,
+                arm_key: None,
+                caller_identity: None,
+                caller_proof: CallerProof::Anonymous,
+                credential_owner: None,
+                headers: &crate::transport::LentCredential::default(),
+                cache_binding: None,
+                account_credential: super::propagation::DispatchAccount::default(),
+                api_key_name: None,
+                trace_id: "r23-bridged",
+                policy_epoch: 0,
+                protocol_revision: None,
+                routing_profile: "default",
+                scope: InvokeScope::allow_all(CallerStanding::Standard),
+                captured: meta.backends.for_test().get("edits"),
+                managed: None,
+                account_refusal: &parking_lot::Mutex::new(None),
+                reservation: &parking_lot::Mutex::new(None),
+                relay: super::relay::RelayKey::unkeyed_for_test("r23"),
+                relay_refused: &parking_lot::Mutex::new(None),
+            };
+            let outcome = round.invoke(json!({})).await;
+            assert!(
+                matches!(outcome, Err(BridgeError::NotAdmitted { .. })),
+                "premise: killed: {outcome:?}"
+            );
+            let mut fields = serde_json::Map::new();
+            crate::gateway::delivery_facts::record_fields(
+                crate::gateway::delivery_facts::snapshot().as_ref(),
+                false,
+                &mut fields,
+            );
+            fields
+        })
+        .await
+    }
+    let lone = effect(false).await;
+    assert_eq!(lone["response_effect"], "refused", "{lone:?}");
+    let composite = effect(true).await;
+    assert!(composite.get("response_effect").is_none(), "{composite:?}");
+}
+
+/// The bridged refusals beside the kill switch: the undeclared key and the
+/// firewall.
+mod refusals_tests;

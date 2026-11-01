@@ -22,13 +22,12 @@ use serde_json::{Value, json};
 
 use super::backend_ops::resolve_backend;
 use super::backends::{AddBackendRequest, validate_backend_name};
-use super::errors::{admin_auth_required, flat_error};
-use super::is_admin;
-use crate::gateway::auth::AuthenticatedClient;
+use super::errors::flat_error;
 use crate::gateway::router::AppState;
 use crate::protocol::continuation::{ContinuationPurpose, Payload, clock_now};
 use crate::security::ssrf::{DestinationPolicy, SSRF_BLOCKED};
 
+use super::guard::Guard;
 use crate::backend::PreviewListing;
 use crate::config::{BackendConfig, TransportConfig};
 
@@ -196,12 +195,12 @@ fn transport_label(backend: &crate::config::BackendConfig) -> (&'static str, Opt
 pub(super) async fn preview_backend(
     State(state): State<Arc<AppState>>,
     Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Json(request): Json<PreviewRequest>,
 ) -> Response {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    let client = guard.client.clone();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
     // The credential, not the display name: two admin keys may share a name,
     // and neither may spend the other's confirmation. A digest of it goes in
@@ -422,6 +421,9 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
                 "class": class,
                 "class_source": class_source,
                 "destructive": hints.and_then(|a| a.destructive_hint) == Some(true),
+                // A name the gateway would never call cannot be ticked: copied
+                // into `allowed_tools`, a trailing `*` would read as a pattern.
+                "selectable": crate::security::validate_tool_name(&tool.name).is_ok(),
             })
         })
         .collect();

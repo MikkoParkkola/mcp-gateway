@@ -10,14 +10,16 @@ use super::support::*;
 use crate::gateway::egress_fixture::secret;
 use crate::security::firewall::{Firewall, FirewallConfig};
 
-async fn firewalled(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn firewalled(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = firewalled_state().await;
     register(&state, BACKEND, mock);
     (state, store)
 }
 
 /// The firewalled gateway with no backend registered yet.
-async fn firewalled_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn firewalled_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -199,5 +201,341 @@ async fn egress_an_a2a_agent_credential_is_screened_by_the_task_worker() {
         "{} cells failed:\n{}",
         failures.len(),
         failures.join("\n")
+    );
+}
+
+/// The firewalled gateway whose response rule for the backend tool takes
+/// `action`, with its audit log at `log`.
+async fn ruled_state(
+    action: crate::security::firewall::FirewallAction,
+    log: Arc<crate::security::TransparencyLogger>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
+    use crate::security::firewall::FirewallRule;
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                enabled: true,
+                scan_responses: true,
+                scan_requests: false,
+                credential_redaction: true,
+                rules: vec![FirewallRule {
+                    tool_match: TOOL.to_string(),
+                    action,
+                    reason: None,
+                    scan: Vec::new(),
+                    servers: None,
+                    keys: None,
+                    except: None,
+                }],
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    super::super::meta_fixture::test_router_app_state_with_meta(
+        &two_principal_auth(),
+        None,
+        |mut meta| {
+            meta.share_keyring_with_for_test(&firewall);
+            meta.set_firewall(Some(firewall));
+            meta.enable_transparency_log(log);
+            meta
+        },
+    )
+    .await
+}
+
+/// One task-augmented call answered with `answer` under a rule taking
+/// `action`, run to its terminal state: the task id, its terminal read, and
+/// every record in the log once the writes landed.
+async fn settled_task_log(
+    action: crate::security::firewall::FirewallAction,
+    answer: Answer,
+) -> (String, Value, Vec<Value>) {
+    settled_task_log_for(action, answer, task_invoke(2, "settle-task", json!({}))).await
+}
+
+/// [`settled_task_log`] for the task-augmented call `request`.
+async fn settled_task_log_for(
+    action: crate::security::firewall::FirewallAction,
+    answer: Answer,
+    request: Value,
+) -> (String, Value, Vec<Value>) {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    let (_dir, log) = temp_log(None);
+    let (state, _store) = ruled_state(action, Arc::clone(&log)).await;
+    let mock = MockBackend::answering(answer);
+    register(&state, BACKEND, &mock);
+    let created = post(&state, "key-a", request).await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert!(mock.calls() > 0, "premise: the worker reached the backend");
+    let _ = delivery_rows(&log).await;
+    let entries = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    (task, settled, entries)
+}
+
+/// The task's `task_settlement` records.
+fn settlement_records<'a>(entries: &'a [Value], task: &str) -> Vec<&'a Value> {
+    entries
+        .iter()
+        .filter(|entry| entry["route"] == "task_settlement" && entry["task_id"] == task)
+        .collect()
+}
+
+/// Every record's route, event, outcome, trace and field names, for a failure
+/// message.
+fn dump(entries: &[Value]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            let keys: Vec<&str> = entry
+                .as_object()
+                .map(|o| o.keys().map(String::as_str).collect())
+                .unwrap_or_default();
+            format!(
+                "event={} route={} outcome={} trace_id={} task_id={} keys={keys:?}",
+                entry["event"],
+                entry["route"],
+                entry["outcome"],
+                entry["trace_id"],
+                entry["task_id"]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// A task worker's egress refusal is recorded on the task's own record (the
+/// settlement record the worker writes), never on a task read's delivery, and
+/// that record joins the worker's dispatch record by its trace alone. The
+/// synchronous twin is the premise: the same answer through the same rule is
+/// refused.
+#[tokio::test]
+async fn a_worker_egress_refusal_is_recorded_on_the_tasks_own_record() {
+    use crate::gateway::router::route_matrix_driver_tests::response::temp_log;
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let planted =
+        || Answer::Result(json!({"content": [{"type": "text", "text": leak}], "isError": false}));
+
+    let (_sync_dir, sync_log) = temp_log(None);
+    let (sync_state, _sync_store) = ruled_state(FirewallAction::Block, sync_log).await;
+    register(&sync_state, BACKEND, &MockBackend::answering(planted()));
+    let refused = post(&sync_state, "key-a", sync_invoke(1, json!({}))).await;
+    assert!(
+        refused.get("error").is_some() && !refused.to_string().contains(&leak),
+        "premise: the rule refuses the answer: {refused}"
+    );
+
+    let (task, settled, entries) = settled_task_log(FirewallAction::Block, planted()).await;
+    assert!(
+        !settled.to_string().contains(&leak),
+        "premise: the task read carries no credential: {settled}"
+    );
+    let records = settlement_records(&entries, &task);
+    let [record] = records.as_slice() else {
+        panic!(
+            "task {task}: one task_settlement record:\n{}",
+            dump(&entries)
+        );
+    };
+    assert!(record["response_effect"] == "refused", "{record}");
+    assert!(record["outcome"] == "denied", "{record}");
+    assert!(!record.to_string().contains(&leak), "no content: {record}");
+    let dispatches: Vec<&Value> = entries
+        .iter()
+        .filter(|entry| entry["route"] == "meta" && entry["trace_id"] == record["trace_id"])
+        .collect();
+    assert!(
+        dispatches.len() == 1,
+        "the record's trace names exactly the worker's dispatch record:\n{}",
+        dump(&entries)
+    );
+}
+
+/// A redaction at settlement records `rewritten` with its finding, and keeps the
+/// completed task's outcome.
+#[tokio::test]
+async fn a_worker_redaction_is_recorded_as_rewritten() {
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let (task, settled, entries) = settled_task_log(
+        FirewallAction::Warn,
+        Answer::Result(json!({"content": [{"type": "text", "text": leak}], "isError": false})),
+    )
+    .await;
+    assert!(
+        !settled.to_string().contains(&leak),
+        "premise: redacted: {settled}"
+    );
+    let records = settlement_records(&entries, &task);
+    let [record] = records.as_slice() else {
+        panic!(
+            "task {task}: one task_settlement record:\n{}",
+            dump(&entries)
+        );
+    };
+    assert!(record["response_effect"] == "rewritten", "{record}");
+    assert!(record["outcome"] == "ok", "{record}");
+    let findings = record["response_findings"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        findings.iter().any(|f| f["kind"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("firewall:"))),
+        "the redaction's finding: {record}"
+    );
+    assert!(!record.to_string().contains(&leak), "no content: {record}");
+}
+
+/// A backend's own failure is not a gateway decision: no settlement record.
+#[tokio::test]
+async fn a_backend_failure_writes_no_settlement_record() {
+    use crate::security::firewall::FirewallAction;
+    let (task, _settled, entries) = settled_task_log(FirewallAction::Block, Answer::Failure).await;
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "task {task}: a backend failure is recorded as the gateway's:\n{}",
+        dump(&entries)
+    );
+}
+
+/// An input request the settlement inspection refuses is replaced by an error
+/// that ends the task, so it is a terminal refusal and is recorded: whether an
+/// answer is interim is read after the inspection.
+#[tokio::test]
+async fn a_refused_input_request_is_recorded_as_a_terminal_refusal() {
+    use super::input_round::{STATE_1, ask, create};
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let mut asked = ask("k1", STATE_1);
+    asked["content"] = json!([{"type": "text", "text": leak}]);
+
+    let (task, settled, entries) = settled_task_log_for(
+        FirewallAction::Block,
+        Answer::Result(asked),
+        create(2, "settle-task"),
+    )
+    .await;
+    assert!(
+        !settled.to_string().contains(&leak),
+        "premise: the task read carries no credential: {settled}"
+    );
+    let records = settlement_records(&entries, &task);
+    let [record] = records.as_slice() else {
+        panic!(
+            "task {task}: one task_settlement record:\n{}",
+            dump(&entries)
+        );
+    };
+    assert!(record["response_effect"] == "refused", "{record}");
+    assert!(record["outcome"] == "denied", "{record}");
+}
+
+/// A clean answer under the same rule writes no settlement record: only a
+/// refusal or a rewrite does.
+#[tokio::test]
+async fn a_clean_task_answer_writes_no_settlement_record() {
+    use crate::security::firewall::FirewallAction;
+    let (task, settled, entries) = settled_task_log(FirewallAction::Block, Answer::ok()).await;
+    assert!(
+        status_of(&settled) == "completed",
+        "premise: the clean task completes: {settled}"
+    );
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "a clean settlement wrote a record:\n{}",
+        dump(&entries)
+    );
+}
+
+/// Under fail-closed audit, a settlement record that cannot be written
+/// withholds the answer: the task settles on `-32005` with no content. Only
+/// the settlement append fails; the worker's dispatch record is written.
+#[tokio::test]
+async fn a_failed_settlement_write_under_fail_closed_withholds_the_answer() {
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    use crate::security::audit::AuditFailurePolicy;
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let (_dir, log) = temp_log(Some(AuditFailurePolicy::FailClosed));
+    let (state, _store) = ruled_state(FirewallAction::Warn, Arc::clone(&log)).await;
+    let mock = MockBackend::answering(Answer::Result(
+        json!({"content": [{"type": "text", "text": leak}], "isError": false}),
+    ));
+    register(&state, BACKEND, &mock);
+    log.fail_next_append_of_kind_for_test("task_settlement");
+
+    let created = post(&state, "key-a", task_invoke(2, "settle-task", json!({}))).await;
+    let task = task_id(&created);
+    let settled = poll_until_terminal(&state, "key-a", &task).await;
+    assert!(mock.calls() > 0, "premise: the worker reached the backend");
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+
+    assert!(
+        entries.iter().any(|entry| entry["route"] == "meta"),
+        "premise: the dispatch record was written:\n{}",
+        dump(&entries)
+    );
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "premise: the settlement append failed:\n{}",
+        dump(&entries)
+    );
+    assert!(
+        settled.to_string().contains("-32005"),
+        "a failed settlement write withholds the answer: {settled}"
+    );
+    assert!(
+        !settled.to_string().contains(&leak) && !settled.to_string().contains("[REDACTED"),
+        "no content of the answer, redacted or not: {settled}"
+    );
+}
+
+/// An input request the inspection rewrote but did not refuse is still an
+/// interim answer: the task waits for input and no settlement record is written.
+#[tokio::test]
+async fn a_rewritten_input_request_writes_no_settlement_record() {
+    use super::input_round::{STATE_1, ask, create, wait_input_required};
+    use crate::gateway::router::route_matrix_driver_tests::response::{delivery_rows, temp_log};
+    use crate::security::firewall::FirewallAction;
+    let leak = secret();
+    let mut asked = ask("k1", STATE_1);
+    asked["content"] = json!([{"type": "text", "text": leak}]);
+    let (_dir, log) = temp_log(None);
+    let (state, _store) = ruled_state(FirewallAction::Warn, Arc::clone(&log)).await;
+    let mock = MockBackend::answering(Answer::Result(asked));
+    register(&state, BACKEND, &mock);
+
+    let created = post(&state, "key-a", create(2, "settle-task")).await;
+    let task = task_id(&created);
+    let parked = wait_input_required(&state, &task).await;
+    assert!(
+        !parked.to_string().contains(&leak),
+        "premise: the input request was redacted: {parked}"
+    );
+    let _ = delivery_rows(&log).await;
+    let entries: Vec<Value> = std::fs::read_to_string(log.path())
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect();
+    assert!(
+        settlement_records(&entries, &task).is_empty(),
+        "an interim answer wrote a settlement record:\n{}",
+        dump(&entries)
     );
 }

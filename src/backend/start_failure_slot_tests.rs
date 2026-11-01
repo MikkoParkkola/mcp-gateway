@@ -13,7 +13,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::slot_eviction_tests::{per_user_backend, slot};
+use super::slot_eviction_tests::{per_user_backend, slot, subscriber_credential};
 
 /// GIVEN a request parked between capturing its idle slot's entry and
 /// claiming the slot, and that entry then evicted by the idle reaper
@@ -34,7 +34,12 @@ async fn a_start_failure_after_the_eviction_race_lands_on_the_live_slot() {
         let backend = Arc::clone(&backend);
         tokio::spawn(async move {
             backend
-                .request_with_headers("tools/list", None, &[], Some(BINDING))
+                .request_with_headers(
+                    "tools/list",
+                    None,
+                    &subscriber_credential(BINDING),
+                    Some(BINDING),
+                )
                 .await
         })
     };

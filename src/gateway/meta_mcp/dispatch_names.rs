@@ -56,6 +56,40 @@ meta_arms! {
     ReloadCapabilities => "gateway_reload_capabilities",
 }
 
+impl MetaArm {
+    /// Whether this meta-tool runs a composite: a plan whose steps each run
+    /// in a cell of their own, with no single invocation for the whole.
+    /// Exhaustive, so a new meta-tool does not compile until it is classed.
+    pub(super) const fn is_composite(self) -> bool {
+        match self {
+            Self::Execute | Self::RunPlaybook => true,
+            Self::Search
+            | Self::ListServers
+            | Self::ListTools
+            | Self::SearchTools
+            | Self::Invoke
+            | Self::GetStats
+            | Self::CostReport
+            | Self::WebhookStatus
+            | Self::KillServer
+            | Self::ReviveServer
+            | Self::ListDisabledCapabilities
+            | Self::SetProfile
+            | Self::GetProfile
+            | Self::ListProfiles
+            | Self::SetState
+            | Self::ReloadConfig
+            | Self::ReloadCapabilities => false,
+        }
+    }
+}
+
+/// Whether `tool_name` names a composite meta-tool (`gateway_execute`,
+/// `gateway_run_playbook`); `false` for any other name.
+pub(crate) fn is_composite_meta_tool(tool_name: &str) -> bool {
+    MetaArm::parse(tool_name).is_some_and(MetaArm::is_composite)
+}
+
 impl MetaMcp {
     /// The refusal for a name no meta-tool answers, with a suggestion drawn
     /// only from the tools this caller may see.

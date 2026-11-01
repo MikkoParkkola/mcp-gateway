@@ -47,7 +47,7 @@ async fn no_log_no_slot_wrap() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn an_open_slot_is_not_wrapped_again() {
-    let file = tempfile::NamedTempFile::new().expect("log file");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -73,7 +73,7 @@ async fn an_open_slot_is_not_wrapped_again() {
 /// or stdio's outermost call), the tail still opens its own slot.
 #[tokio::test(flavor = "current_thread")]
 async fn with_a_log_and_no_open_slot_the_tail_opens_one() {
-    let file = tempfile::NamedTempFile::new().expect("log file");
+    let file = crate::security::transparency_log::temp::TempLog::new();
     let config = crate::security::TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),

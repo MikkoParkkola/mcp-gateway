@@ -32,7 +32,7 @@ impl MetaMcp {
         attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Option<JsonRpcResponse> {
+    ) -> Option<StoredAnswer> {
         self.refuse_stored(id, stored, (attestation, session), caller, StoredRead::Read)
     }
 
@@ -48,7 +48,7 @@ impl MetaMcp {
         attestation: Option<&str>,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> Option<JsonRpcResponse> {
+    ) -> Option<StoredAnswer> {
         self.refuse_stored(
             id,
             stored,
@@ -125,6 +125,34 @@ impl MetaMcp {
         } else {
             super::account_outcome::AccountWrites::All
         };
+        self.account_prepass(&targets, scope, session_id, writes)
+            .await;
+        let view = self.scoped(scope.authorizer.backend_grant());
+        for &(server, tool) in &targets {
+            self.keep_permanent_refusal(&view, server, tool, caller)
+                .await;
+            if let Some(fill) = self
+                .claim_caller_view(server, tool, scope, session_id)
+                .await
+            {
+                fill.run().await;
+            }
+            self.settle_shared_view((server, tool), scope, session_id)
+                .await;
+        }
+    }
+
+    /// The account half shared by a stored read and a listing's warm: the
+    /// targets policy does not already refuse without a catalogue get their
+    /// account outcomes filled, through the caller's own backend grant, so a
+    /// backend the grant excludes is never read for this caller.
+    pub(super) async fn account_prepass(
+        &self,
+        targets: &[(&str, &str)],
+        scope: super::visibility::InvokeScope<'_>,
+        session_id: Option<&str>,
+        writes: super::account_outcome::AccountWrites,
+    ) {
         let judged: Vec<(&str, &str)> = targets
             .iter()
             .copied()
@@ -133,16 +161,8 @@ impl MetaMcp {
             })
             .collect();
         let view = self.scoped(scope.authorizer.backend_grant());
-        self.fill_account_outcomes(&view, &judged, caller, writes)
+        self.fill_account_outcomes(&view, &judged, scope.caller, writes)
             .await;
-        for &(server, tool) in &targets {
-            self.keep_permanent_refusal(&view, server, tool, caller)
-                .await;
-            self.settle_caller_view(server, tool, scope, session_id)
-                .await;
-            self.settle_shared_view((server, tool), scope, session_id)
-                .await;
-        }
     }
 
     /// An account that read unavailable because this caller can never bind
@@ -169,27 +189,27 @@ impl MetaMcp {
         }
     }
 
-    /// The per-user half of a stored read (MIK-8392 B' and touch-on-read):
-    /// a caller's live slot is touched so reading it keeps it from idle
-    /// eviction; a cold one is re-established by the one reader that claims
-    /// it, and only while its account reads live. Every other reader answers
-    /// retryable until the lease ends.
-    async fn settle_caller_view(
+    /// The per-user half of a stored read (MIK-8392 B' and touch-on-read),
+    /// shared with a listing's warm: a caller's live slot is touched so
+    /// reading it keeps it from idle eviction; a cold one is claimed by the
+    /// one reader that wins it, and only through the caller's own backend
+    /// grant, while its account reads live and policy does not refuse it.
+    /// Every check runs before any credential is resolved. The winner gets
+    /// the fill to run; every other reader answers retryable until the lease
+    /// ends.
+    pub(super) async fn claim_caller_view(
         &self,
         server: &str,
         tool: &str,
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
-    ) {
+    ) -> Option<super::invoke::ColdFill> {
         let caller = scope.caller;
-        let Some(backend) = self
+        let backend = self
             .scoped(scope.authorizer.backend_grant())
-            .scoped_get(server)
-        else {
-            return;
-        };
+            .scoped_get(server)?;
         if !backend.keeps_per_user_catalogues() {
-            return;
+            return None;
         }
         // A Passthrough view can never warm (`remember_caller_slot` skips it)
         // and the stored read judges the shared catalogue for it: nothing to
@@ -200,30 +220,26 @@ impl MetaMcp {
                 crate::identity_propagation::PropagationStrategyKind::Passthrough
             )
         }) {
-            return;
+            return None;
         }
-        let Some(principal) = self.principal_for(&backend, caller) else {
-            return;
-        };
-        let id = principal.stable_actor_id();
+        let id = self.principal_for(&backend, caller)?.stable_actor_id();
         if let Some(held) = backend.caller_slot_held(&id) {
             // d0 warm: revalidate against the binding the pre-pass's own
             // view read gave (no second vault read). A mismatch (a rotated
             // grant) forgets the entry, but only while it is still the one
             // seen here, so a lease claimed meanwhile survives.
-            let current = self
-                .target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool)
-                .and_then(|account| visible::memo::account_binding(server, &account));
-            if current.is_none_or(|current| current == held.binding()) {
+            let account =
+                self.target_account(&self.scoped(scope.authorizer.backend_grant()), server, tool);
+            if visible::memo::held_binding_current(server, account.as_ref(), held.binding()) {
                 // MIK-8392 F2: a held catalogue past its TTL is stale, by
                 // the same rule the live fill uses. Treat the view as cold:
-                // forget, claim the lease and refresh through `warm_cold_view`
+                // forget, claim the lease and refresh through `resolve_cold_view`
                 // (one resolution per lease window), retryable meanwhile,
                 // exactly as a cold view. A fresh catalogue touches and
                 // stays warm: no extra resolution (C1, K1).
                 if backend.has_cached_tools_for(Some(held.binding())) {
                     backend.touch_caller_slot(held.binding());
-                    return;
+                    return None;
                 }
                 backend.forget_caller_held(&id, &held);
             } else {
@@ -243,17 +259,23 @@ impl MetaMcp {
             account,
             None | Some(Some(AccountOutcome::Live | AccountOutcome::Unjudged))
         ) {
-            return;
+            return None;
         }
         if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
-            return;
+            return None;
         }
-        if let crate::backend::ColdClaim::Won(generation) =
+        // The claim's lease covers the credential lookup; the fill extends it
+        // to the backend's fill bound as it starts (`ColdFill::run`), so its
+        // publish lands while its own lease stands.
+        let crate::backend::ColdClaim::Won(generation) =
             backend.claim_cold_view(&id, COLD_RETRY_BACKOFF, account_live)
-        {
-            self.warm_cold_view((server, tool), &backend, caller, generation)
-                .await;
-        }
+        else {
+            return None;
+        };
+        let gate = self.gate_inputs(&backend, caller);
+        let attempt = super::invoke::ColdAttempt::new(backend, id, generation, gate);
+        self.resolve_cold_view((server, tool), attempt, caller)
+            .await
     }
 
     /// The shared half of a stored read (MIK-8392 F2): a shared catalogue
@@ -298,7 +320,9 @@ impl MetaMcp {
         if self.refused_without_catalogue(&backend, (server, tool), scope, session_id) {
             return;
         }
-        let _ = backend.tools_for_check(None, &[], true).await;
+        let _ = backend
+            .tools_for_check(None, crate::transport::LentCredential::default(), true)
+            .await;
     }
 
     /// [`Self::refused_without_catalogue`] for any stored target, a
@@ -317,7 +341,8 @@ impl MetaMcp {
         {
             self.refused_without_catalogue(&backend, (server, tool), scope, session_id)
         } else {
-            if self.may_invoke(server, tool, scope, session_id).is_err() {
+            if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+                super::invoke::audit::note_refused_by(kind, None);
                 return true;
             }
             let call = super::invoke::dispatch_guards::BackendCall {
@@ -379,9 +404,12 @@ impl MetaMcp {
         scope: super::visibility::InvokeScope<'_>,
         session_id: Option<&str>,
     ) -> bool {
-        if backend.is_blocked_tool(tool)
-            || self.may_invoke(server, tool, scope, session_id).is_err()
-        {
+        if backend.is_blocked_tool(tool) {
+            super::invoke::audit::note_refused_by(backend.blocked_tool_kind(tool), None);
+            return true;
+        }
+        if let Err((_, kind)) = self.may_invoke_explained(server, tool, scope, session_id) {
+            super::invoke::audit::note_refused_by(kind, None);
             return true;
         }
         let call = super::invoke::dispatch_guards::BackendCall {
@@ -451,7 +479,7 @@ impl MetaMcp {
 /// another reader may try (MIK-8392 B'): the idle reaper's own sweep, so a
 /// cold state outlasts eviction by at most one sweep, and an outage costs at
 /// most one resolution per caller per backend per minute.
-const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
+pub(crate) const COLD_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// Which stored delivery is judged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -465,7 +493,57 @@ enum StoredRead {
 /// A stored read's visibility verdict that is answered later: the first cold
 /// view's remaining lease (retry), and the first refusal by the caller's own
 /// per-user catalogue (answered after the account judgement).
-type StoredVisibility = (Option<Option<std::time::Duration>>, Option<Error>);
+type StoredVisibility = (
+    Option<Option<std::time::Duration>>,
+    Option<(Error, StoredEffect)>,
+);
+
+/// Whether a stored delivery's answer is the gateway's policy refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoredEffect {
+    /// Policy refused it: the delivery records `refused`.
+    Refused,
+    /// A miss, a retry or an unavailable account: no effect is recorded.
+    Unrecorded,
+}
+
+impl StoredEffect {
+    /// A withheld target's effect: a refusal only for a policy reason.
+    fn of(judged: visible::Visibility) -> Self {
+        match judged {
+            visible::Visibility::Withheld(reason) if reason.is_policy() => Self::Refused,
+            _ => Self::Unrecorded,
+        }
+    }
+}
+
+/// The answer a stored delivery gets instead of its output.
+pub(crate) struct StoredAnswer {
+    response: JsonRpcResponse,
+    effect: StoredEffect,
+}
+
+impl StoredAnswer {
+    fn new(effect: StoredEffect, response: JsonRpcResponse) -> Self {
+        Self { response, effect }
+    }
+
+    /// The answer to send, raising `refused` first when policy refused it.
+    pub(crate) fn deliver(self) -> JsonRpcResponse {
+        if self.effect == StoredEffect::Refused {
+            crate::gateway::delivery_facts::raise(
+                crate::gateway::delivery_facts::ResponseEffect::Refused,
+            );
+        }
+        self.response
+    }
+
+    /// The answer without its effect, for a test that reads the frame.
+    #[cfg(test)]
+    pub(crate) fn into_response(self) -> JsonRpcResponse {
+        self.response
+    }
+}
 
 /// Why a stored delivery does not go out.
 enum StoredWithheld {

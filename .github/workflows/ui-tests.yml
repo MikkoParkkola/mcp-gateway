@@ -14,12 +14,16 @@ on:
     paths:
       - 'src/gateway/ui/**'
       - 'ui-tests/**'
+      - 'scripts/dev/rehash_ui_assets.py'
+      - 'scripts/dev/test_rehash_ui_assets.py'
       - '.github/workflows/ui-tests.yml'
   push:
     branches: [main, docs/ranking-1-release-line]
     paths:
       - 'src/gateway/ui/**'
       - 'ui-tests/**'
+      - 'scripts/dev/rehash_ui_assets.py'
+      - 'scripts/dev/test_rehash_ui_assets.py'
       - '.github/workflows/ui-tests.yml'
 
 permissions:
@@ -43,6 +47,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Asset names carry their bytes' hash, and a screen imports the shell by
+      # that name: the rehash script must hash a file after what it imports.
+      - name: Check the asset rehash script hashes in import order
+        working-directory: .
+        run: python3 -I scripts/dev/test_rehash_ui_assets.py
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

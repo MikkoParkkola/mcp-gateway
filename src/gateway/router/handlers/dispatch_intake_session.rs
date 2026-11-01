@@ -64,9 +64,30 @@ pub(super) fn open_request_session(
         .multiplexer
         .open_request_session_scoped(existing, caller_owner, held, kind)
     {
-        Ok((id, request_hold)) => Ok((Some(id), Some(request_hold), false)),
+        Ok((id, request_hold)) => {
+            if initialize {
+                record_client_name(state, request, &id, caller_owner);
+            }
+            Ok((Some(id), Some(request_hold), false))
+        }
         // Memory stays bounded by the cap; the caller is still answered, and
         // gets no id to adopt until slots free (MIK-7215.STATELESS.3a).
         Err(SessionCapacity) => Ok((None, None, true)),
+    }
+}
+
+/// Keep the `clientInfo.name` an `initialize` carries as the session's
+/// reported name. Called only once the session is resolved to `owner`, and the
+/// store repeats the owner check, so a name lands on the caller's own session
+/// or nowhere. Display only: nothing here or after it reads the name to decide
+/// what the session may call or how its calls are attributed.
+fn record_client_name(state: &AppState, request: &Value, id: &SessionId, owner: &SessionOwner) {
+    if let Some(name) = request
+        .pointer("/params/clientInfo/name")
+        .and_then(Value::as_str)
+    {
+        state
+            .multiplexer
+            .record_reported_name(id.expose_secret(), owner, name);
     }
 }

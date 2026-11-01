@@ -47,12 +47,29 @@ pub(crate) fn redirect_decision(previous_hops: usize, next_url: &str) -> Redirec
     }
 }
 
+/// Refuse a redirect hop as a destination-policy refusal. Typed
+/// [`SsrfDenied`], so a send site maps it to `-32600 SSRF blocked`
+/// ([`super::ssrf_denial`]): a policy answer no retry or fallback walks past,
+/// not a transport fault. Every redirect closure refusing a destination goes
+/// through here.
+pub(crate) fn refuse_hop(
+    attempt: reqwest::redirect::Attempt<'_>,
+    reason: String,
+) -> reqwest::redirect::Action {
+    // The request was already sent: the backend may have run it. A blocked
+    // answer after the send is recorded as post_dispatch.rs records a
+    // withheld one, `refused` while the cell vouches for it. Outside a call
+    // (a spec import) there is no cell and this is a no-op.
+    crate::gateway::delivery_facts::refused_while_vouched();
+    attempt.error(SsrfDenied::new(reason))
+}
+
 /// SSRF re-validating redirect policy shared by the spec fetch paths. (MIK-8660 seam)
 pub(crate) fn ssrf_redirect_policy() -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(|attempt| {
         match redirect_decision(attempt.previous().len(), attempt.url().as_str()) {
             RedirectDecision::Stop => attempt.stop(),
-            RedirectDecision::Reject(m) => attempt.error(SsrfDenied::new(m)),
+            RedirectDecision::Reject(m) => refuse_hop(attempt, m),
             RedirectDecision::Follow => attempt.follow(),
         }
     })

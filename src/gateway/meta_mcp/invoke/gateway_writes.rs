@@ -14,6 +14,8 @@ use std::cell::RefCell;
 
 use serde_json::Value;
 
+use crate::protocol::reserved_members;
+
 /// A noted member's fingerprint: SHA-256 over its RFC 8785 canonical JSON
 /// (MIK-7993). Durable in a task row, so key order and number spelling must
 /// not change it across builds, and a backend that controls the bytes at a
@@ -40,7 +42,7 @@ struct Written {
     /// as the noted path; a composite boundary rebases it onto the composite's
     /// answer (MIK-7993).
     dest: Vec<String>,
-    /// The [`NOTED_PATHS`] entry the note was made as: which gateway member
+    /// The noted [`reserved_members::MEMBERS`] row the note was made as: which gateway member
     /// this is, whatever `dest` became.
     kind: &'static [&'static str],
     /// The part of the noted member that `dest` holds, when a projection
@@ -89,32 +91,26 @@ impl WriteRecord {
     pub(crate) fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
 
-/// Every member the gateway notes. A stored record names its path by these
-/// segments, and decoding maps them back here: a path this build does not
-/// note is dropped, so that member stays receipted (MIK-7991 r4).
-const NOTED_PATHS: &[&[&str]] = &[
-    &["recovery"],
-    &["_signature"],
-    TASK_ID,
-    &["trace_id"],
-    &["predicted_next"],
-    &["_meta", "provenance"],
-    &["_security_findings"],
-    &["_cost_warnings"],
-    &["_cost_suggestion"],
-    // MIK-7994: the continuation envelope the gateway mints into an interim
-    // answer.
-    &["requestState"],
-    // MIK-8025: what the modern shaper writes.
-    &["resultType"],
-    &["cacheScope"],
-    &["ttlMs"],
-    // MIK-7993 (r4 M1): the response-contract annotations the gateway adds.
-    CONTRACT_VIOLATION,
-    CONTRACT_REASON,
-];
+    /// Whether this record notes the whole member at `path` from the stored
+    /// value's root as the gateway's write. A `Value` note claims any member;
+    /// an `Answer` note only an envelope member, the layer it is made on. A
+    /// note for part of a member, or rebased under a composite's step, claims
+    /// no top-level member.
+    pub(crate) fn claims(&self, path: &[&str], class: reserved_members::Class) -> bool {
+        self.0.iter().any(|written| {
+            written.within.is_empty()
+                && written
+                    .dest
+                    .iter()
+                    .map(String::as_str)
+                    .eq(path.iter().copied())
+                && (written.layer == Layer::Value
+                    || (written.layer == Layer::Answer
+                        && class == reserved_members::Class::Envelope))
+        })
+    }
+}
 
 /// The response-contract verdict the gateway writes on a violating answer.
 pub(super) const CONTRACT_VIOLATION: &[&str] = &["_contract_violation"];
@@ -174,15 +170,29 @@ impl<'de> serde::Deserialize<'de> for WriteRecord {
     }
 }
 
+/// A kind as this build names it: a record stored before 4.0 names the
+/// recovery hint, prediction and trace id by their old plain names. Decode
+/// only: `dest` keeps the stored path, which names the old member in the old
+/// stored value, and the record is written back under the new kind.
+fn renamed(segment: &str) -> &str {
+    match segment {
+        "recovery" => "_recovery",
+        "trace_id" => "_trace_id",
+        "predicted_next" => "_predicted_next",
+        other => other,
+    }
+}
+
 fn decode_entry(entry: &Value) -> Option<Written> {
     let layer = serde_json::from_value(entry.get("layer")?.clone()).ok()?;
     let dest = segments(entry.get("dest")?)?;
     let within = segments(entry.get("within")?)?;
     let kind = segments(entry.get("kind")?)?;
-    let kind = NOTED_PATHS
-        .iter()
-        .copied()
-        .find(|path| path.iter().copied().eq(kind.iter().map(String::as_str)))?;
+    let kind = reserved_members::noted().find(|path| {
+        path.iter()
+            .copied()
+            .eq(kind.iter().map(|segment| renamed(segment)))
+    })?;
     let hex_digest = entry.get("digest")?.as_str()?;
     if hex_digest.len() != 64
         || !hex_digest
@@ -379,6 +389,12 @@ impl WriteRecord {
     }
 }
 
+/// Run `f` with this delivery's write record suspended: a member written
+/// into a copy that is never delivered is noted in a record thrown away.
+pub(super) fn suspended<T>(f: impl FnOnce() -> T) -> T {
+    GATEWAY_WRITES.sync_scope(RefCell::new(Writes::default()), f)
+}
+
 /// Run `delivery` with a write record, beside its receipt collector.
 ///
 /// Not an `async fn`: one would hold `delivery` twice (as its argument and
@@ -425,12 +441,22 @@ fn index(segment: &str) -> Option<usize> {
 /// outside a delivery scope or when the member is absent.
 pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     debug_assert!(
-        NOTED_PATHS.contains(&path),
-        "{path:?} is not in NOTED_PATHS, so a stored record would drop it"
+        reserved_members::noted().any(|noted| noted == path),
+        "{path:?} is not a noted row of reserved_members::MEMBERS, so a stored record would drop it"
     );
     let Some(digest) = member(value, path).and_then(digest) else {
         return;
     };
+    // A counted member is the gateway's word to the reader on this answer:
+    // the delivery is annotated, with or without a write record open.
+    if reserved_members::MEMBERS
+        .iter()
+        .any(|m| m.path == path && m.class == reserved_members::Class::Counted)
+    {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Annotated,
+        );
+    }
     let _ = GATEWAY_WRITES.try_with(|writes| {
         writes.borrow_mut().push(Written {
             layer,
@@ -443,11 +469,27 @@ pub(crate) fn note(layer: Layer, path: &'static [&'static str], value: &Value) {
     });
 }
 
-/// Note the response-contract annotations the gateway just wrote into
-/// `value` (MIK-7993 r4 M1): its own verdict, never the backend's text.
-pub(super) fn note_contract(value: &Value) {
-    note(Layer::Value, CONTRACT_VIOLATION, value);
-    note(Layer::Value, CONTRACT_REASON, value);
+/// Write the gateway's `member` at `path` (one top-level key) of `value`
+/// and note exactly that value, so a note never vouches for a member the
+/// gateway did not write. A no-op when `value` is not an object.
+pub(crate) fn insert_noted(
+    layer: Layer,
+    path: &'static [&'static str],
+    value: &mut Value,
+    member: Value,
+) {
+    debug_assert_eq!(path.len(), 1, "{path:?} is not a top-level key");
+    if let ([key], Some(map)) = (path, value.as_object_mut()) {
+        map.insert((*key).to_owned(), member);
+        note(layer, path, value);
+    }
+}
+
+/// Write the response-contract verdict and its `reason` into `value`
+/// (MIK-7993 r4 M1): the gateway's own verdict, never the backend's text.
+pub(super) fn write_contract(value: &mut Value, reason: String) {
+    insert_noted(Layer::Value, CONTRACT_VIOLATION, value, Value::Bool(true));
+    insert_noted(Layer::Value, CONTRACT_REASON, value, Value::String(reason));
 }
 
 /// The member a task envelope the gateway built is known by: the task id

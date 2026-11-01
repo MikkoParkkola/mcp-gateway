@@ -6,8 +6,6 @@
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
-use dashmap::DashMap;
-use governor::{Quota, RateLimiter};
 use tracing::warn;
 
 use super::{
@@ -18,6 +16,61 @@ use crate::Result;
 use crate::config::{AuthConfig, CircuitBreakerConfig};
 use crate::failsafe::{CircuitBreaker, CircuitState};
 use crate::gateway::record_principal::RecordPrincipalKey;
+
+/// `config`'s API keys, resolved: the one key-list builder, used at startup
+/// and on every reload, so both resolve a key the same way.
+fn resolve_api_keys(
+    config: &AuthConfig,
+    overlay: &crate::config::EnvOverlay,
+) -> Result<Vec<ResolvedApiKey>> {
+    config
+        .api_keys
+        .iter()
+        .map(|k| {
+            let digest = k.resolve_digest(overlay)?;
+            // A previous digest without its expiry is refused at load; never
+            // carried, so it can never match by omission.
+            let previous = match (k.resolve_previous_digest(overlay)?, k.previous_expires_at) {
+                (Some(digest), Some(expires_at)) => Some(PreviousDigest { digest, expires_at }),
+                _ => None,
+            };
+            Ok(ResolvedApiKey {
+                digest,
+                expires_at: k.expires_at,
+                quota_principal: QuotaPrincipal::api_key(&digest),
+                name: k.name.clone(),
+                rate_limit: k.rate_limit,
+                backends: k.backends.clone(),
+                allowed_tools: k.allowed_tools.clone(),
+                denied_tools: k.denied_tools.clone(),
+                admin: k.admin,
+                personal: k.kind == crate::config::ApiKeyKind::Personal,
+                explicit_principal: k.principal.clone(),
+                previous,
+            })
+        })
+        .collect::<Result<Vec<_>>>()
+}
+
+/// MIK-7973 and ADR-022: refuse a key whose principal or digest another key,
+/// or `bearer`, already holds. Every bearer form, `auto` included, is known
+/// here.
+fn refuse_collisions(bearer: Option<&str>, api_keys: &[ResolvedApiKey]) -> Result<()> {
+    super::refuse_shared_principals(
+        bearer,
+        api_keys.iter().map(|k| (k.name.as_str(), k.principal())),
+    )?;
+    super::refuse_shared_digests(
+        bearer,
+        api_keys.iter().map(|k| {
+            (
+                k.name.as_str(),
+                k.digest,
+                k.previous.as_ref().map(|p| p.digest),
+            )
+        }),
+    )
+}
 
 impl ResolvedAuthConfig {
     /// Create resolved config from `AuthConfig`, keyed by the resolved record
@@ -81,49 +134,8 @@ impl ResolvedAuthConfig {
                 warn!(target: AUTH_TARGET, %error, "host clock reads before 1970: expired API keys are not listed");
             }
         }
-        let api_keys: Vec<ResolvedApiKey> = config
-            .api_keys
-            .iter()
-            .map(|k| {
-                let digest = k.resolve_digest(overlay)?;
-                // A previous digest without its expiry is refused at load; never
-                // carried, so it can never match by omission.
-                let previous = match (k.resolve_previous_digest(overlay)?, k.previous_expires_at) {
-                    (Some(digest), Some(expires_at)) => Some(PreviousDigest { digest, expires_at }),
-                    _ => None,
-                };
-                Ok(ResolvedApiKey {
-                    digest,
-                    expires_at: k.expires_at,
-                    quota_principal: QuotaPrincipal::api_key(&digest),
-                    name: k.name.clone(),
-                    rate_limit: k.rate_limit,
-                    backends: k.backends.clone(),
-                    allowed_tools: k.allowed_tools.clone(),
-                    denied_tools: k.denied_tools.clone(),
-                    admin: k.admin,
-                    personal: k.kind == crate::config::ApiKeyKind::Personal,
-                    explicit_principal: k.principal.clone(),
-                    previous,
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        // MIK-7973 and ADR-022: the one place every bearer form, `auto` included,
-        // is known.
-        super::refuse_shared_principals(
-            bearer_token.as_deref(),
-            api_keys.iter().map(|k| (k.name.as_str(), k.principal())),
-        )?;
-        super::refuse_shared_digests(
-            bearer_token.as_deref(),
-            api_keys.iter().map(|k| {
-                (
-                    k.name.as_str(),
-                    k.digest,
-                    k.previous.as_ref().map(|p| p.digest),
-                )
-            }),
-        )?;
+        let api_keys = resolve_api_keys(config, overlay)?;
+        refuse_collisions(bearer_token.as_deref(), &api_keys)?;
 
         Ok(Self {
             enabled: config.enabled,
@@ -131,10 +143,48 @@ impl ResolvedAuthConfig {
             bearer_quota_principal,
             api_keys,
             public_paths: config.enforced_public_paths(),
-            rate_limiters: DashMap::new(),
             client_circuit_breaker: config.client_circuit_breaker.clone(),
-            client_circuit_breakers: DashMap::new(),
+            runtime: Arc::default(),
             record_key,
+        })
+    }
+
+    /// This config with its per-client buckets and breakers in `runtime`, the
+    /// store shared by every config built over it, so rebuilding the key list
+    /// resets no client's usage or breaker.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn with_runtime(self, runtime: Arc<super::runtime::AuthRuntime>) -> Self {
+        Self { runtime, ..self }
+    }
+
+    /// This running config with `config`'s API keys: a reload's key table.
+    /// Only the key list is rebuilt; every other field applies at a restart
+    /// only, so it is carried over unchanged (the bearer, a generated `auto`
+    /// one included), and the per-client store is shared, so no client's
+    /// usage or breaker resets.
+    ///
+    /// # Errors
+    ///
+    /// A key the startup build would refuse: an unresolvable secret
+    /// reference, or a digest or principal shared with another key or with
+    /// the RUNNING bearer.
+    pub(crate) fn with_keys_of(
+        &self,
+        config: &AuthConfig,
+        overlay: &crate::config::EnvOverlay,
+    ) -> Result<Self> {
+        let api_keys = resolve_api_keys(config, overlay)?;
+        refuse_collisions(self.bearer_token.as_deref(), &api_keys)?;
+        Ok(Self {
+            enabled: self.enabled,
+            bearer_token: self.bearer_token.clone(),
+            bearer_quota_principal: self.bearer_quota_principal.clone(),
+            api_keys,
+            public_paths: self.public_paths.clone(),
+            client_circuit_breaker: self.client_circuit_breaker.clone(),
+            runtime: Arc::clone(&self.runtime),
+            record_key: Arc::clone(&self.record_key),
         })
     }
 
@@ -158,6 +208,10 @@ impl ResolvedAuthConfig {
     }
 
     /// The record key clients minted here are keyed with (MIK-8697 §16.11).
+    pub(crate) fn shared_record_key(&self) -> Arc<RecordPrincipalKey> {
+        Arc::clone(&self.record_key)
+    }
+
     pub(crate) fn record_key(&self) -> &RecordPrincipalKey {
         &self.record_key
     }
@@ -173,6 +227,24 @@ impl ResolvedAuthConfig {
     pub fn validate_token(&self, token: &str) -> Option<AuthenticatedClient> {
         self.validate_token_with_origin(token)
             .map(|(client, _origin)| client)
+    }
+
+    /// Whether the key whose quota identity is `minter` is in this table, an
+    /// admin key, and unexpired at `at`: what a dashboard link, handoff or
+    /// session minted with it needs at each use, so one minted by a key a
+    /// reload then removed, demoted, expired or re-issued (another digest)
+    /// ends there. A previous digest in its grace authenticates as its
+    /// current key, so the grace ending alone ends nothing.
+    pub(crate) fn admin_key_live(
+        &self,
+        minter: &QuotaPrincipal,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        self.api_keys().iter().any(|k| {
+            k.quota_principal == *minter
+                && k.admin
+                && !crate::config::api_key_expired(k.expires_at, at)
+        })
     }
 
     /// Whether `token` is a configured API key past its expiry. Hashed again
@@ -377,12 +449,7 @@ impl ResolvedAuthConfig {
         let Some(quota) = NonZeroU32::new(client.rate_limit) else {
             return true;
         };
-        let limiter = self
-            .rate_limiters
-            .entry(client_state_key(client))
-            .or_insert_with(|| Arc::new(RateLimiter::direct(Quota::per_minute(quota))))
-            .clone();
-        limiter.check().is_ok()
+        self.runtime.admit(client_state_key(client), quota)
     }
 
     /// Check whether this authenticated client's dispatch circuit allows a request.
@@ -413,8 +480,8 @@ impl ResolvedAuthConfig {
     /// Return the current circuit state for tests and observability adapters.
     #[must_use]
     pub fn client_circuit_state(&self, client: &AuthenticatedClient) -> Option<CircuitState> {
-        self.client_circuit_breakers
-            .get(&client_state_key(client))
+        self.runtime
+            .existing_breaker(&client_state_key(client))
             .map(|breaker| breaker.state())
     }
 
@@ -431,16 +498,9 @@ impl ResolvedAuthConfig {
         client: &AuthenticatedClient,
         config: &CircuitBreakerConfig,
     ) -> Arc<CircuitBreaker> {
-        self.client_circuit_breakers
-            .entry(client_state_key(client))
-            .or_insert_with(|| {
-                // The label is for logs only; the map key is the credential.
-                Arc::new(CircuitBreaker::new(
-                    &format!("client:{}", client.name),
-                    config,
-                ))
-            })
-            .clone()
+        // The label is for logs only; the store key is the credential.
+        self.runtime
+            .breaker(client_state_key(client), &client.name, config)
     }
 }
 

@@ -8,6 +8,7 @@ pub(crate) use change_feed::ChangeFeed;
 pub(crate) mod authz;
 pub mod destructive_confirmation;
 mod differential;
+pub(crate) mod health_metrics;
 mod http_error;
 pub mod input_bridge;
 mod meta_mcp;
@@ -125,6 +126,19 @@ pub(crate) mod task_service;
 pub mod trace;
 #[cfg(feature = "webui")]
 pub mod ui;
+#[cfg(feature = "webui")]
+pub(crate) mod ui_call;
+
+/// Whether a web UI tool call (U12) is in scope: such a call runs the tool
+/// itself and is never answered from a cache. Always `false` without the web
+/// UI.
+pub(crate) fn ui_call_runs_live() -> bool {
+    #[cfg(feature = "webui")]
+    let live = ui_call::in_scope();
+    #[cfg(not(feature = "webui"))]
+    let live = false;
+    live
+}
 pub mod webhooks;
 
 pub use auth::{AuthState, ResolvedAuthConfig, auth_middleware};
@@ -183,19 +197,41 @@ pub mod test_helpers {
         meta.set_change_feed(super::ChangeFeed::Http);
     }
 
+    /// `config` with the two security flags off, as fixtures set them on
+    /// `AppState` before the flags moved into the published config
+    /// (ADR-023). For `tests/` only, not a stable API.
+    #[must_use]
+    pub fn flags_off(mut config: crate::config::Config) -> crate::config::Config {
+        config.security.sanitize_input = false;
+        config.security.ssrf_protection = false;
+        config
+    }
+
+    /// A live config for a fixture whose auth (`auth`) differs from
+    /// `config.auth`: the key table and record key it judges with are
+    /// `auth`'s, as a gateway's are the ones it resolved at startup.
+    /// For `tests/` only, not a stable API.
+    #[must_use]
+    pub fn live_config(
+        config: crate::config::Config,
+        auth: std::sync::Arc<super::ResolvedAuthConfig>,
+    ) -> crate::config_reload::LiveConfig {
+        crate::config_reload::LiveConfig::from_prepared(
+            crate::config_reload::Generation::prepare_startup(config, auth),
+        )
+    }
+
     /// The authorizer a fixture's `SubscriptionRegistry` re-validates against:
     /// `config` with no key server, as a fixture's `AppState` carries it.
     #[must_use]
     pub fn auth_state(config: &crate::config::AuthConfig, record_key: &str) -> super::AuthState {
         super::AuthState {
-            auth_config: std::sync::Arc::new(super::ResolvedAuthConfig::from_config(
-                config, record_key,
-            )),
             key_server: None,
             dashboard_bootstrap: std::sync::Arc::default(),
             tls_enabled: false,
-            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: std::sync::Arc::new(live_config(
                 crate::config::Config::default(),
+                std::sync::Arc::new(super::ResolvedAuthConfig::from_config(config, record_key)),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,

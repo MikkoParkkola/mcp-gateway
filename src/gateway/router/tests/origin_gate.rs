@@ -187,7 +187,7 @@ async fn mcp_rejects_foreign_authority_without_host_header() {
 }
 
 /// Build router state whose live config binds a wildcard address.
-async fn wildcard_bind_app_state() -> (Arc<AppState>, tempfile::TempDir) {
+async fn wildcard_bind_app_state() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store_dir) = test_router_app_state().await;
     let mut config = crate::config::Config::default();
     config.server.host = "0.0.0.0".to_string();

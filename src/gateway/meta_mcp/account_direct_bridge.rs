@@ -55,6 +55,9 @@ pub(crate) struct DirectAccountGateway {
     pub(super) dispatches: Arc<Dispatches>,
     /// Kept alive: its store directory lives as long as the gateway.
     custody: Custody,
+    /// The Meta-MCP's audit log. It outlives `take_meta`'s hand-off: hold this
+    /// gateway until the router state it fed is dropped.
+    _log: crate::security::transparency_log::temp::TempLog,
 }
 
 impl DirectAccountGateway {
@@ -113,6 +116,17 @@ impl DirectAccountGateway {
         binding: &Binding,
         second: Second,
     ) -> Self {
+        Self::with_second_configured(auth, binding, second, |_| {})
+    }
+
+    /// [`Self::with_second`], with `configure` applied to both backends'
+    /// config (a fill bound past the listing's deadline cap).
+    pub(crate) fn with_second_configured(
+        auth: crate::config::AuthConfig,
+        binding: &Binding,
+        second: Second,
+        configure: impl Fn(&mut crate::config::BackendConfig),
+    ) -> Self {
         let first = match binding {
             Binding::Unconnected | Binding::Connected | Binding::ConnectedFor(_) => {
                 Bind::Account(WORK)
@@ -127,7 +141,7 @@ impl DirectAccountGateway {
             (ServeMode::Http, auth),
             binding,
             &[(BACKEND, first), other],
-            |_| {},
+            configure,
         )
     }
 
@@ -166,7 +180,7 @@ impl DirectAccountGateway {
         } else {
             accounts
         };
-        let (meta, dispatches) = gateway_in_with(
+        let (log, meta, dispatches) = gateway_in_with(
             binds,
             &Descriptors::same(&descriptors),
             &custody.installed(),
@@ -179,6 +193,7 @@ impl DirectAccountGateway {
             meta: Some(meta),
             dispatches,
             custody,
+            _log: log,
         }
     }
 
@@ -193,11 +208,6 @@ impl DirectAccountGateway {
         Arc::clone(&self.backends)
     }
 
-    /// Requests that reached the fixture's capturing transport.
-    pub(crate) fn dispatched(&self) -> usize {
-        self.dispatches.count()
-    }
-
     /// Revoke the sole operator's grant through live custody, with no
     /// reconnect (MIK-8392 rows).
     pub(crate) async fn revoke_operator_grant_for_test(&self) {
@@ -206,26 +216,6 @@ impl DirectAccountGateway {
             .invalidate(&operator_key())
             .await
             .expect("the seeded grant must revoke through real custody");
-    }
-
-    /// The `tools/call` requests that reached the backend, each as its
-    /// `Authorization` header and the identity key that selected its slot.
-    pub(crate) fn tool_calls(&self) -> Vec<(Option<String>, Option<String>)> {
-        self.dispatches
-            .calls()
-            .into_iter()
-            .map(|call| (call.authorization(), call.identity_key))
-            .collect()
-    }
-
-    /// Every request that reached the backend, as its method, `Authorization`
-    /// header and slot identity key (#2231: listings, not only `tools/call`).
-    pub(crate) fn requests(&self) -> Vec<(String, Option<String>, Option<String>)> {
-        self.dispatches
-            .all()
-            .into_iter()
-            .map(|call| (call.method.clone(), call.authorization(), call.identity_key))
-            .collect()
     }
 
     /// Revoke the sole operator's grant on ONE managed backend's account; any
@@ -241,33 +231,6 @@ impl DirectAccountGateway {
             .invalidate(&operator_key_for(id))
             .await
             .expect("the seeded grant must revoke through real custody");
-    }
-
-    /// The `tools/call` requests sent to `backend`.
-    pub(crate) fn tool_calls_to(&self, backend: &str) -> usize {
-        self.dispatches
-            .calls()
-            .iter()
-            .filter(|call| call.server == backend)
-            .count()
-    }
-
-    /// Fail the next non-`tools/list` request with the HTTP `status` the
-    /// transport would report, with every account left live (MIK-8406 P8i).
-    pub(crate) fn fail_next(&self, status: u16) {
-        self.dispatches.answer_with(&[status]);
-    }
-
-    /// Answer the next non-`tools/list` request with `result`.
-    pub(crate) fn answer_next(&self, result: serde_json::Value) {
-        self.dispatches.script(&[Answer::Result(result)]);
-    }
-
-    /// Answer the next requests, `tools/list` included, with these HTTP
-    /// statuses (MIK-8356 C9: a cold slot's first list gets a 401).
-    pub(crate) fn answer_lists_with(&self, statuses: &[u16]) {
-        self.dispatches.script_lists();
-        self.dispatches.answer_with(statuses);
     }
 
     /// Forced refreshes custody ran: one per `after_upstream_401`.
@@ -332,6 +295,12 @@ impl DirectAccountGateway {
     /// Allow `allowed` further custody reads, then fail busy (G1a).
     pub(crate) fn fail_custody_after_for_test(&self, allowed: usize) {
         self.custody.fail_after(allowed);
+    }
+
+    /// Make only the mint's release step answer `Busy`: the account still
+    /// reads live, so a cold view is claimed and its credential lookup fails.
+    pub(crate) fn fail_release_for_test(&self) {
+        self.custody.busy_at(super::BusyStep::Release);
     }
 
     /// Credential releases custody made: one per `prepare` (MIK-8356 F5: a
@@ -787,6 +756,9 @@ pub(crate) fn cooldown_refusal(server: &str, tool: &str) -> String {
          gateway_list_disabled_capabilities to see all disabled capabilities."
     )
 }
+
+#[path = "account_direct_bridge_traffic.rs"]
+mod traffic;
 
 #[cfg(test)]
 #[path = "account_direct_bridge_fence_tests.rs"]

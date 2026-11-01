@@ -13,10 +13,9 @@
 //! hot-reload after a successful change.
 
 use crate::gateway::routes;
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post};
@@ -24,6 +23,8 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::admin_audit::attach_selection;
+use super::guard::Guard;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
@@ -31,8 +32,7 @@ use super::{
         remove_backend as remove_backend_config, resolve_backend,
         update_backend as update_backend_config,
     },
-    errors::{admin_auth_required, config_path_unavailable, flat_error},
-    is_admin,
+    errors::{config_path_unavailable, flat_error},
 };
 use crate::config::TransportConfig;
 use crate::config_persistence::CommentLoss;
@@ -40,51 +40,13 @@ use crate::config_reload::refusals::RefusalKind;
 use crate::config_reload::{
     ConfigMutation, ConfigWriteError, MutateError, mutate_config_and_reload_detached,
 };
-use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
 use crate::registry::server_registry;
 
 // ── Request / response types ────────────────────────────────────────────────
 
-/// Request body for `POST /ui/api/backends`.
-#[derive(Debug, Deserialize)]
-pub struct AddBackendRequest {
-    /// Backend name / key.
-    pub name: String,
-    /// Explicit stdio command (overrides registry lookup).
-    pub command: Option<String>,
-    /// Explicit HTTP URL (overrides registry lookup).
-    pub url: Option<String>,
-    /// Human-readable description.
-    pub description: Option<String>,
-    /// Environment variables as `{ "KEY": "VALUE" }` map.
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    /// Registry entry to add under `name` (the dashboard's registry mode). When
-    /// absent, `name` itself is looked up in the registry.
-    pub registry: Option<String>,
-}
-
-/// Request body for `PATCH /ui/api/backends/:name`.
-#[derive(Debug, Deserialize)]
-pub struct UpdateBackendRequest {
-    /// New stdio command (replaces existing).
-    pub command: Option<String>,
-    /// New HTTP URL (replaces existing).
-    pub url: Option<String>,
-    /// New description.
-    pub description: Option<String>,
-    /// Env vars to merge (existing keys updated, new keys added; no deletion).
-    pub env: Option<HashMap<String, String>>,
-    /// Whether the backend is enabled.
-    pub enabled: Option<bool>,
-    /// Seconds of idleness after which the gateway stops this backend.
-    ///
-    /// Absent leaves the current setting alone. `0` clears it, meaning never
-    /// stop — without an explicit clear the setting would be impossible to turn
-    /// off from the panel once enabled.
-    pub stop_when_idle_for_secs: Option<u64>,
-}
+mod requests;
+pub use requests::{AddBackendRequest, UpdateBackendRequest};
 
 /// Query parameters for `GET /ui/api/registry/search`.
 #[derive(Debug, Deserialize)]
@@ -186,17 +148,22 @@ pub fn backends_router() -> Router<Arc<AppState>> {
 /// Returns 201 on success, 409 on duplicate, 422 on unresolvable transport.
 async fn add_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     Json(req): Json<AddBackendRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     // Sanitize name
     if let Err(msg) = validate_backend_name(&req.name) {
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
+    }
+
+    if let Some(list) = &req.allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(&req.name, list)
+    {
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
     }
 
     // Require a config path to write to
@@ -222,6 +189,8 @@ async fn add_backend(
     // Load, check for duplicates, persist and reload - all inside one lock, so
     // a second request cannot build its change on the pre-edit config.
     let name = req.name.clone();
+    let allowed_tools = req.allowed_tools;
+    let selected = allowed_tools.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
     let mutation = mutate_config_and_reload_detached(
@@ -232,6 +201,9 @@ async fn add_backend(
             add_backend_config(config, &name, resolved)
                 .inspect(|_| in_lock.note(RefusalKind::Add, &name, config))
                 .map(|notes| {
+                    if let Some(backend) = config.backends.get_mut(&name) {
+                        backend.allowed_tools = allowed_tools;
+                    }
                     // Whether it went in enabled: notes alone do not say, an
                     // OAuth login note comes with an enabled backend.
                     let enabled = config.backends.get(&name).is_some_and(|b| b.enabled);
@@ -256,7 +228,7 @@ async fn add_backend(
     // The reload registered it; listeners hear of it once its tools are
     // listed, through the change drain (F24, `MIK-8127`).
 
-    (
+    let mut response = (
         StatusCode::CREATED,
         Json(json!({
             "status": "created",
@@ -266,7 +238,11 @@ async fn add_backend(
             "enabled": enabled,
         })),
     )
-        .into_response()
+        .into_response();
+    if selected.is_some() {
+        attach_selection(&mut response, &req.name, None, selected.as_deref());
+    }
+    response
 }
 
 /// `DELETE /ui/api/backends/:name` — remove a backend.
@@ -276,12 +252,11 @@ async fn add_backend(
 /// backend does not exist.
 async fn remove_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
@@ -348,12 +323,11 @@ async fn remove_backend(
 /// Returns 200 on success, 404 when not found.
 async fn revive_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     #[allow(
@@ -403,13 +377,12 @@ fn requested_transport(command: Option<String>, url: Option<String>) -> Option<T
 
 async fn update_backend(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
     AxumPath(name): AxumPath<String>,
     Json(req): Json<UpdateBackendRequest>,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let Some(ref config_path) = state.config_path else {
@@ -423,7 +396,14 @@ async fn update_backend(
         description,
         env,
         enabled,
+        allowed_tools,
     } = req;
+
+    if let Some(Some(list)) = &allowed_tools
+        && let Err(refused) = crate::config::check_backend_allowed_tools(&name, list)
+    {
+        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
+    }
 
     // Validate: only one of command/url may be specified
     if command.is_some() && url.is_some() {
@@ -482,6 +462,12 @@ async fn update_backend(
                 },
             )
             .inspect(|()| in_lock.note(RefusalKind::Edit, &name, config))
+            .map(|()| {
+                let backend = config.backends.get_mut(&name)?;
+                let after = allowed_tools?;
+                let before = std::mem::replace(&mut backend.allowed_tools, after.clone());
+                (before != after).then_some((before, after))
+            })
             .map_err(|message| {
                 // Surface the refusal verbatim. An operator setting "stop when idle" on a
                 // backend the gateway does not start needs to be told why, not silently
@@ -493,17 +479,23 @@ async fn update_backend(
     )
     .await;
 
-    let reload = match mutation {
-        Ok(ConfigMutation::Applied((), reload)) => {
+    let (selection, reload) = match mutation {
+        Ok(ConfigMutation::Applied(selection, reload)) => {
             ticket.committed(&updated);
-            reload
+            (selection, reload)
         }
         Ok(ConfigMutation::Rejected((code, message))) => {
             return flat_error(code, message).into_response();
         }
         Err(e) => return unwritten(e),
     };
-    Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response()
+
+    let mut response =
+        Json(json!({"status": "updated", "name": updated, "reload": reload})).into_response();
+    if let Some((before, after)) = selection {
+        attach_selection(&mut response, &updated, before.as_deref(), after.as_deref());
+    }
+    response
 }
 
 /// An add that `add_backend` refused: 422 for a secret reference that does
@@ -536,7 +528,7 @@ fn update_refusal_status(message: &str) -> StatusCode {
 /// The answer to a backend write that did not happen.
 fn unwritten(e: MutateError) -> axum::response::Response {
     let code = match &e {
-        // Nothing was written, and saving it would drop the operator's comments.
+        // Nothing was written: the edit cannot be made in place in the file.
         MutateError::CommentLoss(_) => StatusCode::CONFLICT,
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
@@ -551,10 +543,9 @@ fn unwritten(e: MutateError) -> axum::response::Response {
 }
 
 /// `GET /ui/api/registry` — list all built-in registry entries as JSON.
-async fn list_registry(client: Option<Extension<AuthenticatedClient>>) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn list_registry(guard: Guard) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let entries: Vec<RegistryEntryJson> = server_registry::all()
@@ -568,13 +559,9 @@ async fn list_registry(client: Option<Extension<AuthenticatedClient>>) -> impl I
 /// `GET /ui/api/registry/search?q=` — search registry by keyword.
 ///
 /// Matches against name, description, and category (case-insensitive).
-async fn search_registry(
-    client: Option<Extension<AuthenticatedClient>>,
-    Query(params): Query<SearchQuery>,
-) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return admin_auth_required().into_response();
+async fn search_registry(guard: Guard, Query(params): Query<SearchQuery>) -> impl IntoResponse {
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
 
     let q = params.q.as_deref().unwrap_or("").trim().to_string();

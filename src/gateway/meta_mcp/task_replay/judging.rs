@@ -9,7 +9,9 @@ use serde_json::json;
 
 use super::super::visible::{self, memo::AccountOutcome};
 use super::super::{MetaMcp, MetaMcpCallerContext, error_response_preserving_status};
-use super::{StoredRead, StoredVisibility, StoredWithheld, retry_later};
+use super::{
+    StoredAnswer, StoredEffect, StoredRead, StoredVisibility, StoredWithheld, retry_later,
+};
 use crate::gateway::task_service::CommittedTask;
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::{Error, Result};
@@ -22,7 +24,14 @@ impl MetaMcp {
         (attestation, session): (Option<&str>, Option<&str>),
         caller: &MetaMcpCallerContext<'_>,
         read: StoredRead,
-    ) -> Option<JsonRpcResponse> {
+    ) -> Option<StoredAnswer> {
+        let refused = |error: &Error| {
+            StoredAnswer::new(
+                StoredEffect::Refused,
+                error_response_preserving_status(id.clone(), error),
+            )
+        };
+        let unrecorded = |response| StoredAnswer::new(StoredEffect::Unrecorded, response);
         if !stored.serves_backend_output() {
             return None;
         }
@@ -37,12 +46,19 @@ impl MetaMcp {
             let Some(absence) = scoped.absence(&target.server) else {
                 continue;
             };
-            if absence == super::super::scoped_backends::Absence::OutOfScope {
+            // Out of the key's scope is a policy refusal; unregistered, a miss.
+            let effect = if absence == super::super::scoped_backends::Absence::OutOfScope {
                 let args = json!({"server": target.server, "tool": target.tool, "arguments": {}});
                 let _ = self.check_visible_policy(&args, session, caller);
-            }
+                StoredEffect::Refused
+            } else {
+                StoredEffect::Unrecorded
+            };
             let missing = crate::backend::text_absent(&target.tool);
-            return Some(JsonRpcResponse::error(Some(id.clone()), -32001, missing));
+            return Some(StoredAnswer::new(
+                effect,
+                JsonRpcResponse::error(Some(id.clone()), -32001, missing),
+            ));
         }
         // Visibility first, as on the live path: a Descriptor, Schema or Lacked
         // target answers as absent even where policy would also refuse.
@@ -50,13 +66,18 @@ impl MetaMcp {
         // a cold one defers its retry until after policy and accounts, as the
         // live path fills a cold slot only after route policy.
         let (cold, caller_catalogue) = match self.judge_stored_visibility(stored, session, caller) {
-            Err(error) => return Some(error_response_preserving_status(id.clone(), &error)),
+            Err((error, effect)) => {
+                return Some(StoredAnswer::new(
+                    effect,
+                    error_response_preserving_status(id.clone(), &error),
+                ));
+            }
             Ok(judged) => judged,
         };
         // Policy before accounts, as on the live path: route authorize before
         // caller verdicts, and the dispatch policy before its resolution.
         if let Err(error) = self.authorize_stored(stored, attestation, session, caller) {
-            return Some(error_response_preserving_status(id.clone(), &error));
+            return Some(refused(&error));
         }
         // A removed backend answers as the live call does
         // (`BackendNotFound`, the invoke path's answer for an unknown
@@ -66,34 +87,43 @@ impl MetaMcp {
             &self.scoped(caller.scope().authorizer.backend_grant()),
             stored,
         ) {
-            return Some(error_response_preserving_status(id.clone(), &error));
+            return Some(unrecorded(error_response_preserving_status(
+                id.clone(),
+                &error,
+            )));
         }
         // The stored output only under the bindings that produced
         // it, judged for a read and a repeat alike (a repeat's site-5 proof
         // proves the CURRENT account, never the recorded one).
+        // A stored output the gateway will not serve under today's bindings
+        // is its refusal.
         if let Err(error) = self.judge_stored_provenance(stored, caller) {
-            return Some(error_response_preserving_status(id.clone(), &error));
+            return Some(refused(&error));
         }
         if let Err(withheld) = self.judge_stored_accounts(
             &self.scoped(caller.scope().authorizer.backend_grant()),
             stored,
             read,
         ) {
-            return Some(match withheld {
+            // An account that cannot be used is availability, not policy.
+            return Some(unrecorded(match withheld {
                 StoredWithheld::Retry(after) => retry_later(id, after),
                 StoredWithheld::Refused(error) => {
                     error_response_preserving_status(id.clone(), &error)
                 }
-            });
+            }));
         }
         // The caller's own catalogue is judged after its account, as the
         // live caller verdict resolves the credential before it reads the
         // caller's slot.
-        if let Some(error) = caller_catalogue {
-            return Some(error_response_preserving_status(id.clone(), &error));
+        if let Some((error, effect)) = caller_catalogue {
+            return Some(StoredAnswer::new(
+                effect,
+                error_response_preserving_status(id.clone(), &error),
+            ));
         }
         if let Some(after) = cold {
-            return Some(retry_later(id, after));
+            return Some(unrecorded(retry_later(id, after)));
         }
         // The error-rate cooldown of a per-user tool is met last,
         // as on the live call (it waits for the credential step): a caller
@@ -101,7 +131,7 @@ impl MetaMcp {
         // name above, so the cooldown cannot tell it the tool exists. A
         // repeat never judges accounts and is answered by site 5.
         if read == StoredRead::Read && self.deferred_cooldown_refuses(stored, session, caller) {
-            return Some(retry_later(id, None));
+            return Some(unrecorded(retry_later(id, None)));
         }
         // COLLUDE.1 §13.3: a stored result or pending prompt delivered again
         // renews the reader's receipt; the delivery owner commits it.
@@ -120,10 +150,10 @@ impl MetaMcp {
         stored: &CommittedTask,
         session: Option<&str>,
         caller: &MetaMcpCallerContext<'_>,
-    ) -> std::result::Result<StoredVisibility, Error> {
+    ) -> std::result::Result<StoredVisibility, (Error, StoredEffect)> {
         let scope = caller.scope();
         let mut cold: Option<Option<std::time::Duration>> = None;
-        let mut caller_catalogue: Option<Error> = None;
+        let mut caller_catalogue: Option<(Error, StoredEffect)> = None;
         for target in &stored.targets {
             let (server, tool) = (target.server.as_str(), target.tool.as_str());
             let Some(judged) = self.stored_target_view(server, tool, scope, session) else {
@@ -152,11 +182,14 @@ impl MetaMcp {
                 );
             if own_catalogue {
                 if caller_catalogue.is_none() {
-                    caller_catalogue = visible::memo::absent_if_withheld(Some(judged), tool).err();
+                    caller_catalogue = visible::memo::absent_if_withheld(Some(judged), tool)
+                        .err()
+                        .map(|error| (error, StoredEffect::of(judged)));
                 }
                 continue;
             }
-            visible::memo::absent_if_withheld(Some(judged), tool)?;
+            visible::memo::absent_if_withheld(Some(judged), tool)
+                .map_err(|error| (error, StoredEffect::of(judged)))?;
         }
         Ok((cold, caller_catalogue))
     }
@@ -261,7 +294,8 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
     ) -> Result<()> {
         if stored.targets.is_empty() {
-            // A recording gateway's empty list means nothing was dispatched.
+            // A recording gateway's empty list means nothing was planned or
+            // attempted (`Record::targets`).
             // An older row's empty list means it has no upstream descriptor to
             // name its call (`CommittedTask::of`): `task.tool()` is the meta
             // tool, and the backend's current list is no record of what ran, so

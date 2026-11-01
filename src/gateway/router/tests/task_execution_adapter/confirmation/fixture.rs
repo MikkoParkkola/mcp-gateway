@@ -33,7 +33,9 @@ impl Transport for AnnotatedBackend {
     }
 }
 
-pub(super) async fn fixture(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+pub(super) async fn fixture(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     fixture_with(mock, crate::config::Config::default(), |_| {}).await
 }
 
@@ -43,7 +45,7 @@ pub(super) async fn fixture_with(
     mock: &Arc<MockBackend>,
     config: crate::config::Config,
     meta: impl FnOnce(&mut MetaMcp),
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     // Boxed: the setup future is large, and inlined it would be carried by
     // every row that awaits a fixture.
     Box::pin(fixture_under(mock, &two_principal_auth(), config, meta)).await
@@ -55,7 +57,7 @@ pub(super) async fn fixture_with(
 /// `two_principal_auth`, whose `three_principal_auth` already extends it.
 pub(super) async fn key_only_fixture(
     mock: &Arc<MockBackend>,
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let mut auth = two_principal_auth();
     for (key, name) in [("key-k1", "principal-k1"), ("key-k2", "principal-k2")] {
         let mut extra = auth.api_keys[0].clone();
@@ -77,7 +79,7 @@ async fn fixture_under(
     auth: &crate::config::AuthConfig,
     config: crate::config::Config,
     meta: impl FnOnce(&mut MetaMcp),
-) -> (Arc<AppState>, tempfile::TempDir) {
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (mut state, store) =
         crate::gateway::router::tests::test_router_app_state_with_auth_and_config(auth, config)
             .await;

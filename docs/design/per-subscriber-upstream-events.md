@@ -393,13 +393,17 @@ only when a test exists that fails on its mutant.
 
 ### Isolation
 
-- **ISO-T1.** *Required, not yet implemented.* Users U1 and U2 subscribe to `tools_changed` and `resource_updated` on
+- **ISO-T1.** *Covered* by `iso_t1_signed_assertion_each_user_receives_only_their_own_changes` and
+  `iso_t1_token_exchange_each_user_receives_only_their_own_changes` (tests/per_subscriber_isolation.rs).
+  Users U1 and U2 subscribe to `tools_changed` and `resource_updated` on
   one identity-bound fixture whose catalogue and resources differ per asserted
   subject. U1's change reaches U1 only and U2's reaches U2 only, and each user is
   served (positive half); absence is checked with a window after the positive
   delivery. Once with `signed_assertion` and once with `token_exchange`.
-- **ISO-T2.** *Required, not yet implemented.* The same with managed accounts on a multi-user gateway, plus a lease
-  rotation mid-test: nothing observed under the old lease is delivered after it.
+- **ISO-T2.** *Covered* at the delivery layer by the `iso_t2_*` rows in src/events/worker_vault_fence_tests.rs,
+  and end to end, with each user's managed-account listener on its own minted credential, by the `iso_t2_*`
+  rows in src/events/lease_replace_managed_tests.rs. The same with managed accounts on a multi-user gateway,
+  plus a lease rotation mid-test: nothing observed under the old lease is delivered after it.
 - **ISO-T3.** *Covered.* Durable path: U1's occurrence is queued, then U1's row is re-granted or its
   lease rotates. The queued record is buried as `observation_changed`, and dead-letter replay refuses
   it. Pinned by
@@ -408,17 +412,19 @@ only when a test exists that fails on its mutant.
   `events::admin::replay_obs_tests::a_replay_after_a_regrant_is_refused_as_observation_changed` and
   `a_replay_after_a_lease_rotation_is_refused_by_name` (src/events/admin_replay_obs_tests.rs; the
   refusal).
-- **ISO-T4.** *Required, not yet implemented for the cross-user revoke row.* U1's complete catalogue read never revokes U2's `resource_updated`
+- **ISO-T4.** *Covered:* the cross-user revoke by
+  `iso_t4_one_subscribers_catalogue_read_never_revokes_anothers_rows` (src/events/iso_revoke_tests.rs). U1's complete catalogue read never revokes U2's `resource_updated`
   rows. One row per shared-state class, each with the mutation that shares it:
-  - **ISO-T4a** *(partly covered)* overlapping tools notices across keys, against a shared debounce;
-  - **ISO-T4b** confirming reads across keys, against a shared confirm clock;
-  - **ISO-T4c** legacy subscribe and unsubscribe across keys, against a shared
+  - **ISO-T4a** (`iso_t4a_*`, src/events/upstream_session_iso_tests.rs and upstream_listener_keys_tests.rs) overlapping tools notices across keys, against a shared debounce;
+  - **ISO-T4b** (`each_listener_has_its_own_confirm_clock`) confirming reads across keys, against a shared confirm clock;
+  - **ISO-T4c** (`one_subscribers_unsubscribe_keeps_anothers_subscribe`) legacy subscribe and unsubscribe across keys, against a shared
     legacy-holder ledger.
-- **ISO-T5 (source scan).** *Required, not yet implemented.* On listener paths, every backend notification sets
+- **ISO-T5 (source scan).** *Covered* by the `iso_t5_*` rows in src/events/listener_scan_tests.rs and
+  sources_tests.rs. On listener paths, every backend notification sets
   `lifecycle_key` from the listener's key and none is built with `None`; every
   listener send passes a credential; every `lifecycle_key` call site is covered.
   Fixture rows prove the scan fails when either is dropped.
-- **ISO-T6.** *Required; partly covered.* A revoked U1 has no connection open once the revocation runs (at once
+- **ISO-T6.** A revoked U1 has no connection open once the revocation runs (at once
   on a pushed revocation, at the latest on the next 30-second sweep), even
   with a silent backend, and nothing is emitted for U1 after it; stop on the last subscriber is covered too.
   Unit level only: key-server policy changes take effect on restart, not on a
@@ -443,21 +449,22 @@ stays listener-ineligible.
 
 ### Lease
 
-- **LEASE-T0.** *Required, not yet implemented.* A direct-route call with no `events/lease` leaves the lease store
+- **LEASE-T0.** A direct-route call with no `events/lease` leaves the lease store
   empty.
 - **LEASE-T1.** A token with no `exp`, or a malformed one, is refused.
-- **LEASE-T2.** *Required; partly covered.* A lease request from principal Q never touches P's lease, and Q's
+- **LEASE-T2.** A lease request from principal Q never touches P's lease, and Q's
   token never reaches P's listener (the fixture records presented tokens).
   **LEASE-T2b:** a replace closes and re-handshakes before the next emit.
 - **LEASE-T3.** Each wipe trigger clears the lease, with zero outbound requests
   after it, retries and legacy cleanup included.
 - **LEASE-T4.** A 401 from the backend wipes the lease and marks the rows credential
   rejected.
-- **LEASE-T5.** *Required, not yet implemented.* After a restart the rows are in credential needed, and nothing on
+- **LEASE-T5.** After a restart the rows are in credential needed, and nothing on
   disk contains the token (the store directory is scanned for its bytes).
 - **LEASE-T6.** The memory-only source scan (§3.3), plus a backend that echoes the
   presented token in an error body: no log line, span or answer contains it.
-- **LEASE-T7.** *Required, not yet implemented.* A rotation started while a delivery is in progress: no new callback
+- **LEASE-T7.** *Covered* by `lease_t7_a_replace_bumps_the_generation_before_it_drains` (src/events/lease_tests.rs)
+  and `lease_t7_a_handoff_on_the_wire_at_a_replace_completes` (src/events/worker_obs_tests.rs). A rotation started while a delivery is in progress: no new callback
   handoff begins after the bump; an already-committed handoff completes as
   "possibly sent".
 - **LEASE-T8.** A subscribe with no lease makes zero outbound requests while

@@ -48,7 +48,11 @@ impl MetaMcp {
         };
         let result = enforcer.check(tool, cost_key);
         if !result.allowed {
-            return Err(Error::json_rpc(
+            super::audit::note_refused_by(
+                crate::security::decision_record::DecisionKind::CostBudget,
+                None,
+            );
+            return Err(Error::gateway_refused(
                 -32003,
                 result
                     .block_reason
@@ -94,7 +98,7 @@ impl MetaMcp {
         // whose account boundary is inside the executor, and the credential
         // owner key that names an MCP child (MIK-7825). Pass-through only.
         (caller_proof, credential_owner): (CallerProof<'_>, Option<&str>),
-        propagated_headers: &[(String, String)],
+        propagated_headers: &crate::transport::LentCredential,
         cache_binding: Option<&str>,
         // The capability route's account credential, resolved once above the
         // response cache and carried down unchanged. `None` for every MCP
@@ -226,7 +230,7 @@ impl MetaMcp {
         // Pre-resolved per-user propagation headers (empty = none). Resolved
         // once in `invoke_tool_traced` so the cache key and this dispatch share
         // one credential (MIK-6734); dispatch never mints.
-        propagated_headers: &[(String, String)],
+        propagated_headers: &crate::transport::LentCredential,
         // Caller's stable identity binding (MIK-6784). Transport uses it to
         // partition upstream `MCP-Session-Id` state; the capability executor
         // copies the same already-resolved string into the inner cache key.
@@ -244,13 +248,15 @@ impl MetaMcp {
         captured: Option<Arc<crate::backend::Backend>>,
         chain: &super::super::response_security::chain_receipt::ChainSlot,
     ) -> Result<Value> {
-        let injection = self.secret_injector.inject(server, tool, arguments)?;
-        let arguments = injection.arguments;
-
         // The grant was decided at the authorization chokepoint, above the
         // caches. The definition is resolved again here only for the response
         // transform below, in one lookup so a reload cannot split it (#2236).
-        if let Some(cap) = self.get_capabilities()
+        // Only a call judged on no registry backend takes the capability
+        // route: one judged on a backend is never sent to a same-named
+        // capability (resolve refuses that clash; this holds if a backend is
+        // registered between resolve and here).
+        if captured.is_none()
+            && let Some(cap) = self.get_capabilities()
             && server == cap.name
             && let Some(cap_def) = cap.get(tool)
         {
@@ -417,23 +423,23 @@ impl MetaMcp {
         let response = match &submission {
             Some(_) => {
                 backend
-                    .request_with_task_capability(
+                    .request_with_task_capability_lent(
                         "tools/call",
                         Some(params),
-                        propagated_headers,
+                        propagated_headers.clone(),
                         identity_key,
                     )
                     .await?
             }
-            None if propagated_headers.is_empty() && identity_key.is_none() => {
+            None if propagated_headers.headers.is_empty() && identity_key.is_none() => {
                 backend.request("tools/call", Some(params)).await?
             }
             None => {
                 backend
-                    .request_with_headers(
+                    .request_with_headers_lent(
                         "tools/call",
                         Some(params),
-                        propagated_headers,
+                        propagated_headers.clone(),
                         identity_key,
                     )
                     .await?
@@ -458,9 +464,22 @@ impl MetaMcp {
             });
         }
 
+        let withheld = response.ingress_withheld;
         let mut result = response.result.unwrap_or(json!(null));
         // Raw receipt (inc3 R1): verify before anything reads the reply.
-        self.chain_receive(chained, &mut result, challenge.as_deref(), chain)?;
+        // A refused receipt is the delivered refusal of the backend's answer.
+        self.chain_receive(
+            chained,
+            (
+                &mut result,
+                withheld
+                    .as_deref()
+                    .map(crate::protocol::reserved_members::Withheld::members),
+            ),
+            challenge.as_deref(),
+            chain,
+        )
+        .inspect_err(|_| crate::gateway::delivery_facts::refused_while_vouched())?;
         // The RAW reply, here and nowhere else: this value has not been through
         // projection, the contract gate or any shaping, so a `resultType:
         // "task"` in it is the peer's own envelope and never one this gateway
@@ -489,4 +508,37 @@ impl MetaMcp {
     // ========================================================================
     // Operator control meta-tools
     // ========================================================================
+}
+
+impl MetaMcp {
+    /// A name that is both a registry backend and the attached capability
+    /// backend is refused, at resolve, before any credential, replay, key or
+    /// cache: the checks judge the backend, and the capability would answer.
+    /// Unscoped and name-only, so no caller's view can hide either route.
+    pub(super) fn refuse_name_clash(&self, server: &str) -> Result<()> {
+        if let Some(cap) = self.get_capabilities()
+            && cap.name == server
+            && self
+                .scoped(crate::gateway::authz::BackendGrant::Unscoped)
+                .scoped_get(server)
+                .is_some()
+        {
+            return Err(ambiguous_backend(server, None));
+        }
+        Ok(())
+    }
+}
+
+/// The refusal of a name that is both a registry backend and the capability
+/// backend (see [`Error::AmbiguousBackend`]). `rule` names the policy rule
+/// covering the call, when one does.
+pub(super) fn ambiguous_backend(server: &str, rule: Option<&str>) -> Error {
+    tracing::warn!(
+        server,
+        "refused: the name is both a configured backend and the capability backend"
+    );
+    Error::AmbiguousBackend {
+        server: server.to_owned(),
+        rule: rule.map(str::to_owned),
+    }
 }

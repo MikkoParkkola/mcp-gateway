@@ -136,7 +136,7 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 /// key server trusting issuers A and B, and `rules` as the role mapping.
 struct Gateway {
     state: Arc<AppState>,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
     a: Idp,
     b: Idp,
 }

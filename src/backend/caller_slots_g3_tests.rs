@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 
 use super::Backend;
 use super::pool::PooledEntry;
-use super::slot_eviction_tests::{fill_slot, per_user_backend, slot};
+use super::slot_eviction_tests::{fill_slot, per_user_backend, slot, subscriber_credential};
 use crate::protocol::{JsonRpcResponse, RequestId, Tool, ToolsListResult};
 use crate::transport::{ResendPermission, Transport};
 use crate::{Error, Result};
@@ -165,7 +165,9 @@ async fn g3_i8_retired_fill_cannot_publish() {
     let fill = tokio::spawn({
         let backend = Arc::clone(&backend);
         async move {
-            let filled = backend.get_tools_for_binding(Some("g3:b1"), &[]).await;
+            let filled = backend
+                .get_tools_for_binding(Some("g3:b1"), &subscriber_credential("g3:b1"))
+                .await;
             // What a fill's caller does next: publish the slot to the index.
             backend.record_caller_slot(ALPHA, "g3:b1");
             filled.is_ok()
@@ -199,7 +201,7 @@ async fn g3_i8_retired_fill_cannot_publish() {
     );
 
     backend
-        .get_tools_for_binding(Some("g3:b1"), &[])
+        .get_tools_for_binding(Some("g3:b1"), &subscriber_credential("g3:b1"))
         .await
         .expect("the replacement fills");
     backend.record_caller_slot(ALPHA, "g3:b1");
@@ -275,5 +277,32 @@ async fn g3_cold_claim_keeps_a_warm_slot_and_a_revoked_view() {
             super::ColdClaim::Won(_)
         ),
         "control: the grant came back, so the view is claimed"
+    );
+}
+
+/// Held-view lease release: an older claim whose fill ends superseded
+/// releases only its own generation. A newer claim that won after the older
+/// lease expired keeps its lease, so the next reader sees it as running.
+#[tokio::test(start_paused = true)]
+async fn g3_a_superseded_release_keeps_a_newer_claims_lease() {
+    let backend = per_user_backend("g3-release");
+    let super::ColdClaim::Won(older) = backend.claim_cold_view(ALPHA, Duration::ZERO, true) else {
+        panic!("premise: the first claim wins");
+    };
+    let super::ColdClaim::Won(newer) =
+        backend.claim_cold_view(ALPHA, Duration::from_secs(60), true)
+    else {
+        panic!("premise: the older lease has expired, so a newer claim wins");
+    };
+    assert_ne!(older, newer, "premise: two generations");
+
+    backend.release_cold_attempt(ALPHA, older);
+
+    assert!(
+        matches!(
+            backend.claim_cold_view(ALPHA, Duration::from_secs(60), true),
+            super::ColdClaim::Leased { .. }
+        ),
+        "an older claim's release dropped the newer claim's lease"
     );
 }

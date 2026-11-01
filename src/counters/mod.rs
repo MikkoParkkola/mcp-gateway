@@ -26,9 +26,14 @@ mod ring;
 mod snapshot;
 // The readers serve the web UI's history routes; without them nothing reads.
 #[cfg(any(test, feature = "webui"))]
+mod sums;
+#[cfg(any(test, feature = "webui"))]
 mod view;
 
 pub(crate) use ring::Series;
+// Named only by the web UI's routes; the module's own tests use it in place.
+#[cfg(feature = "webui")]
+pub(crate) use sums::CallWindows;
 #[cfg(any(test, feature = "webui"))]
 pub(crate) use view::{Filter, Query, Window};
 #[cfg(test)]
@@ -253,6 +258,14 @@ pub(crate) struct Marker {
     pub subject: Option<String>,
 }
 
+/// The binary version a restored `counters.json` was saved by, and the one
+/// now running, when they differ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VersionChange {
+    pub from: String,
+    pub to: String,
+}
+
 /// One capped label map plus the overflow count past its cap.
 #[derive(Debug, Clone)]
 pub(crate) struct Dimension<K: Hash + Eq> {
@@ -383,6 +396,14 @@ impl Inner {
 #[derive(Debug)]
 pub(crate) struct CounterStore {
     inner: Mutex<Inner>,
+    /// Lock acquisitions by the readers, so a row can prove a batch read
+    /// takes one, whatever the label count. Per store, never global.
+    #[cfg(test)]
+    reads: std::sync::atomic::AtomicUsize,
+    /// Label windows a batch read walked bucket by bucket, so a row can prove
+    /// that labels the store does not hold share one walk.
+    #[cfg(test)]
+    window_walks: std::sync::atomic::AtomicUsize,
 }
 
 impl CounterStore {
@@ -394,6 +415,10 @@ impl CounterStore {
     fn from_inner(inner: Inner) -> Self {
         Self {
             inner: Mutex::new(inner),
+            #[cfg(test)]
+            reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            window_walks: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -441,13 +466,25 @@ impl CounterStore {
     /// Markers at or after `from`, oldest first.
     #[cfg(any(test, feature = "webui"))]
     pub(crate) fn markers(&self, from: u64) -> Vec<Marker> {
-        let inner = self.inner.lock();
+        let inner = self.read_lock();
         inner
             .markers
             .iter()
             .filter(|m| m.at >= from)
             .cloned()
             .collect()
+    }
+
+    /// The newest `limit` markers at or after `from`, newest first, and how
+    /// many markers are at or after `from` in all. One lock, and only the
+    /// rows returned are cloned.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) fn newest_markers(&self, from: u64, limit: usize) -> (Vec<Marker>, usize) {
+        let inner = self.read_lock();
+        let mut in_window = inner.markers.iter().rev().filter(|m| m.at >= from);
+        let newest: Vec<Marker> = in_window.by_ref().take(limit).cloned().collect();
+        let total = newest.len() + in_window.count();
+        (newest, total)
     }
 
     /// When coverage began.
@@ -476,18 +513,40 @@ impl CounterStore {
     /// # Errors
     ///
     /// The bytes are not a version-1 `counters.json`.
+    #[cfg(test)]
     pub(crate) fn from_bytes<Tz: TimeZone>(
         bytes: &[u8],
         now: u64,
         binary_version: &str,
         zone: &Tz,
     ) -> Result<(Self, bool), snapshot::RestoreError> {
+        Self::from_bytes_noting_change(bytes, now, binary_version, zone)
+            .map(|(store, cut, _)| (store, cut))
+    }
+
+    /// [`Self::from_bytes`], also returning the version change it marked: the
+    /// one value the server keeps for `GET /ui/api/gateway`, taken from the
+    /// restore itself and never read back from marker history.
+    ///
+    /// # Errors
+    ///
+    /// The bytes are not a version-1 `counters.json`.
+    pub(crate) fn from_bytes_noting_change<Tz: TimeZone>(
+        bytes: &[u8],
+        now: u64,
+        binary_version: &str,
+        zone: &Tz,
+    ) -> Result<(Self, bool, Option<VersionChange>), snapshot::RestoreError> {
         let (mut inner, saved_version, cut) = snapshot::from_bytes(bytes, now, zone)?;
-        if saved_version != binary_version {
-            let subject = format!("{saved_version} → {binary_version}");
+        let change = (saved_version != binary_version).then(|| VersionChange {
+            from: saved_version,
+            to: binary_version.to_owned(),
+        });
+        if let Some(change) = &change {
+            let subject = format!("{} → {}", change.from, change.to);
             inner.mark(MarkerKind::Upgrade, Some(&subject), now);
         }
-        Ok((Self::from_inner(inner), cut))
+        Ok((Self::from_inner(inner), cut, change))
     }
 
     /// Labels a dimension holds now.
@@ -526,9 +585,16 @@ impl CounterStore {
 mod store_tests;
 
 #[cfg(test)]
+#[path = "pairs_tests.rs"]
+mod pairs_tests;
+
+#[cfg(test)]
 #[path = "persist_tests.rs"]
 mod persist_tests;
 
+#[cfg(test)]
+#[path = "sums_tests.rs"]
+mod sums_tests;
 #[cfg(test)]
 #[path = "view_tests.rs"]
 mod view_tests;

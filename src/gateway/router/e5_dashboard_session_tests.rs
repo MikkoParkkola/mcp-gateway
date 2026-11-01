@@ -53,7 +53,9 @@ fn api_key(key: &str, admin: bool) -> ApiKeyConfig {
 
 /// Auth on with a static bearer, one admin and one standard key, and
 /// `public` as the public paths.
-async fn fixture_with(public: &[&str]) -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture_with(
+    public: &[&str],
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let auth = AuthConfig {
         enabled: true,
         bearer_token: Some(BEARER.to_string()),
@@ -64,7 +66,7 @@ async fn fixture_with(public: &[&str]) -> (Arc<AppState>, tempfile::TempDir) {
     test_router_app_state_with_auth_and_key_server(&auth, None).await
 }
 
-async fn fixture() -> (Arc<AppState>, tempfile::TempDir) {
+async fn fixture() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     fixture_with(&["/health"]).await
 }
 
@@ -200,7 +202,10 @@ fn is_admin_view(reply: &Reply) -> bool {
 fn with_running(mut state: Arc<AppState>, running: crate::config::Config) -> Arc<AppState> {
     Arc::get_mut(&mut state)
         .expect("state is unique")
-        .live_config = Arc::new(crate::config_reload::LiveConfig::new(running));
+        .live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        running,
+        std::sync::Arc::clone(state.live_config.generation().auth()),
+    ));
     state
 }
 
@@ -282,6 +287,18 @@ async fn logout_is_not_held_by_a_stalled_audit_write() {
     let out = send(&state, logout(Some(&h))).await;
     let answered_by_the_bound = log.stall_answers_for_test();
     release.release();
+    // The released write still runs on the blocking pool: wait for it, so it
+    // never lands while `_log_dir` is being removed (a late `.hwm` would keep
+    // the folder).
+    let late = Arc::clone(&log);
+    assert!(
+        tokio::task::spawn_blocking(move || {
+            late.wait_write_cleared_for_test(crate::test_wait::HANG_BOUND)
+        })
+        .await
+        .expect("the wait does not panic"),
+        "the released audit write finishes"
+    );
     assert_eq!(out.status, StatusCode::SEE_OTHER, "{}", out.body);
     assert_eq!(
         answered_by_the_bound, 1,

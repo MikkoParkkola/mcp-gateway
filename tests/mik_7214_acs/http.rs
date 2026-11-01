@@ -52,6 +52,7 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
     .expect("the fixture task store opens");
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         continuation: Arc::new(mcp_gateway::protocol::continuation::ContinuationState::new()),
         session_lifecycle: None,
         env: None,
@@ -61,10 +62,6 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         multiplexer,
         proxy_manager,
         streaming_config: config.streaming.clone(),
-        auth_config: Arc::new(ResolvedAuthConfig::from_config(
-            &config.auth,
-            crate::record_key::RECORD_KEY,
-        )),
         key_server: None,
         tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -79,14 +76,13 @@ async fn state() -> (Arc<AppState>, tempfile::TempDir) {
         agent_identity_config: mcp_gateway::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: Arc::new(mcp_gateway::config_reload::LiveConfig::new({
-            // Flags off, as this fixture set them on `AppState` before they
-            // moved into the published config (ADR-023).
-            let mut config = config.clone();
-            config.security.sanitize_input = false;
-            config.security.ssrf_protection = false;
-            config
-        })),
+        live_config: Arc::new(mcp_gateway::gateway::test_helpers::live_config(
+            mcp_gateway::gateway::test_helpers::flags_off(config.clone()),
+            Arc::new(ResolvedAuthConfig::from_config(
+                &config.auth,
+                crate::record_key::RECORD_KEY,
+            )),
+        )),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: Arc::new(mcp_gateway::gateway::auth::DashboardBootstrap::new()),

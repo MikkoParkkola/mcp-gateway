@@ -46,11 +46,11 @@ pub(super) mod tasks;
 use health::backends_overall_healthy;
 pub(super) use health::health_handler;
 #[cfg(feature = "metrics")]
-pub(super) use metrics_scrape::metrics_handler;
+pub(super) use metrics_scrape::{MetricsState, metrics_handler};
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
-pub(super) use meta_handler::meta_mcp_handler;
+pub(in crate::gateway) use meta_handler::meta_mcp_handler;
 #[cfg(test)]
 use owner::session_owner;
 pub(super) use request_facts::TASKS_EXTENSION;
@@ -261,7 +261,10 @@ async fn meta_mcp_dispatch(
                 Err(why) => break 'events JsonRpcResponse::error(Some(id), INTERNAL_ERROR, why),
             };
             let caller = crate::events::Caller {
-                principal: events::principal(events_owner, state.auth_config.enabled),
+                principal: events::principal(
+                    events_owner,
+                    state.live_config.generation().auth().enabled,
+                ),
                 identity: verified_identity.clone(),
                 read_key: read_key.clone(),
                 credential,
@@ -332,6 +335,12 @@ async fn meta_mcp_dispatch(
             pending_view = state
                 .begin_listing(session_id, &intake.view_subject(), invoke_scope.caller)
                 .await;
+            // A backend with no shared session lists only the
+            // caller's own view, re-established here under the caller's grant.
+            state
+                .meta_mcp
+                .warm_listing_views(invoke_scope, Some(session_id.as_str()))
+                .await;
             state.meta_mcp.handle_tools_list_with_url_override(
                 id,
                 params,
@@ -363,15 +372,19 @@ async fn meta_mcp_dispatch(
             let answer_id = id.clone();
             // Boxed: an inline future would enlarge this dispatcher's own state.
             // The request's visibility memo is already open (see the handler).
-            let call = Box::pin(dispatch_tools_call::tools_call(
-                &state,
-                &intake,
-                id,
-                &router_authorizer,
-                invoke_scope,
-                &mut signing_context,
-                &mut response_targets,
-                &mut execution,
+            // In a route decision scope: a pre-check refusal's record names
+            // the check that made it (MIK-8914.API2A.1).
+            let call = Box::pin(crate::gateway::meta_mcp::invoke::audit::with_route_scope(
+                dispatch_tools_call::tools_call(
+                    &state,
+                    &intake,
+                    id,
+                    &router_authorizer,
+                    invoke_scope,
+                    &mut signing_context,
+                    &mut response_targets,
+                    &mut execution,
+                ),
             ));
             let called = match cancel_on {
                 Some(cancel_on) => cancel_on.run(call).await,
@@ -381,12 +394,45 @@ async fn meta_mcp_dispatch(
                 Some(Ok(response)) => {
                     let subject = intake.view_subject();
                     let (response, pending) = state
-                        .after_call((session_id, &subject), params, response)
+                        .after_call(
+                            (session_id, &subject),
+                            invoke_scope.caller,
+                            params,
+                            response,
+                        )
                         .await;
                     pending_view = pending;
                     response
                 }
-                Some(Err(response)) => return response,
+                Some(Err(response)) => {
+                    // Refused before dispatch: recorded here, as the tail is skipped.
+                    let correlation = crate::security::response_policy::ResponseCorrelation {
+                        session_id,
+                        caller: client.as_ref().map_or("anonymous", |c| c.name.as_str()),
+                        external_server: "gateway",
+                        external_tool,
+                        subject: grant_subject.as_ref(),
+                        trace_id: None,
+                        key: crate::security::response_policy::KeyOf::of_client(
+                            client.as_ref().and_then(
+                                crate::gateway::auth::AuthenticatedClient::api_key_identity,
+                            ),
+                        ),
+                    };
+                    let credential =
+                        crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
+                            client.as_ref(),
+                            state.live_config.generation().auth().record_key(),
+                        );
+                    return super::judged_answer::record_error_exit(
+                        &state.meta_mcp,
+                        response,
+                        &correlation,
+                        credential,
+                        session_id,
+                    )
+                    .await;
+                }
                 None => {
                     // Not counted against the client: the cancel was its
                     // own choice. The admission lease settles on drop as
@@ -505,6 +551,12 @@ async fn meta_mcp_dispatch(
         // SEP-1862: resolve a single tool schema by name (spec-preview feature).
         #[cfg(feature = "spec-preview")]
         "tools/resolve" => {
+            // The same managed-grant recheck as every listing, so a rotated
+            // grant's slot never resolves a tool.
+            state
+                .meta_mcp
+                .revalidate_caller_slots(invoke_scope.caller)
+                .await;
             state
                 .meta_mcp
                 .handle_tools_resolve(id, params, Some(session_id.as_str()), invoke_scope)
@@ -573,6 +625,11 @@ async fn meta_mcp_dispatch(
             external_tool,
             subject: grant_subject.as_ref(),
             trace_id: invocation_trace.as_deref(),
+            key: crate::security::response_policy::KeyOf::of_client(
+                client
+                    .as_ref()
+                    .and_then(crate::gateway::auth::AuthenticatedClient::api_key_identity),
+            ),
         },
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
@@ -601,7 +658,7 @@ async fn meta_mcp_dispatch(
         &delivery.correlation,
         crate::gateway::meta_mcp::response_security::DeliveryCredential::of(
             client.as_ref(),
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         finalized,
     )
@@ -637,9 +694,17 @@ async fn meta_mcp_dispatch(
         && !response.excludes_client_accounting()
     {
         if response.error.is_some() {
-            state.auth_config.record_client_failure(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_failure(client);
         } else {
-            state.auth_config.record_client_success(client);
+            state
+                .live_config
+                .generation()
+                .auth()
+                .record_client_success(client);
         }
     }
 

@@ -93,7 +93,7 @@ pub(super) fn task_intent_for_call(
     // checking the same string the record is admitted under keeps one
     // rendering of the caller (MIK-7967). With authentication off the owner
     // is a validated agent's own key or the gateway's constant, never empty.
-    if state.auth_config.enabled && req.owner.is_empty() {
+    if state.live_config.generation().auth().enabled && req.owner.is_empty() {
         return Err(Box::new(JsonRpcResponse::error(
             Some(id),
             INVALID_REQUEST,
@@ -137,7 +137,7 @@ pub(super) fn task_intent_for_call(
             // The live request's keyed principal: the worker's records carry it.
             crate::gateway::auth::AuthenticatedClient::record_principal_of(
                 req.client,
-                state.auth_config.record_key(),
+                state.live_config.generation().auth().record_key(),
             ),
             crate::gateway::meta_mcp::Authentication::of(req.client),
             crate::security::audit::CredentialKind::of(req.client),
@@ -216,7 +216,7 @@ fn with_policy_caller<R>(
         caller,
         authorizer,
         &caller_key,
-        state.auth_config.record_key(),
+        state.live_config.generation().auth().record_key(),
     ))
 }
 
@@ -295,13 +295,18 @@ async fn tasks_get_judged(
             |task_id| recover_from_upstream(state, owner, task_id, params, caller),
             |current| {
                 with_policy_caller(state, caller, |policy_caller| {
-                    state.meta_mcp.refuse_stored_delivery(
-                        &id,
-                        current,
-                        crate::gateway::meta_mcp::upstream::recovery_attestation(params),
-                        caller.session_id,
-                        policy_caller,
-                    )
+                    // The refusal is this read's answer (A2: recorded though
+                    // the stored row is not this request's to vouch for).
+                    state
+                        .meta_mcp
+                        .refuse_stored_delivery(
+                            &id,
+                            current,
+                            crate::gateway::meta_mcp::upstream::recovery_attestation(params),
+                            caller.session_id,
+                            policy_caller,
+                        )
+                        .map(crate::gateway::meta_mcp::StoredAnswer::deliver)
                 })
             },
             |current, frame| state.meta_mcp.scan_task_read(current, frame),
@@ -468,7 +473,7 @@ fn update_caller(
         owner.to_owned(),
         crate::gateway::auth::AuthenticatedClient::record_principal_of(
             caller.client,
-            state.auth_config.record_key(),
+            state.live_config.generation().auth().record_key(),
         ),
         crate::gateway::meta_mcp::Authentication::of(caller.client),
         crate::security::audit::CredentialKind::of(caller.client),
@@ -644,7 +649,10 @@ impl crate::gateway::streaming::TaskFrames for TaskFrameSource {
         )
         .await?;
         let holds = std::mem::take(&mut pending.holds);
-        let credential = DeliveryCredential::of(Some(reader), self.state.auth_config.record_key());
+        let credential = DeliveryCredential::of(
+            Some(reader),
+            self.state.live_config.generation().auth().record_key(),
+        );
         Some(crate::gateway::streaming::TaskFrame {
             frame: pending.frame.clone(),
             restored_output: pending.restored_output,

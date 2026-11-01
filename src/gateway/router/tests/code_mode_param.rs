@@ -5,7 +5,9 @@
 use super::*;
 use pretty_assertions::assert_eq;
 
-async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, tempfile::TempDir) {
+async fn test_router_app_state_with_code_mode(
+    enabled: bool,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let backends = Arc::new(BackendRegistry::new());
     let meta_mcp = Arc::new(MetaMcp::new(Arc::clone(&backends)).with_code_mode(enabled));
     let streaming_config = StreamingConfig::default();
@@ -21,11 +23,16 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
     let agent_auth = AgentAuthState::new(false, Arc::new(AgentRegistry::new()));
     let gateway_key_pair = Arc::new(GatewayKeyPair::generate().expect("gateway key generation"));
 
-    let subscriptions = test_subscriptions(&auth_config, None, &agent_auth);
+    let live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
+        crate::config_reload::flags_off(crate::config::Config::default()),
+        Arc::clone(&auth_config),
+    ));
+    let subscriptions = test_subscriptions(&live_config, None, &agent_auth);
     let (task_service, task_executor, store_dir) =
         test_task_runtime(&subscriptions, &meta_mcp).await;
 
     let state = Arc::new(AppState {
+        process: std::sync::Arc::default(),
         session_lifecycle: None,
         continuation: Arc::new(crate::protocol::continuation::ContinuationState::new()),
         env: None,
@@ -35,7 +42,6 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         multiplexer,
         proxy_manager,
         streaming_config,
-        auth_config,
         key_server: None,
         tool_policy: Arc::new(crate::security::ToolPolicy::default()),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
@@ -50,9 +56,7 @@ async fn test_router_app_state_with_code_mode(enabled: bool) -> (Arc<AppState>, 
         agent_identity_config: crate::config::AgentIdentityConfig::default(),
         control_plane_store: None,
         control_plane_base: None,
-        live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
-            crate::config_reload::flags_off(crate::config::Config::default()),
-        )),
+        live_config: Arc::clone(&live_config),
         export_status: None,
         transparency_log: None,
         dashboard_bootstrap: std::sync::Arc::new(crate::gateway::auth::DashboardBootstrap::new()),
@@ -257,7 +261,7 @@ async fn a_codemode_param_caller_gets_code_mode_recovery_hints() {
             .as_str()
             .unwrap_or_else(|| panic!("no tool result in {answer}"));
         let inner: Value = serde_json::from_str(text).expect("the tool result is JSON");
-        inner["recovery"]["suggest"]
+        inner["_recovery"]["suggest"]
             .as_str()
             .unwrap_or_else(|| panic!("no recovery hint in {answer}"))
             .to_owned()

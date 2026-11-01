@@ -6,6 +6,7 @@
 //! gate ratchets. The upstream here answers per credential, so "alpha saw its
 //! own tools" can only pass because the fetch carried alpha's credential.
 
+use crate::security::transparency_log::temp::TempLog;
 use axum::body::to_bytes;
 use axum::http::StatusCode;
 use serde_json::{Value, json};
@@ -40,6 +41,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     > {
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -140,7 +142,7 @@ impl crate::transport::Transport for SlotWire {
 }
 
 /// A logger on `file`, which the caller keeps alive for the test's duration.
-fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
+fn transparency_logger(file: &TempLog) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -156,8 +158,8 @@ fn transparency_logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger
 struct Gateway {
     router: axum::Router,
     seen: Transcript,
-    _store: tempfile::TempDir,
-    _audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: [TempLog; 2],
 }
 
 async fn gateway(required: bool) -> Gateway {
@@ -194,8 +196,8 @@ async fn gateway(required: bool) -> Gateway {
 
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
-    let meta_audit = tempfile::NamedTempFile::new().expect("tempfile");
-    let route_audit = tempfile::NamedTempFile::new().expect("tempfile");
+    let meta_audit = TempLog::new();
+    let route_audit = TempLog::new();
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
     let mut meta = MetaMcp::new(Arc::clone(&state_mut.backends));

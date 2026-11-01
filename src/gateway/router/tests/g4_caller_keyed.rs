@@ -106,17 +106,17 @@ fn delivered(body: &Value) -> &Value {
 
 /// Whether the response carries prediction hints at all.
 fn has_hints(body: &Value) -> bool {
-    body.to_string().contains("predicted_next")
+    body.to_string().contains("_predicted_next")
 }
 
-/// The `predicted_next` hints anywhere in the response, as text: the tool
+/// The `_predicted_next` hints anywhere in the response, as text: the tool
 /// result travels as JSON inside a text block, so string leaves are parsed too.
 fn hints(body: &Value) -> String {
     match body {
         Value::Object(map) => map
             .iter()
             .map(|(k, v)| {
-                if k == "predicted_next" {
+                if k == "_predicted_next" {
                     v.to_string()
                 } else {
                     hints(v)
@@ -309,6 +309,7 @@ pub(in crate::gateway::router::tests) const PROJ_DAY: &str = "proj_day";
 pub(in crate::gateway::router::tests) fn projected_capability(
     port: u16,
 ) -> Arc<crate::capability::CapabilityBackend> {
+    let base_url = crate::test_fixture_host::fixture_url(port);
     let definition = crate::capability::parse_capability(&format!(
         "name: {PROJ_DAY}\n\
          description: Read one day\n\
@@ -319,7 +320,7 @@ pub(in crate::gateway::router::tests) fn projected_capability(
          \x20 primary:\n\
          \x20   service: rest\n\
          \x20   config:\n\
-         \x20     base_url: http://localhost:{port}\n\
+         \x20     base_url: {base_url}\n\
          \x20     path: /read\n\
          \x20     method: GET\n\
          projection:\n\
@@ -327,10 +328,7 @@ pub(in crate::gateway::router::tests) fn projected_capability(
          \x20   id: day\n"
     ))
     .expect("the capability parses");
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(5))
-        .build()
-        .expect("client");
+    let client = crate::test_fixture_host::fixture_client(std::time::Duration::from_secs(5));
     let executor =
         Arc::new(crate::capability::CapabilityExecutor::new().with_test_http_client(client));
     let backend = Arc::new(crate::capability::CapabilityBackend::new(

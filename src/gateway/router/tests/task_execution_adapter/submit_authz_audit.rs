@@ -104,9 +104,11 @@ fn add_second_target(row: &Armed) {
     let yaml = format!(
         "name: {SECOND}\ndescription: Read one calendar week\nmetadata:\n  exposure: personal\n  \
          read_only: true\n  identity_owner:\n    authority: {}\n    subject: {}\nproviders:\n  \
-         primary:\n    service: rest\n    config:\n      base_url: http://localhost:{}\n      \
+         primary:\n    service: rest\n    config:\n      base_url: {}\n      \
          path: /read\n      method: GET\n",
-        OWNER.0, OWNER.1, row.endpoint.port
+        OWNER.0,
+        OWNER.1,
+        crate::test_fixture_host::fixture_url(row.endpoint.port)
     );
     first
         .register_capability(crate::capability::parse_capability(&yaml).expect("parses"))

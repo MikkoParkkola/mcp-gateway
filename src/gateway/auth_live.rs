@@ -53,6 +53,22 @@ impl HeldCredential {
     }
 }
 
+impl HeldCredential {
+    /// A digest of only the credential that decides the request: the bearer
+    /// when an `Authorization` header is present, else the session. A cookie
+    /// the middleware ignores beside a bearer never changes it.
+    #[cfg(feature = "webui")]
+    pub(crate) fn deciding_digest(&self) -> String {
+        let deciding = if self.authorization_present {
+            self.bearer.as_ref()
+        } else {
+            self.session.as_ref()
+        };
+        let part = deciding.map_or_else(|| "-".to_string(), |v| format!("{}:{v}", v.len()));
+        crate::hashing::sha256_hex(part.as_bytes())
+    }
+}
+
 /// The session cookie and bearer credential `headers` present, held for later
 /// re-validation; `None` when they present neither. Any `Authorization`
 /// header is held, even an unsupported scheme such as Basic or Digest with
@@ -115,7 +131,11 @@ pub(crate) async fn current_caller(
         identity,
         agent: agent.clone(),
     };
-    if !state.auth_config.enabled {
+    // A held credential has no request: it is judged by the key table
+    // current at this delivery, so a key removed by reload stops here.
+    let generation = state.live_config.generation();
+    let auth_config = generation.auth();
+    if !auth_config.enabled {
         return Some(found(anonymous_client(), None));
     }
     let credential = credential?;
@@ -129,15 +149,16 @@ pub(crate) async fn current_caller(
         // A delivery is not operator activity: checked, never extended, or
         // server push alone would keep an unattended session alive (E5).
         let handle = credential.session.as_ref()?;
-        return (state.dashboard_bootstrap.check_session(
+        return (state.dashboard_bootstrap.check_session_with(
             handle,
             Now::read(),
             &session_limits(state),
             Touch::No,
+            auth_config,
         ) == SessionCheck::Valid)
             .then(|| found(dashboard_client(), None));
     };
-    if let Some((client, _)) = state.auth_config.validate_token_with_origin(token) {
+    if let Some((client, _)) = auth_config.validate_token_with_origin(token) {
         return Some(found(client, None));
     }
     match key_server_credential(state, token).await {
@@ -332,6 +353,27 @@ fn jwt_claim(token: &str, claim: &str) -> Option<u64> {
         .as_u64()
 }
 
+/// The key table and `auth` settings of the generation the router pinned on
+/// `request`, so a reload mid-request never changes which keys judge it.
+/// `None` without a pin: the caller refuses with [`unpinned`], never judging
+/// by the current generation.
+pub(super) fn pinned_auth(
+    request: &axum::http::Request<axum::body::Body>,
+) -> Option<std::sync::Arc<super::ResolvedAuthConfig>> {
+    crate::gateway::router::pinned_generation(request.extensions())
+        .map(|generation| std::sync::Arc::clone(generation.auth()))
+}
+
+/// The fail-closed answer to a request that reached authentication unpinned.
+pub(super) fn unpinned() -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        crate::gateway::router::UNPINNED,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -377,15 +419,15 @@ mod tests {
             ..crate::config::AuthConfig::default()
         };
         AuthState {
-            auth_config: Arc::new(super::super::ResolvedAuthConfig::from_config(
-                &config,
-                crate::gateway::record_principal::TEST_RECORD_KEY,
-            )),
             key_server: Some(key_server),
             dashboard_bootstrap: Arc::new(super::super::DashboardBootstrap::new()),
             tls_enabled: false,
-            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                Arc::new(super::super::ResolvedAuthConfig::from_config(
+                    &config,
+                    crate::gateway::record_principal::TEST_RECORD_KEY,
+                )),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,

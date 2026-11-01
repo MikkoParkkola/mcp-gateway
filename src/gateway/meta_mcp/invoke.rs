@@ -92,6 +92,7 @@ mod resolve;
 // MIK-8488: the send admission and the dispatch, out of `invoke_tool_traced`.
 mod send;
 pub(crate) use caller_verdict::{CallerVerdict, TargetNaming};
+pub(in crate::gateway::meta_mcp) use caller_verdict::{ColdAttempt, ColdFill};
 mod propagation;
 pub(crate) use propagation::ResolvedDispatch;
 mod stored_proof;
@@ -110,8 +111,8 @@ use projection::{
     apply_capability_projection, call_capability_tool_with_identity, emit_projection_ab_event,
     json_is_populated,
 };
-pub(crate) use stored_proof::SourcedOutcome;
 use stored_proof::TracedOutcome;
+pub(crate) use stored_proof::{Invoked, SourcedOutcome};
 
 /// Monotonically increasing request counter for load-balanced cache key slot selection.
 ///
@@ -308,6 +309,8 @@ mod error_classification_tests;
 // ============================================================================
 
 #[cfg(test)]
+mod context_integrity_note_tests;
+#[cfg(test)]
 mod response_transform_tests;
 
 #[cfg(test)]
@@ -325,7 +328,13 @@ mod suggestion_authz_tests;
 mod f13_bridge_tests;
 
 #[cfg(test)]
+mod bridge_round_recheck_tests;
+
+#[cfg(test)]
 mod captured_invoke_tests;
+
+#[cfg(test)]
+mod runtime_name_clash_tests;
 
 #[cfg(test)]
 mod cancel_settles_tests;
@@ -358,3 +367,5 @@ mod stage_boundary_tests;
 
 #[cfg(test)]
 mod plan_step_guard_tests;
+#[cfg(test)]
+mod presend_refusal_tests;

@@ -92,17 +92,20 @@ fn finish(
             // `hop` let only loopback through as `http://`; through a proxy it
             // would leave the machine after all.
             Hop::Follow if route == Route::EnvironmentProxy && attempt.url().scheme() == "http" => {
-                attempt.error(crate::security::ssrf::SsrfDenied::new(format!(
-                    "{}: an OAuth redirect to http:// loopback would go through the \
-                     environment proxy, off this machine",
-                    crate::security::ssrf::SSRF_BLOCKED
-                )))
+                crate::security::ssrf::refuse_hop(
+                    attempt,
+                    format!(
+                        "{}: an OAuth redirect to http:// loopback would go through the \
+                         environment proxy, off this machine",
+                        crate::security::ssrf::SSRF_BLOCKED
+                    ),
+                )
             }
             // As reqwest's default policy: too many redirects is an error.
             Hop::Stop => attempt.error("too many redirects"),
             // Typed as the resolver's refusal, so every send site maps it to
             // `-32600 SSRF blocked` rather than a generic OAuth failure.
-            Hop::Refuse(reason) => attempt.error(crate::security::ssrf::SsrfDenied::new(reason)),
+            Hop::Refuse(reason) => crate::security::ssrf::refuse_hop(attempt, reason),
             Hop::Follow => attempt.follow(),
         }))
         .build()

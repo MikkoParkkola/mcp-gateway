@@ -351,3 +351,32 @@ fn wrap_tool_success_reads_is_error_only_as_a_true_boolean() {
         assert!(!result.is_error, "{content}");
     }
 }
+
+/// T10: the snapshot keeps every tool, and the stats answer still shows the
+/// 10 most-called, in order.
+#[test]
+fn the_stats_answer_shows_the_ten_most_called_of_many() {
+    let top_tools = (0..300_u64)
+        .rev()
+        .map(|n| crate::stats::TopTool {
+            server: "s".into(),
+            tool: format!("tool-{n}"),
+            count: n,
+        })
+        .collect();
+    let snapshot = StatsSnapshot {
+        invocations: 0,
+        cache_hits: 0,
+        cache_hit_rate: 0.0,
+        tools_discovered: 0,
+        tools_available: 300,
+        top_tools,
+        total_cached_tokens: 0,
+        cached_tokens_by_server: vec![],
+    };
+    let answer = build_stats_response(&snapshot, true);
+    let shown = answer["top_tools"].as_array().expect("top_tools");
+    assert_eq!(shown.len(), crate::stats::TOP_TOOLS);
+    assert_eq!(shown[0]["tool"], "tool-299");
+    assert_eq!(snapshot.top_tools.len(), 300, "the snapshot is not cut");
+}

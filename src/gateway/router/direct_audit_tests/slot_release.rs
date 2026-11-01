@@ -330,6 +330,7 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
     let targets = [ResponsePolicyTarget {
         server: "alpha".to_string(),
         tool: "t".to_string(),
+        origin: crate::security::response_policy::TargetOrigin::Routed,
     }];
     let context = ResponseDeliveryContext {
         method: "tools/call",
@@ -341,6 +342,7 @@ async fn the_fixtures_firewalls_deliver_a_minted_continuation() {
             external_tool: "t",
             subject: None,
             trace_id: None,
+            key: crate::security::response_policy::KeyOf::NotKnown,
         },
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),

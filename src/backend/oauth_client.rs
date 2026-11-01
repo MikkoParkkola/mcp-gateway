@@ -11,7 +11,38 @@ use super::Backend;
 use crate::oauth::{OAuthClient, OAuthClientConfig, TokenStorage};
 use crate::{Error, Result};
 
+/// What [`Backend::slot_gateway_credentials`] answers: the slot's credential
+/// kind, its static headers and its OAuth client.
+type SlotGatewayCredentials = (
+    Option<crate::transport::SlotCredential>,
+    std::collections::HashMap<String, String>,
+    Option<OAuthClient>,
+);
+
 impl Backend {
+    /// A slot's credential kind (a per-user slot's; `None` for the shared
+    /// one) and the gateway's own credentials its transport is built with:
+    /// the static headers and the OAuth client. A required binding's
+    /// per-user slot (`LentOnly`) carries neither, as the per-user
+    /// listener's transport is built.
+    pub(super) fn slot_gateway_credentials(
+        &self,
+        key: &super::PoolKey,
+        http_url: &str,
+        built_under: crate::security::ssrf::DestinationPolicy,
+    ) -> Result<SlotGatewayCredentials> {
+        let slot =
+            matches!(key, super::PoolKey::PerUser { .. }).then(|| self.per_user_slot_credential());
+        if slot == Some(crate::transport::SlotCredential::LentOnly) {
+            return Ok((slot, std::collections::HashMap::new(), None));
+        }
+        Ok((
+            slot,
+            self.config.headers.clone(),
+            self.create_oauth_client(http_url, built_under)?,
+        ))
+    }
+
     /// Create OAuth client if OAuth is configured for this backend, under
     /// `destination`: the policy the start that builds it read once, so the
     /// client and its transport cannot be built under two different policies.

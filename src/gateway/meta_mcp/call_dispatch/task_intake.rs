@@ -131,7 +131,7 @@ impl MetaMcp {
                 if let Some(refusal) =
                     self.refuse_stored_repeat(&id, &stored, attestation, session_id, caller)
                 {
-                    return refusal;
+                    return refusal.deliver();
                 }
                 // Site 5 walks every recorded target (MIK-8406 PLANREPLAY.4). A
                 // pre-v5 row was refused above (-32003, task_replay.rs); a v5 row
@@ -170,7 +170,7 @@ impl MetaMcp {
     /// created, and the row keeps its slot: a refusal drops only this
     /// request's clones. When every target is proven the stored answer is
     /// served, with no second catalogue check and no memo write. An empty
-    /// slice serves as today: nothing was dispatched.
+    /// slice serves as today: nothing was planned or attempted.
     ///
     /// Named residuals: an HTTP request reaches E4 here only across a gap of
     /// 10 s or more inside one request, since the cold view answers first

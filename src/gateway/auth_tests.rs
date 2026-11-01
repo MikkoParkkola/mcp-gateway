@@ -53,9 +53,8 @@ fn bearer_client_remains_admin() {
         bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("bearer-ADMIN")),
         api_keys: vec![],
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -95,9 +94,8 @@ fn test_public_path_check() {
         bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("test")),
         api_keys: vec![],
         public_paths: vec!["/health".to_string(), "/metrics".to_string()],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -137,9 +135,8 @@ fn debug_output_redacts_bearer_and_api_keys() {
             previous: None,
         }],
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -183,9 +180,8 @@ fn test_bearer_token_validation() {
         bearer_quota_principal: Some(QuotaPrincipal::configured_bearer("secret123")),
         api_keys: vec![],
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -226,9 +222,8 @@ fn constant_time_token_comparison_accepts_correct_rejects_wrong() {
             previous: None,
         }],
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -302,9 +297,8 @@ fn test_api_key_validation() {
             },
         ],
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -585,9 +579,8 @@ fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthStat
         bearer_quota_principal: bearer.map(QuotaPrincipal::configured_bearer),
         api_keys: keys,
         public_paths: vec![],
-        rate_limiters: DashMap::new(),
+        runtime: Arc::default(),
         client_circuit_breaker: None,
-        client_circuit_breakers: DashMap::new(),
         record_key: std::sync::Arc::new(
             crate::gateway::record_principal::RecordPrincipalKey::from_text(
                 crate::gateway::record_principal::TEST_RECORD_KEY,
@@ -599,12 +592,12 @@ fn bootstrap_state(bearer: Option<&str>, keys: Vec<ResolvedApiKey>) -> (AuthStat
     let printed = bootstrap.peek().expect("a value is issued at startup");
     (
         AuthState {
-            auth_config: Arc::new(config),
             key_server: None,
             dashboard_bootstrap: bootstrap,
             tls_enabled: false,
-            live_config: Arc::new(crate::config_reload::LiveConfig::new(
+            live_config: Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config::Config::default(),
+                Arc::new(config),
             )),
             agent_auth: crate::gateway::oauth::AgentAuthState::new(
                 false,
@@ -641,7 +634,7 @@ fn redeem(state: &AuthState, printed: &str) -> axum::http::StatusCode {
         ))))
         .body(Body::empty())
         .expect("request builds");
-    try_dashboard_bootstrap(state, &request)
+    try_dashboard_bootstrap(state, state.live_config.generation().auth(), &request)
         .expect("a bootstrap link is always answered here")
         .status()
 }
@@ -687,7 +680,9 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     let (state, _) = bootstrap_state(None, vec![admin_key(false)]);
     assert!(
         state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key("ops", stored.storage_form())
             .is_some()
     );
@@ -696,7 +691,9 @@ fn a_key_reissued_under_the_same_name_is_another_caller() {
     let (state, _) = bootstrap_state(None, vec![reissued]);
     assert!(
         state
-            .auth_config
+            .live_config
+            .generation()
+            .auth()
             .client_for_key("ops", stored.storage_form())
             .is_none()
     );

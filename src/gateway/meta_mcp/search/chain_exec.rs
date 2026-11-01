@@ -7,6 +7,8 @@ use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
 use serde_json::{Value, json};
 
 use super::super::MetaMcp;
+use super::super::scoped_backends::Absence;
+use super::super::visible::Visibility;
 use crate::gateway::meta_mcp_helpers::parse_code_mode_tool_ref;
 use crate::{Error, Result};
 
@@ -206,31 +208,44 @@ impl MetaMcp {
                 caller.principal_source(None),
             ));
         };
-        // MIK-8387 S6: a scoped key's pending step whose backend is absent,
-        // by this request's record first, is refused with the backend miss
-        // and its one invocation record, before anything resolves for it.
-        let scoped = self.scoped(caller.scope().authorizer.backend_grant());
-        if scoped.absent_step(server, tool) {
-            let step = (server, tool, &arguments);
-            let absence = scoped.absence(server);
-            return Err(self
-                .record_absent_step(step, session_id, caller, absence)
-                .await);
-        }
-        // A step the caller can no longer see is refused as the name it
-        // cannot see, never by its reason, and before its fingerprint can
-        // resolve a credential for it (MIK-8361 A5 ruling A; ORACLE.3).
-        if self.tool_visible_to(server, tool, caller.scope(), session_id)
-            != crate::gateway::meta_mcp::visible::Visibility::Visible
-        {
-            return Err(crate::gateway::meta_mcp::visible::absent::absent_name(tool));
-        }
-        self.check_invocation_policy(
-            &json!({ "server": server, "tool": tool, "arguments": arguments }),
-            session_id,
-            caller,
-        )?;
-        self.step_fingerprint(caller, (server, tool)).await
+        // The pending step is judged in a step's own cell, as a live step
+        // is: a refusal here is the step the resumed chain ends on.
+        // Boxed: the checks hold a credential resolution and a record write,
+        // and inline they would make every caller's future large.
+        crate::gateway::delivery_facts::step(Box::pin(async {
+            // MIK-8387 S6: a scoped key's pending step whose backend is absent,
+            // by this request's record first, is refused with the backend miss
+            // and its one invocation record, before anything resolves for it.
+            let scoped = self.scoped(caller.scope().authorizer.backend_grant());
+            if scoped.absent_step(server, tool) {
+                let step = (server, tool, &arguments);
+                let absence = scoped.absence(server);
+                if absence == Some(Absence::OutOfScope) {
+                    crate::gateway::delivery_facts::withheld();
+                }
+                return Err(self
+                    .record_absent_step(step, session_id, caller, absence)
+                    .await);
+            }
+            // A step the caller can no longer see is refused as the name it
+            // cannot see, never by its reason, and before its fingerprint can
+            // resolve a credential for it (MIK-8361 A5 ruling A; ORACLE.3).
+            if let Visibility::Withheld(reason) =
+                self.tool_visible_to(server, tool, caller.scope(), session_id)
+            {
+                if reason.is_policy() {
+                    crate::gateway::delivery_facts::withheld();
+                }
+                return Err(crate::gateway::meta_mcp::visible::absent::absent_name(tool));
+            }
+            self.check_invocation_policy(
+                &json!({ "server": server, "tool": tool, "arguments": arguments }),
+                session_id,
+                caller,
+            )?;
+            self.step_fingerprint(caller, (server, tool)).await
+        }))
+        .await
     }
 }
 
@@ -312,6 +327,12 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
         // The content gate's delivery refusal keeps its type, and so its
         // -32600 and its audit projection, like a denial (MIK-8325).
         Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
+        // A gateway decision's refusal stays sealed, with its own code, so the
+        // chain it ends records `refused` and answers as the decision did.
+        Error::GatewayRefused { code, message } => Error::gateway_refused(
+            code,
+            format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+        ),
         e => Error::json_rpc(
             INTERNAL_ERROR,
             format!("Chain step {idx} ({tool_ref}) failed: {e}"),

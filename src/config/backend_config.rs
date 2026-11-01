@@ -68,6 +68,12 @@ pub struct BackendConfig {
     /// when it withholds the tool. A changed description is withheld again.
     #[serde(default)]
     pub allow_flagged_tools: std::collections::BTreeMap<String, String>,
+    /// When set, the only tools this backend offers, to every caller: exact
+    /// names or a trailing `prefix*`, matched on `tool` or `server:tool`, the
+    /// grammar of an API key's `allowed_tools`. A tool outside it is answered
+    /// as absent, including one the server adds later. Absent: every tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_tools: Option<Vec<String>>,
     /// Undeclared tool-call argument keys: `closed` (default), `standard`, `off`.
     pub input_schema_enforcement: InputSchemaEnforcement,
     /// Permit this backend to carry credentials over cleartext `http://` or
@@ -122,6 +128,7 @@ impl Default for BackendConfig {
             passthrough: false,
             input_schema_enforcement: InputSchemaEnforcement::Closed,
             allow_flagged_tools: std::collections::BTreeMap::new(),
+            allowed_tools: None,
             allow_cleartext_credentials: false,
             runtime_profile: None,
             identity_propagation: None,

@@ -356,7 +356,7 @@ pub(super) fn is_loopback_url(raw: &str) -> bool {
     crate::gateway::is_loopback_host(host)
 }
 
-pub(super) fn executable_name(command: &str) -> Option<String> {
+pub(in crate::discovery) fn executable_name(command: &str) -> Option<String> {
     // Discovery stores argv joined with platform quoting, which starts a
     // quoted program with a quote; split that the same way. Anything else
     // (an unquoted program, raw `ps` text) keeps the whitespace split, so a

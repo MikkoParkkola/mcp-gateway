@@ -23,9 +23,6 @@ pub(crate) enum StdioSetup {
     /// The production firewall with a Warn rule on `read`: a credential in
     /// the answer is redacted and the answer delivered.
     Redacting,
-    /// The chain signer emitting on request; the call carries
-    /// [`crate::gateway::router::route_matrix_driver_tests::response::CHAIN_NONCE`].
-    Chained,
 }
 
 /// `alpha`'s `read` surfaced by name, so the backend envelope is the result.
@@ -55,7 +52,6 @@ fn dual_signed(meta: &mut MetaMcp) {
 /// One stdio `tools/call read` in `era` under `setup`, the backend answering
 /// `answer`.
 pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> Value {
-    use crate::gateway::chain_test_support::{NONCE_KEY, signer};
     let audit = tempfile::tempdir().expect("a temporary directory");
     let firewall = matches!(setup, StdioSetup::Redacting).then(|| {
         audited_firewall_with(&audit.path().join("firewall.jsonl"), |config| {
@@ -64,6 +60,9 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
                 action: crate::security::firewall::FirewallAction::Warn,
                 reason: None,
                 scan: Vec::new(),
+                servers: None,
+                keys: None,
+                except: None,
             }];
         })
     });
@@ -79,9 +78,6 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
                 meta.share_keyring_with_for_test(&firewall);
                 meta.set_firewall(Some(firewall));
             }
-            if matches!(setup, StdioSetup::Chained) {
-                meta.set_chain_signer(signer(), crate::config::ChainEmit::OnRequest);
-            }
         },
         transport,
     )
@@ -95,12 +91,6 @@ pub(crate) async fn stdio_sealed(setup: StdioSetup, era: Era, answer: Value) -> 
         call_meta.insert(
             "io.modelcontextprotocol/clientCapabilities".to_string(),
             json!({"elicitation": {"form": {}}}),
-        );
-    }
-    if matches!(setup, StdioSetup::Chained) {
-        call_meta.insert(
-            NONCE_KEY.to_string(),
-            json!(crate::gateway::router::route_matrix_driver_tests::response::CHAIN_NONCE),
         );
     }
     let params = json!({ "name": "read", "arguments": {}, "_meta": call_meta });

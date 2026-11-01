@@ -62,7 +62,7 @@ fn t3_a_chain_receipt_on_an_unreadable_clock_is_refused_as_a_clock_refusal() {
     let _clock = crate::clock::test_clock::before_epoch();
     let outcome = meta.chain_receive(
         (ChainMode::Require, &origins, Some(KEY_ID)),
-        &mut result,
+        (&mut result, None),
         Some(nonce),
         &slot,
     );
@@ -90,6 +90,7 @@ async fn deliver(
             targets: &[ResponsePolicyTarget {
                 server: "backend".into(),
                 tool: "echo".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "t4-session",
@@ -98,6 +99,7 @@ async fn deliver(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing: None,
             chain_source: ChainSource::Backend,

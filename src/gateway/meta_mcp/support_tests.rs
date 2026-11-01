@@ -502,3 +502,20 @@ fn d1c_tool_stamp_without_public_seed_is_byte_identical() {
         .remove("_meta");
     assert_eq!(bare, result, "stamping adds only _meta");
 }
+
+/// The gateway writes its prediction and correlation id
+/// under the `_` names a backend cannot forge, never under the plain ones,
+/// and leaves a backend's own plain members as they are.
+#[test]
+fn the_augments_write_the_underscore_members_only() {
+    use super::{augment_with_predictions, augment_with_trace};
+    let backend = json!({"predicted_next": "backend", "trace_id": "backend"});
+    let out = augment_with_trace(
+        augment_with_predictions(backend, vec![json!({"tool": "b"})]),
+        "gw-1",
+    );
+    assert_eq!(out["_predicted_next"], json!([{"tool": "b"}]), "{out}");
+    assert_eq!(out["_trace_id"], "gw-1", "{out}");
+    assert_eq!(out["predicted_next"], "backend", "{out}");
+    assert_eq!(out["trace_id"], "backend", "{out}");
+}

@@ -23,7 +23,9 @@ const KEY_ID: &str = "surfaced-task";
 
 /// The standard suite state with `TOOL` surfaced from [`BACKEND`] and
 /// attestation in enforce mode, read from an env file.
-async fn surfaced_enforced(mock: &Arc<MockBackend>) -> (Arc<AppState>, tempfile::TempDir) {
+async fn surfaced_enforced(
+    mock: &Arc<MockBackend>,
+) -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, store) = state_with(mock).await;
     // Warm the catalogue: a surfaced tool the gateway has never listed is
     // confirmed as unclassified before attestation is consulted, and these

@@ -92,6 +92,21 @@ pub fn shows_unchanged(text: &str) -> bool {
     !text.chars().any(is_hidden_char) && !text.contains("\\u{")
 }
 
+/// `raw` as safe display text: without controls (Cc), formats (Cf: bidi
+/// overrides, zero-width marks) or line and paragraph separators (Zl, Zp),
+/// trimmed and capped at `cap` characters, with whether the cap cut it; `None`
+/// when nothing is left. A peer picks these strings, so they must not be able
+/// to reorder or hide what is shown. No Unicode normalization: format
+/// characters are already gone, and display text needs no dependency for it.
+pub(crate) fn display_text(raw: &str, cap: usize) -> Option<(String, bool)> {
+    let kept: String = raw.chars().filter(|&c| !is_hidden_char(c)).collect();
+    let kept = kept.trim();
+    if kept.is_empty() {
+        return None;
+    }
+    Some((kept.chars().take(cap).collect(), kept.chars().count() > cap))
+}
+
 /// One discovered server's fate in [`adopt_literals`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
@@ -106,7 +121,21 @@ pub enum Outcome {
         name: String,
         /// `(reason code, field)` pairs, sorted by field.
         reasons: Vec<(&'static str, String)>,
+        /// Whether a rule left it out or it was refused.
+        skip: Skip,
     },
+}
+
+/// Why a server was left out. A run whose only skips are by rule is a
+/// successful import of nothing; a refusal with nothing adopted fails it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Skip {
+    /// Left out by a rule every import applies, not for a fault of the
+    /// server: the entry named like `capabilities.name`, usually the
+    /// gateway's own export.
+    ByRule,
+    /// The server cannot be adopted as it stands.
+    Refused,
 }
 
 /// What [`adopt_literals`] put into the config, and the secret entries it
@@ -236,11 +265,23 @@ pub(crate) fn adopt_with(
             outcomes[candidate.outcome] = Outcome::Skipped {
                 name: candidate.name.clone(),
                 reasons: over,
+                skip: Skip::Refused,
             };
             false
         });
     }
-    if candidates.is_empty() && !servers.is_empty() {
+    let refused = outcomes.iter().any(|outcome| {
+        matches!(
+            outcome,
+            Outcome::Skipped {
+                skip: Skip::Refused,
+                ..
+            }
+        )
+    });
+    // Nothing adopted fails the run only when a server was refused; a run
+    // whose only finds were left out by rule writes nothing and succeeds.
+    if candidates.is_empty() && refused {
         return Err(format!(
             "no discovered server could be adopted; nothing was written: {}",
             describe_skipped(&outcomes)
@@ -309,7 +350,16 @@ fn classify(
         );
         if !reasons.is_empty() {
             reasons.sort_by(|a, b| a.1.cmp(&b.1));
-            outcomes.push(Outcome::Skipped { name, reasons });
+            let skip = if reasons.iter().all(|(code, _)| *code == "capabilities_name") {
+                Skip::ByRule
+            } else {
+                Skip::Refused
+            };
+            outcomes.push(Outcome::Skipped {
+                name,
+                reasons,
+                skip,
+            });
             continue;
         }
         seen.insert(name.clone());
@@ -412,7 +462,7 @@ pub fn describe_skipped(outcomes: &[Outcome]) -> String {
     outcomes
         .iter()
         .filter_map(|outcome| match outcome {
-            Outcome::Skipped { name, reasons } => Some(format!(
+            Outcome::Skipped { name, reasons, .. } => Some(format!(
                 "\"{}\": {}",
                 shown(name),
                 reasons

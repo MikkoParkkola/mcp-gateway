@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! COLLUDE.1 §13.3 M12, and the shared outbound builder.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -16,7 +15,7 @@ use crate::security::firewall::{
 };
 
 /// Ordinary prose, long enough for several fingerprints.
-const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
+pub(super) const PROSE: &str = "The orchard ledger for the north slope records seven rows of late pears, \
     the grafting dates for each rootstock, the hours the drip lines ran during the dry weeks of \
     August, and which crew pruned the older trees after the second frost. It closes with the \
     count of crates sent to the cooperative press and a note about the broken ladder by the barn.";
@@ -52,23 +51,24 @@ impl crate::transport::Transport for Seen {
 /// post-injection params would refuse the call; the backend still gets it.
 #[tokio::test]
 async fn relay_audit_has_no_injected_secret() {
-    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let rule: crate::secret_injection::CredentialRule =
+        serde_json::from_value(json!({"name": "token", "value": PROSE, "inject_key": "token"}))
+            .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
-        crate::config::BackendConfig::default(),
+        crate::config::BackendConfig {
+            secrets: vec![rule],
+            ..crate::config::BackendConfig::default()
+        },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
     assert!(registry.register(backend));
-    let rule: crate::secret_injection::CredentialRule =
-        serde_json::from_value(json!({"name": "token", "value": PROSE, "inject_key": "token"}))
-            .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -84,7 +84,7 @@ async fn relay_audit_has_no_injected_secret() {
         )
         .keyed_for_test(),
     );
-    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
@@ -109,24 +109,25 @@ async fn relay_audit_has_no_injected_secret() {
 /// leaves the gateway, so the relay check does not read it either.
 #[tokio::test]
 async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
-    let registry = Arc::new(crate::backend::BackendRegistry::new());
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
+    )
+    .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
     let backend = Arc::new(crate::backend::Backend::new(
         "alpha",
-        crate::config::BackendConfig::default(),
+        crate::config::BackendConfig {
+            secrets: vec![rule],
+            ..crate::config::BackendConfig::default()
+        },
         &crate::config::FailsafeConfig::default(),
         std::time::Duration::from_secs(60),
     ));
     let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
     backend.set_transport_for_test(Arc::new(Seen(Arc::clone(&seen))));
     assert!(registry.register(backend));
-    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
-        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
-    )
-    .expect("rule parses");
-    let injector = crate::secret_injection::SecretInjector::new(HashMap::from([(
-        "alpha".to_string(),
-        vec![rule],
-    )]));
     let firewall = Arc::new(
         Firewall::from_config(
             FirewallConfig {
@@ -142,7 +143,7 @@ async fn relay_check_skips_a_caller_value_the_injector_overwrites() {
         )
         .keyed_for_test(),
     );
-    let mut meta = MetaMcp::new(registry).with_secret_injector(injector);
+    let mut meta = MetaMcp::new(registry);
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
@@ -331,137 +332,6 @@ fn text_result(text: &str) -> Value {
     json!({"content": [{"type": "text", "text": text}]})
 }
 
-/// MIK-7887 AC2: a redaction that changes part of a delivered result drops
-/// only the text that was removed. The text the caller still got keeps its
-/// receipt, so relaying it is still caught.
-#[tokio::test]
-async fn a_redaction_keeps_the_receipt_for_the_text_still_delivered() {
-    let (meta, firewall) = relay_meta();
-    let both = text_result(&format!("{PROSE} {OTHER_PROSE}"));
-    let delivered = text_result(PROSE);
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
-            let snapshot = meta.relay_snapshot(&both);
-            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
-        })
-        .await;
-    staged.commit(true);
-    assert!(
-        relayed_by_bob(&firewall, PROSE),
-        "delivered text lost its receipt"
-    );
-    assert!(
-        !relayed_by_bob(&firewall, OTHER_PROSE),
-        "redacted text kept a receipt"
-    );
-}
-
-/// MIK-7887: a `gateway_invoke` answer carries the backend value as one
-/// pretty-printed text block. Rebuilt from that block as written, multi-line
-/// text would be fingerprinted with its newlines escaped, and relaying the
-/// lines the caller read would go unmatched.
-#[tokio::test]
-async fn a_redacted_wrapped_answer_keeps_the_receipt_for_its_lines() {
-    let (meta, firewall) = relay_meta();
-    // Lines shorter than a fingerprint: every window crosses a newline.
-    let lines = PROSE
-        .split(' ')
-        .collect::<Vec<_>>()
-        .chunks(4)
-        .map(|words| words.join(" "))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let both = text_result(&format!("{lines}\n{OTHER_PROSE}"));
-    let delivered = crate::gateway::meta_mcp_helpers::wrap_tool_success(
-        RequestId::Number(1),
-        &text_result(&lines),
-        false,
-    )
-    .result
-    .expect("a success carries a result");
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
-            let snapshot = meta.relay_snapshot(&both);
-            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::InvokeWrapped);
-        })
-        .await;
-    staged.commit(true);
-    assert!(
-        relayed_by_bob(&firewall, &lines),
-        "wrapped lines lost their receipt"
-    );
-    assert!(
-        !relayed_by_bob(&firewall, OTHER_PROSE),
-        "redacted text kept a receipt"
-    );
-}
-
-/// MIK-7887: a native result whose text happens to be JSON keeps its text as
-/// delivered in the rebuilt receipt; decoding alone would drop a number in it.
-#[tokio::test]
-async fn a_native_json_text_keeps_its_numbers_in_the_receipt() {
-    let (meta, firewall) = relay_meta();
-    // Long enough for several winnowed fingerprints.
-    let digits: String = (1000..1050).map(|n: u32| n.to_string()).collect();
-    let both = text_result(&format!(r#"{{"n": {digits}, "s": "{OTHER_PROSE}"}}"#));
-    let delivered = text_result(&format!(r#"{{"n": {digits}}}"#));
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &both);
-            let snapshot = meta.relay_snapshot(&both);
-            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
-        })
-        .await;
-    staged.commit(true);
-    assert!(
-        relayed_by_bob(&firewall, &digits),
-        "the number lost its receipt"
-    );
-}
-
-/// MIK-7887: several staged receipts that no plan step staged cannot be told
-/// apart by a change, so they are dropped, as before (a plan's are kept to
-/// its final answer: see `plan`).
-#[tokio::test]
-async fn a_redaction_over_several_receipts_drops_them() {
-    let (meta, firewall) = relay_meta();
-    let both = text_result(PROSE);
-    let ((), staged) = meta
-        .collecting_staged(async {
-            let alice = RelayKey::new("alice", true);
-            meta.stage_relay_receipt(alice, ("alpha", "send"), &both);
-            meta.stage_relay_receipt(alice, ("alpha", "other"), &text_result(OTHER_PROSE));
-            let snapshot = meta.relay_snapshot(&both);
-            meta.restage_if_changed(
-                snapshot,
-                Some(&text_result("changed")),
-                AnswerShape::Literal,
-            );
-        })
-        .await;
-    staged.commit(true);
-    assert!(!relayed_by_bob(&firewall, PROSE));
-    assert!(!relayed_by_bob(&firewall, OTHER_PROSE));
-}
-
-/// MIK-7887: an unchanged result keeps every staged receipt.
-#[tokio::test]
-async fn an_unchanged_result_keeps_its_receipts() {
-    let (meta, firewall) = relay_meta();
-    let value = text_result(PROSE);
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &value);
-            let snapshot = meta.relay_snapshot(&value);
-            meta.restage_if_changed(snapshot, Some(&value.clone()), AnswerShape::Literal);
-        })
-        .await;
-    staged.commit(true);
-    assert!(relayed_by_bob(&firewall, PROSE));
-}
-
 /// A stored task, one recorded call, ended as `end` says.
 fn stored_task(
     end: impl FnOnce(&mut crate::gateway::task_service::Task),
@@ -600,27 +470,6 @@ fn classified_only_meta() -> (Arc<MetaMcp>, Arc<Firewall>) {
     meta.set_firewall(Some(Arc::clone(&firewall)));
     meta.share_keyring_with_for_test(&firewall);
     (Arc::new(meta), firewall)
-}
-
-/// MIK-7887 (seat review): a rebuild from the redacted copy keeps the
-/// sensitivity the original delivery was judged to have, even when the
-/// redaction removed the classification marker.
-#[tokio::test]
-async fn a_redaction_keeps_the_sensitivity_verdict_of_the_delivery() {
-    let (meta, firewall) = classified_only_meta();
-    let marker = json!({"classification": {"data_classes": ["personal_data"]}});
-    let mut classified = text_result(&format!("{PROSE} {OTHER_PROSE}"));
-    classified["_context_integrity"] = marker;
-    let delivered = text_result(PROSE);
-    let ((), staged) = meta
-        .collecting_staged(async {
-            meta.stage_relay_receipt(RelayKey::new("alice", true), ("alpha", "send"), &classified);
-            let snapshot = meta.relay_snapshot(&classified);
-            meta.restage_if_changed(snapshot, Some(&delivered), AnswerShape::Literal);
-        })
-        .await;
-    staged.commit(true);
-    assert!(relayed_by_bob(&firewall, PROSE), "the verdict was lost");
 }
 
 /// A client channel whose send ends as scripted; `Hang` never answers.
@@ -794,11 +643,97 @@ async fn a_bridged_prompt_is_recorded_as_it_is_delivered() {
     assert_eq!(delivered["cacheScope"], "private", "{delivered}");
 }
 
+/// The relay check reads the rules of the backend the call was judged on.
+/// A reload that replaced that backend with one holding no rule must not
+/// bring a caller value its rule overwrites back into the check.
+#[tokio::test]
+async fn relay_check_reads_the_rules_of_the_backend_the_call_was_judged_on() {
+    let rule: crate::secret_injection::CredentialRule = serde_json::from_value(
+        json!({"name": "token", "value": "vault-secret", "inject_key": "token"}),
+    )
+    .expect("rule parses");
+    let registry = Arc::new(crate::backend::BackendRegistry::with_secret_resolver(
+        Arc::new(crate::secrets::SecretResolver::new()),
+    ));
+    let alpha = |secrets| {
+        Arc::new(crate::backend::Backend::new(
+            "alpha",
+            crate::config::BackendConfig {
+                secrets,
+                ..crate::config::BackendConfig::default()
+            },
+            &crate::config::FailsafeConfig::default(),
+            std::time::Duration::from_secs(60),
+        ))
+    };
+    let judged = alpha(vec![rule]);
+    assert!(registry.register(Arc::clone(&judged)));
+    // The reload: same name, no rule.
+    let reloaded = alpha(Vec::new());
+    assert!(registry.register(Arc::clone(&reloaded)));
+    let firewall = Arc::new(
+        Firewall::from_config(
+            FirewallConfig {
+                rules: crate::yaml::from_str("[{match: \"*\", action: allow}]").unwrap(),
+                collusion: CollusionConfig {
+                    action: CollusionAction::Block,
+                    sources: vec!["alpha:*".to_string()],
+                    ..CollusionConfig::default()
+                },
+                ..FirewallConfig::default()
+            },
+            None,
+        )
+        .keyed_for_test(),
+    );
+    let mut meta = MetaMcp::new(registry);
+    meta.set_firewall(Some(Arc::clone(&firewall)));
+    meta.share_keyring_with_for_test(&firewall);
+    let delivered = json!({"content": [{"type": "text", "text": PROSE}]});
+    firewall.record_delivery(RelayCaller::Keyed("alice"), "alpha", "send", &delivered);
+
+    let bob = MetaMcpCallerContext {
+        caller_key: Some("bob"),
+        ..ctx(&AllowAll)
+    };
+    let arguments = json!({"token": PROSE});
+    let retry = OutboundRetry::default();
+    let check = |backend| {
+        let egress = Egress {
+            arguments: &arguments,
+            backend: Some(backend),
+            inbound_meta: None,
+            prompt_cache_key: None,
+            retry: &retry,
+        };
+        meta.relay_refusal(
+            bob.relay_caller(None),
+            ("", "bob"),
+            ("alpha", "send"),
+            &egress,
+        )
+    };
+    assert!(
+        check(&reloaded).is_some(),
+        "premise: the caller's text is a relay the check refuses"
+    );
+    assert!(
+        check(&judged).is_none(),
+        "the check read rules other than the judged backend's"
+    );
+}
+
 #[path = "relay_delivery_tests.rs"]
 mod delivery;
 
+#[path = "relay_receipt_copy_tests.rs"]
+mod receipt_copy;
+
 #[path = "relay_plan_tests.rs"]
 mod plan;
+
+#[path = "relay_redaction_tests.rs"]
+mod redaction;
 
 #[path = "relay_replay_receipt_tests.rs"]
 mod replay_receipt;

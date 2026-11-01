@@ -19,6 +19,31 @@ use super::{Fx, fixture_inner};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::transport::Transport;
 
+#[cfg(feature = "firewall")]
+thread_local! {
+    static FIREWALL_RULE_KEYS: std::cell::RefCell<Option<Vec<String>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The rule for each backend tool, scoped to the cell's API keys.
+/// `send_message` is the A2A backend's one tool.
+#[cfg(feature = "firewall")]
+pub(super) fn firewall_rules(
+    action: crate::security::firewall::FirewallAction,
+) -> Vec<crate::security::firewall::FirewallRule> {
+    ["read", "send_message"]
+        .map(|tool| crate::security::firewall::FirewallRule {
+            tool_match: tool.to_string(),
+            action,
+            reason: None,
+            scan: Vec::new(),
+            servers: None,
+            keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
+            except: None,
+        })
+        .to_vec()
+}
+
 /// [`super::fixture_firewalled_with`] with `transport` answering for both backends
 /// in place of the scripted one (the egress matrix's planted backend).
 #[cfg(feature = "firewall")]
@@ -31,6 +56,22 @@ pub(crate) async fn fixture_firewalled_on(
     let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
     FIREWALL_RULE.with(|r| r.set(None));
     TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// [`super::fixture_firewalled_with`] whose `read` rule applies only to the
+/// API keys named in `keys`, by their configured names.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_keyed(
+    action: crate::security::firewall::FirewallAction,
+    keys: &[&str],
+) -> Fx {
+    let named = keys.iter().map(|k| (*k).to_owned()).collect();
+    FIREWALL_RULE.with(|r| r.set(Some(action)));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = Some(named));
+    let fx = fixture_inner(Answer::Ok, true, |meta| meta).await;
+    FIREWALL_RULE.with(|r| r.set(None));
+    FIREWALL_RULE_KEYS.with(|k| *k.borrow_mut() = None);
     fx
 }
 
@@ -77,6 +118,16 @@ pub(crate) async fn fixture_hardened_signed_built_on(
     fx
 }
 
+/// `transport` behind no firewall, with response inspection in its default
+/// observe mode: findings are written onto the answer, nothing is withheld.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_observing_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |meta| meta).await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
 /// `transport` behind no firewall, with response inspection in action mode:
 /// only the content inspection can withhold what it answers.
 // Its only consumer is the egress matrix, which is `firewall`-gated.
@@ -85,6 +136,20 @@ pub(crate) async fn fixture_inspecting_on(transport: Arc<dyn Transport>) -> Fx {
     TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
     let fx = fixture_inner(Answer::Ok, false, |mut meta| {
         meta.enable_response_inspection_action_mode();
+        meta
+    })
+    .await;
+    TRANSPORT.with(|t| *t.borrow_mut() = None);
+    fx
+}
+
+/// `transport` behind no firewall, with response inspection turned off
+/// (`enabled: false`): nothing screens what it answers.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_inspection_off_on(transport: Arc<dyn Transport>) -> Fx {
+    TRANSPORT.with(|t| *t.borrow_mut() = Some(transport));
+    let fx = fixture_inner(Answer::Ok, false, |mut meta| {
+        meta.disable_response_inspection();
         meta
     })
     .await;
@@ -137,22 +202,19 @@ pub(super) struct CountingBackend {
     pub(super) kept: Arc<std::sync::Mutex<String>>,
 }
 
-#[async_trait::async_trait]
-impl Transport for CountingBackend {
-    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+impl CountingBackend {
+    /// The answer this backend gives to `method`.
+    fn reply(&self, method: &str, params: Option<&Value>) -> crate::Result<JsonRpcResponse> {
         let id = RequestId::Number(1);
         if method == "tools/list" {
-            return Ok(JsonRpcResponse::success(
-                id,
-                listing(self.answer, params.as_ref()),
-            ));
+            return Ok(JsonRpcResponse::success(id, listing(self.answer, params)));
         }
         self.seen
             .lock()
             .unwrap()
-            .push(params.clone().unwrap_or(Value::Null));
+            .push(params.cloned().unwrap_or(Value::Null));
         let n = self.calls.fetch_add(1, Ordering::SeqCst);
-        if let Some(body) = recording_answer(self.answer, n, params.as_ref(), &self.kept) {
+        if let Some(body) = recording_answer(self.answer, n, params, &self.kept) {
             return Ok(JsonRpcResponse::success(id, body));
         }
         if let Answer::StateOnlyRounds(at, text) = self.answer {
@@ -185,10 +247,7 @@ impl Transport for CountingBackend {
                 | Answer::AskAlways
         ) {
             let asks_now = if matches!(self.answer, Answer::AskAlways) {
-                params
-                    .as_ref()
-                    .and_then(|p| p.get("requestState"))
-                    .is_none()
+                params.and_then(|p| p.get("requestState")).is_none()
             } else {
                 n == usize::from(matches!(self.answer, Answer::AskSecond))
             };
@@ -210,6 +269,17 @@ impl Transport for CountingBackend {
             });
         }
         call_answer(self.answer, id)
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for CountingBackend {
+    async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
+        // As every production transport does: the answer is a backend's.
+        crate::gateway::health_metrics::clock::backend_request(async {
+            self.reply(method, params.as_ref())
+        })
+        .await
     }
     async fn notify(&self, _method: &str, _params: Option<Value>) -> crate::Result<()> {
         Ok(())

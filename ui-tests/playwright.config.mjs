@@ -26,6 +26,9 @@ export default defineConfig({
     command: 'node server.mjs',
     url: `http://127.0.0.1:${PORT}/ui/classic`,
     env: { PORT: String(PORT) },
-    reuseExistingServer: !process.env.CI,
+    // Never attach to a server this run did not start: one left on the port by
+    // another worktree would serve that worktree's shell. A busy port fails the
+    // run; lanes running side by side set their own UI_TESTS_PORT.
+    reuseExistingServer: false,
   },
 });

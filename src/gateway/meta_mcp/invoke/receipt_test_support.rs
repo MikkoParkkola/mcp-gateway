@@ -22,9 +22,9 @@ pub(crate) fn own_hint_text(answer: &Value, backend: &str) -> String {
     let value = answer["content"][0]["text"]
         .as_str()
         .and_then(|text| serde_json::from_str::<Value>(text).ok())
-        .filter(|decoded| decoded.get("recovery").is_some())
+        .filter(|decoded| decoded.get("_recovery").is_some())
         .unwrap_or_else(|| answer.clone());
-    let hint = value["recovery"].to_string();
+    let hint = value["_recovery"].to_string();
     hint.split('"')
         .filter(|piece| {
             piece.chars().count() >= 79

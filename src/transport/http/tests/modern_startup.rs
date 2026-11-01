@@ -84,8 +84,14 @@ fn answer(peer: Peer, request: &Value) -> Value {
                 "serverInfo": { "name": "fixture", "version": "0" }
             }
         }),
+        // A legacy peer was never asked for tasks, so it answers plainly: a
+        // task handle to an undeclared call is refused at ingress.
+        (Peer::Legacy, "tools/call") => json!({
+            "jsonrpc": "2.0", "id": id,
+            "result": { "content": [], "isError": false }
+        }),
         // The upstream-tasks answer, in the pinned SDK's vocabulary.
-        (_, "tools/call") => json!({
+        (Peer::ModernOnly, "tools/call") => json!({
             "jsonrpc": "2.0", "id": id,
             "result": {
                 "resultType": "task",
@@ -240,6 +246,11 @@ async fn a_modern_only_peer_starts_without_a_handshake_and_takes_a_task_call() {
         response.result.as_ref().and_then(|r| r["taskId"].as_str()),
         Some(HANDLE),
         "the task handle must survive the typed path"
+    );
+    assert_eq!(
+        response.result.as_ref().and_then(|r| r["ttlMs"].as_u64()),
+        Some(900_000),
+        "a declared task handle keeps its retention through ingress"
     );
 
     let seen = recorded(&recorder);

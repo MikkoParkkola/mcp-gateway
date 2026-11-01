@@ -8,11 +8,12 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::grant_audit::{GrantAuditor, JournalRead, Recorded, STATE_FILE};
 use crate::control_plane::store::{
-    AuditFilter, AuditPage, ControlPlaneStore, InMemoryControlPlaneStore, StoreError, StoreResult,
+    AuditCursor, AuditFilter, AuditPage, ControlPlaneStore, InMemoryControlPlaneStore, StoreError,
+    StoreResult,
 };
 use crate::control_plane::{
     ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneGrant, ControlPlanePolicy,
@@ -37,6 +38,9 @@ pub(crate) struct FlakyStore {
     /// (0: no failure observed). Proves publish happened before the append.
     pub(super) watch_epoch: std::sync::OnceLock<Arc<std::sync::atomic::AtomicU64>>,
     pub(super) epoch_at_failure: std::sync::atomic::AtomicU64,
+    /// While set, every audit page reports a line over the record cap, as the
+    /// file store does when its log holds one.
+    pub(crate) hole: AtomicBool,
 }
 
 impl FlakyStore {
@@ -95,7 +99,11 @@ impl ControlPlaneStore for FlakyStore {
         self.inner.append_audit(event)
     }
     fn read_audit(&self, filter: &AuditFilter) -> StoreResult<AuditPage> {
-        self.inner.read_audit(filter)
+        let mut page = self.inner.read_audit(filter)?;
+        if self.hole.load(Ordering::SeqCst) {
+            page.unreadable = Some(AuditCursor::for_test(0, Some(0)));
+        }
+        Ok(page)
     }
 }
 

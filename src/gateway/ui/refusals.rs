@@ -10,39 +10,25 @@
 use std::sync::Arc;
 
 use axum::Json;
-use axum::extract::{Extension, State};
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use serde_json::json;
 
-use super::errors::auth_required;
-use super::{AppState, AuthenticatedClient, is_admin};
-use crate::backend::BackendRuntimeState;
+use super::AppState;
+use super::guard::Guard;
 use crate::config::Config;
-use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusal};
+use crate::config_reload::refusals::{RefusalKind, RefusalLedger, startup_refusals};
 
 /// The handler.
 pub(super) async fn refusals(
     State(state): State<Arc<AppState>>,
-    client: Option<Extension<AuthenticatedClient>>,
+    guard: Guard,
 ) -> impl IntoResponse {
-    let client = client.map(|Extension(c)| c);
-    if !is_admin(client.as_ref()) {
-        return auth_required(StatusCode::FORBIDDEN).into_response();
+    if let Err(refused) = guard.admit() {
+        return refused.into_response();
     }
-    #[allow(
-        clippy::disallowed_methods,
-        reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
-    )]
-    let backends = state.backends.all();
-    let mut list: Vec<_> = backends
-        .iter()
-        .filter_map(|backend| {
-            let runtime = backend.status().runtime?;
-            (runtime.state == BackendRuntimeState::Denied)
-                .then(|| startup_refusal(&backend.name, &runtime.denied_reasons))
-        })
-        .collect();
+    let mut list = startup_refusals(&state.backends);
     if let Some(context) = state.meta_mcp.reload_context() {
         list.extend(context.refusals().list());
     }

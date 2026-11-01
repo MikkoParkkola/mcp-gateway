@@ -3,6 +3,7 @@
 //! Pure utility functions shared by router handlers.
 
 use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, PARSE_ERROR};
+use crate::gateway::health_metrics::{Origin, RpcError};
 use crate::gateway::meta_mcp::invoke::egress::Egressed;
 use axum::{
     Json,
@@ -81,13 +82,45 @@ pub(super) fn build_json_response(
     build_session_response(body, session_id, status)
 }
 
+/// The JSON-RPC error an HTTP error response was built from, kept beside it so
+/// the `/mcp` exit that returns it unrendered can record its delivery
+/// (`judged_answer::record_error_exit`), under the trace of the record that
+/// refused it.
+#[derive(Clone)]
+pub(super) struct ErrorFrame {
+    pub(super) frame: JsonRpcResponse,
+    pub(super) trace: Option<String>,
+}
+
+/// Name the trace `response`'s refusal was recorded under, so its delivery
+/// record joins that record.
+pub(super) fn trace_error_frame(response: &mut axum::response::Response, trace: String) {
+    if let Some(frame) = response.extensions_mut().get_mut::<ErrorFrame>() {
+        frame.trace = Some(trace);
+    }
+}
+
 /// Build an HTTP response with a `mcp-session-id` header and a given status.
 pub(super) fn build_response(
     rpc: JsonRpcResponse,
     session_id: &str,
     status: StatusCode,
 ) -> axum::response::Response {
-    build_session_response(rpc, session_id, status)
+    // One of the three places a typed frame becomes the HTTP response, so the
+    // error count reads its code here and never from a body.
+    let marker = RpcError::of_frame(&rpc);
+    let frame = rpc.error.is_some().then(|| ErrorFrame {
+        frame: rpc.clone(),
+        trace: crate::gateway::trace::current(),
+    });
+    let mut response = build_session_response(rpc, session_id, status);
+    if let Some(marker) = marker {
+        response.extensions_mut().insert(marker);
+    }
+    if let Some(frame) = frame {
+        response.extensions_mut().insert(frame);
+    }
+    response
 }
 
 /// Build a JSON-RPC error response with a `mcp-session-id` header and status.
@@ -147,10 +180,70 @@ pub(super) fn session_capacity_refusal(id: Option<RequestId>) -> axum::response:
     response
 }
 
+/// A direct-route answer before it leaves: status and JSON-RPC body, and who
+/// wrote the frame it was made from. The direct route takes the answer apart
+/// and rebuilds it through `outbound::answer_value`, so `origin` rides along
+/// for that call to keep the frame's origin; the error count is marked where
+/// the rebuilt frame becomes the response, not here.
+#[derive(Debug)]
+pub(crate) struct RpcHttp {
+    pub(crate) status: StatusCode,
+    pub(crate) body: Json<Value>,
+    pub(crate) origin: Origin,
+}
+
+impl RpcHttp {
+    /// An answer the gateway wrote.
+    pub(crate) fn gateway(status: StatusCode, body: Value) -> Self {
+        Self {
+            status,
+            body: Json(body),
+            origin: Origin::Gateway,
+        }
+    }
+}
+
+/// A bare status and body is the gateway's own answer.
+impl From<(StatusCode, Json<Value>)> for RpcHttp {
+    fn from((status, body): (StatusCode, Json<Value>)) -> Self {
+        Self {
+            status,
+            body,
+            origin: Origin::Gateway,
+        }
+    }
+}
+
+impl IntoResponse for RpcHttp {
+    fn into_response(self) -> axum::response::Response {
+        let marker = RpcError::of_value(&self.body.0, self.origin);
+        let mut response = (self.status, self.body).into_response();
+        if let Some(marker) = marker {
+            response.extensions_mut().insert(marker);
+        }
+        response
+    }
+}
+
 /// Build a JSON-RPC HTTP response body without attaching a session header.
-pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> (StatusCode, Json<Value>) {
-    let body = rpc.frame().to_value_lossy();
-    (status, Json(body))
+/// The origin is the frame's own: a backend's answer stays a backend's.
+///
+/// `to_value_lossy` drops the frame's refusal marker, so a refusal frame raises
+/// `Refused` here first. Only refusal frames raise, and only the direct route
+/// builds them through this function, so a route with no delivery cell never
+/// raises.
+pub(super) fn build_http_response(rpc: &Egressed, status: StatusCode) -> RpcHttp {
+    let frame = rpc.frame();
+    if frame.wire_meta.delivery_refusal {
+        crate::gateway::delivery_facts::raise(
+            crate::gateway::delivery_facts::ResponseEffect::Refused,
+        );
+    }
+    RpcHttp {
+        status,
+        body: Json(frame.to_value_lossy()),
+        origin: frame.wire_meta.origin,
+    }
 }
 
 /// Count one HTTP request for U1 (MIK-7211), on both routes alike. `false`
@@ -184,7 +277,7 @@ pub(super) fn observe_http(
 /// U1 window segment sealed (MIK-7211): it is neither counted nor served, so
 /// the client retries against the next process. It answers with the request's
 /// own id, so a client waiting on that id sees the refusal, not a timeout.
-pub(super) fn window_sealed_response(request: &Value) -> (StatusCode, Json<Value>) {
+pub(super) fn window_sealed_response(request: &Value) -> RpcHttp {
     build_http_error_response(
         request
             .get("id")
@@ -201,7 +294,7 @@ pub(super) fn build_http_error_response(
     code: i32,
     message: impl Into<String>,
     status: StatusCode,
-) -> (StatusCode, Json<Value>) {
+) -> RpcHttp {
     let frame = JsonRpcResponse::error(id, code, message.into());
     build_http_response(&Egressed::gateway_own(frame), status)
 }
@@ -218,8 +311,8 @@ pub(super) fn build_accepted_response(session_id: &str) -> axum::response::Respo
 /// The direct `/mcp/{name}` answer on the wire. Its 202 is only ever an
 /// accepted notification, whose placeholder body the audit layer has already
 /// read; the spec gives it no body (MIK-7759).
-pub(super) fn bodiless_accepted(answer: (StatusCode, Json<Value>)) -> axum::response::Response {
-    if answer.0 == StatusCode::ACCEPTED {
+pub(super) fn bodiless_accepted(answer: RpcHttp) -> axum::response::Response {
+    if answer.status == StatusCode::ACCEPTED {
         return StatusCode::ACCEPTED.into_response();
     }
     answer.into_response()
@@ -541,7 +634,7 @@ mod merge_client_meta_borrow_tests;
 /// failure stays 400 with JSON-RPC -32700.
 pub(super) async fn read_body(
     request: axum::extract::Request,
-) -> Result<axum::body::Bytes, (StatusCode, Json<Value>)> {
+) -> Result<axum::body::Bytes, RpcHttp> {
     use axum::extract::FromRequest as _;
     axum::body::Bytes::from_request(request, &())
         .await

@@ -187,7 +187,7 @@ async fn control_real_backend_failures_do_disable_the_capability() {
     // A3: the dead backend answers as a failed dispatch, with its recovery
     // hint, never with the unreadable-list refusal.
     assert!(!answers.contains("could not read this tool"), "{answers}");
-    assert!(answers.contains("recovery"), "{answers}");
+    assert!(answers.contains("_recovery"), "{answers}");
     let (_, failed) = meta.kill_switch.capability_window_counts("asker", "book");
     assert!(
         failed >= 5,

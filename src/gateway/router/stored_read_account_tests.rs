@@ -28,7 +28,7 @@ struct Fx {
     /// The transparency log this fixture's `MetaMcp` writes (MIK-8392 B1).
     audit_path: std::path::PathBuf,
     _audit: tempfile::TempDir,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 fn sole_operator() -> AuthConfig {
@@ -716,3 +716,6 @@ mod busy_parity;
 mod capability_busy;
 /// MIK-8412: what the caller verdict adds to a signed nonce refusal on `/mcp`.
 mod http_nonce_alloc;
+
+#[path = "stored_read_account_send_tests.rs"]
+mod sends;

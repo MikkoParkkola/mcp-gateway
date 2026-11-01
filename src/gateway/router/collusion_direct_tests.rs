@@ -51,6 +51,9 @@ enum Read {
     Failed(String),
     /// A result carrying a backend-supplied context-integrity verdict.
     Classified(&'static str),
+    /// A stub result, [`PROSE`] hidden in a backend-planted
+    /// `_context_integrity`, where the relay walk never reads.
+    HiddenInIntegrity,
     /// [`PROSE`] plus an email address the gateway classifies as personal
     /// data, under a backend-forged `public` verdict.
     ForgedPublic,
@@ -170,6 +173,11 @@ impl Transport for Alpha {
                 result["structuredContent"] = relay_split::fields(&pieces);
                 JsonRpcResponse::success(id, result)
             }
+            Read::HiddenInIntegrity => {
+                let mut result = text_result("a short stub");
+                result["_context_integrity"] = json!({"note": PROSE});
+                JsonRpcResponse::success(id, result)
+            }
             Read::Classified(class) => {
                 let mut result = text_result(PROSE);
                 result["_context_integrity"] = json!({"classification": {"data_classes": [class]}});
@@ -197,7 +205,7 @@ struct Fixture {
     catalogue_params: Arc<Mutex<Vec<Value>>>,
     /// The receipt window, for [`Fixture::lapse_window`].
     window: Duration,
-    _store: tempfile::TempDir,
+    _store: crate::gateway::router::tests::FixtureDir,
 }
 
 /// What a fixture varies.

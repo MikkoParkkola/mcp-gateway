@@ -64,6 +64,7 @@ async fn finalize(
             targets: &[ResponsePolicyTarget {
                 server: "actual-backend".into(),
                 tool: "echo".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "signing-delivery-session",
@@ -72,6 +73,7 @@ async fn finalize(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,
@@ -126,7 +128,7 @@ fn assert_failure(response: &JsonRpcResponse) {
     assert_eq!(error.code, -32603);
     assert_eq!(error.message, FAILURE);
     assert!(error.data.is_none());
-    assert!(response.delivery_refusal);
+    assert!(response.wire_meta.delivery_refusal);
     assert!(!response.confirmation_refusal);
     assert!(response.excludes_client_accounting());
     assert_eq!(
@@ -159,7 +161,7 @@ async fn signing_delivery_external_success_covers_all_supplied_final_fields() {
         .unwrap()
         .remove("_signature");
     assert_eq!(verified["result"], expected);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
     let mut tampered = actual;
     tampered.result.as_mut().unwrap()["_meta"]["serverInfo"]["version"] = json!("forged");
     assert!(
@@ -192,7 +194,7 @@ async fn signing_delivery_internal_and_absent_origin_remain_unsigned() {
         let expected = serde_json::to_value(&original).unwrap();
         let actual = finalize(&meta, original, context).await;
         assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
-        assert!(!actual.delivery_refusal);
+        assert!(!actual.wire_meta.delivery_refusal);
     }
 }
 
@@ -207,7 +209,7 @@ async fn signing_delivery_disabled_skips_invalid_context() {
     )
     .await;
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
 }
 
 #[tokio::test]
@@ -493,7 +495,7 @@ fn assert_unsigned_bypass(original: JsonRpcResponse) {
     assert_eq!(serde_json::to_value(&actual).unwrap(), expected);
     #[cfg(feature = "metrics")]
     assert_eq!(failures, 0);
-    assert!(!actual.delivery_refusal);
+    assert!(!actual.wire_meta.delivery_refusal);
     assert!(!actual.confirmation_refusal);
     assert!(!actual.excludes_client_accounting());
     assert_attempt(&path, &actual);
@@ -516,6 +518,9 @@ fn install_firewall(
                     action,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -586,7 +591,7 @@ async fn signing_delivery_firewall_block_skips_invalid_context_and_signing_failu
         actual.error.as_ref().unwrap().message,
         "Response blocked by security firewall"
     );
-    assert!(actual.delivery_refusal);
+    assert!(actual.wire_meta.delivery_refusal);
     assert_eq!(failures, 0, "firewall refusal must short-circuit signing");
     let counts = firewall.response_inspection_counts();
     assert_eq!(

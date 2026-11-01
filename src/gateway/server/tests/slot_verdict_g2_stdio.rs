@@ -62,10 +62,12 @@ struct TaskStore {
 
 /// A stdio gateway over the sole operator's managed backend, both slots warm.
 struct Stdio {
-    gateway: DirectAccountGateway,
     meta: Arc<crate::gateway::meta_mcp::MetaMcp>,
     /// `None` serves no `tasks/*`, as the rows that need no task store.
     tasks: Option<TaskStore>,
+    /// Last: it owns the Meta-MCP's audit log, which must outlive every
+    /// field above that holds the logger.
+    gateway: DirectAccountGateway,
 }
 
 impl Stdio {
@@ -223,59 +225,8 @@ impl Stdio {
     }
 }
 
-/// A rotated grant's slot is never a listing view (stdio twin of the HTTP
-/// row). The operator's slot is warmed by a real `gateway_list_tools` fill
-/// (schema A); the shared slot holds B. After rotation `tools/list` must not
-/// serve A; the now-cold caller sees the shared view B (SLOTVIS.6).
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn tools_list_never_serves_a_rotated_grants_slot_stdio() {
-    let mut gateway =
-        DirectAccountGateway::new_in(ServeMode::Stdio, AuthConfig::default(), &Binding::Connected);
-    let meta = Arc::new(
-        gateway
-            .take_meta()
-            .with_surfaced_tools(vec![SurfacedToolConfig {
-                server: BACKEND.to_string(),
-                tool: TOOL.to_string(),
-            }]),
-    );
-    let backend = gateway.backends().get(BACKEND).expect("the backend");
-    backend.store_shared_tools_for_test(vec![tool(TOOL, &valid())]);
-    let stdio = Stdio {
-        gateway,
-        meta,
-        tasks: None,
-    };
-    let filled = stdio
-        .rpc(
-            1,
-            "tools/call",
-            json!({"name": "gateway_list_tools", "arguments": {"server": BACKEND}}),
-        )
-        .await;
-    let old = DirectAccountGateway::operator_binding();
-    assert!(
-        backend
-            .populated_per_user_bindings_for_test()
-            .contains(&old),
-        "premise: a real fill warmed the operator's slot: {filled}"
-    );
-    assert!(
-        !stdio.listed_schema_has_folder(2).await,
-        "premise: before rotation tools/list serves the caller's slot (schema A)"
-    );
-    stdio.gateway.rotate_operator_grant().await;
-    assert!(
-        backend
-            .populated_per_user_bindings_for_test()
-            .contains(&old),
-        "premise: rotation leaves the old slot warm, so this is the listing's check"
-    );
-    assert!(
-        stdio.listed_schema_has_folder(3).await,
-        "tools/list served the rotated grant's stale slot (schema A), not the shared view B"
-    );
-}
+#[path = "slot_verdict_g2_stdio_listing.rs"]
+mod listing;
 
 /// The stdio gateway over the sole operator's managed backend, [`TOOL`]
 /// surfaced and the shared slot warm: the operator's slot is cold.
@@ -376,18 +327,15 @@ impl Stdio {
         let policy = Arc::new(crate::security::ToolPolicy::default());
         let (tasks, expiry) = stdio_tasks::open(
             &config,
-            &crate::config::EnvOverlay::default(),
             &self.meta,
             &policy,
-            (
-                &std::sync::Arc::new(
-                    crate::gateway::record_principal::RecordPrincipalKey::from_text(
-                        crate::gateway::record_principal::TEST_RECORD_KEY,
-                    )
-                    .expect("test key"),
-                ),
-                &std::sync::Arc::new(crate::config_reload::LiveConfig::new(config.clone())),
-            ),
+            &std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+                config.clone(),
+                std::sync::Arc::new(crate::gateway::server::stdio_tasks::default_auth(
+                    &crate::config::EnvOverlay::default(),
+                    std::sync::Arc::new(crate::gateway::record_principal::test_record_key()),
+                )),
+            )),
         )
         .await
         .expect("the stdio store opens");

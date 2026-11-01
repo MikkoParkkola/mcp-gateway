@@ -260,7 +260,7 @@ impl MetaMcp {
                             (server, tool),
                             backend,
                             dispatch_binding,
-                            &caller_credential.headers,
+                            caller_credential.lent(),
                             proof,
                         );
                         match judged.await {
@@ -273,9 +273,11 @@ impl MetaMcp {
                     }
                 };
             if absent {
-                if let Some(reservation) = idem_reservation.as_mut() {
-                    reservation.release();
-                }
+                // Refused before its backend: the key released, as before.
+                super::nonce_settle::settle_pre_send(
+                    caller,
+                    super::nonce_settle::PreSendExit::ReleaseKey(idem_reservation.as_mut()),
+                );
                 return Err(self.absent_on_slot(
                     (server, backend),
                     tool,
@@ -292,17 +294,24 @@ impl MetaMcp {
                     tool,
                     arguments,
                     dispatch_binding,
-                    &caller_credential.headers,
+                    caller_credential.lent(),
                     (caller.scope(), session_id),
                 )
                 .await
             }
         };
+        // An undeclared key is the delivered refusal; a composite step's is
+        // absorbed, so raised only while the cell is vouched.
+        if let Ok(Some(checked)) = &refusal
+            && checked.kind.refuses()
+        {
+            crate::gateway::delivery_facts::refused_while_vouched();
+        }
         let managed = caller_credential.managed.as_ref();
         self.seal_key_refusal(
             (caller, session_id),
             (server, tool),
-            refusal,
+            refusal.map(|checked| checked.map(|checked| checked.answer)),
             (managed, verified_identity, checked_at),
             idem_reservation,
         )
@@ -342,9 +351,11 @@ impl MetaMcp {
                 {
                     Ok((value, _)) => Some(value),
                     Err(e) => {
-                        if let Some(reservation) = idem_reservation.as_mut() {
-                            reservation.release();
-                        }
+                        // Refused before its backend: the key released, as before.
+                        super::nonce_settle::settle_pre_send(
+                            caller,
+                            super::nonce_settle::PreSendExit::ReleaseKey(idem_reservation.as_mut()),
+                        );
                         return self.with_connect_offer(Err(e), verified_identity).await;
                     }
                 }

@@ -77,6 +77,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
         }
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -306,8 +307,8 @@ pub(super) struct World {
     /// production mints every id (F9), so the label is not the id.
     pub(super) minted: std::cell::RefCell<std::collections::HashMap<String, String>>,
     _shutdown: tokio::sync::broadcast::Sender<()>,
-    _store: tempfile::TempDir,
-    _audit: tempfile::NamedTempFile,
+    _store: crate::gateway::router::tests::FixtureDir,
+    _audit: crate::security::transparency_log::temp::TempLog,
     /// The adapter's env file, kept alive for [`Self::start_adapter`].
     _adapter: Option<tempfile::TempDir>,
 }
@@ -401,7 +402,7 @@ impl World {
     ) -> Self {
         let agents = super::audience_access::agent_registry(&access);
         let auth = fixture_auth(&access);
-        let audit = tempfile::NamedTempFile::new().expect("tempfile");
+        let audit = crate::security::transparency_log::temp::TempLog::new();
         let logger = crate::security::TransparencyLogger::open(Arc::new(
             crate::security::TransparencyLogConfig {
                 enabled: true,
@@ -446,8 +447,9 @@ impl World {
             // The security flags off, as every router fixture's generation
             // has them: the views read SSRF protection from the generation
             // (ADR-023), and on it hides the fixture's loopback backends.
-            st.live_config = Arc::new(crate::config_reload::LiveConfig::new(
+            st.live_config = Arc::new(crate::config_reload::LiveConfig::with_auth(
                 crate::config_reload::flags_off(config),
+                std::sync::Arc::clone(st.live_config.generation().auth()),
             ));
             dir
         });

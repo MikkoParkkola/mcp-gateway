@@ -16,7 +16,6 @@ use serde_json::Value;
 use crate::security::transparency_log::pager::{
     self, ASSEMBLY_WINDOW, Tail, lines_newest_first, older_segment, tail_window_assembled,
 };
-use crate::security::transparency_log::segments::{active_segment_seq, list_segments, sealed_path};
 
 /// The window each read takes.
 pub(super) const WINDOW: u64 = 1 << 20;
@@ -105,74 +104,47 @@ struct LogTail {
 }
 
 impl LogTail {
-    /// Open `log` at `pos`, or at its newest line. A position naming a
-    /// segment no longer kept answers `Ok(None)`.
+    /// Open `log` at `pos`, or at its newest line. A position the log no
+    /// longer holds answers `Ok(None)`, so the caller restarts both logs.
     fn open(which: Which, log: &Path, pos: Option<LogPos>) -> io::Result<Option<Self>> {
-        let (segment, end, newest) = match pos {
-            None => {
-                let at = pager::position(log, None)?;
-                (at.segment.unwrap_or(0), at.end, true)
-            }
-            Some(p) => {
-                let sealed = list_segments(log)?;
-                let active = active_segment_seq(log, sealed.last().map_or(0, |s| s.seq + 1));
-                let kept = sealed.first().map_or(active, |s| s.seq);
-                if p.segment < kept || p.segment > active {
-                    return Ok(None);
-                }
-                (p.segment, p.offset, false)
-            }
-        };
+        let at = pager::position(log, pos.map(|p| (p.offset, Some(p.segment))))?;
+        if at.reset {
+            return Ok(None);
+        }
         #[cfg(test)]
         tests::after_resolve();
         let mut tail = Self {
             which,
             log: log.to_path_buf(),
             file: None,
-            segment,
-            end,
+            segment: at.segment,
+            end: 0,
             pending: Vec::new(),
-            skip_head: newest,
+            skip_head: pos.is_none(),
             done: false,
         };
-        tail.file = tail.open_segment()?;
+        tail.file = tail.open_segment(at.lost_if_unopened())?;
         if let Some(f) = &tail.file {
-            tail.end = tail.end.min(f.metadata()?.len());
+            tail.end = pager::end_in(at.bound, f)?;
         }
         Ok(Some(tail))
     }
 
-    /// Open the current segment's file. The active file is opened by name and
-    /// then checked: if rotation sealed it meanwhile, the sealed file holds
-    /// its bytes, so that is the one read.
-    fn open_segment(&self) -> io::Result<Option<File>> {
-        let sealed_now = |seq: u64| -> io::Result<bool> {
-            Ok(list_segments(&self.log)?.iter().any(|s| s.seq == seq))
-        };
-        let path = if sealed_now(self.segment)? {
-            sealed_path(&self.log, self.segment)
-        } else {
-            self.log.clone()
-        };
-        #[cfg(test)]
-        tests::before_open();
-        let file = match File::open(&path) {
-            Ok(f) => f,
-            // Rotation renames the active file before it creates the next:
-            // in that gap the bytes are under the sealed name.
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return if path == self.log && sealed_now(self.segment)? {
-                    File::open(sealed_path(&self.log, self.segment)).map(Some)
-                } else {
-                    Ok(None)
-                };
-            }
-            Err(e) => return Err(e),
-        };
-        if path == self.log && sealed_now(self.segment)? {
-            return File::open(sealed_path(&self.log, self.segment)).map(Some);
+    /// Open the current segment's file through the pager's one opener.
+    /// `lost_if_unopened`: finding no file means bytes the page names went
+    /// unread, so the page fails rather than pass them.
+    fn open_segment(&self, lost_if_unopened: bool) -> io::Result<Option<File>> {
+        let file = pager::open_segment(&self.log, self.segment, || {
+            #[cfg(test)]
+            tests::before_open();
+        })?;
+        if file.is_none() && lost_if_unopened {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("log segment {} vanished with bytes unread", self.segment),
+            ));
         }
-        Ok(Some(file))
+        Ok(file)
     }
 
     /// The position a later page resumes from.
@@ -218,9 +190,22 @@ impl LogTail {
                 match older_segment(&self.log, Some(self.segment))? {
                     Some((len, seq)) => {
                         self.segment = seq;
-                        self.end = len;
                         self.skip_head = false;
-                        self.file = self.open_segment()?;
+                        self.file = self.open_segment(false)?;
+                        match &self.file {
+                            Some(f) => self.end = pager::end_in(Some(len), f)?,
+                            // Gone since it was listed. Retention removes the
+                            // oldest first: with nothing older kept, the log
+                            // ends here; with an older one kept, a segment in
+                            // between was removed, which a page never steps over.
+                            None if older_segment(&self.log, Some(seq))?.is_some() => {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::NotFound,
+                                    format!("log segment {seq} vanished below kept segments"),
+                                ));
+                            }
+                            None => self.done = true,
+                        }
                     }
                     None => self.done = true,
                 }

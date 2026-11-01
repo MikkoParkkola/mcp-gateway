@@ -38,8 +38,9 @@ pub(super) const INPUT_ROUND_VERSION: u32 = 4;
 pub(super) const TARGET_VERSION: u32 = 5;
 
 /// The record version that introduced [`Record::error_author`]. Written only on
-/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1); every other
-/// row keeps its version and its bytes. An older loader refuses such a row,
+/// a Failed row whose error the peer wrote (MIK-7887.RECEIPT.1) and on a row
+/// whose round the gateway refused before its backend; every other row keeps
+/// its version and its bytes. An older loader refuses such a row,
 /// which UPGRADING-4.0 item 105 states.
 pub(super) const ERROR_AUTHOR_VERSION: u32 = 6;
 
@@ -263,10 +264,14 @@ pub(super) struct AdmissionRecord {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Record {
     pub(super) version: u32,
-    /// Gateway-internal dispatch marker. Serialized even when false so a current
-    /// never-dispatched row is distinguishable from a legacy row that could not
-    /// record the fact. Absent on v1; `#[serde(default)]` loads that as false
-    /// without inventing a field on disk.
+    /// Gateway-internal dispatch marker: the worker reached the dispatch
+    /// funnel, never that a backend ran (a call the gateway refuses at its
+    /// gate settles on a dispatched row). Whether the row holds backend output
+    /// is said by `CommittedTask::backend_result` and `backend_error`.
+    /// Serialized even when false so a current never-dispatched row is
+    /// distinguishable from a legacy row that could not record the fact.
+    /// Absent on v1; `#[serde(default)]` loads that as false without
+    /// inventing a field on disk.
     #[serde(default)]
     pub(super) dispatched: bool,
     /// The durable upstream handle and its recovery descriptor. Absent on
@@ -284,9 +289,15 @@ pub(super) struct Record {
     /// with no round outstanding, so such a row serializes as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) input_round: Option<InputRound>,
-    /// The backend calls this task made or will make, for re-authorizing a
-    /// stored result before it is delivered. Absent on rows written before
-    /// [`TARGET_VERSION`] and on rows that dispatched nothing.
+    /// The calls this task planned or attempted: a single call's, written at
+    /// creation; a plan's, merged at settlement from the steps it attempted.
+    /// A stored read re-checks access against each before it is delivered.
+    /// Never proof that a backend ran: a step refused before its backend stays
+    /// one, as attempted. Whether backend output is stored is said by
+    /// `CommittedTask::backend_result` and `backend_error`; a plan's record of
+    /// the steps a backend ran is its relay replay entry. Absent on rows
+    /// written before [`TARGET_VERSION`] and on a row with nothing planned or
+    /// attempted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) targets: Vec<Target>,
     /// Set when the row settled as the gateway's own bounded failure because
@@ -294,10 +305,13 @@ pub(super) struct Record {
     /// output, so delivering it needs no target check.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(super) output_free: bool,
-    /// Who wrote a Failed row's stored error, decided where it is known
-    /// (MIK-7887.RECEIPT.1). Private: never on the wire or in a `tasks/get`
-    /// body. Absent on older rows and on every non-Failed row; absent is read
-    /// as "not established", which receipts nothing.
+    /// Who wrote the stored outcome, decided where it is known
+    /// (MIK-7887.RECEIPT.1): `Peer` on a Failed row whose error the gateway
+    /// established as the backend's; `Gateway` on a Completed or Failed row
+    /// whose round the gateway refused before its backend, so its answer is
+    /// the gateway's own. Private: never on the wire or in a `tasks/get`
+    /// body. Absent on older rows and otherwise; absent on a Failed row is
+    /// read as "not established", which receipts nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) error_author: Option<ErrorAuthor>,
     /// The attempt claim for the one upstream `tasks/cancel` a cancelled row's
@@ -342,13 +356,16 @@ pub(super) struct Record {
 pub(crate) struct Provenance {
     pub(crate) targets: Option<Vec<Target>>,
     pub(crate) bindings: Vec<crate::gateway::meta_mcp::admission::StepBinding>,
+    /// Whether the settling round of a single call was refused before its
+    /// backend: its answer is then the gateway's own (`ErrorAuthor::Gateway`).
+    pub(crate) pre_send: crate::gateway::meta_mcp::dispatch_log::PreSend,
 }
 
 impl From<Option<Vec<Target>>> for Provenance {
     fn from(targets: Option<Vec<Target>>) -> Self {
         Self {
             targets,
-            bindings: Vec::new(),
+            ..Self::default()
         }
     }
 }
@@ -487,17 +504,18 @@ pub(super) struct InterruptedTask {
 pub(crate) struct CommittedTask {
     pub(crate) task: Task,
     pub(crate) revision: u64,
-    /// The calls that produced this snapshot's result. A legacy row recorded
-    /// none; its one call is recovered from its upstream descriptor when it has
-    /// a consistent one, and is otherwise not known (empty).
+    /// The calls planned or attempted for this snapshot (`Record::targets`:
+    /// never proof that a backend ran). A legacy row recorded none; its one
+    /// call is recovered from its upstream descriptor when it has a
+    /// consistent one, and is otherwise not known (empty).
     pub(crate) targets: Vec<Target>,
     /// Whether the row was written by a gateway that records targets. An empty
-    /// list on such a row means nothing was dispatched; on an older row it
-    /// means the provenance is unavailable.
+    /// list on such a row means nothing was planned or attempted; on an older
+    /// row it means the provenance is unavailable.
     pub(crate) targets_recorded: bool,
     /// The row holds only the gateway's own bounded failure, no backend output.
     pub(crate) output_free: bool,
-    /// Who wrote a Failed row's stored error; see `Record::error_author`.
+    /// Who wrote the stored outcome; see `Record::error_author`.
     pub(crate) error_author: Option<ErrorAuthor>,
     /// The owner's digest as the record persisted it, read in the same piece
     /// as the rest of the snapshot (the events source carries it).
@@ -525,6 +543,45 @@ impl CommittedTask {
                 self.task.status(),
                 TaskStatus::Completed | TaskStatus::Failed | TaskStatus::InputRequired
             )
+    }
+
+    /// The stored task as a delivery serves it: every serve site
+    /// (`tasks/get`, a repeat, a notification) sends this, never
+    /// `task.wire()` alone, and before any egress scan reads it.
+    ///
+    /// Each gateway-only member the row's write record does not claim is
+    /// removed from the result, `error.data` and every parked input request.
+    /// Since ingress strips a backend's copy before store, a claimed member is
+    /// the gateway's own, even sealed or redacted after its note; a row stored
+    /// before the rename notes the plain names, so a `_` member planted in it
+    /// is claimed by nothing. A removal the result's provenance seal covered
+    /// drops that seal (its receipt stays): the bytes it signed are gone.
+    pub(crate) fn delivered_wire(&self) -> serde_json::Value {
+        use crate::protocol::reserved_members::strip_unnoted;
+        let mut wire = serde_json::to_value(self.task.wire()).unwrap_or(serde_json::Value::Null);
+        let writes = &self.gateway_writes;
+        if let Some(result) = wire.get_mut("result")
+            && strip_unnoted(result, |member| writes.claims(member.path, member.class))
+            && let Some(provenance) = result
+                .pointer_mut("/_meta/provenance")
+                .and_then(serde_json::Value::as_object_mut)
+        {
+            provenance.remove("public_signature");
+        }
+        // A Failed row's record is always empty, and the gateway never writes
+        // a noted member into a stored error or an input request.
+        if let Some(data) = wire.pointer_mut("/error/data") {
+            strip_unnoted(data, |_| false);
+        }
+        if let Some(requests) = wire
+            .get_mut("inputRequests")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            for request in requests.values_mut() {
+                strip_unnoted(request, |_| false);
+            }
+        }
+        wire
     }
 
     /// The committed view of `record`, read in one piece so a caller that
@@ -559,12 +616,14 @@ impl CommittedTask {
 
     /// The stored result when it is backend output. A row holding only the
     /// gateway's own sentence (a bounded failure, an interrupted or abandoned
-    /// round) has none: nothing the backend said was delivered with it.
+    /// round, a round refused before its backend) has none: nothing the
+    /// backend said was delivered with it.
     pub(crate) fn backend_result(&self) -> Option<&serde_json::Value> {
         let result = self.task.result()?;
-        let gateway_authored = result
-            .get("_meta")
-            .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
+        let gateway_authored = self.error_author == Some(ErrorAuthor::Gateway)
+            || result
+                .get("_meta")
+                .is_some_and(|meta| meta.get(EXECUTION_OUTCOME_KEY).is_some());
         (!self.output_free && !gateway_authored).then_some(result)
     }
 }
@@ -592,7 +651,7 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
     // A row older than the descriptor cannot have captured one; a descriptor
     // found there is forged or downgraded (the loader and store.rs agree).
     if record.version < UPSTREAM_VERSION
-        || matches!(task.tool(), "gateway_execute" | "gateway_run_playbook")
+        || crate::gateway::meta_mcp::is_composite_meta_tool(task.tool())
     {
         return Vec::new();
     }
@@ -610,6 +669,10 @@ fn legacy_targets(task: &Task, record: &Record) -> Vec<Target> {
 #[cfg(test)]
 #[path = "record_legacy_tests.rs"]
 mod legacy_tests;
+
+#[cfg(test)]
+#[path = "record_delivery_tests.rs"]
+mod delivery_tests;
 
 /// `Target::pairs` keeps the recorded order, duplicates included, and the
 /// names exactly as recorded: every stored-result walk reads it (MIK-8498).

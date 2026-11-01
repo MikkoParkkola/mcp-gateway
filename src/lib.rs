@@ -57,6 +57,9 @@ pub mod control_plane;
 pub mod cost_accounting;
 mod counters;
 mod debug_trust_roots;
+// The decision set serves only the web UI's routes and stream.
+#[cfg(feature = "webui")]
+mod decisions;
 #[doc(hidden)]
 pub mod discovery;
 mod duration_bound;
@@ -88,6 +91,7 @@ pub mod kill_switch;
 #[doc(hidden)]
 pub mod kubernetes;
 pub(crate) mod local_day;
+mod log_escape;
 #[cfg(feature = "metrics")]
 #[doc(hidden)]
 pub mod metrics;
@@ -102,6 +106,13 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+
+// The preview sandbox's test seams must never ship: a release build with them
+// fails here, and CI proves it with a build that must fail.
+#[cfg(all(feature = "sandbox-fixtures", not(debug_assertions)))]
+compile_error!(
+    "the sandbox-fixtures feature is for tests only and cannot be built without debug_assertions"
+);
 #[doc(hidden)]
 pub mod projection;
 #[doc(hidden)]
@@ -154,9 +165,17 @@ pub mod stats;
 #[cfg(all(test, feature = "cost-governance"))]
 pub(crate) mod test_day;
 #[cfg(test)]
+pub(crate) mod test_fixture_host;
+#[cfg(test)]
+pub(crate) mod test_late_write;
+#[cfg(test)]
 mod test_pause;
 #[cfg(test)]
 mod test_ports;
+#[cfg(test)]
+pub(crate) mod test_source_text;
+#[cfg(test)]
+mod test_source_text_tests;
 #[cfg(test)]
 mod test_wait;
 #[cfg(feature = "tool-profiles")]
@@ -178,6 +197,10 @@ mod truncate;
 pub mod trust;
 #[cfg(test)]
 mod unsafe_allowlist_tests;
+/// The 4.0.0 upgrade-notice data. Crate-internal API for the CLI binary, not
+/// supported for external use.
+#[doc(hidden)]
+pub mod upgrade_notice;
 #[doc(hidden)]
 pub mod validator;
 // Windows owner-only store custody and Credential Manager: `win_acl` and
@@ -257,7 +280,9 @@ pub fn setup_tracing(level: &str, format: Option<&str>) -> Result<()> {
         }
         _ => {
             subscriber
-                .with(fmt::layer().with_writer(std::io::stderr))
+                .with(log_escape::escaping(
+                    fmt::layer().with_writer(std::io::stderr),
+                ))
                 .init();
         }
     }

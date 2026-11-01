@@ -10,8 +10,134 @@ use thiserror::Error;
 /// Result type alias for MCP Gateway
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Appended to a chain or playbook step's error when
+/// [`Error::outcome_undetermined`] holds, so a caller reading the text knows
+/// the step was not re-sent because it may already have acted.
+pub(crate) const MAY_HAVE_RUN: &str = "it may have run: its request may have reached the \
+     backend, so it was not re-sent; reconcile at the backend before running it again";
+
+/// Whether a step that failed with `error` is reported as one that may have
+/// run: the error is not raised before the send ([`Error::is_pre_dispatch`],
+/// which the gateway's refusals, `Forbidden` and `GatewayRefused`, are), and
+/// is not a sealed account offer or a marked account refusal (their text is
+/// the gateway's own: it goes out as written, and a marked refusal's text is
+/// read back). The one rule both loops and an aborted playbook use.
+///
+/// A step not reported this way has not been shown never to have run: the
+/// absence of the note is inconclusive, never "not run".
+pub(crate) fn reports_may_have_run(error: &Error) -> bool {
+    error.outcome_undetermined()
+        && crate::personal_accounts::refusal::offer_data(error).is_none()
+        && crate::personal_accounts::refusal::marked(error).is_none()
+}
+
+/// `error`'s text for a chain or playbook step result, with [`MAY_HAVE_RUN`]
+/// appended when [`reports_may_have_run`] holds. The one place both loops word it.
+pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
+    if reports_may_have_run(error) {
+        format!("{text}; {MAY_HAVE_RUN}")
+    } else {
+        text
+    }
+}
+
 /// MCP Gateway errors
+///
+/// Non-exhaustive: a release may add a variant, so a `match` outside this
+/// crate needs a wildcard arm. Listing every variant is not enough:
+///
+/// ```compile_fail,E0004
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///     }
+/// }
+/// ```
+///
+/// The same arms with a wildcard compile:
+///
+/// ```
+/// use mcp_gateway::Error;
+///
+/// fn known(error: &Error) -> bool {
+///     match error {
+///         Error::Config(..)
+///         | Error::Forbidden { .. }
+///         | Error::ResponseFirewallRefused
+///         | Error::AuditUnavailable
+///         | Error::ConfigValidation(..)
+///         | Error::ConfigWatcher(..)
+///         | Error::CapabilityHashMismatch { .. }
+///         | Error::BackendNotFound(..)
+///         | Error::AmbiguousBackend { .. }
+///         | Error::BackendUnavailable(..)
+///         | Error::CircuitOpen { .. }
+///         | Error::RateLimited(..)
+///         | Error::IdentitySlotsExhausted { .. }
+///         | Error::ToolNotFound(..)
+///         | Error::BackendTimeout(..)
+///         | Error::Transport(..)
+///         | Error::TransportPermanent(..)
+///         | Error::TransportConnect(..)
+///         | Error::Protocol(..)
+///         | Error::ProtocolVersionRejected { .. }
+///         | Error::OAuth(..)
+///         | Error::AuthorizationIncomplete { .. }
+///         | Error::AuthorizationCancelled { .. }
+///         | Error::AuthorizationRequired { .. }
+///         | Error::AuthorizationPending { .. }
+///         | Error::Tls(..)
+///         | Error::JsonRpc { .. }
+///         | Error::CliCredentialRefused { .. }
+///         | Error::JsonRpcRetryable { .. }
+///         | Error::GatewayRefused { .. }
+///         | Error::Io(..)
+///         | Error::Json(..)
+///         | Error::Http(..)
+///         | Error::Shutdown
+///         | Error::Internal(..) => true,
+///         _ => false,
+///     }
+/// }
+/// ```
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum Error {
     /// Configuration error
     #[error("Configuration error: {0}")]
@@ -86,6 +212,22 @@ pub enum Error {
     /// Backend not found
     #[error("Backend not found: {0}")]
     BackendNotFound(String),
+
+    /// A name that is both a registry backend and the capability backend: the
+    /// checks judge the registry backend while dispatch would reach the
+    /// capability, so the call takes neither route. Gateway-authored only, so
+    /// its fixed data reaches the client (a backend's error data does not).
+    #[error(
+        "Backend name '{server}' is both a configured backend and the capability backend; \
+         the call was refused because the checks judged one and dispatch would reach the \
+         other. Restart the gateway, then rename one of them if the clash remains."
+    )]
+    AmbiguousBackend {
+        /// The clashing name.
+        server: String,
+        /// The policy rule covering the call, when one does.
+        rule: Option<String>,
+    },
 
     /// The backend could not take the request: it would not start, its
     /// concurrency limit closed, its tools could not be read in time.
@@ -310,6 +452,22 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A gateway decision refused this call: the operator kill switch, a
+    /// capability disable, attestation, a spend limit.
+    ///
+    /// Gateway-owned, like [`Error::ResponseFirewallRefused`]: only
+    /// `Error::gateway_refused` builds it, so a peer's error never carries it.
+    /// It reads exactly as the [`Error::JsonRpc`] it replaces (same code, same
+    /// text), so the wire is unchanged; the variant is what tells the place
+    /// that delivers it that this answer is a refusal (`delivery_facts::outlet`).
+    #[error("JSON-RPC error {code}: {message}")]
+    GatewayRefused {
+        /// Error code
+        code: i32,
+        /// Error message
+        message: String,
+    },
+
     /// A CLI capability refused the credential it was given (MIK-7782: gws
     /// exits 2 with a JSON error whose code is 401).
     ///
@@ -386,6 +544,25 @@ impl Error {
         }
     }
 
+    /// A refusal a gateway decision made: see [`Error::GatewayRefused`].
+    pub(crate) fn gateway_refused(code: i32, message: impl Into<String>) -> Self {
+        Self::GatewayRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// This error after an earlier send of the call reached the backend: a
+    /// pre-dispatch one may have run, so it becomes `Transport` (cause kept).
+    #[must_use]
+    pub(crate) fn after_a_send(self, context: &str) -> Self {
+        if self.is_pre_dispatch() {
+            Self::Transport(format!("{context}: {self}"))
+        } else {
+            self
+        }
+    }
+
     /// True only for failures the gateway can prove it raised *before* the
     /// request reached the backend.
     ///
@@ -407,25 +584,68 @@ impl Error {
     /// holds to a reviewed list of files. The gateway-sealed transient (a
     /// busy custody, MIK-8428) earns it the same way, decided by its seal and
     /// never its text; `Config` stays out, as it is also raised after a send.
+    ///
+    /// The gateway's own refusals (`Forbidden`, `GatewayRefused`) earn their
+    /// place the same way: every site that builds one, or calls a builder that
+    /// does, is a reviewed pre-send site the pre-send scan holds by name.
+    ///
+    /// This is also the public check for whether a failed call may have run:
+    /// `false` means the request may have reached the backend, so a chain or
+    /// playbook step that failed this way was not re-sent, and a caller should
+    /// reconcile with the backend before running it again. For a playbook or
+    /// chain, and for a playbook step answered "not permitted", `true`
+    /// describes the refused request only: an earlier step of the same run may
+    /// have run, and the run's key stays held for that. A step answered "not
+    /// permitted" may itself have run in one rare race (a grant revoked while
+    /// its request was in flight, and the request then failing), so this alone
+    /// never proves a relabelled step did nothing.
+    ///
+    /// One match with no catch-all arm: a new variant does not compile until
+    /// its stage is chosen.
     #[must_use]
     pub fn is_pre_dispatch(&self) -> bool {
-        crate::personal_accounts::refusal::transient_data(self).is_some()
-            || matches!(
-                self,
-                Self::CircuitOpen { .. }
-                | Self::RateLimited(_)
-                | Self::IdentitySlotsExhausted { .. }
-                | Self::BackendNotFound(_)
-                | Self::ToolNotFound(_)
-                | Self::TransportConnect(_)
-                | Self::BackendUnavailable(_)
-                // A login wait: the start never finished, so nothing was sent
-                // and the same-key retry after the login must run (MIK-7982).
-                | Self::AuthorizationIncomplete { .. }
-                | Self::AuthorizationCancelled { .. }
-                | Self::AuthorizationRequired { .. }
-                | Self::AuthorizationPending { .. }
-            )
+        match self {
+            Self::CircuitOpen { .. }
+            | Self::RateLimited(_)
+            | Self::IdentitySlotsExhausted { .. }
+            | Self::BackendNotFound(_)
+            | Self::AmbiguousBackend { .. }
+            | Self::ToolNotFound(_)
+            | Self::TransportConnect(_)
+            | Self::BackendUnavailable(_)
+            | Self::Forbidden { .. }
+            | Self::GatewayRefused { .. }
+            // A login wait: the start never finished, so nothing was sent
+            // and the same-key retry after the login must run (MIK-7982).
+            | Self::AuthorizationIncomplete { .. }
+            | Self::AuthorizationCancelled { .. }
+            | Self::AuthorizationRequired { .. }
+            | Self::AuthorizationPending { .. } => true,
+            // Decided by the gateway's seal, never by the text or the code.
+            Self::JsonRpc { .. } => {
+                crate::personal_accounts::refusal::transient_data(self).is_some()
+            }
+            Self::Config(_)
+            | Self::ResponseFirewallRefused
+            | Self::AuditUnavailable
+            | Self::ConfigValidation(_)
+            | Self::ConfigWatcher(_)
+            | Self::CapabilityHashMismatch { .. }
+            | Self::BackendTimeout(_)
+            | Self::Transport(_)
+            | Self::TransportPermanent(_)
+            | Self::Protocol(_)
+            | Self::ProtocolVersionRejected { .. }
+            | Self::OAuth(_)
+            | Self::Tls(_)
+            | Self::CliCredentialRefused { .. }
+            | Self::JsonRpcRetryable { .. }
+            | Self::Io(_)
+            | Self::Json(_)
+            | Self::Http(_)
+            | Self::Shutdown
+            | Self::Internal(_) => false,
+        }
     }
 
     /// The request may have left the gateway and no answer came back: the
@@ -437,6 +657,21 @@ impl Error {
     #[must_use]
     pub(crate) fn is_lost_round(&self) -> bool {
         matches!(self, Self::Transport(_) | Self::BackendTimeout(_))
+    }
+
+    /// Whether the call that raised this error may have run: `true` for every
+    /// error not proven raised before the request was sent
+    /// ([`Self::is_pre_dispatch`]). No later error is proof the backend did
+    /// nothing: a tool can act and then answer with an error, a response can
+    /// be refused after the backend produced it, and a proxy can answer 4xx
+    /// or 5xx after the backend acted. Reconcile with the backend before
+    /// running such a call again.
+    ///
+    /// Conservative by design: an error that in fact did nothing may still
+    /// read `true`; one that may have run never reads `false`.
+    #[must_use]
+    pub(crate) fn outcome_undetermined(&self) -> bool {
+        !self.is_pre_dispatch()
     }
 
     /// The gateway's own limiter or slot admission refused: the backend was
@@ -469,11 +704,14 @@ impl Error {
     pub fn to_rpc_code(&self) -> i32 {
         match self {
             Self::JsonRpc { code, .. }
+            | Self::GatewayRefused { code, .. }
             | Self::JsonRpcRetryable { code, .. }
             | Self::Forbidden { code, .. } => *code,
             Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
             Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
-            Self::BackendNotFound(_) | Self::ToolNotFound(_) => -32001,
+            Self::BackendNotFound(_) | Self::ToolNotFound(_) | Self::AmbiguousBackend { .. } => {
+                -32001
+            }
             Self::AuditUnavailable => -32005,
             Self::CliCredentialRefused { .. } => {
                 crate::security::http_diagnostics::CLI_UNAUTHORIZED
@@ -491,129 +729,34 @@ impl Error {
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
             | Self::TransportPermanent(_) => -32000,
-            // A 429 is the same class: the backend refused, the gateway is
-            // healthy. Only 429 is lifted -- every other `Http` status keeps
-            // the internal-error code it has always reported, so the arm is
-            // guarded rather than moved wholesale.
-            Self::Http(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => -32000,
-            // A11-b: a typed credential refusal (401, 403) was `Transport`
-            // (-32000) until it was typed; it keeps that code, since the backend
-            // refused and the gateway is healthy.
-            Self::Http(e)
-                if e.status()
-                    .is_some_and(crate::security::http_diagnostics::is_deterministic_refusal) =>
-            {
-                -32000
-            }
+            Self::Http(e) if origin::http_is_backend_refusal(e) => -32000,
             _ => rpc_codes::INTERNAL_ERROR, // Internal error
         }
     }
 }
 
+#[path = "error_ambiguous.rs"]
+mod ambiguous;
 /// Standard JSON-RPC error codes
-pub mod rpc_codes {
-    /// Parse error - Invalid JSON
-    pub const PARSE_ERROR: i32 = -32700;
-    /// Invalid Request - Not a valid Request object
-    pub const INVALID_REQUEST: i32 = -32600;
-    /// Method not found
-    pub const METHOD_NOT_FOUND: i32 = -32601;
-    /// Invalid params
-    pub const INVALID_PARAMS: i32 = -32602;
-    /// Internal error
-    pub const INTERNAL_ERROR: i32 = -32603;
-    /// Server error range start
-    pub const SERVER_ERROR_START: i32 = -32000;
-    /// Server error range end
-    pub const SERVER_ERROR_END: i32 = -32099;
-}
+#[path = "error_rpc_codes.rs"]
+pub mod rpc_codes;
+
+mod may_have_run;
+#[path = "error_origin.rs"]
+mod origin;
 
 #[cfg(test)]
 #[path = "error_pre_send_scan_tests.rs"]
 mod pre_send_scan_tests;
 
 #[cfg(test)]
-mod rpc_code_tests {
-    use super::Error;
+#[path = "error_rpc_code_tests.rs"]
+mod rpc_code_tests;
 
-    /// MIK-7979: every `BackendUnavailable` is raised before the request is
-    /// sent, so it frees an idempotency key; a lost round does not.
-    #[test]
-    fn backend_unavailable_is_pre_dispatch_and_a_lost_round_is_not() {
-        assert!(Error::BackendUnavailable("svc".to_string()).is_pre_dispatch());
-        assert!(!Error::Transport("reset".to_string()).is_pre_dispatch());
-        assert!(!Error::BackendTimeout("slow".to_string()).is_pre_dispatch());
-    }
+#[cfg(test)]
+#[path = "error_non_exhaustive_tests.rs"]
+mod non_exhaustive_tests;
 
-    /// MIK-8428 Case A: the gateway-sealed transient is pre-dispatch (it is
-    /// built only before a send); a look-alike with the same code, text and
-    /// data but no seal, as a backend could answer, is not. The seal decides,
-    /// never the text.
-    #[test]
-    fn only_the_sealed_transient_is_pre_dispatch() {
-        let sealed = crate::personal_accounts::refusal::transient_retry_error(None);
-        let Error::JsonRpc { code, message, .. } = &sealed else {
-            panic!("premise: the transient is a JSON-RPC error: {sealed}");
-        };
-        let look_alike = Error::JsonRpc {
-            code: *code,
-            message: message.clone(),
-            data: crate::personal_accounts::refusal::transient_data(&sealed),
-        };
-        assert!(sealed.is_pre_dispatch(), "{sealed}");
-        assert!(!look_alike.is_pre_dispatch(), "{look_alike}");
-    }
-
-    #[test]
-    fn a_permanent_transport_failure_reports_as_a_backend_error() {
-        // Omitting the variant here reported a missing backend command as an
-        // INTERNAL error, blaming the gateway for the operator's typo.
-        assert_eq!(
-            Error::TransportPermanent("Failed to spawn: no such file".to_string()).to_rpc_code(),
-            -32000,
-        );
-        assert_eq!(
-            Error::Transport("connection refused".to_string()).to_rpc_code(),
-            -32000,
-            "the two transport variants must look the same to a JSON-RPC caller"
-        );
-    }
-
-    #[test]
-    fn a_refusal_keeps_the_peers_code_whichever_carriage_brings_it() {
-        // A peer code recovered from a 429/503 body is the peer's answer, not a
-        // gateway fault: omitting the retryable variant here reported an
-        // exhausted backend refusal as INTERNAL and sent operators after the
-        // wrong process.
-        assert_eq!(
-            Error::JsonRpcRetryable {
-                code: -32601,
-                message: "method not found".to_string(),
-                status: 503,
-                data: None,
-            }
-            .to_rpc_code(),
-            -32601,
-        );
-    }
-
-    /// MIK-8668: the five standard JSON-RPC 2.0 codes keep their spec values
-    /// (written as literals here on purpose; every site migrated to these
-    /// names relies on them).
-    #[test]
-    fn the_standard_codes_keep_their_spec_values() {
-        use super::rpc_codes::{
-            INTERNAL_ERROR, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
-        };
-        assert_eq!(
-            [
-                PARSE_ERROR,
-                INVALID_REQUEST,
-                METHOD_NOT_FOUND,
-                INVALID_PARAMS,
-                INTERNAL_ERROR
-            ],
-            [-32700, -32600, -32601, -32602, -32603]
-        );
-    }
-}
+#[cfg(test)]
+#[path = "error_origin_tests.rs"]
+mod origin_tests;

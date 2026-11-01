@@ -43,6 +43,7 @@ impl crate::identity_propagation::IdentityPropagation for PerIdentityMint {
     > {
         let subject_key = identity.subject.clone();
         Ok(crate::identity_propagation::PropagatedCredential {
+            expiry_synthetic: false,
             headers: vec![(
                 "Authorization".to_string(),
                 format!("Bearer minted-for-{subject_key}"),
@@ -90,7 +91,7 @@ impl crate::transport::Transport for SlotWire {
     }
 }
 
-fn logger(file: &tempfile::NamedTempFile) -> Arc<TransparencyLogger> {
+fn logger(file: &crate::security::transparency_log::temp::TempLog) -> Arc<TransparencyLogger> {
     let config = TransparencyLogConfig {
         enabled: true,
         path: file.path().to_string_lossy().to_string(),
@@ -106,11 +107,12 @@ struct Gateway {
     router: axum::Router,
     auth: Arc<crate::gateway::auth::ResolvedAuthConfig>,
     seen: Seen,
-    _store: tempfile::TempDir,
-    audit: [tempfile::NamedTempFile; 2],
+    _store: crate::gateway::router::tests::FixtureDir,
     /// The route's own transparency log (the one the direct route writes its
     /// mint and refusal rows to), so a cell can fail its next append.
     route_log: Arc<TransparencyLogger>,
+    /// Last, so the logs drop after every field holding a logger.
+    audit: [crate::security::transparency_log::temp::TempLog; 2],
 }
 
 impl Gateway {
@@ -176,8 +178,8 @@ async fn gateway_with_auth(
     let (mut state, store) =
         direct_route_state_with_identity(crate::config::AgentIdentityConfig::default()).await;
     let audit = [
-        tempfile::NamedTempFile::new().expect("tempfile"),
-        tempfile::NamedTempFile::new().expect("tempfile"),
+        crate::security::transparency_log::temp::TempLog::new(),
+        crate::security::transparency_log::temp::TempLog::new(),
     ];
     let state_mut = Arc::get_mut(&mut state).expect("state is unique");
     assert!(state_mut.backends.register(backend), "fixture registration");
@@ -188,11 +190,16 @@ async fn gateway_with_auth(
     state_mut.meta_mcp = Arc::new(meta);
     let route_log = logger(&audit[1]);
     state_mut.transparency_log = Some(Arc::clone(&route_log));
-    state_mut.auth_config = Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
-        &auth,
-        crate::gateway::record_principal::TEST_RECORD_KEY,
-    ));
-    let auth = Arc::clone(&state_mut.auth_config);
+    {
+        state_mut.live_config = std::sync::Arc::new(crate::config_reload::LiveConfig::with_auth(
+            (*state_mut.live_config.get()).clone(),
+            Arc::new(crate::gateway::auth::ResolvedAuthConfig::from_config(
+                &auth,
+                crate::gateway::record_principal::TEST_RECORD_KEY,
+            )),
+        ));
+    }
+    let auth = Arc::clone(state_mut.live_config.generation().auth());
     Gateway {
         router: create_router(state),
         auth,

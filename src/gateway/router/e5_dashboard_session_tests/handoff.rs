@@ -18,7 +18,7 @@ const PUBLIC: &str = "https://gw.example";
 const HANDOFF: &str = "/dashboard/handoff";
 
 /// An HTTPS `public_url` in front of this plain-HTTP loopback listener.
-async fn behind_https_front() -> (Arc<AppState>, tempfile::TempDir) {
+async fn behind_https_front() -> (Arc<AppState>, crate::gateway::router::tests::FixtureDir) {
     let (state, dir) = fixture().await;
     reload(&state, |c| c.server.public_url = Some(PUBLIC.to_string()));
     (state, dir)
@@ -276,9 +276,10 @@ async fn a_code_expires_after_a_minute() {
 async fn a_code_past_its_credential_cap_is_refused() {
     let (state, _dir) = behind_https_front().await;
     let past = std::time::SystemTime::now() - Duration::from_secs(1);
-    let code = state
-        .dashboard_bootstrap
-        .mint_handoff(crate::gateway::auth::Now::read(), Some(past));
+    let code = state.dashboard_bootstrap.mint_handoff(
+        crate::gateway::auth::Now::read(),
+        crate::gateway::auth::Bound::until(Some(past)),
+    );
 
     let out = send(&state, submit(&code, None)).await;
     assert_eq!(out.status, StatusCode::UNAUTHORIZED, "{}", out.body);

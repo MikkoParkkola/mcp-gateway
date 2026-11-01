@@ -19,10 +19,12 @@ use super::{DiscoveredServer, DiscoverySource};
 
 mod build;
 mod helpers;
+/// The discovery route shows a find's program name through the same helper.
+pub(in crate::discovery) use helpers::executable_name;
 use helpers::{
     build_action_groups, classify_data_risk, classify_ownership, classify_remediation,
-    classify_severity, ensure_unique_ids, evidence_refs, executable_name, is_loopback_url,
-    risk_reasons, sanitize_url, stable_shadow_id,
+    classify_severity, ensure_unique_ids, evidence_refs, is_loopback_url, risk_reasons,
+    sanitize_url, stable_shadow_id,
 };
 
 /// Stable schema version for `ShadowRadar` reports.

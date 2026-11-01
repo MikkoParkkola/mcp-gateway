@@ -47,6 +47,7 @@ async fn deliver(
             targets: &[ResponsePolicyTarget {
                 server: "backend".into(),
                 tool: "echo".into(),
+                origin: crate::security::response_policy::TargetOrigin::Routed,
             }],
             correlation: ResponseCorrelation {
                 session_id: "chain-session",
@@ -55,6 +56,7 @@ async fn deliver(
                 external_tool: "gateway_invoke",
                 subject: None,
                 trace_id: None,
+                key: crate::security::response_policy::KeyOf::NotKnown,
             },
             signing,
             chain_source: source,
@@ -300,6 +302,9 @@ async fn link_out_covers_firewall_redaction_stdio() {
                     action: FirewallAction::Allow,
                     scan: vec![],
                     reason: None,
+                    servers: None,
+                    keys: None,
+                    except: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -497,7 +502,12 @@ fn a_missing_challenge_fails_closed() {
     let slot = ChainSlot::default();
     let mut result = body();
     let err = meta(Some(ChainEmit::OnRequest))
-        .chain_receive((ChainMode::Verify, &[], None), &mut result, None, &slot)
+        .chain_receive(
+            (ChainMode::Verify, &[], None),
+            (&mut result, None),
+            None,
+            &slot,
+        )
         .expect_err("no challenge on record");
     assert_eq!(err.to_rpc_code(), -32001);
     assert!(matches!(*slot.lock(), ChainReceipt::Refused));

@@ -122,6 +122,51 @@ async fn t8_every_crash_point_recovers_exactly_once() {
     }
 }
 
+/// Recovery over a log with a line over the record cap cannot tell which
+/// planned records are missing past it, so it refuses and appends nothing;
+/// once the log reads whole, it records each planned id exactly once.
+#[tokio::test]
+async fn recovery_refuses_past_an_unreadable_line_and_appends_nothing() {
+    let mut f = Fixture::new();
+    for i in 0..3 {
+        f.cli(add(row(&format!("g{i:03}"), "r"))).await;
+    }
+    *f.auditor.fault.lock() = Some(GrantAuditFault::AfterAppend(1));
+    let _ = f.reconcile().await;
+    f.restart();
+    let before = f.event_ids().len();
+    f.store.hole.store(true, Ordering::SeqCst);
+    let refused = f.reconcile().await;
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        f.event_ids().len(),
+        before,
+        "nothing appended past the hole"
+    );
+    f.store.hole.store(false, Ordering::SeqCst);
+    f.restart();
+    f.reconcile().await.unwrap();
+    let records = f.records();
+    let added: Vec<_> = records
+        .iter()
+        .filter(|r| r.0 == V::Add)
+        .map(|r| r.1.as_str())
+        .collect();
+    assert_eq!(added, ["g000", "g001", "g002"], "{records:?}");
+    // The refusal left a gap, which the healed run records.
+    assert!(
+        records.iter().any(|r| r.0 == V::Indeterminate),
+        "{records:?}"
+    );
+    assert!(
+        records
+            .iter()
+            .all(|r| r.0 == V::Add || r.0 == V::Indeterminate),
+        "{records:?}"
+    );
+    assert_unique(&f);
+}
+
 /// T8b: a failed commit write keeps the plan as a barrier: the next reload is
 /// refused, nothing new is appended, and a restart records each id once.
 #[tokio::test]

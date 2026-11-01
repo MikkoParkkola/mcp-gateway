@@ -36,6 +36,8 @@ pub(super) struct EvaluatedReload {
     pub(super) overlay: Arc<EnvOverlay>,
     /// Every `env:NAME` the config references, resolved or not.
     pub(super) secret_refs: std::collections::BTreeSet<String>,
+    /// What this evaluation read; digested when it is published.
+    pub(super) inputs: super::revision::RawInputs,
 }
 
 pub(super) fn load_config_patch(
@@ -57,6 +59,7 @@ pub(super) fn load_config_patch(
         patch,
         overlay: evaluated.overlay,
         secret_refs: evaluated.secret_refs,
+        inputs: evaluated.inputs,
     })
 }
 
@@ -73,6 +76,15 @@ pub(super) const IMPLICIT_STARTUP_ENV_KEYS: &[&str] = &[
     crate::trust::provenance_public::PROVENANCE_SEED_ENV,
     crate::trust::provenance_public::PROVENANCE_KEY_ID_ENV,
 ];
+
+/// A refused preparation's answer: the reason, and that the reload changed
+/// nothing.
+fn nothing_published(reason: &str) -> String {
+    format!(
+        "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
+         configuration was published."
+    )
+}
 
 /// Startup-only environment keys a restart would read differently.
 ///
@@ -193,11 +205,19 @@ pub struct ReloadContext {
     /// the reload lock reloads before its own work. Cleared only by an
     /// accepted reload, so a reload that fails is retried, never forgotten.
     pub(super) reload_owed: std::sync::atomic::AtomicBool,
+    /// Where an audited gateway's recovery intents go, set once at start
+    /// from the audit posture: every in-gateway holder of the config lock
+    /// appends one before it recovers a crashed write or pays an owed
+    /// reload.
+    pub(super) recovery_audit: parking_lot::Mutex<Option<Box<dyn replace::IntentSink>>>,
+    /// Test-only: parks an audited recovery inside its task, lock held.
+    #[cfg(test)]
+    pub(super) recovery_pause: std::sync::Arc<crate::test_pause::Slot>,
     /// gateway.yaml as this gateway resolved it at start, through any
     /// symlink. The byte writer writes only there: a link re-pointed since
     /// would send config bytes, secrets included, wherever it now leads.
     #[cfg_attr(
-        not(test),
+        not(any(test, feature = "webui")),
         expect(
             dead_code,
             reason = "read only by the byte writer, whose first caller lands next"
@@ -266,6 +286,9 @@ impl ReloadContext {
             config_path,
             trusted_config,
             reload_owed: std::sync::atomic::AtomicBool::new(false),
+            recovery_audit: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            recovery_pause: std::sync::Arc::default(),
             live_config,
             registry,
             failsafe_config,
@@ -400,6 +423,30 @@ impl ReloadContext {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
 
+    /// The capabilities section applies only at restart, so the attached
+    /// capability backend keeps its name through a reload that renames it. A
+    /// backend registered under that name would be judged as itself and
+    /// answered by the capability; load refuses the pair, and so does this.
+    fn refuse_capability_name_clash(&self, patch: &ConfigPatch) -> std::result::Result<(), String> {
+        let Some(cap) = self.capabilities.as_ref() else {
+            return Ok(());
+        };
+        let Some((name, _)) = patch
+            .backends_added
+            .iter()
+            .chain(&patch.backends_modified)
+            .find(|(name, _)| *name == cap.name)
+        else {
+            return Ok(());
+        };
+        Err(format!(
+            "{POSTURE_REFUSED_PREFIX} backends.{name} has the name of the running capability \
+             backend, and a capabilities.name change applies only at restart. Restart first, \
+             or rename the backend. No backend was started or stopped, and no configuration \
+             was published."
+        ))
+    }
+
     /// Reload the config file and return a structured outcome for callers/UI.
     ///
     /// # Errors
@@ -445,10 +492,20 @@ impl ReloadContext {
         let reader = tokio::select! {
             biased;
             () = self.stop.cancelled() => return Err(STOPPED.to_owned()),
-            reader = crate::config_persistence::lock::reader_lock(&self.config_path, deadline) => reader,
+            reader = self.reader_lock_for_reload(deadline) => reader,
         };
         let (_sidecar, target) = match reader {
             crate::config_persistence::lock::ReaderLock::Held(locked) => {
+                // An audited gateway's lock recovered nothing yet: the
+                // recovery intent comes first.
+                let locked = match self.recover_for_reload(locked).await {
+                    Ok(locked) => locked,
+                    Err(why) => {
+                        return Err(format!(
+                            "config reload skipped: {why}; the next change retries"
+                        ));
+                    }
+                };
                 if locked.recovered == crate::config_persistence::journal::Recovered::RolledBack {
                     self.reload_owed
                         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -495,71 +552,18 @@ impl ReloadContext {
         Ok(outcome)
     }
 
-    async fn reload_transaction(
+    /// The refusals a reload answers before `apply_patch` stops or starts any
+    /// backend: each says nothing was started, stopped or published.
+    fn refuse_before_apply(
         &self,
-        path: &std::path::Path,
-    ) -> std::result::Result<ReloadOutcome, String> {
-        #[cfg(test)]
-        super::reload_pause::pause_here(&self.config_path).await;
-        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
-        // First: a posture change also changes what the posture forces (signing
-        // among it), and the posture is the cause the operator must act on.
-        if let Some(refusal) =
-            posture::reload_refusal(self.live_config.running(), &evaluated.config)
-        {
-            return Err(refusal);
-        }
-        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
-        let (env, overlay): (&crate::config::EnvOverlay, &crate::config::EnvOverlay) =
-            (self.env.startup(), &evaluated.overlay);
-        let signing = (running.message_signing)
-            .restart_changed_field(&proposed.security.message_signing, env, overlay)
-            .map_err(|error| error.to_string())?;
-        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
-        let chain =
-            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
-        // MIK-8697: the record key keys every record and subscription handle
-        // for the process's lifetime, so a changed reference waits for a restart.
-        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
-            .then(|| "record_principal_key".to_owned());
-        if let Some(field) = (signing.map(|f| format!("message_signing.{f}")))
-            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
-            .or(record_key)
-        {
-            return Err(format!(
-                "config reload refused: security.{field} requires restart"
-            ));
-        }
-        // Measured against the overlay startup captured, so a requirement stays
-        // reported on every reload until the process actually restarts.
-        let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
-        let EvaluatedReload {
-            config: new_config,
-            patch,
-            overlay,
-            ..
-        } = evaluated;
-
-        if patch.is_empty() {
-            // The env files can rotate under an unchanged config file, so the
-            // overlay is published even here — a resolver reading the old one
-            // would serve a value the operator has already replaced.
-            self.publish_overlay(overlay);
-            // No difference from the published snapshot does not mean nothing is
-            // outstanding: a restart-only edit was published on an earlier
-            // reload and the running process still has not applied it.
-            return Ok(with_pending_restart(
-                ReloadOutcome::no_changes(),
-                &self.live_config,
-                env_restart_keys,
-            ));
-        }
-
+        new_config: &Config,
+        patch: &ConfigPatch,
+    ) -> std::result::Result<(), String> {
         // Before `apply_patch`, which stops and starts backends: a refusal that
         // ran after it could not say nothing was applied. And before the
         // publish, which is what the origin gate would re-read.
         if let Some(refusal) =
-            crate::gateway::reload_posture_refusal(self.live_config.running(), &new_config)
+            crate::gateway::reload_posture_refusal(self.live_config.running(), new_config)
         {
             // What a restart does with this same file is the operator's next
             // decision, and it differs. A file that also enables authentication
@@ -624,7 +628,7 @@ impl ReloadContext {
         // Compared against what is RUNNING, so it stays true until a restart.
         if let Some(reason) = crate::config::account_bindings::reload_binding_refusal(
             self.live_config.running(),
-            &new_config,
+            new_config,
         ) {
             return Err(format!(
                 "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
@@ -632,14 +636,82 @@ impl ReloadContext {
             ));
         }
 
+        self.refuse_capability_name_clash(patch)
+    }
+
+    /// A refusal when `evaluated` changes a security field only a restart
+    /// applies: message signing, the signature chain or the record key.
+    fn restart_only_refusal(&self, evaluated: &EvaluatedReload) -> std::result::Result<(), String> {
+        let (running, proposed) = (&self.live_config.running().security, &evaluated.config);
+        let (env, overlay) = (self.env.startup(), &evaluated.overlay);
+        let signing = (running.message_signing)
+            .restart_changed_field(&proposed.security.message_signing, env, overlay)
+            .map_err(|error| error.to_string())?;
+        let (was, now) = (&running.signature_chain, &proposed.security.signature_chain);
+        let chain =
+            crate::config::SignatureChainConfig::restart_changed_field(was.as_ref(), now.as_ref());
+        // MIK-8697: the record key keys every record and subscription handle
+        // for the process's lifetime, so a changed reference waits for a restart.
+        let record_key = (running.record_principal_key != proposed.security.record_principal_key)
+            .then(|| "record_principal_key".to_owned());
+        let field = (signing.map(|f| format!("message_signing.{f}")))
+            .or_else(|| chain.map(|f| format!("signature_chain.{f}")))
+            .or(record_key);
+        field.map_or(Ok(()), |field| {
+            Err(format!(
+                "config reload refused: security.{field} requires restart"
+            ))
+        })
+    }
+
+    async fn reload_transaction(
+        &self,
+        path: &std::path::Path,
+    ) -> std::result::Result<ReloadOutcome, String> {
+        #[cfg(test)]
+        super::reload_pause::pause_here(&self.config_path).await;
+        let evaluated = self.load_off_worker(path.to_path_buf()).await?;
+        // First: a posture change also changes what the posture forces (signing
+        // among it), and the posture is the cause the operator must act on.
+        if let Some(refusal) =
+            posture::reload_refusal(self.live_config.running(), &evaluated.config)
+        {
+            return Err(refusal);
+        }
+        self.restart_only_refusal(&evaluated)?;
+        // Measured against the overlay startup captured, so a requirement stays
+        // reported on every reload until the process actually restarts.
+        let env_restart_keys = changed_startup_env_keys(&self.env, &evaluated);
+        let EvaluatedReload {
+            config: new_config,
+            patch,
+            overlay,
+            inputs,
+            ..
+        } = evaluated;
+
+        if patch.is_empty() {
+            // The env files can rotate under an unchanged config file, so the
+            // overlay is published even here — a resolver reading the old one
+            // would serve a value the operator has already replaced.
+            self.publish_overlay(overlay);
+            // The same rotation changes what the config was built from.
+            self.live_config.set_inputs(inputs, &env_restart_keys);
+            // No difference from the published snapshot does not mean nothing is
+            // outstanding: a restart-only edit was published on an earlier
+            // reload and the running process still has not applied it.
+            return Ok(with_pending_restart(
+                ReloadOutcome::no_changes(),
+                &self.live_config,
+                env_restart_keys,
+            ));
+        }
+
+        self.refuse_before_apply(&new_config, &patch)?;
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
-        let generation = Arc::new(super::Generation::prepare(new_config).map_err(|reason| {
-            format!(
-                "{POSTURE_REFUSED_PREFIX} {reason} No backend was started or stopped, and no \
-                 configuration was published."
-            )
-        })?);
+        let prepared = self.live_config.prepare(new_config, &overlay);
+        let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
         let outcome = patch.outcome();
         let fully_applied = apply_patch(
@@ -660,7 +732,8 @@ impl ReloadContext {
 
         // Published together: a resolver that read the new config against the
         // old overlay would resolve an `env:` reference the reload just changed.
-        self.live_config.publish(Arc::clone(&generation));
+        self.live_config
+            .set_applied(Arc::clone(&generation), inputs, &env_restart_keys);
         self.publish_overlay(overlay);
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
@@ -728,3 +801,9 @@ pub(super) fn with_pending_restart(
     }
     outcome
 }
+
+// Mounted here, not under `reload_tally`: they drive the lock-recovery and
+// lock-skip paths, which are private to this module.
+#[cfg(test)]
+#[path = "reload_tally_tests.rs"]
+mod tally_tests;

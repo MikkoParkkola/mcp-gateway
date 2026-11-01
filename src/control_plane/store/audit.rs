@@ -31,6 +31,13 @@ impl AuditCursor {
             segment: None,
         }
     }
+
+    /// A cursor for a test store outside this module, which cannot name the
+    /// fields (an [`AuditPage::unreadable`] a stub reports).
+    #[cfg(test)]
+    pub(crate) const fn for_test(offset: u64, segment: Option<u64>) -> Self {
+        Self { offset, segment }
+    }
 }
 
 /// One bounded page of audit events, newest first.
@@ -44,12 +51,33 @@ pub struct AuditPage {
     /// Audit records examined by this call; never exceeds `filter.scan_budget`.
     pub records_examined: usize,
     /// Bytes read from storage by this call; never exceeds
-    /// [`MAX_AUDIT_SCAN_BYTES`]. The in-memory backend does no I/O and reports 0.
+    /// [`MAX_AUDIT_SCAN_BYTES`] plus one assembly window (a record at the
+    /// logger's cap and the newline before it), read when a line is longer
+    /// than the scan window. The in-memory backend does no I/O and reports 0.
     pub bytes_examined: u64,
     /// The cursor passed in no longer named a position (a pre-D6 cursor after
     /// the log rotated), so this page restarts at the newest record. Records
     /// may be re-read; none are skipped.
     pub cursor_reset: bool,
+    /// Where this page met a log line longer than the logger's record cap
+    /// (corruption, which the logger never writes): reported once, on the page
+    /// that reached it. The page holds no events then; its `next_cursor` pages
+    /// on below the line.
+    pub unreadable: Option<AuditCursor>,
+}
+
+impl AuditPage {
+    /// A page with no events, nothing examined and no further page.
+    pub(super) const fn empty(cursor_reset: bool) -> Self {
+        Self {
+            events: Vec::new(),
+            next_cursor: None,
+            records_examined: 0,
+            bytes_examined: 0,
+            cursor_reset,
+            unreadable: None,
+        }
+    }
 }
 
 /// Filter for [`ControlPlaneStore::read_audit`].
