@@ -13,6 +13,7 @@
 //!    hook sends.
 //!  - (b) admitted under `off`; the hook publishes `block`. Pinned code
 //!    sends; code that reads the live config after the hook refuses.
+//!
 //! Each asserts the hook ran and that its reload was the only publish since
 //! admission.
 

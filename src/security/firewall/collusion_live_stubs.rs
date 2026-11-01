@@ -55,6 +55,7 @@ impl CollusionDetector {
     /// Allow `n` bytes of overflow pairs in all (tests only). The stub keeps
     /// no pairs yet.
     #[cfg(test)]
+    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
     pub(super) fn set_overflow_bytes_total(&mut self, n: usize) {
         let _ = n; // used by the fix
     }
@@ -62,6 +63,7 @@ impl CollusionDetector {
     /// The overflow pairs `(source, inferred)` `caller` holds for the one
     /// fingerprint of `text` (tests only). The stub holds none.
     #[cfg(test)]
+    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
     pub(crate) fn overflow_pairs_of(
         &self,
         text: &str,
@@ -88,12 +90,14 @@ impl CollusionDetector {
     /// The overflow bytes `(per caller maximum, total)` held now (tests
     /// only). The stub counts none.
     #[cfg(test)]
+    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
     pub(crate) fn overflow_bytes(&self) -> (usize, usize) {
         (0, 0)
     }
 
     /// Source names interned now (tests only). The stub interns none.
     #[cfg(test)]
+    #[expect(clippy::unused_self, reason = "the fix reads the detector")]
     pub(crate) fn interned_sources_for_test(&self) -> usize {
         0
     }

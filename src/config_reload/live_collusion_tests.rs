@@ -46,10 +46,10 @@ const LIVE: [(&str, Edit); 4] = [
 
 const DETECTOR: [(&str, Edit); 3] = [
     ("window_secs", |c| {
-        c.security.firewall.collusion.window_secs += 1
+        c.security.firewall.collusion.window_secs += 1;
     }),
     ("min_matches", |c| {
-        c.security.firewall.collusion.min_matches += 1
+        c.security.firewall.collusion.min_matches += 1;
     }),
     ("common_principals", |c| {
         c.security.firewall.collusion.common_principals += 1;

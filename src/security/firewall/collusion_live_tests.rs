@@ -444,6 +444,11 @@ fn p8_9a_a_replayed_receipt_follows_the_current_lists() {
         !refused(&verdict),
         "P8.9a: the replay kept the old list match"
     );
+    let single = plan_snapshot(&Rig::new(config(Block, &["alpha:*"], vec![])), PROSE);
+    assert!(
+        single.contributor_facts_for_test().is_none(),
+        "a single-source receipt has no contributors"
+    );
 }
 
 /// O5.2b: a replay re-decides retention under the current lists. Alice's plan

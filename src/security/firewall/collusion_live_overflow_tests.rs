@@ -13,7 +13,7 @@
 
 use std::time::Instant;
 
-use super::holders::{MAX_RECORDS_PER_CALLER, OVERFLOW_PAIRS_PER_CALLER};
+use super::holders::{MAX_RECORDS_PER_CALLER, OVERFLOW_BYTES_TOTAL, OVERFLOW_PAIRS_PER_CALLER};
 use super::{CollusionDetector, RelayAction, RelayParams};
 use crate::config_reload::Generation;
 use crate::security::firewall::CollusionAction::Block;
@@ -100,7 +100,7 @@ fn p8_8b_a_pair_is_rejudged_through_a_remove_and_re_add() {
             .firewall
             .collusion
             .allowed_flows
-            .push(flow("ov:2", EGRESS))
+            .push(flow("ov:2", EGRESS));
     });
     assert_eq!(bob(&rig, &rig.generation(), &t, now), None, "G3 allowed");
     rig.reload(|c| c.security.firewall.collusion.allowed_flows = vec![flow("fill:*", EGRESS)]);
@@ -267,7 +267,11 @@ fn run_budget(text_of: fn(u64) -> String, per_caller: impl Fn(usize, usize) -> u
     const K: usize = 3;
     let (c_new, c_fp) = pair_charges();
     let per = per_caller(c_new, c_fp);
-    let newcomer = if per == 0 { K } else { K * c_new / per };
+    let newcomer = (K * c_new).checked_div(per).unwrap_or(K);
+    assert!(
+        K * c_new <= OVERFLOW_BYTES_TOTAL,
+        "premise: under the default total"
+    );
     let (rig, now) = (rig(&["fill:*", "ov:*"]), Instant::now());
     let g0 = rig.generation();
     let mut d = standalone();
