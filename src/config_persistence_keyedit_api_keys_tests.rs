@@ -3,9 +3,8 @@
 //! API-key rows: the edits the web UI's key routes make to `auth.api_keys`,
 //! on the auth block `gateway init` writes. Adding a key and adding,
 //! changing or removing one of its fields are edits the editor already
-//! proves; removing a whole key is a list-element removal.
+//! proves; removing a whole key is in the revoke rows.
 
-use super::super::GiveUp;
 use super::*;
 
 /// The auth block `build_init_config` writes (src/commands/mod.rs), with
@@ -155,21 +154,4 @@ fn a_rotation_field_is_removed_from_a_key() {
     assert!(key.get("previous_expires_at").is_none(), "{out}");
     assert_eq!(key["name"].as_str(), Some("ops"), "{out}");
     assert!(out.contains("# keys below"), "{out}");
-}
-
-/// Removing a whole key is a list-element removal, which the editor
-/// refuses today. This row pins that before the removal is built.
-#[test]
-fn removing_a_whole_key_gives_up_today() {
-    let whole = FieldPath(vec![
-        Segment::Key("auth".into()),
-        Segment::Key("api_keys".into()),
-        Segment::Index(0),
-    ]);
-    match edit_in_place(ONE_KEY, &[(whole, Change::Remove)]) {
-        Err(ComputeRefusal::Unprovable { code, .. }) => {
-            assert_eq!(code, GiveUp::SequenceShape);
-        }
-        other => panic!("expected a sequence-shape give-up, got {other:?}"),
-    }
 }

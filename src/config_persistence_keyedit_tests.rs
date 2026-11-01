@@ -554,3 +554,6 @@ mod a2;
 
 #[path = "config_persistence_keyedit_api_keys_tests.rs"]
 mod api_keys;
+
+#[path = "config_persistence_keyedit_revoke_tests.rs"]
+mod revoke;
