@@ -23,14 +23,10 @@ fn keyed_caps() -> (
 ) {
     let dir = tempfile::TempDir::new().expect("env dir");
     let file = dir.path().join("caps.env");
-    std::fs::write(&file, format!("{KEY_VAR}=present\n")).expect("write env");
-    // An env file is read only when its owner alone may read it.
-    #[cfg(unix)]
-    std::fs::set_permissions(
-        &file,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o600),
-    )
-    .expect("owner-only env file");
+    // An env file is read only when its owner alone may read it: the mode on
+    // Unix, the access list on Windows.
+    crate::gateway::test_helpers::write_owner_only(&file, format!("{KEY_VAR}=present\n"))
+        .expect("owner-only env file");
     let env = Arc::new(crate::config::LiveEnv::new(
         Arc::new(crate::config::EnvOverlay::from_paths(&[file])),
         crate::config::ResolvedEnvFiles::default(),
