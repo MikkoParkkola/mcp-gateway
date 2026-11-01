@@ -732,11 +732,11 @@ async fn a_retired_unsettled_token_republishes_without_a_request() {
     }
 }
 
-/// A refresh whose caller stopped waiting (its deadline passed in
-/// `get_token_detached`) still publishes: the exchange is held, the caller has
-/// returned, and only then is the exchange released. The task that completes
-/// it settles the state, so the cell shows the new expiry. Red today: the
-/// publish ran in the dropped caller.
+/// A refresh whose caller stopped waiting (a restart revoked it in
+/// `get_token_detached`, once the exchange had arrived) still publishes: the
+/// exchange is held, the caller has returned, and only then is the exchange
+/// released. The task that completes it settles the state, so the cell shows
+/// the new expiry. Red today: the publish ran in the dropped caller.
 #[tokio::test]
 async fn a_detached_refresh_whose_caller_left_still_publishes() {
     use super::sign_in::{SignIn, SignInStatus};
@@ -751,13 +751,16 @@ async fn a_detached_refresh_whose_caller_left_still_publishes() {
     hold(&owned, &token("a1", Some("r1"), true));
     owned.publish_sign_in();
     let before = cell.snapshot();
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(300);
+    let deadline = tokio::time::Instant::now() + HANG_BOUND;
+    let ask = owned.get_token_detached(false, gate.epoch(), &gate.cohort(), deadline);
+    let leave = async {
+        server.arrivals(1, HANG_BOUND).await;
+        gate.cancel_and_join().await;
+    };
 
-    let left = owned
-        .get_token_detached(false, gate.epoch(), &gate.cohort(), deadline)
-        .await;
+    let (left, ()) = tokio::join!(ask, leave);
 
-    assert!(left.is_err(), "the caller's deadline passed mid-exchange");
+    assert!(left.is_err(), "the caller left mid-exchange");
     assert_eq!(server.sent.lock().unwrap().len(), 1, "the exchange is held");
     assert_eq!(cell.snapshot(), before, "nothing settled yet");
     server.release.notify_one();

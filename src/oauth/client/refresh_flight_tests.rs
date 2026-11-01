@@ -736,6 +736,9 @@ mod sharing;
 
 #[path = "refresh_flight_outcome_tests.rs"]
 mod outcome;
+#[cfg(feature = "webui")]
+#[path = "refresh_flight_issuer_switch_tests.rs"]
+mod issuer_switch;
 
 /// MIK-8207: a token endpoint answering an `expires_in` above the bound is
 /// refused with an error that names it, and nothing it sent is stored. It

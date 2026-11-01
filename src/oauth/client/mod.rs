@@ -83,6 +83,10 @@ pub struct OAuthClient {
     #[cfg(all(test, feature = "webui"))]
     pub(crate) rediscovery_pause: crate::test_pause::Slot,
 
+    /// Where a test holds an adopt after it read the store.
+    #[cfg(all(test, feature = "webui"))]
+    pub(crate) adopt_pause: crate::test_pause::Slot,
+
     /// Current token (cached)
     current_token: RwLock<Option<TokenInfo>>,
 
@@ -259,6 +263,8 @@ impl OAuthClient {
             registration_pause: crate::test_pause::Slot::default(),
             #[cfg(all(test, feature = "webui"))]
             rediscovery_pause: crate::test_pause::Slot::default(),
+            #[cfg(all(test, feature = "webui"))]
+            adopt_pause: crate::test_pause::Slot::default(),
         }
     }
 

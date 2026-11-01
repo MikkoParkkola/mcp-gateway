@@ -593,6 +593,8 @@ impl OAuthClient {
                 };
                 *self.current_token.write() = Some(stored);
             }
+            #[cfg(all(test, feature = "webui"))]
+            self.adopt_pause.pause_blocking();
             self.installed_seen
                 .store(sampled, std::sync::atomic::Ordering::SeqCst);
             if status.installed() == sampled {
