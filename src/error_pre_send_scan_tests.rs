@@ -496,6 +496,9 @@ fn the_clash_refusal_is_built_only_at_reviewed_pre_send_sites() {
     );
 }
 
+#[path = "error_pre_send_scan_refusal_tests.rs"]
+mod refusal_sites;
+
 /// A value built right after a closure's parameters is a construction: the
 /// closing `|` of `|_|` is not a pattern alternative.
 #[test]
