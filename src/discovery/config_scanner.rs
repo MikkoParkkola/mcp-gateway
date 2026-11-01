@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tracing::debug;
 
-use crate::cli_support::shown;
+use crate::cli_support::{Shown, shown};
 use crate::config::TransportConfig;
 #[cfg(not(target_os = "macos"))]
 use crate::home_dir::config_dir;
@@ -116,14 +116,14 @@ impl ConfigScanner {
         if !config_path.exists() {
             debug!(
                 "Claude Desktop config not found at {}",
-                config_path.display()
+                shown_path(&config_path)
             );
             return Ok(Vec::new());
         }
 
         debug!(
             "Scanning Claude Desktop config at {}",
-            config_path.display()
+            shown_path(&config_path)
         );
         self.parse_claude_config(&config_path, DiscoverySource::ClaudeDesktop)
             .await
@@ -141,7 +141,7 @@ impl ConfigScanner {
         if let Ok(vscode_path) = Self::vscode_config_path()
             && vscode_path.exists()
         {
-            debug!("Scanning VS Code config at {}", vscode_path.display());
+            debug!("Scanning VS Code config at {}", shown_path(&vscode_path));
             if let Ok(mut vs_servers) = self
                 .parse_vscode_config(&vscode_path, DiscoverySource::VsCode)
                 .await
@@ -154,7 +154,7 @@ impl ConfigScanner {
         if let Ok(cursor_path) = Self::cursor_config_path()
             && cursor_path.exists()
         {
-            debug!("Scanning Cursor config at {}", cursor_path.display());
+            debug!("Scanning Cursor config at {}", shown_path(&cursor_path));
             if let Ok(mut cursor_servers) = self
                 .parse_vscode_config(&cursor_path, DiscoverySource::VsCode)
                 .await
@@ -174,11 +174,11 @@ impl ConfigScanner {
     pub async fn scan_windsurf(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::windsurf_config_path()?;
         if !config_path.exists() {
-            debug!("Windsurf config not found at {}", config_path.display());
+            debug!("Windsurf config not found at {}", shown_path(&config_path));
             return Ok(Vec::new());
         }
 
-        debug!("Scanning Windsurf config at {}", config_path.display());
+        debug!("Scanning Windsurf config at {}", shown_path(&config_path));
         self.parse_claude_config(&config_path, DiscoverySource::Windsurf)
             .await
     }
@@ -191,7 +191,7 @@ impl ConfigScanner {
     pub async fn scan_mcp_config_dir(&self) -> Result<Vec<DiscoveredServer>> {
         let mcp_dir = Self::mcp_config_dir()?;
         if !mcp_dir.exists() {
-            debug!("MCP config directory not found at {}", mcp_dir.display());
+            debug!("MCP config directory not found at {}", shown_path(&mcp_dir));
             return Ok(Vec::new());
         }
 
@@ -356,10 +356,16 @@ impl ConfigScanner {
     pub async fn scan_claude_code(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::claude_code_config_path()?;
         if !config_path.exists() {
-            debug!("Claude Code config not found at {}", config_path.display());
+            debug!(
+                "Claude Code config not found at {}",
+                shown_path(&config_path)
+            );
             return Ok(Vec::new());
         }
-        debug!("Scanning Claude Code config at {}", config_path.display());
+        debug!(
+            "Scanning Claude Code config at {}",
+            shown_path(&config_path)
+        );
         self.parse_claude_config(&config_path, DiscoverySource::ClaudeCode)
             .await
     }
@@ -374,10 +380,10 @@ impl ConfigScanner {
     pub async fn scan_cursor_mcp_json(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::cursor_mcp_json_path()?;
         if !config_path.exists() {
-            debug!("Cursor mcp.json not found at {}", config_path.display());
+            debug!("Cursor mcp.json not found at {}", shown_path(&config_path));
             return Ok(Vec::new());
         }
-        debug!("Scanning Cursor mcp.json at {}", config_path.display());
+        debug!("Scanning Cursor mcp.json at {}", shown_path(&config_path));
         self.parse_claude_config(&config_path, DiscoverySource::Cursor)
             .await
     }
@@ -394,10 +400,10 @@ impl ConfigScanner {
     pub async fn scan_zed(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::zed_config_path()?;
         if !config_path.exists() {
-            debug!("Zed config not found at {}", config_path.display());
+            debug!("Zed config not found at {}", shown_path(&config_path));
             return Ok(Vec::new());
         }
-        debug!("Scanning Zed config at {}", config_path.display());
+        debug!("Scanning Zed config at {}", shown_path(&config_path));
         self.parse_zed_config(&config_path).await
     }
 
@@ -411,10 +417,16 @@ impl ConfigScanner {
     pub async fn scan_continue(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::continue_config_path()?;
         if !config_path.exists() {
-            debug!("Continue.dev config not found at {}", config_path.display());
+            debug!(
+                "Continue.dev config not found at {}",
+                shown_path(&config_path)
+            );
             return Ok(Vec::new());
         }
-        debug!("Scanning Continue.dev config at {}", config_path.display());
+        debug!(
+            "Scanning Continue.dev config at {}",
+            shown_path(&config_path)
+        );
         self.parse_continue_config(&config_path).await
     }
 
@@ -428,10 +440,10 @@ impl ConfigScanner {
     pub async fn scan_codex(&self) -> Result<Vec<DiscoveredServer>> {
         let config_path = Self::codex_config_path()?;
         if !config_path.exists() {
-            debug!("Codex config not found at {}", config_path.display());
+            debug!("Codex config not found at {}", shown_path(&config_path));
             return Ok(Vec::new());
         }
-        debug!("Scanning Codex config at {}", config_path.display());
+        debug!("Scanning Codex config at {}", shown_path(&config_path));
         self.parse_claude_config(&config_path, DiscoverySource::Codex)
             .await
     }
@@ -676,13 +688,16 @@ pub(crate) mod client_scan;
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
+/// A path for a debug line, escaped: a file name can hold any character the
+/// file system allows, and a newline in it must not forge a line.
+fn shown_path(path: &Path) -> Shown {
+    shown(&path.to_string_lossy())
+}
+
 /// Logs the MCP config file about to be read. Its name is whatever the
-/// directory holds, so it is escaped: a newline in it cannot forge a line.
+/// directory holds.
 fn note_mcp_config_file(path: &Path) {
-    debug!(
-        "Scanning MCP config file: {}",
-        shown(&path.to_string_lossy())
-    );
+    debug!("Scanning MCP config file: {}", shown_path(path));
 }
 
 /// Logs a server found in the environment: the variable name, never its
