@@ -53,15 +53,42 @@ pub(super) fn build(proxy: Option<&url::Url>) -> Client {
                 RedirectDecision::Follow
                     if started_secure && !crate::gateway::is_tls_or_loopback(attempt.url()) =>
                 {
-                    attempt.error(
+                    attempt.error(RedirectRefused(
                         "refusing a capability redirect to cleartext http:// off this machine",
-                    )
+                    ))
                 }
                 RedirectDecision::Follow => attempt.follow(),
             }
         }))
         .build()
         .expect("Failed to create HTTP client")
+}
+
+/// A redirect hop the policy refused: typed, so the send can tell the
+/// gateway's refusal from a backend's transport failure.
+#[derive(Debug)]
+struct RedirectRefused(&'static str);
+
+impl std::fmt::Display for RedirectRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.0)
+    }
+}
+
+impl std::error::Error for RedirectRefused {}
+
+/// Records a cleartext downgrade refused at a redirect hop (`RedirectRefused`)
+/// on the call's delivery; the caller still receives it as a transport
+/// error. A hop the destination policy refuses (a rejected address, a name
+/// for loopback) is recorded by `refuse_hop` at the hop itself, and the send
+/// only translates it (`ssrf_refusal`), so it is never noted twice.
+fn note_redirect_refusal(error: &reqwest::Error) {
+    if error.is_redirect() && crate::security::ssrf::source_of::<RedirectRefused>(error).is_some() {
+        // Raised only while the cell vouches for the delivery: a composite's
+        // own cell does not, so a refusal there is not the plan's; each step
+        // runs in a vouched cell of its own.
+        crate::gateway::delivery_facts::refused_while_vouched();
+    }
 }
 
 /// The route of every capability call: pinned and direct, or through
@@ -168,6 +195,7 @@ pub(super) async fn send_with_retry(
                 }
                 Err(e) => Err(
                     crate::security::http_diagnostics::ssrf_refusal(&e).unwrap_or_else(|| {
+                        note_redirect_refusal(&e);
                         health.record_failure();
                         Error::Transport(format!("{label} failed: {}", redact_url(e)))
                     }),
@@ -184,6 +212,7 @@ pub(super) async fn send_with_retry(
                 if let Some(refused) = crate::security::http_diagnostics::ssrf_refusal(&e) {
                     return Err(refused);
                 }
+                note_redirect_refusal(&e);
                 let transient = e.is_connect() || (retry_timeouts && e.is_timeout());
                 let e = redact_url(e);
                 if transient && attempt < MAX_SEND_ATTEMPTS {
