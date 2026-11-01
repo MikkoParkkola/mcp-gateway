@@ -24,6 +24,9 @@ impl Backend {
             return Ok(None);
         }
         if credential.headers.is_empty() {
+            #[cfg(test)]
+            self.lend_refusals
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             return Err(Error::Forbidden {
                 code: -32001,
                 status: 403,

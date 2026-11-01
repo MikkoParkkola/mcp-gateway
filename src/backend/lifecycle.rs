@@ -105,6 +105,8 @@ impl Backend {
             skip_account_prepass: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             unfilled_outcome_reads: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            lend_refusals: std::sync::atomic::AtomicUsize::new(0),
             unserved_consecutive: AtomicU64::new(0),
             unserved_total: AtomicU64::new(0),
             probe_in_flight: std::sync::atomic::AtomicBool::new(false),

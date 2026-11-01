@@ -285,9 +285,19 @@ async fn a_send_its_recheck_refuses_answers_403_and_records_refused() {
 /// POST a meta-route `gateway_invoke` of [`BACKEND`]'s [`TOOL`] as the same
 /// verified caller; returns the status and the parsed answer.
 async fn invoke(router: &axum::Router) -> (axum::http::StatusCode, Value) {
+    let arguments = json!({"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}});
+    meta_call(router, "gateway_invoke", arguments).await
+}
+
+/// POST a meta-route `tools/call` of the meta-tool `name` with `arguments`
+/// as the verified caller; returns the status and the parsed answer.
+async fn meta_call(
+    router: &axum::Router,
+    name: &str,
+    arguments: Value,
+) -> (axum::http::StatusCode, Value) {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
-        "params": {"name": "gateway_invoke",
-                   "arguments": {"server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}},
+        "params": {"name": name, "arguments": arguments,
                    "_meta": {"io.modelcontextprotocol/protocolVersion": "2026-07-28",
                              "io.modelcontextprotocol/clientCapabilities": {}}}});
     let mut request = axum::http::Request::builder()
@@ -296,7 +306,7 @@ async fn invoke(router: &axum::Router) -> (axum::http::StatusCode, Value) {
         .header("content-type", "application/json")
         .header("mcp-protocol-version", "2026-07-28")
         .header("mcp-method", "tools/call")
-        .header("mcp-name", "gateway_invoke")
+        .header("mcp-name", name)
         .body(axum::body::Body::from(body.to_string()))
         .expect("a request");
     request.extensions_mut().insert(VerifiedIdentity {
@@ -485,5 +495,47 @@ async fn lend_refusals_on_either_route_record_no_budget_sample() {
         switch.capability_window_counts(BACKEND, TOOL),
         (0, 0),
         "the tool's window"
+    );
+}
+
+/// LEND.5 where no route-stage verdict ran: a playbook step's target is not
+/// a route-stage target, so its cold fill is the dispatch check's own
+/// (`r2_check::answer_refused_fill`). The lender refuses that fill once and
+/// the step answers as a refusal, never as a backend error result to retry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_playbook_steps_cold_fill_refused_by_the_lender_is_refused_once() {
+    let (url, calls) = peer().await;
+    let mint = FixedMint {
+        headers: vec![],
+        expires_at: i64::MAX,
+    };
+    let (router, _dirs, meta) =
+        gateway_in(url, mint, crate::config::InputSchemaEnforcement::Closed).await;
+    let mut engine = crate::playbook::PlaybookEngine::new();
+    let definition = json!({
+        "playbook": "1.0", "name": "plan", "description": "one step",
+        "steps": [{"name": "only", "server": BACKEND, "tool": TOOL, "arguments": {"q": "x"}}],
+    });
+    engine.register(serde_json::from_value(definition).expect("the playbook parses"));
+    meta.set_playbook_engine(engine);
+    let (status, answer) =
+        meta_call(&router, "gateway_run_playbook", json!({"name": "plan"})).await;
+    let backend = meta.backends().get(BACKEND).expect("the backend");
+    assert_eq!(
+        backend
+            .lend_refusals
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the lender refused the step's fill once: {status} {answer}"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    let text = answer.to_string();
+    assert!(
+        !text.contains("BACKEND_ERROR") && !text.contains("retrying once is safe"),
+        "not a backend error to retry: {status} {answer}"
+    );
+    assert!(
+        answer.get("error").is_some(),
+        "a refusal: {status} {answer}"
     );
 }
