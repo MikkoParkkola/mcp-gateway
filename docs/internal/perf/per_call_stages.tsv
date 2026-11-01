@@ -76,6 +76,7 @@ src/gateway/meta_mcp/invoke/audit_decision.rs	note_send_refusal	-	on-path, untim
 src/gateway/meta_mcp/invoke/audit_decision.rs	take_route_noted	-	on-path, untimed: the router refusal record only; the timed rows are allowed calls
 src/gateway/meta_mcp/invoke/audit_decision.rs	with_route_scope	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit/settlement.rs	append_settlement	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
+src/gateway/meta_mcp/invoke/audit.rs	answered_by	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	attributes_tenants	-	on-path, untimed: read only by the chain-refusal note (note_uninspected); the timed backend is not chained
 src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-record attribution, built only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
