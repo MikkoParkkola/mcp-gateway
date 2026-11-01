@@ -300,32 +300,6 @@ impl OAuthClient {
         })
     }
 
-    /// Take the confirmed token from storage. The counter is sampled before
-    /// storage is read and recorded only after the adopt succeeded; if it
-    /// moved meanwhile, adopt again. A token inside the expiry buffer cannot
-    /// be adopted as live, but is still loaded so a refresh can use its
-    /// refresh token; `None` then.
-    pub(super) fn adopt_installed(&self) -> Option<String> {
-        let status = self.sign_in_status.as_ref()?;
-        loop {
-            let sampled = status.installed();
-            let adopted = self.adopt_stored_login();
-            if adopted.is_none()
-                && let Some(stored) = self
-                    .credential_key()
-                    .ok()
-                    .and_then(|key| self.storage.load(&key, &self.resource_url))
-            {
-                *self.current_token.write() = Some(stored);
-            }
-            self.installed_seen
-                .store(sampled, std::sync::atomic::Ordering::SeqCst);
-            if status.installed() == sampled {
-                return adopted;
-            }
-        }
-    }
-
     /// Evaluate the token state and write it to the status cell: one token
     /// file load and one legacy-file check, done here and never on a read.
     pub(crate) fn publish_sign_in(&self) {

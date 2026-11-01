@@ -365,7 +365,7 @@ impl Run {
 
     /// End the login with what the decision was: success only after a
     /// committed save.
-    fn finish(&self, lead: Lead, end: Result<Outcome, oneshot::error::RecvError>) {
+    fn finish(&self, lead: Lead, end: std::result::Result<Outcome, oneshot::error::RecvError>) {
         match end {
             Ok(Outcome::Confirmed(Ok(()))) => lead.end(None),
             Ok(Outcome::Confirmed(Err(error))) => lead.end(Some(&error)),

@@ -134,7 +134,7 @@ fn session_owner(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Re
     if !matches!(check, SessionCheck::Valid) {
         return Err(refused());
     }
-    Ok(sign_in_owner(state.auth_config.record_key(), &handle))
+    Ok(sign_in_owner(&state.record_key(), &handle))
 }
 
 /// Put the backend and the outcome on the request's `admin_action` record:
