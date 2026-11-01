@@ -456,6 +456,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/meta_mcp/invoke/projection.rs", "credential_principal: crate::gateway::auth::authenticated_principal(", 1, Decl, "projection input"),
     ("src/gateway/meta_mcp/invoke/projection.rs", "self.credential_principal,", 1, Decl, "projection input"),
     ("src/gateway/meta_mcp/caller_forward.rs", "client.map(|c| c.principal.storage_form())", 1, Store, "presence classification only"),
+    ("src/gateway/router/caller_hiding.rs", "CallerProvenance::classify(client.map(|c| c.principal.storage_form()))", 1, Store, "presence classification only: picks the caller's own catalogue slot for the hiding judgment"),
     ("src/gateway/meta_mcp/invoke/continuation.rs", ".map(crate::gateway::record_principal::InternalPrincipal::storage_form)", 1, Store, "continuation quota key"),
 ];
 
