@@ -1,0 +1,145 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A backend that echoes a credential its configuration gave it, through
+//! `env:` or `headers:` rather than a `secrets:` rule: the value is loaded
+//! the way the gateway loads it, so the row sees what config load marks.
+
+use axum::body::to_bytes;
+use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tower::ServiceExt;
+
+use super::create_router;
+use super::tests::test_router_app_state_with_backend;
+use crate::backend::Backend;
+use crate::config::{Config, FailsafeConfig};
+
+/// The credential the env file holds; long enough that no rule treats it
+/// as too short to redact.
+const SECRET: &str = "config-env-secret-5b81d0c4e9a2";
+
+/// The marker the shared redactor writes in place of a value.
+const MARKER: &str = "[redacted]";
+
+/// A stdio MCP child whose `echo` tool answers with its `ECHO_TOKEN`.
+#[cfg(unix)]
+const STDIO_ENV_ECHO: &str = r#"import json, os, sys
+for line in sys.stdin:
+    req = json.loads(line)
+    if "id" not in req:
+        continue
+    method = req.get("method")
+    if method == "initialize":
+        body = {"result": {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                           "serverInfo": {"name": "echoes", "version": "0"}}}
+    elif method == "tools/list":
+        body = {"result": {"tools": [{"name": "echo", "description": "fixture",
+                                      "inputSchema": {"type": "object"}}]}}
+    elif method == "tools/call":
+        token = os.environ.get("ECHO_TOKEN", "")
+        body = {"result": {"content": [{"type": "text", "text": "environment " + token}]}}
+    else:
+        body = {"result": {}}
+    print(json.dumps({"jsonrpc": "2.0", "id": req["id"], **body}), flush=True)
+"#;
+
+fn write_0600(path: &Path, body: &str) {
+    use std::io::Write as _;
+    #[cfg(unix)]
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path).expect("open");
+    file.write_all(body.as_bytes()).expect("write");
+}
+
+/// A gateway config whose one stdio backend runs `script` with `env_line`
+/// under `env:`, and an env file holding `env_body`.
+fn config(dir: &Path, script: &Path, env_line: &str, env_body: &str) -> PathBuf {
+    let env = dir.join("gateway.env");
+    write_0600(&env, env_body);
+    let path = dir.join("gateway.yaml");
+    write_0600(
+        &path,
+        &format!(
+            "env_files:\n  - \"{}\"\nbackends:\n  echoes:\n    command: \"python3 {}\"\n    \
+             timeout: 10s\n    env:\n      {env_line}\n",
+            env.display(),
+            script.display()
+        ),
+    );
+    path
+}
+
+/// The `echoes` backend as the loaded config describes it.
+fn loaded_backend(path: &Path) -> Arc<Backend> {
+    let loaded = Config::load_evaluated(Some(path)).expect("the config loads");
+    let config = loaded
+        .config
+        .backends
+        .get("echoes")
+        .expect("the backend is configured")
+        .clone();
+    Arc::new(Backend::new(
+        "echoes",
+        config,
+        &FailsafeConfig::default(),
+        Duration::from_secs(30),
+    ))
+}
+
+async fn post(router: &axum::Router, body: Value) -> Value {
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let response = router.clone().oneshot(request).await.unwrap();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    serde_json::from_slice(&body).unwrap()
+}
+
+/// CRED.1: a stdio backend whose `env:` holds a credential written as an
+/// `env:` reference, and that echoes it in a tool result, does not get it
+/// into the client's answer.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_stdio_env_credential_echo_is_redacted() {
+    let dir = tempfile::tempdir().expect("config directory");
+    let script = dir.path().join("echo.py");
+    std::fs::write(&script, STDIO_ENV_ECHO).expect("write the child script");
+    let path = config(
+        dir.path(),
+        &script,
+        "ECHO_TOKEN: \"env:MIK_9105_ECHO_TOKEN\"",
+        &format!("MIK_9105_ECHO_TOKEN={SECRET}\n"),
+    );
+    let (state, _store) = test_router_app_state_with_backend(loaded_backend(&path)).await;
+    let router = create_router(state);
+    let body = post(
+        &router,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": "gateway_invoke",
+            "arguments": {"server": "echoes", "tool": "echo", "arguments": {}}
+        }}),
+    )
+    .await;
+    let text = body.to_string();
+    assert!(
+        text.contains("environment"),
+        "premise: the child answered: {body}"
+    );
+    assert!(
+        !text.contains(SECRET),
+        "the env credential reached the client: {body}"
+    );
+    assert!(
+        text.contains(MARKER),
+        "the env credential was dropped, not redacted: {body}"
+    );
+}

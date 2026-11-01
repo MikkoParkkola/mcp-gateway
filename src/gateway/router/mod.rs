@@ -357,6 +357,10 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// A credential a backend's `env:` or `headers:` gave it is kept out of
+/// the client's answer when the backend echoes it.
+#[cfg(test)]
+mod secret_echo_config_tests;
 /// An echoed injected secret is kept out of the idempotency cache, task
 /// answers and the task store.
 #[cfg(all(test, feature = "firewall"))]
