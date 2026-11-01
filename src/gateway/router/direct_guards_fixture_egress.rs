@@ -274,6 +274,13 @@ impl CountingBackend {
 
 #[async_trait::async_trait]
 impl Transport for CountingBackend {
+    /// A recording double: these rows check what a call sends, not what its
+    /// answer echoes, so it stands in for a transport holding its set
+    /// (DELTA-10 refuses an injected call on one that does not).
+    fn redacts_injected_values(&self) -> bool {
+        true
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> crate::Result<JsonRpcResponse> {
         // As every production transport does: the answer is a backend's.
         crate::gateway::health_metrics::clock::backend_request(async {

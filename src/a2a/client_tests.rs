@@ -264,3 +264,43 @@ fn a_null_error_beside_a_result_is_a_success() {
         "an error of null is no error"
     );
 }
+
+/// A value the agent sent, standing in for an injected secret.
+const NEEDLE: &str = "a2a-secret-9d2c41";
+
+/// DELTA-8 (T1.26): a malformed card, reply or task names where it
+/// broke, never a value it carried.
+#[test]
+fn a_malformed_card_or_reply_quotes_no_value() {
+    let card = parse_card(json!({"name": "a", "supportedInterfaces": NEEDLE})).unwrap_err();
+    let Err(reply) = decode_reply(&json!({"jsonrpc": "2.0", "id": "1",
+        "result": {"task": NEEDLE}}))
+    else {
+        panic!("a malformed reply decoded");
+    };
+    let Err(task) = decode_task(
+        &json!({"jsonrpc": "2.0", "id": "1", "result": {"id": "t", "status": NEEDLE}}),
+        "GetTask",
+    ) else {
+        panic!("a malformed task decoded");
+    };
+    for error in [card, reply, task] {
+        let text = error.to_string();
+        assert!(text.contains("malformed"), "{text}");
+        assert!(
+            !text.contains(NEEDLE),
+            "the diagnostic quotes the agent's value: {text}"
+        );
+    }
+}
+
+/// T1.41: a body that is not JSON is named by its position only,
+/// never by serde's text.
+#[tokio::test]
+async fn a_body_that_is_not_json_quotes_none_of_it() {
+    let body = format!("oops {NEEDLE}").into_bytes();
+    let error = read_capped_json(response(body), "reply").await.unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("reply is malformed"), "{text}");
+    assert!(!text.contains(NEEDLE), "{text}");
+}

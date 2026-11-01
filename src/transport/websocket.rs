@@ -120,21 +120,27 @@ impl McpFrame {
 
         // All remaining frames must be JSON-RPC 2.0.
         let version = v.get("jsonrpc").and_then(Value::as_str).unwrap_or("");
+        // No error below quotes the frame: it is backend text, and can hold
+        // an injected value.
         if version != "2.0" {
-            return Err(Error::Protocol(format!(
-                "Unexpected WebSocket frame: jsonrpc='{version}'"
-            )));
+            return Err(Error::Protocol(
+                "Unexpected WebSocket frame: jsonrpc is not \"2.0\"".to_string(),
+            ));
         }
+        let malformed =
+            |kind: &str| Error::Protocol(format!("WebSocket {kind} frame is malformed"));
 
         let has_id = v.get("id").is_some();
         let has_method = v.get("method").is_some();
         let has_result_or_error = v.get("result").is_some() || v.get("error").is_some();
 
         if has_id && has_method {
-            let req: JsonRpcRequest = serde_json::from_value(v)?;
+            let req: JsonRpcRequest =
+                serde_json::from_value(v).map_err(|_| malformed("request"))?;
             Ok(McpFrame::Request(req))
         } else if has_id && has_result_or_error {
-            let res: JsonRpcResponse = serde_json::from_value(v)?;
+            let res: JsonRpcResponse =
+                serde_json::from_value(v).map_err(|_| malformed("response"))?;
             Ok(McpFrame::Response(res))
         } else if !has_id && has_method {
             let method = v["method"]
@@ -145,7 +151,8 @@ impl McpFrame {
             Ok(McpFrame::Notification { method, params })
         } else {
             Err(Error::Protocol(format!(
-                "Cannot classify WebSocket frame: {v}"
+                "Cannot classify WebSocket frame ({} bytes)",
+                text.len()
             )))
         }
     }
@@ -214,6 +221,10 @@ struct Inner {
     progress_destinations: dashmap::DashMap<String, DeliveryHandle>,
     /// Upstream-notification taps of the events listener (MIK-7630 I5).
     pub(crate) taps: super::upstream_tap::Taps,
+    /// The values the backend's rules injected; every frame this transport
+    /// reads is scrubbed of them before it is routed. Set before
+    /// the connect, so the handshake is scrubbed too.
+    needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
 }
 
 impl Inner {
@@ -227,6 +238,7 @@ impl Inner {
             task: parking_lot::Mutex::new(None),
             progress_destinations: dashmap::DashMap::new(),
             taps: super::upstream_tap::Taps::default(),
+            needles: std::sync::OnceLock::new(),
         })
     }
 }
@@ -306,6 +318,7 @@ impl WebSocketTransport {
             timeout,
             protocol_version,
             DestinationPolicy::Configured,
+            None,
         )
         .await?;
         Ok(started)
@@ -443,22 +456,44 @@ impl WebSocketTransport {
     /// Dispatch an inbound text frame to a pending request or log it.
     fn dispatch_inbound(inner: &Arc<Inner>, text: &str) -> Result<()> {
         debug!(len = text.len(), "Dispatching inbound WebSocket frame");
-        let frame = McpFrame::from_text(text)?;
+        let mut frame = McpFrame::from_text(text)?;
+        // Routing keys (a progress token, a subscription tag) are read from
+        // the frame as sent; only the delivered copy is scrubbed (DELTA-5).
+        let keys = match &frame {
+            McpFrame::Notification { params, .. } if inner.needles.get().is_some() => {
+                params.clone()
+            }
+            _ => None,
+        };
+        // A listen's own answer is classified as sent (lead ruling G9): an
+        // acknowledgement's URIs are the listen's requested ones. A listen is
+        // never a pending request (I5 design §4).
+        if let McpFrame::Response(response) = &frame
+            && let Some(ref id) = response.id
+            && inner
+                .taps
+                .response_to(id, response.result.as_ref(), response.error.as_ref())
+        {
+            return Ok(());
+        }
+        if let Some(needles) = inner.needles.get()
+            && !scrub_frame(needles, &mut frame)
+        {
+            return Ok(());
+        }
 
         match frame {
             McpFrame::Response(response) => {
-                if let Some(ref id) = response.id
-                    && inner
-                        .taps
-                        .response_to(id, response.result.as_ref(), response.error.as_ref())
-                {
-                    // A listen is never a pending request (I5 design §4).
-                } else if let Some(ref id) = response.id {
+                if let Some(ref id) = response.id {
                     let key = id.to_string();
                     if let Some((_, tx)) = inner.pending.remove(&key) {
                         let _ = tx.send(response);
                     } else {
-                        warn!(id = %key, "Received WebSocket response for unknown request");
+                        // The id is backend text: its length only.
+                        warn!(
+                            id_len = key.len(),
+                            "Received WebSocket response for unknown request"
+                        );
                     }
                 }
             }
@@ -469,9 +504,15 @@ impl WebSocketTransport {
                 debug!("Received application-level pong");
             }
             McpFrame::Notification { method, params } => {
-                if inner.taps.notification(&method, params.as_ref()) {
+                let keys = keys.as_ref().or(params.as_ref());
+                if inner.taps.notification_keyed(
+                    &method,
+                    keys,
+                    inner.needles.get().map(AsRef::as_ref),
+                ) {
                     return Ok(());
                 }
+                let token = progress_key(&method, keys);
                 route_progress(
                     inner,
                     JsonRpcNotification {
@@ -479,6 +520,7 @@ impl WebSocketTransport {
                         method,
                         params,
                     },
+                    token,
                 );
             }
             // Not relayed mid-call; the 2026 input bridge (`gateway::input_bridge`) is the path.
@@ -532,7 +574,12 @@ async fn run_io_loop(
                         inner.session.lock().await.messages_received += 1;
                         let text_str: &str = &text;
                         if let Err(e) = WebSocketTransport::dispatch_inbound(&inner, text_str) {
-                            error!(error = %e, "Failed to dispatch inbound WebSocket frame");
+                            // `from_text` errors quote no frame text.
+                            error!(
+                                error = %e,
+                                len = text_str.len(),
+                                "Failed to dispatch inbound WebSocket frame"
+                            );
                         }
                     }
                     Some(Ok(Message::Ping(data))) => {
@@ -543,7 +590,7 @@ async fn run_io_loop(
                         debug!("Received transport-level WebSocket pong");
                     }
                     Some(Ok(Message::Close(frame))) => {
-                        debug!(frame = ?frame, "WebSocket close frame received");
+                        log_close(frame.as_ref());
                         inner.connected.store(false, Ordering::Relaxed);
                         break;
                     }
@@ -598,6 +645,10 @@ async fn run_io_loop(
 
 #[async_trait]
 impl Transport for WebSocketTransport {
+    fn redacts_injected_values(&self) -> bool {
+        self.inner.needles.get().is_some()
+    }
+
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
         backend_request(async move {
             let id = self.next_id();
@@ -637,7 +688,7 @@ impl Transport for WebSocketTransport {
             // Finished, answered or failed: the transport's own timeout is not a
             // cancel (design Q1).
             cancel.disarm();
-            match outcome {
+            let answer = match outcome {
                 Ok(Ok(Ok(response))) => Ok(response),
                 Ok(Err(e)) => Err(e),
                 Ok(Ok(Err(_))) => Err(Error::Transport(
@@ -646,6 +697,14 @@ impl Transport for WebSocketTransport {
                 Err(_) => Err(Error::BackendTimeout(
                     "WebSocket request timed out".to_string(),
                 )),
+            };
+            // Scrubbed on the call's own task (the reader routes the answer as
+            // sent), as the body's last step: a redacted answer stays the
+            // backend's, and a refusal is an error `Error::origin` counts as
+            // the gateway's.
+            match self.inner.needles.get() {
+                Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+                None => answer,
             }
         })
         .await
@@ -717,7 +776,10 @@ mod cancel;
 mod listen;
 #[path = "websocket_progress.rs"]
 mod progress;
-use progress::{ProgressRegistration, route_progress};
+#[path = "websocket_scrub.rs"]
+mod scrub;
+use progress::{ProgressRegistration, progress_key, route_progress};
+use scrub::{log_close, scrub_frame};
 
 #[cfg(test)]
 #[path = "websocket_tests.rs"]
@@ -737,3 +799,7 @@ mod backend_tests;
 #[cfg(test)]
 #[path = "websocket_negotiation_tests.rs"]
 mod negotiation_tests;
+
+#[cfg(test)]
+#[path = "websocket_scrub_tests.rs"]
+mod scrub_tests;

@@ -440,3 +440,7 @@ fn listed_body(listing: &PreviewListing, mut preview: Value, elapsed: Duration) 
             .collect::<Vec<_>>(),
     })
 }
+
+#[cfg(test)]
+#[path = "preview_secret_tests.rs"]
+mod secret_tests;

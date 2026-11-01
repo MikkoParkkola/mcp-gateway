@@ -431,13 +431,52 @@ pub(super) struct Route<'a> {
     pub(super) session_id: Option<&'a str>,
 }
 
-/// Stage 3: find the backend, the caller's session, and apply the admin gate.
-/// `key` is consumed: `owner_of` takes it by value.
+/// The session `caller` presents, counted only when the caller owns it, by
+/// the `/mcp` owner rule; presenting it counts as the session's activity.
+/// Resolved once, before the hiding judgment, so the call is judged and
+/// routed under one profile. `key` is consumed: `owner_of` takes it by value.
+pub(super) fn owned_session<'a>(
+    state: &AppState,
+    caller: &'a Caller,
+    key: Option<String>,
+) -> Option<&'a str> {
+    let owner =
+        super::super::handlers::owner_of(key, &caller.inbound_headers, caller.client.as_ref());
+    caller
+        .inbound_headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .filter(|id| state.multiplexer.touch_if_owned(id, &owner))
+}
+
+/// Records `caller`, under its owned `session`, as this request's hiding
+/// judgment (`meta_mcp::hiding`), before any read of the scoped view.
+pub(super) fn record_hiding_caller(
+    state: std::sync::Arc<AppState>,
+    caller: &Caller,
+    session: Option<&str>,
+) {
+    crate::gateway::meta_mcp::hiding::record_caller(
+        super::super::caller_hiding::RouterHiding::caller(
+            state,
+            super::super::OwnedRouterAuthorizer::capture(
+                caller.client.as_ref(),
+                caller.oauth_agent_identity.as_ref(),
+                caller.cert_identity.as_ref(),
+            ),
+            caller.verified_identity.clone(),
+            session.map(str::to_owned),
+        ),
+    );
+}
+
+/// Stage 3: find the backend and apply the admin gate, under the caller's
+/// owned session ([`owned_session`]).
 pub(super) fn route<'a>(
     state: &AppState,
     name: &str,
     caller: &'a Caller,
-    key: Option<String>,
+    session_id: Option<&'a str>,
     envelope: &Envelope,
 ) -> Result<Route<'a>, Rejection> {
     let Some(backend) = super::super::backend_choke::backend_for(
@@ -449,14 +488,6 @@ pub(super) fn route<'a>(
         return Err(backend_not_found(name));
     };
 
-    // A presented session counts only for its owner, by the `/mcp` owner rule.
-    let owner =
-        super::super::handlers::owner_of(key, &caller.inbound_headers, caller.client.as_ref());
-    let session_id = caller
-        .inbound_headers
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-        .filter(|id| state.multiplexer.touch_if_owned(id, &owner));
     if !crate::gateway::router::helpers::observe_http(
         &envelope.json_request,
         envelope.params.as_ref(),

@@ -147,7 +147,10 @@ impl MetaMcp {
                 }
                 None => JsonRpcResponse::success(id, resp.result.unwrap_or(empty)),
             },
-            Err(e) => JsonRpcResponse::of_error(Some(id), &e),
+            Err(e) => {
+                crate::gateway::delivery_facts::echo_refusal_delivered(&e);
+                JsonRpcResponse::of_error(Some(id), &e)
+            }
         }
     }
 }

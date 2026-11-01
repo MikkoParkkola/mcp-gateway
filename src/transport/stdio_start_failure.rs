@@ -90,6 +90,7 @@ impl StdioTransport {
             progress_destinations: dashmap::DashMap::new(),
             start: early_exit::StartState::default(),
             taps: crate::transport::upstream_tap::Taps::default(),
+            needles: std::sync::OnceLock::new(),
             max_frame_bytes: AtomicUsize::new(DEFAULT_MAX_FRAME_BYTES),
             failure: FailureRecord::default(),
             assigned_cache,

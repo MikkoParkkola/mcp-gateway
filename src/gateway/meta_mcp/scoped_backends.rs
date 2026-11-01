@@ -179,6 +179,8 @@ impl MetaMcp {
         ScopedBackends {
             registry: &self.backends.0,
             grant,
+            // Hidden from the caller, it is still absent: `absence` judges
+            // hiding after this registration check.
             capability: self.get_capabilities().map(|cap| cap.name.clone()),
         }
     }
@@ -208,7 +210,9 @@ impl ScopedBackends<'_> {
         )]
         let registered =
             self.registry.get(name).is_some() || self.capability.as_deref() == Some(name);
-        (!registered).then_some(Absence::Unregistered)
+        // A backend hidden from the caller is one it cannot tell from an
+        // unregistered name (`super::hiding`).
+        (!registered || super::hiding::hidden(name)).then_some(Absence::Unregistered)
     }
 
     /// Whether a requested target is absent for this request: recorded so by
@@ -224,7 +228,11 @@ impl ScopedBackends<'_> {
     /// this grant. Named apart from `BackendRegistry::get`, so its receiver
     /// follows from the name wherever the view is bound.
     pub(in crate::gateway) fn scoped_get(&self, name: &str) -> Option<Arc<Backend>> {
-        if self.absence(name).is_some() {
+        // A scoped key's hidden name is already `absence`'s; an unscoped
+        // caller's misses here, as an unregistered name does.
+        if self.absence(name).is_some()
+            || (!matches!(self.grant, BackendGrant::Scoped(_)) && super::hiding::hidden(name))
+        {
             return None;
         }
         #[allow(

@@ -25,7 +25,10 @@ use super::scan::{Place, Sink, walk};
 const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.rs"];
 
 /// Callee names (the last path segment, or a method name) inventoried.
-const BUILDERS: [&str; 10] = [
+const BUILDERS: [&str; 11] = [
+    // The scrub's refusal read where a backend error is delivered outside
+    // the outlet: a new delivery site of a backend error needs one.
+    "echo_refusal_delivered",
     "build_error_response",
     "build_error_response_with_data",
     "build_http_error_response",

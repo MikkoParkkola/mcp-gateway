@@ -226,6 +226,11 @@ pub struct BackendRegistry {
     /// backend with a rule then refuses its call rather than resolve against
     /// the process environment.
     secret_resolver: Option<Arc<crate::secrets::SecretResolver>>,
+    /// Each backend name's injected values, kept across the instances a
+    /// reload builds, so a retired value is still removed.
+    needles: DashMap<String, Arc<crate::security::needles::NeedleSet>>,
+    /// How long a value stays redacted after its last send.
+    redaction_grace: std::time::Duration,
 }
 
 impl BackendRegistry {
@@ -243,6 +248,8 @@ impl BackendRegistry {
             destination: std::sync::OnceLock::new(),
             started: tokio::sync::broadcast::channel(STARTED_FEED).0,
             secret_resolver: None,
+            needles: DashMap::new(),
+            redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
         }
     }
 
@@ -254,6 +261,14 @@ impl BackendRegistry {
             secret_resolver: Some(resolver),
             ..Self::new()
         }
+    }
+
+    /// This registry's backends keep an injected value redacted for `grace`
+    /// after its last send.
+    #[must_use]
+    pub(crate) fn with_redaction_grace(mut self, grace: std::time::Duration) -> Self {
+        self.redaction_grace = grace;
+        self
     }
 
     /// Hear the name of each backend whose shared start succeeds from now on.
@@ -315,6 +330,21 @@ impl BackendRegistry {
     /// gateway serves, and tests.
     #[must_use = "a refused registration means the backend is NOT registered"]
     pub fn register(&self, backend: Arc<Backend>) -> bool {
+        // The value set is stamped and seeded before the backend is
+        // published, so nothing it answers once visible (a tool description
+        // to a concurrent discovery) can carry a value unscrubbed.
+        // Outside any lock: a keychain value may take its time to resolve.
+        if let Some(resolver) = &self.secret_resolver {
+            backend.stamp_secret_resolver(Arc::clone(resolver));
+        }
+        let grace = self.redaction_grace;
+        let needles = Arc::clone(
+            &*self.needles.entry(backend.name.clone()).or_insert_with(|| {
+                Arc::new(crate::security::needles::NeedleSet::with_grace(grace))
+            }),
+        );
+        backend.stamp_needles(needles);
+        backend.seed_needles();
         // Only reads the flag, but `.write()`: the insert and bump must exclude `with_membership` readers.
         let stopping = self.stopping.write();
         if *stopping {
@@ -339,9 +369,6 @@ impl BackendRegistry {
             backend.stamp_destination(destinations.for_backend(&backend.name));
         }
         backend.stamp_started(self.started.clone());
-        if let Some(resolver) = &self.secret_resolver {
-            backend.stamp_secret_resolver(Arc::clone(resolver));
-        }
         let name = backend.name.clone();
         let breaker = Arc::clone(&backend.shared_entry().failsafe.circuit_breaker);
         if let Some(observer) = self.breaker_observer.get() {

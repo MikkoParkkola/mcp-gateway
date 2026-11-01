@@ -16,16 +16,11 @@ use crate::transport::notification_sink::DeliveryHandle;
 /// token stamped on `notifications/message` must not bypass the caller's level
 /// filter), and a frame with no token, or a token no live call registered, is
 /// dropped rather than given an invented owner.
-pub(super) fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
-    let token = (notification.method == "notifications/progress")
-        .then(|| {
-            notification
-                .params
-                .as_ref()
-                .and_then(|p| p.get("progressToken"))
-                .and_then(progress_token_string)
-        })
-        .flatten();
+pub(super) fn route_progress(
+    inner: &Inner,
+    notification: JsonRpcNotification,
+    token: Option<String>,
+) {
     // `deliver` uses `try_send`: this runs on the I/O task, which must never
     // park on a slow caller.
     if let Some(destination) = token.and_then(|t| inner.progress_destinations.get(&t)) {
@@ -33,6 +28,18 @@ pub(super) fn route_progress(inner: &Inner, notification: JsonRpcNotification) {
     } else {
         debug!(method = %notification.method, "Ignoring WebSocket notification");
     }
+}
+
+/// The token a `notifications/progress` is routed by, read from `params` as
+/// the peer sent them. Progress only: no other method may borrow this route.
+pub(super) fn progress_key(method: &str, params: Option<&Value>) -> Option<String> {
+    (method == "notifications/progress")
+        .then(|| {
+            params
+                .and_then(|p| p.get("progressToken"))
+                .and_then(progress_token_string)
+        })
+        .flatten()
 }
 
 /// A progress token is a string or a number on the wire; the map is keyed by
