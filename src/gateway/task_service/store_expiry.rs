@@ -297,7 +297,7 @@ impl Shared {
         };
         // Every check below holds until the row is applied: a concurrent
         // re-read or mutation cannot move it in between.
-        let _order = self.order();
+        let order = self.order();
         {
             let state = self.state();
             // A closed or poisoned store writes and serves nothing more; a row
@@ -319,14 +319,14 @@ impl Shared {
                 .count()
         };
         if held >= self.limits.per_principal {
-            drop(_order);
+            drop(order);
             tracing::error!(record = %name, "repaired task record would exceed its owner's cap; it stays sealed");
             return;
         }
         let Some((record, task)) = row.map(|row| *row) else {
             // Its key reads but its task does not: the key is kept, unserved.
             if !import(binding_of(&admission), id.clone()) {
-                drop(_order);
+                drop(order);
                 tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
                 return;
             }
@@ -334,7 +334,7 @@ impl Shared {
             state.sealed.remove(name);
             state.reserved.push((admission, id));
             drop(state);
-            drop(_order);
+            drop(order);
             tracing::warn!(record = %name, repaired = true, "sealed task record cleared");
             return;
         };
@@ -346,7 +346,7 @@ impl Shared {
                 })
         };
         if duplicate {
-            drop(_order);
+            drop(order);
             tracing::error!(record = %name, "repaired task record duplicates a served task or key; it stays sealed");
             return;
         }
@@ -363,7 +363,7 @@ impl Shared {
                 // A live row is dated at the store's clock. With none readable
                 // it stays sealed for the next sweep: never settled at 1969.
                 let Ok(now) = self.now() else {
-                    drop(_order);
+                    drop(order);
                     tracing::warn!(record = %name, "host clock reads before 1970: repaired task record stays sealed");
                     return;
                 };
@@ -387,18 +387,18 @@ impl Shared {
             }),
         };
         let Ok(Some((task, record))) = written else {
-            drop(_order);
+            drop(order);
             tracing::error!(record = %name, "repaired task record could not be made durable; it stays sealed");
             return;
         };
         if !import(binding_of(&admission), id) {
-            drop(_order);
+            drop(order);
             tracing::error!(record = %name, "repaired task record's key is refused by admission; it stays sealed");
             return;
         }
         let committed = self.publish(task, record, super::HoldUpdate::Drop);
         self.state().sealed.remove(name);
-        drop(_order);
+        drop(order);
         tracing::warn!(record = %name, recovered = was_live, "sealed task record served again");
         if was_live {
             settled.push(committed);
@@ -420,7 +420,7 @@ impl Shared {
         admission: &Arc<crate::idempotency::admission::ExecutionAdmission>,
         hold: CancelHold,
     ) -> Result<(), StoreError> {
-        let _order = self.order();
+        let order = self.order();
         let identity = {
             let state = self.state();
             if !state.ready {
@@ -464,7 +464,7 @@ impl Shared {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => {
                 drop(guard);
-                drop(_order);
+                drop(order);
                 tracing::warn!(%error, task = %id, "task record not deleted");
                 return Err(StoreError::Storage);
             }
@@ -474,7 +474,7 @@ impl Shared {
             fire(hook.as_ref(), StoreWriteStage::DirectorySync).and_then(|()| sync_dir(&self.dir))
         {
             drop(guard);
-            drop(_order);
+            drop(order);
             tracing::warn!(%error, task = %id, "task record deletion not made durable");
             return Err(StoreError::Storage);
         }

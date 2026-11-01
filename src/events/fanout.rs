@@ -334,7 +334,7 @@ impl EventsHub {
     pub(crate) fn reconcile_catalogue_after(&self, refresh: &dyn Fn() -> CatalogueScan) -> bool {
         // Held through the snapshot and the withdrawal, so a capability reload
         // cannot restore a route in between and lose its subscriptions.
-        let _gate = self.catalogue_lock();
+        let gate = self.catalogue_lock();
         let scan = refresh();
         // With webhooks off no route can come back, so a partial capability
         // scan proves nothing about them: their catalogue is complete (empty).
@@ -375,7 +375,7 @@ impl EventsHub {
         let held = self.store.held_listing();
         let released = self.release_worker();
         // Logged once the catalogue gate is released.
-        drop(_gate);
+        drop(gate);
         if partial {
             tracing::warn!(
                 "events: the startup catalogue is partial (a capability directory could not \

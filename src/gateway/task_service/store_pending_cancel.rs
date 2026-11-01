@@ -171,7 +171,7 @@ impl Shared {
         id: &str,
         attempt: Option<CancelDelivery>,
     ) -> Result<bool, StoreError> {
-        let _order = self.order();
+        let order = self.order();
         let now = self.now().map_err(|_| StoreError::Unavailable)?.timestamp();
         let (task, mut record) = {
             let state = self.state();
@@ -225,7 +225,7 @@ impl Shared {
         if committed.is_ok() {
             self.publish(task, record, super::HoldUpdate::Carry);
         }
-        drop(_order);
+        drop(order);
         if let Some(given_up) = gave_up {
             let backend = send.backend.as_deref().unwrap_or("");
             let handle = send.handle.as_str();

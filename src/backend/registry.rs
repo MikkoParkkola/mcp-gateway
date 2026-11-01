@@ -328,9 +328,9 @@ impl BackendRegistry {
         if let Some(destinations) = self.destination.get() {
             // Check and stamp under the lock `Backend::publish` takes, so no
             // start publishes between them.
-            let _publishing = backend.replaced_transport_cleanups.lock();
+            let publishing = backend.replaced_transport_cleanups.lock();
             if backend.started_unpinned() {
-                drop(_publishing);
+                drop(publishing);
                 drop(stopping);
                 warn!(
                     backend = %backend.name,
