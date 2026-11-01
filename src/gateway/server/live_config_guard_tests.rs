@@ -4,7 +4,10 @@
 //! no live config (`Firewall::policy_under`). These rows hold that to
 //! handlers no production server builds: every production construction of a
 //! `MetaMcp` is listed, and each serving mode sets the live config before
-//! its first request.
+//! its first request. The firewall's public `check_request` and
+//! `check_response` judge by the rules it was built from, which is current
+//! for a program embedding it but not for the gateway: no gateway file
+//! calls them.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -168,4 +171,23 @@ fn build_meta_mcp_is_called_only_by_the_serving_modes() {
         .collect();
     let modes: BTreeSet<String> = SERVING_MODES.map(|(file, _)| file.to_owned()).into();
     assert_eq!(callers, modes, "a new serving mode must be listed in SERVING_MODES");
+}
+
+#[test]
+fn no_production_file_calls_the_startup_rules_entry_points() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let owner = root.join("src/security/firewall/mod.rs");
+    let callers: Vec<String> = production_files(root)
+        .iter()
+        .filter(|file| **file != owner)
+        .filter(|file| {
+            let text = production_text(&std::fs::read_to_string(file).expect("reads"));
+            text.contains(".check_request(") || text.contains(".check_response(")
+        })
+        .map(|file| file.display().to_string())
+        .collect();
+    assert!(
+        callers.is_empty(),
+        "these judge by the startup rules; a gateway check takes the request's generation: {callers:?}"
+    );
 }

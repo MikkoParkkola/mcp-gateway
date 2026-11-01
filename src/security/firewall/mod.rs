@@ -378,6 +378,11 @@ impl Firewall {
     ///
     /// Returns a verdict. If `allowed` is `false`, the caller **must not**
     /// forward the request to the backend.
+    ///
+    /// Judged by the rules this firewall was built from: for a program that
+    /// embeds it, that is the current config. The gateway's own routes never
+    /// call it; they judge under the request's generation
+    /// (`live_config_guard_tests`).
     pub fn check_request(
         &self,
         session_id: &str,
@@ -638,6 +643,9 @@ impl Firewall {
     ///
     /// May redact credentials/PII from the response value in place (returns
     /// the potentially-modified value).
+    ///
+    /// Judged by the rules this firewall was built from, as
+    /// [`Self::check_request`] is; never called by the gateway's own routes.
     pub fn check_response(
         &self,
         session_id: &str,
