@@ -678,4 +678,8 @@ fn call_windows(
 // ── Tests ────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[path = "keys_tests.rs"]
+mod keys_tests;
+
+#[cfg(test)]
 mod tests;

@@ -241,3 +241,22 @@ fn t6_per_digest_budgets_follow_the_digest() {
     let after = quota_of(&over(&runtime, vec![key("k", B, Some(P1))]), B);
     assert_ne!(before.as_store_key(), after.as_store_key());
 }
+
+/// T5b: within a key's grace, its previous and current secrets are one key:
+/// what the previous secret spends counts against the current one's window,
+/// and both see one breaker.
+#[test]
+fn t5b_the_previous_secret_shares_the_keys_state() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let mut rotated = key("k", B, Some(P1));
+    rotated.previous_key_sha256 = Some(crate::config::api_key_digest_spec(A.as_bytes()));
+    rotated.previous_expires_at = Some(chrono::Utc::now() + chrono::Duration::days(1));
+    let cfg = over(&runtime, vec![rotated]);
+    spend(&cfg, A);
+    assert!(!admits(&cfg, B), "the current secret got its own window");
+    open_breaker(&cfg, A);
+    assert!(
+        breaker_open(&cfg, B),
+        "the current secret got its own breaker"
+    );
+}
