@@ -704,3 +704,32 @@ fn a_watch_survives_its_keys_rotation() {
         "control: without the explicit principal the re-keyed watch is refused"
     );
 }
+
+/// T13 (U19 PR3a): an event charge is judged by the budgets current when it
+/// is charged, not by the enforcer's startup copy: a reload that lowers the
+/// budget refuses a charge the old one admitted.
+#[cfg(feature = "cost-governance")]
+#[test]
+fn an_event_charge_after_a_lowering_reload_meets_the_new_budget() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..CostGovernanceConfig::default()
+    };
+    cfg.budgets.per_key.insert("dev".to_owned(), 2.5);
+    let registry = Arc::new(CostRegistry::new(&cfg));
+    let enforcer = Arc::new(BudgetEnforcer::new(cfg.clone(), Arc::clone(&registry)));
+    let mut services = services(Vec::new());
+    services.budget = Some((enforcer, registry));
+    assert!(services.charge("ev", Some("dev"), 1.0), "1 of 2.5");
+    let mut lowered = cfg;
+    lowered.budgets.per_key.insert("dev".to_owned(), 1.0);
+    services.live.edit(|c| c.cost_governance = lowered);
+    assert!(
+        !services.charge("ev", Some("dev"), 1.0),
+        "2 of the reloaded budget 1"
+    );
+}

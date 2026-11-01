@@ -651,3 +651,47 @@ async fn o4d_needs_you_folds_past_its_cap() {
 
 #[path = "overview_actions_tests.rs"]
 mod actions_tests;
+
+/// T18c (U19 PR3a): a reload of only the Notify threshold changes the
+/// overview's limit rows: 70 % of the daily limit is no row at the startup
+/// threshold of 80, and a row once a reload lowers it to 60.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o4b_a_reloaded_notify_threshold_changes_the_limit_rows() {
+    use crate::cost_accounting::config::{AlertAction, AlertRule, CostGovernanceConfig};
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let (mut state, _dir) = fixture(1, false).await;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.budgets.daily = Some(1.0);
+    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
+    let enforcer = Arc::new(BudgetEnforcer::new(
+        cfg.clone(),
+        Arc::new(CostRegistry::new(&cfg)),
+    ));
+    enforcer.record_spend("search", None, 0.70);
+    let inner = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
+    meta.budget_enforcer = Some(enforcer);
+    inner.meta_mcp = Arc::new(meta);
+    let rows = |body: &Value| {
+        body["needs_you"]["rows"]
+            .as_array()
+            .expect("needs-you rows")
+            .iter()
+            .filter(|row| row["kind"] == "limit_80")
+            .count()
+    };
+    assert_eq!(rows(&overview(&state).await), 0, "70 % is under 80");
+    let mut reloaded = cfg;
+    reloaded.alerts = vec![AlertRule {
+        at_percent: 60,
+        action: AlertAction::Notify,
+    }];
+    state.live_config.edit(|c| c.cost_governance = reloaded);
+    assert_eq!(rows(&overview(&state).await), 1, "70 % is over 60");
+}
