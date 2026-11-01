@@ -78,6 +78,3 @@ src/gateway/router/accounts.rs	evict_slots	get_for	Admin
 src/gateway/router/backend_choke.rs	backend_for	scoped_get	scoped
 src/gateway/router/handlers/health.rs	health_handler	statuses_for	Admin
 src/gateway/router/view_judge.rs	baseline_for	all_for	Visibility
-src/gateway/meta_mcp/hiding.rs	listed_catalogue	get_for	Visibility
-src/gateway/router/caller_hiding.rs	registered	get_for	Visibility
-src/gateway/meta_mcp/hiding.rs	caller_slot	get_for	Visibility
