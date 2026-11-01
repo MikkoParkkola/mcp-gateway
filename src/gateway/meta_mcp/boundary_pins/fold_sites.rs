@@ -70,6 +70,11 @@ struct Sites {
     calls: BTreeMap<(String, String, String), usize>,
     /// (file, function) -> the setters it calls.
     setters_in: BTreeMap<(String, String), BTreeSet<String>>,
+    /// Functions that read the error marker off a response
+    /// (`get::<RpcError>()`).
+    marker_reads: BTreeSet<(String, String)>,
+    /// Functions that put a value on a response's extensions.
+    marker_inserts: BTreeSet<(String, String)>,
 }
 
 impl Sites {
@@ -82,6 +87,12 @@ impl Sites {
         // A call inside a macro body (`stream!`, `select!`) is read from its
         // tokens: `name (` after a non-identifier token that is not `fn`.
         let text = mac.tokens.to_string();
+        if text.contains("get :: < RpcError > ()") {
+            self.marker_reads.insert(place(at));
+        }
+        if text.contains("extensions_mut () . insert (") {
+            self.marker_inserts.insert(place(at));
+        }
         for name in SETTERS.iter().chain(&COUNTS) {
             let spelled = format!("{} (", name.replace("::", " :: "));
             for (i, _) in text.match_indices(&spelled) {
@@ -91,6 +102,25 @@ impl Sites {
                     self.call(at, name);
                 }
             }
+        }
+    }
+
+    /// A method call that reads the marker or writes a response extension.
+    fn method(&mut self, at: &Place, call: &syn::ExprMethodCall) {
+        let reads = call.method == "get"
+            && call.turbofish.as_ref().is_some_and(|t| {
+                t.args.iter().any(|arg| {
+                    matches!(arg, syn::GenericArgument::Type(syn::Type::Path(p))
+                        if p.path.segments.last().is_some_and(|s| s.ident == "RpcError"))
+                })
+            });
+        if reads {
+            self.marker_reads.insert(place(at));
+        }
+        let inserts = call.method == "insert"
+            && matches!(call.receiver.as_ref(), syn::Expr::MethodCall(r) if r.method == "extensions_mut");
+        if inserts {
+            self.marker_inserts.insert(place(at));
         }
     }
 
@@ -112,6 +142,7 @@ impl Sink for Sites {
     fn expr(&mut self, at: &Place, expr: &syn::Expr) {
         match expr {
             syn::Expr::Macro(m) => self.literals(at, &m.mac),
+            syn::Expr::MethodCall(call) => self.method(at, call),
             syn::Expr::Call(call) => {
                 let syn::Expr::Path(p) = call.func.as_ref() else {
                     return;
@@ -130,6 +161,38 @@ impl Sink for Sites {
             self.literals(at, &m.mac);
         }
     }
+}
+
+/// The (file, function) a node sits in.
+fn place(at: &Place) -> (String, String) {
+    (
+        at.file.clone(),
+        at.func.clone().unwrap_or_else(|| "-".to_owned()),
+    )
+}
+
+/// The streamed and the buffered count read one marker: every function that
+/// counts an answer reads it off the response (`get::<RpcError>()`), and
+/// every function that builds it (`of_frame`, `of_value`) puts it on the
+/// response it returns. So a delivery path that stops using the marker, or
+/// builds one it never attaches, fails here. Per function, like the rest of
+/// this pin.
+fn marker_path(sites: &Sites) -> Vec<String> {
+    let mut wrong = Vec::new();
+    for (key, names) in &sites.setters_in {
+        let (file, func) = key;
+        let counts = names.contains("count_answer") || names.contains("count_framed");
+        if counts && !sites.marker_reads.contains(key) {
+            wrong.push(format!("counts without reading the marker: {file}\t{func}"));
+        }
+        let builds = names.contains("RpcError::of_frame") || names.contains("RpcError::of_value");
+        if builds && !sites.marker_inserts.contains(key) {
+            wrong.push(format!(
+                "builds the marker without attaching it: {file}\t{func}"
+            ));
+        }
+    }
+    wrong
 }
 
 fn scan(root: &Path, roots: &[&str]) -> Sites {
@@ -245,6 +308,45 @@ fn every_fold_and_count_site_is_listed() {
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// The streamed count (`count_framed`) and the buffered one (`count_answer`)
+/// read the same marker, built by `of_frame`/`of_value` and attached to the
+/// response, so a streamed answer is counted as its buffered twin is.
+#[test]
+fn every_count_reads_the_marker_its_builders_attach() {
+    let wrong = marker_path(&scan(crate_root(), &ROOTS));
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// A count that does not read the marker fails, inside a macro body too; a
+/// builder that does not attach it fails; reading and attaching passes.
+#[test]
+fn a_count_or_builder_off_the_marker_path_fails() {
+    let good = "fn layer(r: R) { let m = r.extensions().get::<RpcError>().copied(); count_answer(1, m); }
+        fn emit(r: R) { let s = stream! { let m = r.extensions().get::<RpcError>().copied(); count_framed(1, m, false); }; }
+        fn build(a: A) -> R { let marker = RpcError::of_frame(&a); let mut r = R::new(); r.extensions_mut().insert(marker); r }";
+    assert_eq!(marker_path(&scan_fixture(good)), Vec::<String>::new());
+    for (bad, line) in [
+        (
+            "fn layer(r: R) { count_answer(1, None); }",
+            "counts without reading the marker",
+        ),
+        (
+            "fn emit() { let s = stream! { count_framed(1, None, false); }; }",
+            "counts without reading the marker",
+        ),
+        (
+            "fn build(a: A) { let _ = RpcError::of_value(&a, o, f); }",
+            "builds the marker without attaching it",
+        ),
+    ] {
+        let wrong = marker_path(&scan_fixture(bad));
+        assert!(
+            wrong.iter().any(|w| w.starts_with(line)),
+            "{bad}: {wrong:?}"
+        );
+    }
 }
 
 /// Scan `source` as a one-file crate.
