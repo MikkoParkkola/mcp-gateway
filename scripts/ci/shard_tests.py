@@ -90,7 +90,9 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
      "mik_7272_task_1_acs)"),
     (_TMP, r"stdio/task-[0-9a-f-]{36}\.json", 1,
      "a stdio task record written after its test's temp dir is gone"),
-    (_TMP, r"\.mcp-gateway/.+|tasks/stdio/store\.lease|inner\.yaml", 2,
+    (_TMP,
+     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
+     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml", 2,
      "the home of a gateway an integration test spawned, written after the "
      "test's temp dir is gone"),
 ]
@@ -99,9 +101,11 @@ KNOWN_LEFTOVERS: list[tuple[str, str, int, str]] = [
 # can only lose entries. A leaked TempLog folder is named `audit-log-*` and
 # matches none of these.
 LEFTOVER_CEILING: dict[tuple[str, str], int] = {
-    (_TMP, r"audit\.jsonl\.hwm"): 3,
-    (_TMP, r"stdio/task-[0-9a-f-]{36}\.json"): 1,
-    (_TMP, r"\.mcp-gateway/.+|tasks/stdio/store\.lease|inner\.yaml"): 2,
+    (r"\.tmp[A-Za-z0-9]{6}", r"audit\.jsonl\.hwm"): 3,
+    (r"\.tmp[A-Za-z0-9]{6}", r"stdio/task-[0-9a-f-]{36}\.json"): 1,
+    (r"\.tmp[A-Za-z0-9]{6}",
+     r"\.mcp-gateway/protocol-revision-telemetry/(\.window\.lock|window\.json)"
+     r"|\.mcp-gateway/record-principal\.key|tasks/stdio/store\.lease|inner\.yaml"): 2,
 }
 
 HEADER = re.compile(r"^\s*(Running|Doc-tests) ")
@@ -191,8 +195,11 @@ def files_in(path: str) -> list[str]:
     if not os.path.isdir(path):
         return []
     try:
+        # A link to a folder is not walked into: it counts as a file of its
+        # own, so it matches no known source.
         return sorted(os.path.relpath(os.path.join(root, f), path).replace(os.sep, "/")
-                      for root, _dirs, fs in os.walk(path, onerror=_raise) for f in fs)
+                      for root, dirs, fs in os.walk(path, onerror=_raise)
+                      for f in [*fs, *(d for d in dirs if os.path.islink(os.path.join(root, d)))])
     except OSError:
         return []
 
@@ -363,6 +370,23 @@ def self_test() -> int:
     finally:
         del os.environ["PLANT_LEAK"]
     assert planted == ["left in TMPDIR: .tmpXyZ789 (other.db 0B)"], planted
+    # The same on real folders: files_in feeds the match, and a link to a
+    # folder beside an allowed file is a stray of its own.
+    with tempfile.TemporaryDirectory() as root:
+        def plant(name: str, files: list[str]) -> str:
+            for f in files:
+                path = os.path.join(root, name, *f.split("/"))
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, "w").close()
+            return name
+        found = {name: files_in(os.path.join(root, name)) for name in (
+            plant(".tmpHome01", home), plant(".tmpHome02", [*home, ".mcp-gateway/other.db"]),
+            plant(".tmpLink01", hwm))}
+        os.symlink(root, os.path.join(root, ".tmpLink01", "elsewhere"))
+        found[".tmpLink01"] = files_in(os.path.join(root, ".tmpLink01"))
+        assert found[".tmpHome01"] == sorted(home), found
+        assert found[".tmpLink01"] == ["audit.jsonl.hwm", "elsewhere"], found
+        assert unexpected(found) == [".tmpHome02", ".tmpLink01"], found
     print("shard_tests self-test: ok")
     return 0
 
