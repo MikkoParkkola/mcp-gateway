@@ -45,6 +45,19 @@ impl MetaMcp {
         backend.is_some_and(|backend| backend.is_read_only_for(binding, tool))
     }
 
+    /// Note on this call's decision the effect [`Self::declared_effect`]
+    /// reads; nothing when it reads none.
+    pub(super) fn note_declared_effect(
+        &self,
+        target: (&str, &str),
+        backend: Option<&crate::backend::Backend>,
+        binding: Option<&str>,
+    ) {
+        if let Some((effect, source)) = self.declared_effect(target, backend, binding) {
+            super::audit::note_declared_effect(effect, source);
+        }
+    }
+
     /// What the called tool declares the call could change, asked as
     /// [`Self::cache_admits`] asks: a capability by its definition, otherwise
     /// the registry backend by what its slot declared. `None` when nothing

@@ -371,6 +371,7 @@ src/gateway/meta_mcp/invoke/pre_dispatch.rs	admit_idempotency_key	http_invoke_ti
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	answer_undeclared_key	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	cache_admits	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path, beside cache_admits
+src/gateway/meta_mcp/invoke/pre_dispatch.rs	note_declared_effect	http_invoke_tiny	on the HTTP gateway_invoke path: notes what declared_effect reads
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	derive_prompt_cache_key	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	log_tool_invoked	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/pre_dispatch.rs	refuse_shared_oauth_login	http_invoke_tiny	on the HTTP gateway_invoke path
