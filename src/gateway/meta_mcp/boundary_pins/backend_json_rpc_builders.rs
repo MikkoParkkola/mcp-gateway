@@ -6,8 +6,9 @@
 //! `gateway`), a `backend_json_rpc(..)` call is a backend's, either taken
 //! off the wire (`origin`) or rebuilt from a frame or error that already
 //! carried a backend's origin (`rebuild`). A
-//! `BackendJsonRpc {..}` literal outside `src/error.rs` fails outright: the
-//! constructor is the only way to mark an error as the backend's.
+//! `BackendJsonRpc {..}` literal outside the two listed functions of
+//! `src/error.rs` (the constructor and `with_may_have_run`) fails outright:
+//! the constructor is the only way to mark an error as the backend's.
 //!
 //! What this cannot see: a builder inside a macro body, or a call passed by
 //! path. Rows are keyed by function name within a file, as the other pins.
@@ -19,8 +20,19 @@ use super::packaged::crate_root;
 use super::scan::{Place, Sink, walk};
 
 const ROOTS: [&str; 2] = ["src/lib.rs", "src/main.rs"];
-/// The one file allowed to write a `BackendJsonRpc {..}` literal.
-const CONSTRUCTOR_FILE: &str = "src/error.rs";
+/// The only functions allowed to write a `BackendJsonRpc {..}` literal: the
+/// constructor, and the note that rebuilds a matched error as its own variant.
+const CONSTRUCTORS: [(&str, &str); 2] = [
+    ("src/error.rs", "backend_json_rpc"),
+    ("src/error.rs", "with_may_have_run"),
+];
+
+/// Whether `at` is one of the [`CONSTRUCTORS`].
+fn is_constructor(at: &Place) -> bool {
+    CONSTRUCTORS
+        .iter()
+        .any(|(file, func)| at.file == *file && at.func.as_deref() == Some(*func))
+}
 /// Where a backend's error is taken off the wire.
 const ORIGIN_FILES: [&str; 3] = [
     "src/transport/http/mod.rs",
@@ -61,7 +73,7 @@ impl Sink for Builders {
         let kind = match expr {
             syn::Expr::Struct(lit) => match last_segment(&lit.path).as_deref() {
                 Some("JsonRpc") => "literal",
-                Some("BackendJsonRpc") if at.file != CONSTRUCTOR_FILE => {
+                Some("BackendJsonRpc") if !is_constructor(at) => {
                     let func = at.func.as_deref().unwrap_or("-");
                     self.strays.push(format!("{}\t{func}", at.file));
                     return;
@@ -148,7 +160,7 @@ fn every_json_rpc_error_builder_is_listed() {
     let mut wrong = diff(&builders.found, LISTED);
     for stray in &builders.strays {
         wrong.push(format!(
-            "BackendJsonRpc literal outside {CONSTRUCTOR_FILE}: {stray}"
+            "BackendJsonRpc literal outside the listed constructors: {stray}"
         ));
     }
     assert!(
@@ -211,4 +223,18 @@ fn a_stray_backend_literal_fails() {
         let strays = scan_fixture(&source).strays;
         assert_eq!(strays, ["src/lib.rs\tf"], "{path}");
     }
+}
+
+/// Only the listed functions of src/error.rs may write the literal: another
+/// function in that file is a stray.
+#[test]
+fn only_the_listed_constructors_may_write_the_literal() {
+    let at = |file: &str, func: &str| Place {
+        file: file.to_owned(),
+        func: Some(func.to_owned()),
+    };
+    assert!(is_constructor(&at("src/error.rs", "backend_json_rpc")));
+    assert!(is_constructor(&at("src/error.rs", "with_may_have_run")));
+    assert!(!is_constructor(&at("src/error.rs", "to_rpc_code")));
+    assert!(!is_constructor(&at("src/lib.rs", "backend_json_rpc")));
 }
