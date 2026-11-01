@@ -46,7 +46,7 @@ pub(super) mod tasks;
 use health::backends_overall_healthy;
 pub(super) use health::health_handler;
 #[cfg(feature = "metrics")]
-pub(super) use metrics_scrape::metrics_handler;
+pub(super) use metrics_scrape::{MetricsState, metrics_handler};
 pub(crate) use modern_response::shape_modern_response;
 pub(super) use owner::owner_of;
 // The direct route admits its execution lease under the same owner (MIK-8154).
@@ -634,6 +634,7 @@ async fn meta_mcp_dispatch(
         signing: signing_context.as_ref(),
         chain_source: response.chain_source,
         chain_nonce: chain_nonce.as_deref(),
+        generation: Some(&intake.generation),
     };
     #[cfg(feature = "firewall")]
     let router = state.firewall.as_deref();

@@ -221,6 +221,7 @@ impl Gateway {
                 signing: signing_context.as_ref(),
                 chain_source,
                 chain_nonce: chain_nonce.as_deref(),
+                generation: generation.generation(),
             },
         );
         // MIK-7887.RECEIPT.4: the receipt describes the delivered answer, with

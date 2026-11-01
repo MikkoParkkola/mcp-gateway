@@ -1,8 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! The 4.0.0 breaking-change notice items, printed by `migrate_4_0_0_release_notice`.
+//! The 4.0.0 breaking-change notice items, printed by `migrate_4_0_0_release_notice`,
+//! and the version order they are gated on.
 //!
-//! Its own file so a new item does not grow `upgrade.rs`, which is held at its line baseline.
+//! One library module so the CLI and the gateway status page read the same list and
+//! the same order, with no second copy and no source file compiled twice. Delivery
+//! (the once-per-install marker file) stays in the binary: this module writes nothing.
+
+mod backend_grant;
+mod semver;
+pub mod webhook;
+
+pub use semver::SemVer;
 
 // ── 4.0.0 migration: breaking-change notice ───────────────────────────────────
 // v4.0.0 carries the changes listed below: each can surprise an operator, and
@@ -13,7 +22,7 @@
 ///
 /// Pinned as a slice so a test can assert the notice still carries every item:
 /// a release note that quietly loses one is worse than none, because the operator has read it.
-pub(super) const NOTICE_4_0_0_ITEMS: &[&str] = &[
+pub const NOTICE_4_0_0_ITEMS: &[&str] = &[
     "OAuth credentials are now stored per issuer, and 4.0.0 does not read 3.x \
 tokens: every OAuth backend re-authenticates once, on its next use. Expect one \
 authorization prompt per backend; no config change is needed. `mcp-gateway \
@@ -42,7 +51,7 @@ reaches your backends and the gateway's own rate limits now apply to calls that 
 previously never got that far. Nothing errors: the symptom is throughput and \
 backend load. Send the header on stateless requests, or complete `initialize` \
 and reuse the session.",
-    super::webhook_notice::ITEM,
+    webhook::ITEM,
     "`logging/setLevel` over HTTP now needs an admin key, because it sets the \
 log level of every shared backend for every user. Other callers are refused \
 with HTTP 403, and with auth off nobody is admin, so it is refused for everyone. \
@@ -72,7 +81,7 @@ signing key and `GATEWAY_ATTESTATION_AUDIENCE`; enforce without either, or any u
 value, now FAILS STARTUP.",
     "A tool call carrying an argument key its schema does not declare, at any depth, is \
 refused with `isError: true`; relax it with `input_schema_enforcement: standard` or `off`.",
-    super::backend_grant_notice::ITEM,
+    backend_grant::ITEM,
     "`/metrics` now requires `server.metrics_token` (HTTP 401 until set; the admin bearer is \
 refused). A missing `env:` variable does not stop startup. Scrape with a dedicated job or the \
 chart's ServiceMonitor, never a generic annotation-driven one.",

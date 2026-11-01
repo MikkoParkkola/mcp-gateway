@@ -529,7 +529,7 @@ impl MetaMcp {
         let (declared, chain) = (caller.input_capabilities, (source, upstream));
         let mut response =
             response_security::shape_meta_result(id, tool_name, result, shape, declared, chain);
-        response.egress_scanned = inspected;
+        response.wire_meta.egress_scanned = inspected;
         response.invocation_trace = trace;
         response
     }

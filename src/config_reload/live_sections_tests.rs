@@ -495,6 +495,16 @@ fn a_held_collusion_edit_keeps_the_previous_view_not_the_startup_one() {
         "a held edit keeps the previous view"
     );
 }
+
+/// The tool policy applies on reload in every build, the firewall's too.
+#[test]
+fn a_tool_policy_edit_alone_reports_no_restart() {
+    let running = Config::default();
+    let mut wanted = running.clone();
+    wanted.security.tool_policy.deny = vec!["a:b".to_string()];
+    assert!(!pending(&running, wanted).contains(&"security"));
+}
+
 /// ADR-029 (amended): the policy fields the Policies screen edits apply on
 /// reload, so an edit to any one of them alone reports no restart.
 #[cfg(feature = "firewall")]

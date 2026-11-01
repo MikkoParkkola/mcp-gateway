@@ -49,11 +49,7 @@ pub(crate) fn error_response_preserving_status(
                 &error.to_string(),
             )
         }
-        _ => crate::protocol::JsonRpcResponse::error(
-            Some(id),
-            error.to_rpc_code(),
-            error.to_string(),
-        ),
+        _ => crate::protocol::JsonRpcResponse::of_error(Some(id), error),
     };
     if let Some(ref mut rpc_error) = response.error {
         // Written unconditionally, so this function is the sole authority on

@@ -332,6 +332,9 @@ async fn fixture(setup: Setup) -> Fixture {
     // `lapse_window` moves the clock.
     freeze(&firewall);
     // With the gateway's keyring, as the gateway builds it (#2210, MIK-8276).
+    // `paired` already published this firewall's section as the live
+    // config's, which is what `publish_firewall` does for fixtures
+    // that build the two apart.
     state_mut.firewall = Some(Arc::new(firewall.with_continuations(meta.continuation())));
     meta.enable_idempotency(Arc::new(IdempotencyCache::new()), Duration::from_secs(300));
     state_mut.meta_mcp = Arc::new((setup.arm)(meta));

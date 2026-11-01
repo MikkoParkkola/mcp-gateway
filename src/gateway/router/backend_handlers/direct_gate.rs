@@ -47,6 +47,7 @@ pub(super) async fn guard_before_credential(
         name: scope.name,
         id: scope.id.clone(),
         client,
+        generation: &caller.generation,
         identity: caller.verified_identity.as_ref(),
         managed: None,
     };

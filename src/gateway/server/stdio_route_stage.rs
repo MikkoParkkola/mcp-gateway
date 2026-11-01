@@ -88,6 +88,7 @@ impl Gateway {
                     super::STDIO_CREDENTIAL_PRINCIPAL,
                     kind,
                 ),
+                scope.authorizer.generation(),
             ) {
                 let answer = error_response_preserving_status(id.clone(), &refusal);
                 return (RouteStage::Answer(answer), witness);

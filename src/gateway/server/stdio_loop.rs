@@ -46,7 +46,6 @@ impl Gateway {
         // ── Shared MetaMcp initialisation ────────────────────────────────────
         let BuiltMetaMcp {
             meta_mcp,
-            tool_policy: _,
             mtls_policy,
             data_dir,
             record_key,
@@ -453,7 +452,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         if !responses.is_empty() {
@@ -555,7 +557,10 @@ impl Gateway {
                             )),
                             &writer,
                             &reads,
-                            Some(meta_mcp.notification_screen("stdio", session_id)),
+                            Some(meta_mcp.notification_screen(
+                                ("stdio", session_id),
+                                Some(Arc::clone(&generation)),
+                            )),
                         )
                         .await;
                         #[cfg(test)]

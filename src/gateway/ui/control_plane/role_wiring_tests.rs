@@ -43,25 +43,26 @@ fn no_identity_uses_legacy_admin_key_projection() {
     );
     assert_eq!(
         actor_from_client(Some(&client(false)), None, &empty).role,
-        ControlPlaneRole::Auditor
+        ControlPlaneRole::Viewer
     );
     assert_eq!(
         actor_from_client(None, None, &empty).role,
-        ControlPlaneRole::Auditor
+        ControlPlaneRole::Viewer
     );
 }
 
-// MIK-6688.ROLE.2 — a verified identity with no matching rule is Auditor,
-// even when an admin API key is also present (identity path wins).
+// MIK-6688.ROLE.2 — a verified identity with no matching rule is Viewer (it
+// reads only its own grants and audit events), even when an admin API key is
+// also present (identity path wins). Auditor is only ever an explicit rule.
 #[test]
-fn verified_identity_without_rule_is_auditor_not_admin() {
+fn verified_identity_without_rule_is_viewer_not_admin() {
     let empty = ControlPlaneRoleMappingConfig::default();
     let actor = actor_from_client(
         Some(&client(true)),
         Some(&identity("https://idp", &["x"])),
         &empty,
     );
-    assert_eq!(actor.role, ControlPlaneRole::Auditor);
+    assert_eq!(actor.role, ControlPlaneRole::Viewer);
     // Collision-safe length-prefixed id (MIK-6702 CP.ID.1): issuer len 11, subject len 1.
     assert_eq!(actor.actor_id, "oidc:11:https://idp:1:s");
 }
@@ -150,7 +151,7 @@ fn role_mapping_reload_revokes_admin_without_restart() {
     );
     assert_eq!(
         after.role,
-        ControlPlaneRole::Auditor,
+        ControlPlaneRole::Viewer,
         "a removed admin rule must stop granting Admin after reload"
     );
 }

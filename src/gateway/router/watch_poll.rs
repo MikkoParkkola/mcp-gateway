@@ -140,7 +140,8 @@ pub(crate) async fn poll_capability(
     }];
     state
         .meta_mcp
-        .inspect_task_result(&targets, &session, &mut result)
+        // A poll has no request behind it: the published generation alone.
+        .inspect_task_result((&targets, &session), None, &mut result)
         .map_err(|_| PollRefused::Response)?;
     if result.get("isError").and_then(Value::as_bool) == Some(true) {
         return Err(PollRefused::Dispatch);
