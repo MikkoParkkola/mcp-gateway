@@ -234,7 +234,7 @@ fn bearer() -> crate::gateway::auth::AuthenticatedClient {
         admin: true,
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::StaticBearer,
-        principal: crate::gateway::record_principal::InternalPrincipal::new("bearer".into()),
+        principal: crate::gateway::auth::principal_of("keys-route-bearer"),
         ..crate::gateway::auth::anonymous_client()
     }
 }
@@ -560,7 +560,7 @@ async fn t12_a_refused_caller_reads_no_key() {
         admin: false,
         authenticated: true,
         credential_kind: crate::security::audit::CredentialKind::ApiKey,
-        principal: crate::gateway::record_principal::InternalPrincipal::new("alpha".into()),
+        principal: crate::gateway::auth::principal_of(ALPHA),
         ..crate::gateway::auth::anonymous_client()
     };
     let (status, reads) = fx.counted(Some(standard)).await;
