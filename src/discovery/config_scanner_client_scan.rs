@@ -171,7 +171,10 @@ impl ConfigScanner {
             if !candidate.path.exists() {
                 continue;
             }
-            debug!("Scanning client config at {}", candidate.path.display());
+            debug!(
+                "Scanning client config at {}",
+                super::shown_path(&candidate.path)
+            );
             let path = &candidate.path;
             let file_name = || {
                 path.file_name()
