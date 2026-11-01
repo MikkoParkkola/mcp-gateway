@@ -621,61 +621,6 @@ fn bench_modern_request_path(c: &mut Criterion) {
     group.finish();
 }
 
-// ── relay detection off-path benchmark ───────────────────────────────────────
-
-/// What one delivery costs with the firewall on and the collusion action
-/// `off`, as a proxy for the staging the amended decision adds there
-/// (ADR-029): relay-detection staging was skipped under `off` and now runs
-/// whenever the firewall is on, so a reload to `on` between staging and
-/// delivery cannot fail open.
-///
-/// The staging entry is crate-private and nothing is made public for a
-/// bench, so this times the public response check on the same path. What
-/// staging adds there, per receipt, is read off `digest_with`
-/// (`src/security/firewall/collusion_gate_receipts.rs:173-175`): one
-/// `format!("{server}:{tool}")` source-identity copy and one
-/// `context_integrity_sensitive(result)` classification
-/// (`src/security/firewall/collusion_gate.rs:561-569`: one JSON-pointer
-/// lookup and a scan of at most a few class names). This proxy does not
-/// bracket either: the response check does not run that classifier. It also
-/// leaves out the leaf walk and digest build that follow
-/// (`collusion_gate_receipts.rs:176-178`), which a real measurement of the
-/// staging entry has to include. The one-off measurement against the
-/// above-2-microsecond line is taken by hand, after the fix exists.
-#[cfg(feature = "firewall")]
-fn bench_collusion_off_delivery(c: &mut Criterion) {
-    use mcp_gateway::security::firewall::{Firewall, FirewallConfig};
-
-    let firewall = Firewall::from_config(FirewallConfig::default(), None);
-    let delivered = json!({
-        "content": [{"type": "text", "text": "The orchard ledger for the north slope \
-            records seven rows of late pears, the grafting dates for each rootstock, the \
-            hours the drip lines ran during the dry weeks of August, and which crew pruned \
-            the older trees after the second frost."}]
-    });
-
-    let mut group = c.benchmark_group("collusion_off_delivery");
-    group.bench_function("response_check_action_off", |b| {
-        b.iter_batched(
-            || delivered.clone(),
-            |mut response| {
-                std::hint::black_box(firewall.check_response(
-                    "bench-session",
-                    "alpha",
-                    "read",
-                    &mut response,
-                    "bench",
-                ))
-            },
-            BatchSize::SmallInput,
-        );
-    });
-    group.finish();
-}
-
-#[cfg(not(feature = "firewall"))]
-fn bench_collusion_off_delivery(_c: &mut Criterion) {}
-
 // ── continuation-envelope benchmarks ────────────────────────────────────────
 
 /// NFR.PERF.1 — what a continuation envelope costs to mint and to redeem.
@@ -859,6 +804,5 @@ criterion_group!(
     bench_modern_request_path,
     bench_continuation,
     bench_http_request_path,
-    bench_collusion_off_delivery,
 );
 criterion_main!(benches);
