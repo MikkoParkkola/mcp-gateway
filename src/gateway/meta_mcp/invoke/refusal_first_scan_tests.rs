@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Source-scan pin (MIK-9129): every site that folds a dispatch failure into
+//! Source-scan pin: every site that folds a dispatch failure into
 //! a tool result (`dispatch_error_result`, `account_refused_fill`) first
 //! asks whether the failure is a refusal of the caller, which is answered as
 //! itself and never folded. A new fold site fails this row until it is

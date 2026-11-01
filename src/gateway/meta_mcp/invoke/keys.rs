@@ -306,7 +306,7 @@ impl MetaMcp {
 
 /// Test-only: a hook run once, the next time a call on this thread passes
 /// the web UI gate, so a row can change what the dispatch is about to run
-/// after the gate judged it (MIK-9129: a capability reloaded as a write).
+/// after the gate judged it (a capability reloaded as a write).
 /// Thread-local, like `caller_verdict`'s dispatch seam: rows that arm it run
 /// on a current-thread runtime.
 #[cfg(test)]

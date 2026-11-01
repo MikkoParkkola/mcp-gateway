@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! T24 through the route (MIK-9129): a capability the UI gate admitted as
+//! T24 through the route: a capability the UI gate admitted as
 //! read-only, reloaded as a write before it runs, is refused by the
 //! capability executor's own gate. That refusal is now answered as itself,
 //! not folded into a tool result, so the route's answer must still be 409
