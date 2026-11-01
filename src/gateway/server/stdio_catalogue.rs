@@ -62,6 +62,7 @@ fn operator() -> relay::CatalogueCaller {
         name: "stdio".to_owned(),
         // The id the stdio dispatcher keys this connection by (MIK-7942).
         session: super::STDIO_SESSION_ID.to_owned(),
+        generation: None,
     }
 }
 

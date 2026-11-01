@@ -23,6 +23,10 @@ pub(crate) struct CatalogueCaller {
     /// The session the read arrived on, for the audit record's session
     /// fingerprint (MIK-7832).
     pub(crate) session: String,
+    /// The generation the read's request pinned on arrival; `None` for a
+    /// caller that has none (the stdio operator), judged then under the
+    /// generation published at the check.
+    pub(crate) generation: Option<std::sync::Arc<crate::config_reload::Generation>>,
 }
 
 tokio::task_local! {
@@ -88,7 +92,14 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        let generation = crate::config_reload::Generation::placeholder();
+        // The request's pinned generation, else the one published now.
+        let published = self.current_generation();
+        let fallback = crate::config_reload::Generation::placeholder();
+        let generation = caller
+            .generation
+            .as_deref()
+            .or(published.as_deref())
+            .unwrap_or(&fallback);
         let message = fw.relay_block_message(
             generation.collusion_view(),
             who,
