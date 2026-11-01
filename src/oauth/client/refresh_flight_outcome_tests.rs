@@ -612,3 +612,33 @@ async fn a_refresh_on_an_unreadable_clock_sends_nothing_and_keeps_its_token() {
     headless(&owned).await.expect("the kept token refreshes");
     assert_eq!(server.uses("r1"), 1);
 }
+
+/// A background refresh whose outcome cannot be told apart from a consumed
+/// token, on a rotating server, retires the stored refresh token; the status
+/// cell must then read `Expired` (the access token is past its time and
+/// nothing can refresh it) with no dispatch in between. Red today: only a
+/// successful renewal republishes, so the cell keeps saying a refreshable
+/// token is held.
+#[tokio::test]
+async fn a_background_refresh_that_retires_the_token_republishes_the_status() {
+    use super::renewal::Renewal;
+    use super::sign_in::{SignIn, SignInStatus};
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let mut owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    rotating(&owned);
+    hold(&owned, &token("a1", Some("r1"), true));
+    owned.publish_sign_in();
+    assert!(
+        matches!(cell.snapshot(), SignIn::SignedIn { .. }),
+        "control: a refreshable token reads signed in"
+    );
+    token_endpoint(&mut owned, malformed_endpoint().await);
+
+    let renewal = owned.attempt_background_renewal().await;
+
+    assert!(!matches!(renewal, Renewal::Renewed), "the refresh failed");
+    assert_eq!(stored(&owned).and_then(|t| t.refresh_token), None);
+    assert_eq!(cell.snapshot(), SignIn::Expired);
+}

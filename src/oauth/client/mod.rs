@@ -527,6 +527,14 @@ impl OAuthClient {
         self.publish_sign_in();
     }
 
+    /// Where this client's token file is.
+    pub(crate) fn token_path_for_test(&self) -> std::path::PathBuf {
+        let key = self
+            .credential_key()
+            .expect("a resolved issuer keys the store");
+        self.storage.token_path(&key, &self.resource_url)
+    }
+
     /// The token this client holds in memory.
     pub(crate) fn cached_token_for_test(&self) -> Option<TokenInfo> {
         self.current_token.read().clone()

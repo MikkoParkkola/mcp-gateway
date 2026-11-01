@@ -118,3 +118,23 @@ async fn get_token_s_cached_return_sees_a_confirmed_sign_in() {
 
     assert_eq!(serving.lock().await.get_token().await.unwrap(), "new");
 }
+
+// An adoption that cannot read the confirmed token must not be acknowledged,
+// and must not leave the old account's cached token serving as current: the
+// next call retries (here it finds no token and would have to sign in again).
+// Red today: both reads fail, the counter is recorded anyway, and the old
+// token is returned.
+#[tokio::test]
+async fn a_failed_adoption_does_not_acknowledge_the_install() {
+    let pair = pair(&a_token("old", None, 3600)).await;
+    assert_eq!(next_token(&pair).await, "old");
+    confirm(&pair, a_token("new", Some("r2"), 3600)).await;
+    std::fs::write(pair.confirming.token_path_for_test(), "not json").unwrap();
+
+    let served = tokio::time::timeout(HANG_BOUND, pair.serving.get_oauth_token()).await;
+
+    assert!(
+        !matches!(&served, Ok(Ok(Some(token))) if token == "old"),
+        "the old account's token still serves: {served:?}"
+    );
+}

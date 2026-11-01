@@ -204,6 +204,11 @@ fn assert_flow_end(records: &[Value], before: usize, word: &str) {
     let text = Value::Array(ended.to_vec()).to_string();
     assert!(!ended.is_empty(), "a flow-end record is written");
     assert!(text.contains(BACKEND) && text.contains(word), "{text}");
+    // A detached end that did not commit is not recorded as a success.
+    assert!(
+        ended.iter().all(|record| record["outcome"] != "ok"),
+        "the canonical outcome is not ok: {text}"
+    );
     assert!(
         !text.contains(TOKEN) && !text.contains(CODE),
         "no secret in {text}"

@@ -126,3 +126,41 @@ async fn a_dropped_start_request_releases_the_login_without_an_audit_log() {
     assert!(!gw.backend.login_gate.in_flight(), "the gate is still held");
     assert!(gw.row().await["sign_in_flow"].is_null(), "the flow is gone");
 }
+
+// Discovery and authorization share one start window. The clock is paused only
+// once the start is parked at the top of discovery (no socket is in flight
+// there), moved on by two seconds, and the start then released: the flow's
+// end must still be the window counted from admission, not from the end of
+// discovery. Red today: the deadline is taken after discovery.
+#[tokio::test]
+async fn a_slow_discovery_shortens_the_authorization_window() {
+    let gw = Arc::new(Gw::new().await);
+    gw.backend.set_sign_in_windows_for_test(windows(4, 30));
+    let (reached, release) = gw.backend.sign_in.discovery_pause.arm();
+    let owner = gw.session();
+    tokio::time::pause();
+    let admitted = tokio::time::Instant::now();
+    let start = tokio::spawn({
+        let gw = Arc::clone(&gw);
+        async move { gw.start(&owner).await }
+    });
+    crate::test_pause::within("the start reaches discovery", reached.notified()).await;
+
+    tokio::time::advance(Duration::from_secs(2)).await;
+    release.notify_one();
+    let reply = tokio::time::timeout(HANG_BOUND, start)
+        .await
+        .expect("the start answers")
+        .expect("the request ran");
+
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let until = gw
+        .backend
+        .with_flow(|slot| slot.as_ref().map(|flow| flow.until))
+        .expect("the flow is pending");
+    assert!(
+        until <= admitted + Duration::from_secs(4) + Duration::from_millis(500),
+        "the window runs from admission: {:?} past it",
+        until.saturating_duration_since(admitted)
+    );
+}

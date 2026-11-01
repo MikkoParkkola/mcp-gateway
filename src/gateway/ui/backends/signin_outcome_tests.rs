@@ -195,3 +195,36 @@ async fn a_dropped_confirm_reads_as_cancelled() {
     assert!(is_cancelled(&error), "{error}");
     assert!(gw.saved().is_none());
 }
+
+// The backend's cancel has been signalled but the flow task has not yet taken
+// the flow: a confirm in that window must be refused, not commit a login the
+// backend already cancelled. The decision is called directly so nothing yields
+// between the signal and the confirm. Red today: `take_for` never looks at
+// the cancel.
+#[tokio::test]
+async fn a_confirm_after_the_backend_cancel_signal_is_refused() {
+    let gw = Arc::new(Gw::new().await);
+    let (owner, attempt) = held(&gw).await;
+    let Who::Dashboard(handle) = owner else {
+        panic!("a session owner");
+    };
+    let tag = crate::gateway::record_principal::sign_in_owner(&gw.state.record_key(), &handle);
+    gw.backend
+        .with_flow(|slot| slot.as_ref().map(|flow| flow.cancel.cancel()))
+        .expect("the flow is pending");
+
+    let decided = super::super::signin_flow::decide(
+        &gw.state,
+        &gw.backend,
+        &tag,
+        &attempt,
+        super::super::signin_flow::Decision::Confirm,
+    )
+    .await;
+
+    assert!(
+        matches!(decided, super::super::signin_flow::Decided::NoSignIn),
+        "a cancelled login is not confirmed"
+    );
+    assert!(gw.saved().is_none(), "nothing was saved");
+}
