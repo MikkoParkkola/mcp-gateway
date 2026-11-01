@@ -118,10 +118,10 @@ fn learn(files: &[syn::File]) -> Known {
     }
     for file in files {
         for sig in signatures(&file.items) {
-            if let syn::ReturnType::Type(_, ty) = &sig.output {
-                if mentions_guard(ty, &known) {
-                    known.helpers.insert(sig.ident.to_string());
-                }
+            if let syn::ReturnType::Type(_, ty) = &sig.output
+                && mentions_guard(ty, &known)
+            {
+                known.helpers.insert(sig.ident.to_string());
             }
         }
     }
@@ -132,10 +132,10 @@ fn all_items(items: &[syn::Item]) -> Vec<&syn::Item> {
     let mut out = Vec::new();
     for item in items {
         out.push(item);
-        if let syn::Item::Mod(m) = item {
-            if let Some((_, inner)) = &m.content {
-                out.extend(all_items(inner));
-            }
+        if let syn::Item::Mod(m) = item
+            && let Some((_, inner)) = &m.content
+        {
+            out.extend(all_items(inner));
         }
     }
     out
@@ -166,10 +166,10 @@ fn dashmaps(file: &syn::File) -> HashSet<String> {
     for item in all_items(&file.items) {
         if let syn::Item::Struct(s) = item {
             for f in &s.fields {
-                if type_names(&f.ty).iter().any(|n| n == "DashMap") {
-                    if let Some(id) = &f.ident {
-                        names.insert(id.to_string());
-                    }
+                if type_names(&f.ty).iter().any(|n| n == "DashMap")
+                    && let Some(id) = &f.ident
+                {
+                    names.insert(id.to_string());
                 }
             }
         }
@@ -266,13 +266,12 @@ impl Scan<'_> {
     fn block_yields(&self, block: &syn::Block, held: &[String]) -> bool {
         let mut inner = held.to_vec();
         for stmt in &block.stmts {
-            if let syn::Stmt::Local(l) = stmt {
-                if l.init
+            if let syn::Stmt::Local(l) = stmt
+                && l.init
                     .as_ref()
                     .is_some_and(|i| self.acquires(&i.expr, &inner))
-                {
-                    inner.extend(bound_names(&l.pat));
-                }
+            {
+                inner.extend(bound_names(&l.pat));
             }
         }
         matches!(block.stmts.last(), Some(syn::Stmt::Expr(e, None)) if self.acquires(e, &inner))
@@ -512,19 +511,19 @@ impl Scan<'_> {
             syn::Item::Fn(f) => self.func(&f.sig, &f.block),
             syn::Item::Impl(i) => {
                 for ii in &i.items {
-                    if let syn::ImplItem::Fn(f) = ii {
-                        if !has_cfg_test(&f.attrs) {
-                            self.func(&f.sig, &f.block);
-                        }
+                    if let syn::ImplItem::Fn(f) = ii
+                        && !has_cfg_test(&f.attrs)
+                    {
+                        self.func(&f.sig, &f.block);
                     }
                 }
             }
             syn::Item::Trait(t) => {
                 for ti in &t.items {
-                    if let syn::TraitItem::Fn(f) = ti {
-                        if let Some(body) = &f.default {
-                            self.func(&f.sig, body);
-                        }
+                    if let syn::TraitItem::Fn(f) = ti
+                        && let Some(body) = &f.default
+                    {
+                        self.func(&f.sig, body);
                     }
                 }
             }
@@ -542,10 +541,10 @@ impl Scan<'_> {
         let outer = std::mem::replace(&mut self.func, sig.ident.to_string());
         let mut held = Vec::new();
         for input in &sig.inputs {
-            if let syn::FnArg::Typed(t) = input {
-                if mentions_guard(&t.ty, self.known) {
-                    held.extend(bound_names(&t.pat));
-                }
+            if let syn::FnArg::Typed(t) = input
+                && mentions_guard(&t.ty, self.known)
+            {
+                held.extend(bound_names(&t.pat));
             }
         }
         self.block(body, held);
