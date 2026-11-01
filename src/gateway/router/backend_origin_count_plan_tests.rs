@@ -87,13 +87,6 @@ fn plan(steps: &Value, timeout: u64) -> crate::playbook::PlaybookDefinition {
     .expect("the playbook deserialises")
 }
 
-/// Run playbook `p` under `key`.
-async fn run_p_as(fx: &Fx, key: &str) -> (StatusCode, Value) {
-    let params = json!({"name": "gateway_run_playbook",
-        "arguments": {"name": "p", "arguments": {}}});
-    send(fx, "/mcp", key, "tools/call", params, None).await
-}
-
 /// The gateway's context-integrity kernel denying every finding, enforced.
 fn denying_kernel() -> crate::context_integrity::ContextIntegrityKernel {
     use crate::context_integrity::{
