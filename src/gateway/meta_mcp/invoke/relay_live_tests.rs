@@ -100,7 +100,8 @@ pub(super) fn sync_key() -> StoredKey {
 /// Alice's plan call, run inside a collector: one `alpha:read` step staged
 /// under a Sync capture and finalised as delivered.
 pub(super) async fn plan_body(meta: &MetaMcp, result: &serde_json::Value) {
-    let answer = json!({"content": [{"type": "text", "text": "plan answer"}]});
+    // The answer is the step's own output, so the receipt is kept whole.
+    let answer = result.clone();
     super::super::replay::note_sync_capture(
         "identity".to_owned(),
         String::new(),
