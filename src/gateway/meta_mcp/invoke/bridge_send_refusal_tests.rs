@@ -312,9 +312,9 @@ fn refused_plan_meta() -> (MetaMcp, Arc<AtomicUsize>) {
 }
 
 /// A composite step refused at its send: sent exactly once (no strategy
-/// resends it) and answered with the neutral step refusal, as a step the
-/// policy refuses is, never as a backend error folded into the plan.
-async fn assert_step_refused_once(tool: &str, arguments: Value) {
+/// resends it) and answered as a refusal, never as a backend error folded
+/// into the plan. Returns the answer for the composite's own refusal shape.
+async fn assert_step_refused_once(tool: &str, arguments: Value) -> Value {
     let (meta, calls) = refused_plan_meta();
     let answer = serde_json::to_value(
         Box::pin(meta.handle_tools_call(
@@ -336,6 +336,12 @@ async fn assert_step_refused_once(tool: &str, arguments: Value) {
         !answer.to_string().contains("retrying once is safe"),
         "no retry is suggested: {answer}"
     );
+    answer
+}
+
+#[tokio::test]
+async fn a_playbook_step_refused_at_its_send_is_refused_once() {
+    let answer = assert_step_refused_once("gateway_run_playbook", json!({"name": "plan"})).await;
     assert_eq!(
         answer["error"]["message"],
         crate::gateway::meta_mcp::STEP_NOT_PERMITTED,
@@ -344,15 +350,18 @@ async fn assert_step_refused_once(tool: &str, arguments: Value) {
 }
 
 #[tokio::test]
-async fn a_playbook_step_refused_at_its_send_is_refused_once() {
-    assert_step_refused_once("gateway_run_playbook", json!({"name": "plan"})).await;
-}
-
-#[tokio::test]
 async fn a_chain_step_refused_at_its_send_is_refused_once() {
-    assert_step_refused_once(
+    let answer = assert_step_refused_once(
         "gateway_execute",
         json!({"chain": [{"tool": "refused:book", "arguments": {}}]}),
     )
     .await;
+    // A chain names the refused step and keeps the refusal's own code
+    // (`chain_exec::step_failure`).
+    assert_eq!(answer["error"]["code"], -32001, "{answer}");
+    let message = answer["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("Chain step 0 (refused:book) refused: "),
+        "the chain's step refusal: {answer}"
+    );
 }
