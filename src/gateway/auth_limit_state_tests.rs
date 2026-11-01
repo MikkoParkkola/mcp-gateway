@@ -142,7 +142,7 @@ fn t3_rotation_widens_no_authority() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
     let minter = quota_of(&before, A);
-    let now = chrono::Utc::now();
+    let now = crate::clock::utc_now().expect("the test clock reads");
     assert!(
         before.admin_key_live(&minter, now),
         "premise: live on A's table"
@@ -164,7 +164,10 @@ fn t3b_a_changed_principal_ends_the_session_and_the_window() {
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(P2))]);
     assert!(
-        !after.admin_key_live(&minter, chrono::Utc::now()),
+        !after.admin_key_live(
+            &minter,
+            crate::clock::utc_now().expect("the test clock reads")
+        ),
         "a session outlived its principal"
     );
     assert!(admits(&after, A), "the new principal shared the old window");
@@ -180,7 +183,10 @@ fn t3c_adopting_the_derived_principal_changes_nothing() {
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(&derived(A)))]);
     assert!(
-        after.admin_key_live(&minter, chrono::Utc::now()),
+        after.admin_key_live(
+            &minter,
+            crate::clock::utc_now().expect("the test clock reads")
+        ),
         "adopting the derived principal ended the session"
     );
     assert!(
@@ -250,7 +256,10 @@ fn t5b_the_previous_secret_shares_the_keys_state() {
     let runtime = Arc::new(AuthRuntime::default());
     let mut rotated = key("k", B, Some(P1));
     rotated.previous_key_sha256 = Some(crate::config::api_key_digest_spec(A.as_bytes()));
-    rotated.previous_expires_at = Some(chrono::Utc::now() + chrono::Duration::days(1));
+    rotated.previous_expires_at = Some(
+        crate::clock::utc_now().expect("the test clock reads")
+            + crate::duration_bound::delta!(days, 1),
+    );
     let cfg = over(&runtime, vec![rotated]);
     spend(&cfg, A);
     assert!(!admits(&cfg, B), "the current secret got its own window");

@@ -354,7 +354,8 @@ fn t8_no_credential_identifier_leaves_the_route() {
 }
 
 fn t(seconds: i64) -> DateTime<Utc> {
-    at("2026-11-01T10:00:00Z") + chrono::Duration::seconds(seconds)
+    at("2026-11-01T10:00:00Z")
+        + chrono::TimeDelta::try_seconds(seconds).expect("an offset in range")
 }
 
 fn rfc3339(at: DateTime<Utc>) -> String {
@@ -438,7 +439,7 @@ async fn t9c2_an_explicit_rotation_keeps_the_time() {
 async fn t9e_a_refused_match_writes_nothing() {
     let fx = Fixture::new().await;
     let table = fx.table();
-    let past = expiry() + chrono::Duration::days(1);
+    let past = expiry() + crate::duration_bound::delta!(days, 1);
     assert!(
         table.validate_token_at(ZETA, past).is_none(),
         "premise: expired"

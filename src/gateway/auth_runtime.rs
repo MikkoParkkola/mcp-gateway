@@ -77,6 +77,7 @@ impl AuthRuntime {
     }
 
     /// When the key with `principal` last authenticated in this process.
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn last_used(&self, principal: &str) -> Option<i64> {
         self.last_used.get(principal).map(|seen| *seen)
     }

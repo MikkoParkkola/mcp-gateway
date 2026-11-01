@@ -253,6 +253,7 @@ impl ResolvedAuthConfig {
 
     /// When `key` last authenticated in this process, in unix seconds:
     /// `None` before its first accepted match since start (API9.9).
+    #[cfg(any(test, feature = "webui"))]
     pub(crate) fn key_last_used(&self, key: &ResolvedApiKey) -> Option<i64> {
         self.runtime.last_used(key.principal().storage_form())
     }
