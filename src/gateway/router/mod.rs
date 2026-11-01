@@ -367,6 +367,9 @@ mod secret_echo_config_tests;
 mod secret_echo_stored_tests;
 #[cfg(test)]
 mod secret_echo_tests;
+/// Answers kept before a value was marked secret are redacted when served.
+#[cfg(test)]
+mod secret_marked_later_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.

@@ -321,6 +321,42 @@ impl BackendRegistry {
         crate::security::needles::scrub_stored_text(&self.retained_sets(), text)
     }
 
+    /// Test hook: holds `value` as a configured secret of `name` from now on,
+    /// as a reload that marks it would, without replacing the instance.
+    #[cfg(test)]
+    pub(crate) fn mark_for_test(&self, name: &str, value: &str) {
+        use crate::config::configured_secrets::{
+            ConfiguredSecret, ConfiguredSecrets, SecretOrigin,
+        };
+        let set = self
+            .needles
+            .get(name)
+            .map(|entry| Arc::clone(entry.value()));
+        let set = set.unwrap_or_else(|| panic!("{name} holds no value set"));
+        set.pin_configured(
+            name,
+            &ConfiguredSecrets::of(vec![ConfiguredSecret {
+                field: "headers.X-Marked".to_owned(),
+                value: value.to_owned(),
+                origin: SecretOrigin::Explicit,
+            }]),
+        );
+    }
+
+    /// Test hook: fills `name`'s value set past its bound, so it refuses.
+    #[cfg(test)]
+    pub(crate) fn overflow_for_test(&self, name: &str) {
+        let set = self
+            .needles
+            .get(name)
+            .map(|entry| Arc::clone(entry.value()));
+        let set = set.unwrap_or_else(|| panic!("{name} holds no value set"));
+        for i in 0..=crate::security::needles::MAX_NEEDLES {
+            set.insert(name, &format!("overflow-value-{i:05}"));
+        }
+        assert!(set.overflowed(), "premise: the set refuses");
+    }
+
     /// Makes `configured` the record a backend registering from now on is
     /// seeded with: set at startup before the register loop, and by a reload
     /// before it applies its patch.
@@ -781,6 +817,10 @@ impl Destinations {
         self.policy.for_backend(self.private.contains(name))
     }
 }
+
+#[cfg(test)]
+#[path = "registry_stored_scrub_tests.rs"]
+mod stored_scrub_tests;
 
 #[cfg(test)]
 mod tests {
