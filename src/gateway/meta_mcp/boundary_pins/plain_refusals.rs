@@ -15,6 +15,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use super::delivery_framing::call_args;
 use super::scan::{Place, Sink};
 
 /// The plain `crate::Error` variants a gateway decision returns as a refusal
@@ -57,6 +58,9 @@ pub(super) enum Kind {
         name: String,
         value: bool,
         method: bool,
+        /// A value handed to a combinator (`.map_err(f)`), the form the
+        /// refusal scan in `delivery_framing.rs` reads.
+        combinator: bool,
     },
     /// A call of a local closure bound to `refuse` or `refusal`.
     Closure(String),
@@ -105,6 +109,8 @@ pub(super) struct Collect {
     wrapped: HashSet<usize>,
     /// Paths that are a call's function (by address, this walk).
     callees: HashSet<usize>,
+    /// Arguments of a combinator call (by address, this walk).
+    combinator_args: HashSet<usize>,
 }
 
 fn addr(expr: &syn::Expr) -> usize {
@@ -386,6 +392,7 @@ impl Sink for Collect {
     fn file(&mut self, _at: &Place, _file: &syn::File) {
         self.wrapped.clear();
         self.callees.clear();
+        self.combinator_args.clear();
     }
 
     fn item(&mut self, at: &Place, item: &syn::Item) {
@@ -470,15 +477,21 @@ impl Sink for Collect {
                     }
                 }
             }
-            syn::Expr::MethodCall(call) => self.push(
-                at,
-                Kind::Call {
-                    owner: None,
-                    name: call.method.to_string(),
-                    value: false,
-                    method: true,
-                },
-            ),
+            syn::Expr::MethodCall(call) => {
+                for arg in call_args(expr) {
+                    self.combinator_args.insert(addr(arg));
+                }
+                self.push(
+                    at,
+                    Kind::Call {
+                        owner: None,
+                        name: call.method.to_string(),
+                        value: false,
+                        method: true,
+                        combinator: false,
+                    },
+                );
+            }
             syn::Expr::Struct(literal) if gateway => {
                 if let Some(variant) = twelve_variant(&literal.path) {
                     let wrapped = self.wrapped.contains(&addr(expr));
@@ -522,6 +535,7 @@ impl Sink for Collect {
                             name: name.clone(),
                             value,
                             method: false,
+                            combinator: value && self.combinator_args.contains(&addr(expr)),
                         },
                     );
                 }

@@ -66,41 +66,55 @@ impl Collect {
 
     /// Error-valued `src/gateway` functions that build one of the twelve or
     /// call such a function, to a fixed point.
-    fn helper_set(&self) -> BTreeSet<String> {
-        let events = &self.events;
-        let valued: BTreeSet<&String> = self
-            .error_valued
-            .iter()
-            .filter(|(file, _)| file.starts_with("src/gateway/"))
-            .map(|(_, name)| name)
-            .collect();
-        let mut helpers = BTreeSet::new();
+    fn helper_set(&self) -> BTreeSet<(String, String)> {
+        let mut helpers: BTreeSet<(String, String)> = BTreeSet::new();
         loop {
-            let builds = |k: &Kind| match k {
+            let builds = |e: &Event| match &e.kind {
                 Kind::Construct { .. } => true,
-                Kind::Call { owner, name, .. } => {
-                    helpers.contains(name)
-                        || (owner.as_deref() == Some("Error")
-                            && ASSOCIATED.contains(&name.as_str()))
+                Kind::Call {
+                    owner,
+                    name,
+                    method,
+                    ..
+                } => {
+                    (owner.as_deref() == Some("Error") && ASSOCIATED.contains(&name.as_str()))
+                        || self.calls_helper(e, &helpers)
+                        || (*method && helpers.iter().any(|h| h.1 == *name))
                 }
                 _ => false,
             };
-            let more: BTreeSet<String> = events
+            let more: BTreeSet<(String, String)> = self
+                .events
                 .iter()
                 .filter(|e| {
                     e.file.starts_with("src/gateway/")
-                        && valued.contains(&e.func)
-                        && builds(&e.kind)
+                        && self
+                            .error_valued
+                            .contains(&(e.file.clone(), e.func.clone()))
+                        && builds(e)
                 })
-                .map(|e| e.func.clone())
+                .map(|e| (e.file.clone(), e.func.clone()))
                 .collect();
             let before = helpers.len();
             helpers.extend(more);
             if helpers.len() == before {
-                break;
+                return helpers;
             }
         }
-        helpers
+    }
+
+    /// Whether `event` names one of `helpers`: a non-method call or value by
+    /// [`Self::names_fn`], a method call by its name (a method's owner type
+    /// is not resolved).
+    fn calls_helper(&self, event: &Event, helpers: &BTreeSet<(String, String)>) -> bool {
+        match &event.kind {
+            Kind::Call {
+                name, method: true, ..
+            } => helpers.iter().any(|h| h.1 == *name),
+            _ => helpers
+                .iter()
+                .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str()))),
+        }
     }
 
     /// Whether `event` (a non-method call or value use) names the function
@@ -177,7 +191,8 @@ impl Collect {
             .chain(&step_writers)
             .filter(|n| !NOT_A_NEEDLE.contains(&n.as_str()))
             .collect();
-        let helpers = self.helper_set();
+        let helper_fns = self.helper_set();
+        let helpers: BTreeSet<String> = helper_fns.iter().map(|h| h.1.clone()).collect();
         let raise_helpers = self.raise_helpers(&needles);
 
         let mut raises = BTreeMap::new();
@@ -196,6 +211,7 @@ impl Collect {
                     name,
                     value,
                     method: false,
+                    combinator,
                 } => {
                     // Inside delivery_facts.rs a bare name is a raise only when
                     // called: a local such as `refused` in `step` is not one.
@@ -215,8 +231,10 @@ impl Collect {
                     }
                     let associated =
                         owner.as_deref() == Some("Error") && ASSOCIATED.contains(&name.as_str());
-                    // A helper with a refusal name is rowed by the refusal scan.
-                    let helper = helpers.contains(name) && !is_refusal_name(name);
+                    // A refusal-named helper called, or handed to a combinator,
+                    // is rowed by the refusal scan; any other value use is not.
+                    let rowed_there = is_refusal_name(name) && (!*value || *combinator);
+                    let helper = self.calls_helper(event, &helper_fns) && !rowed_there;
                     if gateway && (associated || helper) {
                         plain_needle = Some(format!("via {name}{suffix}"));
                     }
@@ -224,7 +242,7 @@ impl Collect {
                 Kind::Call {
                     name, method: true, ..
                 } => {
-                    if gateway && helpers.contains(name) && !is_refusal_name(name) {
+                    if gateway && self.calls_helper(event, &helper_fns) && !is_refusal_name(name) {
                         plain_needle = Some(format!("via {name}"));
                     }
                 }

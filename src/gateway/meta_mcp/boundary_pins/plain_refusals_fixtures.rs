@@ -446,3 +446,21 @@ fn f15_a_helper_of_a_raise_helper_is_followed() {
         "{rows:?}"
     );
 }
+
+/// D3 narrowed (code review): a refusal-named helper bound or handed on as
+/// a value outside a combinator is a row; handed to `map_err` it is the
+/// refusal scan's row, not this one's.
+#[test]
+fn f16_a_refusal_helper_value_outside_a_combinator_is_a_row() {
+    assert_eq!(
+        plain(
+            "fn missing_refusal(s: &str) -> Error { Error::ToolNotFound(s.into()) }\n\
+             fn a() -> Result<()> { let make = missing_refusal; Err(make(\"x\")) }\n\
+             fn b(r: Result<(), &str>) -> Result<()> { r.map_err(missing_refusal) }"
+        ),
+        [
+            "a via missing_refusal (as value) 1",
+            "missing_refusal Error::ToolNotFound(..) 1"
+        ]
+    );
+}

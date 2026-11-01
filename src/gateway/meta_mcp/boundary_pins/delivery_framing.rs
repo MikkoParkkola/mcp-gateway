@@ -95,7 +95,7 @@ const COMBINATORS: [&str; 10] = [
 ];
 
 /// The arguments of a combinator call; none for any other expression.
-fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
+pub(super) fn call_args(expr: &syn::Expr) -> Vec<&syn::Expr> {
     match expr {
         syn::Expr::MethodCall(call) if COMBINATORS.contains(&call.method.to_string().as_str()) => {
             call.args.iter().collect()
