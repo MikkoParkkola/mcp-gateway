@@ -34,11 +34,10 @@ impl OAuthClient {
         // A refresh sends the stored refresh token (MIK-8018); a cached one
         // only says this client has a grant to refresh.
         if self.has_refresh_token() {
-            match self.refresh_token().await {
-                Ok(new_token) => {
-                    self.publish_sign_in();
-                    return Ok(new_token);
-                }
+            let refreshed = self.refresh_token().await;
+            self.publish_sign_in();
+            match refreshed {
+                Ok(new_token) => return Ok(new_token),
                 // A policy refusal is not an expired grant: re-authorizing
                 // would only walk past it (MIK-7701).
                 Err(e) if is_ssrf_refusal(&e) => return Err(e),
@@ -121,9 +120,10 @@ impl OAuthClient {
                 },
                 None => self.refresh_token().await,
             };
+            // Every outcome republishes, as in `get_token`.
+            self.publish_sign_in();
             match refreshed {
                 Ok(token) => {
-                    self.publish_sign_in();
                     if self
                         .login_gate
                         .as_ref()
