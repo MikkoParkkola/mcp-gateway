@@ -10,8 +10,16 @@ use std::sync::Arc;
 /// resolved configured secret, a session this process issued, or a verified
 /// OIDC identity — and published only after that validation. Callers cannot
 /// construct one from request labels.
+///
+/// An API key's carries a second key, the one its rate-limit window and
+/// client breaker are kept under: its principal's hash, so a rotation under
+/// one principal keeps them (ROT.11). Equality covers both, so a value is
+/// equal only for the same digest under the same principal.
 #[derive(Clone, PartialEq, Eq)]
-pub struct QuotaPrincipal(Arc<str>);
+pub struct QuotaPrincipal {
+    store: Arc<str>,
+    limit: Option<Arc<str>>,
+}
 
 impl std::fmt::Debug for QuotaPrincipal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -27,6 +35,17 @@ impl QuotaPrincipal {
     /// Keyed on the configured digest: the plaintext is not held (E4).
     pub(crate) fn api_key(digest: &[u8]) -> Self {
         Self::credential(b"api-key", digest)
+    }
+
+    /// A configured key's: keyed on its digest, with its limit state kept
+    /// under `principal`, the one principal function's answer (explicit, or
+    /// derived from the digest), hashed so no principal sits in plaintext.
+    pub(crate) fn api_key_with_principal(digest: &[u8], principal: &str) -> Self {
+        let limit = Self::credential(b"api-key-principal", principal.as_bytes()).store;
+        Self {
+            limit: Some(limit),
+            ..Self::api_key(digest)
+        }
     }
 
     /// The one bucket every validated dashboard session shares.
@@ -86,22 +105,25 @@ impl QuotaPrincipal {
             (kind.len() as u64).to_be_bytes(),
             (secret.len() as u64).to_be_bytes(),
         );
-        Self(Arc::from(crate::hashing::sha256_hex_chunks([
+        let store = Arc::from(crate::hashing::sha256_hex_chunks([
             b"mcp-gateway/nonce-quota/v1\0".as_slice(),
             &kind_len,
             kind,
             &secret_len,
             secret,
-        ])))
+        ]));
+        Self { store, limit: None }
     }
 
     pub(crate) fn as_store_key(&self) -> &str {
-        &self.0
+        &self.store
     }
 
-    /// The key a client's rate-limit window and breaker are kept under.
+    /// The key a client's rate-limit window and breaker are kept under: an
+    /// API key's principal hash, else the store key. Nonce admission and the
+    /// passthrough slot budget stay on [`Self::as_store_key`], per digest.
     pub(crate) fn limit_store_key(&self) -> &str {
-        &self.0
+        self.limit.as_deref().unwrap_or(&self.store)
     }
 }
 

@@ -149,6 +149,35 @@ impl Fixture {
         (status, String::from_utf8_lossy(&body).into_owned())
     }
 
+    /// [`Self::get`], counting the handler's key-table reads; `client` may
+    /// be absent, as for a caller with no credential.
+    async fn counted(
+        &self,
+        client: Option<crate::gateway::auth::AuthenticatedClient>,
+    ) -> (StatusCode, usize) {
+        let reads = super::keys::TableReads::default();
+        let generation = Arc::new(crate::config_reload::Generation::prepare_startup(
+            Config::default(),
+            self.table(),
+        ));
+        let mut request = Request::builder()
+            .uri(URI)
+            .extension(generation)
+            .extension(reads.clone());
+        if let Some(client) = client {
+            request = request.extension(client);
+        }
+        let response = crate::gateway::ui::api_router()
+            .with_state(Arc::clone(&self.state))
+            .oneshot(request.body(Body::empty()).expect("request builds"))
+            .await
+            .expect("the router is infallible");
+        (
+            response.status(),
+            reads.0.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
     /// The route as the static bearer, which never writes `last_used`.
     async fn as_bearer(&self, auth: Arc<ResolvedAuthConfig>) -> Value {
         let (status, body) = self.get(auth, bearer()).await;
@@ -428,4 +457,46 @@ async fn t10_only_an_api_key_match_writes() {
     for name in ["zeta", "alpha", "mu"] {
         assert_eq!(entry(&answer, name)["last_used"], Value::Null, "{name}");
     }
+}
+
+/// T12: the guard runs before the handler reads the key table: a standard
+/// key and a caller with no credential are refused with no read, and an
+/// admin reads it once.
+#[tokio::test]
+async fn t12_a_refused_caller_reads_no_key() {
+    let fx = Fixture::new().await;
+    let standard = crate::gateway::auth::AuthenticatedClient {
+        name: "alpha".into(),
+        admin: false,
+        authenticated: true,
+        credential_kind: crate::security::audit::CredentialKind::ApiKey,
+        principal: crate::gateway::record_principal::InternalPrincipal::new("alpha".into()),
+        ..crate::gateway::auth::anonymous_client()
+    };
+    let (status, reads) = fx.counted(Some(standard)).await;
+    assert_eq!(
+        (status, reads),
+        (StatusCode::FORBIDDEN, 0),
+        "a standard key"
+    );
+    let (status, reads) = fx.counted(None).await;
+    assert!(status.is_client_error(), "no credential: {status}");
+    assert_eq!(reads, 0, "no credential read the table");
+    let (status, reads) = fx.counted(Some(bearer())).await;
+    assert_eq!((status, reads), (StatusCode::OK, 1), "the admin bearer");
+}
+
+/// T9d: the newer reading wins, whichever arrives last.
+#[test]
+fn t9d_the_newer_reading_wins() {
+    let runtime = AuthRuntime::default();
+    runtime.note_used(P1, 200);
+    runtime.note_used(P1, 100);
+    assert_eq!(
+        runtime.last_used(P1),
+        Some(200),
+        "an older reading moved it back"
+    );
+    runtime.note_used(P1, 300);
+    assert_eq!(runtime.last_used(P1), Some(300));
 }
