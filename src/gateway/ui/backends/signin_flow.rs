@@ -466,6 +466,11 @@ fn take_for(backend: &Backend, owner: &str, attempt: &str) -> std::result::Resul
         if Instant::now() >= flow.until && flow.phase == Phase::AwaitingConfirm {
             return Err(Decided::NoSignIn);
         }
+        // The backend's cancel is signalled but the flow task has not taken
+        // the flow yet: a login it already cancelled is not confirmed.
+        if flow.cancel.is_cancelled() {
+            return Err(Decided::NoSignIn);
+        }
         let Some(grant) = flow.grant.take() else {
             return Err(Decided::NotReady {
                 retry_after_secs: flow.retry_after_secs(),
