@@ -412,7 +412,7 @@ impl StdioTasks {
                             current,
                             caller.authorizer.generation(),
                             frame,
-                        )
+                        );
                     },
                 )
                 .await

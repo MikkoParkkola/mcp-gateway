@@ -312,7 +312,7 @@ async fn tasks_get_judged(
             |current, frame| {
                 state
                     .meta_mcp
-                    .scan_task_read(current, Some(caller.generation), frame)
+                    .scan_task_read(current, Some(caller.generation), frame);
             },
         )
         .await

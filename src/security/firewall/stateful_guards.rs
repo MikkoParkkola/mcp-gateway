@@ -6,7 +6,9 @@
 
 use serde_json::Value;
 
-use super::*;
+use super::{
+    Arc, Finding, FindingLocation, Firewall, ScanType, budget_guard, tenant_guard, tenant_reads,
+};
 
 impl Firewall {
     /// MIK-7116.MIN.1: the tenants a request's `args` name under
