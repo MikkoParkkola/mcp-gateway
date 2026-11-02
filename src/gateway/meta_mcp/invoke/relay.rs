@@ -119,26 +119,26 @@ impl MetaMcp {
                 outbound_params(tool, arguments, meta, key, egress.retry)
             };
             let caller = RelayCaller::new(who.key, who.keyed);
-            // The request's pinned generation, else the one published now
-            // (none only before startup publishes one: see `unpublished`).
+            // The request's pinned generation, else the one published now;
+            // with neither it fails closed (`unpublished_refusal`).
             let published = self.current_generation();
-            let Some(generation) = pinned.or(published.as_deref()) else {
-                staging::unpublished("witness");
-                return None;
+            let message = match pinned.or(published.as_deref()) {
+                Some(generation) => fw.relay_block_message(
+                    generation.collusion_view(),
+                    caller,
+                    (server, tool),
+                    &params,
+                    audit,
+                ),
+                None => Some(staging::unpublished_refusal("witness")),
             };
-            fw.relay_block_message(
-                generation.collusion_view(),
-                caller,
-                (server, tool),
-                &params,
-                audit,
-            )
-            .inspect(|_| super::audit::note_refused_by(DecisionKind::Firewall, None))
-            .map(|message| crate::Error::Forbidden {
-                code: -32002,
-                status: 403,
-                message,
-            })
+            message
+                .inspect(|_| super::audit::note_refused_by(DecisionKind::Firewall, None))
+                .map(|message| crate::Error::Forbidden {
+                    code: -32002,
+                    status: 403,
+                    message,
+                })
         }
         #[cfg(not(feature = "firewall"))]
         {

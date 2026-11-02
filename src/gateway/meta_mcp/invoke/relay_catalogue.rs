@@ -92,20 +92,19 @@ impl MetaMcp {
             self.firewall.as_ref().filter(|fw| fw.relay_active())?,
         );
         let who = RelayCaller::new(&caller.key, caller.keyed);
-        // The request's pinned generation, else the one published now
-        // (none only before startup publishes one: see `unpublished`).
+        // The request's pinned generation, else the one published now;
+        // with neither it fails closed (`unpublished_refusal`).
         let published = self.current_generation();
-        let Some(generation) = caller.generation.as_deref().or(published.as_deref()) else {
-            super::staging::unpublished("catalogue witness");
-            return None;
+        let message = match caller.generation.as_deref().or(published.as_deref()) {
+            Some(generation) => fw.relay_block_message(
+                generation.collusion_view(),
+                who,
+                (backend, method),
+                params,
+                (&caller.session, &caller.name),
+            )?,
+            None => super::staging::unpublished_refusal("catalogue witness"),
         };
-        let message = fw.relay_block_message(
-            generation.collusion_view(),
-            who,
-            (backend, method),
-            params,
-            (&caller.session, &caller.name),
-        )?;
         // The same error `tools/call` refuses with, so the route stamps the
         // same HTTP status (MIK-7832).
         let refusal = crate::Error::Forbidden {

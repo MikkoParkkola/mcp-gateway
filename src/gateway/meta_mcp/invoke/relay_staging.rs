@@ -199,8 +199,9 @@ impl DeferredReceipts {
     }
 }
 
-/// A delivery or a witness found no published generation, so nothing is
-/// recorded or refused. Unreachable in production: startup publishes before
+/// A delivery found no published generation, so nothing is recorded; the
+/// witness refuses in that state ([`unpublished_refusal`]), so no relay gets
+/// past it unrecorded. Unreachable in production: startup publishes before
 /// serving (HTTP `server/run.rs:217`, before `listener::serve` at `:630`;
 /// stdio `server/stdio_loop.rs:127`, before the first read at `:319`; the
 /// bridge commits only inside a call already being served), and the
@@ -209,8 +210,58 @@ impl DeferredReceipts {
 pub(crate) fn unpublished(site: &'static str) {
     tracing::error!(
         site,
-        "relay check before startup published a generation: nothing recorded or refused"
+        "relay delivery before startup published a generation: nothing recorded"
     );
+}
+
+/// What a relay check refuses with while no generation is published: it
+/// fails closed. In a test build a fixture that serves relays without a
+/// live config panics instead, unless the row opted in
+/// ([`unpublished_allow::arm`]), so a fixture that forgot to publish cannot
+/// pass a refusal row by this path.
+pub(crate) const UNPUBLISHED: &str = "no live config published; relays refused until one is";
+
+/// [`UNPUBLISHED`], logged with the witness `site`.
+pub(crate) fn unpublished_refusal(site: &'static str) -> String {
+    #[cfg(test)]
+    assert!(
+        unpublished_allow::fire(),
+        "no live config published in this fixture ({site}): publish one (set_live_config) \
+         before serving relays"
+    );
+    tracing::error!(site, "relay refused: {UNPUBLISHED}");
+    format!("Relay detection blocked: {UNPUBLISHED}")
+}
+
+/// The opt-in a row arms to reach [`unpublished_refusal`] in a test build,
+/// with how often it fired (patterned on `refuse_hook`).
+#[cfg(test)]
+pub(crate) mod unpublished_allow {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    thread_local! {
+        static ALLOWED: std::cell::RefCell<Option<Arc<AtomicUsize>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Allow the unpublished refusal on this thread; the count is how often
+    /// it fired.
+    pub(crate) fn arm() -> Arc<AtomicUsize> {
+        let fired = Arc::new(AtomicUsize::new(0));
+        ALLOWED.with(|a| *a.borrow_mut() = Some(Arc::clone(&fired)));
+        fired
+    }
+
+    /// Whether this thread allowed it, counting the firing.
+    pub(super) fn fire() -> bool {
+        ALLOWED.with(|a| {
+            a.borrow()
+                .as_ref()
+                .map(|fired| fired.fetch_add(1, Ordering::SeqCst))
+                .is_some()
+        })
+    }
 }
 
 impl MetaMcp {
