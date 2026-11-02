@@ -671,5 +671,57 @@ class NamedShapeSpans(unittest.TestCase):
         self.assertPasses("let c = C { timeout_ms: 30_000_u64 };", attrs="")
 
 
+class TestSection(unittest.TestCase):
+    """Test code in a product file is the `#[cfg(test)]` item that holds it,
+    not everything after the file's first `#[cfg(test)]` line: product code
+    after an early test-only item is product code, and code inside a test
+    item is still judged."""
+
+    WINDOW = 'timeout(Duration::from_millis(100), f()).await.expect("x");'
+
+    def product_after(self, early: str) -> str:
+        return f"{early}\n\nasync fn product() {{\n{self.WINDOW}\n}}\n"
+
+    # Each layout puts product code after an early test-only item.
+    EARLY = {
+        "test-only fn": "#[cfg(test)]\nfn helper() {}",
+        "test-only use": "#[cfg(test)]\nuse crate::fixture::Probe;",
+        "path module": '#[cfg(test)]\n#[path = "x_tests.rs"]\nmod tests;',
+        "inline module": "#[cfg(test)]\nmod tests {\n    fn helper() {}\n}",
+    }
+
+    def timeouts(self, text):
+        return guard.scan_timeouts("src/x.rs", text, {}, {})
+
+    def new(self, text):
+        lines = set(range(1, text.count("\n") + 2))
+        return guard.scan_new("src/x.rs", text, HANG, {}, lines)
+
+    def test_product_code_after_an_early_test_item_is_not_test_code(self):
+        for name, early in self.EARLY.items():
+            with self.subTest(layout=name):
+                text = self.product_after(early)
+                self.assertEqual(self.timeouts(text), [], text)
+                self.assertEqual(self.new(text), [], text)
+
+    def test_code_inside_a_test_module_is_judged(self):
+        text = f"fn product() {{}}\n\n#[cfg(test)]\nmod tests {{\n    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_code_inside_a_test_only_fn_is_judged(self):
+        text = f"fn product() {{}}\n\n#[cfg(test)]\nasync fn helper() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_a_test_module_that_never_closes_holds_the_rest_of_the_file(self):
+        text = f"#[cfg(test)]\nmod tests {{\n    fn helper() {{}}\n\nasync fn case() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
+    def test_a_product_file_without_test_items_has_no_test_code(self):
+        self.assertEqual(self.timeouts(self.product_after("fn other() {}")), [])
+
+
 if __name__ == "__main__":
     unittest.main()
