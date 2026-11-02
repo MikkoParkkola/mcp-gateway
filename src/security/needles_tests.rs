@@ -606,10 +606,12 @@ async fn a_refused_sent_value_keeps_the_set_refusing_until_its_grace_passes() {
     // The filled values are past their grace; X is exactly at the end of
     // its own, so still live.
     tokio::time::advance(GRACE).await;
+    // A refusal replaces the whole answer at its caller, so only a
+    // redaction leaves text to check.
     let (outcome, text) = scrubbed(&needles, "echo refused-token-x");
     assert!(
-        matches!(outcome, Scrubbed::Redacted | Scrubbed::Refuse)
-            && !text.contains("refused-token-x"),
+        outcome == Scrubbed::Refuse
+            || (outcome == Scrubbed::Redacted && !text.contains("refused-token-x")),
         "the refused value was served once older values retired: {outcome:?} {text}"
     );
     tokio::time::advance(Duration::from_secs(1)).await;
