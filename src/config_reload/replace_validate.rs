@@ -114,9 +114,9 @@ impl ReloadContext {
         let text = String::from_utf8(text).map_err(|_| {
             ReplaceError::Refused("the new gateway.yaml is not UTF-8 text".to_string())
         })?;
-        let (path, env_paths) = (target.to_path_buf(), self.env.env_paths().clone());
+        let (file, env_paths) = (target.to_path_buf(), self.env.env_paths().clone());
         let evaluated = tokio::task::spawn_blocking(move || {
-            Config::load_pending(&path, &text, &env_paths, pending)
+            Config::load_pending(&file, &text, &env_paths, pending)
         })
         .await
         .map_err(|e| ReplaceError::Failed(format!("the config check task failed: {e}")))?
