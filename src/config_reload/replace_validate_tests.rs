@@ -667,12 +667,14 @@ fn every_yaml_form_of_a_reserved_reference_is_refused_with_its_line() {
     }
 }
 
-/// An env file that assigns a reserved name is refused, naming it.
+/// An env file that assigns a reserved name is refused, naming it, the env
+/// file and the assignment's line, as the YAML forms name theirs.
 #[test]
 fn an_env_file_assigning_a_reserved_name_is_refused() {
     let dir = tempfile::tempdir().expect("dir");
     let env = dir.path().join("gateway.env");
-    write_owner_only(&env, "MCPGW_PENDING_SLOT_6=x\n").expect("write env file");
+    write_owner_only(&env, "# a comment\nOTHER=1\nMCPGW_PENDING_SLOT_6=x\n")
+        .expect("write env file");
     let refused = load_refusal(&format!(
         "env_files:\n  - {}\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
         env.display()
@@ -680,6 +682,10 @@ fn an_env_file_assigning_a_reserved_name_is_refused() {
     assert!(
         refused.contains("MCPGW_PENDING_SLOT_6") && refused.contains("rename"),
         "the refusal names the reserved assignment: {refused}"
+    );
+    assert!(
+        refused.contains(&env.display().to_string()) && refused.contains("line 3"),
+        "the refusal names the env file and the assignment's line: {refused}"
     );
 }
 
