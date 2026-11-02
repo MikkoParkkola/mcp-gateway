@@ -4,6 +4,7 @@
 //! evidence, the activity rule filter, and the receipt's line for each piece
 //! of evidence a record does not carry.
 
+use serde::Deserialize as _;
 use serde_json::Value;
 
 use super::{Decided, Decision, Effect};
@@ -39,49 +40,67 @@ pub(crate) const DECIDED_REPLAYED: &str = "replayed from a stored result";
 
 /// The receipt's evidence lines, by name, in the order the receipt shows them.
 pub(crate) const EVIDENCE_FIELDS: [&str; 6] =
-    ["kind", "rule", "flags", "findings", "effect", "grant"];
+    ["kind", "rule", "grant", "flags", "findings", "effect"];
 
 /// The decision object `entry` carries; `None` for a record without one
-/// (written before decisions were recorded), never an error.
+/// (written before decisions were recorded) and for one that does not read
+/// as a decision, never an error.
 pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
-    let _ = entry;
-    None
+    Decision::deserialize(entry.get("decision")?).ok()
 }
 
-/// Whether `entry`'s decision names `rule_id`.
+/// Whether `entry`'s decision names `rule_id`. A record with no decision, or
+/// one that does not read, names no rule.
 pub(crate) fn matches_rule(entry: &Value, rule_id: &str) -> bool {
-    let _ = (entry, rule_id);
-    true
+    decision_evidence(entry).is_some_and(|d| d.rule_id.as_deref() == Some(rule_id))
+}
+
+/// The line for evidence `decision` does not carry: its version could not
+/// write it, or this call has none.
+fn not_recorded(decision: &Decision) -> &'static str {
+    if decision.v < FINDINGS_AND_EFFECT_SINCE {
+        NOT_RECORDED_BY_VERSION
+    } else {
+        NOT_RECORDED_FOR_CALL
+    }
 }
 
 /// The rule line, when the record names no rule id.
 pub(crate) fn rule_line(decision: &Decision) -> Option<&'static str> {
-    let _ = decision;
-    None
+    decision.rule_id.is_none().then_some(RULE_NOT_RECORDED)
 }
 
 /// The flags line: no tool-call rule carries the audit-required or rollback
 /// flags, so the receipt says they were not set by the rule.
-pub(crate) fn flags_line(decision: &Decision) -> &'static str {
-    let _ = decision;
-    NO_FINDINGS
+pub(crate) fn flags_line(_decision: &Decision) -> &'static str {
+    FLAGS_NOT_SET
 }
 
 /// The findings line, when there is no list to show.
 pub(crate) fn findings_line(decision: &Decision) -> Option<&'static str> {
-    let _ = decision;
-    None
+    match &decision.request_findings {
+        None => Some(not_recorded(decision)),
+        Some(found) if found.is_empty() => Some(NO_FINDINGS),
+        Some(_) => None,
+    }
 }
 
 /// The effect line, when there is no declared read-only or write effect to
 /// show.
 pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
-    let _ = (decision, Effect::Undeclared);
-    None
+    match decision.declared_effect {
+        None => Some(not_recorded(decision)),
+        Some(Effect::Undeclared) => Some(UNDECLARED),
+        Some(Effect::ReadOnly | Effect::MayWrite) => None,
+    }
 }
 
 /// How the call was decided, in the receipt's words.
 pub(crate) fn decided_line(decision: &Decision) -> &'static str {
-    let _ = (decision, Decided::Fresh);
-    DECIDED_FRESH
+    match decision.decided {
+        Decided::Fresh => DECIDED_FRESH,
+        Decided::CacheHitCopied => DECIDED_CACHE_COPIED,
+        Decided::CacheHitNotRedecided => DECIDED_CACHE_NOT_REDECIDED,
+        Decided::Replayed => DECIDED_REPLAYED,
+    }
 }
