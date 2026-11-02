@@ -263,6 +263,20 @@ pr_body_case operators_ruling fail "Follows the operator's ruling on retention."
 pr_body_case cpu_register pass 'Reads the register of the CPU.'
 pr_body_case register_count pass 'The cache registers 3 entries per row.'
 pr_body_case ruling_in_prose pass 'A ruling on the wire format is still open.'
+# Ordinary prose the review round named: hardware and data registers, a
+# sentence boundary, the verb "ruling out", and a court ruling.
+pr_body_case register_file_row pass 'Fix reads from row 3 of the register file.'
+pr_body_case voter_register_row pass 'Skip voter register row 3 when its identifier is empty.'
+pr_body_case register_then_row pass 'Adds a button to register. Row 3 of the results table now shows latency.'
+pr_body_case operator_ruling_out pass 'Fix the comparison operator ruling out valid zero values.'
+pr_body_case lead_ruling_out pass 'With the lead ruling out a DNS cause, this change focuses on the TLS path.'
+pr_body_case court_ruling pass 'Summarises the lead ruling in Smith v Jones for the compliance note.'
+# Internal citations in other spellings.
+pr_body_case row_colon fail 'Deferred in the findings register, row: 397.'
+pr_body_case typographic_possessive fail 'Per the lead’s ruling, retain the route.'
+pr_body_case adjective_register fail 'Recorded as row 397 in the not-fixed register.'
+pr_body_case register_entry fail 'See register entry 397.'
+pr_body_case ruling_letter fail 'Per lead ruling B, the twelve variants stay.'
 # The refusal names its reason.
 pr_body_reason_case() {
   local name="$1" body="$2" reason="$3" out
