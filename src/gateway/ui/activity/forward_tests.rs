@@ -1,0 +1,181 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! The stream's forward read of one log: order, keep, budget, the cursor's
+//! search and its resume.
+
+use std::cell::{Cell, RefCell};
+use std::path::{Path, PathBuf};
+
+use serde_json::{Value, json};
+
+use super::{Budget, ForwardPage, Log, MAX_RESTARTS, Mark, Search, StreamKind, rows_after};
+use crate::gateway::ui::activity::access::Access;
+use crate::security::transparency_log::recompute_entry_hash;
+use crate::security::transparency_log::segments::sealed_path;
+
+#[path = "forward_resume_tests.rs"]
+mod resume;
+#[path = "forward_rows_tests.rs"]
+mod rows;
+
+thread_local! {
+    /// Run once, after a resume has decided the segment's identity and before
+    /// its first byte is read.
+    static AFTER_IDENTITY: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    /// While set, reading a segment's identity fails.
+    static IDENTITY_FAILS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The resume's seam between deciding the identity and the first read.
+pub(super) fn after_identity() {
+    if let Some(hook) = AFTER_IDENTITY.with(|h| h.borrow_mut().take()) {
+        hook();
+    }
+}
+
+/// Whether reading an identity should fail now.
+pub(super) fn identity_fails() -> bool {
+    IDENTITY_FAILS.with(Cell::get)
+}
+
+fn set_after_identity(hook: impl FnOnce() + 'static) {
+    AFTER_IDENTITY.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+}
+
+const X: &str = "https://issuer-x";
+
+/// One line of a fixture log.
+#[derive(Clone)]
+enum Rec {
+    /// A call, by the verified `(issuer, subject)` when there is one.
+    Call(Option<(&'static str, &'static str)>),
+    /// A call padded to about this many bytes.
+    Big(usize),
+    Admin,
+    Config,
+    /// A record Activity does not list (a grant decision).
+    Grant,
+    /// Bytes that are not a record, then a newline.
+    Junk(usize),
+    /// Bytes with no newline, ending the file.
+    Torn(usize),
+}
+
+/// What a fixture wrote: each record's place and offsets, in counter order.
+struct Written {
+    marks: Vec<Mark>,
+    /// `(segment file, start, end after newline)` per record.
+    at: Vec<(PathBuf, u64, u64)>,
+}
+
+fn mark_of(entry: &Value) -> Mark {
+    Mark {
+        counter: entry["counter"].as_u64().unwrap(),
+        hash16: entry["entry_hash"].as_str().unwrap()["sha256:".len()..][..16].to_owned(),
+    }
+}
+
+fn body(rec: &Rec, counter: u64) -> Option<Value> {
+    let mut e = match rec {
+        Rec::Call(_) | Rec::Big(_) => {
+            let mut w = json!({"account": "a"});
+            if let Rec::Call(Some((issuer, subject))) = rec {
+                w["authority"] = (*issuer).into();
+                w["subject"] = (*subject).into();
+            }
+            json!({"outcome": "ok", "server": "srv", "tool": format!("tool_{counter}"),
+                   "route": "meta_invoke", "request_hash": "sha256:aa", "who": w})
+        }
+        Rec::Admin => json!({"event": "admin_action", "surface": "ui", "route": "/x"}),
+        Rec::Config => json!({"kind": "control_plane_audit", "action": "set", "actor_id": "a"}),
+        Rec::Grant => json!({"event": "grant_decision"}),
+        _ => return None,
+    };
+    if let Rec::Big(n) = rec {
+        e["pad"] = "p".repeat(*n).into();
+    }
+    e["timestamp"] = "2026-11-02T10:00:00+00:00".into();
+    Some(e)
+}
+
+/// Write `segments` as one log at `path`: every one but the last sealed,
+/// numbered from `first_seq`; the last is the active file. Counters start at
+/// `first_counter` and chain from `prev`.
+fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter: u64) -> Written {
+    let mut prev = "genesis".to_owned();
+    let mut counter = first_counter;
+    let mut out = Written { marks: Vec::new(), at: Vec::new() };
+    for (i, seg) in segments.iter().enumerate() {
+        let file = if i + 1 == segments.len() {
+            path.to_path_buf()
+        } else {
+            sealed_path(path, first_seq + i as u64)
+        };
+        let mut bytes = Vec::new();
+        for rec in seg {
+            match rec {
+                Rec::Junk(n) => {
+                    bytes.extend(std::iter::repeat_n(b'x', *n));
+                    bytes.push(b'\n');
+                }
+                Rec::Torn(n) => bytes.extend(std::iter::repeat_n(b'x', *n)),
+                rec => {
+                    let mut e = body(rec, counter).unwrap();
+                    e["counter"] = counter.into();
+                    e["prev_entry_hash"] = prev.clone().into();
+                    let hash = recompute_entry_hash(&e).unwrap();
+                    e["entry_hash"] = hash.clone().into();
+                    prev = hash;
+                    let start = bytes.len() as u64;
+                    bytes.extend(e.to_string().as_bytes());
+                    bytes.push(b'\n');
+                    out.marks.push(mark_of(&e));
+                    out.at.push((file.clone(), start, bytes.len() as u64));
+                    counter += 1;
+                }
+            }
+        }
+        std::fs::write(&file, bytes).unwrap();
+    }
+    out
+}
+
+fn write(path: &Path, segments: &[Vec<Rec>]) -> Written {
+    write_from(path, segments, 1, 1)
+}
+
+fn calls(n: usize) -> Vec<Rec> {
+    vec![Rec::Call(Some((X, "s"))); n]
+}
+
+fn log(path: &Path, kind: StreamKind) -> Log<'_> {
+    Log { path, kind, generation: 0, secret: None }
+}
+
+const WIDE: Budget = Budget { rows: 200, bytes: 8 << 20 };
+
+/// Call until the page no longer says `more`; every page, in order.
+fn drain(
+    log: &Log<'_>,
+    cursor: Option<&Mark>,
+    stop: Option<&Mark>,
+    access: &Access,
+    budget: Budget,
+    search: &mut Search,
+) -> Vec<ForwardPage> {
+    let mut pages = Vec::new();
+    let mut at = cursor.cloned();
+    loop {
+        let page = rows_after(log, at.as_ref(), stop, access, budget, search).unwrap();
+        let more = page.more;
+        at = page.next.clone().or(at);
+        pages.push(page);
+        if !more || pages.len() > 10_000 {
+            return pages;
+        }
+    }
+}
+
+fn counters(pages: &[ForwardPage]) -> Vec<u64> {
+    pages.iter().flat_map(|p| p.rows.iter().map(|r| r.mark.counter)).collect()
+}
