@@ -245,23 +245,32 @@ fn r4e_an_anchor_inside_the_element_refuses() {
                     - name: ci\n      backends: *shared\n";
     let (code, reason) = refused(original, &[revoke(0)]);
     assert_eq!(code, GiveUp::Anchor);
-    instructs(&reason, "ops");
-    assert!(reason.contains("lines 3 to 5"), "names its lines: {reason}");
-    let alias = reason.find("alias").expect("the alias step");
-    assert!(
-        alias < reason.find("delete").expect("deletion"),
-        "the alias is replaced before the deletion: {reason}"
-    );
-    // Following it: the alias takes the value it named, then the lines go.
-    let by_hand = drop_lines(
-        &original.replace("backends: *shared", "backends:\n        - fs"),
-        2..5,
-    );
-    let doc: crate::yaml::Value = crate::yaml::from_str(&by_hand).expect("loads");
-    let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
-    assert_eq!(keys.len(), 1, "{by_hand}");
-    assert_eq!(keys[0]["name"].as_str(), Some("ci"));
-    assert_eq!(keys[0]["backends"][0].as_str(), Some("fs"));
+    // Deleting the lines strands `*shared`: the check fails, expiry alone.
+    expiry_only(&reason, "ops");
+}
+
+/// A refusal whose hand deletion did not check out: expiry alone, which a
+/// reload always applies; no deletion offered.
+#[track_caller]
+fn expiry_only(reason: &str, name: &str) {
+    assert!(reason.contains(name), "names the key: {reason}");
+    assert!(reason.contains("expires_at"), "expiry: {reason}");
+    assert!(reason.contains("reload"), "then reload: {reason}");
+    for deletion in ["delete", "remove"] {
+        assert!(!reason.contains(deletion), "no deletion offered: {reason}");
+    }
+    assert!(!reason.contains("sha256:"), "never a value: {reason}");
+}
+
+/// `text`'s `auth` section, loaded as the gateway loads it.
+#[track_caller]
+fn loads_auth(text: &str) -> crate::config::AuthConfig {
+    let doc: crate::yaml::Value = crate::yaml::from_str(text).expect("loads");
+    let auth = doc.get("auth").cloned().unwrap_or(crate::yaml::Value::Null);
+    if auth.is_null() {
+        return crate::config::AuthConfig::default();
+    }
+    crate::yaml::from_value(auth).expect("auth loads")
 }
 
 /// `text` without its 0-based `lines`.
@@ -290,6 +299,9 @@ fn r4g_a_decoration_on_its_own_line_keeps_the_whole_entry() {
     let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0]["name"].as_str(), Some("ci"));
+    let auth = loads_auth(&drop_lines(original, 2..6));
+    assert_eq!(auth.api_keys.len(), 1);
+    assert_eq!(auth.api_keys[0].name, "ci");
 }
 
 // R4h: a decorated sole key where `api_keys` is all of `auth`: the
@@ -307,6 +319,7 @@ fn r4h_deleting_the_only_key_by_hand_names_the_auth_line_it_empties() {
     let by_hand = drop_lines(original, 2..6);
     let doc: crate::yaml::Value = crate::yaml::from_str(&by_hand).expect("loads");
     assert!(doc.get("auth").is_none(), "{by_hand}");
+    assert!(loads_auth(&by_hand).api_keys.is_empty());
 }
 
 // R4i: a flow element in a block list has its own lines: delete them,
@@ -325,6 +338,9 @@ fn r4i_a_flow_element_in_a_block_list_deletes_its_own_lines() {
     let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0]["name"].as_str(), Some("ci"));
+    let auth = loads_auth(&drop_lines(original, 2..3));
+    assert_eq!(auth.api_keys.len(), 1);
+    assert_eq!(auth.api_keys[0].name, "ci");
 }
 
 // R4j: an anchor on the list itself: an alias elsewhere may name it, so
@@ -334,8 +350,83 @@ fn r4j_an_anchored_list_refuses_with_the_instructions() {
     let original = "auth:\n  api_keys: &keys\n    - name: ops\n    - name: ci\nmirror: *keys\n";
     let (code, reason) = refused(original, &[revoke(0)]);
     assert_eq!(code, GiveUp::Anchor);
+    // `mirror` would lose `ops` too: not the original minus the key.
+    expiry_only(&reason, "ops");
+}
+
+// R4k: an anchor inside an entry of a flow list, used by a survivor: the
+// shared-line edit strands the alias, so expiry alone.
+#[test]
+fn r4k_a_flow_list_entry_holding_a_used_anchor_gets_expiry_only() {
+    let original =
+        "auth:\n  api_keys: [{name: ops, backends: &s [fs]}, {name: ci, backends: *s}]\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Flow);
+    expiry_only(&reason, "ops");
+}
+
+// R4l: a decoration line with a trailing comment still leads to the dash,
+// and the checked deletion names the `api_keys:` line it empties.
+#[test]
+fn r4l_a_commented_decoration_line_gets_a_checked_deletion() {
+    let original = "auth:\n  enabled: true\n  api_keys:\n    -\n      &k # note\n      name: ops\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
     instructs(&reason, "ops");
-    assert!(reason.contains("alias"), "{reason}");
+    assert!(
+        reason.contains("lines 4 to 6 and the `api_keys:` line 3"),
+        "{reason}"
+    );
+    let auth = loads_auth(&drop_lines(original, 2..6));
+    assert!(auth.api_keys.is_empty());
+}
+
+// R4m: an anchored list holding the last key, named by an alias: the
+// cascade would delete the anchor, so expiry alone.
+#[test]
+fn r4m_an_anchored_sole_list_named_by_an_alias_gets_expiry_only() {
+    let original = "auth:\n  enabled: true\n  api_keys: &keys\n    - name: ops\nmirror: *keys\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    expiry_only(&reason, "ops");
+}
+
+// R4n (G1): a flow element written over several lines: the node's end
+// excludes its `}`, so the line range would leave it; the check fails.
+#[test]
+fn r4n_a_multiline_flow_element_gets_expiry_only() {
+    let original = "auth:\n  api_keys:\n    - {\n        name: ops\n      }\n    - name: ci\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Flow);
+    expiry_only(&reason, "ops");
+}
+
+// R4o (G4): an anchor on its own line above the list's first dash: the
+// deletion would leave `&keys` behind; the check fails.
+#[test]
+fn r4o_a_list_anchor_on_its_own_line_gets_expiry_only() {
+    let original = "auth:\n  enabled: true\n  api_keys:\n    &keys\n    - name: ops\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    expiry_only(&reason, "ops");
+}
+
+// R4p (G6): a key spelt `-note` inside an anchored entry is no dash; a
+// range that took it for one fails the check.
+#[test]
+fn r4p_a_key_starting_with_a_hyphen_is_not_the_dash() {
+    let original =
+        "auth:\n  api_keys:\n    - &k\n      -note: x\n      name: ops\n    - name: ci\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    if reason.contains("delete") {
+        // Offered only because it checked out: following it loads.
+        let auth = loads_auth(&drop_lines(original, 2..5));
+        assert_eq!(auth.api_keys.len(), 1);
+        assert_eq!(auth.api_keys[0].name, "ci");
+    } else {
+        expiry_only(&reason, "ops");
+    }
 }
 
 // R4c, R4f: a flow list refuses with an entry-specific edit, never a
@@ -478,11 +569,29 @@ fn r13_a_block_scalar_key_removed_beside_a_revocation_proves() {
         Change::Remove,
     );
     let (out, dropped) = revoked(&original, &[revoke(1), environment]);
-    assert!(
-        !out.contains("environment") && !out.contains("name: b"),
-        "{out}"
+    // The block scalar's trailing blank line is inside its span: it goes.
+    assert_eq!(
+        out,
+        "auth:\n  api_keys:\n    - name: a\n      key_sha256: \"sha256:01\"\n    \
+         - name: c\n      key_sha256: \"sha256:03\"\n"
     );
     assert!(dropped.is_empty(), "{dropped:?}");
+}
+
+// R14: a key removal (no revocation) whose block scalar's trailing blank
+// line would otherwise join the `|+` scalar above it: the line goes with
+// the removed key, and the save proves.
+#[test]
+fn r14_a_removed_block_scalar_takes_its_trailing_blank_line() {
+    let original = "environment: |+\n  staging\ndefault_routing_profile: |-\n  default\n\n\
+                    server:\n  port: 8080\n";
+    let profile = (
+        FieldPath(vec![Segment::Key("default_routing_profile".into())]),
+        Change::Remove,
+    );
+    let template = edit_in_place(original, &[profile]).expect("a provable removal");
+    let out = String::from_utf8(template.bytes().to_vec()).expect("utf-8");
+    assert_eq!(out, "environment: |+\n  staging\nserver:\n  port: 8080\n");
 }
 
 // R10, R10b: removing an element outside `auth.api_keys` gives up.

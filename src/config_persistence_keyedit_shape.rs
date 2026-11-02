@@ -564,6 +564,15 @@ pub(super) fn remove_entry(
     let span = &text[node.start..node.end.min(text.len())];
     let last_byte = node.start + span.trim_end().len().saturating_sub(1);
     let mut last = lines.line_of(last_byte.max(key.start));
+    // Blank lines wholly inside the span are the entry's (a block scalar's
+    // trailing lines, which a `|+` scalar above would otherwise take).
+    let end = node.end.min(text.len());
+    while last + 1 < lines.len()
+        && lines.content(last + 1).trim().is_empty()
+        && lines.line_start(last + 2) <= end
+    {
+        last += 1;
+    }
     // Comment and blank lines indented under the entry belong to it.
     // Blank lines between them do not end that.
     let mut next = last + 1;
