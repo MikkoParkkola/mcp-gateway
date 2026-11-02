@@ -31,6 +31,17 @@ pub(in super::super) struct Derived {
     pub(in super::super) plain: Vec<String>,
 }
 
+/// A construction's needle: its shape, and `wrapped` inside a raise.
+fn construct_needle(variant: &str, form: &str, wrapped: bool) -> String {
+    let shape = match form {
+        "call" => format!("Error::{variant}(..)"),
+        "{}" => format!("Error::{variant}{{}}"),
+        _ => format!("Error::{variant} (as value)"),
+    };
+    let wrap = if wrapped { " wrapped" } else { "" };
+    format!("{shape}{wrap}")
+}
+
 /// A macro invocation's two needles: its `delivery_facts` raise row, and
 /// its plain-refusal row (the other monitored names, joined).
 fn macro_needles(tokens: &str, helpers: &BTreeSet<String>) -> (Option<String>, Option<String>) {
@@ -268,15 +279,7 @@ impl Collect {
                     variant,
                     form,
                     wrapped,
-                } => {
-                    let shape = match *form {
-                        "call" => format!("Error::{variant}(..)"),
-                        "{}" => format!("Error::{variant}{{}}"),
-                        _ => format!("Error::{variant} (as value)"),
-                    };
-                    let wrap = if *wrapped { " wrapped" } else { "" };
-                    plain_needle = Some(format!("{shape}{wrap}"));
-                }
+                } => plain_needle = Some(construct_needle(variant, form, *wrapped)),
                 Kind::Closure(name) if gateway => {
                     plain_needle = Some(format!("via {name} (closure)"));
                 }
