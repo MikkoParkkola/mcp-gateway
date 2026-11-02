@@ -225,7 +225,6 @@ fn flow_entry_span(text: &str, start: usize) -> Option<Range<usize>> {
         match quote {
             Some(q) if b == b'\\' && q == b'"' => at += 1,
             Some(q) if b == q => quote = None,
-            Some(_) => {}
             None if b == b'"' || b == b'\'' => quote = Some(b),
             None if b == b'{' || b == b'[' => depth += 1,
             None if b == b'}' || b == b']' => {
@@ -234,7 +233,7 @@ fn flow_entry_span(text: &str, start: usize) -> Option<Range<usize>> {
                     break;
                 }
             }
-            None => {}
+            _ => {}
         }
         at += 1;
     }
