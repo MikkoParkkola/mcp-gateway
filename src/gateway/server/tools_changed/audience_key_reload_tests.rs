@@ -8,8 +8,10 @@
 use super::audience_fixture::{World, tool};
 use crate::gateway::streaming::TaggedNotification;
 
-/// An ordinary notification from `backend`, not a list change.
-const UPDATED: &str = "notifications/resources/updated";
+/// An ordinary backend notification (not a tool-list change) that both
+/// channels carry: `subscriptions/listen` here subscribes to resource-list
+/// changes.
+const UPDATED: &str = "notifications/resources/list_changed";
 
 /// Push one ordinary notification from `backend` into both channels.
 async fn push(w: &World, backend: &str) {
