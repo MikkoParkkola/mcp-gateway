@@ -745,6 +745,27 @@ class TestSection(unittest.TestCase):
         text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} + {window};\n}}\n"
         self.assertEqual(len(self.timeouts(text)), 1, text)
 
+    def test_a_test_only_let_runs_past_a_cast_after_its_block(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} as u64\n        + {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_an_outer_test_cfg_makes_the_whole_file_test_code(self):
+        text = f"#![cfg(test)]\n\nfn first() {{}}\n\nasync fn helper() {{\n{self.WINDOW}\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    ELAPSED = "assert!(start.elapsed() < Duration::from_secs(9));"
+
+    def test_new_code_judges_an_elapsed_assert_only_in_test_code(self):
+        product = f"#[cfg(test)]\nfn helper() {{}}\n\nfn product() {{\n{self.ELAPSED}\n}}\n"
+        self.assertEqual(self.new(product), [], product)
+        inside = f"#[cfg(test)]\nmod tests {{\n    fn case() {{\n{self.ELAPSED}\n    }}\n}}\n"
+        self.assertIn(guard.FLOOR, [f.rule for f in self.new(inside)], inside)
+
+    def test_full_mode_still_judges_an_elapsed_assert_anywhere(self):
+        text = "fn product() {\nassert!(start.elapsed() < Duration::from_millis(100));\n}\n"
+        self.assertEqual(len(guard.scan_text("src/x.rs", text, {})), 1, text)
+
     def test_a_test_only_field_with_nested_generics_ends_at_its_comma(self):
         text = (
             "fn product() {\n    let c = C {\n        #[cfg(test)]\n"
