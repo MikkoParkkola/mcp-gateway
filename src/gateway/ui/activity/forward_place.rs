@@ -143,7 +143,7 @@ pub(super) fn resume(
     #[cfg(test)]
     super::tests::after_identity();
     // Any element that cannot be read restarts the search, as a mismatch does.
-    if file.metadata().map_or(true, |m| m.len() < place.offset) {
+    if !file.metadata().is_ok_and(|m| m.len() >= place.offset) {
         return Ok(None);
     }
     if let Some(anchor) = &place.anchor {
