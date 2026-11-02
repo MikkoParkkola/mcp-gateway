@@ -620,3 +620,26 @@ async fn a_refused_sent_value_keeps_the_set_refusing_until_its_grace_passes() {
         "the refusal outlived the refused value's grace"
     );
 }
+
+/// Once a refused value's grace has passed, answers are served again on
+/// the scrub path alone, with nothing else lifting the refusal first: an
+/// ordinary answer passes, and the refused value, past its grace like any
+/// retired value, is no longer withheld.
+#[tokio::test(start_paused = true)]
+async fn answers_flow_again_once_the_refused_values_grace_has_passed() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    for answer in ["an ordinary answer", "echo refused-token-x"] {
+        let (outcome, text) = scrubbed(&needles, answer);
+        assert_eq!(
+            outcome,
+            Scrubbed::Clean,
+            "still refused after the refused value's grace: {text}"
+        );
+    }
+}
