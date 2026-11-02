@@ -67,3 +67,18 @@ async fn a_nameless_peer_never_reaches_the_inner_service() {
     assert_eq!(response.status(), axum::http::StatusCode::UNAUTHORIZED);
     assert_eq!(reached.load(Ordering::SeqCst), 0, "nothing inside ran");
 }
+
+#[test]
+fn no_peer_chain_or_an_empty_one_is_absent() {
+    for chain in [None, Some(&[][..])] {
+        let peer = client_identity_from_peer_chain(chain).expect("nothing to parse");
+        assert!(matches!(peer, PeerCert::Absent), "{peer:?}");
+    }
+}
+
+#[test]
+fn an_unparseable_leaf_fails_the_connection() {
+    let garbage = CertificateDer::from(b"not a certificate".to_vec());
+    let error = client_identity_from_peer_chain(Some(&[garbage])).expect_err("refused");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+}
