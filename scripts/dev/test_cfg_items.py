@@ -47,7 +47,7 @@ class Owner(unittest.TestCase):
         "braced const generic": ("#[cfg(test)]\nfn h() -> P<{ 8 >> 1 }> {\n  x();\n}\nfn p() {}\n", [(1, 4)]),
         "where commas": ("#[cfg(test)]\npub(crate) async fn h<T>()\nwhere\n  T: Send,\n  T: Sync,\n{\n}\nfn p() {}\n", [(1, 7)]),
         "struct field": ("struct S {\n #[cfg(test)]\n a: u8,\n b: u8,\n}\n", [(2, 3)]),
-        "pub tuple field": ("struct S(\n #[cfg(test)]\n pub(crate) [u8; { 2 }],\n u16,\n);\n", [(2, 3)]),
+        "pub tuple field": ("struct S(\n #[cfg(test)]\n pub(crate)\n [u8; { 2 }],\n u16,\n);\n", [(2, 4)]),
         "enum variant": ("enum E {\n #[cfg(test)]\n A(u8),\n B,\n}\n", [(2, 3)]),
         "struct literal field": ("fn p() { let c = C {\n #[cfg(test)]\n probe: make(\n 1),\n t: 50,\n }; }\n", [(2, 4)]),
         "shorthand field": ("fn p() { let c = C {\n #[cfg(test)]\n probe,\n t: 50,\n }; }\n", [(2, 3)]),
