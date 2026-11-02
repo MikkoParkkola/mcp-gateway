@@ -206,6 +206,13 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
     };
     state.live_config.set(config);
     let (log_dir, other_receipt) = seed_log(&mut state);
+    // The gateway's discovery cache, as startup attaches it, over a scan
+    // that finds nothing: discovery answers what an admitted caller gets.
+    state
+        .meta_mcp
+        .set_discovery_cache(Arc::new(crate::discovery::listing::DiscoveryCache::new(
+            Arc::new(NoClientFiles),
+        )));
     if store {
         Arc::get_mut(&mut state)
             .expect("state is unique")
@@ -217,6 +224,29 @@ async fn fixture(kind: Gateway, store: bool) -> Fixture {
         state,
         other_receipt,
         _dirs: (dir, log_dir),
+    }
+}
+
+/// A client-file scan that finds no file.
+struct NoClientFiles;
+
+impl crate::discovery::listing::ScanSource for NoClientFiles {
+    fn fingerprint(&self) -> crate::discovery::config_scanner::client_scan::Fingerprint {
+        crate::discovery::config_scanner::ConfigScanner::fingerprint(&[])
+    }
+    fn scan(
+        &self,
+    ) -> futures::future::BoxFuture<'_, crate::discovery::config_scanner::client_scan::ClientScan>
+    {
+        let scan = crate::discovery::config_scanner::client_scan::ClientScan {
+            finds: Vec::new(),
+            fingerprint: self.fingerprint(),
+            unreadable: Vec::new(),
+        };
+        Box::pin(async move { scan })
+    }
+    fn now(&self) -> std::time::Instant {
+        std::time::Instant::now()
     }
 }
 
@@ -283,6 +313,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_TOOLS_CALL,
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
+        routes::UI_DECISIONS_COUNT,
         routes::UI_GATEWAY,
         routes::UI_KEYS,
         routes::UI_CONFIG,

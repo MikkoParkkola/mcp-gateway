@@ -273,9 +273,20 @@ impl Noted {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "the receipt and the Activity rule filter read through it when they land"
+)]
+#[path = "decision_record_read.rs"]
+pub(crate) mod read;
+
 #[cfg(test)]
 #[path = "decision_record_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "decision_record_read_tests.rs"]
+mod read_tests;
 
 #[cfg(test)]
 #[path = "decision_record_writer_tests.rs"]
