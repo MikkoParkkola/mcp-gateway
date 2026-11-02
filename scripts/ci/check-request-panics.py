@@ -693,6 +693,27 @@ def run_self_test() -> int:
     )
     check("flag live unwrap after cfg(kani) item", len(f) == 1 and "y.unwrap()" in f[0][2], repr(f))
 
+    # A file the parser cannot read cleanly is unsure as a whole; this gate
+    # looks for product code, so its test items stay product (LEAN_SHORT).
+    f, _, _, _ = _scan_temp(
+        {
+            "src/foo.rs": (
+                "fn p(s: S) {\n"
+                "    let S {\n"
+                '        #[cfg(feature = "x")]\n'
+                "        a,\n"
+                "        b,\n"
+                "    } = s;\n"
+                "}\n"
+                "#[cfg(test)]\n"
+                "fn t(y: Option<i32>) -> i32 {\n"
+                "    y.unwrap()\n"
+                "}\n"
+            )
+        }
+    )
+    check("flag a test item's unwrap in an unsure file", len(f) == 1 and "y.unwrap()" in f[0][2], repr(f))
+
     # ---- Not flagged ----
     f, _, _, _ = _scan_temp(
         {"src/foo.rs": "fn f(x: Option<i32>) -> i32 {\n    x.unwrap() // invariant: ok\n}\n"}
