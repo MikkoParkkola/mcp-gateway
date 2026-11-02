@@ -254,3 +254,63 @@ fn the_grid_holds_matches_and_misses() {
         assert_eq!(actual, expected, "{needle:?} vs {number}");
     }
 }
+
+/// NUMCOST.3, measured by hand in a release build: a 16 MiB number-heavy
+/// answer against 1,024 and 2,048 values, directly through [`Compiled`]
+/// (the ingress set stops at 1,024 values, past which it refuses rather than
+/// matches). The set is built once (cold) and then reused for every scrub, as
+/// a backend's cached set is; both times are printed. Values are mostly text
+/// or all numbers, and the answer's numbers either match one value or none.
+#[test]
+#[ignore = "measurement: run by hand and report"]
+fn cost_of_number_matching_against_the_value_count() {
+    let size = 16 * 1024 * 1024;
+    for count in [1024_usize, 2048] {
+        for (values_kind, values) in [
+            (
+                "text",
+                (0..count)
+                    .map(|i| {
+                        if i == 0 {
+                            "012345".to_owned()
+                        } else {
+                            format!("needle-{i:05}-secret")
+                        }
+                    })
+                    .collect::<Vec<String>>(),
+            ),
+            (
+                "numeric",
+                (0..count)
+                    .map(|i| format!("{}", 7_000_000 + i))
+                    .collect::<Vec<String>>(),
+            ),
+        ] {
+            let started = std::time::Instant::now();
+            let compiled = Compiled::new(&values);
+            let build = started.elapsed();
+            for (answer_kind, number) in [
+                ("matching", values[0].trim_start_matches('0')),
+                ("missing", "12346"),
+            ] {
+                let answer: Value = serde_json::from_str(&format!(
+                    "{{\"n\":[{}]}}",
+                    vec![number; size / (number.len() + 1)].join(",")
+                ))
+                .expect("a number-heavy answer");
+                let mut scrubbed = answer.clone();
+                let started = std::time::Instant::now();
+                let changed = redact_value_with(&mut scrubbed, &compiled);
+                let scrub = started.elapsed();
+                assert_eq!(
+                    changed,
+                    answer_kind == "matching",
+                    "{values_kind} {answer_kind}"
+                );
+                println!(
+                    "NUMCOST.3 values={count} values_kind={values_kind} answer={answer_kind} build={build:?} scrub={scrub:?}"
+                );
+            }
+        }
+    }
+}
