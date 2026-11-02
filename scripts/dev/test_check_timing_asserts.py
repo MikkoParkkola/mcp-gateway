@@ -299,6 +299,9 @@ class RequestTimeouts(unittest.TestCase):
     def test_a_timeout_getter_is_not_a_bound(self):
         self.assertPasses("let d = config.timeout();")
 
+    def test_a_range_before_the_timeout_function_is_not_a_method(self):
+        self.assertPasses("let r = 0.. timeout(Duration::from_secs(5), f()).await.expect(\"x\");")
+
     def test_a_request_timeout_in_product_code_is_not_judged(self):
         text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n"
         self.assertEqual(guard.scan_timeouts("src/x.rs", text, {}, {}), [])

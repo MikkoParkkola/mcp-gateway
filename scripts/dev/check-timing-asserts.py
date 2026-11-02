@@ -85,6 +85,7 @@ from pathlib import Path
 
 from check_timing_asserts_core import (
     HANG_BOUND_HOME,
+    NOT_A_REQUEST,
     PARSE_REPORT,
     THRESHOLD_S,
     _cfg_rules,
