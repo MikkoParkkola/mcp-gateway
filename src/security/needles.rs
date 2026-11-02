@@ -447,10 +447,10 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         }
         E::ProtocolVersionRejected { supported } => {
             let mut tokens = Value::from(supported.clone());
-            if scrub_in_place(&secrets, &mut tokens) == Scrubbed::Clean {
-                Scrubbed::Clean
-            } else {
+            if scrub_in_place(&secrets, &mut tokens) == Scrubbed::Redacted {
                 Scrubbed::Refuse
+            } else {
+                Scrubbed::Clean
             }
         }
         E::Protocol(m)
@@ -503,7 +503,7 @@ fn scrub_string(secrets: &Compiled, text: &mut String) -> Scrubbed {
 /// same comparison a result number gets, so `0739154` matches 739154.
 fn code_matches(secrets: &Compiled, code: i32) -> bool {
     let mut number = Value::from(code);
-    scrub_in_place(secrets, &mut number) != Scrubbed::Clean
+    scrub_in_place(secrets, &mut number) == Scrubbed::Redacted
 }
 
 fn scrub_response(secrets: &Compiled, response: &mut JsonRpcResponse) -> Scrubbed {
@@ -570,22 +570,15 @@ fn scrub_option(secrets: &Compiled, value: &mut Option<Value>) -> Scrubbed {
 /// The shared renderer (strings, keys, numbers by value, overlaps merged,
 /// output capped), and whether it changed anything.
 fn scrub_in_place(secrets: &Compiled, value: &mut Value) -> Scrubbed {
-    use crate::security::secret_redaction::{holds_no_needle, redact_value_with};
-    if !redact_value_with(value, secrets) {
-        return Scrubbed::Clean;
+    if crate::security::secret_redaction::redact_value_with(value, secrets) {
+        Scrubbed::Redacted
+    } else {
+        Scrubbed::Clean
     }
-    if holds_no_needle(value, secrets) {
-        return Scrubbed::Redacted;
-    }
-    // A marker beside other text completed a held value: refused whole.
-    tracing::warn!("an answer was refused: removing one injected value from it formed another");
-    Scrubbed::Refuse
 }
 
 fn merge(a: Scrubbed, b: Scrubbed) -> Scrubbed {
-    if a == Scrubbed::Refuse || b == Scrubbed::Refuse {
-        Scrubbed::Refuse
-    } else if a == Scrubbed::Redacted || b == Scrubbed::Redacted {
+    if a == Scrubbed::Redacted || b == Scrubbed::Redacted {
         Scrubbed::Redacted
     } else {
         Scrubbed::Clean

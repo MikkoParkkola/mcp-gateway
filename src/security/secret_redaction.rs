@@ -244,8 +244,9 @@ impl Compiled {
 }
 
 /// Whether `value` holds none of `compiled`'s needles in a string or a key.
-/// Run after a redaction: the renderer never rescans its output, so a marker
-/// written next to other text can complete a needle.
+/// One set's render never forms its own needles (it writes the first marker
+/// that forms none), but a later set's marker can complete an earlier set's
+/// value: the stored scrub, which runs set after set, checks with this.
 pub(crate) fn holds_no_needle(value: &Value, compiled: &Compiled) -> bool {
     fn clean(value: &Value, matcher: &AhoCorasick) -> bool {
         match value {

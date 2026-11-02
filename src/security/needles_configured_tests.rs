@@ -275,11 +275,12 @@ async fn adding_a_record_before_registration_demotes_nothing() {
     );
 }
 
-/// A value overlapping a marker (`prefix[redact`) is completed by the
-/// marker written for its neighbour: the rescan refuses the answer, and the
-/// value never leaves.
+/// A value overlapping a marker (`prefix[redact`) beside a neighbour that
+/// is removed: within one set the renderer writes the first marker that
+/// forms no held value, so the answer is redacted and the value never
+/// leaves.
 #[tokio::test(start_paused = true)]
-async fn a_marker_completing_a_held_value_refuses_the_answer() {
+async fn a_value_overlapping_a_marker_is_never_formed_in_one_set() {
     let needles = NeedleSet::with_grace(GRACE);
     needles.pin_configured(
         "b",
@@ -289,18 +290,27 @@ async fn a_marker_completing_a_held_value_refuses_the_answer() {
         ]),
     );
     let (outcome, text) = scrubbed(&needles, "prefixother-token-value");
-    assert_eq!(outcome, Scrubbed::Refuse, "{text}");
+    assert_eq!(outcome, Scrubbed::Redacted, "{text}");
+    assert!(
+        !text.contains("prefix[redact"),
+        "a marker formed the value: {text}"
+    );
 }
 
-/// A value learned at runtime (an injected one) that contains a marker is
-/// completed the same way: refused, never delivered.
+/// A value learned at runtime (an injected one) that contains a marker:
+/// within one set no marker that would form it is written, so it never
+/// leaves.
 #[tokio::test(start_paused = true)]
-async fn a_runtime_value_holding_a_marker_refuses_an_answer_that_forms_it() {
+async fn a_runtime_value_holding_a_marker_is_never_formed_in_one_set() {
     let needles = NeedleSet::with_grace(GRACE);
     needles.insert("b", "abc[redacted]xyz-token");
     needles.insert("b", "other-token-value");
     let (outcome, text) = scrubbed(&needles, "abcother-token-valuexyz-token");
-    assert_eq!(outcome, Scrubbed::Refuse, "{text}");
+    assert_eq!(outcome, Scrubbed::Redacted, "{text}");
+    assert!(
+        !text.contains("abc[redacted]xyz-token"),
+        "a marker formed the value: {text}"
+    );
 }
 
 /// Across sets: the first set finds nothing, the second's redaction forms
