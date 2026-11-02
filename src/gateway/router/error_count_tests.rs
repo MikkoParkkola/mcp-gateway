@@ -236,6 +236,7 @@ fn an_answer_sent_straight_from_rpc_http_counts_once_by_its_origin() {
             status: StatusCode::OK,
             body: body(),
             origin: Origin::Backend,
+            folded: None,
         }
         .into_response()
     })));
@@ -245,6 +246,7 @@ fn an_answer_sent_straight_from_rpc_http_counts_once_by_its_origin() {
             status: StatusCode::OK,
             body: body(),
             origin: Origin::Gateway,
+            folded: None,
         }
         .into_response()
     })));

@@ -85,10 +85,17 @@ impl DirectOutcome {
     pub(crate) fn from_response(response: &Result<JsonRpcResponse>) -> Self {
         match response {
             Ok(r) => match &r.error {
-                Some(e) => Self::from_class(
-                    BudgetOutcome::of_error(&Error::json_rpc(e.code, e.message.clone())),
-                    false,
-                ),
+                Some(e) => {
+                    // A frame a backend wrote rebuilds as the backend's error,
+                    // so the class is read from the same variant the live
+                    // dispatch would have raised.
+                    let error = if r.wire_meta.origin == crate::protocol::Origin::Backend {
+                        Error::backend_json_rpc(e.clone())
+                    } else {
+                        Error::json_rpc(e.code, e.message.clone())
+                    };
+                    Self::from_class(BudgetOutcome::of_error(&error), false)
+                }
                 None => Self::from_class(
                     BudgetOutcome::of_value(r.result.as_ref().unwrap_or(&Value::Null)),
                     true,

@@ -140,7 +140,9 @@ fn is_session_expired_error(err: &Error) -> bool {
         // `-32600`: on this path a malformed-request refusal is what it says it
         // is, and treating it as an expiry would re-initialize and retry every
         // one of them.
-        Error::JsonRpc { code, message, .. } | Error::JsonRpcRetryable { code, message, .. } => {
+        Error::JsonRpc { code, message, .. }
+        | Error::BackendJsonRpc { code, message, .. }
+        | Error::JsonRpcRetryable { code, message, .. } => {
             let lower = message.to_lowercase();
             // The marker set is the Transport arm's, mirrored: a peer that words
             // its expiry as "session expired" reaches one arm or the other
@@ -207,6 +209,17 @@ pub(super) fn parse_failure(what: &str, error: &serde_json::Error) -> String {
 /// status keeps both facts in [`Error::JsonRpcRetryable`], because the health
 /// probe reads the code and the retry classifiers read the carriage
 /// (MIK-7217, OUTBOUND.2).
+/// [`peer_refusal`] for rows outside this module that need the error a peer's
+/// non-2xx JSON-RPC body really becomes, not a hand-built look-alike.
+#[cfg(test)]
+pub(crate) fn peer_refusal_for_test(
+    body: &str,
+    id: &RequestId,
+    status: reqwest::StatusCode,
+) -> Option<Error> {
+    peer_refusal(body, id, status)
+}
+
 fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Option<Error> {
     let response: JsonRpcResponse = serde_json::from_str(body).ok()?;
     if response.id.as_ref() != Some(id) {
@@ -221,11 +234,7 @@ fn peer_refusal(body: &str, id: &RequestId, status: reqwest::StatusCode) -> Opti
             data: error.data,
         }
     } else {
-        Error::JsonRpc {
-            code: error.code,
-            message: error.message,
-            data: error.data,
-        }
+        Error::backend_json_rpc(error)
     })
 }
 

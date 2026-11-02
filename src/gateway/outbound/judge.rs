@@ -245,6 +245,7 @@ pub(crate) fn delivered(
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         origin: crate::gateway::health_metrics::Origin::Gateway,
+        folded: None,
     }
 }
 
@@ -281,6 +282,7 @@ pub(crate) fn admit(
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         origin: crate::gateway::health_metrics::Origin::Gateway,
+        folded: None,
     })
 }
 
@@ -333,6 +335,7 @@ pub(crate) fn admit_stream_item(
         delivery: None,
         holds: crate::gateway::meta_mcp::sealed_hold::CarriedHolds::none(),
         origin: crate::gateway::health_metrics::Origin::Gateway,
+        folded: None,
     })
 }
 
@@ -375,6 +378,7 @@ mod emitted_document_tests {
                 delivery_refusal: true,
                 egress_scanned: true,
                 origin: crate::protocol::Origin::Gateway,
+                folded: None,
             },
             chain_source: crate::protocol::ChainSource::NotEligible,
             chain_upstream: None,
