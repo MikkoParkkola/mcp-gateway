@@ -52,8 +52,10 @@ impl StreamKind {
 
     /// Whether a row of `kind` belongs on this stream.
     pub(in crate::gateway::ui) fn keeps(self, kind: Kind) -> bool {
-        let _ = kind;
-        true
+        match self {
+            Self::Activity => matches!(kind, Kind::Call | Kind::AdminAction),
+            Self::Config => kind == Kind::Config,
+        }
     }
 }
 

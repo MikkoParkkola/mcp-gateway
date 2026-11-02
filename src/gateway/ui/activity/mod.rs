@@ -35,7 +35,7 @@ use serde_json::{Value, json};
 
 use self::access::{Access, Refused};
 use self::reader::{Limits, read_page};
-use self::rows::{FeedOutcome, Filter, kind_of, owned_by, row};
+use self::rows::{FeedOutcome, Filter, kind_of, row, visible};
 use super::AppState;
 use super::errors::{auth_required, flat_error};
 use super::guard::Guard;
@@ -310,13 +310,8 @@ fn list_page(logs: &Logs, access: &Access, query: &ListQuery) -> Response {
         bytes: PAGE_SCAN_BYTES,
     };
     let keep = |line: &reader::Line| {
-        kind_of(line).is_some_and(|kind| {
-            parsed.filter.matches(line, kind)
-                && match access {
-                    Access::All => true,
-                    Access::Own { issuer, subject } => owned_by(line, kind, issuer, subject),
-                }
-        })
+        kind_of(line)
+            .is_some_and(|kind| parsed.filter.matches(line, kind) && visible(access, line, kind))
     };
     let page = match read_page(
         &logs.invocation,

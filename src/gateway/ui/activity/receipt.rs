@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use super::access::Access;
 use super::reader::{Line, Which};
-use super::rows::{Kind, kind_of, owned_by, row};
+use super::rows::{Kind, kind_of, row, visible};
 use super::seek::{Reads, oldest_counter, seek};
 use crate::security::transparency_log::recompute_entry_hash;
 
@@ -129,9 +129,7 @@ pub(super) fn receipt(
     let Some(kind) = kind_of(&line) else {
         return Ok(None);
     };
-    if let Access::Own { issuer, subject } = access
-        && !owned_by(&line, kind, issuer, subject)
-    {
+    if !visible(access, &line, kind) {
         return Ok(None);
     }
     let Some(Value::Object(mut body)) = row(&line, secret) else {
