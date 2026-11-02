@@ -58,6 +58,16 @@ fn settle_pinned(fx: &Fx, scope: Scope, name: &str, generation: &Generation) {
     );
 }
 
+/// The starting figure stored for `name` today, as the status reports it.
+fn figure(fx: &Fx, scope: Scope, name: &str) -> Option<f64> {
+    let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+    let snapshot = enforcer.snapshot();
+    match scope {
+        Scope::Tool => snapshot.tool_estimate.get(name).copied(),
+        Scope::Key => snapshot.key_estimate.get(name).copied(),
+    }
+}
+
 /// A full map with $3 of `target`'s spend in the overflow total.
 async fn with_overflow(scope: Scope) -> Fx {
     let fx = full_fixture(scope).await;
@@ -96,11 +106,22 @@ async fn t9_repeated_reloads_keep_the_first_estimate() {
         let fx = with_overflow(scope).await;
         reload(&fx, |c| budget(scope, c, "target", 3.5));
         spend(&fx, scope, "unrelated", 2.0);
+        assert_eq!(figure(&fx, scope, "target"), Some(3.0), "{scope:?}: taken");
         // The same file again.
         reload(&fx, |_| {});
+        assert_eq!(
+            figure(&fx, scope, "target"),
+            Some(3.0),
+            "{scope:?}: not re-taken"
+        );
         assert!(!admitted(&fx, scope, "target"), "{scope:?}: still 3 + 1");
         // Only the amount changes.
         reload(&fx, |c| budget(scope, c, "target", 4.5));
+        assert_eq!(
+            figure(&fx, scope, "target"),
+            Some(3.0),
+            "{scope:?}: still 3"
+        );
         assert!(
             admitted(&fx, scope, "target"),
             "{scope:?}: 3 + 1 < 4.5; a re-take or a compounding estimate refuses"
