@@ -71,6 +71,10 @@ impl OAuthClient {
             ));
         }
 
+        // The registration as stored now, as a refresh reads it: a sign-in
+        // under this issuer may have re-registered the client since.
+        let key = self.credential_key()?;
+        self.reload_registered_client_id(&key);
         let client_id = self
             .client_id
             .read()
