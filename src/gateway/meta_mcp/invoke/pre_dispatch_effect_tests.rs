@@ -38,7 +38,7 @@ fn gateway() -> MetaMcp {
     let executor = Arc::new(crate::capability::CapabilityExecutor::new());
     let caps = Arc::new(crate::capability::CapabilityBackend::new("caps", executor));
     caps.register_capability(definition).expect("registers");
-    let mut meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    let meta = MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
     meta.set_capabilities(caps);
     meta
 }
