@@ -457,20 +457,6 @@ impl ReloadContext {
                 return Err(ReplaceError::Stale { current: now });
             }
         }
-        // The operation's own intent, before any entry or byte changes.
-        if let Audit::Required { sink, kind } = &mut audit {
-            let intent = Intent {
-                kind: *kind,
-                base: FileRevision::of(&current),
-                outside_change: false,
-                recovery_intent_id,
-            };
-            sink.append(&intent).map_err(|e| {
-                ReplaceError::Refused(format!(
-                    "the audit log refused this change's record; nothing was written: {e}"
-                ))
-            })?;
-        }
         let mut entries = Entries {
             pending: None,
             renamed: false,
@@ -483,6 +469,23 @@ impl ReloadContext {
         fits_when_filled(&template)?;
         self.validate_template(&target, &template, step.as_ref())
             .await?;
+        // The operation's own intent, once its checks pass and before any
+        // entry or byte changes. Unchanged bytes write nothing, so they
+        // record nothing.
+        let unchanged = step.is_none() && template.bytes() == current.as_slice();
+        if let (Audit::Required { sink, kind }, false) = (&mut audit, unchanged) {
+            let intent = Intent {
+                kind: *kind,
+                base: FileRevision::of(&current),
+                outside_change: false,
+                recovery_intent_id,
+            };
+            sink.append(&intent).map_err(|e| {
+                ReplaceError::Refused(format!(
+                    "the audit log refused this change's record; nothing was written: {e}"
+                ))
+            })?;
+        }
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
