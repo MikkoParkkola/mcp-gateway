@@ -257,7 +257,7 @@ fn a_scoped_admin_key_warns_at_load() {
         "the fix is named: {warned}"
     );
     assert!(
-        lines[0].contains("web UI shows it only those"),
+        lines[0].contains("Activity and status in the web UI show it only those"),
         "the UI scope is named: {warned}"
     );
 }

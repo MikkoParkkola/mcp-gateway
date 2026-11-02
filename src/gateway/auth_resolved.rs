@@ -72,7 +72,7 @@ fn warn_if_scoped_admin(key: &crate::config::ApiKeyConfig) {
             target: AUTH_TARGET,
             key = %key.name,
             backends = ?key.backends,
-            "admin API key lists only some backends: the web UI shows it only those; set backends: [\"*\"] for full admin"
+            "admin API key lists only some backends: the Activity and status in the web UI show it only those; set backends: [\"*\"] for full admin"
         );
     }
 }

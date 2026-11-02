@@ -31,6 +31,9 @@ enum Who {
     /// `backends` from the token's scopes).
     ScopedAdminKey,
     EmptyAuditor,
+    /// A non-admin key with an empty list whose identity maps to Admin: the
+    /// role adds no scope, so it reads nothing.
+    EmptyRoleAdmin,
     /// An admin key with an empty list: a UI-wide admin that calls no
     /// backend.
     UiAdminKey,
@@ -46,7 +49,7 @@ impl Who {
             | Self::ScopedDeveloper
             | Self::ScopedRoleAdmin => SCOPED_KEY,
             Self::ScopedAdminKey => SCOPED_ADMIN_KEY,
-            Self::EmptyAuditor => EMPTY_KEY,
+            Self::EmptyAuditor | Self::EmptyRoleAdmin => EMPTY_KEY,
             Self::UiAdminKey => UI_ADMIN_KEY,
         }
     }
@@ -55,7 +58,7 @@ impl Who {
         match self {
             Self::Auditor | Self::ScopedAuditor | Self::EmptyAuditor => Caller::OidcAuditor,
             Self::Developer | Self::ScopedDeveloper => Caller::OidcDeveloper,
-            Self::ScopedRoleAdmin => Caller::OidcAdmin,
+            Self::ScopedRoleAdmin | Self::EmptyRoleAdmin => Caller::OidcAdmin,
             Self::AdminKey | Self::ScopedKey | Self::ScopedAdminKey | Self::UiAdminKey => {
                 return None;
             }
@@ -247,7 +250,18 @@ async fn row_for(who: Who) -> [String; 6] {
     );
 
     let (code, body) = ask(format!("{}?format=csv", routes::UI_ACTIVITY_EXPORT)).await;
-    let export = format!("{}:{}", code.as_u16(), seeded_tools(&body));
+    // The CSV's second column is the row kind: any row but a call is
+    // gateway-wide.
+    let non_call = String::from_utf8_lossy(&body)
+        .lines()
+        .skip(1)
+        .any(|line| matches!(line.split(',').nth(1), Some("config" | "admin_action")));
+    let export = format!(
+        "{}:{}{}",
+        code.as_u16(),
+        seeded_tools(&body),
+        if non_call { "+non-call" } else { "" }
+    );
 
     let receipt_uri = |id: &str| routes::UI_ACTIVITY_RECEIPT.replace("{id}", id);
     let (code, body) = ask(receipt_uri(&fx.beta_receipt)).await;
@@ -295,7 +309,7 @@ fn expected(who: Who) -> [String; 6] {
         Who::AdminKey | Who::UiAdminKey => [
             "200:full:2".to_string(),
             format!("200:{ALL}+non-call"),
-            format!("200:{ALL}"),
+            format!("200:{ALL}+non-call"),
             "200".to_string(),
             "200:alpha,beta".to_string(),
             "200".to_string(),
@@ -303,7 +317,7 @@ fn expected(who: Who) -> [String; 6] {
         Who::Auditor => [
             "200:counts:2/2".to_string(),
             format!("200:{ALL}+non-call"),
-            format!("200:{ALL}"),
+            format!("200:{ALL}+non-call"),
             "200".to_string(),
             "200:alpha,beta".to_string(),
             "403".to_string(),
@@ -328,7 +342,7 @@ fn expected(who: Who) -> [String; 6] {
             scoped_reader("200:counts:1/1", ALPHA)
         }
         Who::ScopedDeveloper => scoped_reader("200:counts:1/1", "tool_alpha_dev"),
-        Who::EmptyAuditor => {
+        Who::EmptyAuditor | Who::EmptyRoleAdmin => {
             let mut row = scoped_reader("200:counts:0/0", "");
             row[4] = "200:".to_string();
             row
@@ -336,7 +350,7 @@ fn expected(who: Who) -> [String; 6] {
     }
 }
 
-const WHO: [Who; 10] = [
+const WHO: [Who; 11] = [
     Who::AdminKey,
     Who::Auditor,
     Who::Developer,
@@ -346,6 +360,7 @@ const WHO: [Who; 10] = [
     Who::ScopedRoleAdmin,
     Who::ScopedAdminKey,
     Who::EmptyAuditor,
+    Who::EmptyRoleAdmin,
     Who::UiAdminKey,
 ];
 
