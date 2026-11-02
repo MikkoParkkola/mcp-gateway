@@ -44,12 +44,18 @@ impl BackendRegistry {
         crate::security::needles::scrub_stored(&self.retained_sets(), response)
     }
 
-    /// Every value set this registry retains, registered or removed.
+    /// Every value set this registry retains, registered or removed, by
+    /// backend name: where one set's redaction meets another's value, the
+    /// order decides between a redaction and a refusal, so it must not be
+    /// the map's (seeded per process).
     fn retained_sets(&self) -> Vec<Arc<crate::security::needles::NeedleSet>> {
-        self.needles
+        let mut sets: Vec<_> = self
+            .needles
             .iter()
-            .map(|entry| Arc::clone(entry.value()))
-            .collect()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect();
+        sets.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+        sets.into_iter().map(|(_, set)| set).collect()
     }
 
     /// [`Self::scrub_stored`] for a stored tool result held as a bare value;
