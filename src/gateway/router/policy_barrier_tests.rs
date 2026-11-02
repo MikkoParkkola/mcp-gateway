@@ -252,6 +252,9 @@ async fn call(
         }
         Route::Direct | Route::MetaInvoke => None,
     };
+    // Counted after any continuation setup, so the one new record is the
+    // measured request's own.
+    let recorded = invocations(fx).await.len();
     let fired = Rc::new(Cell::new(false));
     let (live, next, flag) = (
         std::sync::Arc::clone(&fx.state.live_config),
@@ -283,11 +286,15 @@ async fn call(
         serde_json::to_value(current).expect("config serialises"),
         "the published config is still the one the reload wrote"
     );
-    // The call's own record is the newest invocation in the log.
-    let kind = invocations(fx)
-        .await
-        .last()
-        .map_or(Value::Null, |row| row["decision"]["kind"].clone());
+    // The measured request leaves exactly one invocation record: its own.
+    let rows = invocations(fx).await;
+    let [row] = &rows[recorded..] else {
+        panic!(
+            "{route:?}: wanted one new invocation record, got {}",
+            rows.len() - recorded
+        );
+    };
+    let kind = row["decision"]["kind"].clone();
     outcome(&body, fx.calls.load(Ordering::SeqCst) - before, kind)
 }
 
@@ -490,11 +497,14 @@ async fn a_queued_task_takes_the_rules_current_at_dispatch() {
     let got = injected_task(&fx, "barrier-tighten").await;
     assert!(fired.get(), "the reload published before dispatch");
     assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "dispatched: {got}");
-    assert_ne!(
+    // Settled, and failed for the firewall at dispatch, not for any other
+    // reason: a `tasks/get` error carries no status and does not pass.
+    assert_eq!(
         got.pointer("/result/status").and_then(Value::as_str),
-        Some("completed"),
+        Some("failed"),
         "{got}"
     );
+    assert!(got.to_string().contains("Firewall blocked"), "{got}");
 }
 
 /// The loosening direction, against the startup rules: a fixture started

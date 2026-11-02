@@ -292,5 +292,10 @@ async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
     assert!(policy_refused(&reply), "denied then allowed: {reply}");
 
     let reply = held_across_a_policy_flip(&mut s, &path, true).await;
-    assert!(reached_resolution(&reply), "allowed then denied: {reply}");
+    // Resolution's own failure, not the policy's: its refusal names the
+    // server too, so `reached_resolution` alone would accept a denial.
+    assert!(
+        reached_resolution(&reply) && !policy_refused(&reply),
+        "allowed then denied: {reply}"
+    );
 }
