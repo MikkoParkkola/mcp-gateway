@@ -180,7 +180,9 @@ fn leaf(cn: Option<&str>, san_uri: Option<&str>) -> CertIdentity {
         .collect();
     let key_pair = KeyPair::generate().expect("key generation failed");
     let der = params.self_signed(&key_pair).expect("cert").der().to_vec();
-    CertIdentity::from_der(&der).expect("parses")
+    CertIdentity::from_der(&der)
+        .expect("parses")
+        .expect("names someone")
 }
 
 /// MIK-8286 R1a: a certificate with neither a SAN URI nor a CN has no grant

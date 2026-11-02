@@ -76,11 +76,27 @@ impl CertIdentity {
     /// is public and proves nothing on its own: calling this on unverified
     /// bytes would let the sender choose its own bucket.
     ///
+    /// `None` for a certificate that parses but names no one (no SAN URI, no
+    /// CN): it is no identity, and its caller refuses it as such.
+    ///
     /// # Errors
     ///
     /// Returns `Error::Config` if the certificate cannot be parsed or has
     /// a malformed subject DN.
-    pub fn from_der(der: &[u8]) -> Result<Self> {
+    pub(crate) fn from_der(der: &[u8]) -> Result<Option<Self>> {
+        let identity = Self::parse(der)?;
+        Ok(identity.subject_id().is_some().then_some(identity))
+    }
+
+    /// [`Self::parse`] for a test that needs the identity of a certificate
+    /// naming no one, to prove what downstream code does with one.
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(der: &[u8]) -> Result<Self> {
+        Self::parse(der)
+    }
+
+    /// The identity fields of `der`, whether or not they name anyone.
+    fn parse(der: &[u8]) -> Result<Self> {
         let (_, cert) = X509Certificate::from_der(der)
             .map_err(|e| Error::Config(format!("Failed to parse client certificate: {e}")))?;
 
@@ -230,7 +246,9 @@ mod tests {
         // GIVEN: cert with CN=claude-code-agent
         let der = cert_cn_only("claude-code-agent");
         // WHEN: parsing
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         // THEN: CN extracted
         assert_eq!(id.common_name.as_deref(), Some("claude-code-agent"));
     }
@@ -239,7 +257,9 @@ mod tests {
     fn from_der_extracts_organizational_unit() {
         // GIVEN: cert with OU=engineering
         let der = make_cert_der("test-agent", Some("engineering"), &[dns_san("test-agent")]);
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert_eq!(id.organizational_unit.as_deref(), Some("engineering"));
     }
 
@@ -251,7 +271,9 @@ mod tests {
             None,
             &[uri_san("spiffe://company.com/agent/cursor")],
         );
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert_eq!(id.san_uris, vec!["spiffe://company.com/agent/cursor"]);
     }
 
@@ -259,7 +281,9 @@ mod tests {
     fn from_der_extracts_san_dns_name() {
         // GIVEN: cert with DNS SAN
         let der = make_cert_der("server", None, &[dns_san("gateway.company.com")]);
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert!(
             id.san_dns_names
                 .contains(&"gateway.company.com".to_string())
@@ -277,7 +301,9 @@ mod tests {
                 dns_san("foo.internal"),
             ],
         );
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert_eq!(id.san_uris.len(), 1);
         assert_eq!(id.san_dns_names.len(), 1);
     }
@@ -296,7 +322,9 @@ mod tests {
     fn display_name_prefers_spiffe_uri_over_cn() {
         // GIVEN: cert with both CN and SPIFFE URI
         let der = make_cert_der("my-cn", None, &[uri_san("spiffe://company.com/agent/foo")]);
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert_eq!(id.display_name, "spiffe://company.com/agent/foo");
     }
 
@@ -304,7 +332,9 @@ mod tests {
     fn display_name_falls_back_to_cn_when_no_spiffe() {
         // GIVEN: cert with CN only (DNS SAN added by rcgen requirement)
         let der = cert_cn_only("claude-code-agent");
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert_eq!(id.display_name, "claude-code-agent");
     }
 
@@ -323,7 +353,9 @@ mod tests {
             None,
             &[uri_san("https://not-spiffe.example.com")],
         );
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         // THEN: non-SPIFFE URI means display_name falls back to CN
         assert_eq!(id.display_name, "fallback-cn");
     }
@@ -333,7 +365,9 @@ mod tests {
     #[test]
     fn organizational_unit_is_none_when_absent() {
         let der = cert_cn_only("no-ou-agent");
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert!(id.organizational_unit.is_none());
     }
 
@@ -343,7 +377,9 @@ mod tests {
     fn san_lists_reflect_what_cert_contains() {
         // GIVEN: cert with only DNS SANs
         let der = make_cert_der("server", None, &[dns_san("gateway.example.com")]);
-        let id = CertIdentity::from_der(&der).unwrap();
+        let id = CertIdentity::from_der(&der)
+            .unwrap()
+            .expect("names someone");
         assert!(id.san_uris.is_empty(), "No URI SANs expected");
         assert!(!id.san_dns_names.is_empty());
     }

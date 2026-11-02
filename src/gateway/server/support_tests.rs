@@ -69,7 +69,7 @@ async fn peer_cert_identity_service_inserts_identity_extension() {
                 .unwrap_or_default()
         }),
     );
-    let app = PeerCertIdentityLayer::new(Some(identity.clone())).layer(echo);
+    let app = PeerCertIdentityLayer::new(PeerCert::Named(identity.clone())).layer(echo);
     let response = app
         .oneshot(Request::get("/").body(axum::body::Body::empty()).unwrap())
         .await
@@ -433,8 +433,8 @@ mod mtls_listener {
     }
 }
 
-/// A leaf with no CN and no SAN URI, parsed by the production parser.
-fn nameless_leaf() -> CertIdentity {
+/// A leaf with no CN and no SAN URI, through the production peer-chain parse.
+fn nameless_leaf() -> PeerCert {
     let mut params = CertificateParams::default();
     params.distinguished_name = DistinguishedName::new();
     let key_pair = KeyPair::generate().expect("key generation failed");
@@ -443,7 +443,10 @@ fn nameless_leaf() -> CertIdentity {
         .expect("cert generation failed")
         .der()
         .to_vec();
-    CertIdentity::from_der(&der).expect("a nameless leaf still parses")
+    let peer =
+        client_identity_from_peer_chain(Some(&[der.into()])).expect("a nameless leaf still parses");
+    assert!(matches!(peer, PeerCert::Nameless), "{peer:?}");
+    peer
 }
 
 /// MIK-8286 R3: a client certificate that names no subject is a presented
@@ -465,7 +468,7 @@ async fn a_nameless_client_certificate_is_refused_before_anything_runs() {
             async { "ok" }
         }),
     );
-    let app = PeerCertIdentityLayer::new(Some(nameless_leaf())).layer(inner);
+    let app = PeerCertIdentityLayer::new(nameless_leaf()).layer(inner);
     let request = Request::get("/health")
         .body(axum::body::Body::empty())
         .unwrap();
