@@ -27,17 +27,37 @@ pub(super) fn setup() -> (tempfile::TempDir, PathBuf, Arc<ReloadContext>) {
 }
 
 pub(super) fn context(path: &Path) -> Arc<ReloadContext> {
+    Arc::new(unshared(path))
+}
+
+/// [`setup`] with a reload that refuses every load after the write: the
+/// writer's own checks before any entry pass on the real loader, so a test
+/// reaches the commit and the rollback behind it.
+pub(super) fn setup_refusing_reload() -> (tempfile::TempDir, PathBuf, Arc<ReloadContext>) {
+    fn refused(
+        _: &Path,
+        _: &Arc<LiveConfig>,
+        _: &crate::config::LiveEnv,
+    ) -> std::result::Result<EvaluatedReload, String> {
+        Err("the reload refused the new bytes (test)".to_owned())
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, START).expect("write config");
+    let ctx = Arc::new(unshared(&path).with_load(refused));
+    (dir, path, ctx)
+}
+
+fn unshared(path: &Path) -> ReloadContext {
     let running = Config::load(Some(path)).expect("config loads");
-    Arc::new(
-        ReloadContext::new(
-            path.to_path_buf(),
-            Arc::new(LiveConfig::new(running)),
-            Arc::new(crate::backend::BackendRegistry::new()),
-            crate::config::FailsafeConfig::default(),
-            Duration::from_secs(60),
-        )
-        .expect("the registry pairs with the config"),
+    ReloadContext::new(
+        path.to_path_buf(),
+        Arc::new(LiveConfig::new(running)),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
     )
+    .expect("the registry pairs with the config")
 }
 
 /// Replace gateway.yaml with `bytes`.
