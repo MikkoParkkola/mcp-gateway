@@ -401,6 +401,74 @@ async fn a_truncated_fill_records_no_undeclared_effect() {
     assert_eq!(backend.declared_effect_for(None, "t2"), None);
 }
 
+/// A fill that stops after page 0 (page 1 has no list key but a cursor),
+/// every tool carrying `hints`.
+fn truncated_after_first_page(hints: Value) -> Arc<Backend> {
+    let pager = Arc::new(Pager {
+        method: "tools/list",
+        key: "tools",
+        extra: json!({ "annotations": hints }),
+        script: Mutex::new(finite(vec![
+            (vec!["t0"], Some("c1")),
+            (vec![], Some("c2")),
+            (vec!["t2"], None),
+        ])),
+        requests: AtomicUsize::new(0),
+        params_seen: Mutex::new(Vec::new()),
+    });
+    pager.script.lock().keyless_page = Some(1);
+    backend_with(pager, LONG_TTL)
+}
+
+/// A page the fill never reached may list the same name again without the
+/// hint, so a truncated fill cannot admit a name to the response cache that
+/// the slot did not already admit, nor label it read-only.
+#[tokio::test]
+async fn a_truncated_fill_grants_no_cache_admission() {
+    let backend = truncated_after_first_page(json!({ "readOnlyHint": true }));
+    backend.get_tools_shared().await.expect("fill");
+    assert!(truncated(&backend));
+    assert!(
+        !backend.is_read_only_for(None, "t0"),
+        "a partial list admitted `t0` to the response cache"
+    );
+    assert_eq!(backend.declared_effect_for(None, "t0"), None);
+}
+
+/// The same for resending: a partial list cannot make a name safe to resend.
+#[tokio::test]
+async fn a_truncated_fill_grants_no_resend() {
+    let backend = truncated_after_first_page(json!({ "idempotentHint": true }));
+    backend.get_tools_shared().await.expect("fill");
+    assert!(truncated(&backend));
+    assert!(
+        !backend.resend_permitted_snapshot().contains("t0"),
+        "a partial list made `t0` safe to resend"
+    );
+}
+
+/// A truncated fill narrows: a name the slot held stays while the pages read
+/// still declare it, and one they do not declare leaves.
+#[tokio::test]
+async fn a_truncated_fill_keeps_only_what_it_still_declares() {
+    let backend = truncated_after_first_page(json!({
+        "readOnlyHint": true,
+        "idempotentHint": true,
+    }));
+    backend.set_read_only_declared_for_test(&["t0", "t9"]);
+    *backend.shared_entry_for_test().resend_permitted.write() =
+        ["t0", "t9"].map(str::to_owned).into();
+    backend.get_tools_shared().await.expect("fill");
+    assert!(truncated(&backend));
+    assert!(backend.is_read_only_for(None, "t0"));
+    assert!(!backend.is_read_only_for(None, "t9"));
+    let resend = backend.resend_permitted_snapshot();
+    assert!(
+        resend.contains("t0") && !resend.contains("t9"),
+        "{resend:?}"
+    );
+}
+
 /// Review fold: a later page with no `tools` key and no cursor is malformed,
 /// not an empty last page: the fill fails and keeps no partial list, so the
 /// check never judges a present tool absent. Mutant M40 (accept any result
