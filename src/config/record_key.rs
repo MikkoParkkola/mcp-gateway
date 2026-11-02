@@ -39,8 +39,41 @@ pub(crate) fn resolve_record_key_text(
         Err(e) => return Err(refused(e.to_string())),
         Ok(_) => {}
     }
-    // The guarded reader enforces owner-only mode (or DACL) and strips the one
-    // trailing newline, exactly as for the same file named by a `file:` SecretRef.
+    read_key_file(key_file, field)
+}
+
+/// [`resolve_record_key_text`] for a reader that must create nothing: the
+/// configured `SecretRef`, else an existing key file, else `None`. A report
+/// the command line prints never writes key material where none exists.
+///
+/// # Errors
+///
+/// As [`resolve_record_key_text`], except that a missing key file is `None`.
+pub(crate) fn read_record_key_text(
+    configured: Option<&str>,
+    overlay: &super::EnvOverlay,
+    key_file: &Path,
+    field: &str,
+) -> Result<Option<String>> {
+    if let Some(text) = configured {
+        return SecretRef::parse(text).resolve(field, overlay).map(Some);
+    }
+    match std::fs::symlink_metadata(key_file) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        _ => read_key_file(key_file, field).map(Some),
+    }
+}
+
+/// The 64 hex digits of an existing `key_file`. The guarded reader enforces
+/// owner-only mode (or DACL) and strips the one trailing newline, exactly as
+/// for the same file named by a `file:` `SecretRef`.
+fn read_key_file(key_file: &Path, field: &str) -> Result<String> {
+    let refused = |why: String| {
+        Error::ConfigValidation(format!(
+            "record key file {}: {why}; restore it from backup, or set {field}",
+            key_file.display()
+        ))
+    };
     let text =
         read_file_ref("the record key file", key_file).map_err(|e| refused(e.to_string()))?;
     if text.len() != 64 || !text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {

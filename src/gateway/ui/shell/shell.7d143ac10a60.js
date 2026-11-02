@@ -1397,10 +1397,10 @@ export async function refreshCounts() {
   try {
     const reply = await api('/ui/api/decisions/count');
     next = Number.isInteger(reply?.count) && reply.count >= 0 ? reply.count : 'unavailable';
-  } catch (err) {
-    // A 404: the route ships with the To do queue, so until then no badge.
-    // Anything else failed and reads "?".
-    next = err instanceof ApiError && err.status === 404 ? null : 'unavailable';
+  } catch {
+    // Any failure, a 404 included, reads "?": the count route ships with the
+    // To do queue, so a missing route is now a failure like any other.
+    next = 'unavailable';
   }
   if (epoch !== authEpoch || seq !== countSeq) return; // a newer read, or another identity, owns the badge now
   DECISIONS.count = next;

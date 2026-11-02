@@ -28,6 +28,20 @@ pub use secret_map::{REDACTED, SecretMap};
 use config_scanner::ConfigScanner;
 use process_scanner::ProcessScanner;
 
+/// Each name once: a client config's find first, then the environment's,
+/// then a process's, each keeping discovery's order within its kind. The one
+/// precedence rule for discovery and the shadow radar.
+fn unique_by_name<T: std::borrow::Borrow<DiscoveredServer>>(mut servers: Vec<T>) -> Vec<T> {
+    servers.sort_by_key(|server| match server.borrow().source {
+        DiscoverySource::Environment => 1,
+        DiscoverySource::RunningProcess => 2,
+        _ => 0,
+    });
+    let mut seen = std::collections::HashSet::new();
+    servers.retain(|server| seen.insert(server.borrow().name.clone()));
+    servers
+}
+
 /// Discovered MCP server
 ///
 /// `#[non_exhaustive]` since 4.0: build one with [`DiscoveredServer::new`].
@@ -239,15 +253,24 @@ impl AutoDiscovery {
             }
         }
 
-        // Deduplicate by name (prefer config over process)
-        let mut unique_servers: Vec<DiscoveredServer> = Vec::new();
-        for server in servers {
-            if !unique_servers.iter().any(|s| s.name == server.name) {
-                unique_servers.push(server);
-            }
-        }
+        Ok(unique_by_name(servers))
+    }
 
-        Ok(unique_servers)
+    /// The radar's own scan: what the environment and running processes
+    /// name, without the client config files the shared discovery cache
+    /// reads. Environment finds first, as [`Self::discover_all`] orders them;
+    /// a failed scan is logged and the other's finds still answer, as there.
+    #[cfg(any(test, feature = "webui"))]
+    pub(crate) async fn discover_non_client(&self) -> Vec<DiscoveredServer> {
+        let mut servers = self.config_scanner.scan_environment().unwrap_or_else(|e| {
+            tracing::warn!("Environment scan failed: {e}");
+            Vec::new()
+        });
+        match self.process_scanner.scan().await {
+            Ok(mut found) => servers.append(&mut found),
+            Err(e) => tracing::warn!("Process scan failed: {e}"),
+        }
+        servers
     }
 
     /// Discover from specific source
@@ -317,3 +340,10 @@ mod yaml_redaction_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "non_client_tests.rs"]
+mod non_client_tests;
+#[cfg(test)]
+#[path = "unique_by_name_tests.rs"]
+mod unique_by_name_tests;

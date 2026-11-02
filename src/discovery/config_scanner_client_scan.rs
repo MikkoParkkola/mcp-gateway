@@ -52,14 +52,61 @@ pub(crate) struct ClientScan {
     pub(crate) finds: Vec<DiscoveredServer>,
     /// Taken before the reads, from the same candidate list.
     pub(crate) fingerprint: Fingerprint,
-    /// Files that exist but did not read or parse: their app and file name.
-    pub(crate) unreadable: Vec<(DiscoverySource, String)>,
+    /// Files that exist but could not be read, with their full paths: kept
+    /// only for this scan, never cached (the cache keeps a keyed digest).
+    pub(crate) unreadable: Vec<UnreadableClientFile>,
+}
+
+/// A client config file that exists but could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct UnreadableClientFile {
+    pub(crate) source: DiscoverySource,
+    pub(crate) path: PathBuf,
+    pub(crate) reason: crate::decisions::UnreadableReason,
+}
+
+impl UnreadableClientFile {
+    /// The file's name alone, which is all that may be shown.
+    pub(crate) fn file_name(&self) -> String {
+        self.path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// A digest of the full path under `key`: tells two files with one name
+    /// apart without holding the path, and without letting anyone test a
+    /// guess at it.
+    pub(crate) fn path_digest(&self, key: &[u8; 32]) -> String {
+        crate::hashing::hmac_sha256_hex(key, self.path.as_os_str().as_encoded_bytes())
+    }
+}
+
+#[cfg(test)]
+impl ClientScan {
+    /// Each unreadable file as its file name, reason class and path digest
+    /// under a fixed test key.
+    pub(crate) fn unreadable_rows(
+        &self,
+    ) -> Vec<(String, crate::decisions::UnreadableReason, String)> {
+        self.unreadable
+            .iter()
+            .map(|file| (file.file_name(), file.reason, file.path_digest(&[3; 32])))
+            .collect()
+    }
 }
 
 /// One line per candidate: its path, then its stamp or `absent`.
 fn stamp_line(path: &std::path::Path) -> String {
-    let Ok(meta) = std::fs::metadata(path) else {
-        return format!("{}\0absent\n", path.display());
+    let meta = match std::fs::metadata(path) {
+        Ok(meta) => meta,
+        // A file the gateway may not reach is not absent: when it becomes
+        // reachable, or unreachable, the fingerprint changes and the cache
+        // rescans (R13).
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            return format!("{}\0denied\n", path.display());
+        }
+        Err(_) => return format!("{}\0absent\n", path.display()),
     };
     #[cfg(unix)]
     let inode = std::os::unix::fs::MetadataExt::ino(&meta);
@@ -168,24 +215,41 @@ impl ConfigScanner {
         let mut finds = Vec::new();
         let mut unreadable = Vec::new();
         for candidate in candidates {
-            if !candidate.path.exists() {
+            use crate::decisions::UnreadableReason;
+            let path = &candidate.path;
+            let mut unread = |reason| {
+                unreadable.push(UnreadableClientFile {
+                    source: candidate.source.clone(),
+                    path: path.clone(),
+                    reason,
+                });
+            };
+            // Not `exists()`: it reads any metadata error as absence, so a
+            // file the gateway may not reach vanished without a word.
+            let meta = match std::fs::metadata(path) {
+                Ok(meta) => meta,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    unread(UnreadableReason::NoPermission);
+                    continue;
+                }
+                Err(_) => {
+                    unread(UnreadableReason::NotAReadableFile);
+                    continue;
+                }
+            };
+            debug!("Scanning client config at {}", super::shown_path(path));
+            // A FIFO, a device or a huge file never reaches a parser.
+            if !(meta.is_file() && meta.len() <= MAX_CLIENT_FILE) {
+                unread(UnreadableReason::NotAReadableFile);
                 continue;
             }
-            debug!(
-                "Scanning client config at {}",
-                super::shown_path(&candidate.path)
-            );
-            let path = &candidate.path;
-            let file_name = || {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            };
-            // A FIFO, a device or a huge file never reaches a parser.
-            let readable = std::fs::metadata(path)
-                .is_ok_and(|meta| meta.is_file() && meta.len() <= MAX_CLIENT_FILE);
-            if !readable {
-                unreadable.push((candidate.source.clone(), file_name()));
+            // Judged by the open's error kind, never by a parser's message:
+            // every parser maps its read error to text.
+            if let Err(e) = std::fs::File::open(path)
+                && e.kind() == std::io::ErrorKind::PermissionDenied
+            {
+                unread(UnreadableReason::NoPermission);
                 continue;
             }
             let read = match candidate.format {
@@ -202,7 +266,7 @@ impl ConfigScanner {
             };
             match read {
                 Ok(mut servers) => finds.append(&mut servers),
-                Err(_) => unreadable.push((candidate.source.clone(), file_name())),
+                Err(_) => unread(UnreadableReason::DidNotParse),
             }
         }
         ClientScan {

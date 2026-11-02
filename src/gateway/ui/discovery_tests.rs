@@ -11,6 +11,7 @@ use futures::future::BoxFuture;
 
 use super::*;
 use crate::config::TransportConfig;
+use crate::discovery::config_scanner::ConfigScanner;
 use crate::discovery::config_scanner::client_scan::{ClientScan, Fingerprint};
 use crate::discovery::listing::ScanSource;
 use crate::discovery::{DiscoveredServer, DiscoverySource, ServerMetadata};
@@ -26,7 +27,13 @@ impl ScanSource for Fixed {
         let scan = ClientScan {
             finds: self.0.clone(),
             fingerprint: self.fingerprint(),
-            unreadable: vec![(DiscoverySource::VsCode, "settings.json".to_string())],
+            unreadable: vec![
+                crate::discovery::config_scanner::client_scan::UnreadableClientFile {
+                    source: DiscoverySource::VsCode,
+                    path: std::path::PathBuf::from("/home/someone/.config/Code/settings.json"),
+                    reason: crate::decisions::UnreadableReason::DidNotParse,
+                },
+            ],
         };
         Box::pin(async move { scan })
     }
@@ -177,5 +184,49 @@ async fn without_a_config_file_nothing_is_adoptable() {
     assert_eq!(
         server(&body, "a")["refusals"],
         json!([{"reason": "no_config_file", "field": "name"}])
+    );
+}
+
+/// R5: the decision set's adopt rule is the route's own: a configured name
+/// (an adopted backend is written disabled), the capabilities name, an
+/// invalid name, no config file, or a scan-level refusal is no decision.
+#[tokio::test]
+async fn the_adopt_rule_is_the_routes_own() {
+    const DISABLED: &str =
+        "backends:\n  adopted:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    enabled: false\n";
+    let dir = tempfile::tempdir().expect("tempdir");
+    let gateway = read_gateway(Some(&gateway_file(dir.path(), DISABLED))).expect("reads");
+    let Gateway::File { config, .. } = &gateway else {
+        panic!("a config");
+    };
+    let capabilities = config.capabilities.name.clone();
+    let mut refused = find("needs-secret");
+    refused.uncarried = vec!["env.TOKEN".to_string()];
+    let cache = DiscoveryCache::new(Arc::new(Fixed(vec![
+        find("fresh"),
+        find("adopted"),
+        find(&capabilities),
+        find("x/y"),
+        refused,
+    ])));
+    let (listing, _) = cache.listing().await.expect("listing");
+    let eligible = |name: &str, gateway: &Gateway| {
+        let find = listing
+            .finds
+            .iter()
+            .find(|f| f.name == name)
+            .expect("listed");
+        adopt_eligible(find, gateway)
+    };
+    assert!(
+        eligible("fresh", &gateway),
+        "an unmanaged find is a decision"
+    );
+    for name in ["adopted", capabilities.as_str(), "x/y", "needs-secret"] {
+        assert!(!eligible(name, &gateway), "{name} is no decision");
+    }
+    assert!(
+        !eligible("fresh", &Gateway::None),
+        "without a config file nothing is a decision"
     );
 }

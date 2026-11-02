@@ -67,10 +67,11 @@ fn report(discovered: &[DiscoveredServer], registered: &[&str]) -> ShadowScanRep
         .iter()
         .map(|name| (*name).to_string())
         .collect::<HashSet<_>>();
-    ShadowScanReport::from_discovered(
+    ShadowScanReport::from_discovered_keyed(
         discovered,
         &registered_names,
         Some(Path::new("gateway.yaml")),
+        &crate::gateway::record_principal::test_record_key(),
     )
 }
 
@@ -213,7 +214,7 @@ fn shadow_scan_collects_configs_processes_ports_and_gateway_registry() {
         report
             .assets
             .iter()
-            .any(|asset| asset.evidence.config_path.as_deref() == Some("/tmp/config.json"))
+            .any(|asset| asset.evidence.config_path.as_deref() == Some("config.json"))
     );
     assert!(
         report
@@ -632,3 +633,5 @@ fn a_quoted_windows_program_keeps_only_its_name() {
         "{json}"
     );
 }
+
+mod endpoint;

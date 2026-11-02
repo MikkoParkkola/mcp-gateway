@@ -83,6 +83,8 @@ owned_routes! {
     UI_DISCOVERY_ADOPT = "/ui/api/discovery/adopt",
     /// The decisions an admin has open.
     UI_DECISIONS = "/ui/api/decisions",
+    /// How many decisions an admin has open, and their revision.
+    UI_DECISIONS_COUNT = "/ui/api/decisions/count",
     /// The web UI's windowed call counters.
     UI_METRICS_SERIES = "/ui/api/metrics/series",
     /// Restarts, upgrades, reloads, pauses and switch-offs.

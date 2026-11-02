@@ -306,7 +306,7 @@ fn shadow_report_is_passive_and_excludes_registered_servers() {
         ),
     ];
 
-    let report = ShadowScanReport::from_discovered(
+    let report = keyed_report(
         &discovered,
         &registered,
         Some(std::path::Path::new("gateway.yaml")),
@@ -335,7 +335,7 @@ fn shadow_scan_flags_unmanaged_fixture_with_reason_evidence_remediation() {
         make_stdio_discovered("unmanaged-local", "unmanaged-local-mcp"),
     ];
 
-    let report = ShadowScanReport::from_discovered(
+    let report = keyed_report(
         &discovered,
         &registered,
         Some(std::path::Path::new("gateway.yaml")),
@@ -375,7 +375,7 @@ fn shadow_report_redacts_command_arguments_and_url_private_values() {
         ),
     ];
 
-    let report = ShadowScanReport::from_discovered(&discovered, &registered, None);
+    let report = keyed_report(&discovered, &registered, None);
     let serialized = serde_json::to_string(&report).unwrap();
 
     assert!(!serialized.contains("PRIVATEVALUE"));
@@ -398,7 +398,7 @@ fn shadow_report_classifies_network_sensitive_assets_as_critical() {
     let registered = std::collections::HashSet::new();
     let discovered = vec![make_http_discovered("gmail", "https://mcp.example.com/sse")];
 
-    let report = ShadowScanReport::from_discovered(&discovered, &registered, None);
+    let report = keyed_report(&discovered, &registered, None);
     let asset = &report.assets[0];
 
     assert_eq!(
@@ -424,7 +424,7 @@ fn shadow_report_groups_findings_by_actionability() {
         make_http_discovered("unknown-remote", "https://mcp.example.com/mcp"),
     ];
 
-    let report = ShadowScanReport::from_discovered(&discovered, &registered, None);
+    let report = keyed_report(&discovered, &registered, None);
 
     assert!(report.action_groups.iter().any(|group| {
         group.action == ShadowRemediationAction::AdoptIntoGateway && group.count == 1
@@ -441,8 +441,8 @@ fn shadow_report_ids_are_stable_for_same_input() {
     let registered = std::collections::HashSet::new();
     let discovered = vec![make_stdio_discovered("stable", "npx -y stable")];
 
-    let left = ShadowScanReport::from_discovered(&discovered, &registered, None);
-    let right = ShadowScanReport::from_discovered(&discovered, &registered, None);
+    let left = keyed_report(&discovered, &registered, None);
+    let right = keyed_report(&discovered, &registered, None);
 
     assert_eq!(left.assets[0].id, right.assets[0].id);
 }
@@ -458,7 +458,7 @@ fn shadow_consumer_handoff_projects_report_for_product_surfaces() {
         ),
     ];
 
-    let report = ShadowScanReport::from_discovered(
+    let report = keyed_report(
         &discovered,
         &registered,
         Some(std::path::Path::new("gateway.yaml")),
@@ -646,12 +646,35 @@ fn assert_handoff_surfaces_are_sanitized(handoff: &ShadowConsumerHandoff) {
         .unwrap();
     assert!(!remote_inventory.local_only);
     assert!(remote_inventory.confirmation_required);
+    // The endpoint is the origin only: a URL path can carry a token.
     assert_eq!(
         remote_inventory.endpoint.as_deref(),
-        Some("https://mcp.example.com/sse")
+        Some("https://mcp.example.com")
     );
 
     let serialized = serde_json::to_string(&handoff).unwrap();
     assert!(!serialized.contains("PRIVATEVALUE"));
     assert!(!serialized.contains("session="));
+}
+
+/// A report keyed by a fixed record key in a fresh data dir, so its ids hold
+/// across reports, as the gateway's do.
+fn keyed_report(
+    discovered: &[mcp_gateway::discovery::DiscoveredServer],
+    registered: &std::collections::HashSet<String>,
+    gateway_config: Option<&std::path::Path>,
+) -> ShadowScanReport {
+    let data_dir = tempfile::tempdir().expect("data dir");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        data_dir.path().join("record-principal.key"),
+        "ab".repeat(32),
+    )
+    .expect("key file");
+    ShadowScanReport::from_discovered(
+        discovered,
+        registered,
+        gateway_config,
+        None,
+        data_dir.path(),
+    )
 }

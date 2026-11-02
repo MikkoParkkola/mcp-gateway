@@ -153,7 +153,7 @@ impl Route {
         };
         let response = adopt_discovery(
             axum::extract::State(Arc::clone(&self.state)),
-            Extension(Arc::clone(&self.cache)),
+            Some(Extension(Arc::clone(&self.cache))),
             Guard::for_route(
                 crate::gateway::routes::UI_DISCOVERY_ADOPT,
                 &axum::http::Method::POST,
@@ -442,4 +442,80 @@ async fn without_a_config_file_nothing_is_adopted() {
     let (status, body) = route.adopt(true, &id, &revision).await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "no_config_file", "{body}");
+}
+
+/// Whether the decision set shows an open adopt item for `name`.
+fn adopt_item_open(state: &AppState, name: &str) -> bool {
+    state
+        .meta_mcp
+        .decisions()
+        .and_then(|set| set.view().ok())
+        .is_some_and(|view| {
+            view.decisions
+                .iter()
+                .any(|item| item["kind"] == "adopt" && item["server"]["name"] == name)
+        })
+}
+
+/// Wait, within a hang guard, until `done` holds.
+async fn until(what: &str, done: impl Fn() -> bool) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    while !done() {
+        assert!(tokio::time::Instant::now() < deadline, "never: {what}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// R5: adopting through the route writes a disabled backend, which the
+/// decision set's tick reads as managed: the item closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_adopted_find_closes_its_decision() {
+    let route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let source: Arc<dyn ScanSource> = route.clients.clone();
+    let _set = crate::gateway::ui::decisions::start_with_source(
+        &route.state.meta_mcp,
+        route.state.config_path.clone(),
+        shutdown,
+        source,
+    );
+    until("the adopt item opens", || {
+        adopt_item_open(&route.state, "tool")
+    })
+    .await;
+    let (id, revision) = route.listed("tool").await;
+    let (status, body) = route.adopt(true, &id, &revision).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    until("the adopted find's item closes", || {
+        !adopt_item_open(&route.state, "tool")
+    })
+    .await;
+}
+
+/// R5: a backend written into gateway.yaml directly, with no adopt route to
+/// nudge anything, closes the item on the next tick.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_backend_written_by_hand_closes_its_decision() {
+    let route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let (_stop, shutdown) = tokio::sync::broadcast::channel(1);
+    let source: Arc<dyn ScanSource> = route.clients.clone();
+    let _set = crate::gateway::ui::decisions::start_with_source(
+        &route.state.meta_mcp,
+        route.state.config_path.clone(),
+        shutdown,
+        source,
+    );
+    until("the adopt item opens", || {
+        adopt_item_open(&route.state, "tool")
+    })
+    .await;
+    write_owner_only(
+        route.config(),
+        "secrets:\n  store: files\nbackends:\n  tool:\n    command: npx tool\n    enabled: false\n",
+    )
+    .expect("write config");
+    until("the hand-written backend's item closes", || {
+        !adopt_item_open(&route.state, "tool")
+    })
+    .await;
 }
