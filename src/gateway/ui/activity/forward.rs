@@ -58,7 +58,7 @@ impl StreamKind {
 }
 
 /// One log as a source reads it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 pub(in crate::gateway::ui) struct Log<'a> {
     pub(in crate::gateway::ui) path: &'a Path,
     pub(in crate::gateway::ui) kind: StreamKind,
