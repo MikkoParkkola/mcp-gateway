@@ -404,6 +404,10 @@ async fn a_truncated_fill_records_no_undeclared_effect() {
 /// A fill that stops after page 0 (page 1 has no list key but a cursor),
 /// every tool carrying `hints`.
 fn truncated_after_first_page(hints: Value) -> Arc<Backend> {
+    backend_with(truncating_pager(hints), LONG_TTL)
+}
+
+fn truncating_pager(hints: Value) -> Arc<Pager> {
     let pager = Arc::new(Pager {
         method: "tools/list",
         key: "tools",
@@ -417,7 +421,7 @@ fn truncated_after_first_page(hints: Value) -> Arc<Backend> {
         params_seen: Mutex::new(Vec::new()),
     });
     pager.script.lock().keyless_page = Some(1);
-    backend_with(pager, LONG_TTL)
+    pager
 }
 
 /// A page the fill never reached may list the same name again without the
@@ -445,6 +449,25 @@ async fn a_truncated_fill_grants_no_resend() {
         !backend.resend_permitted_snapshot().contains("t0"),
         "a partial list made `t0` safe to resend"
     );
+}
+
+/// A truncated fill withholds admission only until a complete fill: the
+/// next complete list grants it again.
+#[tokio::test]
+async fn a_complete_fill_after_a_truncated_one_restores_admission() {
+    let pager = truncating_pager(json!({
+        "readOnlyHint": true,
+        "idempotentHint": true,
+    }));
+    let backend = backend_with(Arc::clone(&pager), Duration::ZERO);
+    backend.get_tools_shared().await.expect("truncated fill");
+    assert!(truncated(&backend), "precondition");
+    pager.script.lock().keyless_page = None;
+
+    backend.get_tools_shared().await.expect("complete fill");
+    assert!(!truncated(&backend));
+    assert!(backend.is_read_only_for(None, "t0"));
+    assert!(backend.resend_permitted_snapshot().contains("t0"));
 }
 
 /// A truncated fill narrows: a name the slot held stays while the pages read
