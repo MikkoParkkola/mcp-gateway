@@ -726,6 +726,7 @@ class TestSection(unittest.TestCase):
         "generic return": "#[cfg(test)]\nasync fn helper() -> Result<u8, String> {{\n{w}\nOk(0)\n}}\n",
         "where clause": "#[cfg(test)]\nasync fn helper<T>(t: T)\nwhere\n    T: Send,\n    T: Sync,\n{{\n{w}\n}}\n",
         "braced const generic": "#[cfg(test)]\nasync fn helper() -> Probe<{{ N }}> {{\n{w}\nProbe\n}}\n",
+        "braced const generic impl": "#[cfg(test)]\nimpl Probe<{{ 1 + 1 }}> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
         "generic impl": "#[cfg(test)]\nimpl<T, U> Probe<T, U> {{\n    async fn helper() {{\n{w}\n    }}\n}}\n",
     }
 
@@ -735,6 +736,18 @@ class TestSection(unittest.TestCase):
                 text = "fn product() {}\n\n" + shape.format(w=self.WINDOW)
                 self.assertEqual(len(self.timeouts(text)), 1, text)
                 self.assertTrue(self.new(text), text)
+
+    def test_a_test_only_let_is_judged_to_its_semicolon(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} + {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_test_only_field_with_nested_generics_ends_at_its_comma(self):
+        text = (
+            "fn product() {\n    let c = C {\n        #[cfg(test)]\n"
+            "        probe: make::<Map<A, B>>(),\n        timeout_ms: 50,\n    };\n}\n"
+        )
+        self.assertEqual(self.new(text), [], text)
 
     def test_a_second_test_item_after_product_code_is_judged(self):
         text = (
