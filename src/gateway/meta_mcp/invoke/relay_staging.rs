@@ -219,9 +219,11 @@ pub(crate) fn unpublished(site: &'static str) {
 /// live config panics instead, unless the row opted in
 /// ([`unpublished_allow::arm`]), so a fixture that forgot to publish cannot
 /// pass a refusal row by this path.
+#[cfg(feature = "firewall")]
 pub(crate) const UNPUBLISHED: &str = "no live config published; relays refused until one is";
 
 /// [`UNPUBLISHED`], logged with the witness `site`.
+#[cfg(feature = "firewall")]
 pub(crate) fn unpublished_refusal(site: &'static str) -> String {
     #[cfg(test)]
     assert!(
@@ -235,7 +237,7 @@ pub(crate) fn unpublished_refusal(site: &'static str) -> String {
 
 /// The opt-in a row arms to reach [`unpublished_refusal`] in a test build,
 /// with how often it fired (patterned on `refuse_hook`).
-#[cfg(test)]
+#[cfg(all(test, feature = "firewall"))]
 pub(crate) mod unpublished_allow {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
