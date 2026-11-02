@@ -75,13 +75,18 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> 
     Ok(file_id(&file).ok().map(|id| (file, id)))
 }
 
-/// The counter of a segment's first line, when that line is a record.
+/// The counter of a segment's first record, when one starts within the cap.
 /// Returns the bytes read too.
 fn first_counter(file: &File) -> io::Result<(Option<u64>, u64)> {
     let mut scan = Scan::new(file.try_clone()?, 0, Mode::Boundary, ASSEMBLY_WINDOW);
-    let counter = match scan.next()? {
-        Step::Record { entry, .. } => mark_of(&entry).map(|m| m.counter),
-        _ => None,
+    // Unreadable lines before the first record are stepped over, within one
+    // capped read, so a torn or hand-edited head does not hide the segment.
+    let counter = loop {
+        match scan.next()? {
+            Step::Record { entry, .. } => break mark_of(&entry).map(|m| m.counter),
+            Step::Unreadable => {}
+            Step::Budget | Step::End => break None,
+        }
     };
     Ok((counter, scan.read))
 }

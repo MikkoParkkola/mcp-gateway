@@ -29,8 +29,10 @@ fn far_cursor_of(path: &Path, run: Rec, tail: usize, rec: &Rec) -> Written {
     write(path, &[recs])
 }
 
+/// A malformed run of about `bytes`, as many short lines: longer than a
+/// budget, so a search across it suspends.
 fn junk(bytes: usize) -> Rec {
-    Rec::Junk(bytes)
+    Rec::Junks(bytes.div_ceil(2048), 2047)
 }
 
 /// The per-call bound: the budget, one record within the cap, and the
@@ -94,7 +96,7 @@ fn f5b_a_search_across_a_malformed_run_spends_one_budget_per_call_and_completes(
 fn f5b_a_newline_free_run_past_the_budget_and_the_cap_is_crossed_in_bounded_calls() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("inv.jsonl");
-    let w = far_cursor(&path, junk(CAP + 1024 * 1024), 1);
+    let w = far_cursor(&path, Rec::Junk(CAP + 1024 * 1024), 1);
     let l = log(&path, StreamKind::Activity);
     let mut search = Search::default();
     let pages = drain(
@@ -152,7 +154,10 @@ fn f5d_the_cursor_record_straddling_the_budget_or_a_segment_is_found() {
         let path = d.path().join("inv.jsonl");
         let w = write(
             &path,
-            &[vec![junk(900), Rec::Call(None), Rec::Call(None)], calls(2)],
+            &[
+                vec![Rec::Junk(900), Rec::Call(None), Rec::Call(None)],
+                calls(2),
+            ],
         );
         let l = log(&path, StreamKind::Activity);
         let b = Budget {
@@ -234,20 +239,32 @@ fn f5e_an_oversized_cursor_record_is_validated_in_one_call() {
     let path = d.path().join("inv.jsonl");
     let w = write(&path, &[vec![Rec::Big(64 * 1024), Rec::Call(None)]]);
     let l = log(&path, StreamKind::Activity);
+    let mut search = Search::default();
     let page = rows_after(
         &l,
         Some(&w.marks[0]),
         w.marks.last(),
         &Access::All,
         SMALL,
-        &mut Search::default(),
+        &mut search,
     )
     .unwrap();
-    assert!(!page.reset && !page.searching);
-    assert_eq!(
-        page.rows.iter().map(|r| r.mark.counter).collect::<Vec<_>>(),
-        vec![2]
+    assert!(
+        !page.reset && !page.searching,
+        "validated in its first call"
     );
+    let next = page.next.clone();
+    let rest = drain(
+        &l,
+        next.as_ref(),
+        w.marks.last(),
+        &Access::All,
+        SMALL,
+        &mut search,
+    );
+    let mut got = counters(&[page]);
+    got.extend(counters(&rest));
+    assert_eq!(got, vec![2]);
 }
 
 #[test]

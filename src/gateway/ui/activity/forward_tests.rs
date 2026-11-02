@@ -57,6 +57,8 @@ enum Rec {
     Grant,
     /// Bytes that are not a record, then a newline.
     Junk(usize),
+    /// This many junk lines of this length each.
+    Junks(usize, usize),
     /// Bytes with no newline, ending the file.
     Torn(usize),
 }
@@ -117,6 +119,12 @@ fn write_from(path: &Path, segments: &[Vec<Rec>], first_seq: u64, first_counter:
         let mut bytes = Vec::new();
         for rec in seg {
             match rec {
+                Rec::Junks(count, n) => {
+                    for _ in 0..*count {
+                        bytes.extend(std::iter::repeat_n(b'x', *n));
+                        bytes.push(b'\n');
+                    }
+                }
                 Rec::Junk(n) => {
                     bytes.extend(std::iter::repeat_n(b'x', *n));
                     bytes.push(b'\n');
