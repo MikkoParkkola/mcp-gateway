@@ -197,3 +197,72 @@ fn g0_a_guard_method_does_not_make_a_namesake_function_a_guard() {
     let file = syn::parse_file(src).expect("planted source");
     assert!(scan(&[("planted.rs".to_owned(), file)]).is_empty());
 }
+
+/// A registry whose `backends` is a `DashMap`, and a config whose `backends`
+/// is a plain map: the same field name, two types.
+const MAPS: &str = "struct R { backends: DashMap<K, V> } struct C { backends: HashMap<K, V> }";
+
+/// Hits in `body`, planted after [`MAPS`].
+fn with_maps(body: &str) -> usize {
+    planted(&format!("{MAPS} {body}"))
+}
+
+#[test]
+fn scan1_a_dashmap_bound_to_a_local_is_still_a_map() {
+    let cases = [
+        (
+            "for over a local bound to a resolved field",
+            "impl R { fn f(&self) { let b = &self.backends; for (k, v) in b { warn!(\"x\"); } } }",
+        ),
+        (
+            "iter on a local bound to a resolved field",
+            "impl R { fn f(&self) { let b = &self.backends; for e in b.iter() { warn!(\"x\"); } } }",
+        ),
+        (
+            "iter on a local bound to an unresolved receiver's field",
+            "fn f(x: &Unknown) { let b = &x.backends; for e in b.iter() { warn!(\"x\"); } }",
+        ),
+        (
+            "a reborrow of a map local",
+            "impl R { fn f(&self) { let b = &self.backends; let c = &*b; for e in c.iter() { warn!(\"x\"); } } }",
+        ),
+        (
+            "a map-typed parameter",
+            "fn f(m: &DashMap<K, V>) { for e in m.iter() { warn!(\"x\"); } }",
+        ),
+        (
+            "an annotated map local",
+            "fn f(r: &R) { let m: &DashMap<K, V> = &r.backends; for e in m.iter() { warn!(\"x\"); } }",
+        ),
+    ];
+    for (form, src) in cases {
+        assert_eq!(with_maps(src), 1, "{form}");
+    }
+}
+
+#[test]
+fn scan2_a_plain_map_of_a_dashmaps_name_is_not_a_map() {
+    let quiet = [
+        (
+            "a resolved struct's plain field",
+            "fn f(c: &C) { for (k, v) in &c.backends { warn!(\"x\"); } }",
+        ),
+        (
+            "a local bound to a resolved struct's plain field",
+            "fn f(c: &C) { let b = &c.backends; for _ in b { warn!(\"x\"); } }",
+        ),
+        (
+            "a shadowed map local",
+            "impl R { fn f(&self) { let b = &self.backends; let b = 5; for _ in 0..b { warn!(\"x\"); } } }",
+        ),
+    ];
+    for (form, src) in quiet {
+        assert_eq!(with_maps(src), 0, "{form}");
+    }
+    // An unresolved receiver fails closed: any struct's map field of that name.
+    assert_eq!(
+        with_maps("fn f(x: &X) { for (k, v) in &x.backends { warn!(\"x\"); } }"),
+        1,
+        "unresolved receiver"
+    );
+}
