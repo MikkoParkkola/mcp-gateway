@@ -24,6 +24,7 @@ mod live_config;
 mod live_generation;
 mod needle_attach_sites;
 mod packaged;
+mod pinned_role_mapping;
 mod plain_refusals;
 mod plain_refusals_fixtures;
 mod plain_refusals_tests;
