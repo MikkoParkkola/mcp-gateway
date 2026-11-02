@@ -67,10 +67,16 @@ fn delivered(outcome: &Outcome) -> String {
 }
 
 async fn firewall_site(route: Route) {
-    let fx: Logged = fixture(Answer::Ok, Some(FirewallAction::Block)).await;
+    // The retry's injection rides in a question's answer, which only the
+    // dispatch rescan reads; the backend must ask for there to be a retry.
+    let (answer, args) = match route {
+        Route::MetaRetry => (Answer::AskAlways, injected_answer()),
+        Route::Direct | Route::MetaInvoke => (Answer::Ok, injected()),
+    };
+    let fx: Logged = fixture(answer, Some(FirewallAction::Block)).await;
     let config = configured(&fx, two_rules);
     let deciding = config.security.firewall.rules[1].clone();
-    let got = call(&fx, (route, injected()), &config, &config).await;
+    let got = call(&fx, (route, args), &config, &config).await;
     let expected = firewall_id(&fx, &deciding);
     assert!(got.refused && got.kind == "firewall", "{route:?}: {got:?}");
     assert_eq!(got.rule, json!(expected.as_str()), "{route:?}");

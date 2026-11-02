@@ -29,10 +29,11 @@ async fn a_meta_tool_policy_refusal_records_its_rule_id() {
     };
     let who = api_key_caller();
     let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
-    let error = meta
+    // A withheld tool answers as an absent one: an `isError` result.
+    let answer = meta
         .invoke_tool(&args, None, &context(&authorizer, &who))
-        .await
-        .expect_err("premise: the call is refused");
+        .await;
+    let delivered = format!("{answer:?}");
     let all = records(&dir);
     let [record] = all.as_slice() else {
         panic!("one record: {all:?}");
@@ -42,7 +43,7 @@ async fn a_meta_tool_policy_refusal_records_its_rule_id() {
     assert_eq!(record["decision"]["kind"], "tool_policy", "{record}");
     assert_eq!(record["decision"]["rule_id"], expected.as_str(), "{record}");
     let hex = expected.as_str().trim_start_matches("tool_policy:");
-    assert!(!error.to_string().contains(hex), "{error}");
+    assert!(!delivered.contains(hex), "{delivered}");
 }
 
 /// A target that matches nothing records `not_found` with no rule.
@@ -58,12 +59,12 @@ async fn a_not_found_refusal_records_no_rule() {
             None,
             &context(&crate::gateway::authz::AllowAll, &who),
         )
-        .await
-        .expect_err("premise: the call is refused");
+        .await;
     let all = records(&dir);
     let [record] = all.as_slice() else {
         panic!("one record: {all:?}");
     };
+    assert_eq!(record["decision"]["kind"], "not_found", "{record}");
     assert!(record["decision"].get("rule_id").is_none(), "{record}");
 }
 
