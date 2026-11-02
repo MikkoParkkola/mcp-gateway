@@ -36,7 +36,7 @@ impl MetaMcp {
             decisions: std::sync::OnceLock::new(),
             #[cfg(feature = "webui")]
             discovery_cache: std::sync::OnceLock::new(),
-            capabilities: RwLock::new(None),
+            capabilities: Arc::new(RwLock::new(None)),
             cache,
             default_cache_ttl,
             idempotency_cache: None,

@@ -88,6 +88,8 @@ fn allow_all() -> FirewallRule {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 
