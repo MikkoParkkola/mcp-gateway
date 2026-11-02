@@ -213,3 +213,155 @@ fn comments_between_items_or_on_the_key_line_refuse_naming_their_line() {
     let on_key = "auth:\n  scope: # note\n    - alpha\n    - beta\n";
     assert_refused_by(on_key, &[list("auth.scope", &["x"])], "line 2");
 }
+
+#[test]
+fn a_block_list_on_its_elements_dash_line_keeps_the_dash_line() {
+    let original = "auth:\n  api_keys:\n    - backends:\n        - a\n      name: x\n";
+    let out = edited(original, &[api_key_list(0, "backends", &["b"])]);
+    assert_eq!(
+        out,
+        "auth:\n  api_keys:\n    - backends: [\"b\"]\n      name: x\n"
+    );
+}
+
+#[test]
+fn a_list_that_is_the_whole_crlf_file_with_and_without_a_final_newline() {
+    let out = edited("scope:\r\n  - a\r\n  - b", &[list("scope", &["x"])]);
+    assert_eq!(out, "scope: [\"x\"]");
+    let out = edited("scope:\r\n  - a\r\n", &[list("scope", &["x"])]);
+    assert_eq!(out, "scope: [\"x\"]\r\n");
+}
+
+#[test]
+fn empty_values_take_the_list_and_keep_their_comment() {
+    for value in ["~ ", "null ", "[] ", ""] {
+        let original = format!("auth:\n  scope: {value}# c\n");
+        let out = edited(&original, &[list("auth.scope", &["x"])]);
+        assert_eq!(out, "auth:\n  scope: [\"x\"] # c\n", "from `{value}`");
+    }
+}
+
+#[test]
+fn decorated_or_multi_line_empty_values_are_refused() {
+    for original in [
+        "auth:\n  scope: &a []\n",
+        "auth:\n  scope: &a ~\n",
+        "auth:\n  scope: &a null\n",
+        "auth:\n  scope: &s\n    - a\n",
+        "auth:\n  base: &b x\n  scope:\n    - *b\n",
+    ] {
+        assert_refused_by(original, &[list("auth.scope", &["x"])], "anchor");
+    }
+    assert_refused_by(
+        "auth:\n  scope: [\n  ]\n",
+        &[list("auth.scope", &["x"])],
+        "more than one line",
+    );
+}
+
+#[test]
+fn other_shapes_and_items_are_refused_naming_why() {
+    let set =
+        |original: &str, by: &str| assert_refused_by(original, &[list("auth.scope", &["x"])], by);
+    set("auth:\n  scope: x\n", "a scalar, not a list");
+    set("auth:\n  scope:\n    a: 1\n", "a mapping, not a list");
+    set("auth:\n  scope:\n    - true\n", "not a plain string");
+    set("auth:\n  scope:\n    - ~\n", "not a plain string");
+    set(
+        "auth:\n  scope:\n    - |\n      text\n",
+        "not a plain string",
+    );
+    let at_index = (
+        FieldPath(vec![
+            Segment::Key("auth".into()),
+            Segment::Key("scope".into()),
+            Segment::Index(0),
+        ]),
+        Change::List(vec!["x".into()]),
+    );
+    assert_refused_by(BLOCK, &[at_index], "not at a list position");
+}
+
+#[test]
+fn quoted_items_are_replaced_and_rewritten() {
+    let original = "auth:\n  scope:\n    - \"5\"\n    - 'q'\n";
+    let out = edited(original, &[list("auth.scope", &["y"])]);
+    assert_eq!(out, "auth:\n  scope: [\"y\"]\n");
+}
+
+#[test]
+fn hard_items_round_trip_and_the_output_edits_again() {
+    let items = ["a\"b", "c\\d", "e\nf"];
+    let out = edited(INLINE, &[list("auth.scope", &items)]);
+    assert_eq!(strings(&out, "auth.scope"), items);
+    assert!(out.contains("  scope: [\"a\\\"b\", "), "exact text: {out}");
+    let again = edited(&out, &[list("auth.scope", &["z"])]);
+    assert_eq!(again, INLINE.replace("[\"alpha\", \"beta\"]", "[\"z\"]"));
+}
+
+#[test]
+fn two_block_rewrites_and_a_key_removal_pass_the_deletion_proof() {
+    let original = "\
+auth:
+  scope:
+    - a
+    - b
+  legacy: 1
+  allow:
+    - c
+other: 1
+";
+    let out = edited(
+        original,
+        &[
+            list("auth.scope", &["x"]),
+            (path("auth.legacy"), Change::Remove),
+            list("auth.allow", &[]),
+        ],
+    );
+    assert_eq!(out, "auth:\n  scope: [\"x\"]\n  allow: []\nother: 1\n");
+}
+
+#[test]
+fn a_refused_comment_names_its_original_line_after_an_insertion_above() {
+    let original = "a:\n  x: 1\nauth:\n  scope:\n    - p\n    # c\n    - q\n";
+    assert_refused_by(
+        original,
+        &[
+            (path("a.y"), Change::Set(Scalar::Int(2))),
+            list("auth.scope", &["x"]),
+        ],
+        "line 6",
+    );
+}
+
+#[test]
+fn an_unchanged_list_writes_nothing() {
+    assert_eq!(
+        edited(BLOCK, &[list("auth.scope", &["alpha", "beta"])]),
+        BLOCK
+    );
+    assert_eq!(
+        edited(INLINE, &[list("auth.scope", &["alpha", "beta"])]),
+        INLINE
+    );
+}
+
+#[test]
+fn two_new_elements_by_element_changes_are_still_refused() {
+    let element = |i: usize| {
+        (
+            FieldPath(vec![
+                Segment::Key("auth".into()),
+                Segment::Key("scope".into()),
+                Segment::Index(i),
+            ]),
+            Change::Set(Scalar::Str("z".into())),
+        )
+    };
+    assert_refused_by(
+        BLOCK,
+        &[element(2), element(3)],
+        "only one new list element",
+    );
+}
