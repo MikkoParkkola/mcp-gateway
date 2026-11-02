@@ -295,7 +295,7 @@ pub(crate) struct UpstreamHandle {
     /// The stored fingerprint of what the dispatch injected
     /// (`security::dispatched`); `None` for a row from before it existed,
     /// which is withheld.
-    pub secrets: Option<String>,
+    pub fingerprint: Option<String>,
 }
 
 /// What one bounded read-only query learned.

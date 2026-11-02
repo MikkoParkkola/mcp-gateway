@@ -239,7 +239,7 @@ impl Sender {
                     handle: pending.handle.clone(),
                     tool: String::new(),
                     arguments: serde_json::Value::Null,
-                    secrets: None,
+                    fingerprint: None,
                 };
                 let deadline = crate::gateway::meta_mcp::upstream::QUERY_DEADLINE;
                 Some(self.adapter.cancel(&handle, deadline).await)

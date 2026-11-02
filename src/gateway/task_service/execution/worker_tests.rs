@@ -350,7 +350,7 @@ fn handle() -> UpstreamHandle {
         handle: "job-1".to_owned(),
         tool: String::new(),
         arguments: serde_json::Value::Null,
-        secrets: Some("none".to_owned()),
+        fingerprint: Some("none".to_owned()),
     }
 }
 

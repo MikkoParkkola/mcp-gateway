@@ -330,7 +330,7 @@ impl TaskExecutor {
             handle: descriptor.handle.clone(),
             tool: descriptor.tool.clone(),
             arguments: descriptor.arguments.clone(),
-            secrets: descriptor.secret_fingerprint.clone(),
+            fingerprint: descriptor.secret_fingerprint.clone(),
         };
 
         // In the dispatch scope, so the gates' attribution notes travel with

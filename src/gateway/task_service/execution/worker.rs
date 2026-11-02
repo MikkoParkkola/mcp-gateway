@@ -402,7 +402,7 @@ async fn follow_handle(
     executor: &Arc<TaskExecutor>,
     state: &crate::gateway::task_service::host::LiveHost,
     (principal, id, revision): (&str, &str, u64),
-    (job, handle, relay, captured, secrets): (
+    (job, handle, relay, captured, fingerprint): (
         &crate::gateway::meta_mcp::upstream::DirectJob,
         String,
         crate::gateway::meta_mcp::invoke::relay::RelayKey<'_>,
@@ -433,7 +433,7 @@ async fn follow_handle(
         handle,
         tool: job.tool.clone(),
         arguments: job.arguments.clone(),
-        secrets,
+        fingerprint,
     };
     let followed = tokio::select! {
         biased;

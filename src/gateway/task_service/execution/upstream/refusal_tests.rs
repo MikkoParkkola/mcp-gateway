@@ -332,7 +332,7 @@ async fn a_handle_is_live_only_for_a_readable_working_row_that_matches() {
         handle: handle.to_owned(),
         tool: String::new(),
         arguments: serde_json::Value::Null,
-        secrets: Some("none".to_owned()),
+        fingerprint: Some("none".to_owned()),
     };
     let live = |f: &Fixture, id: &str, h: &UpstreamHandle| {
         f.executor.handle_still_live(&f.owner_digest, id, h)

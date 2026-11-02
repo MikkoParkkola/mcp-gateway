@@ -39,7 +39,7 @@ pub(super) async fn follow_upstream_job(
     let (job, handle, relay, bindings, injected) = dispatched;
     // The stored form the follow checks against, the same string the
     // capture writes: missing when the dispatch's slot held nothing.
-    let secrets = injected.as_ref().map_or_else(
+    let fingerprint = injected.as_ref().map_or_else(
         || crate::security::dispatched::MISSING.to_owned(),
         crate::security::dispatched::Dispatched::stored,
     );
@@ -50,7 +50,7 @@ pub(super) async fn follow_upstream_job(
         (bindings.clone(), injected),
     )
     .await;
-    let followed = (&job, handle.clone(), relay, captured, Some(secrets));
+    let followed = (&job, handle.clone(), relay, captured, Some(fingerprint));
     follow_handle(
         executor,
         state,
