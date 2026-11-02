@@ -42,5 +42,14 @@ class GateEnvPython(unittest.TestCase):
             self.assertFalse((project / "uv.lock").exists(), "the check wrote a lock")
 
 
+    def test_a_synced_environment_names_its_own_interpreter(self):
+        env = SCRIPT.parent.parent / "gate-env"
+        if not (env / ".venv/bin/python").exists():
+            self.skipTest("the gate environment is not synced here")
+        done = run({})
+        self.assertEqual(done.returncode, 0, done)
+        self.assertEqual(done.stdout.strip(), str(env / ".venv/bin/python"))
+
+
 if __name__ == "__main__":
     unittest.main()

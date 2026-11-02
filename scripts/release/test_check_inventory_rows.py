@@ -119,6 +119,13 @@ class CheckInventoryRows(unittest.TestCase):
         self.repo.commit("add")
         self.assertEqual(sorted(self.repo.missing()), ["helper", "p"])
 
+    def test_a_product_function_with_a_test_only_parameter_needs_a_row(self) -> None:
+        # The parameter is test-only; the function is product code, even
+        # though its signature shares a line with the parameter.
+        self.repo.write("src/oauth/mod.rs", "pub fn existing() {}\npub fn product(#[cfg(test)] probe: ()) {}\n")
+        self.repo.commit("add")
+        self.assertEqual(self.repo.missing(), ["product"])
+
     def test_a_file_declared_only_for_tests_needs_no_row(self) -> None:
         # Declared by `#[path]` under cfg(test), and from a test file in turn.
         self.repo.write(

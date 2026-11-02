@@ -63,6 +63,16 @@ class Owner(unittest.TestCase):
                 with self.subTest(construct=name, side=side):
                     self.assertEqual(lines(text, side), want, text)
 
+    def test_a_cfg_mentioned_inside_another_attribute_marks_nothing(self):
+        text = "#[doc = stringify!(#[cfg(test)])]\nfn product() {\n  x();\n}\n"
+        for side in (LONG, SHORT):
+            with self.subTest(side=side):
+                self.assertEqual(lines(text, side), [], text)
+
+    def test_a_comment_between_a_tuple_fields_visibility_and_type(self):
+        text = "struct S(\n #[cfg(test)]\n pub(crate) /* why */\n [u8; { 2 }],\n u16,\n);\n"
+        self.assertEqual(lines(text), [(2, 4)], text)
+
     def test_a_cfg_that_builds_outside_tests_marks_nothing(self):
         for cfg in ("any(test, unix)", "not(test)", 'feature = "test"'):
             with self.subTest(cfg=cfg):
