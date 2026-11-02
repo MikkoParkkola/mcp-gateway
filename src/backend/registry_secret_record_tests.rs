@@ -25,11 +25,12 @@ fn backend(name: &str) -> Arc<Backend> {
 }
 
 /// The retained sets come back by backend name, not in the map's order or
-/// the order the backends registered.
+/// the order the backends registered. Twelve names, registered out of order:
+/// without the sort, the map's order matches by chance about once in 12!.
 #[tokio::test]
 async fn retained_sets_come_back_by_backend_name() {
     let registry = BackendRegistry::new();
-    for name in ["c", "a", "b"] {
+    for name in ["g", "c", "k", "a", "j", "e", "l", "b", "h", "d", "i", "f"] {
         #[allow(
             clippy::disallowed_methods,
             reason = "Test: registers the backends whose sets are ordered"
@@ -38,7 +39,7 @@ async fn retained_sets_come_back_by_backend_name() {
         assert!(registered, "premise: {name} registered");
     }
     let sets = registry.retained_sets();
-    let expected: Vec<_> = ["a", "b", "c"]
+    let expected: Vec<_> = ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]
         .into_iter()
         .map(|name| Arc::clone(registry.needles.get(name).expect("premise: a set").value()))
         .collect();
