@@ -294,6 +294,34 @@ impl SecretInjector {
     }
 }
 
+/// Each of `rules` that applies to `tool`, with the value it resolves to now
+/// through `resolver`, before any templating: what a dispatch's fingerprint
+/// is taken over, at the dispatch and again at each check, so both sides
+/// hash the same inputs. An empty value is left out, as injection skips it.
+///
+/// # Errors
+///
+/// A rule that does not resolve.
+pub(crate) fn resolved_rules(
+    rules: &[CredentialRule],
+    resolver: &SecretResolver,
+    tool: &str,
+) -> crate::Result<Vec<(String, String)>> {
+    let mut pairs = Vec::new();
+    for rule in rules
+        .iter()
+        .filter(|rule| tool_matches_rule(tool, &rule.tools))
+    {
+        let value = resolver.resolve(&rule.value).map_err(|e| {
+            crate::Error::Config(format!("Failed to resolve credential '{}': {e}", rule.name))
+        })?;
+        if !value.is_empty() {
+            pairs.push((rule.name.clone(), value));
+        }
+    }
+    Ok(pairs)
+}
+
 /// [`SecretInjector::inject`] over one backend's `rules`, resolved by
 /// `resolver`: what a backend's own send applies.
 ///
