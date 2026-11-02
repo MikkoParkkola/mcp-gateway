@@ -149,8 +149,8 @@ class RealTree(unittest.TestCase):
             self.assertEqual(found, {
                 "src/identity_grants.rs new",
                 "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
-                # GrantSubject::new is checked since GS.2; each call site is
-                # listed until the rule is retired.
+                # GrantSubject::new is checked; each call site is listed
+                # until the rule is retired.
                 "src/identity_grants.rs try_from",
                 "src/decisions/mod.rs access_key", "src/decisions/mod.rs covered",
                 "src/decisions/mod.rs denial_from_record",

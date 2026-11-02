@@ -31,10 +31,10 @@ import re
 import sys
 from pathlib import Path
 
-# Since GS.2 `GrantSubject::new` is the fallible constructor (names_someone),
-# so each production call is checked; listed one site at a time until the
-# operator retires this rule on MIK-9210's evidence.
-NEW_IS_CHECKED = "new is the checked constructor since GS.2 (names_someone)"
+# `GrantSubject::new` is the fallible constructor (names_someone), so each
+# production call is checked; each site stays listed until this rule is
+# retired.
+NEW_IS_CHECKED = "new is the checked constructor (names_someone)"
 
 # (file, enclosing fn, construct) -> why it may build an identity directly.
 ALLOWED = {
