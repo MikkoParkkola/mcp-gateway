@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use super::direct_guards_fixture::Fx;
-use super::live_budget_members_tests::{CAP, Scope, full_fixture};
+use super::live_budget_members_tests::{CAP, Scope, full_fixture, settle};
 use super::live_budget_tests::{fixture, governance, reload};
 use crate::clock::test_clock::at_secs;
 use crate::config_reload::Generation;
@@ -200,7 +200,8 @@ async fn t7b_a_row_created_after_the_overflow_began_keeps_that_overflow() {
         let _clock = at_secs(T);
         let fx = with_overflow(scope).await;
         reload(&fx, |c| budget(scope, c, "filler-0", 50.0));
-        spend(&fx, scope, "target", 1.0);
+        // Under the live generation: only its budgets free the place.
+        settle(&fx, scope, "target");
         assert_eq!(
             scope.rows(&fx).0.get("target").copied(),
             Some(1.0),
