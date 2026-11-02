@@ -403,11 +403,22 @@ impl Collect {
             .collect()
     }
 
-    /// Imports that rename a discovered helper (`use x::helper as other`).
-    pub(in super::super) fn helper_renames(&self, helpers: &BTreeSet<String>) -> Vec<String> {
+    /// Imports that rename a discovered helper or raise helper
+    /// (`use x::helper as other`): both tables match names as written.
+    pub(in super::super) fn helper_renames(&self, derived: &Derived) -> Vec<String> {
+        let raise_names = derived
+            .raise_helpers
+            .iter()
+            .filter_map(|h| h.rsplit("::").next());
+        let names: BTreeSet<&str> = derived
+            .helpers
+            .iter()
+            .map(String::as_str)
+            .chain(raise_names)
+            .collect();
         self.renames
             .iter()
-            .filter(|(_, from, _)| helpers.contains(from))
+            .filter(|(_, from, _)| names.contains(from.as_str()))
             .map(|(file, from, to)| format!("{file}: use {from} as {to}"))
             .collect()
     }

@@ -175,18 +175,7 @@ fn no_monitored_variant_is_imported_aliased_or_globbed() {
         .filter(|(file, text)| !ALIAS_ALLOW.contains(&(file.as_str(), text.as_str())))
         .map(|(file, text)| format!("{file}: {text}"))
         .collect();
-    let names: BTreeSet<String> = derived
-        .helpers
-        .iter()
-        .cloned()
-        .chain(
-            derived
-                .raise_helpers
-                .iter()
-                .filter_map(|h| h.rsplit("::").next().map(str::to_string)),
-        )
-        .collect();
-    found.extend(collect.helper_renames(&names));
+    found.extend(collect.helper_renames(&derived));
     found.extend(
         collect
             .error_impls
