@@ -311,7 +311,8 @@ fn admit(hub: &EventsHub, key: &str, secret: &str, name: &str) {
         "secret": "whsec_x", "previous_secret": null, "previous_until": null,
         "granted_at": Utc::now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null,
-        "api_key": {"name": key, "principal": principal},
+        // Opened with the key's secret now: bound to that secret.
+        "api_key": {"name": key, "principal": principal, "digest_tag": principal},
         "credential_kind": serde_json::to_value(crate::security::audit::CredentialKind::ApiKey)
             .expect("kind"),
     }))
