@@ -165,7 +165,7 @@ async fn a_401_json_rpc_session_expiry_keeps_session_recovery() {
         );
         // The parsed refusal keeps the peer's own code.
         assert!(
-            matches!(err, Error::JsonRpc { code: c, .. } if c == code),
+            matches!(err, Error::BackendJsonRpc { code: c, .. } if c == code),
             "{body}: {err:?}"
         );
     }

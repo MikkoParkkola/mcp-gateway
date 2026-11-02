@@ -755,10 +755,12 @@ async fn fixture_inner(
             },
             ..FirewallConfig::default()
         };
-        state_mut.firewall = Some(Arc::new(
+        let firewall = Arc::new(
             Firewall::from_config(config.clone(), tracker.clone())
                 .with_continuations(meta.continuation()),
-        ));
+        );
+        super::firewall_publish_fixture::publish_firewall(state_mut, &firewall);
+        state_mut.firewall = Some(firewall);
         let meta_firewall = Arc::new(
             Firewall::from_config(config, tracker).with_continuations(meta.continuation()),
         );

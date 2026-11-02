@@ -43,6 +43,15 @@ impl MetaMcp {
         self.startup_live_config.get().cloned().or(from_reload)
     }
 
+    /// The generation published now: the answer side's P beside the request's
+    /// pinned one, and the only one for a check no request is behind (task
+    /// settlement, a poll, a requestless notification). `None` only before
+    /// startup sets the live config. Every reader is a firewall check.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn current_generation(&self) -> Option<Arc<crate::config_reload::Generation>> {
+        self.live_config().map(|live| live.generation())
+    }
+
     /// Startup's live config; a second call keeps the first.
     pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
         let _ = self.startup_live_config.set(live);
@@ -63,6 +72,14 @@ impl MetaMcp {
 
     pub(in crate::gateway) fn get_capabilities(&self) -> Option<Arc<CapabilityBackend>> {
         self.capabilities.read().clone()
+    }
+
+    /// The live capability slot, shared with the firewall's folder check.
+    #[cfg(feature = "firewall")]
+    pub(in crate::gateway) fn capability_slot(
+        &self,
+    ) -> Arc<parking_lot::RwLock<Option<Arc<CapabilityBackend>>>> {
+        Arc::clone(&self.capabilities)
     }
 
     /// The session profile's check of `(server, tool)` for this request's

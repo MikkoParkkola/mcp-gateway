@@ -245,14 +245,14 @@ impl Gateway {
     #[cfg(test)]
     pub(super) async fn dispatch_single(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: &serde_json::Value,
         session_id: &str,
     ) -> Option<serde_json::Value> {
         Self::dispatch_single_for_client(
             meta_mcp,
-            tool_policy,
+            generation,
             mtls_policy,
             request.clone(),
             StdioClient {
@@ -295,7 +295,7 @@ impl Gateway {
     #[cfg(test)]
     pub(super) async fn dispatch_single_for_client(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: serde_json::Value,
         client: StdioClient<'_>,
@@ -304,7 +304,7 @@ impl Gateway {
         // One delivery's facts, as the serve loop opens them per message.
         crate::gateway::delivery_facts::scope(async move {
             let (answer, staged) =
-                Self::dispatch_single_staged(meta_mcp, tool_policy, mtls_policy, request, client)
+                Self::dispatch_single_staged(meta_mcp, generation, mtls_policy, request, client)
                     .await;
             // No frame is judged here: recorded and settled as built, and the
             // receipts follow the frame as `judge_and_commit` has them follow it.
@@ -329,7 +329,7 @@ impl Gateway {
     )]
     pub(super) async fn dispatch_single_staged(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         request: serde_json::Value,
         client: StdioClient<'_>,
@@ -342,7 +342,7 @@ impl Gateway {
         // The minted-receipt scope rides outside the memo.
         let dispatch = crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
             crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-                Self::dispatch_relay_scoped(meta_mcp, tool_policy, mtls_policy, request, client),
+                Self::dispatch_relay_scoped(meta_mcp, generation, mtls_policy, request, client),
             )),
         ));
         if meta_mcp.relay_active() {
@@ -360,11 +360,11 @@ impl Gateway {
     #[cfg(test)]
     pub(super) async fn dispatch_batch(
         meta_mcp: &Arc<MetaMcp>,
-        tool_policy: &Arc<crate::security::ToolPolicy>,
+        generation: &dyn crate::gateway::authz::StdioLine,
         mtls_policy: &Arc<crate::mtls::MtlsPolicy>,
         batch: serde_json::Value,
         session_id: &str,
     ) -> Vec<serde_json::Value> {
-        Self::dispatch_batch_for_client(meta_mcp, tool_policy, mtls_policy, batch, session_id).await
+        Self::dispatch_batch_for_client(meta_mcp, generation, mtls_policy, batch, session_id).await
     }
 }

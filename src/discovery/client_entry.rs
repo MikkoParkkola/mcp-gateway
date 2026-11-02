@@ -18,12 +18,13 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::{DiscoveredServer, DiscoverySource, SecretMap, ServerMetadata};
+use crate::cli_support::shown;
 use crate::config::TransportConfig;
 
 /// The string-valued members of `config[key]` in gateway syntax. A non-string
 /// value, or one only the client can resolve, is skipped with a warning that
-/// names the client, server and key, never the value, and its field name
-/// (`env.K`) goes to `uncarried`.
+/// names the client, server and key (escaped for a terminal), never the
+/// value, and its field name (`env.K`) goes to `uncarried`.
 fn string_map(
     source: &DiscoverySource,
     name: &str,
@@ -38,13 +39,19 @@ fn string_map(
         .iter()
         .filter_map(|(k, v)| {
             let Some(value) = v.as_str() else {
-                warn!("{source:?} server {name}: {key}.{k} is not a string; skipped");
+                warn!(
+                    "{source:?} server {}: {key}.{} is not a string; skipped",
+                    shown(name),
+                    shown(k)
+                );
                 uncarried.push(format!("{key}.{k}"));
                 return None;
             };
             let Some(value) = gateway_value(value) else {
                 warn!(
-                    "{source:?} server {name}: {key}.{k} uses a variable the gateway cannot resolve; skipped"
+                    "{source:?} server {}: {key}.{} uses a variable the gateway cannot resolve; skipped",
+                    shown(name),
+                    shown(k)
                 );
                 uncarried.push(format!("{key}.{k}"));
                 return None;
@@ -176,7 +183,10 @@ pub(super) fn parse(
         }
         let argv = client_argv(program, config, &mut uncarried);
         let Some(command) = crate::transport::join_command(&argv) else {
-            warn!("server {name}: an argument cannot be quoted for the command line; skipped");
+            warn!(
+                "server {}: an argument cannot be quoted for the command line; skipped",
+                shown(name)
+            );
             return None;
         };
         let working_dir = config.get("cwd").and_then(Value::as_str).map(PathBuf::from);
@@ -258,6 +268,10 @@ pub(super) fn parse(
         return Some(server);
     }
 
-    warn!("Unsupported server config format for {name}");
+    warn!("Unsupported server config format for {}", shown(name));
     None
 }
+
+#[cfg(test)]
+#[path = "client_entry_tests.rs"]
+mod tests;

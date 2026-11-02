@@ -390,6 +390,8 @@ fn r_fwstamp_redaction_keeps_the_counted_text() {
                 servers: None,
                 keys: None,
                 except: None,
+                allowed_roots: None,
+                path_args: None,
             }],
             ..FirewallConfig::default()
         },

@@ -383,6 +383,24 @@ async fn keyless_continuation_page_marks_truncated() {
     );
 }
 
+/// A truncated fill read only some pages, so a hint it did not see may sit on
+/// one it never reached: no name it stores reads undeclared.
+#[tokio::test]
+async fn a_truncated_fill_records_no_undeclared_effect() {
+    let pager = Pager::tools(vec![
+        (vec!["t0"], Some("c1")),
+        (vec![], Some("c2")),
+        (vec!["t2"], None),
+    ]);
+    pager.script.lock().keyless_page = Some(1);
+    let backend = backend_with(Arc::clone(&pager), LONG_TTL);
+
+    backend.get_tools_shared().await.expect("fill");
+    assert!(truncated(&backend));
+    assert_eq!(backend.declared_effect_for(None, "t0"), None);
+    assert_eq!(backend.declared_effect_for(None, "t2"), None);
+}
+
 /// Review fold: a later page with no `tools` key and no cursor is malformed,
 /// not an empty last page: the fill fails and keeps no partial list, so the
 /// check never judges a present tool absent. Mutant M40 (accept any result
@@ -525,3 +543,6 @@ fn fill_budget_expiry_keeps_pages_and_marks_truncated() {
         "{rendered}"
     );
 }
+
+#[path = "list_drain_origin_tests.rs"]
+mod list_drain_origin;

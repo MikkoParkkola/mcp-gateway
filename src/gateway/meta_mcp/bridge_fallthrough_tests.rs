@@ -597,6 +597,7 @@ async fn a_minted_retry_under_a_discovery_name_is_inspected_once_and_unmarked() 
                 signing: None,
                 chain_source: ChainSource::NotEligible,
                 chain_nonce: None,
+                generation: None,
             },
         )
         .await;

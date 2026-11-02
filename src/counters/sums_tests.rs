@@ -7,6 +7,7 @@
 use chrono::TimeZone;
 use chrono_tz::{Europe::Amsterdam, UTC};
 
+use super::sums::{CallWindows, SERIES, WindowSums};
 use super::*;
 
 const HOUR: u64 = 3600;
@@ -21,6 +22,11 @@ fn record(store: &CounterStore, tool: Label<'_>, at: u64) {
         tally: Tally::default(),
     };
     store.record(&call, at, &UTC);
+}
+
+/// Each label's two 24-hour windows.
+fn days(sums: &WindowSums) -> Vec<(Option<u64>, Option<u64>)> {
+    sums.counts.iter().map(CallWindows::days).collect()
 }
 
 fn tool(name: &str) -> Filter<'_> {
@@ -52,7 +58,7 @@ fn t1c_the_current_bucket_is_partial_and_its_twin_whole() {
     record(&store, Label::Known("t"), now - 86_400 - 590);
     record(&store, Label::Known("t"), now - 86_400 + 1_100);
     let sums = store.window_sums(&[tool("t")], now, &UTC);
-    assert_eq!(sums.counts, vec![(Some(1), Some(2))]);
+    assert_eq!(days(&sums), vec![(Some(1), Some(2))]);
 }
 
 /// T2c: after the clock steps back, a series whose newest bucket is ahead of
@@ -65,7 +71,7 @@ fn t2c_a_clock_step_back_loses_the_oldest_previous_buckets() {
     record(&store, Label::Known("t"), now - HOUR);
     record(&store, Label::Known("t"), now + 10 * HOUR);
     let sums = store.window_sums(&[tool("t")], now, &UTC);
-    assert_eq!(sums.counts, vec![(Some(1), None)]);
+    assert_eq!(days(&sums), vec![(Some(1), None)]);
 }
 
 /// T7: one batch read takes the lock once, for 3 labels or 300.
@@ -125,7 +131,7 @@ fn t11_sums_match_the_series_read() {
         assert!(!series.folded && series.previous_complete, "{now}");
         let day: u64 = series.points.iter().map(|p| p.v).sum();
         let prev: u64 = series.previous.expect("compared").iter().map(|p| p.v).sum();
-        assert_eq!(sums.counts, vec![(Some(day), Some(prev))], "{now}");
+        assert_eq!(days(&sums), vec![(Some(day), Some(prev))], "{now}");
     }
 }
 
@@ -138,8 +144,8 @@ fn t2_an_unheld_label_in_a_full_dimension_is_unknown() {
         record(&store, Label::Known(&format!("t{n}")), T0 - HOUR);
     }
     let sums = store.window_sums(&[tool("not-held"), tool("t0")], T0, &UTC);
-    assert_eq!(sums.counts[0], (None, None));
-    assert_eq!(sums.counts[1], (Some(1), Some(0)));
+    assert_eq!(sums.counts[0].days(), (None, None));
+    assert_eq!(sums.counts[1].days(), (Some(1), Some(0)));
 }
 
 /// T2: overflow calls only in the previous period make only the previous
@@ -149,7 +155,7 @@ fn t2_overflow_in_the_previous_period_only_nulls_that_period() {
     let store = CounterStore::new(0);
     record(&store, Label::Untrusted, T0 - 36 * HOUR);
     let sums = store.window_sums(&[tool("quiet")], T0, &UTC);
-    assert_eq!(sums.counts, vec![(Some(0), None)]);
+    assert_eq!(days(&sums), vec![(Some(0), None)]);
 }
 
 /// T2: overflow calls in the current period make a label not held unknown
@@ -162,8 +168,8 @@ fn t2_overflow_in_the_current_period_nulls_only_unheld_labels() {
     record(&store, Label::Untrusted, T0 - 2 * HOUR);
     let sums = store.window_sums(&[tool("held"), tool("quiet")], T0, &UTC);
     // Its admission call at T0 - 40 h is in the previous period.
-    assert_eq!(sums.counts[0], (Some(1), Some(1)));
-    assert_eq!(sums.counts[1], (None, Some(0)));
+    assert_eq!(sums.counts[0].days(), (Some(1), Some(1)));
+    assert_eq!(sums.counts[1].days(), (None, Some(0)));
 }
 
 /// T2: overflow calls earlier in the half hour a label was admitted in may be
@@ -175,7 +181,7 @@ fn t2_overflow_in_the_admission_half_hour_is_not_attributed() {
     record(&store, Label::Untrusted, admitted - 300);
     record(&store, Label::Known("late"), admitted);
     let sums = store.window_sums(&[tool("late")], T0, &UTC);
-    assert_eq!(sums.counts[0].0, None);
+    assert_eq!(sums.counts[0].day, None);
 }
 
 /// T3: a store younger than both periods reads numbers, not `None`: no call
@@ -186,7 +192,7 @@ fn t3_a_young_store_reads_numbers() {
     let store = CounterStore::new(since);
     record(&store, Label::Known("t"), T0 - HOUR);
     let sums = store.window_sums(&[tool("t")], T0, &UTC);
-    assert_eq!(sums.counts, vec![(Some(1), Some(0))]);
+    assert_eq!(days(&sums), vec![(Some(1), Some(0))]);
     assert_eq!(sums.since, since);
 }
 
@@ -199,7 +205,7 @@ fn t2b_previous_buckets_past_the_ring_are_unknown() {
     let store = CounterStore::new(0);
     record(&store, Label::Known("t"), now - HOUR);
     let sums = store.window_sums(&[tool("t")], now, &Amsterdam);
-    assert_eq!(sums.counts, vec![(Some(1), None)]);
+    assert_eq!(days(&sums), vec![(Some(1), None)]);
 }
 
 /// T7b: labels the store does not hold all get the same answer, worked out
@@ -215,10 +221,168 @@ fn t7b_unheld_labels_share_one_walk() {
 
     let sums = store.window_sums(&labels, now, &UTC);
 
-    assert!(sums.counts.iter().all(|c| *c == (Some(0), Some(0))));
+    assert!(sums.counts.iter().all(|c| c.days() == (Some(0), Some(0))));
     assert!(
         store.window_walks_for_test() - before <= 1,
         "{} walks for 600 unheld labels",
         store.window_walks_for_test() - before
     );
+}
+
+/// 10 minutes into the half hour starting at T0 + 10 h: the current bucket
+/// `nb` covers T0 + 10 h .. T0 + 10.5 h.
+const NOW: u64 = T0 + 10 * HOUR + 600;
+
+fn hours(store: &CounterStore, label: &str, now: u64) -> CallWindows {
+    store.window_sums(&[tool(label)], now, &UTC).counts[0]
+}
+
+/// H1: a call at the first and at the last second of a bucket lands in that
+/// bucket's series point and in the hour window holding it, and nowhere else.
+#[test]
+fn h1_a_call_at_each_bucket_boundary_lands_in_its_point_and_hour() {
+    let store = CounterStore::new(0);
+    let start_of = |back: u64| NOW / HALF * HALF - back * HALF;
+    // Oldest first, so the label is held from the first of them on.
+    record(&store, Label::Known("t"), start_of(2) - 1); // last second of nb-3
+    record(&store, Label::Known("t"), start_of(2)); // first second of nb-2
+    record(&store, Label::Known("t"), start_of(1)); // first second of nb-1
+    let w = hours(&store, "t", NOW);
+    let mut series = [Some(0); SERIES];
+    series[8] = Some(1);
+    series[9] = Some(1);
+    series[10] = Some(1);
+    assert_eq!(w.series, series);
+    assert_eq!((w.hour, w.prev_hour), (Some(2), Some(1)));
+    let sums = store.window_sums(&[tool("t")], NOW, &UTC);
+    assert_eq!(
+        sums.series_start,
+        i64::try_from(NOW / HALF * HALF - 11 * HALF).unwrap()
+    );
+}
+
+/// H2: a call in the partial current bucket is in the last series point and
+/// in neither hour window.
+#[test]
+fn h2_the_partial_current_bucket_is_only_the_last_point() {
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t"), NOW - 10);
+    let w = hours(&store, "t", NOW);
+    assert_eq!(w.series[SERIES - 1], Some(1));
+    assert_eq!((w.hour, w.prev_hour), (Some(0), Some(0)));
+}
+
+/// H3: the hour windows and the series survive a restart.
+#[test]
+fn h3_the_hour_windows_survive_a_restart() {
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t"), NOW - 3 * HALF);
+    record(&store, Label::Known("t"), NOW - HALF);
+    let before = hours(&store, "t", NOW);
+    let bytes = store.encode("4.0.0", NOW);
+    let (back, _) = CounterStore::from_bytes(&bytes, NOW, "4.0.0", &UTC).unwrap();
+    assert_eq!(hours(&back, "t", NOW), before);
+    assert_eq!((before.hour, before.prev_hour), (Some(1), Some(1)));
+}
+
+/// H4: 1,300 tools in one read: one lock, every tool answered.
+#[test]
+fn h4_thirteen_hundred_tools_take_one_read() {
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t0"), NOW - HALF);
+    let names: Vec<String> = (0..1_300).map(|n| format!("t{n}")).collect();
+    let labels: Vec<Filter<'_>> = names.iter().map(|n| tool(n)).collect();
+    let before = store.reads_for_test();
+    let sums = store.window_sums(&labels, NOW, &UTC);
+    assert_eq!(store.reads_for_test() - before, 1);
+    assert_eq!(sums.counts.len(), 1_300);
+    assert_eq!(sums.counts[0].hour, Some(1));
+    assert!(sums.counts[1..].iter().all(|w| w.hour == Some(0)));
+}
+
+/// H5: an overflow call in a bucket a label never held nulls that point and
+/// the hour holding it, and nothing else.
+#[test]
+fn h5_an_overflow_call_nulls_only_its_point_and_hour() {
+    let store = CounterStore::new(0);
+    record(&store, Label::Untrusted, NOW - HALF);
+    let w = hours(&store, "quiet", NOW);
+    let mut series = [Some(0); SERIES];
+    series[10] = None;
+    assert_eq!(w.series, series);
+    assert_eq!((w.hour, w.prev_hour), (None, Some(0)));
+}
+
+/// H5: a ring that no longer holds the series' oldest buckets nulls that
+/// whole prefix and the hour windows that touch it, nothing newer.
+#[test]
+fn h5_an_evicted_prefix_nulls_its_points_and_the_hours_touching_it() {
+    let store = CounterStore::new(0);
+    record(&store, Label::Known("t"), NOW - HALF);
+    // A newest bucket 92 half hours ahead keeps buckets from nb - 3 on.
+    record(&store, Label::Known("t"), NOW + 92 * HALF);
+    let w = hours(&store, "t", NOW);
+    assert!(w.series[..8].iter().all(Option::is_none), "{:?}", w.series);
+    assert_eq!(&w.series[8..], &[Some(0), Some(0), Some(1), Some(0)]);
+    assert_eq!((w.hour, w.prev_hour), (Some(1), None));
+}
+
+/// H5: a label the store cannot count at all (not held, its dimension full)
+/// is null everywhere, the series included.
+#[test]
+fn h5_an_uncountable_label_is_null_in_every_point() {
+    let store = CounterStore::new(0);
+    for n in 0..MAX_LABELS {
+        record(&store, Label::Known(&format!("t{n}")), NOW - HOUR);
+    }
+    assert_eq!(hours(&store, "not-held", NOW), CallWindows::UNKNOWN);
+}
+
+/// H6: before the store existed nothing was hidden: those points and hours
+/// are 0, not null.
+#[test]
+fn h6_points_before_coverage_are_zero() {
+    // Counting began 20 minutes ago, inside bucket nb - 1. A newest bucket 92
+    // half hours ahead stops the ring holding anything before nb - 3, so
+    // without the coverage rule points 0..8 would read null, not 0.
+    let store = CounterStore::new(NOW - 1_200);
+    record(&store, Label::Known("t"), NOW + 92 * HALF);
+    let w = hours(&store, "t", NOW);
+    assert_eq!(w.series, [Some(0); SERIES]);
+    assert_eq!((w.hour, w.prev_hour), (Some(0), Some(0)));
+}
+
+/// H6: near the epoch the series still has 12 points, the ones before the
+/// epoch 0, and the hour indices still hold.
+#[test]
+fn h6_near_the_epoch_the_series_keeps_twelve_points() {
+    for nb in [0, 10, 11] {
+        let now = nb * HALF + 5;
+        let store = CounterStore::new(0);
+        record(&store, Label::Known("t"), now);
+        let sums = store.window_sums(&[tool("t")], now, &UTC);
+        let w = sums.counts[0];
+        assert_eq!(w.series[SERIES - 1], Some(1), "{nb}");
+        assert_eq!(w.series[..SERIES - 1], [Some(0); SERIES - 1], "{nb}");
+        let nb = i64::try_from(nb).unwrap();
+        assert_eq!(sums.series_start, (nb - 11) * 1_800, "{nb}");
+    }
+}
+
+/// H7: the hour windows and series do not depend on the zone, even at a DST
+/// change (Amsterdam, 2026-10-25 03:00 local).
+#[test]
+fn h7_hours_are_the_same_in_every_zone() {
+    let now = local(&Amsterdam, (2026, 10, 25, 2, 40)) + HOUR;
+    let store = CounterStore::new(0);
+    for back in [1, 2, 3, 5] {
+        record(&store, Label::Known("t"), now - back * HALF);
+    }
+    let utc = store.window_sums(&[tool("t")], now, &UTC).counts[0];
+    let ams = store.window_sums(&[tool("t")], now, &Amsterdam).counts[0];
+    assert_eq!(
+        (utc.hour, utc.prev_hour, utc.series),
+        (ams.hour, ams.prev_hour, ams.series)
+    );
+    assert_eq!(utc.hour, Some(2));
 }

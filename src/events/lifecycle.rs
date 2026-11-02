@@ -176,6 +176,8 @@ impl EventsHub {
         }
         // One attempt per key per replay, even when several rows hold it.
         let mut tried = HashSet::new();
+        // Logged once `started` is released.
+        let mut refused = Vec::new();
         for (key, principal, name, arguments) in self.live_keys().unwrap_or_default() {
             if !of(key.0) || started.contains(&key) || !tried.insert(key.clone()) {
                 continue;
@@ -190,10 +192,12 @@ impl EventsHub {
                 Ok(()) => {
                     started.insert(key);
                 }
-                Err(refusal) => {
-                    tracing::warn!(code = refusal.code, %name, "events: source refused a replayed start");
-                }
+                Err(refusal) => refused.push((refusal, name)),
             }
+        }
+        drop(started);
+        for (refusal, name) in refused {
+            tracing::warn!(code = refusal.code, %name, "events: source refused a replayed start");
         }
     }
 

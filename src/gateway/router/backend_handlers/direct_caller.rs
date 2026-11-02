@@ -635,7 +635,7 @@ pub(super) async fn forward_notification(
         .await
     {
         Ok(()) => {
-            super::record_client_success(state, caller.client.as_ref());
+            super::client_outcome::record_client_success(state, caller.client.as_ref());
             RpcHttp::gateway(StatusCode::ACCEPTED, serde_json::json!({}))
         }
         // No free caller slot (#2300): dropped, counted at admission, and
@@ -645,7 +645,7 @@ pub(super) async fn forward_notification(
             RpcHttp::gateway(StatusCode::TOO_MANY_REQUESTS, serde_json::json!({}))
         }
         Err(e) => {
-            super::record_client_failure(state, caller.client.as_ref());
+            super::client_outcome::record_client_failure(state, caller.client.as_ref());
             // The code only: the error's text can be the backend's.
             tracing::error!(backend = %name, code = e.to_rpc_code(), "Backend notification failed");
             let mut response = crate::protocol::JsonRpcResponse::of_error(None, &e);
@@ -663,7 +663,12 @@ pub(super) async fn forward_notification(
                 crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
             );
             let client = caller.client.as_ref();
-            super::super::direct_guards::scan_direct_egress(state, screen, client, &mut response);
+            super::super::direct_guards::scan_direct_egress(
+                state,
+                screen,
+                (client, &caller.generation),
+                &mut response,
+            );
             crate::gateway::router::helpers::build_http_response(
                 &Egressed::of(response),
                 StatusCode::INTERNAL_SERVER_ERROR,

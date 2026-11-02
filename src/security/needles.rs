@@ -146,7 +146,10 @@ impl NeedleSet {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
         if values.len() >= MAX_NEEDLES {
-            if !self.overflowed.swap(true, Ordering::SeqCst) {
+            let first = !self.overflowed.swap(true, Ordering::SeqCst);
+            // Logged once the set's write guard is released.
+            drop(values);
+            if first {
                 tracing::warn!(
                     backend,
                     bound = MAX_NEEDLES,
@@ -354,7 +357,14 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         return Scrubbed::Clean;
     }
     match error {
+        // A backend's own error carries its text and data as its gateway twin
+        // does: an injected value it echoes is scrubbed, or refused, alike.
         E::JsonRpc {
+            code,
+            message,
+            data,
+        }
+        | E::BackendJsonRpc {
             code,
             message,
             data,
