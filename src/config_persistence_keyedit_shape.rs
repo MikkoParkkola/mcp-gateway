@@ -236,6 +236,15 @@ impl Lines {
         }
     }
 
+    /// The 1-based line in the original that line `n` of the text comes
+    /// from; `None` for a line an edit inserted.
+    pub(super) fn original_line(&self, n: usize) -> Option<usize> {
+        match self.lines.get(n)?.1 {
+            Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(i + 1),
+            Origin::Inserted => None,
+        }
+    }
+
     /// The original lines still in the text, kept or with a value replaced.
     pub(super) fn surviving(&self) -> std::collections::BTreeSet<usize> {
         self.lines
@@ -589,8 +598,15 @@ pub(super) fn remove_entry(
         last = next;
         next += 1;
     }
-    if rule == CommentRule::Refuse && (first..=last).any(|n| lines.content(n).contains('#')) {
-        return Err(give_up(GiveUp::Comment, "a deleted line carries a comment"));
+    if rule == CommentRule::Refuse
+        && let Some(n) = (first..=last).find(|&n| lines.content(n).contains('#'))
+    {
+        // Named by its line in the original, never by its text.
+        let reason = match lines.original_line(n) {
+            Some(line) => format!("a deleted line carries a comment (line {line})"),
+            None => "a deleted line carries a comment".to_owned(),
+        };
+        return Err(give_up(GiveUp::Comment, &reason));
     }
     lines.delete(first..last + 1);
     Ok(true)
