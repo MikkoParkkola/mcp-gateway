@@ -568,6 +568,35 @@ async fn an_empty_read_after_a_switch_answers_moved() {
     );
 }
 
+/// A stored token the adopt read just before a sign-in under the other issuer
+/// was confirmed is not cached: `cache_if_current` refuses it and the adopt
+/// answers `Moved`.
+#[tokio::test]
+async fn a_token_read_before_a_switch_is_not_cached() {
+    let server = TokenServer::start(&[]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let cell = Arc::new(SignInStatus::new(SignIn::NeverSignedIn));
+    let owned = client(dir.path(), &server).with_sign_in_status(Arc::clone(&cell));
+    let key = owned.credential_key().unwrap();
+    owned
+        .storage
+        .save(&key, RESOURCE, &token("a1", Some("r1"), false))
+        .unwrap();
+    let (reached, release) = owned.stored_read_pause.arm();
+    let adopt = tokio::task::spawn_blocking(move || {
+        let adopted = owned.adopt_stored_login_for_test();
+        (owned, adopted)
+    });
+    within("the adopt parks after its read", reached.notified()).await;
+
+    cell.record_install(OTHER_ISSUER_KEY);
+    release.notify_one();
+
+    let (owned, adopted) = adopt.await.expect("the adopt ran");
+    assert_eq!(adopted, Adopt::Moved);
+    assert!(owned.current_token.read().is_none(), "nothing cached");
+}
+
 /// A refresh already sent when a sign-in under the other issuer is confirmed:
 /// its answer is not handed back, not cached, and the status stays the new
 /// sign-in's. Red before a refreshed token was cached through the checked

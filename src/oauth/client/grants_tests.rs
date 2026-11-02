@@ -233,6 +233,33 @@ fn a_stored_token_equal_to_the_live_cached_one_is_not_adopted() {
     );
 }
 
+/// A stored token fresher than the cached one, but no longer in the store when
+/// the adopt reads it: nothing is adopted and the refresh goes ahead.
+#[test]
+fn a_fresher_token_the_store_no_longer_holds_is_not_adopted() {
+    let dir = tempfile::tempdir().unwrap();
+    let client = client(dir.path(), "https://as.example", &[]);
+    let gone = live_token("gone-access");
+
+    assert_eq!(RefreshCaller::adopt(&client, Some(&gone)), None);
+    assert!(client.current_token.read().is_none(), "nothing cached");
+}
+
+/// Before discovery there is no issuer to key the store by, so a stored-login
+/// adopt reads nothing.
+#[cfg(feature = "webui")]
+#[test]
+fn a_stored_login_adopt_before_discovery_reads_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut client = client(dir.path(), "https://as.example", &[]);
+    client.auth_metadata = None;
+
+    assert_eq!(
+        client.adopt_stored_login_for_test(),
+        crate::oauth::client::grants::Adopt::Nothing
+    );
+}
+
 // ---------------------------------------------------------------------------
 // try_client_credentials
 // ---------------------------------------------------------------------------
