@@ -30,10 +30,9 @@ impl RuleId {
     /// The id of a rule of `kind` whose serialised definition is `definition`.
     #[must_use]
     pub(crate) fn of(kind: &str, key: &RuleKey, definition: &[u8]) -> Self {
-        let _ = key;
         Self(format!(
             "{kind}:{}",
-            &crate::hashing::sha256_hex(definition)[..12]
+            crate::hashing::hmac_sha256_hex(&key.0, definition)
         ))
     }
 
