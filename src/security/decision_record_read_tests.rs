@@ -176,15 +176,88 @@ fn the_reader_field_names_are() {
 
 #[test]
 fn r1_a_malformed_decision_reads_no_evidence_and_matches_no_rule() {
+    let kind = serde_json::to_value(DecisionKind::Grant).unwrap();
+    // Every field in declaration order: serde would read it as the struct.
+    let positional = json!([
+        2,
+        null,
+        null,
+        [],
+        kind,
+        "grant:abc",
+        null,
+        null,
+        false,
+        null,
+        null,
+        "fresh"
+    ]);
+    let mut array_finding = serde_json::to_value(full()).unwrap();
+    array_finding["request_findings"] = json!([["shell_injection", "high", "request_args"]]);
     for bad in [
         json!("grant"),
+        json!(null),
+        json!({}),
+        json!([]),
+        positional,
+        array_finding,
         json!({"v": "two", "rule_id": "grant:abc"}),
         json!({"v": 2, "kind": "no_such_kind", "rule_id": "grant:abc"}),
+        json!({"v": 2, "rule_id": "grant:abc", "decided": "fresh"}),
     ] {
         let e = json!({"counter": 7, "decision": bad});
         assert_eq!(decision_evidence(&e), None, "{bad}");
         assert!(!matches_rule(&e, "grant:abc"), "{bad}");
     }
+}
+
+#[test]
+fn r1_a_hand_written_v2_record_and_a_later_one_with_an_unknown_field_read_fully() {
+    let kind = serde_json::to_value(DecisionKind::Grant).unwrap();
+    let raw = json!({
+        "v": 2, "config_revision": "rev-a", "running_revision": "rev-b",
+        "pending_restart": ["listen"], "kind": kind, "rule_id": "grant:abc",
+        "grant_id": "g-dev",
+        "request_findings": [{"scan_type": "shell_injection", "severity": "high",
+                              "location": "request_args"}],
+        "request_findings_truncated": true, "declared_effect": "may_write",
+        "declared_effect_source": "capability_definition", "decided": "replayed"});
+    let want = Decision {
+        running_revision: Some("rev-b".into()),
+        pending_restart: vec!["listen".into()],
+        request_findings_truncated: true,
+        declared_effect: Some(Effect::MayWrite),
+        declared_effect_source: Some(EffectSource::CapabilityDefinition),
+        decided: Decided::Replayed,
+        ..full()
+    };
+    let read = |d: &Value| decision_evidence(&json!({"counter": 7, "decision": d}));
+    assert_eq!(read(&raw), Some(want.clone()));
+    let mut later = raw.clone();
+    later["v"] = 3.into();
+    later["added_later"] = "ignored".into();
+    assert_eq!(read(&later), Some(Decision { v: 3, ..want }));
+}
+
+#[test]
+fn matches_rule_needs_the_whole_rule_id() {
+    let e = entry(Some(&full()));
+    for partial in ["grant:", "grant:ab", "", "GRANT:ABC", "grant:abc "] {
+        assert!(!matches_rule(&e, partial), "{partial:?}");
+    }
+}
+
+#[test]
+fn version_0_reads_not_recorded_by_this_gateway_version() {
+    let v0 = Decision {
+        v: 0,
+        request_findings: None,
+        declared_effect: None,
+        declared_effect_source: None,
+        ..full()
+    };
+    assert_eq!(findings_line(&v0), Some(NOT_RECORDED_BY_VERSION));
+    assert_eq!(effect_line(&v0), Some(NOT_RECORDED_BY_VERSION));
 }
 
 #[test]
@@ -288,16 +361,21 @@ fn r6_each_way_of_deciding_reads_its_own_line() {
 
 #[test]
 fn r6_a_replay_and_a_cache_hit_keep_their_declared_effect() {
-    for decided in [Decided::Replayed, Decided::CacheHitNotRedecided] {
+    // A replay may stand in for a stored write; a cache hit not decided
+    // again only for a read-only call.
+    for (decided, effect) in [
+        (Decided::Replayed, Effect::MayWrite),
+        (Decided::CacheHitNotRedecided, Effect::ReadOnly),
+    ] {
         let d = Decision {
             decided,
-            declared_effect: Some(Effect::MayWrite),
+            declared_effect: Some(effect),
             ..full()
         };
         let back = decision_evidence(&entry(Some(&d))).expect("evidence");
         assert_eq!(
             (back.decided, back.declared_effect),
-            (decided, Some(Effect::MayWrite))
+            (decided, Some(effect))
         );
         assert_eq!(effect_line(&back), None, "a declared effect needs no line");
     }

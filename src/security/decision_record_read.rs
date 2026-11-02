@@ -46,7 +46,19 @@ pub(crate) const EVIDENCE_FIELDS: [&str; 6] =
 /// (written before decisions were recorded) and for one that does not read
 /// as a decision, never an error.
 pub(crate) fn decision_evidence(entry: &Value) -> Option<Decision> {
-    Decision::deserialize(entry.get("decision")?).ok()
+    let raw = entry.get("decision").filter(|d| object_shaped(d))?;
+    Decision::deserialize(raw).ok()
+}
+
+/// Whether `decision` has the shape the writer gives it: an object, and each
+/// request finding an object. serde would read a positional array as either
+/// struct, which no writer produces.
+fn object_shaped(decision: &Value) -> bool {
+    decision.is_object()
+        && decision
+            .get("request_findings")
+            .and_then(Value::as_array)
+            .is_none_or(|found| found.iter().all(Value::is_object))
 }
 
 /// Whether `entry`'s decision names `rule_id`. A record with no decision, or
