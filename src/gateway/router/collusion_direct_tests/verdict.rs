@@ -183,3 +183,38 @@ async fn a_judged_direct_read_is_one_record() {
         "the delivery record names t1: {records:#?}"
     );
 }
+
+/// A direct relay refusal comes from the collusion detector, not a configured
+/// rule: its record names kind firewall and no rule.
+#[tokio::test]
+async fn a_direct_relay_refusal_records_no_rule() {
+    let mut fx = fixture(Setup::default()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.jsonl");
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: path.to_string_lossy().into_owned(),
+            key_id: "rv".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("open log"),
+    );
+    Arc::get_mut(&mut fx.state)
+        .expect("state is unique")
+        .transparency_log = Some(Arc::clone(&log));
+    fx.read(Some("a")).await;
+    assert_refused(&fx, &fx.send(Some("b"), PROSE).await, 0);
+    while log.write_in_flight_for_test() {
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let refused = std::fs::read_to_string(&path)
+        .expect("the log")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|row| row.get("tool").is_some() && row["event"] != "response_delivery_attempt")
+        .last()
+        .expect("the relayed call's record");
+    assert_eq!(refused["decision"]["kind"], "firewall", "{refused}");
+    assert!(refused["decision"].get("rule_id").is_none(), "{refused}");
+}
