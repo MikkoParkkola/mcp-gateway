@@ -16,7 +16,9 @@ whose expiry fails the test (`.await` then `.expect`, `.unwrap`, `?` or
 `.unwrap_or_else(|_| panic!..)`, directly or through a `let` binding) is
 refused when W is under 5 s or cannot be resolved. A fn on a paused clock
 (`start_paused = true`, `time::pause()`) is skipped: its time is virtual.
-Test code is a test path, or a product file from its first `#[cfg(test)]`.
+Test code is a test path, or an item under a test-only cfg by its own extent
+(`cfg(test)`, `cfg(all(test, ..))`, any cfg false without `test`: the orphan
+gate's shared judgement); a line shared with product code counts as test.
 A const reaches a file `include!`d by the file that defines it.
 
 New or changed test code (`--base`) meets stricter rules: an elapsed bound or
@@ -50,7 +52,6 @@ quietly. And, for MIK-8360 (none is lexical; the fix pattern follows each):
   message (messages are blanked): assert the error kind or cause instead;
 - `ttl`, `interval` and `period` fields: legitimate when waited out by event,
   refused only beside a waited real-clock sleep (the product-timer rule);
-- product code after a file's first `#[cfg(test)]` is read as test code.
 - a bare `.timeout(D)` method (an HTTP client's request timeout): 77 test
   sites at MIK-8360's base, too many to gate without a separate decision;
   a short one bounds the success path, so prefer the 10 s floor;

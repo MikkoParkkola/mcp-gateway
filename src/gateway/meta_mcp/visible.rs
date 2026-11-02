@@ -587,7 +587,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time `/mcp` or `/mcp/{name}` intake on this
     /// thread has made its sanitize decision (MIK-8154 NP3, F2).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn after_intake(hook: impl FnOnce() + 'static) {
         AFTER_INTAKE.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -602,7 +602,7 @@ pub(crate) mod seams {
 
     /// Run `hook` once, the next time a task worker on this thread starts its
     /// dispatch: between the submit's intake and the run (MIK-8154 C2e2).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn before_task_dispatch(hook: impl FnOnce() + 'static) {
         BEFORE_TASK_DISPATCH.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
@@ -617,7 +617,7 @@ pub(crate) mod seams {
     /// Run `hook` once, the next time a task worker on this thread has
     /// re-admitted its call: between the re-admission's judgement and the run
     /// (the C2e6 row).
-    #[cfg(feature = "firewall")]
+    #[cfg(any(feature = "firewall", feature = "cost-governance"))]
     pub(crate) fn after_readmit(hook: impl FnOnce() + 'static) {
         AFTER_READMIT.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
