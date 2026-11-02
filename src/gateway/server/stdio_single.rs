@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use super::Gateway;
+
 #[cfg(test)]
 use super::{STDIO_CREDENTIAL_PRINCIPAL, StdioNonce};
 use super::{stdio_delivery, stdio_tasks};
@@ -368,4 +369,19 @@ impl Gateway {
     ) -> Vec<serde_json::Value> {
         Self::dispatch_batch_for_client(meta_mcp, generation, mtls_policy, batch, session_id).await
     }
+}
+
+/// The generation a stdio message is judged with: the one its line was
+/// pinned to when it was read, or, for a line that carries none, the live
+/// config's current one, read once into `current`.
+pub(super) fn message_generation<'a>(
+    meta_mcp: &MetaMcp,
+    line: &'a dyn crate::gateway::authz::StdioLine,
+    current: &'a mut Option<Arc<crate::config_reload::Generation>>,
+) -> Option<&'a crate::config_reload::Generation> {
+    if let Some(pinned) = line.generation() {
+        return Some(pinned);
+    }
+    *current = meta_mcp.live_config().map(|live| live.generation());
+    current.as_deref()
 }

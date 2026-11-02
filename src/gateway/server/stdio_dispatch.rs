@@ -10,6 +10,7 @@ use tracing::debug;
 use super::Gateway;
 use super::StdioNonce;
 use super::stdio_route_stage::RouteStage;
+use super::stdio_single::message_generation;
 use super::{
     STDIO_CREDENTIAL_PRINCIPAL, StdioClient, stdio_catalogue, stdio_delivery,
     stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
@@ -154,7 +155,8 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-                        let live = meta_mcp.live_config().map(|live| live.generation());
+                        let mut current = None;
+                        let live = message_generation(meta_mcp, generation, &mut current);
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -162,7 +164,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            (meta_mcp.record_key(), live.as_deref()),
+                            (meta_mcp.record_key(), live),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -617,9 +619,10 @@ impl Gateway {
             // X14's granted retry fields, when it grants: declared ahead of
             // the caller context that borrows them.
             let granted;
-            // Once per message: its budgets judge the call from admission to
-            // settlement, whatever a reload publishes meanwhile.
-            let live = meta_mcp.live_config().map(|live| live.generation());
+            // The message's own generation, the policy's config: its budgets
+            // judge the call from admission to settlement across a reload.
+            let mut current = None;
+            let live = message_generation(meta_mcp, generation, &mut current);
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -627,7 +630,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                (meta_mcp.record_key(), live.as_deref()),
+                (meta_mcp.record_key(), live),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload

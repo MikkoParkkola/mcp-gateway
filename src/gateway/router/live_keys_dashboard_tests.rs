@@ -124,23 +124,28 @@ async fn session_works(state: &Arc<AppState>, handle: &str) -> bool {
     status == StatusCode::OK && body.get("tool_count").is_some()
 }
 
-/// The reload edits K13 covers, each applied to the minting key ADMIN.
+/// The reload edits K13 covers, each applied to the minting key ADMIN; and
+/// narrowing it to some backends.
 fn edits() -> Vec<(&'static str, Vec<ApiKeyConfig>)> {
     let mut demoted = admin_key(ADMIN, ADMIN);
     demoted.admin = false;
     let mut expired = admin_key(ADMIN, ADMIN);
     expired.expires_at = Some("2001-01-01T00:00:00Z".parse().expect("an instant"));
     let replaced = admin_key("k13-admin-key-reissued", ADMIN);
+    // A session is unscoped, so a key narrowed to some backends ends it.
+    let mut narrowed = admin_key(ADMIN, ADMIN);
+    narrowed.backends = vec!["alpha".to_string()];
     vec![
         ("removed", vec![admin_key(OTHER, OTHER)]),
         ("demoted", vec![demoted, admin_key(OTHER, OTHER)]),
         ("expired", vec![expired, admin_key(OTHER, OTHER)]),
         ("replaced", vec![replaced, admin_key(OTHER, OTHER)]),
+        ("narrowed", vec![narrowed, admin_key(OTHER, OTHER)]),
     ]
 }
 
-/// K13: a link minted by a key the reload then removes, demotes, expires or
-/// replaces is refused at redemption.
+/// K13: a link minted by a key the reload then removes, demotes, expires,
+/// replaces or narrows is refused at redemption.
 #[tokio::test]
 async fn k13_a_link_minted_before_the_reload_dies_with_its_key() {
     for (edit, keys) in edits() {

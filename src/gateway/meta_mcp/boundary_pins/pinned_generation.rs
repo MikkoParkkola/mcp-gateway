@@ -6,6 +6,11 @@
 //! `MetaMcpCallerContext` may write `generation: None`: every site names the
 //! generation it means (the compiler already refuses an omitted field).
 //!
+//! A stdio message is pinned when its line is read, so the stdio dispatch
+//! judges it with that line's generation and never re-reads the live config:
+//! a reload landing mid-message would otherwise judge the policy and the
+//! budgets of one message under two configs.
+//!
 //! Syntax scan, per struct expression whose path ends in `MetaMcpCallerContext`.
 //! A context built through an alias or a differently named type is missed, as
 //! in the other pins.
@@ -75,4 +80,55 @@ fn g2_the_scan_flags_a_none_generation_only() {
         "MetaMcpCallerContext { era, generation: live.as_deref() }"
     ));
     assert!(!flagged("Other { generation: None }"));
+}
+
+/// The file the stdio messages are dispatched from.
+const STDIO_DISPATCH: &str = "src/gateway/server/stdio_dispatch.rs";
+
+/// In the stdio dispatch file: its `.live_config()` calls, and how many
+/// times it calls `message_generation`.
+#[derive(Default)]
+struct StdioReads {
+    live: Vec<String>,
+    helper_calls: usize,
+}
+
+impl Sink for StdioReads {
+    fn expr(&mut self, at: &Place, expr: &syn::Expr) {
+        if !at.file.ends_with(STDIO_DISPATCH) {
+            return;
+        }
+        match expr {
+            syn::Expr::MethodCall(call) if call.method == "live_config" => {
+                let func = at.func.as_deref().unwrap_or("<module>");
+                self.live.push(format!("{}:{func}", at.file));
+            }
+            syn::Expr::Call(call)
+                if matches!(&*call.func, syn::Expr::Path(path)
+                    if path.path.segments.last().is_some_and(|s| s.ident == "message_generation")) =>
+            {
+                self.helper_calls += 1;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The stdio dispatch reads no live config: both of its caller contexts take
+/// the message's generation through `stdio_single::message_generation`.
+#[test]
+fn g3_stdio_dispatch_reads_the_generation_from_the_message_line() {
+    let mut reads = StdioReads::default();
+    walk(crate_root(), &ROOTS, &mut reads).expect("the walk reads every module");
+    reads.live.sort();
+    assert!(
+        reads.live.is_empty(),
+        "stdio dispatch re-reads the live config:\n{}",
+        reads.live.join("\n")
+    );
+    // Also proves the scan reached the file.
+    assert_eq!(
+        reads.helper_calls, 2,
+        "both caller contexts take the message's generation"
+    );
 }
