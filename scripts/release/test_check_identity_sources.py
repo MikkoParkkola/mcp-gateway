@@ -196,5 +196,47 @@ class CodeReviewBypasses(unittest.TestCase):
                         "mod a;\n")
             self.assertTrue(any("deserializes" in v for v in cis.violations(root)), carrier)
 
+
+class SameNames(unittest.TestCase):
+    """Two types may share a name in different modules; only the one a
+    reference resolves to decides whether it carries an identity."""
+
+    A = "#[derive(Deserialize)]\npub struct Decision { who: GrantSubject }\n"
+    READ = "fn load(s: &str) -> Body { serde_json::from_str(s).unwrap() }\n"
+    MODS = "mod a;\nmod b;\nmod c;\n"
+
+    def run_b(self, b: str, c: str = "") -> list[str]:
+        root = tree({"src/a.rs": self.A, "src/b.rs": b + self.READ, "src/c.rs": c}, self.MODS)
+        return [v for v in cis.violations(root) if "deserializes" in v]
+
+    def test_a_local_namesake_without_an_identity_passes(self):
+        b = ("#[derive(Deserialize)]\nenum Decision { Yes, No }\n"
+             "#[derive(Deserialize)]\nstruct Body { d: Decision }\n")
+        self.assertEqual(self.run_b(b), [])
+
+    def test_an_imported_carrier_still_fails(self):
+        b = "use crate::a::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_qualified_carrier_still_fails(self):
+        b = "#[derive(Deserialize)]\nstruct Body { d: crate::a::Decision }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_carrier_imported_under_another_name_fails(self):
+        b = "use crate::a::Decision as Choice;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_type_alias_of_a_carrier_fails(self):
+        b = "type Choice = crate::a::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_re_exported_carrier_fails(self):
+        b = "use crate::c::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
+        self.assertEqual(len(self.run_b(b, "pub use crate::a::Decision;\n")), 1)
+
+    def test_an_unresolvable_name_fails_closed(self):
+        b = "use crate::a::*;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
 if __name__ == "__main__":
     unittest.main()
