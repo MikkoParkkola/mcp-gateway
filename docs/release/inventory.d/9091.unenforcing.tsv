@@ -1,0 +1,1 @@
+src/gateway/outbound/mod.rs	folded_by	1	Carries a failure folded into a tool result onto the frame, for the error count; decides nothing.
