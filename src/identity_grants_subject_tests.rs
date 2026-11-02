@@ -63,3 +63,25 @@ fn a_valid_subject_payload_reads_back_unchanged() {
         assert_eq!(serde_json::to_string(&read).unwrap(), body);
     }
 }
+
+fn grants_yaml(subject: &str, owner: &str) -> String {
+    format!(
+        "schema_version: identity_grants.v1\ngrants:\n- grant_id: g-empty\n  subject:\n    authority: api_key\n    subject: \"{subject}\"\n  agent: any\n  capability: calendar_read\n  scope: execute\n  owner:\n    authority: api_key\n    subject: \"{owner}\"\n  provenance: mcp-gateway identity grants grant\n  reason: empty\n"
+    )
+}
+
+/// An empty subject or owner in a grants file grants nothing, so loading it
+/// refuses, naming the path and the rule id; `gateway upgrade` removes such rows.
+#[tokio::test]
+async fn a_grants_yaml_naming_no_one_is_refused_with_its_path_and_rule_id() {
+    for (subject, owner) in [("", "alice"), ("alice", "")] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("grants.yaml");
+        crate::gateway::test_helpers::write_owner_only(&path, grants_yaml(subject, owner)).unwrap();
+        let error = super::read_identity_grants_file(&path)
+            .await
+            .expect_err("a rule naming no one must not load");
+        assert!(error.contains(&path.display().to_string()), "path: {error}");
+        assert!(error.contains("g-empty"), "rule id: {error}");
+    }
+}
