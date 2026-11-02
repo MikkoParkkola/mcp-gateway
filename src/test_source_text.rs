@@ -37,6 +37,10 @@ pub(crate) fn production_text(text: &str) -> String {
 /// item's parent (a last field with no comma). `None` when the text ends first.
 /// `text` is the original, to tell a masked literal or comment after a block
 /// (which ends the item) from plain whitespace.
+///
+/// A `,` in a generic header or a `where` clause ends an item early. That is
+/// safe here only because [`production_text`] then keeps the item's remainder,
+/// so a scan sees more; a reuse that classifies test code would miss it.
 fn item_end(code: &[u8], text: &[u8], start: usize) -> Option<usize> {
     let mut depth = 0_usize;
     let mut i = start;
