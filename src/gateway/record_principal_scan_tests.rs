@@ -392,7 +392,6 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/gateway/router/handlers/dispatch_intake_run.rs", ".map(|client| client.principal.storage_form())", 2, Store, "a provenance classification and an admission owner key argument"),
     ("src/gateway/auth.rs", "pub(crate) const CREDENTIAL_OWNER_PREFIX", 1, Decl, "the owner-key prefix"),
     ("src/gateway/auth.rs", "pub(in crate::gateway) fn credential_principal(&self)", 1, Decl, "returns &InternalPrincipal, no bytes"),
-    ("src/gateway/auth.rs", "principal_of_digest(digest).storage_form().to_owned()", 1, Store, "a holder's secret fingerprint: compared with a live digest's fingerprint at each re-check, never recorded"),
     ("src/gateway/router/handlers/events.rs", ".map(|c| c.principal.storage_form().to_owned())", 1, Store, "events Credential.principal: the subscription owner binding"),
     ("src/gateway/router/handlers/events.rs", "principal: c.principal.storage_form().to_owned()", 1, Store, "ApiKeyRef.principal: a key-match store field"),
     ("src/identity_propagation/caller_proof.rs", "pub(crate) fn classify(credential_principal: Option<&str>)", 1, Decl, "presence classification parameter"),
