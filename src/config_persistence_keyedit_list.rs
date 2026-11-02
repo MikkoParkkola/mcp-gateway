@@ -78,18 +78,16 @@ pub(super) fn set(
             if unchanged {
                 return Ok(());
             }
-            match close {
-                Some(close) => replaced(lines, node.bytes.start..close + 1, value),
-                None => {
-                    // Both positions come from this one parse. The item lines
-                    // are under the key's line, so deleting them first leaves
-                    // the colon's byte position as it was; nothing is
-                    // re-parsed between the two steps.
-                    let colon = colon_after(&text, key_bytes.end)?;
-                    shape::remove_entry(lines, &path.0, CommentRule::Refuse, Span::Under)?;
-                    write_after(lines, colon, value)
-                }
+            if let Some(close) = close {
+                return replaced(lines, node.bytes.start..close + 1, value);
             }
+            // Both positions come from this one parse. The item lines are
+            // under the key's line, so deleting them first leaves the colon's
+            // byte position as it was; nothing is re-parsed between the two
+            // steps.
+            let colon = colon_after(&text, key_bytes.end)?;
+            shape::remove_entry(lines, &path.0, CommentRule::Refuse, Span::Under)?;
+            write_after(lines, colon, value)
         }
     }
 }
@@ -139,8 +137,12 @@ fn strings_only(text: &str, kids: &[&Node], current: &Value) -> Result<(), Compu
 /// The byte of the `]` closing a one-line inline list: on the `[`'s line,
 /// after the last item (or the `[` when empty), with only spaces and commas
 /// between.
-fn closing_bracket(text: &str, list: &Node, last: Option<&Node>) -> Result<usize, ComputeRefusal> {
-    let from = last.map_or(list.bytes.end, |item| item.bytes.end);
+fn closing_bracket(
+    text: &str,
+    list: &Node,
+    final_item: Option<&Node>,
+) -> Result<usize, ComputeRefusal> {
+    let from = final_item.map_or(list.bytes.end, |item| item.bytes.end);
     let rest = &text[from..];
     let gap = rest.len() - rest.trim_start_matches([' ', ',']).len();
     let at = from + gap;
