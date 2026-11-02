@@ -87,7 +87,7 @@ pub(super) fn parse_refusal(
     if bare.is_empty() && !nameless.is_empty() {
         let rows: Vec<String> = nameless
             .iter()
-            .map(|(grant_id, field)| format!("grant '{grant_id}' ({field})"))
+            .map(|(grant_id, field)| format!("grant '{grant_id}' (empty {field})"))
             .collect();
         return format!(
             "identity grants file {} names no one in {} row(s): {}. Such a row grants \
@@ -181,40 +181,24 @@ impl Tree {
     /// `(grant_id, field)` of every row whose `subject` or `owner` has an
     /// empty authority or subject: such a row names no one.
     fn nameless_rows(&self) -> Vec<(String, String)> {
-        let mut out = Vec::new();
-        let mut check = |grant_id: Option<&str>, field: &str, part: Option<(&str, &str)>| {
-            if let Some((authority, subject)) = part
-                && !super::names_someone(authority, subject)
-            {
-                let id = grant_id.unwrap_or("<no grant_id>").to_owned();
-                out.push((id, format!("empty {field}")));
-            }
+        let named = |grant_id: Option<&str>, fields: Vec<&'static str>| {
+            let id = grant_id.unwrap_or("<no grant_id>").to_owned();
+            fields.into_iter().map(move |f| (id.clone(), f.to_owned()))
         };
         match self {
-            Self::Json(file) => {
-                for row in json_rows(file) {
+            Self::Json(file) => json_rows(file)
+                .flat_map(|row| {
                     let id = row.get("grant_id").and_then(serde_json::Value::as_str);
-                    for field in ["subject", "owner"] {
-                        let part = row.get(field).and_then(|v| {
-                            Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?))
-                        });
-                        check(id, field, part);
-                    }
-                }
-            }
-            Self::Yaml(file) => {
-                for row in yaml_rows(file) {
+                    named(id, json_nameless(row))
+                })
+                .collect(),
+            Self::Yaml(file) => yaml_rows(file)
+                .flat_map(|row| {
                     let id = row.get("grant_id").and_then(crate::yaml::Value::as_str);
-                    for field in ["subject", "owner"] {
-                        let part = row.get(field).and_then(|v| {
-                            Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?))
-                        });
-                        check(id, field, part);
-                    }
-                }
-            }
+                    named(id, yaml_nameless(row))
+                })
+                .collect(),
         }
-        out
     }
 
     /// Why the file still fails its typed parse with the bare rows removed,
@@ -263,6 +247,69 @@ fn yaml_rows(file: &crate::yaml::Value) -> impl Iterator<Item = &crate::yaml::Va
         .and_then(crate::yaml::Value::as_sequence)
         .into_iter()
         .flatten()
+}
+
+/// The fields of a JSON row whose pair names no one.
+fn json_nameless(row: &serde_json::Value) -> Vec<&'static str> {
+    ["subject", "owner"]
+        .into_iter()
+        .filter(|field| {
+            row.get(field)
+                .and_then(|v| Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?)))
+                .is_some_and(|(authority, subject)| !super::names_someone(authority, subject))
+        })
+        .collect()
+}
+
+/// The fields of a YAML row whose pair names no one.
+fn yaml_nameless(row: &crate::yaml::Value) -> Vec<&'static str> {
+    ["subject", "owner"]
+        .into_iter()
+        .filter(|field| {
+            row.get(field)
+                .and_then(|v| Some((v.get("authority")?.as_str()?, v.get("subject")?.as_str()?)))
+                .is_some_and(|(authority, subject)| !super::names_someone(authority, subject))
+        })
+        .collect()
+}
+
+/// The grants file in `content` with every row naming no one removed, and
+/// those rows' `(grant_id, field)`; `None` when there is none to remove.
+///
+/// # Errors
+///
+/// The rest of the file still fails its typed parse.
+pub(super) fn strip_nameless(
+    content: &str,
+) -> Result<Option<(super::IdentityGrantFile, Vec<(String, String)>)>, String> {
+    let Some(tree) = Tree::parse(content) else {
+        return Ok(None);
+    };
+    let removed = tree.nameless_rows();
+    if removed.is_empty() {
+        return Ok(None);
+    }
+    let file = match tree {
+        Tree::Json(mut file) => {
+            if let Some(rows) = file
+                .get_mut("grants")
+                .and_then(serde_json::Value::as_array_mut)
+            {
+                rows.retain(|row| json_nameless(row).is_empty());
+            }
+            serde_json::from_value(file).map_err(|e| e.to_string())?
+        }
+        Tree::Yaml(mut file) => {
+            if let Some(rows) = file
+                .get_mut("grants")
+                .and_then(crate::yaml::Value::as_sequence_mut)
+            {
+                rows.retain(|row| yaml_nameless(row).is_empty());
+            }
+            crate::yaml::from_value(file).map_err(|e| e.to_string())?
+        }
+    };
+    Ok(Some((file, removed)))
 }
 
 /// The id of a bare YAML row: `!exact runner` or `{exact: runner}`.

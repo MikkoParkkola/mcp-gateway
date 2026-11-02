@@ -385,19 +385,7 @@ pub async fn write_identity_grants_file(
         })?;
     }
 
-    // JSON or YAML by extension, matching what the reader accepts. The atomic
-    // replace below is byte-agnostic, so one writer covers both.
-    let content = if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
-    {
-        serde_json::to_string_pretty(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))?
-    } else {
-        crate::yaml::to_string(grant_file)
-            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))?
-    };
+    let content = grants_text(path, grant_file)?;
 
     let target = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
@@ -411,6 +399,22 @@ pub async fn write_identity_grants_file(
             path.display()
         )
     })
+}
+
+/// A grants file's text: JSON or YAML by extension, matching what the reader
+/// accepts. The atomic replace is byte-agnostic, so one writer covers both.
+fn grants_text(path: &Path, grant_file: &IdentityGrantFile) -> Result<String, String> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
+    {
+        serde_json::to_string_pretty(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants JSON: {error}"))
+    } else {
+        crate::yaml::to_string(grant_file)
+            .map_err(|error| format!("failed to serialize identity grants YAML: {error}"))
+    }
 }
 
 /// Load local identity grants from a JSON or YAML file.

@@ -30,8 +30,25 @@ pub fn remove_nameless_rows(
     backup: &Path,
     write: impl Fn(&Path, &str) -> std::io::Result<()>,
 ) -> std::io::Result<Vec<Removed>> {
-    let _ = (path, backup, write);
-    Ok(Vec::new())
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let Some((file, removed)) =
+        super::matching::strip_nameless(&content).map_err(std::io::Error::other)?
+    else {
+        return Ok(Vec::new());
+    };
+    let text = super::grants_text(path, &file).map_err(std::io::Error::other)?;
+    // The original first: a rewrite that fails after it leaves both the
+    // backup and, by the atomic replace, the original itself.
+    write(backup, &content)?;
+    write(path, &text)?;
+    Ok(removed
+        .into_iter()
+        .map(|(grant_id, field)| Removed { grant_id, field })
+        .collect())
 }
 
 #[cfg(test)]
