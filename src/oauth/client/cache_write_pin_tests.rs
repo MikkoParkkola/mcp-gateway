@@ -93,7 +93,8 @@ fn a_loaded_token_is_cached_only_through_the_checked_step() {
     }
     let found = sites(&all, "current_token.write()");
 
-    let unlisted: Vec<_> = found.difference(&pairs(&WRITERS)).collect();
+    let allowed = pairs(&WRITERS);
+    let unlisted: Vec<_> = found.difference(&allowed).collect();
     assert!(
         unlisted.is_empty(),
         "cache writes outside the listed sites: {unlisted:?}"
