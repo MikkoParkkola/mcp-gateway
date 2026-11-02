@@ -515,12 +515,18 @@ async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check(
         tokio::time::timeout(Duration::from_secs(20), hub.attempt(&services, "evt_key"))
             .await
             .expect("the attempt finished");
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        assert_eq!(
-            accepted.load(Ordering::SeqCst) >= 1,
-            tagged,
-            "sent only when bound (tagged {tagged})"
-        );
+        if tagged {
+            // The callback counts a connection in its own task: wait for it.
+            tokio::time::timeout(Duration::from_secs(20), async {
+                while accepted.load(Ordering::SeqCst) == 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("the bound subscription was sent");
+        } else {
+            assert_eq!(accepted.load(Ordering::SeqCst), 0, "sent though unbound");
+        }
         assert_eq!(
             hub.store.subscriptions().is_empty(),
             !tagged,
