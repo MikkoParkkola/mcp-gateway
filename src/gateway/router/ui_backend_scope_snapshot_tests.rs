@@ -220,3 +220,25 @@ async fn a_backend_scope_bounds_the_snapshots_gateway_wide_objects() {
         wrong.join("\n")
     );
 }
+
+/// A failed audit read is still reported to a scoped caller: the store is
+/// read for every caller, and only its events are withheld.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_scoped_reader_still_learns_the_audit_read_failed() {
+    for who in [Who::AdminKey, Who::ScopedAuditor] {
+        let mut fx = scoped_fixture().await;
+        Arc::get_mut(&mut fx.state)
+            .expect("state is unique")
+            .control_plane_store = Some(Arc::new(crate::control_plane::FailingStore));
+        let router = create_router(Arc::clone(&fx.state));
+        let (code, body) = send(&router, get(who, routes::UI_CONTROL_PLANE)).await;
+        let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+        assert_eq!(code, StatusCode::OK, "{who:?}: {body}");
+        assert_eq!(body["store_read_degraded"], true, "{who:?}: {body}");
+        assert_eq!(
+            body["view"]["audit_events"],
+            serde_json::json!([]),
+            "{who:?}"
+        );
+    }
+}

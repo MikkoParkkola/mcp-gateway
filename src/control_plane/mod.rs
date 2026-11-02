@@ -668,6 +668,11 @@ pub struct ControlPlaneReadOnlyView {
 }
 
 #[cfg(test)]
+#[path = "failing_store_test_support.rs"]
+mod failing_store;
+#[cfg(test)]
 mod grant_change_store_tests;
+#[cfg(test)]
+pub(crate) use failing_store::FailingStore;
 #[cfg(test)]
 mod tests;
