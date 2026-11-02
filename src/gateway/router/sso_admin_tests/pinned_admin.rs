@@ -82,10 +82,7 @@ async fn the_admin_flag_follows_the_pinned_mapping() {
 /// authenticated, through the public-path branch's own key-server call.
 #[tokio::test]
 async fn the_admin_flag_follows_the_pinned_mapping_on_a_public_path() {
-    let gw = gateway(GRANTS).await;
-    let mut config = (*gw.state.live_config.get()).clone();
-    config.auth.public_paths = vec!["/mcp".to_string()];
-    gw.state.live_config.set(config);
+    let gw = super::gateway_with_public(GRANTS, &["/mcp"]).await;
     assert!(
         gw.state
             .live_config
