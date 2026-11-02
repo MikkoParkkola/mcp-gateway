@@ -6,7 +6,7 @@
 
 use serde_json::Value;
 
-use super::{Decision, Effect};
+use super::{Decided, Decision, Effect};
 
 /// The decision object version that writes request findings and the declared
 /// effect. A record below it predates both.
@@ -25,6 +25,17 @@ pub(crate) const NOT_RECORDED_FOR_CALL: &str = "not recorded for this call";
 pub(crate) const NO_FINDINGS: &str = "none";
 /// A tool whose definition declared no effect.
 pub(crate) const UNDECLARED: &str = "the tool declared no effect";
+
+/// A call decided for itself.
+pub(crate) const DECIDED_FRESH: &str = "decided for this call";
+/// A cache hit carrying the decision it was stored with.
+pub(crate) const DECIDED_CACHE_COPIED: &str =
+    "served from cache with the decision it was stored with";
+/// A cache hit that was not decided again: only a read-only call may be one.
+pub(crate) const DECIDED_CACHE_NOT_REDECIDED: &str =
+    "served from cache, not re-decided; read-only calls only";
+/// An idempotent replay of a stored result.
+pub(crate) const DECIDED_REPLAYED: &str = "replayed from a stored result";
 
 /// The receipt's evidence lines, by name, in the order the receipt shows them.
 pub(crate) const EVIDENCE_FIELDS: [&str; 6] =
@@ -67,4 +78,10 @@ pub(crate) fn findings_line(decision: &Decision) -> Option<&'static str> {
 pub(crate) fn effect_line(decision: &Decision) -> Option<&'static str> {
     let _ = (decision, Effect::Undeclared);
     None
+}
+
+/// How the call was decided, in the receipt's words.
+pub(crate) fn decided_line(decision: &Decision) -> &'static str {
+    let _ = (decision, Decided::Fresh);
+    DECIDED_FRESH
 }
