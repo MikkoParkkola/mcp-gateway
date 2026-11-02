@@ -98,7 +98,7 @@ async fn a_replacement_lacking_a_value_retires_it_a_grace_after_it_registers() {
     )]
     let second = registry.register(backend("b"));
     assert!(second, "premise: the replacement registered");
-    tokio::time::advance(GRACE - Duration::from_secs(1)).await;
+    tokio::time::advance(Duration::from_secs(3_599)).await;
     assert!(
         served_redacted(&registry),
         "the value retired before its grace"

@@ -70,18 +70,16 @@ impl NeedleSet {
         superseded: Superseded,
     ) {
         for secret in secrets.iter() {
-            if !holds(secret) {
-                if self.short_warned.lock().insert(secret.field.clone()) {
-                    tracing::warn!(
-                        backend,
-                        field = %secret.field,
-                        bytes = secret.value.len(),
-                        "not redacted: too short to be treated as a secret; write it \
-                         as an env: reference to mark it secret"
-                    );
-                }
-            } else {
+            if holds(secret) {
                 self.warn_if_short(backend, &secret.field, &secret.value);
+            } else if self.short_warned.lock().insert(secret.field.clone()) {
+                tracing::warn!(
+                    backend,
+                    field = %secret.field,
+                    bytes = secret.value.len(),
+                    "not redacted: too short to be treated as a secret; write it \
+                     as an env: reference to mark it secret"
+                );
             }
         }
         let wanted: Vec<&str> = secrets

@@ -447,10 +447,10 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         }
         E::ProtocolVersionRejected { supported } => {
             let mut tokens = Value::from(supported.clone());
-            if scrub_in_place(&secrets, &mut tokens) != Scrubbed::Clean {
-                Scrubbed::Refuse
-            } else {
+            if scrub_in_place(&secrets, &mut tokens) == Scrubbed::Clean {
                 Scrubbed::Clean
+            } else {
+                Scrubbed::Refuse
             }
         }
         E::Protocol(m)
