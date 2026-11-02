@@ -7,6 +7,7 @@ single-constructor rule fails the check; the real tree's shapes pass."""
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -209,10 +210,22 @@ class SameNames(unittest.TestCase):
         root = tree({"src/a.rs": self.A, "src/b.rs": b + self.READ, "src/c.rs": c}, self.MODS)
         return [v for v in cis.violations(root) if "deserializes" in v]
 
-    def test_a_local_namesake_without_an_identity_passes(self):
+    def test_a_namesake_is_flagged_until_its_site_is_listed(self):
         b = ("#[derive(Deserialize)]\nenum Decision { Yes, No }\n"
              "#[derive(Deserialize)]\nstruct Body { d: Decision }\n")
-        self.assertEqual(self.run_b(b), [])
+        self.assertEqual(len(self.run_b(b)), 1, "a name is never resolved, so a namesake counts")
+        with mock.patch.dict(cis.READ_BACKS, {("src/b.rs", "load"): "row: a namesake enum, no identity"}):
+            self.assertEqual(self.run_b(b), [])
+
+    def test_a_listed_site_that_is_no_longer_flagged_fails(self):
+        b = "#[derive(Deserialize)]\nstruct Body { d: u8 }\n"
+        root = tree({"src/a.rs": self.A, "src/b.rs": b + self.READ, "src/c.rs": ""}, self.MODS)
+        with mock.patch.dict(cis.READ_BACKS, {("src/b.rs", "load"): "row: stale"}, clear=True):
+            self.assertEqual(len(cis.stale_read_backs(cis.scan(root)[1])), 1)
+            self.assertEqual(cis.main(["x", str(root)]), 1)
+
+    def test_the_repository_has_no_stale_read_back(self):
+        self.assertEqual(cis.stale_read_backs(cis.scan(HERE.parents[1])[1]), [])
 
     def test_an_imported_carrier_still_fails(self):
         b = "use crate::a::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
@@ -238,10 +251,25 @@ class SameNames(unittest.TestCase):
         b = "use crate::a::*;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
         self.assertEqual(len(self.run_b(b)), 1)
 
-    def test_an_imported_namesake_without_an_identity_passes(self):
-        c = "#[derive(Deserialize)]\npub enum Decision { Yes, No }\n"
-        b = "use crate::c::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
-        self.assertEqual(self.run_b(b, c), [])
+    def test_a_carrier_in_a_generic_default_fails(self):
+        b = ("#[derive(Deserialize)]\nstruct Wrap<T = GrantSubject> { who: T }\n"
+             "#[derive(Deserialize)]\nstruct Body { d: Wrap }\n")
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_carrier_in_an_alias_generic_default_fails(self):
+        b = "type Choice<T = crate::a::Decision> = Vec<T>;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_manual_deserialize_impl_carrier_fails(self):
+        b = ("struct Wrap { who: GrantSubject }\n"
+             "impl<'de> serde::Deserialize<'de> for Wrap { fn deserialize() {} }\n"
+             "#[derive(Deserialize)]\nstruct Body { d: Wrap }\n")
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_union_carrier_fails(self):
+        b = ("#[derive(Deserialize)]\nunion Wrap { who: std::mem::ManuallyDrop<GrantSubject> }\n"
+             "#[derive(Deserialize)]\nstruct Body { d: Wrap }\n")
+        self.assertEqual(len(self.run_b(b)), 1)
 
     def test_a_carrier_renamed_by_a_re_export_behind_a_glob_fails(self):
         b = "use crate::c::*;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
