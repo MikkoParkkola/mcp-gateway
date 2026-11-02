@@ -613,11 +613,12 @@ fn secret_still_valid(
     tag: &str,
     in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
 ) -> bool {
-    super::digest_tag_of(&key.digest) == tag
-        || key
-            .previous
-            .as_ref()
-            .is_some_and(|p| super::digest_tag_of(&p.digest) == tag && in_grace(p.expires_at))
+    super::tag_still_valid(
+        tag,
+        Some(&key.digest),
+        key.previous.as_ref().map(|p| (&p.digest, p.expires_at)),
+        in_grace,
+    )
 }
 
 #[cfg(test)]

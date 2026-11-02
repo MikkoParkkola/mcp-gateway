@@ -220,6 +220,21 @@ pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
     principal_of_digest(digest).storage_form().to_owned()
 }
 
+/// Whether the secret fingerprinted `tag` still authenticates: it is the
+/// `current` digest's, or the `previous` digest's while `in_grace` holds for
+/// the grace's end (ADR-022). The one rule every holder kind is judged by
+/// (event subscriptions, watch polls, dashboard sessions); a digest that
+/// could not be read is `None` and matches nothing (fail closed).
+pub(crate) fn tag_still_valid(
+    tag: &str,
+    current: Option<&[u8; 32]>,
+    previous: Option<(&[u8; 32], chrono::DateTime<chrono::Utc>)>,
+    in_grace: impl FnOnce(chrono::DateTime<chrono::Utc>) -> bool,
+) -> bool {
+    current.is_some_and(|digest| digest_tag_of(digest) == tag)
+        || previous.is_some_and(|(digest, end)| digest_tag_of(digest) == tag && in_grace(end))
+}
+
 #[path = "auth_resolved.rs"]
 mod resolved;
 pub(crate) use resolved::KeyBinding;

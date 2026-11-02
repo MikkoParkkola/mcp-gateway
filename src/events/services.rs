@@ -132,16 +132,15 @@ fn secret_still_valid(
     tag: &str,
     now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
 ) -> bool {
-    let tag_of = |spec: Option<&str>| {
-        spec.and_then(crate::config::parse_api_key_digest)
-            .map(|digest| crate::gateway::auth::digest_tag_of(&digest))
-    };
-    if tag_of(k.key_sha256.as_deref()).as_deref() == Some(tag) {
-        return true;
-    }
-    tag_of(k.previous_key_sha256.as_deref()).as_deref() == Some(tag)
-        && k.previous_expires_at
-            .is_some_and(|end| now.is_ok_and(|now| now < end))
+    let digest = |spec: Option<&str>| spec.and_then(crate::config::parse_api_key_digest);
+    let current = digest(k.key_sha256.as_deref());
+    let previous = digest(k.previous_key_sha256.as_deref()).zip(k.previous_expires_at);
+    crate::gateway::auth::tag_still_valid(
+        tag,
+        current.as_ref(),
+        previous.as_ref().map(|(d, end)| (d, *end)),
+        |end| now.is_ok_and(|now| !crate::config::api_key_expired(Some(end), now)),
+    )
 }
 
 impl Services {
