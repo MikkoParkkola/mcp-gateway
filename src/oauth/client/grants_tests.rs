@@ -393,7 +393,12 @@ fn a_refused_code_exchange_logs_its_status_and_is_an_oauth_error() {
         let issuer = token_endpoint(400, r#"{"error":"invalid_grant"}"#).await;
         let client = client(dir.path(), &issuer, &[]);
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
     });
 
@@ -415,7 +420,12 @@ async fn an_unparseable_code_exchange_answer_is_an_oauth_error() {
     let client = client(dir.path(), &issuer, &[]);
 
     let refused = client
-        .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+        .exchange_code(
+            client.issuer_current().unwrap().spend(&client).unwrap(),
+            "code",
+            "http://127.0.0.1:9/cb",
+            "verifier",
+        )
         .await;
 
     assert!(
@@ -437,7 +447,12 @@ async fn an_oversized_expires_in_is_refused_on_the_code_exchange() {
     let client = client(dir.path(), &issuer, &[]);
 
     let refused = client
-        .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+        .exchange_code(
+            client.issuer_current().unwrap().spend(&client).unwrap(),
+            "code",
+            "http://127.0.0.1:9/cb",
+            "verifier",
+        )
         .await;
 
     let expected = format!(
@@ -465,7 +480,12 @@ fn a_successful_code_exchange_logs_whether_a_refresh_token_came() {
         .await;
         let client = client(dir.path(), &issuer, &[]);
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
             .unwrap()
     });
@@ -639,7 +659,12 @@ async fn an_unreadable_clock_sends_no_code_exchange() {
     let refused = {
         let _clock = crate::clock::test_clock::before_epoch();
         client
-            .exchange_code("code", "http://127.0.0.1:9/cb", "verifier")
+            .exchange_code(
+                client.issuer_current().unwrap().spend(&client).unwrap(),
+                "code",
+                "http://127.0.0.1:9/cb",
+                "verifier",
+            )
             .await
     };
 

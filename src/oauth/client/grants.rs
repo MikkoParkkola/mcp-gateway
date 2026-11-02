@@ -57,7 +57,7 @@ impl OAuthClient {
     /// against a server that won't accept it.
     pub(super) async fn try_client_credentials(
         &self,
-        _allowed: super::sign_in::GrantAllowed,
+        allowed: super::sign_in::GrantAllowed,
     ) -> Result<String> {
         let auth_meta = self.auth_meta()?;
 
@@ -77,7 +77,9 @@ impl OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID for client_credentials".to_string()))?;
 
-        let params = self.client_credentials_params(&client_id);
+        // Spent right before the request: a sign-in elsewhere since the proof
+        // was taken sends nothing.
+        let params = self.client_credentials_params(allowed.spend(self)?, &client_id);
 
         // One clock reading dates the token this request returns; a clock that
         // cannot be read (before 1970) refuses before anything is sent
@@ -116,7 +118,7 @@ impl OAuthClient {
         let token = token_from_answer(&auth_meta.token_endpoint, token_response, now)?;
 
         self.save_issued(&token).await?;
-        *self.current_token.write() = Some(token.clone());
+        self.cache_if_current(token.clone());
 
         info!(backend = %self.backend_name, "Token renewed via client_credentials");
         Ok(token.access_token)
@@ -170,7 +172,7 @@ impl OAuthClient {
     /// Form parameters for the `refresh_token` grant (RFC 6749 §6 + RFC 8707).
     pub(super) fn refresh_params(
         &self,
-        _allowed: super::sign_in::GrantAllowed,
+        _spent: super::sign_in::Spent,
         refresh_token: &str,
         client_id: &str,
     ) -> Vec<(&'static str, String)> {
@@ -191,7 +193,11 @@ impl OAuthClient {
     /// Form parameters for the `client_credentials` grant (RFC 6749 §4.4 +
     /// RFC 8707). No `client_secret` is added here: this path historically
     /// authenticates public/dynamically-registered clients without one.
-    pub(super) fn client_credentials_params(&self, client_id: &str) -> Vec<(&'static str, String)> {
+    pub(super) fn client_credentials_params(
+        &self,
+        _spent: super::sign_in::Spent,
+        client_id: &str,
+    ) -> Vec<(&'static str, String)> {
         let mut params = vec![
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id.to_string()),
@@ -209,6 +215,7 @@ impl OAuthClient {
     /// Exchange authorization code for tokens
     pub(super) async fn exchange_code(
         &self,
+        _spent: super::sign_in::Spent,
         code: &str,
         redirect_uri: &str,
         code_verifier: &str,
@@ -293,7 +300,7 @@ impl OAuthClient {
             Refreshed::Adopted(access) => Ok(access),
             Refreshed::Exchanged(token) => {
                 let access = token.access_token.clone();
-                *self.current_token.write() = Some(token);
+                self.cache_if_current(token);
                 info!(backend = %self.backend_name, "Token refreshed successfully");
                 Ok(access)
             }
@@ -509,7 +516,7 @@ impl OAuthClient {
         let token = Box::pin(self.issue_token(allowed, cancel, listeners, deadline, None)).await?;
         // Store and cache the token, under the same cancel and the window.
         self.save_issued_until(&token, cancel, deadline).await?;
-        *self.current_token.write() = Some(token.clone());
+        self.cache_if_current(token.clone());
 
         Ok(token.access_token)
     }
@@ -621,7 +628,7 @@ impl OAuthClient {
     /// saves nothing; the caller decides what to do with the token.
     async fn issue_token(
         &self,
-        _allowed: super::sign_in::GrantAllowed,
+        allowed: super::sign_in::GrantAllowed,
         cancel: &tokio_util::sync::CancellationToken,
         listeners: Option<tokio_util::sync::DropGuard>,
         deadline: Option<tokio::time::Instant>,
@@ -736,12 +743,14 @@ impl OAuthClient {
         // Exchange code for token. Cancel first (MIK-8339): a restart or stop
         // ends a login stalled here. The exchange itself is bounded by the
         // OAuth client's own request timeout (destination.rs), and by a
-        // detached step's deadline.
+        // detached step's deadline. The proof is spent first: a sign-in under
+        // another issuer during the callback wait redeems nothing.
+        let spent = allowed.spend(self)?;
         let token = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(cancelled()),
             () = crate::oauth::login_gate::past(exchange_by) => return Err(self.incomplete()),
-            token = self.exchange_code(&callback_result.code, &actual_callback_url, &code_verifier) => token?,
+            token = self.exchange_code(spent, &callback_result.code, &actual_callback_url, &code_verifier) => token?,
         };
         Ok(token)
     }
@@ -760,7 +769,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
     ) -> Result<super::refresh_flight::RefreshRequest> {
         // Under the flight: an install that moved while this refresh waited
         // for the lock sends nothing.
-        let allowed = self.issuer_current()?;
+        let spent = self.issuer_current()?.spend(self)?;
         let auth_meta = self.auth_meta()?;
         let key = self.credential_key()?;
         self.reload_registered_client_id(&key);
@@ -770,7 +779,7 @@ impl super::refresh_flight::RefreshCaller for OAuthClient {
             .clone()
             .ok_or_else(|| Error::OAuth("No client ID".to_string()))?;
         Ok(super::refresh_flight::RefreshRequest {
-            params: self.refresh_params(allowed, sent, &client_id),
+            params: self.refresh_params(spent, sent, &client_id),
             http: self.refresh_client_for(&auth_meta.token_endpoint)?,
             endpoint: auth_meta.token_endpoint.clone(),
             destination: self.destination,

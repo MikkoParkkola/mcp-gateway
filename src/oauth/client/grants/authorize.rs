@@ -222,7 +222,7 @@ impl OAuthClient {
                         // Inside the expiry buffer: cached for a refresh, if the
                         // install is still this client's.
                         Some(stored) => {
-                            self.cache_loaded(stored);
+                            self.cache_if_current(stored);
                         }
                         // Nothing could be read: the old account's token stops serving.
                         None => *self.current_token.write() = None,
@@ -258,6 +258,11 @@ impl OAuthClient {
     /// none; `Moved` if the latest install is under another issuer, which no
     /// caller may read as leave to run a grant.
     pub(super) fn adopt_stored_login(&self) -> Adopt {
+        // Before anything is read: a moved install is Moved, whether or not
+        // this issuer still has a token stored.
+        if self.issuer_differs() {
+            return Adopt::Moved;
+        }
         let Ok(key) = self.credential_key() else {
             return Adopt::Nothing;
         };
@@ -269,7 +274,7 @@ impl OAuthClient {
             return Adopt::Nothing;
         };
         let access = token.access_token.clone();
-        if !self.cache_loaded(token.clone()) {
+        if !self.cache_if_current(token.clone()) {
             return Adopt::Moved;
         }
         self.reload_registered_client_id(&key);

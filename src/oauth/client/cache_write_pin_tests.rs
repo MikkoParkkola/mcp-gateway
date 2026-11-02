@@ -1,24 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Pins, the backstop to the grant proof's type: a token loaded from storage
-//! enters the cache only through `cache_loaded`, which checks the install's
+//! enters the cache only through `cache_if_current`, which checks the install's
 //! issuer under the install-key lock, and the grant proof is built only by its
-//! two constructors. Every other write to the cache is listed here: a token
-//! just issued (a login, a refresh, a client-credentials grant, a confirmed
-//! sign-in), an emptied cache, or a test seed. A new site fails a row until it
+//! two constructors. A token issued by a grant of this client goes through
+//! the same step. Every other write to the cache is listed here: a confirmed
+//! web-UI sign-in, an emptied cache, or a test seed. A new site fails a row until it
 //! is classified.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 /// `(file under src/oauth/client, function)` allowed to write the cache.
-const WRITERS: [(&str, &str); 10] = [
-    ("sign_in.rs", "cache_loaded"),
+const WRITERS: [(&str, &str); 7] = [
+    ("sign_in.rs", "cache_if_current"),
     ("sign_in.rs", "rediscover_if_moved"),
     ("grants/authorize.rs", "adopt_installed"),
-    ("grants.rs", "try_client_credentials"),
-    ("grants.rs", "refresh_token"),
-    ("grants.rs", "authorize_until_by"),
     ("grants.rs", "save_confirmed"),
     ("grants.rs", "age_token_for_test"),
     ("mod.rs", "drop_credentials_from_other_issuer"),
@@ -53,6 +50,26 @@ fn client_sources() -> Vec<(String, String)> {
 
 /// Every `(file, enclosing fn)` with a line holding `needle`.
 fn sites(all: &[(String, String)], needle: &str) -> BTreeSet<(String, String)> {
+    sites_where(all, |line| line.contains(needle))
+}
+
+/// Every `(file, enclosing fn)` that builds a `ty` value: a line holding
+/// `ty {` that is not its declaration, an impl block or a return type.
+fn builders(all: &[(String, String)], ty: &str) -> BTreeSet<(String, String)> {
+    let needle = format!("{ty} {{");
+    sites_where(all, |line| {
+        line.contains(&needle)
+            && !line.contains("struct ")
+            && !line.contains("impl ")
+            && !line.contains("-> ")
+    })
+}
+
+/// Every `(file, enclosing fn)` with a line `matches` accepts.
+fn sites_where(
+    all: &[(String, String)],
+    matches: impl Fn(&str) -> bool,
+) -> BTreeSet<(String, String)> {
     let mut found = BTreeSet::new();
     for (file, text) in all {
         let mut current = String::from("-");
@@ -66,7 +83,7 @@ fn sites(all: &[(String, String)], needle: &str) -> BTreeSet<(String, String)> {
                     current = rest[..end].to_owned();
                 }
             }
-            if line.contains(needle) {
+            if matches(line) {
                 found.insert((file.clone(), current.clone()));
             }
         }
@@ -100,7 +117,7 @@ fn a_loaded_token_is_cached_only_through_the_checked_step() {
         "cache writes outside the listed sites: {unlisted:?}"
     );
     assert!(
-        found.contains(&("sign_in.rs".to_owned(), "cache_loaded".to_owned())),
+        found.contains(&("sign_in.rs".to_owned(), "cache_if_current".to_owned())),
         "the scan finds the checked step itself: {found:?}"
     );
 }
@@ -109,12 +126,17 @@ fn a_loaded_token_is_cached_only_through_the_checked_step() {
 fn the_grant_proof_is_built_only_by_its_checks() {
     let all = client_sources();
     assert_eq!(
-        sites(&all, "GrantAllowed { _only_here"),
+        builders(&all, "GrantAllowed"),
         pairs(&[
             ("sign_in.rs", "issuer_current"),
             ("sign_in.rs", "ui_sign_in")
         ]),
         "who builds the grant proof"
+    );
+    assert_eq!(
+        builders(&all, "Spent"),
+        pairs(&[("sign_in.rs", "spend")]),
+        "who spends the grant proof"
     );
     assert_eq!(
         sites(&all, "Self::ui_sign_in()"),

@@ -373,7 +373,7 @@ impl OAuthClient {
             .storage
             .load(&self.credential_key()?, &self.resource_url);
         if let Some(token) = &loaded {
-            self.cache_loaded(token.clone());
+            self.cache_if_current(token.clone());
         }
         // The issuer is known now: say what the token file says, once.
         self.publish_token_state(loaded.as_ref());

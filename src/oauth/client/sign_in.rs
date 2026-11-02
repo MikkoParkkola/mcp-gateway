@@ -363,9 +363,43 @@ pub(super) fn split_hook(
 /// Proof that a grant of this client's credential may run. Its field is
 /// private to this module, so only [`OAuthClient::issuer_current`] and
 /// [`OAuthClient::ui_sign_in`] make one; every grant entry takes it, and a
-/// grant path that skips the issuer check does not compile.
+/// grant path that skips the issuer check does not compile. It is spent with
+/// [`GrantAllowed::spend`] right before the grant's request, which checks
+/// again: a proof taken before an await cannot start a grant after a switch.
 pub(crate) struct GrantAllowed {
+    stamp: Stamp,
+}
+
+/// When a proof was made: the install count its issuer check saw, or a
+/// web-UI sign-in, which runs under the issuer it just discovered.
+enum Stamp {
+    Checked(u64),
+    #[cfg(feature = "webui")]
+    UiSignIn,
+}
+
+/// A proof spent right before a grant's request: what every request builder
+/// of a grant takes. Only [`GrantAllowed::spend`] makes one.
+pub(crate) struct Spent {
     _only_here: (),
+}
+
+impl GrantAllowed {
+    /// Spend the proof right before the grant's request. Refused with the
+    /// sign-in wait if a sign-in was installed since the check or the issuers
+    /// now differ; a web-UI sign-in's proof is spent as it is. One await, the
+    /// send, still separates this from the answer: a switch in it is caught
+    /// where the answer is cached (`cache_if_current`) and handed back.
+    pub(super) fn spend(self, client: &OAuthClient) -> crate::Result<Spent> {
+        match self.stamp {
+            Stamp::Checked(installed)
+                if client.issuer_differs() || client.installed_now() != installed =>
+            {
+                Err(client.issuer_wait())
+            }
+            _ => Ok(Spent { _only_here: () }),
+        }
+    }
 }
 
 impl OAuthClient {
@@ -396,10 +430,11 @@ impl OAuthClient {
         }))
     }
 
-    /// The one way a token loaded from storage enters the cache: only while the
-    /// latest confirmed sign-in is under this client's own key, checked under
-    /// the install-key lock. Whether it was cached.
-    pub(super) fn cache_loaded(&self, token: TokenInfo) -> bool {
+    /// The one way a token enters the cache, whether loaded from storage or
+    /// just issued by a grant of this client: only while the latest confirmed
+    /// sign-in is under this client's own key, checked under the install-key
+    /// lock. A grant answered after a switch is not cached. Whether it was.
+    pub(super) fn cache_if_current(&self, token: TokenInfo) -> bool {
         let key = self.credential_key().ok();
         if let Some(status) = &self.sign_in_status {
             return status.if_current(key.as_deref(), || {
@@ -431,7 +466,9 @@ impl OAuthClient {
         if self.issuer_differs() {
             return Err(self.issuer_wait());
         }
-        Ok(GrantAllowed { _only_here: () })
+        Ok(GrantAllowed {
+            stamp: Stamp::Checked(self.installed_now()),
+        })
     }
 
     /// The one grant that may run under another issuer than the latest
@@ -440,7 +477,16 @@ impl OAuthClient {
     /// `authorize_for_ui` calls it.
     #[cfg(feature = "webui")]
     pub(super) fn ui_sign_in() -> GrantAllowed {
-        GrantAllowed { _only_here: () }
+        GrantAllowed {
+            stamp: Stamp::UiSignIn,
+        }
+    }
+
+    /// How many confirmed sign-ins this client's status cell has recorded.
+    fn installed_now(&self) -> u64 {
+        self.sign_in_status
+            .as_ref()
+            .map_or(0, |status| status.installed())
     }
 
     /// The sign-in wait a caller gets while the issuers differ.
