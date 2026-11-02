@@ -535,3 +535,88 @@ async fn a_comment_mentioning_the_reserved_prefix_does_not_refuse_a_save() {
         .expect("a comment that mentions the prefix does not refuse the save");
     assert_eq!(read(&path), COMMENTED);
 }
+
+/// What loading `text` as gateway.yaml says.
+fn load_refusal(text: &str) -> String {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, text).expect("write config");
+    crate::config::Config::load(Some(&path))
+        .expect_err("a reference to a reserved name is refused")
+        .to_string()
+}
+
+/// Every form a reserved reference can take in YAML is refused with its
+/// name and line: an anchored scalar an alias repeats, a flow mapping, a
+/// quoted key, and a scalar spread over lines.
+#[test]
+fn every_yaml_form_of_a_reserved_reference_is_refused_with_its_line() {
+    let backend = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+    let cases = [
+        (
+            "an alias",
+            format!(
+                "{backend}    headers:\n      X-One: &tok \"env:MCPGW_PENDING_SLOT_1\"\n      X-Two: *tok\n"
+            ),
+            "MCPGW_PENDING_SLOT_1",
+            5,
+        ),
+        (
+            "a flow mapping",
+            format!("{backend}    headers: {{X-A: \"${{MCPGW_PENDING_SLOT_2}}\"}}\n"),
+            "MCPGW_PENDING_SLOT_2",
+            4,
+        ),
+        (
+            "a quoted key",
+            format!("{backend}    headers:\n      \"${{MCPGW_PENDING_SLOT_4}}\": v\n"),
+            "MCPGW_PENDING_SLOT_4",
+            5,
+        ),
+        (
+            "a multi-line scalar",
+            format!(
+                "{backend}    headers:\n      X-B: \"first\n        ${{MCPGW_PENDING_SLOT_5}} second\"\n"
+            ),
+            "MCPGW_PENDING_SLOT_5",
+            5,
+        ),
+    ];
+    for (form, text, name, line) in cases {
+        let refused = load_refusal(&text);
+        assert!(
+            refused.contains(name) && refused.contains(&format!("line {line}")),
+            "{form}: the refusal names {name} and line {line}: {refused}"
+        );
+    }
+}
+
+/// An env file that assigns a reserved name is refused, naming it.
+#[test]
+fn an_env_file_assigning_a_reserved_name_is_refused() {
+    let dir = tempfile::tempdir().expect("dir");
+    let env = dir.path().join("gateway.env");
+    write_owner_only(&env, "MCPGW_PENDING_SLOT_6=x\n").expect("write env file");
+    let refused = load_refusal(&format!(
+        "env_files:\n  - {}\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n",
+        env.display()
+    ));
+    assert!(
+        refused.contains("MCPGW_PENDING_SLOT_6") && refused.contains("rename"),
+        "the refusal names the reserved assignment: {refused}"
+    );
+}
+
+/// A plain scalar that only mentions the prefix, with neither `env:` nor
+/// `${`, is no reference and loads.
+#[test]
+fn a_plain_scalar_mentioning_the_reserved_prefix_loads() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(
+        &path,
+        "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    headers:\n      X-Note: \"MCPGW_PENDING_SLOT_7 is reserved\"\n",
+    )
+    .expect("write config");
+    crate::config::Config::load(Some(&path)).expect("a mention without a reference loads");
+}
