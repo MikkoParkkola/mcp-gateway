@@ -68,6 +68,7 @@ fn ctx(authorizer: &(dyn ToolAuthorizer + Sync)) -> MetaMcpCallerContext<'_> {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

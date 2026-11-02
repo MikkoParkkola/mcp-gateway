@@ -29,6 +29,11 @@ pub(crate) struct BackendCall<'a> {
     /// The router's caller key, for a session-less call's own spend record
     /// (MIK-7653). `None` where no spend is recorded, or the caller is keyless.
     pub caller_key: Option<&'a str>,
+    /// The generation whose budgets and alerts judge this call's spend, from
+    /// admission to settlement. `None` judges with the live config's current
+    /// one, for a call that was never pinned or spends nothing.
+    #[cfg_attr(not(feature = "cost-governance"), allow(dead_code))]
+    pub generation: Option<&'a crate::config_reload::Generation>,
 }
 
 /// What admitting one backend call leaves behind: the warnings for its result
@@ -218,6 +223,7 @@ impl MetaMcp {
             cost_key: None,
             trace_id,
             caller_key: None,
+            generation: None,
         })
         .map_err(|refusal| self.withheld_as_undefined((server, tool), session_id, refusal))
     }
@@ -278,7 +284,7 @@ impl MetaMcp {
     )]
     pub(crate) fn admit_spend_for(&self, call: &BackendCall<'_>) -> Result<Admission> {
         #[cfg(feature = "cost-governance")]
-        return self.admit_spend(call.tool, call.cost_key);
+        return self.admit_spend(call.tool, call.cost_key, call.generation);
         #[cfg(not(feature = "cost-governance"))]
         {
             let _ = call;
@@ -330,7 +336,14 @@ impl MetaMcp {
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
             let cost = enforcer.registry.cost_for(call.tool);
-            enforcer.settle(admission.hold(), call.tool, call.cost_key, cost);
+            self.judged_by(enforcer, call.generation, |governance| {
+                enforcer.settle_under(
+                    governance,
+                    admission.hold(),
+                    (call.tool, call.cost_key),
+                    cost,
+                );
+            });
         }
     }
 

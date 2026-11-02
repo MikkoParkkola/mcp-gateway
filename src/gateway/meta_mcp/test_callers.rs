@@ -81,6 +81,7 @@ pub(in crate::gateway) fn anonymous_caller() -> MetaMcpCallerContext<'static> {
         retry,
         era: crate::protocol::meta::Era::Modern,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 

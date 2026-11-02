@@ -353,6 +353,7 @@ impl MetaMcp {
                 cost_key: None,
                 trace_id: "",
                 caller_key: None,
+                generation: None,
             };
             // MIK-8475: an account-bearing capability waits for the
             // credential step too.
@@ -386,6 +387,7 @@ impl MetaMcp {
                         cost_key: caller.cost_key(),
                         trace_id: "",
                         caller_key: None,
+                        generation: None,
                     })
                     .is_err()
         })
@@ -420,6 +422,7 @@ impl MetaMcp {
             cost_key: None,
             trace_id: "",
             caller_key: None,
+            generation: None,
         };
         // MIK-8474: on a per-user backend the error-rate cooldown waits for
         // the credential step, as the live call's policy has it (MIK-8439).
