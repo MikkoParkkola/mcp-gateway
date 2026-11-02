@@ -307,9 +307,6 @@ pub(crate) fn edit_in_place(
 ) -> Result<Template, ComputeRefusal> {
     whole_file_is_plain(original)?;
     no_overlap(changes)?;
-    if changes.iter().any(|(_, c)| matches!(c, Change::List(_))) {
-        return Err(unprovable("a whole-list set is not written yet"));
-    }
     for (path, change) in changes {
         // A slot is named by its own field's path, never another's.
         if let Change::Secret(id) = change
@@ -342,9 +339,9 @@ pub(crate) fn edit_in_place(
         let Some(value) = rendered(change) else {
             continue;
         };
-        match path.keys() {
-            Some(keys) => set_keyed(&mut lines, path, &keys, &value)?,
-            None => shape::place(&mut lines, &path.0, &value)?,
+        match change {
+            Change::List(items) => list::set(&mut lines, path, items, &value)?,
+            _ => write_value(&mut lines, path, &value)?,
         }
     }
     let mut removed: Vec<&[Segment]> = Vec::new();
@@ -355,7 +352,12 @@ pub(crate) fn edit_in_place(
         let gone = if revoked == Some(path.0.as_slice()) {
             revoke::remove_element(&mut lines, &path.0)?
         } else {
-            shape::remove_entry(&mut lines, &path.0, shape::CommentRule::Refuse)?
+            shape::remove_entry(
+                &mut lines,
+                &path.0,
+                shape::CommentRule::Refuse,
+                shape::Span::Entry,
+            )?
         };
         if gone {
             removed.push(&path.0);
@@ -490,8 +492,6 @@ fn rendered(change: &Change) -> Option<String> {
     })
 }
 
-/// A float always written with a decimal point, so it reads back as a
-/// float: `2.0`, `1.0e300`.
 /// `items` as one inline list of double-quoted strings: `["a", "b"]`, `[]`.
 fn inline_list(items: &[String]) -> String {
     let quoted: Vec<String> = items
@@ -501,6 +501,8 @@ fn inline_list(items: &[String]) -> String {
     format!("[{}]", quoted.join(", "))
 }
 
+/// A float always written with a decimal point, so it reads back as a
+/// float: `2.0`, `1.0e300`.
 fn float_text(value: f64) -> String {
     let shortest = format!("{value:?}");
     if shortest.contains('.') {
@@ -509,6 +511,19 @@ fn float_text(value: f64) -> String {
     match shortest.split_once('e') {
         Some((mantissa, exponent)) => format!("{mantissa}.0e{exponent}"),
         None => format!("{shortest}.0"),
+    }
+}
+
+/// Write `value` at `path`: through the parser's value span when the path is
+/// mapping keys alone, else by node position; inserted when absent.
+fn write_value(
+    lines: &mut shape::Lines,
+    path: &FieldPath,
+    value: &str,
+) -> Result<(), ComputeRefusal> {
+    match path.keys() {
+        Some(keys) => set_keyed(lines, path, &keys, value),
+        None => shape::place(lines, &path.0, value),
     }
 }
 
@@ -703,6 +718,9 @@ mod shape;
 
 #[path = "config_persistence_keyedit_revoke.rs"]
 mod revoke;
+
+#[path = "config_persistence_keyedit_list.rs"]
+mod list;
 
 #[cfg(test)]
 #[path = "config_persistence_keyedit_tests.rs"]
