@@ -749,6 +749,18 @@ class TestSection(unittest.TestCase):
         )
         self.assertEqual(self.new(text), [], text)
 
+    def test_a_line_shared_by_a_test_item_and_product_code_is_judged(self):
+        text = f"#[cfg(test)] fn a() {{}} async fn product() {{ {self.WINDOW} }}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
+    def test_a_nested_block_comment_does_not_end_a_test_module(self):
+        text = (
+            "fn product() {}\n\n#[cfg(test)]\nmod tests {\n    /* outer /* inner */ } */\n"
+            f"    async fn case() {{\n{self.WINDOW}\n    }}\n}}\n"
+        )
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+        self.assertTrue(self.new(text), text)
+
     def test_a_second_test_item_after_product_code_is_judged(self):
         text = (
             "#[cfg(test)]\nfn early() {}\n\nasync fn product() {\n" + self.WINDOW + "\n}\n\n"
