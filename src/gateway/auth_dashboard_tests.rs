@@ -456,9 +456,7 @@ fn k13_tables(
         .and_then(|client| client.quota_principal)
         .map(|quota| crate::gateway::auth::MintingKey {
             quota,
-            digest_tag: crate::gateway::auth::principal_of(secret)
-                .storage_form()
-                .to_owned(),
+            digest_tag: crate::gateway::auth::secret_tag(secret),
         })
         .expect("the key has a quota identity");
     let without = crate::gateway::auth::ResolvedAuthConfig::from_config(

@@ -182,8 +182,8 @@ pub(crate) struct NamedApiKey {
     personal: bool,
     /// The key's previous digest matched, not its current one (ADR-022).
     matched_previous_digest: bool,
-    /// The 12-hex fingerprint of the digest that matched, current or
-    /// previous: what a watch or session opened by this request is bound to,
+    /// The fingerprint ([`digest_tag_of`]) of the digest that matched,
+    /// current or previous: what a watch or session opened by this request is bound to,
     /// so it ends when that secret stops being valid. Never the digest.
     digest_tag: String,
 }
@@ -226,10 +226,19 @@ impl NamedApiKey {
     }
 }
 
-/// The 12-hex fingerprint a holder is bound to: the same form a derived
-/// principal takes, of the digest the request matched.
+/// The fingerprint a holder is bound to: the full SHA-256, hex, of the
+/// digest the request matched. Full length, so two digests that share a
+/// principal's 12-hex prefix never share a tag and a rotation away from one
+/// always ends what it opened; hashed, so the key's digest itself is never
+/// stored with a holder.
 pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
-    principal_of_digest(digest).storage_form().to_owned()
+    crate::hashing::sha256_hex(digest)
+}
+
+/// The tag of the digest of `secret`, as a request presenting it records.
+#[cfg(test)]
+pub(crate) fn secret_tag(secret: &str) -> String {
+    digest_tag_of(&<sha2::Sha256 as sha2::Digest>::digest(secret.as_bytes()).into())
 }
 
 /// Whether the secret fingerprinted `tag` still authenticates: it is the

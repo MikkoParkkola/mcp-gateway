@@ -215,7 +215,7 @@ impl Credential {
 pub(crate) struct ApiKeyRef {
     pub name: String,
     pub principal: String,
-    /// The 12-hex fingerprint of the digest that authenticated the caller
+    /// The fingerprint of the digest that authenticated the caller
     /// (`crate::gateway::auth::digest_tag_of`). Absent on rows stored before
     /// holders were bound to their secret: those are refused (fail closed),
     /// since nothing says which secret opened them.

@@ -114,11 +114,7 @@ async fn access_lost_during_the_second_verdict_is_not_sent() {
                 principal: crate::gateway::auth::principal_of(SECRET)
                     .storage_form()
                     .to_owned(),
-                digest_tag: Some(
-                    crate::gateway::auth::principal_of(SECRET)
-                        .storage_form()
-                        .to_owned(),
-                ),
+                digest_tag: Some(crate::gateway::auth::secret_tag(SECRET)),
             });
         });
         let drive = async {
@@ -504,14 +500,15 @@ async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check(
         let services = logged_services(dir.path());
         services.live.set(keyed());
         let (port, accepted) = counting_callback().await;
-        let tag = crate::gateway::auth::principal_of(SECRET)
+        let principal = crate::gateway::auth::principal_of(SECRET)
             .storage_form()
             .to_owned();
+        let tag = crate::gateway::auth::secret_tag(SECRET);
         queued_with(&hub, port, "evt_key", "probe.open", |sub, _| {
             sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
             sub.api_key = Some(ApiKeyRef {
                 name: "k".to_owned(),
-                principal: tag.clone(),
+                principal: principal.clone(),
                 digest_tag: tagged.then(|| tag.clone()),
             });
         });

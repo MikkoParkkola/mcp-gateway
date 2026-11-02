@@ -107,11 +107,7 @@ async fn the_watch_host_poll_refuses_a_gone_key_and_a_blocked_pattern() {
             principal: crate::gateway::auth::principal_of(name)
                 .storage_form()
                 .to_owned(),
-            digest_tag: Some(
-                crate::gateway::auth::principal_of(name)
-                    .storage_form()
-                    .to_owned(),
-            ),
+            digest_tag: Some(crate::gateway::auth::secret_tag(name)),
         },
     };
     let fx = fixture_firewalled(Answer::Ok).await;
@@ -330,7 +326,7 @@ async fn the_watch_host_admits_only_a_live_granted_key() {
         principal: "subscriber".into(),
         api_key: ApiKeyRef {
             name: name.into(),
-            digest_tag: Some(principal.clone()),
+            digest_tag: Some(crate::gateway::auth::secret_tag(name)),
             principal,
         },
     };

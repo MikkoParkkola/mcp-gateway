@@ -54,11 +54,7 @@ fn presented(name: &str, secret: &str) -> ApiKeyRef {
         principal: crate::gateway::auth::principal_of(secret)
             .storage_form()
             .to_owned(),
-        digest_tag: Some(
-            crate::gateway::auth::principal_of(secret)
-                .storage_form()
-                .to_owned(),
-        ),
+        digest_tag: Some(crate::gateway::auth::secret_tag(secret)),
     }
 }
 
@@ -247,13 +243,56 @@ async fn a_subscription_stored_without_its_secret_is_refused() {
         AccessVerdict::Refuses,
         "a row stored without its secret's fingerprint was admitted"
     );
-    let tag = crate::gateway::auth::principal_of("s1")
-        .storage_form()
-        .to_owned();
+    let tag = crate::gateway::auth::secret_tag("s1");
     assert_eq!(
         live.admission(&row(Some(tag)), Some("x")).await,
         AccessVerdict::Admits,
         "control: the same row bound to the current secret is admitted"
+    );
+}
+
+/// Two digests sharing their first 6 bytes share a derived principal and
+/// would share a 12-hex fingerprint. A holder opened with one still ends when
+/// the key rotates to the other: the tag is the full hash of the digest. The
+/// control keeps the digest it was opened with and is admitted.
+#[tokio::test]
+async fn a_rotation_to_a_digest_sharing_the_old_prefix_still_ends_the_holder() {
+    let prefix = "a1b2c3d4e5f6";
+    let old = format!("{prefix}{}", "0".repeat(52));
+    let new = format!("{prefix}{}", "1".repeat(52));
+    let digest = |hex: &str| {
+        crate::config::parse_api_key_digest(&format!("sha256:{hex}")).expect("a digest")
+    };
+    let with_digest = |hex: &str| ApiKeyConfig {
+        key_sha256: Some(format!("sha256:{hex}")),
+        ..key("alice", "unused", None)
+    };
+    let sub: Subscription = serde_json::from_value(serde_json::json!({
+        "v": 1, "id": "s", "principal": "p",
+        "api_key": {
+            "name": "alice",
+            "principal": prefix,
+            "digest_tag": crate::gateway::auth::digest_tag_of(&digest(&old)),
+        },
+        "url": "https://h/x", "name": "e", "arguments": {}, "secret": "whsec_x",
+        "previous_secret": null, "previous_until": null,
+        "granted_at": "2026-10-01T00:00:00Z", "expires_at": null, "active": true,
+        "failed_since": null, "last_delivery_at": null, "last_error": null
+    }))
+    .expect("loads");
+    assert_eq!(
+        services(vec![with_digest(&old)])
+            .admission(&sub, Some("x"))
+            .await,
+        AccessVerdict::Admits,
+        "control: the digest it was opened with"
+    );
+    assert_eq!(
+        services(vec![with_digest(&new)])
+            .admission(&sub, Some("x"))
+            .await,
+        AccessVerdict::Refuses,
+        "rotated to a digest sharing the old prefix, the holder lived on"
     );
 }
 

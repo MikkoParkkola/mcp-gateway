@@ -255,10 +255,10 @@ fn a_previous_secret_match_binds_holders_to_the_previous_digest() {
         .expect("previous secret");
     assert_eq!(
         current.expect("an API key").digest_tag(),
-        &hex_of(NEW)[..12]
+        crate::gateway::auth::secret_tag(NEW)
     );
     let previous = previous.expect("an API key");
-    assert_eq!(previous.digest_tag(), &hex_of(OLD)[..12]);
+    assert_eq!(previous.digest_tag(), crate::gateway::auth::secret_tag(OLD));
     let bound = |at| {
         config
             .client_for_key_at(
@@ -326,11 +326,7 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
 /// holder opened with the new secret answers throughout.
 #[test]
 fn a_watch_holder_follows_the_secret_it_was_opened_with() {
-    let tag = |secret: &str| {
-        crate::gateway::auth::principal_of(secret)
-            .storage_form()
-            .to_owned()
-    };
+    let tag = crate::gateway::auth::secret_tag;
     let leaked = resolved(&[with_principal(key("ops", NEW, None), PRINCIPAL)]);
     assert!(
         leaked

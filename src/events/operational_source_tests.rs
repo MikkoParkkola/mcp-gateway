@@ -312,7 +312,7 @@ fn admit(hub: &EventsHub, key: &str, secret: &str, name: &str) {
         "granted_at": Utc::now(), "expires_at": null, "active": true,
         "failed_since": null, "last_delivery_at": null, "last_error": null,
         // Opened with the key's secret now: bound to that secret.
-        "api_key": {"name": key, "principal": principal, "digest_tag": principal},
+        "api_key": {"name": key, "principal": principal, "digest_tag": crate::gateway::auth::secret_tag(secret)},
         "credential_kind": serde_json::to_value(crate::security::audit::CredentialKind::ApiKey)
             .expect("kind"),
     }))

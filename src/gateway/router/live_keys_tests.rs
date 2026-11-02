@@ -250,11 +250,7 @@ async fn a_reload_rotating_a_leaked_key_ends_its_old_watch() {
         name: "ops".to_owned(),
         principal: PRINCIPAL.to_owned(),
         // Opened with the old secret: bound to its digest.
-        digest_tag: Some(
-            crate::gateway::auth::principal_of(OLD)
-                .storage_form()
-                .to_owned(),
-        ),
+        digest_tag: Some(crate::gateway::auth::secret_tag(OLD)),
     };
     assert!(
         services.admits(Some(&watch), "x"),
