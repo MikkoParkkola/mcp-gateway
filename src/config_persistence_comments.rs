@@ -48,23 +48,42 @@ pub(crate) fn dropped_comment_lines(before: &str, after: &str) -> Vec<String> {
 /// Lines outside `region` are not classified (`None`).
 fn comments(lines: &[&str], region: std::ops::Range<usize>) -> Vec<Option<String>> {
     (0..lines.len())
-        .map(|i| {
-            if !region.contains(&i) {
-                return None;
-            }
-            // Each `#` after a blank (or at the start) is a candidate, tried in
-            // order: one inside a value is rejected and the next is tried.
-            let line = lines[i];
-            line.match_indices('#')
-                .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
-                .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
-                .find(|comment| {
-                    #[cfg(test)]
-                    PARSE_CHECKS.with(|n| n.set(n.get() + 1));
-                    super::splice::parsed_as_comment(lines, i, comment)
-                })
-                .map(|comment| comment.trim().to_owned())
+        .map(|i| region.contains(&i).then(|| comment(lines, i)).flatten())
+        .collect()
+}
+
+/// Line `i`'s comment, if it has one.
+fn comment(lines: &[&str], i: usize) -> Option<String> {
+    // Each `#` after a blank (or at the start) is a candidate, tried in
+    // order: one inside a value is rejected and the next is tried.
+    let line = lines[i];
+    line.match_indices('#')
+        .filter(|&(at, _)| at == 0 || line[..at].ends_with([' ', '\t']))
+        .map(|(at, _)| &line[line[..at].trim_end_matches([' ', '\t']).len()..])
+        .find(|comment| {
+            #[cfg(test)]
+            PARSE_CHECKS.with(|n| n.set(n.get() + 1));
+            super::splice::parsed_as_comment(lines, i, comment)
         })
+        .map(|comment| comment.trim().to_owned())
+}
+
+/// Of `text`'s 0-based `lines`, the 1-based numbers of those carrying a
+/// comment by the same parser-backed rule, sorted: what an edit that
+/// deleted exactly those lines dropped, with no text matched across.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "first caller: the web UI's key revoke")
+)]
+pub(crate) fn comment_line_numbers(
+    text: &str,
+    lines: &std::collections::BTreeSet<usize>,
+) -> Vec<usize> {
+    let all: Vec<&str> = text.lines().collect();
+    lines
+        .iter()
+        .filter(|&&i| i < all.len() && comment(&all, i).is_some())
+        .map(|i| i + 1)
         .collect()
 }
 
