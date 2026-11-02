@@ -197,6 +197,7 @@ jobs:
           python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
           python3 scripts/ci/shard_tests.py --self-test
           python3 scripts/ci/check_needs.py --self-test
+          python3 scripts/ci/job_time_watch.py --self-test
           python3 scripts/ci/test_os_shards.py
       - name: Validate the gateway-spawn check against planted spawns
         run: python3 scripts/ci/check-gateway-spawns.py --self-test
@@ -813,10 +814,23 @@ jobs:
     needs: [macos-shards]
     if: ${{ always() && !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: ubuntu-latest
+    # Read this run's job timings for the limit watch below.
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A shard creeping toward its time limit is cut off mid-test one day and
+      # takes the train with it: warn at 80%, never fail.
+      - name: Warn when a macOS shard used over 80% of its time limit
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/job_time_watch.py macos-shards
       - name: Every macOS shard succeeded
         env:
           NEEDS: ${{ toJSON(needs) }}

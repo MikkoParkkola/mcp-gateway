@@ -17,6 +17,7 @@ python3 scripts/ci/check_advisory_exceptions.py	0	closed
 python3 scripts/ci/check_advisory_exceptions.py --self-test	0	closed
 python3 scripts/ci/check_needs.py --self-test	0	closed
 python3 scripts/ci/check_per_call_stages.py	0	closed
+python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
 python3 scripts/ci/shard_tests.py --self-test	0	closed
 python3 scripts/ci/test_check_per_call_stages.py	0	closed
