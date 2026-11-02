@@ -181,7 +181,11 @@ impl MetaMcp {
         let include_costs = caller_is_admin;
         #[cfg(feature = "cost-governance")]
         if let Some(ref enforcer) = self.budget_enforcer {
-            let section = cost_section(&enforcer.snapshot());
+            // One generation for the whole response: limits and spend agree.
+            let snapshot = self.judged_by(enforcer, None, |governance| {
+                enforcer.snapshot_under(governance)
+            });
+            let section = cost_section(&snapshot);
             if include_costs && let Value::Object(ref mut map) = response {
                 map.insert("cost_governance".to_string(), section);
             }

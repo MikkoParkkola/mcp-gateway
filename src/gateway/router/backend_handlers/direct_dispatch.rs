@@ -218,6 +218,7 @@ pub(super) async fn admit<'a>(
         cost_key: client.and_then(|c| c.api_key_identity()),
         trace_id: "",
         caller_key,
+        generation: Some(&*caller.generation),
     };
     let auth = BackendAuthContext {
         generation: &caller.generation,
@@ -538,6 +539,7 @@ pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> Back
         cost_key: call.cost_key,
         trace_id: call.trace_id,
         caller_key: call.caller_key,
+        generation: call.generation,
     }
 }
 

@@ -33,6 +33,7 @@ mod snapshot;
 use rows::MAX_UNBUDGETED_ROWS;
 #[cfg(feature = "cost-governance")]
 use rows::add_capped;
+use snapshot::evaluate_alerts;
 
 // ── DailyAccumulator ─────────────────────────────────────────────────────────
 
@@ -514,8 +515,35 @@ impl BudgetEnforcer {
     ///
     /// Hot path: single `DashMap` lookup + ≤3 short accumulator locks.  No allocation
     /// when the tool is free or governance is disabled.
-    #[allow(clippy::too_many_lines)]
     pub fn check(&self, tool_name: &str, api_key_name: Option<&str>) -> EnforcementResult {
+        self.check_under(&self.config, tool_name, api_key_name)
+    }
+
+    /// The governance a call is judged with: `generation`'s when governance is
+    /// enabled there, else this enforcer's startup copy.
+    ///
+    /// `enabled`, the prices and the alternatives are restart-only, so turning
+    /// governance off by reload leaves the running enforcer judging with what
+    /// it started with. Only the budgets and the alerts follow a reload.
+    pub(crate) fn governance<'a>(
+        &'a self,
+        generation: Option<&'a crate::config_reload::Generation>,
+    ) -> &'a CostGovernanceConfig {
+        generation
+            .map(|generation| &generation.config().cost_governance)
+            .filter(|governance| governance.enabled)
+            .unwrap_or(&self.config)
+    }
+
+    /// [`Self::check`] with the budgets and alerts of `governance`, the config
+    /// the request is pinned to.
+    #[allow(clippy::too_many_lines)]
+    pub(crate) fn check_under(
+        &self,
+        governance: &CostGovernanceConfig,
+        tool_name: &str,
+        api_key_name: Option<&str>,
+    ) -> EnforcementResult {
         if !self.config.enabled {
             return EnforcementResult {
                 allowed: true,
@@ -553,7 +581,7 @@ impl BudgetEnforcer {
         let mut block_reason: Option<String> = None;
 
         // Check 1: per-tool daily limit
-        if let Some(&limit) = self.config.budgets.per_tool.get(tool_name) {
+        if let Some(&limit) = governance.budgets.per_tool.get(tool_name) {
             let acc = self
                 .tool_daily
                 .entry(tool_name.to_string())
@@ -561,7 +589,7 @@ impl BudgetEnforcer {
             let current_usd = usd(acc.current_on(today) + pending.tool(tool_name));
             let projected = current_usd + cost;
 
-            if let Some(action) = self.evaluate_alerts(projected, limit) {
+            if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
                 match action {
                     AlertAction::Log => logs.push(DeferredLog::Tool {
                         tool: tool_name.to_string(),
@@ -584,11 +612,11 @@ impl BudgetEnforcer {
         }
 
         // Check 2: global daily limit
-        if !blocked && let Some(limit) = self.config.budgets.daily {
+        if !blocked && let Some(limit) = governance.budgets.daily {
             let current_usd = usd(self.global_daily.current_on(today) + pending.global);
             let projected = current_usd + cost;
 
-            if let Some(action) = self.evaluate_alerts(projected, limit) {
+            if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
                 match action {
                     AlertAction::Log => logs.push(DeferredLog::Global {
                         spent: projected,
@@ -612,7 +640,7 @@ impl BudgetEnforcer {
         // Check 3: per-key daily limit
         if !blocked
             && let Some(key_name) = api_key_name
-            && let Some(&limit) = self.config.budgets.per_key.get(key_name)
+            && let Some(&limit) = governance.budgets.per_key.get(key_name)
         {
             let acc = self
                 .key_daily
@@ -621,7 +649,7 @@ impl BudgetEnforcer {
             let current_usd = usd(acc.current_on(today) + pending.key(key_name));
             let projected = current_usd + cost;
 
-            if let Some(action) = self.evaluate_alerts(projected, limit) {
+            if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
                 match action {
                     AlertAction::Log => logs.push(DeferredLog::Key {
                         key: key_name.to_string(),
@@ -686,12 +714,25 @@ impl BudgetEnforcer {
         api_key_name: Option<&str>,
         cost_usd: f64,
     ) {
+        self.settle_under(&self.config, hold, (tool_name, api_key_name), cost_usd);
+    }
+
+    /// [`Self::settle`] with the budgets of `governance`: which names are
+    /// budgeted decides which have a row of their own, and the crossings are
+    /// those of the budgets the call was admitted under.
+    pub(crate) fn settle_under(
+        &self,
+        governance: &CostGovernanceConfig,
+        hold: Option<&SpendHold>,
+        (tool_name, api_key_name): (&str, Option<&str>),
+        cost_usd: f64,
+    ) {
         if cost_usd == 0.0 {
             return;
         }
         let micro = super::tally::micro(cost_usd);
 
-        let budgets = &self.config.budgets;
+        let budgets = &governance.budgets;
         // Before the adds, so the first spend of a day never finds yesterday's
         // rows filling the cap. No entry guard is held: `retain` takes every
         // shard lock.
@@ -729,6 +770,7 @@ impl BudgetEnforcer {
         fire(&AFTER_SETTLE);
         if self.observer.is_set() {
             self.report_crossings(
+                budgets,
                 tool_name,
                 api_key_name,
                 micro,

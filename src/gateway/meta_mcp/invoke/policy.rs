@@ -70,6 +70,7 @@ impl MetaMcp {
             cost_key: None,
             trace_id: "",
             caller_key: None,
+            generation: caller.generation,
         };
         let view = self.scoped(caller.scope().authorizer.backend_grant());
         if self.defers_error_rate_cooldown(&view, server, tool) {
