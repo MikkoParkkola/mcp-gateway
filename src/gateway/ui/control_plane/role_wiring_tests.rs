@@ -111,9 +111,11 @@ fn actor_id_is_collision_safe() {
     assert_eq!(id_a, a.stable_actor_id());
 }
 
-// MIK-6702.CP.RELOAD.1 — the role mapping is read live: a reload that
-// removes an admin rule stops granting Admin without a restart. Simulates
-// the reload by swapping the LiveConfig the handler reads through.
+// A reload that removes an admin rule stops granting Admin without a
+// restart: the next request pins the new generation and is judged by its
+// mapping (a request already in flight keeps the one it arrived under).
+// Simulates the reload by reading the mapping before and after the swap, as
+// each request's pin would.
 #[test]
 fn role_mapping_reload_revokes_admin_without_restart() {
     use crate::config::Config;
