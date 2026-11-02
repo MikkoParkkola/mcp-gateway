@@ -185,19 +185,17 @@ pub(super) async fn dashboard_link(
     let key = match (
         client.api_key_identity(),
         client.quota_principal.clone(),
-        &digest_tag,
+        digest_tag,
     ) {
         (None, _, _) => None,
-        (Some(_), Some(key), Some(_)) => Some(key),
+        (Some(_), Some(quota), Some(digest_tag)) => {
+            Some(crate::gateway::auth::MintingKey { quota, digest_tag })
+        }
         (Some(_), _, _) => return admin_auth_required().into_response(),
     };
     let value = state
         .dashboard_bootstrap
-        .rearm_bound(crate::gateway::auth::Bound {
-            not_after,
-            key,
-            digest_tag,
-        });
+        .rearm_bound(crate::gateway::auth::Bound { not_after, key });
     let scheme = if running.mtls.enabled {
         "https"
     } else {

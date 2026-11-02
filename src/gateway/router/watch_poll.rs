@@ -183,7 +183,7 @@ impl GatewayWatchHost {
         state.live_config.generation().auth().client_for_key(
             &holder.api_key.name,
             &holder.api_key.principal,
-            Some(tag),
+            crate::gateway::auth::KeyBinding::Secret(tag),
         )
     }
 }
@@ -226,7 +226,7 @@ impl WatchHost for GatewayWatchHost {
         let Some(client) = generation.auth().client_for_key_at(
             &holder.api_key.name,
             &holder.api_key.principal,
-            Some(tag),
+            crate::gateway::auth::KeyBinding::Secret(tag),
             now,
         ) else {
             return false;

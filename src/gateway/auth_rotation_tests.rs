@@ -244,15 +244,30 @@ fn client_for_key_finds_a_rotated_key_by_its_principal() {
         PRINCIPAL,
     )]);
     let inside = grace_end() - crate::duration_bound::delta!(minutes, 1);
-    assert!(config.client_for_key("ops", PRINCIPAL, None).is_some());
     assert!(
         config
-            .client_for_key_at("ops", PRINCIPAL, None, inside)
+            .client_for_key(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Unchecked
+            )
+            .is_some()
+    );
+    assert!(
+        config
+            .client_for_key_at(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Unchecked,
+                inside
+            )
             .is_some()
     );
     let derived = hex_of(NEW)[..12].to_owned();
     assert!(
-        config.client_for_key("ops", &derived, None).is_none(),
+        config
+            .client_for_key("ops", &derived, crate::gateway::auth::KeyBinding::Unchecked)
+            .is_none(),
         "the digest prefix is no longer the key's principal"
     );
 }
@@ -271,13 +286,21 @@ fn a_watch_holder_follows_the_secret_it_was_opened_with() {
     let leaked = resolved(&[with_principal(key("ops", NEW, None), PRINCIPAL)]);
     assert!(
         leaked
-            .client_for_key("ops", PRINCIPAL, Some(&tag(OLD)))
+            .client_for_key(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Secret(&tag(OLD))
+            )
             .is_none(),
         "a leaked rotation left the old secret's watch polling"
     );
     assert!(
         leaked
-            .client_for_key("ops", PRINCIPAL, Some(&tag(NEW)))
+            .client_for_key(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Secret(&tag(NEW))
+            )
             .is_some()
     );
     let routine = resolved(&[with_principal(
@@ -288,19 +311,34 @@ fn a_watch_holder_follows_the_secret_it_was_opened_with() {
     let after = grace_end() + crate::duration_bound::delta!(minutes, 1);
     assert!(
         routine
-            .client_for_key_at("ops", PRINCIPAL, Some(&tag(OLD)), inside)
+            .client_for_key_at(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Secret(&tag(OLD)),
+                inside
+            )
             .is_some(),
         "inside the grace the old secret's watch keeps polling"
     );
     assert!(
         routine
-            .client_for_key_at("ops", PRINCIPAL, Some(&tag(OLD)), after)
+            .client_for_key_at(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Secret(&tag(OLD)),
+                after
+            )
             .is_none(),
         "after the grace the old secret's watch still polled"
     );
     assert!(
         routine
-            .client_for_key_at("ops", PRINCIPAL, Some(&tag(NEW)), after)
+            .client_for_key_at(
+                "ops",
+                PRINCIPAL,
+                crate::gateway::auth::KeyBinding::Secret(&tag(NEW)),
+                after
+            )
             .is_some()
     );
 }
@@ -583,7 +621,11 @@ fn a_reissued_key_loaded_from_config_is_another_caller() {
     );
     assert!(
         after
-            .client_for_key("ops", old_caller.principal.storage_form(), None)
+            .client_for_key(
+                "ops",
+                old_caller.principal.storage_form(),
+                crate::gateway::auth::KeyBinding::Unchecked
+            )
             .is_none(),
         "a watch stored under the old principal does not follow the name"
     );

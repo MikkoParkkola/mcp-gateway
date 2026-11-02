@@ -85,6 +85,14 @@ fn breaker_open(cfg: &ResolvedAuthConfig, secret: &str) -> bool {
     cfg.client_circuit_state(&client) == Some(crate::failsafe::CircuitState::Open)
 }
 
+/// The minting key a session opened with `secret` is bound to.
+fn minter_of(cfg: &ResolvedAuthConfig, secret: &str) -> super::MintingKey {
+    super::MintingKey {
+        quota: quota_of(cfg, secret),
+        digest_tag: super::digest_tag_of(&digest(secret)),
+    }
+}
+
 fn quota_of(cfg: &ResolvedAuthConfig, secret: &str) -> super::QuotaPrincipal {
     cfg.validate_token(secret)
         .expect("the key validates")
@@ -141,15 +149,15 @@ fn t2c_derived_rotation_has_no_breaker() {
 fn t3_rotation_widens_no_authority() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     let now = crate::clock::utc_now().expect("the test clock reads");
     assert!(
-        before.admin_key_live(&minter, None, now),
+        before.admin_key_live(&minter, now),
         "premise: live on A's table"
     );
     let after = over(&runtime, vec![key("k", B, Some(P1))]);
     assert!(
-        !after.admin_key_live(&minter, None, now),
+        !after.admin_key_live(&minter, now),
         "A's session outlived the rotation"
     );
 }
@@ -161,28 +169,23 @@ fn t3_rotation_widens_no_authority() {
 fn a_session_follows_the_secret_that_minted_it() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
-    let tag = super::digest_tag_of(&digest(A));
+    let minter = minter_of(&before, A);
     let now = crate::clock::utc_now().expect("the test clock reads");
     let mut routine = key("k", B, Some(P1));
     routine.previous_key_sha256 = Some(crate::config::api_key_digest_spec(A.as_bytes()));
     routine.previous_expires_at = Some(now + crate::duration_bound::delta!(minutes, 15));
     let routine = over(&runtime, vec![routine]);
     assert!(
-        routine.admin_key_live(&minter, Some(&tag), now),
+        routine.admin_key_live(&minter, now),
         "a routine rotation logged the dashboard out inside the grace"
     );
     assert!(
-        !routine.admin_key_live(
-            &minter,
-            Some(&tag),
-            now + crate::duration_bound::delta!(minutes, 16)
-        ),
+        !routine.admin_key_live(&minter, now + crate::duration_bound::delta!(minutes, 16)),
         "the session outlived the grace"
     );
     let leaked = over(&runtime, vec![key("k", B, Some(P1))]);
     assert!(
-        !leaked.admin_key_live(&minter, Some(&tag), now),
+        !leaked.admin_key_live(&minter, now),
         "a leaked rotation left the old secret's session live"
     );
 }
@@ -193,13 +196,12 @@ fn a_session_follows_the_secret_that_minted_it() {
 fn t3b_a_changed_principal_ends_the_session_and_the_window() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, Some(P1))]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(P2))]);
     assert!(
         !after.admin_key_live(
             &minter,
-            None,
             crate::clock::utc_now().expect("the test clock reads")
         ),
         "a session outlived its principal"
@@ -213,13 +215,12 @@ fn t3b_a_changed_principal_ends_the_session_and_the_window() {
 fn t3c_adopting_the_derived_principal_changes_nothing() {
     let runtime = Arc::new(AuthRuntime::default());
     let before = over(&runtime, vec![key("k", A, None)]);
-    let minter = quota_of(&before, A);
+    let minter = minter_of(&before, A);
     spend(&before, A);
     let after = over(&runtime, vec![key("k", A, Some(&derived(A)))]);
     assert!(
         after.admin_key_live(
             &minter,
-            None,
             crate::clock::utc_now().expect("the test clock reads")
         ),
         "adopting the derived principal ended the session"

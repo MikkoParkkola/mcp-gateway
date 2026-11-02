@@ -110,6 +110,17 @@ impl Services {
     }
 }
 
+/// Whose API key an admission judges.
+#[derive(Clone, Copy)]
+enum KeyCheck<'a> {
+    /// A holder opened with that key: it names the secret that opened it,
+    /// which must still be valid; one that names none is refused.
+    Holder(&'a ApiKeyRef),
+    /// The caller of the request being answered now, whose secret its own
+    /// match just proved.
+    ThisRequest { name: &'a str, principal: &'a str },
+}
+
 /// Whether the secret fingerprinted `tag` still authenticates as key `k`:
 /// it is the key's current digest, or its previous one before the grace ends
 /// (ADR-022). A rotation that drops the old secret at once leaves no digest
@@ -134,13 +145,30 @@ fn secret_still_valid(
 }
 
 impl Services {
-    /// Whether a subscription made with API key `key` may still see
-    /// `backend` under the live config. A key that left the config, expired,
-    /// or was replaced under the same name sees nothing; a principal without
-    /// an API key has no live scope to re-read, so its subscribe-time check
-    /// stands.
+    /// Whether a holder opened with API key `key` (a subscription, a watch)
+    /// may still see `backend` under the live config. A key that left the
+    /// config, expired, or was replaced under the same name sees nothing,
+    /// and nor does a holder whose secret the key no longer accepts, or one
+    /// that names no secret (fail closed). A principal without an API key has
+    /// no live scope to re-read, so its subscribe-time check stands.
     pub(crate) fn admits(&self, key: Option<&ApiKeyRef>, backend: &str) -> bool {
-        self.admits_grant(key, Some(backend), crate::clock::utc_now())
+        self.admits_grant(
+            key.map(KeyCheck::Holder),
+            Some(backend),
+            crate::clock::utc_now(),
+        )
+    }
+
+    /// Whether the API key `name` under `principal`, which authenticated the
+    /// request being answered now, may see `backend`: the one check with no
+    /// holder behind it, so no secret binding to judge (the request's own
+    /// match just proved the secret).
+    pub(crate) fn admits_this_request(&self, name: &str, principal: &str, backend: &str) -> bool {
+        self.admits_grant(
+            Some(KeyCheck::ThisRequest { name, principal }),
+            Some(backend),
+            crate::clock::utc_now(),
+        )
     }
 
     /// As [`Self::admits`]; `None` asks only that the key be live, for
@@ -149,30 +177,36 @@ impl Services {
     /// cannot be read (MIK-8202).
     fn admits_grant(
         &self,
-        key: Option<&ApiKeyRef>,
+        key: Option<KeyCheck<'_>>,
         backend: Option<&str>,
         now: Result<DateTime<Utc>, crate::clock::ClockBeforeEpoch>,
     ) -> bool {
         let Some(key) = key else {
             return true;
         };
+        let (name, principal) = match key {
+            KeyCheck::Holder(r) => (r.name.as_str(), r.principal.as_str()),
+            KeyCheck::ThisRequest { name, principal } => (name, principal),
+        };
         self.live
             .get()
             .auth
             .api_keys
             .iter()
-            .find(|k| k.name == key.name)
+            .find(|k| k.name == name)
             .filter(|k| k.expires_at.is_none() || now.is_ok_and(|now| !k.is_expired_at(now)))
             .filter(|k| {
                 k.key_sha256
                     .as_deref()
                     .and_then(crate::config::parse_api_key_digest)
-                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == key.principal)
+                    .is_some_and(|digest| k.principal_for(&digest).storage_form() == principal)
             })
-            .filter(|k| {
-                key.digest_tag
+            .filter(|k| match key {
+                KeyCheck::Holder(r) => r
+                    .digest_tag
                     .as_deref()
-                    .is_none_or(|tag| secret_still_valid(k, tag, now))
+                    .is_some_and(|tag| secret_still_valid(k, tag, now)),
+                KeyCheck::ThisRequest { .. } => true,
             })
             .is_some_and(|k| {
                 backend.is_none_or(|backend| k.backends.iter().any(|b| b == "*" || b == backend))
@@ -219,11 +253,16 @@ impl Services {
         use crate::security::audit::CredentialKind as Kind;
         match sub.credential_kind {
             // A stored row must name the secret that opened it: one stored
-            // before holders were bound carries no fingerprint and is refused.
+            // before holders were bound carries no fingerprint and is refused
+            // by the holder check.
             None | Some(Kind::ApiKey) => {
                 sub.legacy_api_key_name.is_none()
-                    && sub.api_key.as_ref().is_some_and(|k| k.digest_tag.is_some())
-                    && self.admits_grant(sub.api_key.as_ref(), backend, Ok(now))
+                    && sub.api_key.is_some()
+                    && self.admits_grant(
+                        sub.api_key.as_ref().map(KeyCheck::Holder),
+                        backend,
+                        Ok(now),
+                    )
             }
             // No credential was presented: authentication is off.
             Some(Kind::None | Kind::LocalTransport) => true,

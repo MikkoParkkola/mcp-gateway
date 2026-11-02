@@ -101,7 +101,7 @@ async fn poll(fx: &Fx, key: &str, arguments: Value) -> Value {
         .client_for_key(
             key,
             crate::gateway::auth::principal_of(key).storage_form(),
-            None,
+            crate::gateway::auth::KeyBinding::Unchecked,
         )
         .expect("the fixture key is live");
     let target = Target {

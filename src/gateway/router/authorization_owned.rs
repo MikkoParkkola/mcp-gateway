@@ -78,12 +78,16 @@ impl OwnedRouterAuthorizer {
         let Some(name) = client.api_key_identity() else {
             return Ok(None);
         };
+        // The same credential, not only the same name and principal: a key
+        // re-issued under an explicit principal keeps both, and its old
+        // secret's work must not run. A client with no quota identity names
+        // no credential to find again.
+        let credential = client.quota_principal.as_ref().ok_or(KeyGone)?;
+        let binding = crate::gateway::auth::KeyBinding::Credential(credential);
         let fresh = at
-            .and_then(|at| keys.client_for_key_at(name, client.principal.storage_form(), None, at))
-            // The same credential, not only the same name and principal: a
-            // key re-issued under an explicit principal keeps both, and its
-            // old secret's work must not run.
-            .filter(|fresh| fresh.quota_principal == client.quota_principal)
+            .and_then(|at| {
+                keys.client_for_key_at(name, client.principal.storage_form(), binding, at)
+            })
             .filter(|fresh| fresh.admin || !client.admin)
             .ok_or(KeyGone)?;
         Ok(Some(Self {

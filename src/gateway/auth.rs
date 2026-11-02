@@ -36,7 +36,9 @@ pub(crate) use api_key::{PreviousDigest, refuse_shared_digests};
 #[path = "auth_dashboard.rs"]
 mod dashboard;
 pub use dashboard::DashboardBootstrap;
-pub(crate) use dashboard::{Bound, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch};
+pub(crate) use dashboard::{
+    Bound, MintingKey, Now, Redeem, Redemption, SessionCheck, SessionLimits, Touch,
+};
 #[path = "auth_bootstrap.rs"]
 mod bootstrap;
 #[path = "auth_handoff.rs"]
@@ -220,6 +222,7 @@ pub(crate) fn digest_tag_of(digest: &[u8; 32]) -> String {
 
 #[path = "auth_resolved.rs"]
 mod resolved;
+pub(crate) use resolved::KeyBinding;
 
 /// Carries the matched key's provenance with the request, so downstream checks
 /// read it rather than re-derive it. A request that presented a rotated key's

@@ -233,35 +233,26 @@ impl ResolvedAuthConfig {
             .map(|(client, _origin)| client)
     }
 
-    /// Whether the key whose quota identity is `minter` is in this table, an
-    /// admin key, and unexpired at `at`: what a dashboard link, handoff or
-    /// session minted with it needs at each use, so one minted by a key a
-    /// reload then removed, demoted, expired or re-issued (another digest)
-    /// ends there. A previous digest in its grace authenticates as its
-    /// current key, so the grace ending alone ends nothing.
-    ///
-    /// With `digest_tag`, the fingerprint of the secret the minting request
-    /// matched, the key is found by its principal and the session lives while
-    /// that secret is still valid (current, or previous inside the grace), so
-    /// a routine rotation keeps it and one that drops the secret ends it.
-    /// Without it, the minter must be this exact credential.
+    /// Whether `minter`'s key is in this table under the same principal, an
+    /// admin key, unexpired at `at`, and still accepting the secret the
+    /// minting request matched (its current digest, or its previous one
+    /// before the grace ends): what a dashboard link, handoff or session
+    /// needs at each use. So one minted by a key a reload then removed,
+    /// demoted, expired or moved to another principal ends there; a routine
+    /// rotation keeps it until the old secret's grace ends, and a rotation
+    /// that drops that secret at once ends it.
     pub(crate) fn admin_key_live(
         &self,
-        minter: &QuotaPrincipal,
-        digest_tag: Option<&str>,
+        minter: &super::MintingKey,
         at: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         self.api_keys().iter().any(|k| {
-            let same = match digest_tag {
-                Some(tag) => {
-                    k.quota_principal.same_key_principal(minter)
-                        && secret_still_valid(k, tag, |end| {
-                            !crate::config::api_key_expired(Some(end), at)
-                        })
-                }
-                None => k.quota_principal == *minter,
-            };
-            same && k.admin && !crate::config::api_key_expired(k.expires_at, at)
+            k.quota_principal.same_key_principal(&minter.quota)
+                && secret_still_valid(k, &minter.digest_tag, |end| {
+                    !crate::config::api_key_expired(Some(end), at)
+                })
+                && k.admin
+                && !crate::config::api_key_expired(k.expires_at, at)
         })
     }
 
@@ -454,26 +445,20 @@ impl ResolvedAuthConfig {
     /// live key matches both, or the key expired: a key re-issued under the
     /// same name has another digest and does not match.
     ///
-    /// `digest_tag`, when given, is the fingerprint of the secret a stored
-    /// holder was opened with: it must still be the key's current digest, or
-    /// its previous one before the grace ends, so a rotation that drops the
-    /// old secret at once ends what that secret opened.
+    /// `binding` is what the holder was bound to when it was opened (see
+    /// [`KeyBinding`]); there is no way to ask without one.
     pub(crate) fn client_for_key(
         &self,
         name: &str,
         principal: &str,
-        digest_tag: Option<&str>,
+        binding: KeyBinding<'_>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
         let key = keys
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired_now(key.expires_at)
-            && digest_tag.is_none_or(|tag| {
-                secret_still_valid(key, tag, |end| {
-                    !crate::config::api_key_expired_now(Some(end))
-                })
-            }))
+            && binding.holds(key, |end| !crate::config::api_key_expired_now(Some(end))))
         .then(|| Self::client_of(key))
     }
 
@@ -483,7 +468,7 @@ impl ResolvedAuthConfig {
         &self,
         name: &str,
         principal: &str,
-        digest_tag: Option<&str>,
+        binding: KeyBinding<'_>,
         now: chrono::DateTime<chrono::Utc>,
     ) -> Option<AuthenticatedClient> {
         let keys = self.api_keys();
@@ -491,11 +476,7 @@ impl ResolvedAuthConfig {
             .iter()
             .find(|k| k.name == name && k.principal().storage_form() == principal)?;
         (!crate::config::api_key_expired(key.expires_at, now)
-            && digest_tag.is_none_or(|tag| {
-                secret_still_valid(key, tag, |end| {
-                    !crate::config::api_key_expired(Some(end), now)
-                })
-            }))
+            && binding.holds(key, |end| !crate::config::api_key_expired(Some(end), now)))
         .then(|| Self::client_of(key))
     }
 
@@ -592,6 +573,37 @@ const DUMMY_PREVIOUS_DIGEST: [u8; 32] = [0xA5; 32];
 #[cfg(not(test))]
 fn dummy_previous_digest() -> [u8; 32] {
     DUMMY_PREVIOUS_DIGEST
+}
+
+/// What a holder found again by its key was bound to when it was opened. A
+/// lookup always names one, so no caller can skip the binding by omission.
+#[derive(Clone, Copy)]
+pub(crate) enum KeyBinding<'a> {
+    /// The fingerprint of the secret that opened it (a watch): that secret
+    /// must still be the key's current digest, or its previous one before the
+    /// grace ends.
+    Secret(&'a str),
+    /// The exact credential, digest and principal (a queued task): any
+    /// rotation ends it, since its old secret's work must not run.
+    Credential(&'a QuotaPrincipal),
+    /// Only whether the key is live: for tests that ask nothing more.
+    #[cfg(test)]
+    Unchecked,
+}
+
+impl KeyBinding<'_> {
+    fn holds(
+        self,
+        key: &ResolvedApiKey,
+        in_grace: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+    ) -> bool {
+        match self {
+            Self::Secret(tag) => secret_still_valid(key, tag, in_grace),
+            Self::Credential(quota) => key.quota_principal == *quota,
+            #[cfg(test)]
+            Self::Unchecked => true,
+        }
+    }
 }
 
 /// Whether the secret fingerprinted `tag` still authenticates as `key`: its

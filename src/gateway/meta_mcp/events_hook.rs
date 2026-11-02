@@ -93,23 +93,20 @@ impl MetaMcp {
         let Some(hub) = self.events() else {
             return Vec::new();
         };
+        // A live search: the caller authenticated on this request, so its key
+        // is judged as it stands now; no holder is involved.
         let api_key = caller
             .api_key_identity()
             .zip(crate::gateway::auth::authenticated_principal(
                 caller.authentication == super::Authentication::Authenticated,
                 caller.credential_principal,
-            ))
-            // A live search: the caller authenticated on this request, so the
-            // key is judged as it stands now; no stored holder is involved.
-            .map(|(name, principal)| crate::events::ApiKeyRef {
-                name: name.to_owned(),
-                principal: principal.to_owned(),
-                digest_tag: None,
-            });
+            ));
         hub.search(query, limit, |scope| match scope {
             Visibility::Backend(backend) => {
                 self.admits_backend(backend, caller.scope(), session_id)
-                    && hub.live_admits(api_key.as_ref(), backend)
+                    && api_key.is_none_or(|(name, principal)| {
+                        hub.live_admits_this_request(name, principal, backend)
+                    })
             }
             Visibility::Owner => caller.credential_principal.is_some(),
             Visibility::Operator => false,
