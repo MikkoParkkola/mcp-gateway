@@ -44,6 +44,11 @@ pub(super) async fn fixture(cfg: &CostGovernanceConfig) -> Fx {
     fx.state
         .live_config
         .edit(move |c| c.cost_governance = seeded);
+    // As startup wires it: a reader with no pin judges with this live config,
+    // never with the enforcer's startup copy, so a pin mutant cannot hide.
+    fx.state
+        .meta_mcp
+        .set_live_config(Arc::clone(&fx.state.live_config));
     fx
 }
 

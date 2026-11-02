@@ -88,21 +88,26 @@ async fn t19a_a_queued_task_meets_the_budget_current_at_its_dispatch() {
 }
 
 /// T19b: a task that took its generation at dispatch keeps that budget when a
-/// reload lowers it before the call is admitted: 10 at dispatch, $4 spent,
-/// 4.5 published after readmission; the call still fits the 10 it took.
+/// reload raises it before the call is admitted. Started at 10, $4 spent, 4.5
+/// published before dispatch, 10 again after readmission: the call is judged
+/// by the 4.5 it took and refused. Startup's 10 and the live 10 both admit
+/// it, so reading either instead of the pin fails this row.
 #[tokio::test]
 async fn t19b_a_dispatching_task_keeps_its_budget_across_a_later_reload() {
     crate::test_day::same_utc_day_async(|| async move {
         let fx = fixture(&governance(|c| Scope::Key.set(c, Some(10.0)))).await;
         super::live_budget_tests::spend(&fx, 4).await;
+        reload(&fx, |c| Scope::Key.set(c, Some(4.5)));
         let live = std::sync::Arc::clone(&fx.state.live_config);
         seams::after_readmit(move || {
-            live.edit(|c| Scope::Key.set(&mut c.cost_governance, Some(4.5)));
+            live.edit(|c| Scope::Key.set(&mut c.cost_governance, Some(10.0)));
         });
         let got = task_result(&fx, "t19b").await;
-        assert!(!got.to_string().contains("budget exceeded"), "{got}");
-        assert!((spent(&fx) - 5.0).abs() < 1e-9, "the call was spent");
-        reload(&fx, |c| Scope::Key.set(c, Some(10.0)));
+        assert!(
+            got.to_string().contains("budget exceeded"),
+            "judged by 4.5: {got}"
+        );
+        assert!((spent(&fx) - 4.0).abs() < 1e-9, "nothing was spent");
     })
     .await;
 }

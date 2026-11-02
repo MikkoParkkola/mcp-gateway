@@ -255,11 +255,11 @@ mod late_refusal_lease_tests;
 #[cfg(test)]
 mod lend_refusal_tests;
 #[cfg(all(test, feature = "cost-governance"))]
-mod live_budget_tests;
-#[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_members_tests;
 #[cfg(all(test, feature = "cost-governance"))]
 mod live_budget_queued_tests;
+#[cfg(all(test, feature = "cost-governance"))]
+mod live_budget_tests;
 /// ADR-023: the security flags apply on reload.
 #[cfg(all(test, feature = "firewall"))]
 mod live_flags_tests;
