@@ -44,3 +44,54 @@ async fn a_meta_tool_policy_refusal_records_its_rule_id() {
     let hex = expected.as_str().trim_start_matches("tool_policy:");
     assert!(!error.to_string().contains(hex), "{error}");
 }
+
+/// A target that matches nothing records `not_found` with no rule.
+#[tokio::test]
+async fn a_not_found_refusal_records_no_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(Ok(ok_result()), &dir);
+    let who = api_key_caller();
+    let args = json!({"server": "nowhere", "tool": "read", "arguments": {}});
+    let _ = meta
+        .invoke_tool(
+            &args,
+            None,
+            &context(&crate::gateway::authz::AllowAll, &who),
+        )
+        .await
+        .expect_err("premise: the call is refused");
+    let all = records(&dir);
+    let [record] = all.as_slice() else {
+        panic!("one record: {all:?}");
+    };
+    assert!(record["decision"].get("rule_id").is_none(), "{record}");
+}
+
+/// A response-side block (the contract gate) records no rule: response
+/// attribution is not recorded.
+#[tokio::test]
+async fn a_response_side_block_records_no_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut meta = meta(Ok(ok_result()), &dir);
+    meta.set_response_contract(crate::config::ResponseContractConfig {
+        fail_closed: true,
+        action_mode: true,
+        ..crate::config::ResponseContractConfig::default()
+    });
+    let who = api_key_caller();
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let _ = meta
+        .invoke_tool(
+            &args,
+            None,
+            &context(&crate::gateway::authz::AllowAll, &who),
+        )
+        .await
+        .expect_err("premise: the call is refused");
+    let all = records(&dir);
+    let [record] = all.as_slice() else {
+        panic!("one record: {all:?}");
+    };
+    assert_eq!(record["decision"]["kind"], "response_gate", "{record}");
+    assert!(record["decision"].get("rule_id").is_none(), "{record}");
+}

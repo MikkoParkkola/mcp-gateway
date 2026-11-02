@@ -250,3 +250,45 @@ fn maximal() -> FirewallRule {
         path_args: Some(vec!["path".to_string(), "dest".to_string()]),
     }
 }
+
+/// The startup policy, compiled without a key, names no rule: an unkeyed id
+/// would let a reader of the log test guesses about a short rule.
+#[test]
+fn an_unkeyed_compile_names_no_rule() {
+    let block = rule("t", &[ScanType::Credentials], FirewallAction::Block);
+    let config = FirewallConfig {
+        rules: vec![block],
+        ..FirewallConfig::default()
+    };
+    let policy = FirewallPolicy::compile(&config);
+    let target = RuleTarget {
+        server: ServerOf::Backend("s"),
+        tool: "t",
+        key: KeyOf::NoKey,
+    };
+    let findings = [finding(CREDENTIAL.0, CREDENTIAL.1)];
+    let (action, named) = Firewall::resolve_attributed(&policy, target, &findings);
+    assert_eq!((action, named), (FirewallAction::Block, None));
+}
+
+/// The relay refusals come from the collusion detector, not a configured
+/// rule: both sites note kind firewall with no rule.
+#[test]
+fn the_relay_refusals_note_no_rule() {
+    for (file, source) in [
+        (
+            "meta_mcp/invoke/relay.rs",
+            include_str!("../../gateway/meta_mcp/invoke/relay.rs"),
+        ),
+        (
+            "router/backend_handlers/relay.rs",
+            include_str!("../../gateway/router/backend_handlers/relay.rs"),
+        ),
+    ] {
+        let flat: String = source.split_whitespace().collect();
+        assert!(
+            flat.contains("DecisionKind::Firewall,None"),
+            "{file}: a relay refusal must note no rule"
+        );
+    }
+}
