@@ -59,10 +59,24 @@ pub(super) struct Page {
     /// A scan cursor: it moves past rows this caller cannot see.
     pub(super) next: LogCursor,
     pub(super) more: bool,
-    /// A cursor half named a row that no longer exists.
-    pub(super) reset: bool,
+    /// Which cursor halves named a row that no longer exists.
+    pub(super) reset: Reset,
     /// A log whose cursor row is not yet found: it is not at its head.
     pub(super) searching: bool,
+}
+
+/// Which logs' cursor halves are gone. Only those halves are cleared: the
+/// other log's delivered position still holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct Reset {
+    pub(super) inv: bool,
+    pub(super) gov: bool,
+}
+
+impl Reset {
+    pub(super) fn any(self) -> bool {
+        self.inv || self.gov
+    }
 }
 
 /// Where log rows come from.
@@ -147,6 +161,8 @@ pub(super) struct LogMerge<S: LogSource> {
     stop: LogCursor,
     /// The source's place for this catch-up.
     search: S::Search,
+    /// Resets handed out and not yet acknowledged, oldest first.
+    resets: std::collections::VecDeque<Reset>,
 }
 
 impl<S: LogSource> LogMerge<S> {
@@ -177,6 +193,7 @@ impl<S: LogSource> LogMerge<S> {
             scan: resume,
             stop: head,
             search: S::Search::default(),
+            resets: std::collections::VecDeque::new(),
         }
     }
 
@@ -190,7 +207,16 @@ impl<S: LogSource> LogMerge<S> {
     pub(super) fn ack(&mut self, out: &Out) {
         match out {
             Out::Reset => {
-                self.delivered = LogCursor::default();
+                let gone = self.resets.pop_front().unwrap_or(Reset {
+                    inv: true,
+                    gov: true,
+                });
+                if gone.inv {
+                    self.delivered.inv = None;
+                }
+                if gone.gov {
+                    self.delivered.gov = None;
+                }
                 self.recovery = None;
             }
             Out::Row(row) => *self.slot(row.log) = Some(row.part.clone()),
@@ -283,6 +309,7 @@ impl<S: LogSource> LogMerge<S> {
         self.stop = self.source.head(&self.access).await;
         self.seen = self.stop.clone();
         self.scan = Some(self.scan_start());
+        self.search = S::Search::default();
     }
 
     /// One catch-up page from `from`, after yielding to the runtime.
@@ -293,36 +320,20 @@ impl<S: LogSource> LogMerge<S> {
             .rows_after(from, &self.stop, &self.access, PAGE, &mut self.search)
             .await;
         let mut out = Vec::with_capacity(page.rows.len() + 1);
-        if page.reset {
+        if page.reset.any() {
             tracing::debug!("ui stream: the position's row is gone, resetting");
             out.push(Out::Reset);
+            self.resets.push_back(page.reset);
         }
-        let mut past = false;
-        for row in page.rows {
-            if self.past_head(&row) {
-                past = true;
-            } else {
-                out.push(Out::Row(row));
-            }
-        }
-        let done = past || !page.more || self.reached_head(&page.next);
+        out.extend(page.rows.into_iter().map(Out::Row));
+        // A source returns no row past `stop`; a log still searching for its
+        // cursor is not at its head, whatever counter the cursor names.
+        let done = !page.searching && (!page.more || self.reached_head(&page.next));
         self.unacked += out.len();
-        if !past {
-            // Rows past the head were dropped, so this cursor skips them.
-            self.hint = Some(page.next.clone());
-            self.promote_hint();
-        }
+        self.hint = Some(page.next.clone());
+        self.promote_hint();
         self.scan = (!done).then_some(page.next);
         out
-    }
-
-    /// Whether `row` lies beyond the head this scan stops at.
-    fn past_head(&self, row: &Row) -> bool {
-        let head = match row.log {
-            LogName::Invocation => &self.stop.inv,
-            LogName::Governance => &self.stop.gov,
-        };
-        head.as_ref().is_none_or(|h| row.part.counter > h.counter)
     }
 
     /// Whether a scan cursor has caught up with the captured head in both logs.

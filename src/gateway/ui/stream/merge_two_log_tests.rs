@@ -11,7 +11,7 @@ use serde_json::json;
 use tokio::sync::broadcast;
 
 use super::id::{LogCursor, LogName, LogPart};
-use super::merge::{Appended, LogMerge, LogSource, Out, Page, Row};
+use super::merge::{Appended, LogMerge, LogSource, Out, Page, Reset, Row};
 
 const HASH: &str = "0123456789abcdef";
 
@@ -144,7 +144,10 @@ impl LogSource for TwoLogs {
                 gov: gov.next,
             },
             more: inv.more || gov.more,
-            reset: inv.reset || gov.reset,
+            reset: Reset {
+                inv: inv.reset,
+                gov: gov.reset,
+            },
             searching: inv.searching || gov.searching,
         })
     }
