@@ -380,3 +380,6 @@ async fn a_backend_scope_bounds_every_role_on_every_read() {
         wrong.join("\n")
     );
 }
+
+#[path = "ui_backend_scope_snapshot_tests.rs"]
+mod snapshot;
