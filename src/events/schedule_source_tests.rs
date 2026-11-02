@@ -443,6 +443,8 @@ async fn a_blocked_label_is_dead_lettered() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         }],
         ..FirewallConfig::default()
     };

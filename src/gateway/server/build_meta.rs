@@ -76,7 +76,10 @@ impl Gateway {
                 .with_continuations(meta_mcp.continuation())
                 .with_posture(self.config.security.posture)
                 .with_reads(Arc::clone(&self.reads))
-                .sharing_relay_with(meta_mcp.firewall.as_deref()),
+                .sharing_relay_with(meta_mcp.firewall.as_deref())
+                // The folder check classifies a call's backend through the
+                // live registry and capability slot.
+                .with_registries(Arc::clone(&self.backends), meta_mcp.capability_slot()),
         );
         if fw_enabled {
             info!("Security firewall enabled (RFC-0071)");

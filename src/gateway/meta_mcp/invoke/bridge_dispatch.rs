@@ -307,6 +307,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         let sent = super::chokepoint::Outbound {
             arguments: self.arguments,
             answers: outbound.input_responses.as_ref(),
+            backend: self.captured.as_deref(),
         };
         let at = (self.server, self.tool);
         let source = super::chokepoint::Source::Bridged;

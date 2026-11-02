@@ -172,6 +172,7 @@ async fn guard_tool_call(
         id,
         (backend_name, tool_name),
         (params, arguments),
+        backend,
     ) {
         return Err(rejection);
     }
@@ -218,6 +219,7 @@ fn firewall_refusal(
     id: &RequestId,
     (backend_name, tool_name): (&str, &str),
     (params, arguments): (&Value, &Value),
+    backend: &crate::backend::Backend,
 ) -> Option<BackendRejection> {
     let fw = state.firewall.as_ref()?;
     let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
@@ -235,6 +237,7 @@ fn firewall_refusal(
         arguments,
         caller_name,
         &control_identity,
+        Some(backend),
     );
     if verdict.action == FirewallAction::Warn {
         warn!(
@@ -734,16 +737,6 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
     }
 }
 
-fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_success(client);
-    }
-}
-
 /// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
 /// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
 /// chokepoint, so without this a client could route around provenance simply
@@ -775,16 +768,7 @@ fn stamp_direct_provenance(
     ));
 }
 
-fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_failure(client);
-    }
-}
-
+mod client_outcome;
 mod costs;
 mod direct_audit;
 mod direct_caller;

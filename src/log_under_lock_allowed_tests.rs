@@ -3,8 +3,10 @@
 //! The log-under-lock scan's allowlist, apart from the scan for the file-size
 //! ceiling.
 
-/// Sites that log under a guard on purpose, each with why it cannot block:
-/// (file, function, "macro!: message", reason). Keyed by the message, so a
+/// Sites that log under a guard on purpose, each with why it cannot block,
+/// and sites the scan reads as holding a guard when none is held, each with
+/// what the matched name really is: (file, function, "macro!: message",
+/// reason). Keyed by the message, so a
 /// new line in an allowed function is still a hit. None of them can block:
 /// every tracing line goes through the lossy stderr writer, which never waits.
 pub(super) const ALLOWED: &[(&str, &str, &str, &str)] = &[
@@ -121,6 +123,12 @@ pub(super) const ALLOWED: &[(&str, &str, &str, &str)] = &[
         "store",
         "info!: fields backend slot reason outcome evidence trigger",
         "the record is written with the install, under the caller's guard; the lossy writer never waits",
+    ),
+    (
+        "src/security/firewall/allowed_root.rs",
+        "warn_at_load",
+        "warn!: secret {:?} of backends.{name} owns {owned:?}, a declared argument in {path}.path_args: covered calls are refused",
+        "not a guard: config.backends is the plain HashMap at config/mod.rs:142, not the registry DashMap the scan matches by field name",
     ),
     (
         "src/transport/http/startup.rs",

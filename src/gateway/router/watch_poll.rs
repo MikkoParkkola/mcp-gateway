@@ -81,6 +81,7 @@ pub(crate) async fn poll_capability(
             &arguments,
             &client.name,
             &identity,
+            None,
         );
         if !verdict.allowed {
             return Err(PollRefused::Firewall);

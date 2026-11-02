@@ -40,6 +40,8 @@ pub(super) fn firewall_rules(
             servers: None,
             keys: FIREWALL_RULE_KEYS.with(|k| k.borrow().clone()),
             except: None,
+            allowed_roots: None,
+            path_args: None,
         })
         .to_vec()
 }

@@ -115,6 +115,8 @@ async fn t10b_a_pinned_tool_survives_redaction_on_the_direct_route() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

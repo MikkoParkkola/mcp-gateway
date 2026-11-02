@@ -4,6 +4,7 @@
 //! registry-ban lint cannot see, read from the crate's own source with `syn`.
 
 mod allow_pins;
+mod allowed_root_pins;
 mod caller_view;
 mod ci_wiring;
 mod creation_sites;

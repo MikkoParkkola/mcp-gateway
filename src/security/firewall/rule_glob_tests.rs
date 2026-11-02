@@ -21,6 +21,8 @@ fn allow_rule(tool_match: &str) -> FirewallRule {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 

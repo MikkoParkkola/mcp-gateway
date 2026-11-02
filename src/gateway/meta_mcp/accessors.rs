@@ -74,6 +74,14 @@ impl MetaMcp {
         self.capabilities.read().clone()
     }
 
+    /// The live capability slot, shared with the firewall's folder check.
+    #[cfg(feature = "firewall")]
+    pub(in crate::gateway) fn capability_slot(
+        &self,
+    ) -> Arc<parking_lot::RwLock<Option<Arc<CapabilityBackend>>>> {
+        Arc::clone(&self.capabilities)
+    }
+
     /// The session profile's check of `(server, tool)` for this request's
     /// caller. The profile judges a name by name alone, registered or not,
     /// so a name hidden from the caller meets exactly what an unregistered

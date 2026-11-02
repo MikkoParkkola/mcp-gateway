@@ -135,6 +135,8 @@ async fn firewall_app_state(
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await
 }
@@ -444,6 +446,8 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
@@ -453,6 +457,8 @@ async fn meta_tools_call_blocks_when_a_later_target_refuses_after_an_allowing_fi
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
     ])
     .await;
@@ -534,6 +540,8 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
         FirewallRule {
             tool_match: "zeta_echo".to_string(),
@@ -543,6 +551,8 @@ async fn response_artifact_folds_every_target_after_a_single_redacting_scan() {
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         },
     ])
     .await;
@@ -629,6 +639,8 @@ async fn meta_tools_call_is_inspected_once_by_the_router_instance() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 
@@ -691,6 +703,8 @@ async fn meta_tools_call_refusal_survives_without_a_second_inspection() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 
@@ -722,6 +736,8 @@ async fn modern_meta_tools_call_is_inspected_once_by_the_router_instance() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }])
     .await;
 
