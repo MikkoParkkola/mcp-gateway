@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import bisect
 import functools
+import importlib.util
 import re
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 THRESHOLD_S = 5.0
@@ -68,8 +69,19 @@ def blank_strings_and_comments(text: str) -> str:
             j = text.find("\n", i)
             i = n if j < 0 else j
         elif tok == "/*":
-            j = text.find("*/", i + 2)
-            j = n if j < 0 else j + 2
+            # Block comments nest in Rust: a `*/` closes only its own `/*`.
+            depth, j = 0, i
+            while j < n:
+                opener, closer = text.find("/*", j), text.find("*/", j)
+                if closer < 0:
+                    j = n
+                    break
+                if 0 <= opener < closer:
+                    depth, j = depth + 1, opener + 2
+                else:
+                    depth, j = depth - 1, closer + 2
+                    if depth == 0:
+                        break
             out.append("\n" * text.count("\n", i, j))
             i = j
         elif tok not in ('"', "'"):
@@ -384,13 +396,142 @@ FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
 LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
 
 
-def test_start(path: str, code: str) -> int | None:
-    """Where test code starts in `code`: all of a test file, or from a product
-    file's first `#[cfg(test)]` on (its inline test module). None: no tests."""
+@functools.lru_cache(maxsize=1)
+def _cfg_rules():
+    """scripts/dev/check-orphan-test-modules.py: the one test-only cfg
+    judgement (`cfg_is_test`, `cfg_expression`) and the offset-keeping
+    blanker that nests block comments, shared with the other gates."""
+    spec = importlib.util.spec_from_file_location(
+        "orphan_gate_cfg", Path(__file__).resolve().parent / "check-orphan-test-modules.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CFG_OPEN = re.compile(r"#\s*(!?)\s*\[\s*cfg\s*\(")
+QUALIFIERS = re.compile(r"(?:\s*(?:pub(?:\s*\([^()]*\))?|async|unsafe|default|extern\s*(?:\"[^\"]*\")?)\b)*\s*")
+# Items that run to their top-level `;`, past any initializer block.
+TO_SEMICOLON = {"let", "const", "static", "type", "use"}
+# Items that end after their body block, or at a top-level `;`.
+TO_BODY = {"fn", "impl", "trait", "struct", "enum", "union", "mod", "macro_rules"}
+
+
+def _header_word(code: str, at: int) -> str:
+    """The keyword an item starts with, past attributes and qualifiers: `fn`
+    for a `const fn`; '' for a field, a variant, an arm or a statement."""
+    while True:
+        m = re.compile(r"\s*#\s*\[").match(code, at)
+        if not m:
+            break
+        depth, i = 1, m.end()
+        while i < len(code) and depth:
+            depth += {"[": 1, "]": -1}.get(code[i], 0)
+            i += 1
+        at = i
+    at = QUALIFIERS.match(code, at).end()
+    word = re.compile(r"[A-Za-z_]\w*").match(code, at)
+    if not word:
+        return ""
+    if word.group() == "const":
+        after = QUALIFIERS.match(code, word.end()).end()
+        if code.startswith("fn", after) and not re.match(r"\w", code[after + 2 : after + 3]):
+            return "fn"
+    if word.group() == "macro_rules" and code.startswith("!", word.end()):
+        return "macro_rules"
+    return word.group()
+
+
+def item_end(code: str, start: int) -> int | None:
+    """Where the item after a cfg attribute ends in `code` (comments and
+    literal contents blanked, offsets kept). The rule of the repo's Rust
+    helper (src/test_source_text.rs `item_end`), turned toward test code: an
+    item never ends early, as an early end would leave test code unjudged.
+    - `let`, `const`, `static`, `type`, `use`: at a top-level `;`.
+    - `fn`, `impl`, `trait`, `struct`, `enum`, `union`, `mod`, `macro_rules!`:
+      after their body block (outside any `<..>`), or at a top-level `;`.
+    - anything else (a field, a variant, an arm, a statement): as the Rust
+      rule, at a top-level `;`, a `,` outside `<..>`, or after a top-level
+      block nothing continues.
+    Any item ends before the bracket that closes its parent. Inside a
+    top-level `<..>` a block is a const-generic argument, not a body, and
+    `<`/`>` are counted only at the item's own level, so `Probe<{ 8 >> 1 }>`
+    keeps it open. `None` when the text ends first."""
+    kind = _header_word(code, start)
+    depth, angle, i, n = 0, 0, start, len(code)
+    while i < n:
+        c = code[i]
+        if c in "([{":
+            depth += 1
+        elif c in ")]}" and depth == 0:
+            return i
+        elif c in ")]":
+            depth -= 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0 and angle == 0 and kind not in TO_SEMICOLON:
+                j = i + 1
+                while j < n and code[j].isspace():
+                    j += 1
+                rest = code[j:]
+                if rest[:1] in (";", ","):
+                    if kind in TO_BODY and rest[:1] == ",":
+                        return i + 1
+                    return j + 1
+                continues = (
+                    kind not in TO_BODY
+                    and (
+                        (rest[:1] == "." and rest[1:2] != ".")
+                        or rest[:1] == "?"
+                        or (rest.startswith("else") and not re.match(r"\w", rest[4:5]))
+                        or (rest[:1] != "" and rest[:1] in "+-*/%&|^=<>")
+                    )
+                )
+                if not continues:
+                    return i + 1
+        elif depth == 0 and c == "<":
+            angle += 1
+        elif depth == 0 and c == ">" and angle and code[i - 1 : i] not in ("-", "=") and code[i + 1 : i + 2] != "=":
+            angle -= 1
+        elif depth == 0 and c == ";":
+            return i + 1
+        elif depth == 0 and c == "," and angle == 0 and kind not in TO_SEMICOLON and kind not in TO_BODY:
+            return i + 1
+        i += 1
+    return None
+
+
+@functools.lru_cache(maxsize=4096)
+def test_lines(path: str, text: str) -> frozenset[int]:
+    """The lines of `text` that hold test code: every line of a test path;
+    else each line touched by an item under a test-only cfg (the shared
+    `cfg_is_test`), by the item's own extent. An outer `#![cfg(..)]`, an
+    unbalanced predicate or an item whose end is not found makes the rest of
+    the file test code: the gate judges more, never less. A line shared by a
+    test item and product code counts as test."""
+    count = text.count("\n") + 1
     if TEST_FILE.search(path):
-        return 0
-    m = re.search(r"#\[cfg\(test\)\]", code)
-    return m.start() if m else None
+        return frozenset(range(1, count + 1))
+    rules = _cfg_rules()
+    code = rules.blank(text)[0]
+    line_of = lambda at: code.count("\n", 0, at) + 1  # noqa: E731
+    lines: set[int] = set()
+    frm = 0
+    while m := CFG_OPEN.search(code, frm):
+        expr = rules.cfg_expression(code, m.end())
+        close = m.end() + len(expr)
+        balanced = code[close : close + 1] == ")"
+        if balanced and not rules.cfg_is_test(expr):
+            frm = close + 1
+            continue
+        bracket = re.compile(r"\s*\]").match(code, close + 1) if balanced else None
+        end = None if (m.group(1) or not bracket) else item_end(code, bracket.end())
+        if end is None:
+            lines.update(range(line_of(m.start()), count + 1))
+            break
+        lines.update(range(line_of(m.start()), line_of(max(end - 1, m.start())) + 1))
+        frm = end
+    return frozenset(lines)
 
 
 def scan_timeouts(
@@ -410,8 +551,8 @@ def scan_timeouts(
     judged: it expects the window to pass.
     """
     code = blank_strings_and_comments(text)
-    start = test_start(path, code)
-    if start is None:
+    tested = test_lines(path, text)
+    if not tested:
         return []
     file_consts = {m.group(2): m.group(3) for m in CONST.finditer(code)}
     # A file textually `include!`d into another shares that file's items.
@@ -423,7 +564,9 @@ def scan_timeouts(
     imports = imports_of(code)
     fns = [(m.start(), m.group(1)) for m in FN.finditer(code)]
     found = []
-    for m in TIMEOUT.finditer(code, start):
+    for m in TIMEOUT.finditer(code):
+        if code.count("\n", 0, m.start()) + 1 not in tested:
+            continue
         depth, end = 1, m.end()
         while end < len(code) and depth:
             depth += {"(": 1, ")": -1}.get(code[end], 0)
