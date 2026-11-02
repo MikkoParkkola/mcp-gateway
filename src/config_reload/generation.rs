@@ -248,3 +248,7 @@ pub(crate) mod refuse_hook {
         Some(reason)
     }
 }
+
+#[cfg(test)]
+#[path = "generation_rule_id_tests.rs"]
+mod rule_id_tests;

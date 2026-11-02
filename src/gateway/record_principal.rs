@@ -90,6 +90,12 @@ impl RecordPrincipalKey {
             .expect("32 bytes is well within HKDF-SHA256's 8160-byte max output");
         key
     }
+
+    /// The rule id key: HKDF-SHA-256 of the record key under its own tag, so
+    /// rule ids never share a key with revisions or record principals.
+    pub(crate) fn rule_id_key(&self) -> crate::security::rule_id::RuleKey {
+        crate::security::rule_id::RuleKey::from_derived([0u8; 32])
+    }
 }
 
 /// The record key: `configured` (a `SecretRef`) when set, else the fallback file

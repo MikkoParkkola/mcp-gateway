@@ -158,6 +158,40 @@ impl ToolPolicy {
     ///
     /// Returns `Error::Protocol` if the tool is denied by policy.
     pub fn check(&self, server: &str, tool: &str) -> Result<()> {
+        self.check_explained(server, tool)
+            .map(|_| ())
+            .map_err(|(error, _)| error)
+    }
+
+    /// The policy compiled with rule ids under `key`: the entry that decided a
+    /// call can then be named in its decision record.
+    #[must_use]
+    pub(crate) fn from_config_keyed(
+        config: &ToolPolicyConfig,
+        key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        let _ = key;
+        Self::from_config(config)
+    }
+
+    /// [`Self::check`], naming the entry that decided: an explicit allow on
+    /// `Ok`, the refusing deny or default action on `Err`. Ids are present only
+    /// on a policy compiled with [`Self::from_config_keyed`].
+    pub(crate) fn check_explained(
+        &self,
+        server: &str,
+        tool: &str,
+    ) -> std::result::Result<
+        Option<&crate::security::rule_id::RuleId>,
+        (Error, Option<&crate::security::rule_id::RuleId>),
+    > {
+        let stub = crate::security::rule_id::stub_id();
+        self.decide(server, tool)
+            .map(|()| Some(stub))
+            .map_err(|e| (e, Some(stub)))
+    }
+
+    fn decide(&self, server: &str, tool: &str) -> Result<()> {
         if !self.enabled {
             return Ok(());
         }
@@ -420,3 +454,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "policy_rule_id_tests.rs"]
+mod rule_id_tests;

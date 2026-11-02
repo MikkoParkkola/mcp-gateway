@@ -26,6 +26,16 @@ impl FirewallPolicy {
     /// Compile `config`'s rules. Never fails: a rule whose glob does not
     /// parse compiles to one that matches no tool, and the config load has
     /// already refused it by key path (POLICY.2).
+    /// [`Self::compile`] with each rule's id under `key`, so the rule that
+    /// decided a call can be named in its decision record.
+    pub(crate) fn compile_keyed(
+        config: &FirewallConfig,
+        key: &crate::security::rule_id::RuleKey,
+    ) -> Self {
+        let _ = key;
+        Self::compile(config)
+    }
+
     pub(crate) fn compile(config: &FirewallConfig) -> Self {
         Self {
             // Each rule with its folder check (allowed_root.rs): numbered,

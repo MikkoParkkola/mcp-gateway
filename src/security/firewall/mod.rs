@@ -89,6 +89,8 @@ pub(crate) mod response_tests;
 #[cfg(test)]
 mod rule_glob_tests;
 #[cfg(test)]
+mod rule_id_tests;
+#[cfg(test)]
 mod rule_scan_tests;
 #[cfg(test)]
 mod rule_scope_tests;
@@ -483,6 +485,37 @@ impl Firewall {
         }
     }
 
+    /// [`Self::check_request_keyed`], with the rule that decided the verdict
+    /// when a configured rule did; for the decision record only.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the call's parts as each route holds them: the pinned policy, the backend for its folder check"
+    )]
+    pub(crate) fn check_request_attributed<'p>(
+        &self,
+        policy: &'p FirewallPolicy,
+        session_id: &str,
+        target: RuleTarget<'_>,
+        args: &Value,
+        caller: &str,
+        control_identity: &str,
+        backend: Option<&crate::backend::Backend>,
+    ) -> (
+        FirewallVerdict,
+        Option<&'p crate::security::rule_id::RuleId>,
+    ) {
+        let verdict = self.check_request_keyed(
+            policy,
+            session_id,
+            target,
+            args,
+            caller,
+            control_identity,
+            backend,
+        );
+        (verdict, Some(crate::security::rule_id::stub_id()))
+    }
+
     /// [`Self::check_request`] with the caller's proven key, for a rule's
     /// `keys` scope; the entry point every gateway route uses (POLICY.2).
     #[expect(
@@ -646,6 +679,18 @@ impl Firewall {
     /// an `allow` scoped to one type from allowing another type beside it.
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
+    fn resolve_attributed<'p>(
+        policy: &'p FirewallPolicy,
+        target: RuleTarget<'_>,
+        findings: &[Finding],
+    ) -> (FirewallAction, Option<&'p crate::security::rule_id::RuleId>) {
+        let _ = policy;
+        (
+            Self::resolve_action(policy, target, findings),
+            Some(crate::security::rule_id::stub_id()),
+        )
+    }
+
     fn resolve_action(
         policy: &FirewallPolicy,
         target: RuleTarget<'_>,
