@@ -34,3 +34,4 @@ src/oauth/client/sign_in.rs	record_install	1	Stores the install key before the c
 src/oauth/client/sign_in.rs	install_key	1	Reads the latest install key.
 src/oauth/client/sign_in.rs	settled_publisher	1	Builds the hook that publishes a settled refresh to the status; it gates no request.
 src/oauth/client/sign_in.rs	issuer_wait	1	Builds the sign-in wait answer; the decision is in issuer_differs.
+src/oauth/client/sign_in.rs	installed_now	1	Reads the status cell's install count; the decision is in GrantAllowed::spend.
