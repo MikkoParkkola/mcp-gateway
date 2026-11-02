@@ -54,10 +54,7 @@ pub(super) fn set(
     }
     let doc: Value = crate::yaml::from_str(&text)
         .map_err(|_| unprovable("the file is not one mapping the parser accepts"))?;
-    let current = path.0.iter().fold(&doc, |at, segment| match segment {
-        Segment::Key(k) => &at[k.as_str()],
-        Segment::Index(i) => &at[*i],
-    });
+    let current = value_at(&doc, &path.0);
     match node.shape {
         Shape::Scalar { empty: true } => after_colon(lines, &text, key_bytes.end, value),
         Shape::Scalar { empty: false }
@@ -77,11 +74,7 @@ pub(super) fn set(
             } else {
                 None
             };
-            let unchanged = current.as_sequence().is_some_and(|now| {
-                now.iter()
-                    .map(Value::as_str)
-                    .eq(items.iter().map(|s| Some(s.as_str())))
-            });
+            let unchanged = holds(current, items);
             if unchanged {
                 return Ok(());
             }
@@ -99,6 +92,23 @@ pub(super) fn set(
             }
         }
     }
+}
+
+/// The value at `path` in `doc`; null when absent.
+pub(super) fn value_at<'v>(doc: &'v Value, path: &[Segment]) -> &'v Value {
+    path.iter().fold(doc, |at, segment| match segment {
+        Segment::Key(k) => &at[k.as_str()],
+        Segment::Index(i) => &at[*i],
+    })
+}
+
+/// `current` is a list of exactly `items`, in order.
+pub(super) fn holds(current: &Value, items: &[String]) -> bool {
+    current.as_sequence().is_some_and(|now| {
+        now.iter()
+            .map(Value::as_str)
+            .eq(items.iter().map(|s| Some(s.as_str())))
+    })
 }
 
 /// Every item a one-line string scalar with no anchor, tag or alias, and as

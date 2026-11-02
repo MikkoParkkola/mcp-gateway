@@ -428,17 +428,22 @@ pub(super) enum Taken {
     Element,
     /// A mapping entry: its lines start at its key.
     Entry,
+    /// The lines under a mapping entry's key, its own line kept (a block
+    /// list rewritten inline); comments count as under it when indented
+    /// deeper than the key itself.
+    Under,
 }
 
 /// S5: the original lines removing `node` may delete, from the original
 /// text alone and apart from how the edit chose its lines: the dash or key
 /// line through the last line holding a non-space byte of the node, then
 /// comment lines indented deeper than the dash or key (blank lines between
-/// them included).
+/// them included). Under [`Taken::Under`] the key's own line is not taken.
 pub(super) fn may_delete(original: &str, node: &Node, taken: Taken) -> BTreeSet<usize> {
     let starts = Starts::of(original);
     let line = |n: usize| content(original, &starts, n);
-    let mut first = starts.line_of(node.start);
+    let key_line = starts.line_of(node.start);
+    let mut first = key_line;
     if taken == Taken::Element {
         while first > 0 && !line(first).trim_start().starts_with('-') {
             let above = line(first - 1);
@@ -453,7 +458,13 @@ pub(super) fn may_delete(original: &str, node: &Node, taken: Taken) -> BTreeSet<
             first -= 1;
         }
     }
-    let col = indent(&line(first));
+    let col = match taken {
+        Taken::Under => {
+            first += 1;
+            node.start - starts.0[key_line]
+        }
+        Taken::Element | Taken::Entry => indent(&line(first)),
+    };
     let end = node.end.min(original.len());
     let last = original[node.start..end]
         .char_indices()

@@ -365,9 +365,14 @@ pub(crate) fn edit_in_place(
     }
     shape::drop_emptied(&mut lines, &before, &removed, revoked)?;
     let edited = lines.text();
-    let dropped = match revoked {
-        Some(path) => deleted_as_planned(original, &before, &removed, path, &lines, &edited)?,
-        None => Vec::new(),
+    let deleted = deleted_as_planned(
+        original, &before, changes, &removed, revoked, &lines, &edited,
+    )?;
+    // Only a revocation drops comments; every other deletion refused them.
+    let dropped = if revoked.is_some() {
+        deleted
+    } else {
+        Vec::new()
     };
     if !lines.bytes_hold(original) {
         return Err(unprovable("an untouched line changed"));
@@ -428,16 +433,18 @@ fn one_revocation(changes: &[(FieldPath, Change)]) -> Result<Option<&[Segment]>,
     Ok(Some(path.0.as_slice()))
 }
 
-/// S5 and S4 for a save holding a revocation: the original lines the edit
-/// deleted are exactly the lines its removals may delete, judged on the original text apart
-/// from the edit (the element, each removed key, each entry the cascade
-/// emptied); else `Unprovable`. Returns the deleted lines that carried a
-/// comment, 1-based.
+/// S5 and S4, for every save: the original lines the edit deleted are
+/// exactly the lines its changes may delete, planned on the original text
+/// apart from the edit (a revoked element, each removed key, each entry the
+/// cascade emptied, the item lines of each block list rewritten inline);
+/// else `Unprovable`. No deleting step's own account is trusted. Returns the
+/// deleted lines that carried a comment, 1-based.
 fn deleted_as_planned(
     original: &str,
     before: &[crate::yaml::Node],
+    changes: &[(FieldPath, Change)],
     removed: &[&[Segment]],
-    revoked: &[Segment],
+    revoked: Option<&[Segment]>,
     lines: &shape::Lines,
     edited: &str,
 ) -> Result<Vec<usize>, ComputeRefusal> {
@@ -448,8 +455,20 @@ fn deleted_as_planned(
             allowed.extend(revoke::may_delete(original, node, taken));
         }
     };
+    let doc: Value = crate::yaml::from_str(original)
+        .map_err(|_| unprovable("the file is not one mapping the parser accepts"))?;
+    for (path, change) in changes {
+        let Change::List(items) = change else {
+            continue;
+        };
+        let block = shape::find(before, &path.0)
+            .is_some_and(|n| n.shape == crate::yaml::Shape::Sequence && !n.flow);
+        if block && !list::holds(list::value_at(&doc, &path.0), items) {
+            take(&path.0, revoke::Taken::Under);
+        }
+    }
     for &path in removed {
-        let taken = if path == revoked {
+        let taken = if Some(path) == revoked {
             revoke::Taken::Element
         } else {
             revoke::Taken::Entry
