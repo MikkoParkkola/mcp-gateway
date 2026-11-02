@@ -23,8 +23,10 @@ use crate::security::secret_redaction::Compiled;
 mod configured;
 pub(crate) use configured::{scrub_stored, scrub_stored_text, scrub_stored_value};
 
-/// The most values one backend name may hold inside their grace. Past it
-/// every frame from that backend is refused rather than a value dropped.
+/// The most sent values one backend name may hold inside their grace. Past
+/// it every frame from that backend is refused rather than a value dropped.
+/// Its configured values come on top, at most
+/// [`MAX_CONFIGURED`](crate::config::configured_secrets::MAX_CONFIGURED) of them.
 pub(crate) const MAX_NEEDLES: usize = 1024;
 
 /// What the refusal says when the set is full.
@@ -87,15 +89,6 @@ pub(crate) struct NeedleSet {
     overflowed: AtomicBool,
     /// Rules already warned about a short value (ECHO.6), by name.
     short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
-    /// Configured values a full set could not take. The set stays refused
-    /// until each is installed: room made by retirement goes to them first,
-    /// and an unrelated value never clears the refusal alone.
-    owed: parking_lot::Mutex<Vec<String>>,
-    /// A sent value a full set refused: the refusal holds until there is room.
-    refused_sent: AtomicBool,
-    /// An owed value dropped from configuration before it was installed is
-    /// protected only by the refusal, which holds until its grace has passed.
-    refuse_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     /// Bumped whenever `values` gains or loses a value.
     version: std::sync::atomic::AtomicU64,
     /// The live values compiled once, swapped when the list changes or its
@@ -135,9 +128,6 @@ impl NeedleSet {
             grace,
             overflowed: AtomicBool::new(false),
             short_warned: parking_lot::Mutex::default(),
-            owed: parking_lot::Mutex::default(),
-            refused_sent: AtomicBool::new(false),
-            refuse_until: parking_lot::Mutex::default(),
             version: std::sync::atomic::AtomicU64::new(0),
             compiled: RwLock::new(None),
         }
@@ -176,10 +166,13 @@ impl NeedleSet {
         }
     }
 
-    /// Pushes a value not yet held, after [`Self::settle`]; past the bound
-    /// the set fails closed and keeps every value it holds. Whether this
-    /// refusal is the first since the set last had room: the caller warns
-    /// once its guard is dropped, never while holding it.
+    /// Pushes a value not yet held, after [`Self::settle`]. A configured
+    /// value is always taken: the bound caps the values a backend's sends
+    /// rotate through, and configured ones are few and capped at load. Past
+    /// the bound a sent value is refused and the set fails closed, keeping
+    /// every value it holds. Whether this refusal is the first since the set
+    /// last had room: the caller warns once its guard is dropped, never
+    /// while holding it.
     #[must_use]
     fn admit(
         &self,
@@ -189,19 +182,7 @@ impl NeedleSet {
         now: tokio::time::Instant,
     ) -> bool {
         self.settle(values, now);
-        if values.iter().any(|held| held.value == value) {
-            // It was owed, and the settle installed it.
-            return false;
-        }
-        if values.len() >= MAX_NEEDLES {
-            if lifetime == Lifetime::Configured {
-                let mut owed = self.owed.lock();
-                if !owed.iter().any(|due| due == value) {
-                    owed.push(value.to_owned());
-                }
-            } else {
-                self.refused_sent.store(true, Ordering::SeqCst);
-            }
+        if lifetime == Lifetime::Grace && sent_count(values) >= MAX_NEEDLES {
             return !self.overflowed.swap(true, Ordering::SeqCst);
         }
         values.push(Held {
@@ -214,42 +195,18 @@ impl NeedleSet {
         false
     }
 
-    /// Drops retired values, installs owed values while there is room, and
-    /// lifts the refusal once nothing is owed, a refused sent value has room
-    /// and no dropped owed value is inside its grace. Whether the set still
-    /// refuses.
+    /// Drops retired values and lifts the refusal once the sent values have
+    /// room again. Whether the set still refuses.
     fn settle(&self, values: &mut Vec<Held>, now: tokio::time::Instant) -> bool {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
-        let mut owed = self.owed.lock();
-        while values.len() < MAX_NEEDLES {
-            let Some(due) = owed.pop() else { break };
-            if !values.iter().any(|held| held.value == due) {
-                values.push(Held {
-                    encoded: percent_forms(&due),
-                    value: due,
-                    last_sent: now,
-                    lifetime: Lifetime::Configured,
-                });
-                self.version.fetch_add(1, Ordering::SeqCst);
-            }
-        }
-        if values.len() < MAX_NEEDLES {
-            self.refused_sent.store(false, Ordering::SeqCst);
-        }
-        let mut until = self.refuse_until.lock();
-        if until.is_some_and(|deadline| now > deadline) {
-            *until = None;
-        }
-        let refusing =
-            !owed.is_empty() || until.is_some() || self.refused_sent.load(Ordering::SeqCst);
-        if !refusing {
+        if sent_count(values) < MAX_NEEDLES {
             self.overflowed.store(false, Ordering::SeqCst);
         }
-        refusing
+        self.overflowed.load(Ordering::SeqCst)
     }
 
     /// The one warning a set that has just filled up gives.
@@ -337,6 +294,14 @@ impl NeedleSet {
 /// encoding (space as `%20`, every byte but `A-Za-z0-9-._~` escaped), each
 /// with uppercase and with lowercase hex. Mixed-case hex within one value,
 /// double encoding and base64 are not matched (register row 318).
+/// The values counted against [`MAX_NEEDLES`]: every one but the configured.
+fn sent_count(values: &[Held]) -> usize {
+    values
+        .iter()
+        .filter(|held| held.lifetime != Lifetime::Configured)
+        .count()
+}
+
 fn percent_forms(value: &str) -> Vec<String> {
     const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
     let form: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();

@@ -373,8 +373,40 @@ pub(crate) fn evaluate_backends(
                 Err(message) => unresolved.push(message),
             }
         }
+        unresolved.extend(configured_refusals(name, &secrets));
         configured.insert(name.clone(), secrets.sorted());
     }
+}
+
+/// A backend's configured credentials the redaction set cannot hold safely,
+/// one message each, naming fields and counts, never values: more than
+/// [`MAX_CONFIGURED`](super::configured_secrets::MAX_CONFIGURED) of them, or a
+/// value holding a redaction marker, which a redaction elsewhere in an
+/// answer could complete into that value.
+fn configured_refusals(
+    name: &str,
+    secrets: &super::configured_secrets::ConfiguredSecrets,
+) -> Vec<String> {
+    use super::configured_secrets::MAX_CONFIGURED;
+    let mut refusals: Vec<String> = secrets
+        .iter()
+        .filter(|secret| crate::security::secret_redaction::contains_marker(&secret.value))
+        .map(|secret| {
+            format!(
+                "backends.{name}.{}: a secret value contains a redaction marker \
+                 (`[redacted]`, `<removed>` or `{{hidden}}`); choose a value without one",
+                secret.field
+            )
+        })
+        .collect();
+    let count = secrets.iter().count();
+    if count > MAX_CONFIGURED {
+        refusals.push(format!(
+            "backends.{name}: {count} secret values in headers: and env:, more than the \
+             {MAX_CONFIGURED} a backend may configure"
+        ));
+    }
+    refusals
 }
 
 /// Whether `written` is a whole-value `env:`, `file:` or `keychain:` reference.

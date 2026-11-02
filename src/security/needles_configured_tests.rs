@@ -167,58 +167,6 @@ async fn only_an_inferred_value_is_gated_by_length() {
     assert!(!log.contains("7bytes!"), "a warning printed a value: {log}");
 }
 
-/// Overflow with configured and sent values mixed: past the bound the set
-/// fails closed; once sent values retire there is room and answers flow.
-#[tokio::test(start_paused = true)]
-async fn overflow_recovers_with_configured_values_held() {
-    let needles = NeedleSet::with_grace(GRACE);
-    for i in 0..MAX_NEEDLES - 1 {
-        needles.insert("b", &format!("sent-value-{i:05}"));
-    }
-    let set = ConfiguredSecrets::of(vec![
-        explicit("headers.A", "configured-a-value"),
-        explicit("headers.B", "configured-b-value"),
-    ]);
-    needles.pin_configured("b", &set);
-    assert!(
-        needles.overflowed(),
-        "premise: the second configured value did not fit"
-    );
-    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
-    needles.pin_configured("b", &set);
-    assert!(!needles.overflowed(), "room after the sent values retired");
-    assert!(redacted(&needles, "configured-a-value"));
-    assert!(redacted(&needles, "configured-b-value"));
-}
-
-/// A configured value a full set refused stays owed: when retirement makes
-/// room, the next unrelated send installs it before the refusal clears, so
-/// answers never flow again with a configured credential missing.
-#[tokio::test(start_paused = true)]
-async fn an_unrelated_send_never_clears_overflow_past_an_owed_value() {
-    let needles = NeedleSet::with_grace(GRACE);
-    for i in 0..MAX_NEEDLES - 1 {
-        needles.insert("b", &format!("sent-value-{i:05}"));
-    }
-    let set = ConfiguredSecrets::of(vec![
-        explicit("headers.A", "configured-a-value"),
-        explicit("headers.B", "configured-b-value"),
-    ]);
-    needles.pin_configured("b", &set);
-    assert!(
-        needles.overflowed(),
-        "premise: one configured value did not fit"
-    );
-    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
-    needles.insert("b", "unrelated-later-value");
-    assert!(!needles.overflowed(), "room after the sent values retired");
-    assert!(redacted(&needles, "configured-a-value"));
-    assert!(
-        redacted(&needles, "configured-b-value"),
-        "the owed configured value was never installed"
-    );
-}
-
 /// A set no send reaches any more (a removed backend's) recovers once its
 /// values retire: checking it settles it, with no further insert.
 #[tokio::test(start_paused = true)]
@@ -235,44 +183,13 @@ async fn an_overflowed_set_with_no_sends_recovers_when_its_values_retire() {
     );
 }
 
-/// Room for exactly the owed value: the pin that installs it lifts the
-/// refusal instead of owing the value it just installed.
+/// Configured values sit outside the bound on sent values: a backend whose
+/// sends filled every slot still has each configured value held and
+/// redacted, and the bound still refuses the next sent value.
 #[tokio::test(start_paused = true)]
-async fn installing_the_owed_value_into_the_last_slot_lifts_the_refusal() {
+async fn configured_values_past_the_free_slots_are_all_held() {
     let needles = NeedleSet::with_grace(GRACE);
-    needles.insert("b", "sent-value-early");
-    tokio::time::advance(Duration::from_secs(60)).await;
-    for i in 0..MAX_NEEDLES - 2 {
-        needles.insert("b", &format!("sent-value-{i:05}"));
-    }
-    let set = ConfiguredSecrets::of(vec![
-        explicit("headers.A", "configured-a-value"),
-        explicit("headers.B", "configured-b-value"),
-    ]);
-    needles.pin_configured("b", &set);
-    assert!(
-        needles.overflowed(),
-        "premise: one configured value is owed"
-    );
-    // Only the early value retires: one slot, for the owed value.
-    tokio::time::advance(GRACE - Duration::from_secs(30)).await;
-    needles.pin_configured("b", &set);
-    assert!(
-        redacted(&needles, "configured-b-value"),
-        "the owed value was not installed"
-    );
-    assert!(
-        !needles.overflowed(),
-        "the set refuses with every configured value held"
-    );
-}
-
-/// An owed value unpinned before a slot freed was never held, so only the
-/// refusal protects it: the set refuses until that value's grace has passed.
-#[tokio::test(start_paused = true)]
-async fn an_owed_value_dropped_from_configuration_keeps_the_refusal_through_its_grace() {
-    let needles = NeedleSet::with_grace(GRACE);
-    for i in 0..MAX_NEEDLES - 1 {
+    for i in 0..MAX_NEEDLES {
         needles.insert("b", &format!("sent-value-{i:05}"));
     }
     needles.pin_configured(
@@ -280,23 +197,23 @@ async fn an_owed_value_dropped_from_configuration_keeps_the_refusal_through_its_
         &ConfiguredSecrets::of(vec![
             explicit("headers.A", "configured-a-value"),
             explicit("headers.B", "configured-b-value"),
+            explicit("env.C", "configured-c-value"),
         ]),
     );
     assert!(
-        needles.overflowed(),
-        "premise: one configured value is owed"
+        !needles.overflowed(),
+        "configured values overflowed the set"
     );
-    tokio::time::advance(Duration::from_secs(60)).await;
-    needles.pin_configured(
-        "b",
-        &ConfiguredSecrets::of(vec![explicit("headers.A", "configured-a-value")]),
-    );
-    // The sent values retire; the dropped owed value is still inside its grace.
-    tokio::time::advance(GRACE - Duration::from_secs(30)).await;
+    for value in [
+        "configured-a-value",
+        "configured-b-value",
+        "configured-c-value",
+    ] {
+        assert!(redacted(&needles, value), "{value} is not held");
+    }
+    needles.insert("b", "one-sent-value-too-many");
     assert!(
         needles.overflowed(),
-        "the refusal lifted while the dropped value was inside its grace"
+        "the bound on sent values no longer holds"
     );
-    tokio::time::advance(Duration::from_secs(60)).await;
-    assert!(!needles.overflowed(), "the refusal outlived the grace");
 }

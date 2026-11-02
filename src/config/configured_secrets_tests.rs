@@ -177,3 +177,94 @@ fn the_record_never_prints_a_value() {
     assert_eq!(configured["b"].iter().count(), 1, "premise: one recorded");
     assert!(!printed.contains(TOKEN), "{printed}");
 }
+
+/// The load refusals for one backend `b` whose headers are `env:` references
+/// to the given env-file variables.
+fn refused(headers: Pairs<'_>, env_body: &str) -> Vec<String> {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.env");
+    crate::gateway::test_helpers::write_owner_only(&path, env_body).expect("write the env file");
+    let overlay = EnvOverlay::from_paths(&[PathBuf::from(&path)]);
+    let mut backends = HashMap::from([(
+        "b".to_owned(),
+        BackendConfig {
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            ..BackendConfig::default()
+        },
+    )]);
+    let mut unresolved = Vec::new();
+    evaluate_backends(
+        &mut backends,
+        &overlay,
+        &mut unresolved,
+        &mut ConfiguredByBackend::new(),
+    );
+    unresolved
+}
+
+/// `count` header references, each to its own variable, and the env file
+/// that defines them.
+fn many(count: usize) -> (Vec<(String, String)>, String) {
+    let headers = (0..count)
+        .map(|i| (format!("X-Key-{i}"), format!("env:KEY_{i}")))
+        .collect();
+    let body = (0..count)
+        .map(|i| format!("KEY_{i}=configured-secret-{i:04}\n"))
+        .collect();
+    (headers, body)
+}
+
+/// A backend may configure at most `MAX_CONFIGURED` secret values: one more
+/// is refused at load, naming the backend and the count, never a value.
+#[test]
+fn a_backend_configuring_too_many_secrets_is_refused_at_load() {
+    let at_cap = many(super::MAX_CONFIGURED);
+    let pairs: Vec<(&str, &str)> = at_cap
+        .0
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert!(
+        refused(&pairs, &at_cap.1).is_empty(),
+        "the cap itself was refused"
+    );
+    let over = many(super::MAX_CONFIGURED + 1);
+    let pairs: Vec<(&str, &str)> = over
+        .0
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let refusals = refused(&pairs, &over.1);
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(
+        refusals[0].contains("backends.b:") && refusals[0].contains("65"),
+        "{refusals:?}"
+    );
+    assert!(
+        !refusals[0].contains("configured-secret-"),
+        "a refusal printed a value: {refusals:?}"
+    );
+}
+
+/// A secret value holding a redaction marker could be completed by a
+/// redaction next to it, so load refuses it, naming the field, never the
+/// value; each of the markers counts.
+#[test]
+fn a_secret_value_holding_a_redaction_marker_is_refused_at_load() {
+    for marker in ["[redacted]", "<removed>", "{hidden}"] {
+        let body = format!("MARKED=abc{marker}xyz-secret\n");
+        let refusals = refused(&[("X-Key", "env:MARKED")], &body);
+        assert_eq!(refusals.len(), 1, "{marker}: {refusals:?}");
+        assert!(
+            refusals[0].contains("backends.b.headers.X-Key"),
+            "{refusals:?}"
+        );
+        assert!(
+            !refusals[0].contains("xyz-secret"),
+            "a refusal printed the value: {refusals:?}"
+        );
+    }
+}

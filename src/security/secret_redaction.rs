@@ -111,6 +111,11 @@ const MAX_RENAME_TRIES: usize = 1024;
 /// do not, so a needle formed at the edge of one is not formed by the next.
 const MARKERS: [&str; 3] = ["[redacted]", "<removed>", "{hidden}"];
 
+/// Whether `value` holds a marker: a redaction next to it could complete it.
+pub(crate) fn contains_marker(value: &str) -> bool {
+    MARKERS.iter().any(|marker| value.contains(marker))
+}
+
 /// The first marker containing no needle, or nothing at all.
 fn marker_for(needles: &[&str]) -> &'static str {
     MARKERS

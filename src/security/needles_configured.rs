@@ -55,16 +55,6 @@ impl NeedleSet {
         let mut values = self.values.write();
         let now = tokio::time::Instant::now();
         let mut changed = false;
-        let mut overflowed = false;
-        // A value no longer configured is no longer owed; one never installed
-        // is protected only by the refusal, until its grace has passed.
-        let mut owed = self.owed.lock();
-        let before = owed.len();
-        owed.retain(|due| wanted.contains(&due.as_str()));
-        if owed.len() != before {
-            *self.refuse_until.lock() = Some(now + self.grace);
-        }
-        drop(owed);
         for held in values.iter_mut() {
             if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
                 held.lifetime = Lifetime::Grace;
@@ -83,16 +73,11 @@ impl NeedleSet {
                 }
                 continue;
             }
-            overflowed |= self.admit(&mut values, value, Lifetime::Configured, now);
+            // A configured value is always taken: never a refusal.
+            let _ = self.admit(&mut values, value, Lifetime::Configured, now);
         }
-        // An unpinning alone can lift the refusal: nothing else would.
-        self.settle(&mut values, now);
         if changed {
             self.version.fetch_add(1, Ordering::SeqCst);
-        }
-        drop(values);
-        if overflowed {
-            self.warn_overflowed(backend);
         }
     }
 }

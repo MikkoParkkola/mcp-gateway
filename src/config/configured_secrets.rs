@@ -67,6 +67,11 @@ impl ConfiguredSecrets {
 /// public structs carry no field for it.
 pub(crate) type ConfiguredByBackend = std::collections::HashMap<String, ConfiguredSecrets>;
 
+/// The most secret values one backend may configure. Each is held for as
+/// long as it is configured, outside the bound on sent values, so this caps
+/// the set at that bound plus this; a config past it is refused at load.
+pub(crate) const MAX_CONFIGURED: usize = 64;
+
 /// Which kind of slot a value was written in.
 #[derive(Clone, Copy)]
 pub(super) enum Slot {
