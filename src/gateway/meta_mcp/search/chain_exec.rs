@@ -285,6 +285,9 @@ fn chain_step_result(idx: usize, tool_ref: &str, result: Value) -> Result<Value>
         .chars()
         .take(2048)
         .collect();
+    // The chain's error wraps the step's own tool failure: counted as that
+    // step's, the backend's unless the gateway folded the result itself.
+    crate::gateway::delivery_facts::step_tool_failed();
     Err(Error::json_rpc(
         INTERNAL_ERROR,
         format!("Chain step {idx} ({tool_ref}) failed: {detail}"),
@@ -318,12 +321,30 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
             data,
         },
+        // The same refusal from the backend itself: the same text, still the
+        // backend's, so the chain it ends counts as the backend's error. No
+        // caller hands a chain step one today (`invoke_tool` folds every
+        // backend dispatch error into a tool result first); kept so an
+        // unfolded path keeps the origin rather than relying on reachability.
+        Error::BackendJsonRpc {
+            code: INVALID_PARAMS,
+            message,
+            data,
+        } => Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code: INVALID_PARAMS,
+            message: format!("Chain step {idx} ({tool_ref}) refused: {message}"),
+            data,
+        }),
         // A step naming a tool this caller cannot see answers exactly as an
         // absent name, unchanged (MIK-8356 fold F5).
-        e @ Error::JsonRpc {
+        e @ (Error::JsonRpc {
             code: METHOD_NOT_FOUND,
             ..
-        } => e,
+        }
+        | Error::BackendJsonRpc {
+            code: METHOD_NOT_FOUND,
+            ..
+        }) => e,
         // The content gate's delivery refusal keeps its type, and so its
         // -32600 and its audit projection, like a denial (MIK-8325).
         Error::ResponseFirewallRefused => Error::ResponseFirewallRefused,
@@ -333,16 +354,71 @@ fn step_failure(idx: usize, tool_ref: &str, error: Error) -> Error {
             code,
             format!("Chain step {idx} ({tool_ref}) refused: {message}"),
         ),
-        e => Error::json_rpc(
-            INTERNAL_ERROR,
-            format!("Chain step {idx} ({tool_ref}) failed: {e}"),
-        ),
+        // A backend's own error keeps the backend's origin, as a gateway
+        // refusal keeps its seal above; the text is the same as the arm below.
+        e @ Error::BackendJsonRpc { .. } => {
+            Error::backend_json_rpc(crate::protocol::JsonRpcError {
+                code: INTERNAL_ERROR,
+                message: format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+                data: None,
+            })
+        }
+        e => {
+            // The chain's error wraps this step's failure: counted with the
+            // failure's own origin, not as the gateway's.
+            crate::gateway::delivery_facts::step_carried(Some(&e));
+            crate::gateway::delivery_facts::wrapped_step(INTERNAL_ERROR);
+            Error::json_rpc(
+                INTERNAL_ERROR,
+                format!("Chain step {idx} ({tool_ref}) failed: {e}"),
+            )
+        }
     }
 }
 
 #[cfg(test)]
 mod member_tests {
     use serde_json::json;
+
+    /// C5: a chain step's backend error keeps the backend's origin through
+    /// the chain's own wording: a refused argument keeps its code and gains
+    /// the step prefix, an absent method passes through unchanged, and any
+    /// other backend error is wrapped as the backend's.
+    #[test]
+    fn a_backends_step_error_keeps_its_origin_through_the_chain() {
+        use crate::error::rpc_codes::{INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND};
+        let backend = |code: i32| {
+            crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+                code,
+                message: "backend says no".to_owned(),
+                data: None,
+            })
+        };
+        let refused = super::step_failure(0, "alpha:read", backend(INVALID_PARAMS));
+        assert!(
+            matches!(&refused, crate::Error::BackendJsonRpc { code: INVALID_PARAMS, message, .. }
+                if message == "Chain step 0 (alpha:read) refused: backend says no"),
+            "{refused:?}"
+        );
+        let absent = super::step_failure(0, "alpha:read", backend(METHOD_NOT_FOUND));
+        assert!(
+            matches!(&absent, crate::Error::BackendJsonRpc { code: METHOD_NOT_FOUND, message, .. }
+                if message == "backend says no"),
+            "{absent:?}"
+        );
+        let other = super::step_failure(1, "alpha:read", backend(-32001));
+        assert!(
+            matches!(
+                &other,
+                crate::Error::BackendJsonRpc {
+                    code: INTERNAL_ERROR,
+                    ..
+                }
+            ),
+            "{other:?}"
+        );
+        assert_eq!(other.origin(), crate::protocol::Origin::Backend);
+    }
 
     /// `MIK-8113` (chain provenance): each result is its step's by the
     /// execution index written beside it, not its place in the array, so a
@@ -366,3 +442,7 @@ mod member_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "chain_step_origin_tests.rs"]
+mod chain_step_origin_tests;

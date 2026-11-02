@@ -457,11 +457,12 @@ impl MetaMcp {
             } else {
                 error.message
             };
-            return Err(Error::JsonRpc {
-                code: error.code,
+            // The backend's own error, with the gateway's miss hint in its
+            // message: still the backend's answer, counted as the backend's.
+            return Err(Error::backend_json_rpc(crate::protocol::JsonRpcError {
                 message,
-                data: error.data,
-            });
+                ..error
+            }));
         }
 
         let withheld = response.ingress_withheld;

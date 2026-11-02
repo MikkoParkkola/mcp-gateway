@@ -39,6 +39,15 @@ impl Error {
                 message: note(message),
                 data,
             },
+            Self::BackendJsonRpc {
+                code,
+                message,
+                data,
+            } => Self::BackendJsonRpc {
+                code,
+                message: note(message),
+                data,
+            },
             Self::JsonRpcRetryable {
                 code,
                 message,

@@ -487,7 +487,11 @@ impl MetaMcp {
         // Code Mode carries the caller's identity + attribution through to
         // dispatch, so an identity-required backend gets the per-user credential
         // just like the direct gateway_invoke path (MIK-6734).
-        self.invoke_tool(&invoke_args, session_id, caller).await
+        let answer = self.invoke_tool(&invoke_args, session_id, caller).await;
+        // The execute delivers its one step's answer as its own, a failure
+        // folded into that answer included.
+        crate::gateway::delivery_facts::step_carried(None);
+        answer
     }
 
     /// List tools from a specific server, or ALL tools if server is omitted.
