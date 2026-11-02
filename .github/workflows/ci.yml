@@ -747,16 +747,18 @@ jobs:
     name: macOS shard ${{ matrix.shard }}
     if: ${{ !(github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && startsWith(github.head_ref, 'throwaway/')) && !(github.event_name == 'push' && github.ref == 'refs/heads/docs/ranking-1-release-line') && (github.event_name != 'pull_request' || (startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository)) }}
     runs-on: macos-latest
-    # The two lib shards each compile the `--lib` test binary from cold (every
-    # shard missed the cache on the last three trains): 19 to 86 min, before
-    # 8 to 23 min of tests. At 90 a slow runner cut off a train mid-test. This
-    # comes back down when the shards run binaries built once in one job.
+    # The lib shard compiles the `--lib` test binary from cold (every macOS
+    # shard missed the cache on the last three trains, and a hit would save
+    # only the 2-4 min dependency build): 19 to 86 min, then about 32 min of
+    # tests. At 90 a slow runner cut off a train mid-test.
     timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
-        # Three jobs: the account has five macOS runners in all (MIK-8482).
-        shard: [lib-a, lib-b, int]
+        # Two jobs: about two macOS runners serve trains, so a third job
+        # queued behind the others, and lib-a and lib-b each compiled the
+        # same lib test binary. One lib shard builds it once.
+        shard: [lib, int]
     env:
       # Two build jobs on the 3-core, 7 GB runner: the default swapped. Kept
       # on measurement (MIK-8482): the slowest shard took 25.5 min (#3944
@@ -774,10 +776,34 @@ jobs:
       # Tests job's, for the same reason; every test that does not run on
       # macOS is listed in docs/release/macos-test-exclusions.tsv.
       - name: Every test kept off macOS is listed (MIK-8174)
-        if: matrix.shard == 'lib-a'
+        if: matrix.shard == 'lib'
         run: python3 scripts/release/check_macos_exclusions.py
+      # The same build takes 19 or 86 min on these runners. Swap and memory
+      # pressure every 30 s, printed below, say whether the slow ones swap.
+      # The sampler outlives this step; the runner ends it with the job.
+      - name: Sample swap and memory pressure during the build
+        run: |
+          (
+            while :; do
+              printf '%s swap %s | %s\n' "$(date -u +%H:%M:%S)" "$(sysctl -n vm.swapusage)" \
+                "$(memory_pressure -Q 2>/dev/null | tail -1)" >> "$RUNNER_TEMP/mac-sampler.log"
+              sleep 30
+            done
+          ) &
       - name: Shard suite
+        # Under the job's limit, so a slow build still leaves time for the
+        # report below.
+        timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      - name: Runner, swap and memory pressure during the build
+        if: always()
+        run: |
+          echo "image $ImageOS $ImageVersion, $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB, $(sysctl -n machdep.cpu.brand_string)"
+          if [ -s "$RUNNER_TEMP/mac-sampler.log" ]; then
+            cat "$RUNNER_TEMP/mac-sampler.log"
+          else
+            echo "::warning::no swap or memory pressure samples were recorded"
+          fi
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs

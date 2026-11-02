@@ -5,8 +5,8 @@
 
 Static checks on ci.yml and scripts/ci/shard_tests.py:
 
-- every OS's shards are exact complements: one lib filter and its `--skip`,
-  and integration globs that are `*` alone or a class and its negation;
+- every OS's shards are exact complements: the whole lib unfiltered, or one
+  lib filter and its `--skip`, and integration globs that are `*` alone or a class and its negation;
 - together they cover the targets the unsharded command ran (Linux, macOS:
   lib, bins, tests, doctests; Windows: `--tests`, which is lib, bins, tests);
 - each shard matrix in ci.yml lists exactly that OS's shards;
@@ -67,8 +67,8 @@ def table_problems(st) -> list[str]:
                     globs.append(args[args.index("--test") + 1])
                 if "--skip" in args or any(a in st.SKIPS[os_kind] for a in test_args if a != "--skip"):
                     out.append(f"{os_kind} {name} {step}: an OS skip belongs in SKIPS, not the shard")
-        if sorted(lib_filters) != sorted([(st.LIB_SPLIT,), ("--skip", st.LIB_SPLIT)]):
-            out.append(f"{os_kind}: lib shards {lib_filters} are not one filter and its --skip")
+        if sorted(lib_filters) not in ([()], sorted([(st.LIB_SPLIT,), ("--skip", st.LIB_SPLIT)])):
+            out.append(f"{os_kind}: lib shards {lib_filters} are not the whole lib or one filter and its --skip")
         if sorted(globs) not in ([st.GLOB_ALL], sorted([st.GLOB_A, st.GLOB_B])):
             out.append(f"{os_kind}: integration globs {globs} are not `*` or a class and its negation")
         if st.GLOB_B != "[!" + st.GLOB_A[1:]:
