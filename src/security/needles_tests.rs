@@ -643,3 +643,30 @@ async fn answers_flow_again_once_the_refused_values_grace_has_passed() {
         );
     }
 }
+
+/// A later refused value extends the refusal to its own grace: the deadline
+/// moves on with each refusal and never stays at the first one's.
+#[tokio::test(start_paused = true)]
+async fn a_later_refused_value_extends_the_refusal_to_its_grace() {
+    let needles = NeedleSet::with_grace(GRACE);
+    for step in 0..super::MAX_NEEDLES {
+        needles.insert("b", &format!("fill-token-{step:05}"));
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-x");
+    tokio::time::advance(Duration::from_secs(10)).await;
+    needles.insert("b", "refused-token-y");
+    // X's grace has passed, Y's ends now: the set still refuses.
+    tokio::time::advance(GRACE).await;
+    let (outcome, text) = scrubbed(&needles, "echo refused-token-y");
+    assert_eq!(
+        outcome,
+        Scrubbed::Refuse,
+        "the refusal lifted at the first refused value's deadline: {text}"
+    );
+    tokio::time::advance(Duration::from_secs(1)).await;
+    assert!(
+        !needles.overflowed(),
+        "the refusal outlived the last refused value's grace"
+    );
+}
