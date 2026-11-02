@@ -135,6 +135,26 @@ fn scan1_a_dashmap_reached_through_a_binding_is_still_a_map() {
             "impl R { fn f(&self, k: K) { let g = { let b = &self.backends; b.get(&k) }; warn!(\"x\"); } }",
             1,
         ),
+        (
+            "a ref parameter borrows the map",
+            "fn f(ref m: DashMap<K, V>) { for e in m { warn!(\"x\"); } }",
+            1,
+        ),
+        (
+            "shadow by if let",
+            "fn f(c: &C, rs: &[R]) { if let Some(c) = rs.first() { for e in &c.backends { warn!(\"x\"); } } }",
+            1,
+        ),
+        (
+            "shadow by a match arm",
+            "fn f(c: &C, r: Option<&R>) { match r { Some(c) => { for e in &c.backends { warn!(\"x\"); } } None => {} } }",
+            1,
+        ),
+        (
+            "shadow by a closure parameter",
+            "fn f(c: &C) { let g = |c| { for e in &c.backends { warn!(\"x\"); } }; }",
+            1,
+        ),
     ]);
 }
 
@@ -168,7 +188,12 @@ fn scan2_a_plain_map_of_a_dashmaps_name_is_not_a_map() {
         ),
         (
             "an annotation outranks the initializer",
-            "fn f(w: &W) { let c: &C = &w.inner; for e in &c.backends { warn!(\"x\"); } }",
+            "fn f(x: &X) { let c: &C = &x.backends; for e in &c.backends { warn!(\"x\"); } }",
+            0,
+        ),
+        (
+            "an owned map moved, then consumed",
+            "fn f(m: DashMap<K, V>) { let b = m; for e in b { warn!(\"x\"); } }",
             0,
         ),
         (
