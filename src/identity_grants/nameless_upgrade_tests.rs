@@ -102,3 +102,20 @@ fn an_absent_grants_path_is_nothing_to_do() {
     assert!(removed.is_empty());
     assert!(!path.exists());
 }
+
+#[test]
+fn a_blank_subject_row_is_removed_like_an_empty_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("identity-grants.yaml");
+    let blank = ROW_EMPTY.replace("subject: \"\"", "subject: \"   \"");
+    let body = format!("schema_version: identity_grants.v1\ngrants:\n{ROW_OK}{blank}");
+    crate::gateway::test_helpers::write_owner_only(&path, &body).unwrap();
+    let removed = remove_nameless_rows(&path, &dir.path().join("b"), atomic).unwrap();
+    assert_eq!(
+        removed,
+        vec![Removed {
+            grant_id: "g-empty".into(),
+            field: "subject".into()
+        }]
+    );
+}

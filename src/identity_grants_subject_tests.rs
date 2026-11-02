@@ -103,13 +103,21 @@ fn new_refuses_a_subject_naming_no_one_and_names_the_empty_part() {
     );
 }
 
-/// The check is raw, never trimmed: a value of spaces still names someone,
-/// both through `new` and on deserialize.
+/// A value of only spaces names no one, like an empty one; any other value is
+/// kept exactly as written, so `" admin "` stays a different subject from
+/// `admin`.
 #[test]
-fn whitespace_still_names_someone() {
-    let built = GrantSubject::new(" ", " admin ", None).expect("raw values name someone");
-    assert_eq!((built.authority(), built.subject()), (" ", " admin "));
-    let read: GrantSubject = serde_json::from_str(r#"{"authority":" ","subject":" "}"#)
-        .expect("raw values name someone");
-    assert_eq!(read.subject(), " ");
+fn blank_names_no_one_and_other_values_stay_verbatim() {
+    use super::EmptyIdentity;
+    assert_eq!(
+        GrantSubject::new("   ", "alice", None).unwrap_err(),
+        EmptyIdentity::Authority
+    );
+    assert_eq!(
+        GrantSubject::new("api_key", " \t ", None).unwrap_err(),
+        EmptyIdentity::Subject
+    );
+    assert!(serde_json::from_str::<GrantSubject>(r#"{"authority":" ","subject":"x"}"#).is_err());
+    let kept = GrantSubject::new("api_key", " admin ", None).expect("names someone");
+    assert_eq!(kept.subject(), " admin ");
 }
