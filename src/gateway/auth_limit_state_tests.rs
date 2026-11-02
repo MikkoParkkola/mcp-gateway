@@ -195,6 +195,73 @@ fn t3c_adopting_the_derived_principal_changes_nothing() {
     );
 }
 
+/// T3d: a reload that narrows an admin key to some backends ends what it
+/// minted: a dashboard session is unscoped, and a scoped key may not hold one.
+#[test]
+fn t3d_narrowing_the_key_ends_its_session() {
+    let runtime = Arc::new(AuthRuntime::default());
+    let before = over(&runtime, vec![key("k", A, Some(P1))]);
+    let minter = quota_of(&before, A);
+    let now = crate::clock::utc_now().expect("the test clock reads");
+    assert!(
+        before.admin_key_live(&minter, now),
+        "premise: live on A's table"
+    );
+    let mut narrowed = key("k", A, Some(P1));
+    narrowed.backends = vec!["alpha".to_string()];
+    let after = over(&runtime, vec![narrowed]);
+    assert!(
+        quota_of(&after, A) == minter,
+        "premise: the same key, only narrowed"
+    );
+    assert!(
+        !after.admin_key_live(&minter, now),
+        "a session outlived its key's narrowing"
+    );
+}
+
+/// A load warns once per admin key with a non-empty list without `*`, naming
+/// it and what its UI scope becomes; an unscoped admin key, an admin key with
+/// an empty list (a UI-wide admin) and a scoped non-admin key are silent.
+#[test]
+fn a_scoped_admin_key_warns_at_load() {
+    let mut scoped_admin = key("scoped-admin", A, None);
+    scoped_admin.backends = vec!["alpha".to_string()];
+    let mut scoped_plain = key("scoped-plain", B, None);
+    scoped_plain.admin = false;
+    scoped_plain.backends = vec!["alpha".to_string()];
+    let full_admin = key("full-admin", "matrix-third-secret", None);
+    let mut ui_admin = key("ui-admin", "matrix-fourth-secret", None);
+    ui_admin.backends = Vec::new();
+    let ((), warned) = crate::test_log_capture::capture_warnings(|| {
+        let _ = over(
+            &Arc::new(AuthRuntime::default()),
+            vec![scoped_admin, scoped_plain, full_admin, ui_admin],
+        );
+    });
+    let lines: Vec<&str> = warned
+        .lines()
+        .filter(|l| l.contains("admin API key lists only some backends"))
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one warning, for the scoped admin: {warned}"
+    );
+    assert!(
+        lines[0].contains("scoped-admin"),
+        "the key is named: {warned}"
+    );
+    assert!(
+        lines[0].contains("backends: [\"*\"]"),
+        "the fix is named: {warned}"
+    );
+    assert!(
+        lines[0].contains("Activity and status in the web UI show it only those"),
+        "the UI scope is named: {warned}"
+    );
+}
+
 /// The limit key's golden, in `credential()`'s layout: the domain, then the
 /// kind and the principal, each prefixed by its length as u64 big-endian.
 fn golden(principal: &str) -> String {
