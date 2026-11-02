@@ -178,8 +178,8 @@ fn the_reader_field_names_are() {
 fn r1_a_malformed_decision_reads_no_evidence_and_matches_no_rule() {
     for bad in [
         json!("grant"),
-        json!({"v": "two"}),
-        json!({"v": 2, "kind": "no_such_kind"}),
+        json!({"v": "two", "rule_id": "grant:abc"}),
+        json!({"v": 2, "kind": "no_such_kind", "rule_id": "grant:abc"}),
     ] {
         let e = json!({"counter": 7, "decision": bad});
         assert_eq!(decision_evidence(&e), None, "{bad}");
