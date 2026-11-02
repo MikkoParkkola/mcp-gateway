@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 
 use syn::visit::Visit;
 
+use super::fragments::{Table, live_base, pin_table, scratch_table, shown, without_first_row};
 use super::packaged::crate_root;
 use super::scan::{Place, Sink, expr_attrs, item_attrs, test_only, walk};
 
@@ -158,34 +159,40 @@ impl Sink for Sites {
     }
 }
 
-/// The reviewed list: file, function, kind, count, class, reason.
-const LISTED: &str = include_str!("creation_sites.tsv");
 const CLASSES: [&str; 3] = ["helper", "no-secret", "test-only"];
 
-/// The listed counts, and the rows that are malformed or carry no class.
-fn listed() -> (Counts, Vec<String>) {
-    let mut counts = Counts::new();
+/// The listed counts from the reviewed `creation_sites` table (file, function,
+/// kind, count, class, reason), and the rows that are malformed or carry no
+/// class.
+fn listed(table: &Table) -> (Listed, Vec<String>) {
+    let mut counts = Listed::new();
     let mut bad = Vec::new();
-    for line in LISTED
-        .lines()
-        .filter(|l| !l.is_empty() && !l.starts_with('#'))
-    {
+    for (path, line) in table.rows() {
+        let at = shown(path);
         let cols: Vec<&str> = line.split('\t').collect();
         let [file, func, kind, n, class, reason] = cols[..] else {
-            bad.push(format!("not six columns: {line}"));
+            bad.push(format!("not six columns in {at}: {line}"));
             continue;
         };
         if !CLASSES.contains(&class) || reason.trim().is_empty() {
-            bad.push(format!("no class or no reason: {line}"));
+            bad.push(format!("no class or no reason in {at}: {line}"));
         }
         let Ok(n) = n.parse::<usize>() else {
-            bad.push(format!("count is not a number: {line}"));
+            bad.push(format!("count is not a number in {at}: {line}"));
             continue;
         };
-        counts.insert((file.to_owned(), func.to_owned(), kind.to_owned()), n);
+        let key = (file.to_owned(), func.to_owned(), kind.to_owned());
+        if let Some((_, earlier)) = counts.insert(key, (n, at.clone())) {
+            bad.push(format!(
+                "repeated key in {earlier} and {at}: {file}\t{func}\t{kind}"
+            ));
+        }
     }
     (counts, bad)
 }
+
+/// (file, function, kind) -> (count, the table file listing it).
+type Listed = BTreeMap<(String, String, String), (usize, String)>;
 
 /// Every creating call in production code is a reviewed row with a class,
 /// with its exact count; a new call, a changed count or a stale row fails
@@ -194,27 +201,48 @@ fn listed() -> (Counts, Vec<String>) {
 fn every_file_creation_site_is_classified() {
     let mut sites = Sites::default();
     walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
-    let (want, bad) = listed();
-    let mut wrong: Vec<String> = bad;
-    for (key, n) in &sites.counts {
-        match want.get(key) {
-            Some(m) if m == n => {}
-            Some(m) => wrong.push(format!("count {m} -> {n}: {}\t{}\t{}", key.0, key.1, key.2)),
-            None => wrong.push(format!(
-                "unlisted: {}\t{}\t{}\t{n}\t<class>\t<reason>",
-                key.0, key.1, key.2
-            )),
-        }
-    }
-    for key in want.keys().filter(|k| !sites.counts.contains_key(*k)) {
-        wrong.push(format!("stale: {}\t{}\t{}", key.0, key.1, key.2));
-    }
+    let wrong = differences(&sites.counts, &pin_table("creation_sites"));
     assert!(
         wrong.is_empty(),
         "file creation sites differ from creation_sites.tsv ({}):\n{}",
         wrong.len(),
         wrong.join("\n")
     );
+}
+
+/// What differs between the counted sites and the reviewed table: malformed
+/// rows, changed counts, unlisted sites and stale rows.
+fn differences(found: &Counts, table: &Table) -> Vec<String> {
+    let (want, bad) = listed(table);
+    let mut wrong: Vec<String> = bad;
+    let mut add = Vec::new();
+    for (key, n) in found {
+        match want.get(key) {
+            Some((m, _)) if m == n => {}
+            Some((m, at)) => wrong.push(format!(
+                "count {m} -> {n}, edit this row in {at}: {}\t{}\t{}",
+                key.0, key.1, key.2
+            )),
+            None => add.push(format!(
+                "{}\t{}\t{}\t{n}\t<class>\t<reason>",
+                key.0, key.1, key.2
+            )),
+        }
+    }
+    for (key, (_, at)) in want.iter().filter(|(k, _)| !found.contains_key(*k)) {
+        wrong.push(format!(
+            "stale, remove from {at}: {}\t{}\t{}",
+            key.0, key.1, key.2
+        ));
+    }
+    if !add.is_empty() {
+        wrong.push(format!(
+            "rows to add ({}; put these in your fragment creation_sites.d/<ticket>.tsv):",
+            add.len()
+        ));
+        wrong.extend(add);
+    }
+    wrong
 }
 
 /// The scanner sees a second create inside a function it has already counted.
@@ -233,4 +261,130 @@ fn a_second_create_in_one_function_changes_its_count() {
     let key = |file: &str| (file.to_owned(), "f".to_owned(), "fs-write".to_owned());
     assert_eq!(sites.counts.get(&key("a.rs")), Some(&1));
     assert_eq!(sites.counts.get(&key("b.rs")), Some(&2));
+}
+
+/// Every creating call the walk counts, by (file, function, kind).
+fn counted() -> Counts {
+    let mut sites = Sites::default();
+    walk(crate_root(), &ROOTS, &mut sites).expect("the walk reads every module");
+    sites.counts
+}
+
+/// FRAG.2 through the real comparison: a real row held only by a fragment
+/// still counts.
+#[test]
+fn creation_sites_reads_a_required_row_from_a_fragment() {
+    let (base, moved) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[("0.tsv", &moved)]);
+    let wrong = differences(&counted(), &table);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// FRAG.2: a stale row in a fragment fails, naming the fragment.
+#[test]
+fn creation_sites_rejects_a_stale_fragment_row() {
+    let stale = "src/nowhere.rs\tf\tfs-write\t1\thelper\tnone\n";
+    let (_root, table) = scratch_table(
+        "creation_sites",
+        &live_base("creation_sites"),
+        &[("0.tsv", stale)],
+    );
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("stale") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// FRAG.2: a key held by the base and by a fragment fails, naming both files
+/// (a map insert would keep only the last).
+#[test]
+fn creation_sites_key_repeated_across_files_fails_naming_both() {
+    let (_, moved) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table(
+        "creation_sites",
+        &live_base("creation_sites"),
+        &[("0.tsv", &moved)],
+    );
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong
+            .iter()
+            .any(|l| l.contains("creation_sites.tsv") && l.contains("0.tsv")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key listed twice in one file fails (a map insert would keep only one).
+#[test]
+fn creation_sites_key_repeated_in_one_file_fails() {
+    let (_, moved) = without_first_row(&live_base("creation_sites"));
+    let base = format!("{}{moved}", live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[]);
+    let wrong = differences(&counted(), &table);
+    assert!(
+        wrong.iter().any(|l| l.contains("repeated")),
+        "{}",
+        wrong.join("\n")
+    );
+}
+
+/// A key the table lacks is listed to add, in the reader's own fragment.
+#[test]
+fn creation_sites_missing_key_is_listed_to_add_in_your_fragment() {
+    let (base, _) = without_first_row(&live_base("creation_sites"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[]);
+    let wrong = differences(&counted(), &table).join("\n");
+    assert!(wrong.contains("rows to add"), "{wrong}");
+    assert!(wrong.contains("creation_sites.d/<ticket>.tsv"), "{wrong}");
+}
+
+/// A row whose value changed under the same key names the file to edit.
+#[test]
+fn creation_sites_changed_value_names_the_owning_file() {
+    let (base, moved) = without_first_row(&live_base("creation_sites"));
+    let mut cols: Vec<&str> = moved.trim_end().split('\t').collect();
+    cols[3] = "999";
+    let changed = format!("{}\n", cols.join("\t"));
+    let (_root, table) = scratch_table("creation_sites", &base, &[("0.tsv", &changed)]);
+    let wrong = differences(&counted(), &table).join("\n");
+    assert!(
+        wrong.contains("edit this row in") && wrong.contains("0.tsv"),
+        "{wrong}"
+    );
+}
+
+/// Each row check still fires for a row that sits only in a fragment.
+#[test]
+fn creation_sites_validations_still_fail_in_a_fragment() {
+    for (bad, diagnostic) in [
+        ("a\tb\n", "not six columns"),
+        (
+            "src/x.rs\tf\tfs-write\tmany\thelper\twhy\n",
+            "count is not a number",
+        ),
+        (
+            "src/x.rs\tf\tfs-write\t1\tnope\twhy\n",
+            "no class or no reason",
+        ),
+        (
+            "src/x.rs\tf\tfs-write\t1\thelper\t \n",
+            "no class or no reason",
+        ),
+    ] {
+        let (_root, table) = scratch_table(
+            "creation_sites",
+            &live_base("creation_sites"),
+            &[("0.tsv", bad)],
+        );
+        let wrong = differences(&counted(), &table).join("\n");
+        assert!(
+            wrong.contains(diagnostic) && wrong.contains("0.tsv"),
+            "{bad:?}: {wrong}"
+        );
+    }
 }

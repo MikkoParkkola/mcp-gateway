@@ -63,6 +63,10 @@ pub(crate) struct A2aTransport {
     canceller: Canceller,
     /// The backend timeout: bounds a whole delegation, send plus polls.
     timeout: Duration,
+    /// The backend's injected values. Every answer and error leaves
+    /// [`Transport::request`] scrubbed of them; ids and card routing fields
+    /// are read as sent before that (DELTA-16).
+    needles: Option<Arc<crate::security::needles::NeedleSet>>,
 }
 
 impl A2aTransport {
@@ -75,6 +79,35 @@ impl A2aTransport {
         timeout: Duration,
         destination: DestinationPolicy,
         lender: Option<Arc<Lender>>,
+        needles: Option<Arc<crate::security::needles::NeedleSet>>,
+    ) -> Result<Arc<Self>> {
+        Self::start_unscrubbed(
+            a2a_url,
+            card_path,
+            headers,
+            timeout,
+            destination,
+            lender,
+            needles.clone(),
+        )
+        .await
+        .map_err(|mut error| {
+            // A card's routing fields can reach a start error (DELTA-15).
+            if let Some(needles) = &needles {
+                crate::security::needles::scrub_error(needles, &mut error);
+            }
+            error
+        })
+    }
+
+    async fn start_unscrubbed(
+        a2a_url: &str,
+        card_path: Option<&str>,
+        headers: &HashMap<String, String>,
+        timeout: Duration,
+        destination: DestinationPolicy,
+        lender: Option<Arc<Lender>>,
+        needles: Option<Arc<crate::security::needles::NeedleSet>>,
     ) -> Result<Arc<Self>> {
         let origin = url::Url::parse(a2a_url).map_err(|e| {
             Error::Config(format!(
@@ -110,6 +143,7 @@ impl A2aTransport {
             closed: watch::channel(false).0,
             parked: Parked::new(PARKED_TTL),
             timeout,
+            needles,
         });
         transport.spawn_sweeper();
         Ok(transport)
@@ -529,6 +563,17 @@ impl A2aTransport {
     }
 }
 
+impl A2aTransport {
+    /// `answer` as it leaves this transport: scrubbed of the backend's
+    /// injected values, or the fixed refusal (DELTA-16).
+    fn scrubbed(&self, answer: Result<JsonRpcResponse>) -> Result<JsonRpcResponse> {
+        match &self.needles {
+            Some(needles) => crate::security::needles::scrub_answer(needles, answer),
+            None => answer,
+        }
+    }
+}
+
 /// The agent's own JSON-RPC error, passed on as the agent's.
 fn agent_error(id: RequestId, code: i32, message: &str) -> JsonRpcResponse {
     JsonRpcResponse::error(Some(id), code, format!("A2A agent error: {message}"))
@@ -537,7 +582,10 @@ fn agent_error(id: RequestId, code: i32, message: &str) -> JsonRpcResponse {
 #[async_trait]
 impl Transport for A2aTransport {
     async fn request(&self, method: &str, params: Option<Value>) -> Result<JsonRpcResponse> {
-        backend_request(async move { self.dispatch(method, params, &[], None).await }).await
+        backend_request(
+            async move { self.scrubbed(self.dispatch(method, params, &[], None).await) },
+        )
+        .await
     }
 
     /// Per-request headers (a propagated end-user credential) go on this one
@@ -551,10 +599,16 @@ impl Transport for A2aTransport {
         _resend: crate::transport::ResendPermission,
     ) -> Result<JsonRpcResponse> {
         backend_request(async move {
-            self.dispatch(method, params, extra_headers, identity_key)
-                .await
+            self.scrubbed(
+                self.dispatch(method, params, extra_headers, identity_key)
+                    .await,
+            )
         })
         .await
+    }
+
+    fn redacts_injected_values(&self) -> bool {
+        self.needles.is_some()
     }
 
     fn carries_identity_headers(&self) -> bool {
@@ -598,3 +652,7 @@ impl Drop for A2aTransport {
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "transport_needles_tests.rs"]
+mod needles_tests;

@@ -256,7 +256,7 @@ impl MetaMcp {
         // capability (resolve refuses that clash; this holds if a backend is
         // registered between resolve and here).
         if captured.is_none()
-            && let Some(cap) = self.get_capabilities()
+            && let Some(cap) = self.caller_capabilities()
             && server == cap.name
             && let Some(cap_def) = cap.get(tool)
         {

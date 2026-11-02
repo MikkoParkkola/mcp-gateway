@@ -75,7 +75,9 @@ impl Store {
     ) -> std::io::Result<Vec<Evicted>> {
         let mut state = self.state.lock();
         let mut evicted = Vec::new();
-        match self.evict_dead(&mut state, now, policy, &mut evicted) {
+        let swept = self.evict_dead(&mut state, now, policy, &mut evicted);
+        drop(state);
+        match swept {
             Ok(()) => Ok(evicted),
             // What was evicted before the failure is gone: its receipts are
             // returned, and the next sweep retries the rest.

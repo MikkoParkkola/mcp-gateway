@@ -19,14 +19,12 @@ use crate::gateway::meta_mcp::MetaMcp;
 use crate::gateway::meta_mcp::visible::memo::Judged;
 use crate::gateway::router::{AppState, OwnedRouterAuthorizer, RouterAuthorizer};
 use crate::protocol::{JsonRpcResponse, RequestId};
-use crate::security::ToolPolicy;
 
 /// What a stdio gateway lends its tasks. `run_stdio_on` holds the only strong
 /// reference, so a worker that outlives the session fails its upgrade and
 /// settles before dispatch, as an HTTP worker does after shutdown.
 pub(crate) struct StdioTaskHost {
     pub(crate) meta_mcp: Arc<MetaMcp>,
-    pub(crate) tool_policy: Arc<ToolPolicy>,
     /// The transport mark. Only `gateway::server` can mint one, so only a
     /// stdio-built host carries it.
     pub(crate) nonce: &'static StdioNonce,
@@ -63,6 +61,29 @@ impl LiveHost {
         match self {
             Self::Http(state) => state.live_config.generation(),
             Self::Stdio(host) => host.live_config.generation(),
+        }
+    }
+
+    /// Run `run` as the caller `authorizer` captured, so a lookup it makes
+    /// misses a backend hidden from that caller (`meta_mcp::hiding`), judged
+    /// live. A stdio host carries no certificate or agent token: nothing is
+    /// hidden there.
+    pub(crate) async fn as_caller<F: Future>(
+        &self,
+        owned: &super::execution::OwnedCallerContext,
+        run: F,
+    ) -> F::Output {
+        match self {
+            Self::Http(state) => {
+                let caller = crate::gateway::router::caller_hiding::RouterHiding::caller(
+                    Arc::clone(state),
+                    owned.authorizer().clone(),
+                    owned.verified_identity().cloned(),
+                    owned.session_id().map(str::to_owned),
+                );
+                crate::gateway::meta_mcp::hiding::with_caller(caller, run).await
+            }
+            Self::Stdio(_) => run.await,
         }
     }
 
@@ -177,8 +198,9 @@ impl LiveHost {
     ) -> HostAuthorizer<'a> {
         match self {
             Self::Http(state) => HostAuthorizer::Http(router.borrow(state, generation)),
-            Self::Stdio(host) => HostAuthorizer::Stdio(ToolPolicyAuthorizer {
-                tool_policy: &host.tool_policy,
+            Self::Stdio(_) => HostAuthorizer::Stdio(ToolPolicyAuthorizer {
+                tool_policy: generation.tool_policy(),
+                generation: Some(generation),
             }),
         }
     }
@@ -190,6 +212,12 @@ pub(crate) enum HostAuthorizer<'a> {
 }
 
 impl ToolAuthorizer for HostAuthorizer<'_> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        match self {
+            Self::Http(inner) => inner.generation(),
+            Self::Stdio(inner) => inner.generation(),
+        }
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         match self {
             Self::Http(inner) => inner.decide(target),

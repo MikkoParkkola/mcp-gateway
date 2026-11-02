@@ -29,7 +29,6 @@ use mcp_gateway::mtls::{MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::continuation::{
     ContinuationError, ContinuationPurpose, ContinuationState, Payload,
 };
-use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 
 /// One gateway process, built the way the server builds it.
 ///
@@ -76,7 +75,6 @@ async fn app_state() -> (Arc<AppState>, tempfile::TempDir) {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),

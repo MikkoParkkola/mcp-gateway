@@ -416,6 +416,7 @@ ticket_keyed_cases=(
   "changelog.d/9999.fixed.md::- Refuse a stale handle (MIK-9999)."
   "upgrading.d/9999-handles.md::Handles from before MIK-9999 are refused."
   "docs/release/inventory.d/9999.handles.tsv::src/x.rs	refuse	MIK-9999"
+  "src/gateway/meta_mcp/boundary_pins/delivery_refusals.d/9999.tsv::src/x.rs	refuse	MIK-9999"
   "tests/handles.rs::// MIK-9999.HANDLE.1: a stale handle is refused."
 )
 for i in "${!ticket_keyed_cases[@]}"; do

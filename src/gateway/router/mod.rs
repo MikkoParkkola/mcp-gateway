@@ -25,7 +25,6 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
@@ -41,6 +40,7 @@ pub(crate) use authorization::{
     sanitize_exempt,
 };
 mod backend_handlers;
+pub(crate) mod caller_hiding;
 mod handlers;
 // The web UI's Try-a-tool route runs this one MCP path in process (U12).
 #[cfg(feature = "webui")]
@@ -155,6 +155,7 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
@@ -167,6 +168,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
@@ -178,10 +181,16 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// Slice B T10: only an API-key match records a key's last use.
+#[cfg(all(test, feature = "webui"))]
+mod keys_last_used_callers_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod live_keys_tests;
+/// LOG.1: requests that log complete while stderr never drains.
+#[cfg(test)]
+mod log_lossy_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -258,6 +267,8 @@ mod live_flags_tests;
 /// ADR-023: a request keeps the generation it arrived with.
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod live_policy_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
 #[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;
@@ -355,6 +366,12 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// An echoed injected secret is kept out of the idempotency cache, task
+/// answers and the task store.
+#[cfg(all(test, feature = "firewall"))]
+mod secret_echo_stored_tests;
+#[cfg(test)]
+mod secret_echo_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
@@ -427,8 +444,6 @@ pub struct AppState {
     pub task_executor: Arc<crate::gateway::task_service::TaskExecutor>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
-    /// Tool access policy
-    pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
     pub mtls_policy: Arc<MtlsPolicy>,
     /// Whether URLs declared in `backends:` config are pre-authorised
@@ -847,8 +862,10 @@ pub(crate) fn compression() -> CompressionLayer {
 }
 
 /// Pin the published generation on a request before anything else runs. Every
-/// later judgement on the request reads this one, so a reload that publishes
-/// mid-request never mixes two configurations into one answer.
+/// later request-side judgement reads this one, so a reload that publishes
+/// mid-request never mixes two configurations into the request's checks; the
+/// answer side judges under this one and the published one (ADR-029, amended,
+/// item 5).
 async fn pin_generation(
     axum::extract::State(live): axum::extract::State<Arc<crate::config_reload::LiveConfig>>,
     mut request: axum::extract::Request,

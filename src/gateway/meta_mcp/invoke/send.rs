@@ -297,7 +297,9 @@ impl MetaMcp {
         let chain_slot = super::super::response_security::chain_receipt::ChainSlot::default();
         // A3 R1: only an MCP backend's own answer can be chain-eligible; a
         // capability's `Ok` also covers its local refusals and inner cache.
-        let mcp_backend = self.get_capabilities().is_none_or(|cap| server != cap.name);
+        let mcp_backend = self
+            .caller_capabilities()
+            .is_none_or(|cap| server != cap.name);
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,

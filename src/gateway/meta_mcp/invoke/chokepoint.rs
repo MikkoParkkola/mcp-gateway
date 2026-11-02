@@ -230,7 +230,7 @@ impl MetaMcp {
         ) {
             return Err(refusal);
         }
-        match self.get_capabilities() {
+        match self.caller_capabilities() {
             // Even an unwritable record answers so: the call dispatches
             // nothing (D3-a narrowed, lead ruling 2026-10-11).
             Some(cap) if cap.name == server => Err(Error::ToolNotFound(tool.to_string())),
@@ -274,6 +274,7 @@ impl MetaMcp {
         session_id: &str,
         (server, tool, arguments): (&str, &str, &Value),
         (caller, control_identity, target): (&str, &str, ScanTarget),
+        generation: Option<&crate::config_reload::Generation>,
     ) -> Option<Error> {
         let firewall = self.firewall.as_deref()?;
         // stdio only: no API keys on that transport.
@@ -282,7 +283,11 @@ impl MetaMcp {
             tool,
             key: crate::security::response_policy::KeyOf::NoKey,
         };
+        // The line's generation (ADR-029, amended, item 5); the published one
+        // only for a caller with none.
+        let published = self.current_generation();
         let verdict = firewall.check_request_keyed(
+            firewall.policy_under(generation.or(published.as_deref())),
             session_id,
             rule_target,
             arguments,
@@ -401,9 +406,11 @@ impl MetaMcp {
                 crate::security::response_policy::KeyOf::Key,
             ),
         };
-        let mut verdict = firewall.rescan(target, outbound.arguments);
+        let published = self.current_generation();
+        let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
+        let mut verdict = firewall.rescan(policy, target, outbound.arguments);
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(target, answers);
+            let answered = firewall.rescan(policy, target, answers);
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }

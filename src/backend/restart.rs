@@ -39,7 +39,7 @@ impl Backend {
         // `Backend::lifecycle`: without this, the check below can pass before
         // stop() latches, and the restart then registers a cleanup after the
         // final drain or starts a child after teardown.
-        let _lifecycle = self.lifecycle.read().await;
+        let lifecycle_held = self.lifecycle.read().await;
 
         // Refuse once shutdown has begun. `stop()` has already taken every
         // transport out of the pool; restarting here would spawn a fresh child
@@ -48,6 +48,7 @@ impl Backend {
         // its shutdown signal between ticks, so a probe already in flight can
         // reach this point during teardown.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(lifecycle_held);
             debug!(backend = %self.name, "Skipping force_restart: backend is stopping");
             return Ok(RestartOutcome::SkippedStopping);
         }
@@ -76,7 +77,7 @@ impl Backend {
         let set_out_cohort = self.login_gate.cohort();
 
         let entry = self.shared_entry();
-        let _guard = if interactive {
+        let start_held = if interactive {
             entry.start_lock.lock().await
         } else {
             entry.start_lock.try_lock().map_err(|_| required())?
@@ -88,6 +89,8 @@ impl Backend {
         // rather than hang forever. Correctness must not depend on having won
         // the lock, only on this flag.
         if self.replaced_transport_cleanups.lock().stopping {
+            drop(start_held);
+            drop(lifecycle_held);
             debug!(backend = %self.name, "Abandoning force_restart: shutdown began while waiting");
             return Ok(RestartOutcome::SkippedStopping);
         }

@@ -68,9 +68,10 @@ impl Seen {
                 file.seen.remove(&old);
             }
         }
-        if let Err(error) = write_record(&self.dir, &file_name(route), &*file)
-            .and_then(super::records::Placed::durable)
-        {
+        let persisted = write_record(&self.dir, &file_name(route), &*file)
+            .and_then(super::records::Placed::durable);
+        drop(guard);
+        if let Err(error) = persisted {
             // The id is still remembered in memory; only a restart could
             // reopen the window for it.
             tracing::warn!(%error, "events: inbound seen-set not persisted");

@@ -209,28 +209,12 @@ impl RelayGate {
     }
 
     pub(super) fn from_config(config: &CollusionConfig) -> Self {
-        let compile = |patterns: &[String]| {
-            patterns
-                .iter()
-                .filter_map(|p| glob::Pattern::new(p).ok())
-                .collect()
-        };
         Self {
             detector: detector_for(config),
             replay: Arc::new(ReplayReceipts::new()),
-            sources: compile(&config.sources),
-            non_egress: compile(&config.non_egress),
-            flows: config
-                .allowed_flows
-                .iter()
-                .take(MAX_ALLOWED_FLOWS)
-                .filter_map(|f| {
-                    Some((
-                        glob::Pattern::new(&f.source).ok()?,
-                        glob::Pattern::new(&f.egress).ok()?,
-                    ))
-                })
-                .collect(),
+            sources: compile_globs(&config.sources),
+            non_egress: compile_globs(&config.non_egress),
+            flows: compile_flows(&config.allowed_flows),
             text_cut: AtomicU64::new(0),
             plan_drop: AtomicU64::new(0),
             #[cfg(test)]
@@ -265,6 +249,30 @@ impl RelayGate {
             .filter(|(_, pattern)| pattern.matches(target))
             .fold(0, |mask, (bit, _)| mask | (1 << bit))
     }
+}
+
+/// `server:tool` globs, compiled; one that does not parse is dropped (the
+/// config load has already refused it by key path).
+pub(super) fn compile_globs(patterns: &[String]) -> Vec<glob::Pattern> {
+    patterns
+        .iter()
+        .filter_map(|p| glob::Pattern::new(p).ok())
+        .collect()
+}
+
+/// `allowed_flows`, compiled as (source, egress), at most
+/// [`MAX_ALLOWED_FLOWS`] entries.
+pub(super) fn compile_flows(flows: &[AllowedFlow]) -> Vec<(glob::Pattern, glob::Pattern)> {
+    flows
+        .iter()
+        .take(MAX_ALLOWED_FLOWS)
+        .filter_map(|f| {
+            Some((
+                glob::Pattern::new(&f.source).ok()?,
+                glob::Pattern::new(&f.egress).ok()?,
+            ))
+        })
+        .collect()
 }
 
 /// The detector `config` asks for; `None` when relay detection is off.

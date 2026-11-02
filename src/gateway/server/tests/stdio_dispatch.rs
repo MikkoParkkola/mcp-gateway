@@ -141,6 +141,7 @@ async fn ac_confirm_1a_the_refusal_marker_never_reaches_the_wire() {
     let tool_policy = test_tool_policy();
     let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
         tool_policy: tool_policy.as_ref(),
+        generation: None,
     };
     // Built by the gate itself, not by hand: a hand-made response would
     // only prove that serde skips a field, never that the refusal the

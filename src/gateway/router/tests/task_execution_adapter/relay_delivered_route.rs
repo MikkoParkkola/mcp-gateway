@@ -372,6 +372,7 @@ async fn the_suites_firewall_delivers_a_minted_continuation() {
         signing: None,
         chain_source: crate::protocol::ChainSource::default(),
         chain_nonce: None,
+        generation: None,
     };
     let response =
         crate::protocol::JsonRpcResponse::success(crate::protocol::RequestId::Number(1), answer);

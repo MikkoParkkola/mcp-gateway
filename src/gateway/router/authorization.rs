@@ -8,6 +8,7 @@ use tracing::warn;
 
 use super::AppState;
 use super::backend_choke::backend_for;
+use super::caller_hiding::{CallerParts, admits_some_tool};
 use crate::gateway::auth::AuthenticatedClient;
 pub(super) use crate::gateway::authz::{AuthorizationError, CallTarget, ToolTarget};
 use crate::gateway::authz::{BackendGrant, Decision, Emit, ToolAuthorizer, Transport};
@@ -361,8 +362,8 @@ pub(super) fn decide_tool_target<'a>(
         .map_err(|e| refused(DecisionKind::Syntax, e.clone()))
         .and_then(|()| crate::gateway::authz::authorize_backend(client, target.server))
         .and_then(|()| {
-            state
-                .tool_policy
+            generation
+                .tool_policy()
                 .check(target.server, target.tool)
                 .map_err(|e| refused(DecisionKind::ToolPolicy, e.to_string()))
         })
@@ -501,14 +502,8 @@ fn backend_admitted(
     if agent.is_none() && !mtls {
         return true;
     }
-    backend_tool_names(state, client, server)
-        .iter()
-        .any(|tool| {
-            agent.is_none_or(|id| {
-                check_scopes(&id.scopes, &id.client_id, server, tool, &Action::Execute).is_ok()
-            }) && (!mtls
-                || state.mtls_policy.evaluate(cert_identity, server, tool) != PolicyDecision::Deny)
-        })
+    let tools = backend_tool_names(state, client, server);
+    admits_some_tool(state, (agent, cert_identity), server, &tools)
 }
 
 /// The names of `server`'s known tools: an MCP backend's cache, or the
@@ -659,17 +654,16 @@ pub(crate) struct RouterAuthorizer<'a> {
     pub(super) oauth_agent_identity: Option<&'a OAuthAgentIdentity>,
     pub(super) cert_identity: Option<&'a CertIdentity>,
     /// The principal a refusal is recorded against, resolved once at
-    /// construction.
-    ///
-    /// Resolved and stored rather than derived in `caller_name`, which returns
-    /// a borrow and so could only ever hand back the API-key name. An
-    /// agent-authenticated or certificate-authenticated caller would otherwise
-    /// be audited as unauthenticated — and those are the refusals an incident
-    /// responder most needs to attribute.
+    /// construction: `caller_name` returns a borrow, so deriving it there
+    /// could only give the API-key name, and an agent- or certificate-
+    /// authenticated caller, whose refusals matter most, would read as none.
     pub(super) principal: Option<String>,
 }
 
 impl ToolAuthorizer for RouterAuthorizer<'_> {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        Some(self.generation)
+    }
     fn decide<'a>(&'a self, target: ToolTarget<'a>) -> Decision<'a> {
         decide_tool_target(
             self.state,
@@ -719,6 +713,7 @@ impl ToolAuthorizer for RouterAuthorizer<'_> {
 /// Owned twin of [`RouterAuthorizer`]: captured on the request thread so a
 /// background worker can rebuild the identical borrowed authorizer after the
 /// request future is gone.
+#[derive(Clone)]
 pub(crate) struct OwnedRouterAuthorizer {
     client: Option<AuthenticatedClient>,
     oauth_agent_identity: Option<OAuthAgentIdentity>,
@@ -738,6 +733,15 @@ impl OwnedRouterAuthorizer {
             cert_identity: cert.cloned(),
             principal: refusal_principal(client, oauth, cert),
         }
+    }
+
+    /// The caller's client, agent identity and certificate.
+    pub(super) fn parts(&self) -> CallerParts<'_> {
+        (
+            self.client.as_ref(),
+            self.oauth_agent_identity.as_ref(),
+            self.cert_identity.as_ref(),
+        )
     }
 
     /// The borrowed authorizer, judged by `generation`: the one current when

@@ -1,4 +1,5 @@
 # file	fn	needle	count (generated; see delivery_framing.rs)
+src/gateway/delivery_facts.rs	outlet	echo_refusal_delivered	1
 src/gateway/meta_mcp/admission.rs	admit_meta_sync_unrefunded	Error::json_rpc	1
 src/gateway/meta_mcp/admission.rs	admit_operation	Error::json_rpc	9
 src/gateway/meta_mcp/admission.rs	complete_delivery_read	to_value_lossy	1
@@ -21,6 +22,7 @@ src/gateway/meta_mcp/call_dispatch/task_intake.rs	first_unproven	error_response_
 src/gateway/meta_mcp/call_dispatch/task_intake.rs	task_intake_transient	error_response_preserving_status	1
 src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	JsonRpcResponse::error	1
 src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	JsonRpcResponse::of_error	1
+src/gateway/meta_mcp/caller_forward.rs	forward_for_caller	echo_refusal_delivered	1
 src/gateway/meta_mcp/caller_forward.rs	prompt_credential	JsonRpcResponse::error	2
 src/gateway/meta_mcp/caller_forward.rs	scope_refusal	error_response_preserving_status	1
 src/gateway/meta_mcp/chain_interim.rs	drive_chain	Error::json_rpc	1
@@ -58,6 +60,7 @@ src/gateway/meta_mcp/invoke/dispatch_guards.rs	from_response	Error::json_rpc	1
 src/gateway/meta_mcp/invoke/egress.rs	of	delivery_refusal_error	1
 src/gateway/meta_mcp/invoke/egress.rs	scan_egress	delivery_refusal_error	1
 src/gateway/meta_mcp/invoke/egress.rs	scan_task_read	delivery_refusal_error	1
+src/gateway/meta_mcp/invoke/errors.rs	dispatch_error_result	echo_refusal_delivered	1
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	Error::JsonRpc{}	1
 src/gateway/meta_mcp/invoke/legacy_bridge.rs	bridge_legacy_ask	dispatch_error_result	1
 src/gateway/meta_mcp/invoke/nonce_settle.rs	refused_submit_answer	error_response_preserving_status	1
@@ -150,6 +153,7 @@ src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_plain	bui
 src/gateway/router/backend_handlers/direct_dispatch/forward.rs	forward_sanitized	build_http_response	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	JsonRpcResponse::of_error_text	1
 src/gateway/router/backend_handlers/direct_failure.rs	answer	build_http_response	2
+src/gateway/router/backend_handlers/direct_failure.rs	answer	echo_refusal_delivered	1
 src/gateway/router/backend_handlers/direct_gate.rs	guard_before_credential	build_http_response	1
 src/gateway/router/backend_handlers/direct_gate.rs	guard_before_credential	error_response_preserving_status	1
 src/gateway/router/backend_handlers/direct_idempotency.rs	deliver_replay	build_http_response	4
