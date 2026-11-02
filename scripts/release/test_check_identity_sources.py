@@ -238,5 +238,47 @@ class SameNames(unittest.TestCase):
         b = "use crate::a::*;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
         self.assertEqual(len(self.run_b(b)), 1)
 
+    def test_an_imported_namesake_without_an_identity_passes(self):
+        c = "#[derive(Deserialize)]\npub enum Decision { Yes, No }\n"
+        b = "use crate::c::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
+        self.assertEqual(self.run_b(b, c), [])
+
+    def test_a_carrier_renamed_by_a_re_export_behind_a_glob_fails(self):
+        b = "use crate::c::*;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
+        self.assertEqual(len(self.run_b(b, "pub use crate::a::Decision as Choice;\n")), 1)
+
+    def test_a_wrapping_type_alias_of_a_carrier_fails(self):
+        b = "type Choice = Vec<crate::a::Decision>;\n#[derive(Deserialize)]\nstruct Body { d: Choice }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_carrier_through_a_module_alias_fails(self):
+        b = ("#[derive(Deserialize)]\nenum Decision { Yes }\nuse crate::a as m;\n"
+             "#[derive(Deserialize)]\nstruct Body { d: m::Decision }\n")
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_generic_parameter_shadowing_a_namesake_fails(self):
+        b = ("#[derive(Deserialize)]\nenum Decision { Yes }\n"
+             "#[derive(Deserialize)]\nstruct Body { d: u8 }\n"
+             "fn read<Decision: DeserializeOwned>(s: &str) -> Decision { serde_json::from_str(s).unwrap() }\n")
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_a_lowercase_carrier_fails(self):
+        b = "#[derive(Deserialize)]\nstruct body_t { who: GrantSubject }\nstruct Body;\n" \
+            "fn read(s: &str) -> body_t { serde_json::from_str(s).unwrap() }\n"
+        self.assertEqual(len(self.run_b(b)), 1)
+
+    def test_cfg_alternative_imports_of_one_name_fail(self):
+        c = "#[derive(Deserialize)]\npub enum Decision { Yes, No }\n"
+        b = ("#[cfg(unix)]\nuse crate::c::Decision;\n#[cfg(not(unix))]\nuse crate::a::Decision;\n"
+             "#[derive(Deserialize)]\nstruct Body { d: Decision }\n")
+        self.assertEqual(len(self.run_b(b, c)), 1)
+
+    def test_a_namesake_in_a_file_included_twice_fails(self):
+        c = "#[derive(Deserialize)]\npub enum Decision { Yes, No }\n"
+        b = "use crate::c::Decision;\n#[derive(Deserialize)]\nstruct Body { d: Decision }\n"
+        root = tree({"src/a.rs": self.A, "src/b.rs": b + self.READ, "src/c.rs": c},
+                    self.MODS + '#[path = "c.rs"]\nmod c2;\n')
+        self.assertEqual(len([v for v in cis.violations(root) if "deserializes" in v]), 1)
+
 if __name__ == "__main__":
     unittest.main()
