@@ -517,7 +517,7 @@ def _item(text: str, start: int, end: int) -> CfgItem:
     return CfgItem(start, end, text.count("\n", 0, start) + 1, text.count("\n", 0, max(start, end - 1)) + 1)
 
 
-def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "") -> CfgItems:
+def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "", report: dict | None = None) -> CfgItems:
     """Each outermost item in `text` under a cfg that `is_target` accepts
     (default `cfg_is_test`), by its own extent, with every unsure case
     resolved by `side`: a file whose parse errors are not exactly a listed
@@ -532,6 +532,8 @@ def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "") -> CfgI
     to_char = _char_offsets(text, src)
     errors = root.has_error
     known = errors and _error_signatures(root, src.split(b"\n")) == KNOWN_GAPS.get(path)
+    if report is not None:
+        report[path] = (bool(errors), bool(known))
     if errors and not known:
         whole = (_item(text, 0, len(text)),) if side is SafeSide.LEAN_LONG else ()
         return CfgItems(whole, True, False, ("parse errors outside the known-gap list",))
@@ -548,6 +550,17 @@ def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "") -> CfgI
             continue
         items.append(_item(text, to_char(start), to_char(end)))
     return CfgItems(tuple(items), bool(errors), bool(known), tuple(unsure))
+
+
+def parse_error_summary(report: dict) -> str:
+    """The line each gate prints: how many files it parsed with errors and
+    how many of those match the known-gap list, so a grammar regression or a
+    new gap shows as a changed count. `report` is what `cfg_items` filled."""
+    errors = sorted(path for path, (bad, _) in report.items() if bad)
+    known = [path for path in errors if report[path][1]]
+    line = f"cfg items: {len(report)} files parsed, {len(errors)} with parse errors ({len(known)} on the known-gap list)"
+    unlisted = [path for path in errors if not report[path][1]]
+    return line + (": unsure as a whole: " + ", ".join(unlisted) if unlisted else "")
 
 
 def item_extents_ignoring_errors(text: str, is_target=None) -> list[tuple[int, int]]:

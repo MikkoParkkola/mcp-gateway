@@ -409,6 +409,10 @@ def _cfg_rules():
     return module
 
 
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
 @functools.lru_cache(maxsize=4096)
 def test_lines(path: str, text: str) -> frozenset[int]:
     """The lines of `text` that hold test code: every line of a test path;
@@ -421,7 +425,7 @@ def test_lines(path: str, text: str) -> frozenset[int]:
     if TEST_FILE.search(path):
         return frozenset(range(1, count + 1))
     rules = _cfg_rules()
-    found = rules.cfg_items(text, rules.SafeSide.LEAN_LONG, path=path)
+    found = rules.cfg_items(text, rules.SafeSide.LEAN_LONG, path=path, report=PARSE_REPORT)
     return frozenset(n for item in found.items for n in range(item.first_line, item.last_line + 1))
 
 

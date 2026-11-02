@@ -124,6 +124,10 @@ def _is_non_product(expr: str, orphan) -> bool:
     return orphan.cfg_is_test(expr) or expr.strip() == "kani"
 
 
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
 def _blank_cfg_items(blanked: str, text: str, path: str, orphan) -> str:
     """`blanked` with every item under a non-product cfg blanked by its own
     extent, as the shared parser finds it in `text` (`blank` keeps offsets,
@@ -134,6 +138,7 @@ def _blank_cfg_items(blanked: str, text: str, path: str, orphan) -> str:
         orphan.SafeSide.LEAN_SHORT,
         is_target=lambda expr: _is_non_product(expr, orphan),
         path=path,
+        report=PARSE_REPORT,
     )
     out = list(blanked)
     for item in found.items:
@@ -1014,6 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
         return exc.code if isinstance(exc.code, int) else 1
     findings = find_new_sites(current, baseline)
     stale = find_stale_allowances(current, baseline)
+    print(_ORPHAN.parse_error_summary(PARSE_REPORT))
     if findings or stale:
         for rel, line, norm in findings:
             print(f"{rel}:{line}: new panic site without // invariant: {norm}")

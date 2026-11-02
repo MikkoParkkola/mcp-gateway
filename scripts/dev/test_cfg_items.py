@@ -133,5 +133,20 @@ class KnownGaps(unittest.TestCase):
                 self.assertEqual(G.item_extents_ignoring_errors(text), [(start, start + 3)], text)
 
 
+class Report(unittest.TestCase):
+    """Each gate prints how many files it parsed with errors."""
+
+    def test_the_summary_counts_errors_and_known_gaps(self):
+        report: dict = {}
+        G.cfg_items("fn a() {}\n", LONG, path="src/clean.rs", report=report)
+        G.cfg_items(Unsure.BROKEN, LONG, path="src/broken.rs", report=report)
+        G.cfg_items(KnownGaps.SHAPES["binding with a path pattern"], LONG, path="src/other.rs", report=report)
+        self.assertEqual(
+            G.parse_error_summary(report),
+            "cfg items: 3 files parsed, 2 with parse errors (0 on the known-gap list): "
+            "unsure as a whole: src/broken.rs, src/other.rs",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

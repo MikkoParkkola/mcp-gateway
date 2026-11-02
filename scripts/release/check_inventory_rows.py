@@ -109,13 +109,17 @@ def bodyless(lines: list[str], line: int) -> bool:
     return False
 
 
+# Which files the finder parsed with errors, for the line the gate prints.
+PARSE_REPORT: dict[str, tuple[bool, bool]] = {}
+
+
 def test_lines(lines: list[str], path: str = "") -> set[int]:
     """1-based line numbers inside an item under a test-only cfg, by its own
     extent, as the orphan gate's shared parser finds it in the original
     `lines`. This gate looks for product functions, so an unsure case stays
     product code: LEAN_SHORT."""
     gate = orphan_gate()
-    found = gate.cfg_items("\n".join(lines), gate.SafeSide.LEAN_SHORT, path=path)
+    found = gate.cfg_items("\n".join(lines), gate.SafeSide.LEAN_SHORT, path=path, report=PARSE_REPORT)
     return {n for item in found.items for n in range(item.first_line, item.last_line + 1)}
 
 
@@ -299,6 +303,7 @@ def main(argv: list[str]) -> int:
         broken = error.problems
         missing = []
         misnamed = []
+    print(orphan_gate().parse_error_summary(PARSE_REPORT))
     for problem in broken:
         print(f"inventory: {problem}")
     if broken:
