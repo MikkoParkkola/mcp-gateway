@@ -1,0 +1,46 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! A tool-policy refusal on the meta route records the deny entry that made
+//! it, by its keyed id, and the delivered error never carries the id.
+
+use serde_json::json;
+
+use super::{api_key_caller, context, meta, ok_result, records};
+use crate::gateway::authz::ToolPolicyAuthorizer;
+use crate::security::rule_id::RuleId;
+use crate::security::{ToolPolicy, ToolPolicyConfig};
+
+#[tokio::test]
+async fn a_meta_tool_policy_refusal_records_its_rule_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = meta(Ok(ok_result()), &dir);
+    let key = crate::gateway::record_principal::test_record_key().rule_id_key();
+    let policy = ToolPolicy::from_config_keyed(
+        &ToolPolicyConfig {
+            deny: vec!["alpha:read".to_string()],
+            use_default_deny: false,
+            ..ToolPolicyConfig::default()
+        },
+        &key,
+    );
+    let authorizer = ToolPolicyAuthorizer {
+        tool_policy: &policy,
+        generation: None,
+    };
+    let who = api_key_caller();
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    let error = meta
+        .invoke_tool(&args, None, &context(&authorizer, &who))
+        .await
+        .expect_err("premise: the call is refused");
+    let all = records(&dir);
+    let [record] = all.as_slice() else {
+        panic!("one record: {all:?}");
+    };
+    let bytes = serde_json::to_vec(&("deny", "alpha:read")).expect("serialises");
+    let expected = RuleId::of("tool_policy", &key, &bytes);
+    assert_eq!(record["decision"]["kind"], "tool_policy", "{record}");
+    assert_eq!(record["decision"]["rule_id"], expected.as_str(), "{record}");
+    let hex = expected.as_str().trim_start_matches("tool_policy:");
+    assert!(!error.to_string().contains(hex), "{error}");
+}

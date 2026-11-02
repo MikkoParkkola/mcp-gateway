@@ -469,6 +469,8 @@ mod surfaced_replay;
 mod decision_kinds;
 // A dispatched call records the effect its tool declared.
 mod effect_records;
+// A tool-policy refusal names its rule.
+mod rule_ids;
 
 /// MIK-7735. A backend's own `-32001` / `-32004` answer is the peer's
 /// refusal, not the gateway's policy: the record says `error`, with the

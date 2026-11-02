@@ -535,6 +535,20 @@ pub(crate) fn denial_kind(
     kept_denial(server, tool).and_then(|(_, kind)| kind)
 }
 
+/// The check and its rule [`note_denial_code`] kept for `(server, tool)`, as
+/// one pair read in one lookup.
+pub(crate) fn denial(
+    server: &str,
+    tool: &str,
+) -> Option<(
+    crate::security::decision_record::DecisionKind,
+    Option<crate::security::rule_id::RuleId>,
+)> {
+    kept_denial(server, tool)
+        .and_then(|(_, kind)| kind)
+        .map(|kind| (kind, Some(crate::security::rule_id::stub_id().clone())))
+}
+
 fn kept_denial(
     server: &str,
     tool: &str,

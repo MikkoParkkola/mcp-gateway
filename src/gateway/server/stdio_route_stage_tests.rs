@@ -61,6 +61,15 @@ async fn route_stage<T>(
     targets: &[CallTarget<'_>],
     read: impl FnOnce() -> T,
 ) -> (Option<crate::protocol::JsonRpcResponse>, T) {
+    route_stage_as(&RefusesArguments, targets, read).await
+}
+
+/// [`route_stage`] judged by `authorizer`.
+async fn route_stage_as<T>(
+    authorizer: &dyn crate::gateway::authz::ToolAuthorizer,
+    targets: &[CallTarget<'_>],
+    read: impl FnOnce() -> T,
+) -> (Option<crate::protocol::JsonRpcResponse>, T) {
     let registry = Arc::new(BackendRegistry::new());
     assert!(registry.register(Arc::new(Backend::new(
         "alpha",
@@ -70,7 +79,7 @@ async fn route_stage<T>(
     ))));
     let meta = MetaMcp::new(registry);
     let scope = crate::gateway::meta_mcp::InvokeScope {
-        authorizer: &RefusesArguments,
+        authorizer,
         is_admin: false,
         api_key_name: None,
         grant_key: None,
@@ -140,4 +149,36 @@ async fn a_lone_withheld_target_records_refused() {
             crate::gateway::delivery_facts::scope(route_stage(&targets, effect)).await;
         assert_eq!(recorded, expected, "{} targets", targets.len());
     }
+}
+
+/// A stdio tool-policy refusal, withheld at the route stage, keeps the deny
+/// entry's id beside its kind in the visibility memo the record reads.
+#[tokio::test]
+async fn a_withheld_stdio_tool_policy_refusal_keeps_its_rule_id() {
+    let key = crate::gateway::record_principal::test_record_key().rule_id_key();
+    let policy = crate::security::ToolPolicy::from_config_keyed(
+        &crate::security::ToolPolicyConfig {
+            deny: vec!["alpha:read".to_string()],
+            use_default_deny: false,
+            ..crate::security::ToolPolicyConfig::default()
+        },
+        &key,
+    );
+    let authorizer = crate::gateway::authz::ToolPolicyAuthorizer {
+        tool_policy: &policy,
+        generation: None,
+    };
+    let (_, noted) = route_stage_as(&authorizer, &[target(false)], || {
+        crate::gateway::meta_mcp::visible::memo::denial("alpha", "read")
+    })
+    .await;
+    let bytes = serde_json::to_vec(&("deny", "alpha:read")).expect("serialises");
+    let expected = crate::security::rule_id::RuleId::of("tool_policy", &key, &bytes);
+    assert_eq!(
+        noted,
+        Some((
+            crate::security::decision_record::DecisionKind::ToolPolicy,
+            Some(expected)
+        ))
+    );
 }
