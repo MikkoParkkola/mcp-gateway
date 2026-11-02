@@ -194,6 +194,15 @@ pub(in crate::gateway::ui) fn rows_after(
                 if mark.counter > stop.counter {
                     break Outcome::Done;
                 }
+                // Counters run without gaps within a log, and retention removes
+                // only the oldest: a jump means rows between were lost.
+                if at
+                    .last
+                    .as_ref()
+                    .is_some_and(|l| mark.counter != l.counter + 1)
+                {
+                    break Outcome::Reset;
+                }
                 let line = Line {
                     log: log.kind.log(),
                     entry,

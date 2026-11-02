@@ -216,6 +216,28 @@ fn f9b_retention_removing_the_segment_restarts_into_a_reset() {
 }
 
 #[test]
+fn f9b_a_new_rewrite_generation_restarts() {
+    let mut s = suspended(calls(1));
+    let mut l = log(&s.path, StreamKind::Activity);
+    l.generation = 1;
+    let stop = s.w.marks.last().unwrap().clone();
+    let cursor = s.cursor();
+    let next = rows_after(
+        &l,
+        Some(&cursor),
+        Some(&stop),
+        &Access::All,
+        SMALL,
+        &mut s.search,
+    )
+    .unwrap();
+    assert!(
+        next.diag.restarted,
+        "the log was replaced since the last call"
+    );
+}
+
+#[test]
 fn e2_with_no_anchor_yet_a_rotation_continues_and_a_replacement_restarts() {
     let mut rotated = suspended(Vec::new());
     let saved = rotated.first.diag.read_end.unwrap();

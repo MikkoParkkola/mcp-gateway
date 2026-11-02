@@ -380,3 +380,43 @@ fn f15_a_counter_ahead_of_the_head_resets() {
         );
     }
 }
+
+#[test]
+fn a_missing_middle_segment_resets_rather_than_skipping_its_rows() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &[calls(2), calls(2), calls(2)]);
+    std::fs::remove_file(sealed_path(&path, 2)).unwrap();
+    let l = log(&path, StreamKind::Activity);
+    let pages = drain(
+        &l,
+        Some(&w.marks[0]),
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    assert!(
+        pages.iter().any(|p| p.reset),
+        "a gap in the segments resets"
+    );
+    assert!(
+        !counters(&pages).contains(&5),
+        "no row past the gap is served as the cursor's successor"
+    );
+}
+
+#[test]
+fn head_reads_past_an_unreadable_tail_longer_than_one_read() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let mut recs = calls(2);
+    recs.push(Rec::Junks(1500, 2047));
+    let w = write(&path, &[recs]);
+    let l = log(&path, StreamKind::Activity);
+    assert_eq!(
+        super::super::head(&l).unwrap().as_ref(),
+        w.marks.last(),
+        "a tail of junk is not an empty log"
+    );
+}
