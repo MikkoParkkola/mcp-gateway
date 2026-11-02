@@ -433,7 +433,7 @@ pub(super) fn record_outcome(
 /// What the caller of a confirm asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Decision {
+pub(super) enum ConfirmChoice {
     Confirm,
     Cancel,
 }
@@ -541,9 +541,9 @@ pub(super) async fn decide(
     backend: &Backend,
     owner: &str,
     attempt: &str,
-    decision: Decision,
+    decision: ConfirmChoice,
 ) -> Decided {
-    if decision == Decision::Cancel {
+    if decision == ConfirmChoice::Cancel {
         return cancel_flow(backend, owner, attempt).await;
     }
     let taken = match take_for(backend, owner, attempt) {

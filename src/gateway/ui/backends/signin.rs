@@ -20,7 +20,7 @@ use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
-use super::signin_flow::{Decided, Decision, Holder, Started, decide, start};
+use super::signin_flow::{ConfirmChoice, Decided, Holder, Started, decide, start};
 use crate::backend::Backend;
 use crate::gateway::auth::{AuthenticatedClient, Now, SessionCheck, SessionLimits, Touch};
 use crate::gateway::record_principal::sign_in_owner;
@@ -281,7 +281,7 @@ fn in_progress(
 /// The body of a confirm.
 #[derive(serde::Deserialize)]
 struct ConfirmBody {
-    decision: Decision,
+    decision: ConfirmChoice,
     attempt_id: String,
 }
 
@@ -322,7 +322,7 @@ pub(super) async fn confirm_sign_in(
     let decided = decide(&state, &backend, &owner, &ask.attempt_id, ask.decision).await;
     let (response, outcome) = match decided {
         Decided::Done => {
-            let word = if ask.decision == Decision::Confirm {
+            let word = if ask.decision == ConfirmChoice::Confirm {
                 "confirmed"
             } else {
                 "cancelled"

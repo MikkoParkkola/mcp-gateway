@@ -180,7 +180,7 @@ async fn a_dropped_confirm_reads_as_cancelled() {
                 &gw.backend,
                 &tag,
                 &attempt,
-                super::super::signin_flow::Decision::Confirm,
+                super::super::signin_flow::ConfirmChoice::Confirm,
             )
             .await
         }
@@ -218,7 +218,7 @@ async fn a_confirm_after_the_backend_cancel_signal_is_refused() {
         &gw.backend,
         &tag,
         &attempt,
-        super::super::signin_flow::Decision::Confirm,
+        super::super::signin_flow::ConfirmChoice::Confirm,
     )
     .await;
 
