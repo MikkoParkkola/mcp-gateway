@@ -148,7 +148,7 @@ class RealTree(unittest.TestCase):
                      for v in cis.violations(HERE.parents[1])}
             self.assertEqual(found, {
                 "src/identity_grants.rs new", "src/identity_grants.rs checked",
-                "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs from_der",
+                "src/key_server/oidc_identity.rs checked", "src/mtls/identity.rs parse",
             })
         finally:
             cis.ALLOWED.update(saved)
