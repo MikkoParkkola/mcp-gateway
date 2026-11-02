@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::super::delivery_framing::is_refusal_name;
-use super::{ASSOCIATED, Collect, Event, FACTS, FACTS_FILE, Kind, module_of, monitored_tokens};
+use super::{ASSOCIATED, Collect, Event, FACTS, FACTS_FILE, Kind, monitored_tokens};
 
 /// Effect writers that are not call needles: `step` scopes one composite
 /// step and notes its outcome; the step's own raise is the row.
@@ -31,6 +31,45 @@ pub(in super::super) struct Derived {
     pub(in super::super) plain: Vec<String>,
 }
 
+/// The module path a file declares, from the crate root: `src/a/b.rs` is
+/// `[a, b]`, `src/a/mod.rs` is `[a]`, and `src/lib.rs` is `[]`.
+fn module_path(file: &str) -> Vec<String> {
+    let path = file
+        .strip_prefix("src/")
+        .unwrap_or(file)
+        .trim_end_matches(".rs");
+    let mut parts: Vec<String> = path.split('/').map(str::to_string).collect();
+    if matches!(
+        parts.last().map(String::as_str),
+        Some("mod" | "lib" | "main")
+    ) {
+        parts.pop();
+    }
+    parts
+}
+
+/// The module a path prefix names from `caller`'s file: `crate::` from the
+/// root, `super::` from the parent, `self::` (or a plain name) from the
+/// caller's own module.
+fn resolve(prefix: &[String], caller: &str) -> Vec<String> {
+    let mut module = module_path(caller);
+    let mut rest = prefix;
+    match rest.first().map(String::as_str) {
+        Some("crate") => {
+            module.clear();
+            rest = &rest[1..];
+        }
+        Some("self") => rest = &rest[1..],
+        _ => {}
+    }
+    while rest.first().is_some_and(|s| s == "super") {
+        module.pop();
+        rest = &rest[1..];
+    }
+    module.extend(rest.iter().cloned());
+    module
+}
+
 /// A construction's needle: its shape, and `wrapped` inside a raise.
 fn construct_needle(variant: &str, form: &str, wrapped: bool) -> String {
     let shape = match form {
@@ -42,22 +81,48 @@ fn construct_needle(variant: &str, form: &str, wrapped: bool) -> String {
     format!("{shape}{wrap}")
 }
 
-/// A macro invocation's two needles: its `delivery_facts` raise row, and
-/// its plain-refusal row (the other monitored names, joined).
-fn macro_needles(tokens: &str, helpers: &BTreeSet<String>) -> (Option<String>, Option<String>) {
+/// A macro invocation's two needles: its raise row (`delivery_facts`, or a
+/// raise helper called in its tokens: the name followed by `(`, so a log
+/// message's word is not one), and its plain-refusal row (the other
+/// monitored names, joined).
+fn macro_needles(
+    tokens: &str,
+    helpers: &BTreeSet<String>,
+    raise_names: &BTreeSet<String>,
+) -> (Option<String>, Option<String>) {
     let names = monitored_tokens(tokens, helpers);
     let is_facts = |n: &&String| *n == FACTS || n.starts_with(&format!("{FACTS}*"));
-    let facts = names
-        .iter()
-        .find(is_facts)
-        .map(|n| format!("{n} (in macro)"));
+    let mut raise: Vec<String> = names.iter().filter(is_facts).cloned().collect();
+    for name in raise_names {
+        let calls = called_count(tokens, name);
+        if calls == 1 {
+            raise.push(name.clone());
+        } else if calls > 1 {
+            raise.push(format!("{name}*{calls}"));
+        }
+    }
     let plain: Vec<&str> = names
         .iter()
         .filter(|n| !is_facts(n))
         .map(String::as_str)
         .collect();
-    let plain = (!plain.is_empty()).then(|| format!("{} (in macro)", plain.join(",")));
-    (facts, plain)
+    let joined = |v: Vec<&str>| (!v.is_empty()).then(|| format!("{} (in macro)", v.join(",")));
+    (
+        joined(raise.iter().map(String::as_str).collect()),
+        joined(plain),
+    )
+}
+
+/// How often `name` is called in macro tokens: the word, then `(`.
+fn called_count(tokens: &str, name: &str) -> usize {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    tokens
+        .match_indices(name)
+        .filter(|(at, _)| {
+            !tokens[..*at].chars().next_back().is_some_and(ident)
+                && tokens[at + name.len()..].trim_start().starts_with('(')
+        })
+        .count()
 }
 
 fn fns_with(events: &[Event], file: &str, hit: impl Fn(&Kind) -> bool) -> BTreeSet<String> {
@@ -100,15 +165,9 @@ impl Collect {
         loop {
             let builds = |e: &Event| match &e.kind {
                 Kind::Construct { .. } => true,
-                Kind::Call {
-                    owner,
-                    name,
-                    method,
-                    ..
-                } => {
+                Kind::Call { owner, name, .. } => {
                     (owner.as_deref() == Some("Error") && ASSOCIATED.contains(&name.as_str()))
                         || self.calls_helper(e, &helpers)
-                        || (*method && helpers.iter().any(|h| h.1 == *name))
                 }
                 _ => false,
             };
@@ -132,18 +191,11 @@ impl Collect {
         }
     }
 
-    /// Whether `event` names one of `helpers`: a non-method call or value by
-    /// [`Self::names_fn`], a method call by its name (a method's owner type
-    /// is not resolved).
+    /// Whether `event` names one of `helpers`, by [`Self::names_fn`].
     fn calls_helper(&self, event: &Event, helpers: &BTreeSet<(String, String)>) -> bool {
-        match &event.kind {
-            Kind::Call {
-                name, method: true, ..
-            } => helpers.iter().any(|h| h.1 == *name),
-            _ => helpers
-                .iter()
-                .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str()))),
-        }
+        helpers
+            .iter()
+            .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str())))
     }
 
     /// Whether `event` (a non-method call or value use) names the function
@@ -152,9 +204,9 @@ impl Collect {
     /// name is that module.
     fn names_fn(&self, event: &Event, (file, name): (&str, &str)) -> bool {
         let Kind::Call {
-            owner,
             name: called,
-            method: false,
+            method,
+            prefix,
             ..
         } = &event.kind
         else {
@@ -163,16 +215,38 @@ impl Collect {
         if called != name {
             return false;
         }
-        let module = module_of(file);
-        match owner {
-            Some(owner) => *owner == module,
-            None => {
-                event.file == file
-                    || self.uses.iter().any(|(f, path)| {
-                        *f == event.file && path.ends_with(&[module.clone(), name.to_string()])
-                    })
-            }
+        // A method call names a method of that name; its owner type is not
+        // resolved, so only a function with a receiver can match.
+        if *method {
+            return self.methods.contains(&(file.to_string(), name.to_string()));
         }
+        let target = module_path(file);
+        if prefix.is_empty() {
+            // A bare name: defined in the caller's file, or imported by name
+            // or by glob from the defining module.
+            return event.file == file
+                || self.uses.iter().any(|(f, path)| {
+                    *f == event.file
+                        && match path.split_last() {
+                            Some((last, module)) if last == "*" => {
+                                resolve(module, &event.file) == target
+                            }
+                            Some((last, module)) => {
+                                last == name
+                                    && (resolve(module, &event.file) == target
+                                        || module.last() == target.last())
+                            }
+                            None => false,
+                        }
+                });
+        }
+        // `Self::f(..)` inside an impl names a function of the same file.
+        if prefix.len() == 1 && prefix[0] == "Self" {
+            return event.file == file;
+        }
+        // A path: resolved from the caller's module, or (a re-export such as
+        // `crate::gateway::gateway_writes`) matched by its last module name.
+        resolve(prefix, &event.file) == target || prefix.last() == target.last()
     }
 
     /// Raise helpers: functions outside `delivery_facts.rs` returning `()`
@@ -223,6 +297,7 @@ impl Collect {
         let helper_fns = self.helper_set();
         let helpers: BTreeSet<String> = helper_fns.iter().map(|h| h.1.clone()).collect();
         let raise_helpers = self.raise_helpers(&needles);
+        let raise_names: BTreeSet<String> = raise_helpers.iter().map(|h| h.1.clone()).collect();
 
         let mut raises = BTreeMap::new();
         let mut plain = Vec::new();
@@ -271,6 +346,12 @@ impl Collect {
                 Kind::Call {
                     name, method: true, ..
                 } => {
+                    if raise_helpers
+                        .iter()
+                        .any(|h| self.names_fn(event, (h.0.as_str(), h.1.as_str())))
+                    {
+                        *raises.entry(format!("{key}\tvia {name}")).or_insert(0) += 1;
+                    }
                     if gateway && self.calls_helper(event, &helper_fns) && !is_refusal_name(name) {
                         plain_needle = Some(format!("via {name}"));
                     }
@@ -284,7 +365,7 @@ impl Collect {
                     plain_needle = Some(format!("via {name} (closure)"));
                 }
                 Kind::InMacro(tokens) => {
-                    let (facts, plain_names) = macro_needles(tokens, &helpers);
+                    let (facts, plain_names) = macro_needles(tokens, &helpers, &raise_names);
                     if let Some(facts) = facts {
                         *raises.entry(format!("{key}\t{facts}")).or_insert(0) += 1;
                     }

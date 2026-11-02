@@ -55,7 +55,10 @@ pub(super) fn collect(root: &std::path::Path, roots: &[&str]) -> Collect {
 
 /// Reviewed aliases of the crate error the guard admits: (file, item).
 /// A private alias in a function body there, out of the gateway's reach.
-const ALIAS_ALLOW: [(&str, &str); 1] = [("src/security/needles.rs", "use crate::Error as E")];
+const ALIAS_ALLOW: [(&str, &str); 1] = [(
+    "src/security/needles.rs",
+    "use crate::Error as E (in fn scrub_error)",
+)];
 
 fn crate_collect() -> (Collect, Derived) {
     let collect = collect(crate_root(), &ROOTS);
@@ -171,7 +174,18 @@ fn no_monitored_variant_is_imported_aliased_or_globbed() {
         .filter(|(file, text)| !ALIAS_ALLOW.contains(&(file.as_str(), text.as_str())))
         .map(|(file, text)| format!("{file}: {text}"))
         .collect();
-    found.extend(collect.helper_renames(&derived.helpers));
+    let names: BTreeSet<String> = derived
+        .helpers
+        .iter()
+        .cloned()
+        .chain(
+            derived
+                .raise_helpers
+                .iter()
+                .filter_map(|h| h.rsplit("::").next().map(str::to_string)),
+        )
+        .collect();
+    found.extend(collect.helper_renames(&names));
     found.extend(
         collect
             .error_impls
@@ -620,4 +634,28 @@ fn the_unbindable_confirmation_is_pending() {
         .find(|l| l.starts_with(&key))
         .unwrap_or_else(|| panic!("no row for the unbindable refusal: {key}"));
     assert_eq!(row(line).class, "pending:unbindable-confirmation", "{line}");
+}
+
+/// Every raise helper has at least one caller row (code review, muse): a
+/// listed helper whose calls all go unresolved shows a call form the scan
+/// misses, instead of passing silently.
+#[test]
+fn each_raise_helper_has_a_caller_row() {
+    let (_, derived) = crate_collect();
+    let unrowed: Vec<&String> = derived
+        .raise_helpers
+        .iter()
+        .filter(|helper| {
+            let name = helper.rsplit("::").next().unwrap_or_default();
+            !derived.raises.keys().any(|key| {
+                key.split('\t')
+                    .nth(2)
+                    .is_some_and(|needle| needle.starts_with(&format!("via {name}")))
+            })
+        })
+        .collect();
+    assert!(
+        unrowed.is_empty(),
+        "raise helpers with no caller row: {unrowed:?}"
+    );
 }

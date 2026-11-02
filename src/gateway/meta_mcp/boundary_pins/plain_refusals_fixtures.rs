@@ -181,7 +181,18 @@ fn guard_hits(gateway: &str, other: &str) -> Vec<String> {
     let (_dir, collect, derived) = fixture(gateway, other);
     let mut hits: Vec<String> = collect.aliases.iter().map(|(_, t)| t.clone()).collect();
     hits.extend(collect.raise_imports(&derived));
-    hits.extend(collect.helper_renames(&derived.helpers));
+    let names: std::collections::BTreeSet<String> = derived
+        .helpers
+        .iter()
+        .cloned()
+        .chain(
+            derived
+                .raise_helpers
+                .iter()
+                .filter_map(|h| h.rsplit("::").next().map(str::to_string)),
+        )
+        .collect();
+    hits.extend(collect.helper_renames(&names));
     hits.extend(
         collect
             .error_impls
@@ -485,4 +496,110 @@ fn f17_a_second_construction_in_a_macro_changes_its_row() {
         ),
         ["f Error::RateLimited*2 (in macro) 1"]
     );
+}
+
+/// F18 (delta review HIGH): a raise helper that is a method, called as
+/// `self.helper()`, is a raise row; a free function of that name is not.
+#[test]
+fn f18_a_method_raise_helper_call_is_a_raise_row() {
+    let gateway = "struct G;\n\
+                   impl G {\n\
+                   fn advise(&self) { crate::gateway::delivery_facts::refused(()); }\n\
+                   fn deliver(&self) { self.advise(); }\n\
+                   }\n\
+                   fn other(x: &X) { x.unrelated(); }";
+    let rows = raise_rows(gateway, "");
+    assert!(
+        rows.contains(&"src/gateway/a.rs deliver via advise 1".to_string()),
+        "{rows:?}"
+    );
+    let free = raise_rows(
+        &format!("{RAISE_HELPER}fn g(x: &X) {{ x.withheld_for(1); }}"),
+        "",
+    );
+    assert!(!free.iter().any(|r| r.contains(" g ")), "{free:?}");
+}
+
+/// F19 (delta review, muse): calls through `super::`, `use super::helper`
+/// and `use super::*` resolve to the parent module's raise helper.
+#[test]
+fn f19_a_parent_module_raise_helper_is_resolved() {
+    let dir = tempfile::tempdir().expect("a temp crate");
+    for (path, text) in [
+        ("src/lib.rs", "mod gateway;\n"),
+        (
+            "src/gateway/mod.rs",
+            "mod a;\nmod b;\nmod c;\nmod delivery_facts;\n\
+             fn withheld_for(r: u8) { if r > 0 { crate::gateway::delivery_facts::refused(()); } }\n",
+        ),
+        (
+            "src/gateway/delivery_facts.rs",
+            "pub(crate) fn raise(e: Effect) { with(|facts| facts.effect = e); }\n\
+             pub(crate) fn refused<E>(error: E) -> E { raise(Effect::Refused); error }\n",
+        ),
+        ("src/gateway/a.rs", "fn f() { super::withheld_for(1); }"),
+        (
+            "src/gateway/b.rs",
+            "use super::withheld_for;\nfn g() { withheld_for(2); }",
+        ),
+        (
+            "src/gateway/c.rs",
+            "use super::*;\nfn h() { withheld_for(3); }",
+        ),
+    ] {
+        let path = dir.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(path, text).expect("write");
+    }
+    let derived = collect(dir.path(), &["src/lib.rs"]).derive();
+    for row in [
+        "src/gateway/a.rs\tf\tvia withheld_for",
+        "src/gateway/b.rs\tg\tvia withheld_for",
+        "src/gateway/c.rs\th\tvia withheld_for",
+    ] {
+        assert!(
+            derived.raises.contains_key(row),
+            "{row}: {:?}",
+            derived.raises
+        );
+    }
+}
+
+/// F20 (delta review): `Self::helper()` inside an impl reaches an
+/// associated plain-refusal helper.
+#[test]
+fn f20_a_self_helper_call_is_a_row() {
+    let rows = plain(
+        "impl G {\n\
+         fn helper() -> Error { Error::Config(String::new()) }\n\
+         fn f() -> Error { Self::helper() }\n\
+         }",
+    );
+    assert!(rows.contains(&"f via helper 1".to_string()), "{rows:?}");
+}
+
+/// F21 (delta review): a renamed import of a raise helper is a guard hit.
+#[test]
+fn f21_a_renamed_raise_helper_import_is_a_hit() {
+    let hits = guard_hits(
+        RAISE_HELPER,
+        "use crate::gateway::a::withheld_for as record;",
+    );
+    assert_eq!(hits, ["src/other/b.rs: use withheld_for as record"]);
+}
+
+/// F22 (delta review): a raise helper called inside a macro is a raise
+/// row; the word in a log message is not.
+#[test]
+fn f22_a_raise_helper_called_in_a_macro_is_a_raise_row() {
+    let gateway = format!(
+        "{RAISE_HELPER}fn f() {{ select! {{ _ = t => withheld_for(1), _ = c => {{}} }} }}\n\
+         fn g() {{ warn!(\"withheld_for is skipped\"); }}"
+    );
+    let rows = raise_rows(&gateway, "");
+    assert!(
+        rows.contains(&"src/gateway/a.rs f withheld_for (in macro) 1".to_string()),
+        "{rows:?}"
+    );
+    assert!(!rows.iter().any(|r| r.contains(" g ")), "{rows:?}");
 }

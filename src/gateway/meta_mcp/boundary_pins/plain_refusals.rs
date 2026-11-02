@@ -61,6 +61,9 @@ pub(super) enum Kind {
         /// A value handed to a combinator (`.map_err(f)`), the form the
         /// refusal scan in `delivery_framing.rs` reads.
         combinator: bool,
+        /// The full path's segments before the name (empty for a method or
+        /// a bare name), for resolving `super::`, `self::` and `crate::`.
+        prefix: Vec<String>,
     },
     /// A call of a local closure bound to `refuse` or `refusal`.
     Closure(String),
@@ -89,6 +92,9 @@ pub(super) struct Collect {
     /// Functions outside `delivery_facts.rs` returning `()`: (file, name).
     /// One that raises is a raise helper ([`Collect::raise_helpers`]).
     unit_fns: BTreeSet<(String, String)>,
+    /// Functions with a receiver (`&self`): (file, name). A method call
+    /// resolves only to one of these.
+    methods: BTreeSet<(String, String)>,
     /// Every import leaf: (file, path segments).
     uses: Vec<(String, Vec<String>)>,
     /// Imports and aliases the recogniser cannot follow: (file, item text).
@@ -191,21 +197,6 @@ fn all_exprs(expr: &syn::Expr, into: &mut HashSet<usize>) {
     syn::visit::Visit::visit_expr(&mut Gather(into), expr);
 }
 
-/// The module name a file declares: its stem, or its directory's name
-/// for a `mod.rs`.
-fn module_of(file: &str) -> String {
-    let path = std::path::Path::new(file);
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
-    match stem.as_deref() {
-        Some("mod") => path
-            .parent()
-            .and_then(std::path::Path::file_name)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        _ => stem.unwrap_or_default(),
-    }
-}
-
 /// How often `word` occurs in `text` with no identifier character either side.
 fn word_count(text: &str, word: &str) -> usize {
     let ident = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
@@ -251,6 +242,10 @@ impl Collect {
     fn fn_sig(&mut self, at: &Place, sig: &syn::Signature, block: &syn::Block) {
         if returns_error(sig) {
             self.error_valued
+                .insert((at.file.clone(), sig.ident.to_string()));
+        }
+        if sig.receiver().is_some() {
+            self.methods
                 .insert((at.file.clone(), sig.ident.to_string()));
         }
         if matches!(sig.output, syn::ReturnType::Default)
@@ -343,6 +338,15 @@ fn crate_error(segments: &[String]) -> bool {
     )
 }
 
+/// An alias item's text with the function it sits in, if any: a reviewed
+/// function-local alias stays allowed only while it stays there.
+fn scoped(at: &Place, text: String) -> String {
+    match &at.func {
+        Some(func) => format!("{text} (in fn {func})"),
+        None => text,
+    }
+}
+
 /// Whether `segments` reach an `Error` through `crate`, `super` or `self`:
 /// the crate's own error type, as the gateway names it.
 fn local_error(segments: &[String]) -> bool {
@@ -393,7 +397,7 @@ impl Collect {
                 };
                 self.facts_uses.push((at.file.clone(), key, text));
             } else if error_variant || error_renamed {
-                self.aliases.push((at.file.clone(), text));
+                self.aliases.push((at.file.clone(), scoped(at, text)));
             } else if let Some(rename) = rename {
                 self.renames.push((at.file.clone(), last.clone(), rename));
             }
@@ -447,8 +451,10 @@ impl Sink for Collect {
                             && (target.path.segments.len() == 1
                                 || local_error(&segments(&target.path)))))
                 {
-                    self.aliases
-                        .push((at.file.clone(), format!("type {} = Error", alias.ident)));
+                    self.aliases.push((
+                        at.file.clone(),
+                        scoped(at, format!("type {} = Error", alias.ident)),
+                    ));
                 }
             }
             syn::Item::Macro(mac) => {
@@ -504,6 +510,7 @@ impl Sink for Collect {
                         value: false,
                         method: true,
                         combinator: false,
+                        prefix: Vec::new(),
                     },
                 );
             }
@@ -551,6 +558,7 @@ impl Sink for Collect {
                             value,
                             method: false,
                             combinator: value && self.combinator_args.contains(&addr(expr)),
+                            prefix: segments[..segments.len() - 1].to_vec(),
                         },
                     );
                 }
