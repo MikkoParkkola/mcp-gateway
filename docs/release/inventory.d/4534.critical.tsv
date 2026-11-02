@@ -1,0 +1,1 @@
+src/gateway/server/stdio_single.rs	message_generation	1	critical	a	message_generation	Decides which generation judges a stdio message's policy and budgets: the one its line was pinned to when it was read, or for a line that carries none the live config's current one

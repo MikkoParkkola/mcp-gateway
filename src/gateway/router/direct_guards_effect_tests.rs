@@ -21,6 +21,7 @@ fn read_call() -> BackendCall<'static> {
         cost_key: Some("k-std"),
         trace_id: "",
         caller_key: None,
+        generation: None,
     }
 }
 

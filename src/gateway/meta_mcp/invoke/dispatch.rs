@@ -42,11 +42,15 @@ impl MetaMcp {
         tool: &str,
         // The per-key cost name (`BackendCall::cost_key`), never a display name.
         cost_key: Option<&str>,
+        // The generation the call is pinned to (`BackendCall::generation`).
+        pinned: Option<&crate::config_reload::Generation>,
     ) -> Result<dispatch_guards::Admission> {
         let Some(ref enforcer) = self.budget_enforcer else {
             return Ok(dispatch_guards::Admission::default());
         };
-        let result = enforcer.check(tool, cost_key);
+        let result = self.judged_by(enforcer, pinned, |governance| {
+            enforcer.check_under(governance, tool, cost_key)
+        });
         if !result.allowed {
             super::audit::note_refused_by(
                 crate::security::decision_record::DecisionKind::CostBudget,
@@ -63,6 +67,27 @@ impl MetaMcp {
             result.warnings,
             result.hold,
         ))
+    }
+
+    /// Run `judge` with the governance a call is judged by: the budgets and
+    /// alerts of the generation it is pinned to, else of the live config's
+    /// current one. Admission and settlement of one call both read the same
+    /// pin, so a reload between them cannot move the call's budgets.
+    #[cfg(feature = "cost-governance")]
+    pub(super) fn judged_by<R>(
+        &self,
+        enforcer: &crate::cost_accounting::enforcer::BudgetEnforcer,
+        pinned: Option<&crate::config_reload::Generation>,
+        judge: impl FnOnce(&crate::cost_accounting::config::CostGovernanceConfig) -> R,
+    ) -> R {
+        let live;
+        let generation = if pinned.is_some() {
+            pinned
+        } else {
+            live = self.live_config().map(|live| live.generation());
+            live.as_deref()
+        };
+        judge(enforcer.governance(generation))
     }
 
     /// Dispatch one round to the backend and meter it.
@@ -105,8 +130,9 @@ impl MetaMcp {
         // backend and for a capability with no account reference.
         account_credential: super::propagation::DispatchAccount,
         // The per-key cost name (`MetaMcpCallerContext::cost_key`): the
-        // only name this function uses, for the spend it settles (MIK-8507).
-        cost_key: Option<&str>,
+        // only name this function uses, for the spend it settles (MIK-8507),
+        // and the generation whose budgets that spend is settled under.
+        (cost_key, generation): (Option<&str>, Option<&crate::config_reload::Generation>),
         trace_id: &str,
         policy_epoch: u64,
         protocol_revision: Option<&str>,
@@ -186,6 +212,7 @@ impl MetaMcp {
                 // On a session-less call `arm_key` is the non-empty caller key or None
                 // (`experiment_key`): the key the caller's own report reads.
                 caller_key: arm_key,
+                generation,
             },
             dispatch_guards::DirectOutcome::of(&dispatch_result),
             admission,

@@ -212,6 +212,7 @@ async fn call(meta: &MetaMcp, client: &Client) -> crate::Result<Value> {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: client,
+        generation: None,
     };
     let args = json!({"server": "svc", "tool": "act", "arguments": {}});
     meta.invoke_tool(&args, Some("session-1962"), &context)
