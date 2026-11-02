@@ -26,7 +26,7 @@ fn cert(san_uri: Option<&str>, cn: Option<&str>, display: &str) -> CertIdentity 
 }
 
 fn subject(authority: &str, id: &str) -> GrantSubject {
-    GrantSubject::new(authority, id, None)
+    GrantSubject::for_test(authority, id, None)
 }
 
 // U1: the byte-exact encoding (design F2).
@@ -116,7 +116,7 @@ fn u3_a_certificate_naming_no_subject_is_no_subject_key() {
     );
     // Defence in depth: a placeholder subject handed over with that
     // certificate is re-derived from the certificate, and still names no one.
-    let placeholder = GrantSubject::new("mtls", "<unknown>", None);
+    let placeholder = GrantSubject::for_test("mtls", "<unknown>", None);
     assert_eq!(caller_key(Some(&placeholder), Some(&c), None), "");
 }
 

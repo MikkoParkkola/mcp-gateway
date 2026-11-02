@@ -127,6 +127,18 @@ impl GrantSubject {
     }
 }
 
+#[cfg(test)]
+impl GrantSubject {
+    /// A test's fixed subject.
+    pub(crate) fn for_test(
+        authority: impl Into<String>,
+        subject: impl Into<String>,
+        label: Option<String>,
+    ) -> Self {
+        Self::new(authority, subject, label)
+    }
+}
+
 /// Whether an (authority, subject) pair names someone: both non-empty,
 /// compared raw (verified bytes are never trimmed). The one predicate every
 /// caller-identity source applies (MIK-8286). It does not judge names: a

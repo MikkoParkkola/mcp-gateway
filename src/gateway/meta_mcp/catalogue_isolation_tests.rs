@@ -442,7 +442,7 @@ fn result_cache_keys_separate_callers_and_keep_one_caller_stable() {
         caller_cache_principal(
             None,
             None,
-            Some(&crate::identity_grants::GrantSubject::new(
+            Some(&crate::identity_grants::GrantSubject::for_test(
                 authority.to_string(),
                 subject.to_string(),
                 None,

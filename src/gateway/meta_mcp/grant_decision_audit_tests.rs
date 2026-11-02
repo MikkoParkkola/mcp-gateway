@@ -38,7 +38,11 @@ pub(super) fn api_key(name: &str) -> Who {
     Who {
         kind: CredentialKind::ApiKey,
         api_key_name: Some(name.to_string()),
-        grant_subject: Some(GrantSubject::new("api_key", name, Some(name.to_string()))),
+        grant_subject: Some(GrantSubject::for_test(
+            "api_key",
+            name,
+            Some(name.to_string()),
+        )),
         identity: None,
     }
 }
@@ -47,7 +51,11 @@ fn oidc(issuer: &str, subject: &str, email: &str) -> Who {
     Who {
         kind: CredentialKind::OidcBearer,
         api_key_name: None,
-        grant_subject: Some(GrantSubject::new(issuer, subject, Some(email.to_string()))),
+        grant_subject: Some(GrantSubject::for_test(
+            issuer,
+            subject,
+            Some(email.to_string()),
+        )),
         identity: Some(VerifiedIdentity {
             subject: subject.to_string(),
             email: email.to_string(),

@@ -38,7 +38,7 @@ fn admin() -> ControlPlaneActor {
 fn enforced_grant() -> IdentityGrant {
     IdentityGrant {
         grant_id: "g-enforced".to_string(),
-        subject: GrantSubject::new("oidc", "sub-1", Some("alice@corp".to_string())),
+        subject: GrantSubject::for_test("oidc", "sub-1", Some("alice@corp".to_string())),
         agent: GrantAgent::Any,
         capability: "gmail".to_string(),
         tool: None,

@@ -510,7 +510,10 @@ async fn documented_caller_identity_examples_load_and_resolve() {
     let subject = resolve(&h, Some(peer(&peer_ip)), proxy, None)
         .await
         .unwrap();
-    assert_eq!(subject, Some(GrantSubject::new("corp-sso", "alice", None)));
+    assert_eq!(
+        subject,
+        Some(GrantSubject::for_test("corp-sso", "alice", None))
+    );
 }
 
 /// Strip the indent a list-nested fenced block carries.
