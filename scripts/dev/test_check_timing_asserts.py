@@ -750,6 +750,11 @@ class TestSection(unittest.TestCase):
         text = f"async fn product() {{\n    #[cfg(test)]\n    let x = {{ 0 }} as u64\n        + {window};\n}}\n"
         self.assertEqual(len(self.timeouts(text)), 1, text)
 
+    def test_a_test_only_let_runs_past_a_range_after_its_block(self):
+        window = self.WINDOW.rstrip(";")
+        text = f"async fn product() {{\n    #[cfg(test)]\n    let r = {{ 0 }}\n        .. {window};\n}}\n"
+        self.assertEqual(len(self.timeouts(text)), 1, text)
+
     def test_an_outer_test_cfg_makes_the_whole_file_test_code(self):
         text = f"#![cfg(test)]\n\nfn first() {{}}\n\nasync fn helper() {{\n{self.WINDOW}\n}}\n"
         self.assertEqual(len(self.timeouts(text)), 1, text)
