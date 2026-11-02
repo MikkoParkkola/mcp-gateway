@@ -8,6 +8,9 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[cfg(unix)]
+#[path = "common/pids.rs"]
+mod pids;
 
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -57,6 +60,7 @@ fn a_cleared_environment_still_opens_the_store_under_the_fixture_home() {
 #[cfg(unix)]
 mod reaped {
     use super::gateway_bin::Reaped;
+    use super::pids::{KillPid, alive};
     use std::path::Path;
     use std::process::Stdio;
     use std::sync::Arc;
@@ -123,29 +127,6 @@ while True:
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         true
-    }
-
-    /// Whether `pid` is a live process (not gone, not a zombie).
-    fn alive(pid: u32) -> bool {
-        let out = std::process::Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
-            .expect("ps");
-        let stat = String::from_utf8_lossy(&out.stdout);
-        let stat = stat.trim();
-        !stat.is_empty() && !stat.starts_with('Z')
-    }
-
-    /// SIGKILLs a pid when the row ends, so a red run leaks no process.
-    struct KillPid(u32);
-
-    impl Drop for KillPid {
-        fn drop(&mut self) {
-            let _ = std::process::Command::new("kill")
-                .args(["-KILL", &self.0.to_string()])
-                .stderr(Stdio::null())
-                .status();
-        }
     }
 
     /// On a current-thread runtime: the stop drains the child with SIGTERM,
