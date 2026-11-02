@@ -159,8 +159,9 @@ pub(in crate::gateway::ui) fn rows_after(
         page.bytes_read += page.anchor_bytes;
         return Ok(page);
     };
-    page.first_read = Some(at.offset);
     let mut scan = scan::Scan::new(file, at.offset, at.mode, budget.bytes);
+    // Where the scan itself starts, not where the place says it should.
+    page.first_read = Some(scan.offset);
     let mut spent = 0;
     let outcome = loop {
         let step = scan.next()?;

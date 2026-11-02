@@ -56,7 +56,9 @@ fn f9e_a_resume_in_a_rotated_segment_crosses_into_the_next_without_restarting() 
     let mut s = suspended(calls(1));
     s.rotate();
     // The rotated file ends at record 4; the new active file goes on.
-    let w = write_from(&s.path, &[calls(2)], 2, 5);
+    // A run inside the next segment, so the search suspends there too.
+    let next = vec![Rec::Call(None), junk(64 * 1024), Rec::Call(None)];
+    let w = write_from(&s.path, &[next], 2, 5);
     let stop = w.marks.last().unwrap().clone();
     let l = log(&s.path, StreamKind::Activity);
     let mut pages = Vec::new();
