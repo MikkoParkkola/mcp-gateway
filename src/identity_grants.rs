@@ -40,6 +40,24 @@ pub struct GrantSubject {
 }
 
 impl GrantSubject {
+    /// The identity authority, such as an issuer URL or local authority name.
+    #[must_use]
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// The stable subject identifier inside the authority namespace.
+    #[must_use]
+    pub fn subject(&self) -> &str {
+        &self.subject
+    }
+
+    /// The operator-facing label. Display only: never part of identity.
+    #[must_use]
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+
     /// Create a new grant subject.
     #[must_use]
     pub fn new(
