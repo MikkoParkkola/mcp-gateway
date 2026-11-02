@@ -247,10 +247,16 @@ fn a_previous_secret_match_binds_holders_to_the_previous_digest() {
         key("ops", NEW, Some((OLD, grace_end()))),
         PRINCIPAL,
     )]);
-    let (_, current) = config
+    // The tags are read where the clock lets both secrets match; the grace
+    // checks below judge the same tag against the clock-test grace.
+    let open = resolved(&[with_principal(
+        key("ops", NEW, Some((OLD, far_future()))),
+        PRINCIPAL,
+    )]);
+    let (_, current) = open
         .validate_token_with_origin(NEW)
         .expect("current secret");
-    let (_, previous) = config
+    let (_, previous) = open
         .validate_token_with_origin(OLD)
         .expect("previous secret");
     assert_eq!(

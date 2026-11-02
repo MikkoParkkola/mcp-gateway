@@ -378,7 +378,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/records.rs", "pub credential_principal: Option<String>", 1, Decl, "subscription store field"),
     ("src/events/worker.rs", "credential_principal: self.sub.credential_principal.as_deref()", 1, Decl, "into Attempt.credential_principal, keyed at services.rs record_form"),
     ("src/events/services.rs", ".storage_form()", 1, Store, "bearer principal for live-binding comparison"),
-    ("src/events/services.rs", "k.principal_for(&digest).storage_form() == key.principal", 1, Store, "a watch's configured key still holds its recorded principal (ADR-022)"),
+    ("src/events/services.rs", "k.principal_for(&digest).storage_form() == principal", 1, Store, "a holder's configured key still holds its recorded principal (ADR-022)"),
     ("src/gateway/auth_resolved.rs", "k.principal().storage_form() == principal", 2, Store, "client_for_key and client_for_key_at find a key by its stored principal"),
     ("src/gateway/auth_resolved.rs", "configured_key_principal(k.principal.as_deref(), &digest).storage_form()", 1, Store, "hashed into the key's limit-state key (ROT.11); only the hash keys the window and breaker"),
     ("src/gateway/auth_resolved.rs", "self.runtime.last_used(key.principal().storage_form())", 1, Store, "in-memory last-use lookup key; the answer carries the time only"),
