@@ -147,12 +147,8 @@ async fn post(router: &axum::Router, body: Value) -> Value {
 #[tokio::test]
 async fn a_stdio_env_credential_echo_is_redacted() {
     let dir = tempfile::tempdir().expect("config directory");
-    let backend = stdio_backend(dir.path(), "ECHO_TOKEN: \"env:MIK_9105_ECHO_TOKEN\"");
-    let path = config(
-        dir.path(),
-        &backend,
-        &format!("MIK_9105_ECHO_TOKEN={SECRET}\n"),
-    );
+    let backend = stdio_backend(dir.path(), "ECHO_TOKEN: \"env:ECHO_CFG_TOKEN\"");
+    let path = config(dir.path(), &backend, &format!("ECHO_CFG_TOKEN={SECRET}\n"));
     let body = invoke_echo(&path).await;
     let text = body.to_string();
     assert!(
@@ -180,9 +176,9 @@ async fn an_http_header_credential_echo_is_redacted() {
     let dir = tempfile::tempdir().expect("config directory");
     let backend = format!(
         "    http_url: \"{url}\"\n    streamable_http: true\n    headers:\n      \
-         X-Api-Key: \"env:MIK_9105_HEADER\"\n"
+         X-Api-Key: \"env:ECHO_CFG_HEADER\"\n"
     );
-    let path = config(dir.path(), &backend, &format!("MIK_9105_HEADER={SECRET}\n"));
+    let path = config(dir.path(), &backend, &format!("ECHO_CFG_HEADER={SECRET}\n"));
     let body = invoke_echo(&path).await;
     let text = body.to_string();
     assert!(
@@ -207,10 +203,10 @@ async fn a_websocket_upgrade_header_credential_echo_is_redacted() {
     let peer = WsPeer::start(Behaviour::EchoUpgradeHeaders).await;
     let dir = tempfile::tempdir().expect("config directory");
     let backend = format!(
-        "    ws_url: \"{}\"\n    headers:\n      Authorization: \"Bearer ${{MIK_9105_WS}}\"\n",
+        "    ws_url: \"{}\"\n    headers:\n      Authorization: \"Bearer ${{ECHO_CFG_WS}}\"\n",
         peer.url
     );
-    let path = config(dir.path(), &backend, &format!("MIK_9105_WS={SECRET}\n"));
+    let path = config(dir.path(), &backend, &format!("ECHO_CFG_WS={SECRET}\n"));
     let body = invoke_echo(&path).await;
     let text = body.to_string();
     assert_eq!(
@@ -240,8 +236,8 @@ async fn a_value_not_marked_secret_passes_unchanged() {
     for (env_line, env_body, expected) in [
         ("ECHO_TOKEN: \"debug\"", String::new(), "environment debug"),
         (
-            "ECHO_TOKEN: \"${MIK_9105_DEBUG}\"",
-            "MIK_9105_DEBUG=1\n".to_owned(),
+            "ECHO_TOKEN: \"${ECHO_CFG_DEBUG}\"",
+            "ECHO_CFG_DEBUG=1\n".to_owned(),
             "environment 1",
         ),
     ] {
