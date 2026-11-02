@@ -54,6 +54,7 @@ class Owner(unittest.TestCase):
         "match arm": ("fn p(x: u8) { match x {\n #[cfg(test)]\n 0 => {\n probe()\n }\n _ => (),\n } }\n", [(2, 5)]),
         "let with a range": ("fn p() {\n #[cfg(test)]\n let r = { 0 }\n   .. f();\n g();\n}\n", [(2, 4)]),
         "comparison statement": ("fn p() {\n #[cfg(test)]\n if 1 < 2 { probe(); }\n product();\n}\n", [(2, 3)]),
+        "comment inside the attribute": ("#[cfg /* why */ (test)]\nfn h() {\n}\nfn p() {}\n", [(1, 3)]),
         "compound cfg": ('#[cfg(all(test, feature = "x"))]\nmod t {\n}\nfn p() {}\n', [(1, 3)]),
     }
 
