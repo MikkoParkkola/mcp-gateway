@@ -256,6 +256,8 @@ pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.
 pr_body_case register_row fail 'The remaining gap is register row 397.'
 pr_body_case register_rows fail 'Deferred as register rows 418-420.'
 pr_body_case row_of_the_register fail 'Recorded as row 397 of the register.'
+pr_body_case register_colon_rows fail 'Declined and recorded in the register: rows 350 and 351.'
+pr_body_case register_comma_row fail 'Recorded in the not-fixed register, row 383.'
 pr_body_case lead_ruling fail 'Per the lead ruling 2026-11-02, the route stays.'
 pr_body_case operators_ruling fail "Follows the operator's ruling on retention."
 pr_body_case cpu_register pass 'Reads the register of the CPU.'

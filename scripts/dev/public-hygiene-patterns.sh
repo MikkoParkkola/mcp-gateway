@@ -31,7 +31,7 @@ private_content_checks=(
 # no row, and "a ruling on X" names no lead or operator.
 # shellcheck disable=SC2034  # read by check-pr-body-hygiene.sh
 process_reference_checks=(
-  "register-row::i::(^|[^[:alpha:]])register[[:space:]]+rows?[[:space:]#]*[0-9]|(^|[^[:alpha:]])rows?[[:space:]#]*[0-9]+[[:space:]]+(of|in)[[:space:]]+the[[:space:]]+register([^[:alpha:]]|$)::cites a row of the internal findings register"
+  "register-row::i::(^|[^[:alpha:]])register[^[:alnum:]]{1,4}rows?[[:space:]#]*[0-9]|(^|[^[:alpha:]])rows?[[:space:]#]*[0-9]+[[:space:]]+(of|in)[[:space:]]+the[[:space:]]+register([^[:alpha:]]|$)::cites a row of the internal findings register"
   "ruling::i::(^|[^[:alpha:]])(lead|operator)('s)?[[:space:]]+rulings?([^[:alpha:]]|$)::cites an internal ruling"
 )
 
