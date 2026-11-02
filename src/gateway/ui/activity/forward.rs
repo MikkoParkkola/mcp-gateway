@@ -160,7 +160,7 @@ pub(in crate::gateway::ui) fn rows_after(
     }
     let started = match resumed {
         Some(r) => Some(r),
-        None => place::start(log, cursor, &mut page.diag.bytes_read)?,
+        None => place::start(log, cursor)?,
     };
     let Some((file, mut at)) = started else {
         page.reset = true;
@@ -220,13 +220,13 @@ pub(in crate::gateway::ui) fn rows_after(
             scan::Step::Unreadable => {}
             scan::Step::Budget => break Outcome::More,
             scan::Step::End => {
-                let Some((next, seq, id)) = place::next_segment(log.path, at.seq)? else {
+                let (next, seq, id) = match place::next_segment(log.path, at.seq)? {
+                    place::Next::Opened(file, seq, id) => (file, seq, id),
                     // The log ends here: a cursor not yet found is ahead of it.
-                    break if at.found {
-                        Outcome::Done
-                    } else {
-                        Outcome::Reset
-                    };
+                    place::Next::End if at.found => break Outcome::Done,
+                    // Or the next segment is gone or unreadable: rows past this
+                    // point cannot be proven, so the client reloads.
+                    place::Next::End | place::Next::Missing => break Outcome::Reset,
                 };
                 spent += scan.read;
                 at = at.at_start(seq, id);

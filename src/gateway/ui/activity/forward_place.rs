@@ -7,11 +7,11 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-use super::scan::{Anchor, Mode, Scan, Step};
-use super::{Log, Mark, mark_of};
-use crate::security::transparency_log::pager::{ASSEMBLY_WINDOW, open_segment};
+use super::super::seek::segments;
+use super::scan::{Anchor, Mode};
+use super::{Log, Mark};
+use crate::security::transparency_log::pager::open_segment;
 use crate::security::transparency_log::rotation::{FileId, file_id};
-use crate::security::transparency_log::segments::listing;
 
 /// A saved place in one segment.
 #[derive(Clone, Debug)]
@@ -54,21 +54,30 @@ impl Place {
     }
 }
 
-/// The log's segments, oldest first, the active file's included.
-pub(super) fn segments(path: &Path) -> io::Result<Vec<u64>> {
-    let files = listing(path)?;
-    let mut seqs: Vec<u64> = files.sealed.iter().map(|s| s.seq).collect();
-    seqs.extend(files.active);
-    Ok(seqs)
+/// What follows segment `seq`.
+pub(super) enum Next {
+    /// The next segment, opened with its identity.
+    Opened(File, u64, FileId),
+    /// No later segment: the log ends at `seq`.
+    End,
+    /// A later segment exists but the next number is missing, or it would
+    /// not open or name itself: rows may lie in it, so the read cannot just end.
+    Missing,
 }
 
-/// The next kept segment after `seq`, opened with its identity; `None` when
-/// the log ends there.
-pub(super) fn next_segment(path: &Path, seq: u64) -> io::Result<Option<(File, u64, FileId)>> {
+/// The segment after `seq`. Segments are numbered without gaps, so a later
+/// one that is not `seq + 1` means one vanished.
+pub(super) fn next_segment(path: &Path, seq: u64) -> io::Result<Next> {
     let Some(next) = segments(path)?.into_iter().find(|s| *s > seq) else {
-        return Ok(None);
+        return Ok(Next::End);
     };
-    Ok(open(path, next)?.map(|(f, id)| (f, next, id)))
+    if next != seq + 1 {
+        return Ok(Next::Missing);
+    }
+    Ok(match open(path, next)? {
+        Some((file, id)) => Next::Opened(file, next, id),
+        None => Next::Missing,
+    })
 }
 
 /// A segment opened with its identity. `None` when it is gone, or when its
@@ -84,69 +93,28 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> 
     Ok(file_id(&file).ok().map(|id| (file, id)))
 }
 
-/// The counter of a segment's first record, when one starts within the cap.
-/// Returns the bytes read too.
-fn first_counter(file: &File) -> io::Result<(Option<u64>, u64)> {
-    let mut scan = Scan::new(file.try_clone()?, 0, Mode::Boundary, ASSEMBLY_WINDOW);
-    // Unreadable lines before the first record are stepped over, within one
-    // capped read, so a torn or hand-edited head does not hide the segment.
-    let counter = loop {
-        match scan.next()? {
-            Step::Record { entry, .. } => break mark_of(&entry).map(|m| m.counter),
-            Step::Unreadable => {}
-            Step::Budget | Step::End => break None,
-        }
-    };
-    Ok((counter, scan.read))
-}
-
-/// Where a fresh read for `cursor` starts: the oldest segment for none, else
-/// the last segment whose first record is at or below the cursor's counter.
-/// `None` when no kept segment can hold it: the cursor's row is gone.
-/// Adds the bytes it read to `read`.
-pub(super) fn start(
-    log: &Log<'_>,
-    cursor: Option<&Mark>,
-    read: &mut u64,
-) -> io::Result<Option<(File, Place)>> {
-    let mut chosen = None;
+/// Where a fresh read starts: the oldest kept segment, at its first byte. A
+/// cursor is then searched for by the budgeted scan itself, so finding it
+/// costs no more per call than reading rows does. `None` for a log with no
+/// segment that opens.
+pub(super) fn start(log: &Log<'_>, cursor: Option<&Mark>) -> io::Result<Option<(File, Place)>> {
     for seq in segments(log.path)? {
-        let Some((file, id)) = open(log.path, seq)? else {
-            continue;
-        };
-        let fits = match cursor {
-            None => true,
-            Some(c) => {
-                let (first, n) = first_counter(&file)?;
-                *read += n;
-                match first {
-                    Some(first) if first > c.counter => break,
-                    Some(_) => true,
-                    None => false,
-                }
-            }
-        };
-        if fits {
-            chosen = Some((file, seq, id));
-            if cursor.is_none() {
-                break;
-            }
+        if let Some((file, id)) = open(log.path, seq)? {
+            let place = Place {
+                cursor: cursor.cloned(),
+                found: cursor.is_none(),
+                last: None,
+                generation: log.generation,
+                file: id,
+                seq,
+                offset: 0,
+                mode: Mode::Boundary,
+                anchor: None,
+            };
+            return Ok(Some((file, place)));
         }
     }
-    Ok(chosen.map(|(file, seq, id)| {
-        let place = Place {
-            cursor: cursor.cloned(),
-            found: cursor.is_none(),
-            last: None,
-            generation: log.generation,
-            file: id,
-            seq,
-            offset: 0,
-            mode: Mode::Boundary,
-            anchor: None,
-        };
-        (file, place)
-    }))
+    Ok(None)
 }
 
 /// Reopen a saved place, proven on the handle it will read: the same file
@@ -174,11 +142,14 @@ pub(super) fn resume(
     };
     #[cfg(test)]
     super::tests::after_identity();
-    if file.metadata()?.len() < place.offset {
+    // Any element that cannot be read restarts the search, as a mismatch does.
+    if file.metadata().map_or(true, |m| m.len() < place.offset) {
         return Ok(None);
     }
     if let Some(anchor) = &place.anchor {
-        let (same, n) = anchor.holds(&file)?;
+        let Ok((same, n)) = anchor.holds(&file) else {
+            return Ok(None);
+        };
         *anchor_bytes += n;
         if !same {
             return Ok(None);
