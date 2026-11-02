@@ -82,8 +82,8 @@ async fn t7_a_name_budgeted_by_reload_starts_from_the_overflow_total() {
         assert!(!admitted(&fx, scope, "target"), "{scope:?}: 3 + 1 > 3.5");
         // The same figure under a budget that fits it: the estimate is the
         // overflow total, not more.
-        reload(&fx, |c| budget(scope, c, "target", 4.0));
-        assert!(admitted(&fx, scope, "target"), "{scope:?}: 3 + 1 <= 4");
+        reload(&fx, |c| budget(scope, c, "target", 4.5));
+        assert!(admitted(&fx, scope, "target"), "{scope:?}: 3 + 1 < 4.5");
     }
 }
 
@@ -103,7 +103,7 @@ async fn t9_repeated_reloads_keep_the_first_estimate() {
         reload(&fx, |c| budget(scope, c, "target", 4.5));
         assert!(
             admitted(&fx, scope, "target"),
-            "{scope:?}: 3 + 1 <= 4.5; a re-take or a compounding estimate refuses"
+            "{scope:?}: 3 + 1 < 4.5; a re-take or a compounding estimate refuses"
         );
     }
 }
@@ -212,8 +212,8 @@ async fn t7b_a_row_created_after_the_overflow_began_keeps_that_overflow() {
             !admitted(&fx, scope, "target"),
             "{scope:?}: 1 + 3 + 1 > 4.5; the row alone reads 2"
         );
-        reload(&fx, |c| budget(scope, c, "target", 5.0));
-        assert!(admitted(&fx, scope, "target"), "{scope:?}: 1 + 3 + 1 <= 5");
+        reload(&fx, |c| budget(scope, c, "target", 5.5));
+        assert!(admitted(&fx, scope, "target"), "{scope:?}: 1 + 3 + 1 < 5.5");
     }
 }
 
@@ -277,7 +277,7 @@ async fn t9c_remove_and_re_add_keeps_the_first_estimate() {
         reload(&fx, |c| budget(scope, c, "target", 4.5));
         assert!(
             admitted(&fx, scope, "target"),
-            "{scope:?}: 3 + 1 <= 4.5; a re-take reads 5"
+            "{scope:?}: 3 + 1 < 4.5; a re-take reads 5"
         );
     }
 }
@@ -295,6 +295,127 @@ async fn t9d_an_old_generation_settle_keeps_the_estimate() {
         assert!(
             !admitted(&fx, scope, "target"),
             "{scope:?}: 1 + 3 + 1 > 4.5; without the estimate 1 + 1"
+        );
+    }
+}
+
+/// T7c: an owned name's spend in a gap with no budget lands in its own row.
+/// Budgeted (figure 3), unbudgeted, $1 of spend, a check pinned to the
+/// generation that budgeted it, budgeted again: judged at 1 + 3 + 1.
+#[tokio::test]
+async fn t7c_spend_in_a_gap_with_no_budget_stays_in_the_row() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let fx = with_overflow(scope).await;
+        reload(&fx, |c| budget(scope, c, "target", 50.0));
+        let budgeted = fx.state.live_config.generation();
+        reload(&fx, |c| {
+            c.budgets.per_tool.remove("target");
+            c.budgets.per_key.remove("target");
+        });
+        let (_, overflow) = scope.rows(&fx);
+        spend(&fx, scope, "target", 1.0);
+        let (rows, overflow_after) = scope.rows(&fx);
+        assert_eq!(rows.get("target").copied(), Some(1.0), "{scope:?}: own row");
+        assert!((overflow_after - overflow).abs() < 1e-9, "{scope:?}");
+        let call = scope.call("target", &budgeted);
+        drop(fx.state.meta_mcp.admit_spend_for(&call));
+        reload(&fx, |c| budget(scope, c, "target", 4.5));
+        assert!(
+            !admitted(&fx, scope, "target"),
+            "{scope:?}: 1 + 3 + 1 > 4.5"
+        );
+        reload(&fx, |c| budget(scope, c, "target", 5.5));
+        assert!(admitted(&fx, scope, "target"), "{scope:?}: 1 + 3 + 1 < 5.5");
+    }
+}
+
+/// T9e: a name budgeted at startup is owned from the start: removed by a
+/// reload, its spend still lands in its row, and budgeted again it takes no
+/// figure from the overflow.
+#[tokio::test]
+async fn t9e_a_startup_budget_removed_and_re_added_takes_no_figure() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let fx = fixture(&governance(|c| {
+            c.tool_costs.insert("idle".to_owned(), 1.0);
+            budget(scope, c, "idle", 50.0);
+        }))
+        .await;
+        scope.fill(&fx, CAP);
+        spend(&fx, scope, "other", 3.0);
+        let startup = fx.state.live_config.generation();
+        reload(&fx, |c| {
+            c.budgets.per_tool.remove("idle");
+            c.budgets.per_key.remove("idle");
+        });
+        spend(&fx, scope, "idle", 1.0);
+        assert_eq!(
+            scope.rows(&fx).0.get("idle").copied(),
+            Some(1.0),
+            "{scope:?}"
+        );
+        let call = scope.call("idle", &startup);
+        drop(fx.state.meta_mcp.admit_spend_for(&call));
+        reload(&fx, |c| budget(scope, c, "idle", 2.5));
+        assert!(
+            admitted(&fx, scope, "idle"),
+            "{scope:?}: 1 + 1 < 2.5, no figure"
+        );
+    }
+}
+
+/// T10c: ownership outlives the day. Budgeted on day 1; on day 2 the cap
+/// fills again, and a call pinned to the day-1 generation that did not
+/// budget the name settles into the name's own row.
+#[tokio::test]
+async fn t10c_ownership_outlives_the_day() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let day1 = at_secs(T);
+        let fx = with_overflow(scope).await;
+        let before = fx.state.live_config.generation();
+        reload(&fx, |c| budget(scope, c, "target", 50.0));
+        drop(day1);
+        let _day2 = at_secs(T + DAY);
+        for i in 0..CAP {
+            spend(&fx, scope, &format!("day2-{i}"), 0.01);
+        }
+        settle_pinned(&fx, scope, "target", &before);
+        assert_eq!(
+            scope.rows(&fx).0.get("target").copied(),
+            Some(1.0),
+            "{scope:?}"
+        );
+    }
+}
+
+/// T10e: the figure is taken before the swap. Seeded, a call pinned to the
+/// outgoing generation settles before the new generation publishes; the
+/// publication takes no second figure, and the spend is counted once.
+#[tokio::test]
+async fn t10e_a_settle_between_the_seed_and_the_swap_counts_once() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let fx = with_overflow(scope).await;
+        let live = &fx.state.live_config;
+        let before = live.generation();
+        let mut config = (*live.get()).clone();
+        budget(scope, &mut config.cost_governance, "target", 4.5);
+        let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");
+        enforcer.seed_estimates(
+            &before.config().cost_governance.budgets,
+            &config.cost_governance.budgets,
+        );
+        settle_pinned(&fx, scope, "target", &before);
+        live.set(config);
+        assert!(
+            !admitted(&fx, scope, "target"),
+            "{scope:?}: 1 + 3 + 1 > 4.5"
+        );
+        reload(&fx, |c| budget(scope, c, "target", 5.5));
+        assert!(
+            admitted(&fx, scope, "target"),
+            "{scope:?}: counted once, 5 < 5.5"
         );
     }
 }

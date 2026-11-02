@@ -106,7 +106,7 @@ fn t8_the_estimate_is_kept_apart_through_save_and_restore() {
 
         let (_, fits) = boot_cost_governance(&governed(scope, Some(5.0)), dir.path());
         let fits = fits.expect("armed");
-        assert!(scope.admits(&fits, "target"), "{scope:?}: 3 + 0.5 + 1 <= 5");
+        assert!(scope.admits(&fits, "target"), "{scope:?}: 3 + 0.5 + 1 < 5");
         let snap = fits.snapshot();
         assert!(
             (snap.global_daily_usd
@@ -145,7 +145,7 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
             let (_, restored) = boot_cost_governance(&governed(scope, Some(1.6)), dir.path());
             assert!(
                 scope.admits(&restored.expect("armed"), "target"),
-                "{scope:?} {bad}: 0.5 + 1 <= 1.6 with no estimate"
+                "{scope:?} {bad}: 0.5 + 1 < 1.6 with no estimate"
             );
         }
     }
