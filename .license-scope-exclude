@@ -13,3 +13,7 @@
 # The repository currently has no vendored or generated source (verified: no
 # @generated markers, no build.rs). This list is intentionally empty; add a
 # path here when third-party or generated material is introduced.
+
+# The gates' Python environment (scripts/gate-env, gitignored): third-party
+# packages installed from the hash-locked uv.lock, each under its own licence.
+scripts/gate-env/.venv
