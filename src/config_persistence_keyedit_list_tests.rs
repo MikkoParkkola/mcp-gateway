@@ -459,6 +459,15 @@ fn an_explicit_key_refuses_under_every_value_shape() {
     }
 }
 
+/// One key-line form: its name, the file, the change, and the file written
+/// or the code refused.
+type FormRow = (
+    &'static str,
+    &'static str,
+    (FieldPath, Change),
+    Result<&'static str, GiveUp>,
+);
+
 /// Every key-line form a list set meets, with its outcome: written in place
 /// (the expected file) or refused (the expected code). A form this table
 /// lacks is the gap to fill, here, before anywhere else.
@@ -466,7 +475,7 @@ fn an_explicit_key_refuses_under_every_value_shape() {
 fn every_key_line_form_has_its_outcome() {
     use std::result::Result::{Err as Refused, Ok as Written};
     let scope = || list("auth.scope", &["x"]);
-    let rows: Vec<(&str, &str, (FieldPath, Change), Result<&str, GiveUp>)> = vec![
+    let rows: Vec<FormRow> = vec![
         (
             "plain",
             "auth:\n  scope: [\"a\"]\n",
