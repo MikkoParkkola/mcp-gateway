@@ -268,3 +268,43 @@ fn a_gateway_authored_row_is_delivered_as_before() {
     assert_eq!(authored.delivered_wire(), plain.delivered_wire());
     assert!(authored.backend_error().is_none());
 }
+
+/// An upstream row stored before its dispatch's secrets were fingerprinted
+/// is served withheld at every reader: a completed result and a failed
+/// error alike are replaced by the fixed answer, holding none of the stored
+/// bytes, and the task's state is left as it is. A vouched row is unchanged.
+#[test]
+fn an_unvouched_upstream_row_is_served_withheld_never_its_outcome() {
+    let echoed = "echo of key legacy-secret-0b51";
+    let reason = crate::gateway::meta_mcp::upstream::SECRETS_WITHHELD;
+    let mut done = completed(
+        &json!({"content": [{"type": "text", "text": echoed}], "isError": false}),
+        Vec::new(),
+    );
+    assert!(
+        done.delivered_wire().to_string().contains(echoed),
+        "premise: a vouched row serves its result"
+    );
+    done.secrets_unvouched = true;
+    let served = done.delivered_wire();
+    assert!(!served.to_string().contains(echoed), "{served}");
+    assert!(served.to_string().contains(reason), "{served}");
+    assert_eq!(
+        served["status"],
+        json!("completed"),
+        "the state is left as it is"
+    );
+
+    let mut task = Task::create("gateway_invoke").expect("the clock reads after 1970");
+    task.fail(&JsonRpcError {
+        code: -32001,
+        message: echoed.to_owned(),
+        data: Some(json!({"quoted": echoed})),
+    })
+    .expect("a live task fails");
+    let mut failed = row(task, Vec::new());
+    failed.secrets_unvouched = true;
+    let served = failed.delivered_wire();
+    assert!(!served.to_string().contains(echoed), "{served}");
+    assert_eq!(served["error"]["message"], json!(reason), "{served}");
+}
