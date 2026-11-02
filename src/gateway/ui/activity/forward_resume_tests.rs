@@ -349,3 +349,60 @@ fn f5f_records_at_the_cap_each_move_a_call_forward() {
         "anchor re-reads are counted"
     );
 }
+
+/// A log of three calls whose second line, newline included, is `len` bytes.
+fn with_second_line_of(path: &Path, len: usize) -> Written {
+    // A padded record grows by one byte per pad byte: measure it once unpadded.
+    let probe = write(path, &[vec![Rec::Call(None), Rec::Big(0), Rec::Call(None)]]);
+    let unpadded = usize::try_from(probe.at[1].2 - probe.at[1].1).unwrap();
+    let w = write(
+        path,
+        &[vec![
+            Rec::Call(None),
+            Rec::Big(len - unpadded),
+            Rec::Call(None),
+        ]],
+    );
+    assert_eq!(
+        usize::try_from(w.at[1].2 - w.at[1].1).unwrap(),
+        len,
+        "fixture line length"
+    );
+    w
+}
+
+#[test]
+fn a_record_at_the_cap_is_read_and_one_byte_over_is_refused() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("inv.jsonl");
+    let l = log(&path, StreamKind::Activity);
+
+    let w = with_second_line_of(&path, CAP);
+    let pages = drain(
+        &l,
+        Some(&w.marks[0]),
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    assert_eq!(
+        counters(&pages),
+        vec![2, 3],
+        "a record of exactly the cap is a record"
+    );
+
+    let w = with_second_line_of(&path, CAP + 1);
+    let pages = drain(
+        &l,
+        Some(&w.marks[0]),
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    assert!(
+        !counters(&pages).contains(&2),
+        "a record one byte over the cap is never served"
+    );
+}
