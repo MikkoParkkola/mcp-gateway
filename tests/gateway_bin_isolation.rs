@@ -297,7 +297,7 @@ for line in sys.stdin:
             root = root.display()
         );
         // The gateway refuses a config other users can read.
-        mcp_gateway::gateway::test_helpers::write_owner_only(&root.join("gateway.yaml"), config)
+        mcp_gateway::gateway::test_helpers::write_owner_only(root.join("gateway.yaml"), config)
             .expect("config");
         let log = std::fs::File::create(root.join("gateway.log")).expect("log");
         let mut reaped = Reaped::new(

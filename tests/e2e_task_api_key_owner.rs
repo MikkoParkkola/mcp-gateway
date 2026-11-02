@@ -67,7 +67,7 @@ fn key_hash(key: &str) -> String {
 
 struct Gateway {
     /// The gateway and the folder it runs in, stopped before the folder goes.
-    gateway: gateway_bin::Reaped,
+    process: gateway_bin::Reaped,
     log: PathBuf,
     url: String,
     http: reqwest::Client,
@@ -126,7 +126,7 @@ impl Gateway {
             .expect("an HTTP client");
         reaped.owning(tmp);
         let mut gateway = Self {
-            gateway: reaped,
+            process: reaped,
             log,
             url: String::new(),
             http,
@@ -137,7 +137,7 @@ impl Gateway {
 
     /// Ends the gateway with a drain; its folder goes only after it exited.
     async fn stop(self) {
-        self.gateway.stop().await;
+        self.process.stop().await;
     }
 
     fn logs(&self) -> String {
@@ -149,7 +149,7 @@ impl Gateway {
     async fn wait_ready(&mut self) {
         let deadline = tokio::time::Instant::now() + READY_BOUND;
         loop {
-            if let Some(status) = self.gateway.child_mut().try_wait().expect("child status") {
+            if let Some(status) = self.process.child_mut().try_wait().expect("child status") {
                 panic!("serve exited before ready ({status})\n{}", self.logs());
             }
             if self.url.is_empty()
