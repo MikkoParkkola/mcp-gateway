@@ -1,10 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Editing existing scalar fields of `gateway.yaml` in place, so a UI save
-//! keeps every comment and untouched byte (ADR-024). Each change rewrites the
-//! value of one key that already exists; anything this cannot prove right is
-//! `Unprovable`, and nothing is written. Creating keys and removing them come
-//! later, with their own design.
+//! Editing `gateway.yaml` in place, so a UI save keeps every comment and
+//! untouched byte (ADR-024). A change sets a field's value (inserting the key,
+//! and any missing parents, when it is absent), makes it a secret slot, or
+//! removes the key; a list may gain one new element, at its end, which also
+//! creates a missing list. One `auth.api_keys` element may be removed (the
+//! web UI's key revoke): its lines go, with the comments on them reported by
+//! original line number, and so do a list and parent it empties. Anything
+//! the meaning and bytes proofs cannot cover is `Unprovable`, and nothing is
+//! written: among those, removing any other list element, reordering list
+//! elements, removing a key that sits on its element's dash line, and
+//! deleting a line that carries a comment outside a revocation.
 //!
 //! A secret field is written as a slot: a placeholder the byte writer fills
 //! with the store reference it creates, after this edit has been proven.
@@ -168,6 +174,8 @@ impl GiveUp {
 pub(crate) struct Template {
     bytes: Vec<u8>,
     slots: Vec<(SlotId, Range<usize>)>,
+    /// The original 1-based lines whose comment the edit dropped.
+    dropped: Vec<usize>,
 }
 
 impl Template {
@@ -188,7 +196,18 @@ impl Template {
             }
             end = range.end;
         }
-        Ok(Self { bytes, slots })
+        Ok(Self {
+            bytes,
+            slots,
+            dropped: Vec::new(),
+        })
+    }
+
+    /// The original 1-based line numbers of the comment lines this edit
+    /// dropped, sorted: a list element's removal takes its comments with it.
+    /// Line numbers only, never text: a `#` in a value can be a secret.
+    pub(crate) fn dropped_comments(&self) -> &[usize] {
+        &self.dropped
     }
 
     /// The bytes as they stand, slots still holding their placeholders.
@@ -202,6 +221,7 @@ impl Template {
         Self {
             bytes,
             slots: Vec::new(),
+            dropped: Vec::new(),
         }
     }
 
@@ -304,6 +324,13 @@ pub(crate) fn edit_in_place(
         }
     }
     let before = shape::nodes(original)?;
+    let revoked = one_revocation(changes)?;
+    if let Some(path) = revoked
+        && let Some(i) = revoke::revoked_index(path)
+        && let Some(refusal) = revoke::refusal(original, &before, i)
+    {
+        return Err(refusal);
+    }
     one_new_element(&before, changes)?;
     let mut lines = shape::Lines::new(original);
     for (path, change) in changes {
@@ -317,12 +344,24 @@ pub(crate) fn edit_in_place(
     }
     let mut removed: Vec<&[Segment]> = Vec::new();
     for (path, change) in changes {
-        if *change == Change::Remove && shape::remove_entry(&mut lines, &path.0)? {
+        if *change != Change::Remove {
+            continue;
+        }
+        let gone = if revoked == Some(path.0.as_slice()) {
+            revoke::remove_element(&mut lines, &path.0)?
+        } else {
+            shape::remove_entry(&mut lines, &path.0, shape::CommentRule::Refuse)?
+        };
+        if gone {
             removed.push(&path.0);
         }
     }
-    shape::drop_emptied(&mut lines, &before, &removed)?;
+    shape::drop_emptied(&mut lines, &before, &removed, revoked)?;
     let edited = lines.text();
+    let dropped = match revoked {
+        Some(path) => deleted_as_planned(original, &before, &removed, path, &lines, &edited)?,
+        None => Vec::new(),
+    };
     if !lines.bytes_hold(original) {
         return Err(unprovable("an untouched line changed"));
     }
@@ -344,7 +383,93 @@ pub(crate) fn edit_in_place(
         }
     }
     slots.sort_by_key(|(_, range)| range.start);
-    Template::checked(edited.into_bytes(), slots)
+    let mut template = Template::checked(edited.into_bytes(), slots)?;
+    template.dropped = dropped;
+    Ok(template)
+}
+
+/// The one list-element removal a save may hold (S7, S8): of
+/// `auth.api_keys`, with no other change in that list. `None` when the
+/// save removes no element.
+fn one_revocation(changes: &[(FieldPath, Change)]) -> Result<Option<&[Segment]>, ComputeRefusal> {
+    let mut elements = changes
+        .iter()
+        .filter(|(p, c)| *c == Change::Remove && matches!(p.0.last(), Some(Segment::Index(_))));
+    let Some((path, _)) = elements.next() else {
+        return Ok(None);
+    };
+    if revoke::revoked_index(&path.0).is_none() {
+        return Err(give_up(
+            GiveUp::SequenceShape,
+            "only an `auth.api_keys` element may be removed",
+        ));
+    }
+    let list = &path.0[..2];
+    // Counted by occurrence: the revocation is the one change under the list.
+    let alone = elements.next().is_none()
+        && changes
+            .iter()
+            .filter(|(p, _)| p.0.starts_with(list))
+            .count()
+            == 1;
+    if !alone {
+        return Err(give_up(
+            GiveUp::SequenceShape,
+            "a removed list element must be the save's only change in its list",
+        ));
+    }
+    Ok(Some(path.0.as_slice()))
+}
+
+/// S5 and S4 for a save holding a revocation: the original lines the edit
+/// deleted are exactly the lines its removals may delete, judged on the original text apart
+/// from the edit (the element, each removed key, each entry the cascade
+/// emptied); else `Unprovable`. Returns the deleted lines that carried a
+/// comment, 1-based.
+fn deleted_as_planned(
+    original: &str,
+    before: &[crate::yaml::Node],
+    removed: &[&[Segment]],
+    revoked: &[Segment],
+    lines: &shape::Lines,
+    edited: &str,
+) -> Result<Vec<usize>, ComputeRefusal> {
+    let after = shape::nodes(edited)?;
+    let mut allowed = std::collections::BTreeSet::new();
+    let mut take = |path: &[Segment], taken| {
+        if let Some(node) = shape::find(before, path) {
+            allowed.extend(revoke::may_delete(original, node, taken));
+        }
+    };
+    for &path in removed {
+        let taken = if path == revoked {
+            revoke::Taken::Element
+        } else {
+            revoke::Taken::Entry
+        };
+        take(path, taken);
+        // A parent the removal emptied went with it.
+        for d in 1..path.len() {
+            let parent = &path[..d];
+            if matches!(parent.last(), Some(Segment::Key(_)))
+                && shape::find(&after, parent).is_none()
+            {
+                take(parent, revoke::Taken::Entry);
+            }
+        }
+    }
+    let surviving = lines.surviving();
+    let deleted: std::collections::BTreeSet<usize> = (0..original.split_inclusive('\n').count())
+        .filter(|n| !surviving.contains(n))
+        .collect();
+    // Equal, not a subset: a deletion one comment line short keeps the
+    // meaning, so only this comparison sees it.
+    if deleted != allowed {
+        return Err(unprovable(
+            "the deleted lines are not the removed entries' lines",
+        ));
+    }
+    Ok(super::comments::comment_line_numbers(original, &deleted))
 }
 
 /// The value text `change` writes; `None` for a removal.
@@ -554,6 +679,9 @@ fn meaning_holds(original: &str, changes: &[(FieldPath, Change)], edited: &str) 
 
 #[path = "config_persistence_keyedit_shape.rs"]
 mod shape;
+
+#[path = "config_persistence_keyedit_revoke.rs"]
+mod revoke;
 
 #[cfg(test)]
 #[path = "config_persistence_keyedit_tests.rs"]

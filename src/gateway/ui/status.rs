@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 
 use super::guard::Guard;
 use super::{AppState, access_report, auth_facts, call_windows, is_admin};
+use crate::gateway::authz::BackendGrant;
 
 /// `GET /ui/api/status` — JSON snapshot of gateway health.
 pub(super) async fn status(
@@ -24,12 +25,16 @@ pub(super) async fn status(
     let _ = guard.admit();
     let access = access_report::report(&generation, guard.client.as_ref(), guard.identity.as_ref());
     let client = guard.client;
-    let view = if is_admin(client.as_ref()) {
+    // A caller with no credential (a public status path) has no scope to
+    // narrow by. A scoped admin gets the counts, within its scope: the full
+    // view lists every backend.
+    let scope = BackendGrant::for_ui(client.as_ref());
+    let view = if is_admin(client.as_ref()) && scope == BackendGrant::Unscoped {
         StatusView::Full
     } else {
         StatusView::CountsOnly
     };
-    let mut body = status_body(&state, view);
+    let mut body = status_body(&state, view, scope);
     body["auth"] = auth_facts(&state, client.as_ref());
     // An auth-on caller with no credential gets no `access` member at all.
     if let Some(access) = access {
@@ -41,14 +46,16 @@ pub(super) async fn status(
 /// Which of the two views a caller gets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StatusView {
-    /// Every server row: admin callers.
+    /// Every server row: unscoped admin callers.
     Full,
-    /// Counts only: every other caller.
+    /// Counts only, of the backends the caller's scope reaches: every other
+    /// caller.
     CountsOnly,
 }
 
 /// The status body without the caller's `auth` member, which the caller adds.
-pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
+/// `CountsOnly` counts only the backends `scope` admits.
+pub(super) fn status_body(state: &AppState, view: StatusView, scope: BackendGrant<'_>) -> Value {
     #[allow(
         clippy::disallowed_methods,
         reason = "Admin: the operator dashboard behind admin auth; not a tenant read"
@@ -58,7 +65,9 @@ pub(super) fn status_body(state: &AppState, view: StatusView) -> Value {
 
     if view == StatusView::CountsOnly {
         // Redacted view: counts only, no names/details
-        let healthy = backends
+        let counted: Vec<_> = backends.iter().filter(|b| scope.admits(&b.name)).collect();
+        let total = counted.len();
+        let healthy = counted
             .iter()
             .filter(|b| b.status().circuit_state != crate::failsafe::CircuitState::Open)
             .count();
