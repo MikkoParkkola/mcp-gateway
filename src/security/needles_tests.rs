@@ -603,14 +603,16 @@ async fn a_refused_sent_value_keeps_the_set_refusing_until_its_grace_passes() {
     tokio::time::advance(Duration::from_secs(10)).await;
     needles.insert("b", "refused-token-x");
     assert!(needles.overflowed(), "premise: the value was refused");
-    tokio::time::advance(GRACE - Duration::from_secs(9)).await;
+    // The filled values are past their grace; X is exactly at the end of
+    // its own, so still live.
+    tokio::time::advance(GRACE).await;
     let (outcome, text) = scrubbed(&needles, "echo refused-token-x");
     assert!(
         matches!(outcome, Scrubbed::Redacted | Scrubbed::Refuse)
             && !text.contains("refused-token-x"),
         "the refused value was served once older values retired: {outcome:?} {text}"
     );
-    tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::time::advance(Duration::from_secs(1)).await;
     assert!(
         !needles.overflowed(),
         "the refusal outlived the refused value's grace"
