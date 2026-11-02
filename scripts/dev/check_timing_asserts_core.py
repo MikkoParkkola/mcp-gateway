@@ -410,7 +410,7 @@ def _cfg_rules():
 
 
 CFG_OPEN = re.compile(r"#\s*(!?)\s*\[\s*cfg\s*\(")
-QUALIFIERS = re.compile(r"(?:\s*(?:pub(?:\s*\([^()]*\))?|async|unsafe|default|extern\s*(?:\"[^\"]*\")?)\b)*\s*")
+QUALIFIERS = re.compile(r"(?:\s*(?:pub\b(?:\s*\([^()]*\))?|async\b|unsafe\b|default\b|extern\b(?:\s*\"[^\"]*\")?))*\s*")
 # Items that run to their top-level `;`, past any initializer block.
 TO_SEMICOLON = {"let", "const", "static", "type", "use"}
 # Items that end after their body block, or at a top-level `;`.
@@ -484,12 +484,15 @@ def item_end(code: str, start: int) -> int | None:
                         (rest[:1] == "." and rest[1:2] != ".")
                         or rest[:1] == "?"
                         or (rest.startswith("else") and not re.match(r"\w", rest[4:5]))
+                        or (rest.startswith("as") and not re.match(r"\w", rest[2:3]))
                         or (rest[:1] != "" and rest[:1] in "+-*/%&|^=<>")
                     )
                 )
                 if not continues:
                     return i + 1
-        elif depth == 0 and c == "<":
+        elif depth == 0 and c == "<" and re.match(r"[\w>:]", code[i - 1 : i]):
+            # A generic opens right after a name, `>` or `::` (rustfmt never
+            # spaces it); `a < b` is a comparison.
             angle += 1
         elif depth == 0 and c == ">" and angle and code[i - 1 : i] not in ("-", "=") and code[i + 1 : i + 2] != "=":
             angle -= 1

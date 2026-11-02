@@ -32,6 +32,7 @@ from check_timing_asserts_core import (
     split_top,
     test_lines,
 )
+from check_timing_asserts_source import _signature_body
 
 # PR-C (MIK-8247, MIK-8288): rules for new or changed code only, read against
 # `--base`. Existing sites are judged by the 5 s rule above and by MIK-8266's
@@ -165,34 +166,19 @@ def fn_spans(code: str) -> list[tuple[int, str, int, int]]:
     """(attribute start, name, body start, body end) for each fn with a body."""
     spans = []
     for m in FN.finditer(code):
-        brace = body_open(code, m.end())
+        # The signature's own body finder, so a braced const generic
+        # (`-> Probe<{ 1 + 1 }>`) is not the body; a signature it does not
+        # support falls back to the first `{`, as before.
+        brace = _signature_body(code, m.end())
         if brace is None:
+            brace = code.find("{", m.end())
+            semi = code.find(";", m.end())
+            if brace < 0 or 0 <= semi < brace:
+                continue
+        elif brace < 0:
             continue
         spans.append((m.start(), m.group(1), brace, block_end(code, brace)))
     return spans
-
-
-def body_open(code: str, at: int) -> int | None:
-    """The `{` that opens a fn's body, from just past its name: the first one
-    outside the signature's brackets and its `<..>`, so a braced const
-    generic (`-> Probe<{ 1 + 1 }>`) is not the body. `None` for a fn with no
-    body (a `;` first)."""
-    depth, angle = 0, 0
-    for i in range(at, len(code)):
-        c = code[i]
-        if c == "{" and depth == 0 and angle == 0:
-            return i
-        if c in "([{":
-            depth += 1
-        elif c in ")]}":
-            depth -= 1
-        elif depth == 0 and c == "<":
-            angle += 1
-        elif depth == 0 and c == ">" and angle and code[i - 1] not in "-=" and code[i + 1 : i + 2] != "=":
-            angle -= 1
-        elif depth == 0 and c == ";":
-            return None
-    return None
 
 
 def scan_new(
