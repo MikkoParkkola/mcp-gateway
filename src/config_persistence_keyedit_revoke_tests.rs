@@ -429,6 +429,45 @@ fn r4p_a_key_starting_with_a_hyphen_is_not_the_dash() {
     }
 }
 
+// R4q: the last entry of a flow list: the checked edit takes the comma
+// before it; following the instruction by hand loads with the other key.
+#[test]
+fn r4q_the_last_entry_of_a_flow_list_takes_the_comma_before_it() {
+    let original = "auth:\n  api_keys: [{name: ci, key_sha256: \"sha256:cc\"}, {name: ops, key_sha256: \"sha256:aa\"}]\n";
+    let (code, reason) = refused(original, &[revoke(1)]);
+    assert_eq!(code, GiveUp::Flow);
+    instructs(&reason, "ops");
+    assert!(
+        reason.contains("on line 2, remove the entry with `name: ops` and one comma next to it"),
+        "{reason}"
+    );
+    let by_hand = original.replace(", {name: ops, key_sha256: \"sha256:aa\"}", "");
+    let auth = loads_auth(&by_hand);
+    assert_eq!(auth.api_keys.len(), 1);
+    assert_eq!(auth.api_keys[0].name, "ci");
+}
+
+// R4r: the sole entry of a flow list has no comma to take: no deletion is
+// checked, so expiry alone.
+#[test]
+fn r4r_the_sole_entry_of_a_flow_list_gets_expiry_only() {
+    let original = "auth:\n  enabled: true\n  api_keys: [{name: ops, key_sha256: \"sha256:aa\"}]\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Flow);
+    expiry_only(&reason, "ops");
+}
+
+// R4s: a name written with quotes is named as written: `"'ops'"` is not
+// the other key's `ops`.
+#[test]
+fn r4s_a_quoted_name_is_named_as_written() {
+    let original = "auth:\n  api_keys: [{name: \"'ops'\", key_sha256: \"sha256:aa\"}, {name: ops, key_sha256: \"sha256:bb\"}]\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Flow);
+    assert!(reason.contains("`name: \"'ops'\"`"), "{reason}");
+    assert!(!reason.contains("`name: ops`"), "{reason}");
+}
+
 // R4c, R4f: a flow list refuses with an entry-specific edit, never a
 // whole-line deletion; applying either edit by hand loads as promised.
 #[test]

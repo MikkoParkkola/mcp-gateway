@@ -169,7 +169,10 @@ fn instructions(name: &str, deletion: Option<&Deletion>) -> String {
     let deletion = match deletion {
         None => return expiry,
         Some(Deletion::OnLine(line, _)) => {
-            format!("on line {line}, remove the entry with `name: {name}`, keeping the others")
+            format!(
+                "on line {line}, remove the entry with `name: {name}` and one comma next to it, \
+                 keeping the others"
+            )
         }
         Some(Deletion::Lines(lines, emptied)) => format!(
             "delete lines {} to {}{}",
@@ -265,13 +268,12 @@ pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<Co
     let element = super::shape::find(nodes, &element_path)?;
     let list = super::shape::find(nodes, &list_path)?;
     let name_path = [&element_path[..], &[Segment::Key("name".into())][..]].concat();
+    // The name as written in the file, quotes and all: names are unique once
+    // decoded, so two spellings cannot both load, and trimming quotes could
+    // turn `"'ops'"` into another key's `ops`.
     let name = super::shape::find(nodes, &name_path).map_or_else(
         || format!("#{index}"),
-        |n| {
-            original[n.bytes.clone()]
-                .trim_matches(['"', '\''])
-                .to_owned()
-        },
+        |n| original[n.bytes.clone()].to_owned(),
     );
     let starts = Starts::of(original);
     let auth = super::shape::find(nodes, &list_path[..1])?;
