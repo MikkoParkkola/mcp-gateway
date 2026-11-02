@@ -296,6 +296,10 @@ class RequestTimeouts(unittest.TestCase):
             with self.subTest(w=w):
                 self.assertRefused(f"let s = events.timeout({w});", rule=guard.NOT_A_REQUEST)
 
+    def test_the_receiver_is_read_within_its_own_statement(self):
+        body = self.BUILDER.format(w="Duration::from_secs(30)") + "\nlet s = events.timeout(Duration::from_secs(30));"
+        self.assertRefused(body, rule=guard.NOT_A_REQUEST)
+
     def test_a_timeout_getter_is_not_a_bound(self):
         self.assertPasses("let d = config.timeout();")
 
@@ -303,7 +307,8 @@ class RequestTimeouts(unittest.TestCase):
         self.assertPasses("let r = 0.. timeout(Duration::from_secs(5), f()).await.expect(\"x\");")
 
     def test_a_request_timeout_in_product_code_is_not_judged(self):
-        text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n"
+        # Beside a test item, so the file holds test code and is scanned.
+        text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n#[cfg(test)]\nfn helper() {}\n"
         self.assertEqual(guard.scan_timeouts("src/x.rs", text, {}, {}), [])
 
     def test_a_paused_clock_is_not_judged(self):
@@ -596,6 +601,7 @@ class MethodRowCutover(unittest.TestCase):
             "post": "THRESHOLD_S = 5.0\nJUDGES_TIMEOUT_METHOD = True\n",
             "computed": "JUDGES_TIMEOUT_METHOD = bool(1)\n",
             "broken": "JUDGES_TIMEOUT_METHOD = (\n",
+            "zero": "JUDGES_TIMEOUT_METHOD = 0\n",
         }.items():
             core = self.scratch.root / self.CORE
             core.parent.mkdir(parents=True, exist_ok=True)
@@ -608,7 +614,7 @@ class MethodRowCutover(unittest.TestCase):
         self.scratch.close()
 
     def test_the_marker_is_read_as_data_and_fails_closed(self):
-        expected = {"pre": False, "post": True, "computed": None, "broken": None}
+        expected = {"pre": False, "post": True, "computed": None, "broken": None, "zero": None}
         for name, want in expected.items():
             with self.subTest(base=name):
                 self.assertIs(guard.base_judges_timeout_method(self.refs[name]), want)
