@@ -65,16 +65,7 @@ impl TryFrom<RawGrantSubject> for GrantSubject {
     type Error = EmptyIdentity;
 
     fn try_from(raw: RawGrantSubject) -> Result<Self, Self::Error> {
-        // The one predicate every identity source applies; the error names
-        // the part that is empty.
-        if !names_someone(&raw.authority, &raw.subject) {
-            return Err(if raw.authority.is_empty() {
-                EmptyIdentity::Authority
-            } else {
-                EmptyIdentity::Subject
-            });
-        }
-        Ok(Self::new(raw.authority, raw.subject, raw.label))
+        Self::new(raw.authority, raw.subject, raw.label)
     }
 }
 
@@ -97,45 +88,46 @@ impl GrantSubject {
         self.label.as_deref()
     }
 
-    /// Create a new grant subject.
-    #[must_use]
+    /// The one way to build a grant subject, a caller's or a grant rule's:
+    /// refused when the authority or the subject is empty, since such a
+    /// subject names nobody and every key built from it would merge all such
+    /// callers, and a rule naming it grants nothing. The error names the part
+    /// that is empty.
+    ///
+    /// # Errors
+    ///
+    /// [`EmptyIdentity`] when the authority or the subject is empty.
     pub fn new(
         authority: impl Into<String>,
         subject: impl Into<String>,
         label: Option<String>,
-    ) -> Self {
-        Self {
-            authority: authority.into(),
-            subject: subject.into(),
-            label,
-        }
-    }
-
-    /// The only way production code builds a CALLER's grant subject
-    /// (MIK-8286): `None` when the authority or the subject is empty, since
-    /// such a subject names nobody and every key built from it would merge
-    /// all such callers. Grant-file rule targets are not caller identities
-    /// and keep [`GrantSubject::new`]; `scripts/release/check_identity_sources.py`
-    /// counts every production `new` call outside this one.
-    pub(crate) fn checked(
-        authority: impl Into<String>,
-        subject: impl Into<String>,
-        label: Option<String>,
-    ) -> Option<Self> {
+    ) -> Result<Self, EmptyIdentity> {
         let (authority, subject) = (authority.into(), subject.into());
-        names_someone(&authority, &subject).then(|| Self::new(authority, subject, label))
+        // The one predicate every identity source applies.
+        if !names_someone(&authority, &subject) {
+            return Err(if authority.is_empty() {
+                EmptyIdentity::Authority
+            } else {
+                EmptyIdentity::Subject
+            });
+        }
+        Ok(Self {
+            authority,
+            subject,
+            label,
+        })
     }
 }
 
 #[cfg(test)]
 impl GrantSubject {
-    /// A test's fixed subject.
+    /// A test's fixed subject; panics on an empty authority or subject.
     pub(crate) fn for_test(
         authority: impl Into<String>,
         subject: impl Into<String>,
         label: Option<String>,
     ) -> Self {
-        Self::new(authority, subject, label)
+        Self::new(authority, subject, label).expect("a test subject names someone")
     }
 }
 

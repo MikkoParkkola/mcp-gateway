@@ -341,7 +341,7 @@ impl DecisionSet {
         let (Some(now), Some(scope)) = (self.now, requested.scope.as_ref()) else {
             return false;
         };
-        let Some(subject) = GrantSubject::checked(&key.authority, &key.subject, None) else {
+        let Some(subject) = GrantSubject::new(&key.authority, &key.subject, None).ok() else {
             return false;
         };
         self.grants.iter().any(|grant| {
@@ -434,11 +434,14 @@ pub(crate) fn denial_from_record(record: &Map<String, Value>) -> Option<Identity
         allowed: reason == IdentityGrantDecisionReason::GrantMatched,
         reason,
         // Through the checked constructor: a record naming no one is no request.
-        subject: Some(GrantSubject::checked(
-            subject.get("authority")?.as_str()?,
-            subject.get("subject")?.as_str()?,
-            None,
-        )?),
+        subject: Some(
+            GrantSubject::new(
+                subject.get("authority")?.as_str()?,
+                subject.get("subject")?.as_str()?,
+                None,
+            )
+            .ok()?,
+        ),
         agent_id: text("agent_id").map(str::to_string),
         capability: text("capability")?.to_string(),
         tool: text("tool").map(str::to_string),
@@ -498,10 +501,11 @@ fn access_key(event: &IdentityGrantAuditEvent) -> Option<(AccessKey, String)> {
         return None;
     }
     // The checked constructor's rule: a subject that names no one is none.
-    let subject = event
-        .subject
-        .as_ref()
-        .filter(|s| GrantSubject::checked(s.authority(), s.subject(), None).is_some())?;
+    let subject = event.subject.as_ref().filter(|s| {
+        GrantSubject::new(s.authority(), s.subject(), None)
+            .ok()
+            .is_some()
+    })?;
     let agent = event.agent_id.clone().filter(|agent| !agent.is_empty())?;
     let key = AccessKey {
         authority: subject.authority().to_owned(),

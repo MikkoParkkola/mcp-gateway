@@ -137,13 +137,16 @@ async fn upsert_local_grant(input: LocalGrantInput) -> Result<(PathBuf, Identity
     let subject = parse_subject_spec(&input.subject, input.subject_label, "subject")?;
     let owner = match input.owner {
         Some(owner) => Some(parse_subject_spec(&owner, input.owner_label, "owner")?),
-        None => Some(GrantSubject::new(
-            subject.authority().to_owned(),
-            subject.subject().to_owned(),
-            input
-                .owner_label
-                .or_else(|| subject.label().map(str::to_owned)),
-        )),
+        None => Some(
+            GrantSubject::new(
+                subject.authority().to_owned(),
+                subject.subject().to_owned(),
+                input
+                    .owner_label
+                    .or_else(|| subject.label().map(str::to_owned)),
+            )
+            .map_err(|e| format!("owner: {e}"))?,
+        ),
     };
     let grant = IdentityGrant {
         grant_id: non_empty(&input.grant_id, "grant-id")?,
@@ -302,14 +305,15 @@ fn parse_subject_spec(
         .ok_or_else(|| {
             format!("{field_name} must use AUTHORITY:SUBJECT, for example api_key:alice")
         })?;
-    Ok(GrantSubject::new(
+    GrantSubject::new(
         non_empty(authority, field_name)?,
         verbatim_id(subject, field_name)?,
         label.and_then(|label| {
             let trimmed = label.trim();
             (!trimmed.is_empty()).then(|| trimmed.to_string())
         }),
-    ))
+    )
+    .map_err(|e| format!("{field_name}: {e}"))
 }
 
 fn parse_agent_binding(agent: Option<String>, any_agent: bool) -> Result<GrantAgent, String> {

@@ -133,7 +133,7 @@ impl MetaMcp {
     pub(in crate::gateway) fn grant_subject_from_api_key(
         grant_key: Option<&str>,
     ) -> Option<GrantSubject> {
-        grant_key.and_then(|name| GrantSubject::checked("api_key", name, Some(name.to_string())))
+        grant_key.and_then(|name| GrantSubject::new("api_key", name, Some(name.to_string())).ok())
     }
 
     /// Whether the kernel enforces on `carrier`. Notes no data classes: the
