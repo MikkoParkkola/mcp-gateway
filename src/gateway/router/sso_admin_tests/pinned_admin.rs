@@ -94,12 +94,9 @@ async fn the_admin_flag_follows_the_pinned_mapping_on_a_public_path() {
     follows_the_pin(&gw).await;
 }
 
-/// Authentication with no generation pinned refuses the request, never
-/// judging it by the current one: the handler behind it never runs.
-#[tokio::test]
-async fn an_unpinned_request_never_reaches_a_handler() {
-    let gw = gateway(GRANTS).await;
-    let token = gw.a.token("alice", &["ops-admins"], &json!({}));
+/// The handler-less refusal: `request` through authentication alone, with
+/// no generation pinned, answers the no-pin error and never runs the handler.
+async fn refused_unpinned(gw: &Gateway, request: axum::http::Request<axum::body::Body>) {
     let ran = Arc::new(AtomicBool::new(false));
     let seen = Arc::clone(&ran);
     let app = axum::Router::new()
@@ -114,10 +111,7 @@ async fn an_unpinned_request_never_reaches_a_handler() {
             super::super::build_auth_state(&gw.state),
             crate::gateway::auth::auth_middleware,
         ));
-    let response = app
-        .oneshot(super::rpc(&token, "tools/list", &json!({})))
-        .await
-        .expect("a response");
+    let response = app.oneshot(request).await.expect("a response");
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -128,4 +122,36 @@ async fn an_unpinned_request_never_reaches_a_handler() {
         String::from_utf8_lossy(&body)
     );
     assert!(!ran.load(Ordering::SeqCst), "the handler ran unpinned");
+}
+
+/// A live dashboard session is accepted before a credential is read, so the
+/// session path refuses an unpinned request on its own, never judging the
+/// session by the current key table.
+#[tokio::test]
+async fn an_unpinned_dashboard_session_never_reaches_a_handler() {
+    use crate::gateway::auth::{Now, SESSION_COOKIE, SessionLimits};
+    let gw = gateway(GRANTS).await;
+    let limits = SessionLimits::from(&gw.state.live_config.get().auth.dashboard_session);
+    let handle = gw
+        .state
+        .dashboard_bootstrap
+        .issue_session_at(Now::read(), &limits);
+    let request = axum::http::Request::post("/mcp")
+        .header(
+            axum::http::header::COOKIE,
+            format!("{SESSION_COOKIE}={handle}"),
+        )
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from("{}"))
+        .expect("a request");
+    refused_unpinned(&gw, request).await;
+}
+
+/// Authentication with no generation pinned refuses the request, never
+/// judging it by the current one: the handler behind it never runs.
+#[tokio::test]
+async fn an_unpinned_request_never_reaches_a_handler() {
+    let gw = gateway(GRANTS).await;
+    let token = gw.a.token("alice", &["ops-admins"], &json!({}));
+    refused_unpinned(&gw, super::rpc(&token, "tools/list", &json!({}))).await;
 }
