@@ -326,3 +326,20 @@ fn an_all_zero_key_is_refused() {
         "not the weak-key refusal: {text}"
     );
 }
+
+/// Startup's half of the audit posture: auth on with the audit log off is
+/// refused at load, so no running gateway has auth on and no log.
+#[test]
+fn auth_on_with_the_audit_log_off_is_refused_at_load() {
+    let mut config = Config::default();
+    config.auth.enabled = true;
+    config.security.transparency_log.enabled = Some(false);
+    let refused = config
+        .validate()
+        .expect_err("auth on without an audit log is refused")
+        .to_string();
+    assert!(
+        refused.contains("security.transparency_log must be enabled"),
+        "the refusal names the audit log: {refused}"
+    );
+}

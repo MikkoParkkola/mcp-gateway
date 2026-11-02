@@ -484,3 +484,39 @@ async fn an_adopt_writes_its_paired_intent_first() {
         "W25: the adopt wrote no paired intent; the log holds {events:?}"
     );
 }
+
+/// Auth on with no audit log: an adopt is refused before the writer runs,
+/// and neither gateway.yaml nor the store changes.
+#[tokio::test]
+async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
+    let mut route = Route::new(EMPTY, vec![stdio("tool", "npx tool", &[])]).await;
+    let mut running = Config::default();
+    running.auth.enabled = true;
+    Arc::get_mut(&mut route.state)
+        .expect("state is unique")
+        .live_config = Arc::new(LiveConfig::new(running));
+    assert!(
+        route.state.transparency_log.is_none(),
+        "premise: the gateway has no audit log"
+    );
+    let (id, revision) = route.listed("tool").await;
+    let before = route.bytes();
+
+    let (status, body) = route.adopt(true, &id, &revision).await;
+
+    assert_ne!(
+        status,
+        StatusCode::CREATED,
+        "auth is on with no audit log, yet the adopt was written: {body}"
+    );
+    assert_eq!(
+        route.bytes(),
+        before,
+        "the refused adopt changed gateway.yaml"
+    );
+    assert_eq!(
+        route.entries(),
+        0,
+        "the refused adopt created a store entry"
+    );
+}
