@@ -31,6 +31,24 @@ pub(in super::super) struct Derived {
     pub(in super::super) plain: Vec<String>,
 }
 
+/// A macro invocation's two needles: its `delivery_facts` raise row, and
+/// its plain-refusal row (the other monitored names, joined).
+fn macro_needles(tokens: &str, helpers: &BTreeSet<String>) -> (Option<String>, Option<String>) {
+    let names = monitored_tokens(tokens, helpers);
+    let is_facts = |n: &&String| *n == FACTS || n.starts_with(&format!("{FACTS}*"));
+    let facts = names
+        .iter()
+        .find(is_facts)
+        .map(|n| format!("{n} (in macro)"));
+    let plain: Vec<&str> = names
+        .iter()
+        .filter(|n| !is_facts(n))
+        .map(String::as_str)
+        .collect();
+    let plain = (!plain.is_empty()).then(|| format!("{} (in macro)", plain.join(",")));
+    (facts, plain)
+}
+
 fn fns_with(events: &[Event], file: &str, hit: impl Fn(&Kind) -> bool) -> BTreeSet<String> {
     events
         .iter()
@@ -263,21 +281,11 @@ impl Collect {
                     plain_needle = Some(format!("via {name} (closure)"));
                 }
                 Kind::InMacro(tokens) => {
-                    let names = monitored_tokens(tokens, &helpers);
-                    let is_facts = |n: &String| n == FACTS || n.starts_with(&format!("{FACTS}*"));
-                    if let Some(facts) = names.iter().find(|n| is_facts(n)) {
-                        *raises
-                            .entry(format!("{key}\t{facts} (in macro)"))
-                            .or_insert(0) += 1;
+                    let (facts, plain_names) = macro_needles(tokens, &helpers);
+                    if let Some(facts) = facts {
+                        *raises.entry(format!("{key}\t{facts}")).or_insert(0) += 1;
                     }
-                    let plain_names: Vec<&str> = names
-                        .iter()
-                        .filter(|n| !is_facts(n))
-                        .map(String::as_str)
-                        .collect();
-                    if gateway && !plain_names.is_empty() {
-                        plain_needle = Some(format!("{} (in macro)", plain_names.join(",")));
-                    }
+                    plain_needle = plain_names.filter(|_| gateway);
                 }
                 _ => {}
             }
