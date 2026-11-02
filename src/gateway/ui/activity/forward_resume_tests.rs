@@ -405,4 +405,7 @@ fn a_record_at_the_cap_is_read_and_one_byte_over_is_refused() {
         !counters(&pages).contains(&2),
         "a record one byte over the cap is never served"
     );
+    // Refused, the next counter does not follow the cursor: rows were lost.
+    assert!(counters(&pages).is_empty(), "nothing past it is served");
+    assert!(pages.iter().any(|p| p.reset), "the read resets");
 }

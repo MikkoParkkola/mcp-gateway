@@ -409,16 +409,60 @@ fn a_missing_middle_segment_resets_rather_than_skipping_its_rows() {
 }
 
 #[test]
-fn head_reads_past_an_unreadable_tail_longer_than_one_read() {
+fn head_of_a_log_ending_in_a_long_unreadable_tail_is_an_error_not_empty() {
     let d = dir();
     let path = d.path().join("inv.jsonl");
     let mut recs = calls(2);
     recs.push(Rec::Junks(1500, 2047));
-    let w = write(&path, &[recs]);
+    write(&path, &[recs]);
     let l = log(&path, StreamKind::Activity);
-    assert_eq!(
-        super::super::head(&l).unwrap().as_ref(),
-        w.marks.last(),
-        "a tail of junk is not an empty log"
+    assert!(
+        super::super::head(&l).is_err(),
+        "a tail of junk past one read is neither a record nor an empty log"
     );
+    // A short tail still finds the newest record.
+    let mut recs = calls(2);
+    recs.push(Rec::Junks(4, 100));
+    let w = write(&path, &[recs]);
+    assert_eq!(super::super::head(&l).unwrap().as_ref(), w.marks.last());
+}
+
+#[test]
+fn a_gap_that_holds_the_stop_resets() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &vec![calls(2); 4]);
+    std::fs::remove_file(sealed_path(&path, 2)).unwrap();
+    let l = log(&path, StreamKind::Activity);
+    // The stop (counter 4) was in the removed segment.
+    let pages = drain(
+        &l,
+        Some(&w.marks[0]),
+        Some(&w.marks[3]),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    assert!(pages.iter().any(|p| p.reset), "not Done past a lost stop");
+}
+
+#[test]
+fn a_fresh_read_never_starts_past_an_unreadable_oldest_segment() {
+    let d = dir();
+    let path = d.path().join("inv.jsonl");
+    let w = write(&path, &[calls(2), calls(2)]);
+    let l = log(&path, StreamKind::Activity);
+    IDENTITY_FAILS.with(|f| f.set(1));
+    let page = rows_after(
+        &l,
+        None,
+        w.marks.last(),
+        &Access::All,
+        WIDE,
+        &mut Search::default(),
+    );
+    IDENTITY_FAILS.with(|f| f.set(0));
+    let page = page.unwrap();
+    assert!(page.reset, "an unreadable segment is not skipped");
+    assert!(page.rows.is_empty());
 }

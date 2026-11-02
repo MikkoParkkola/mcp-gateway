@@ -170,9 +170,9 @@ fn f9b_a_shrink_below_the_offset_restarts() {
 #[test]
 fn f9b_an_unreadable_identity_restarts() {
     let mut s = suspended(calls(1));
-    IDENTITY_FAILS.with(|f| f.set(true));
+    IDENTITY_FAILS.with(|f| f.set(u32::MAX));
     let next = s.resume();
-    IDENTITY_FAILS.with(|f| f.set(false));
+    IDENTITY_FAILS.with(|f| f.set(0));
     assert!(
         next.diag.restarted,
         "an identity that cannot be read is never trusted"

@@ -23,8 +23,8 @@ thread_local! {
     /// Run once, after a resume has decided the segment's identity and before
     /// its first byte is read.
     static AFTER_IDENTITY: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
-    /// While set, reading a segment's identity fails.
-    static IDENTITY_FAILS: Cell<bool> = const { Cell::new(false) };
+    /// How many of the next identity reads fail.
+    static IDENTITY_FAILS: Cell<u32> = const { Cell::new(0) };
 }
 
 /// The resume's seam between deciding the identity and the first read.
@@ -34,9 +34,13 @@ pub(super) fn after_identity() {
     }
 }
 
-/// Whether reading an identity should fail now.
+/// Whether this identity read should fail; each failure uses one up.
 pub(super) fn identity_fails() -> bool {
-    IDENTITY_FAILS.with(Cell::get)
+    IDENTITY_FAILS.with(|f| {
+        let left = f.get();
+        f.set(left.saturating_sub(1));
+        left > 0
+    })
 }
 
 fn set_after_identity(hook: impl FnOnce() + 'static) {

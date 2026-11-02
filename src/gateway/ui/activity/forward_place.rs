@@ -75,22 +75,34 @@ pub(super) fn next_segment(path: &Path, seq: u64) -> io::Result<Next> {
         return Ok(Next::Missing);
     }
     Ok(match open(path, next)? {
-        Some((file, id)) => Next::Opened(file, next, id),
-        None => Next::Missing,
+        Segment::Opened(file, id) => Next::Opened(file, next, id),
+        Segment::Gone | Segment::Unreadable => Next::Missing,
     })
 }
 
 /// A segment opened with its identity. `None` when it is gone, or when its
 /// identity cannot be read: an unreadable identity is never trusted.
-pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> {
+pub(super) fn open(path: &Path, seq: u64) -> io::Result<Segment> {
     let Some(file) = open_segment(path, seq, || {})? else {
-        return Ok(None);
+        return Ok(Segment::Gone);
     };
     #[cfg(test)]
     if super::tests::identity_fails() {
-        return Ok(None);
+        return Ok(Segment::Unreadable);
     }
-    Ok(file_id(&file).ok().map(|id| (file, id)))
+    Ok(match file_id(&file) {
+        Ok(id) => Segment::Opened(file, id),
+        Err(_) => Segment::Unreadable,
+    })
+}
+
+/// A listed segment, opened.
+pub(super) enum Segment {
+    Opened(File, FileId),
+    /// Removed since it was listed: retention, or a rotation in between.
+    Gone,
+    /// It exists but its identity cannot be read: it cannot be proven.
+    Unreadable,
 }
 
 /// Where a fresh read starts: the oldest kept segment, at its first byte. A
@@ -99,20 +111,25 @@ pub(super) fn open(path: &Path, seq: u64) -> io::Result<Option<(File, FileId)>> 
 /// segment that opens.
 pub(super) fn start(log: &Log<'_>, cursor: Option<&Mark>) -> io::Result<Option<(File, Place)>> {
     for seq in segments(log.path)? {
-        if let Some((file, id)) = open(log.path, seq)? {
-            let place = Place {
-                cursor: cursor.cloned(),
-                found: cursor.is_none(),
-                last: None,
-                generation: log.generation,
-                file: id,
-                seq,
-                offset: 0,
-                mode: Mode::Boundary,
-                anchor: None,
-            };
-            return Ok(Some((file, place)));
-        }
+        let (file, id) = match open(log.path, seq)? {
+            Segment::Opened(file, id) => (file, id),
+            // Removed since it was listed: the next one is now the oldest.
+            Segment::Gone => continue,
+            // Rows may lie in it; starting past it would skip them.
+            Segment::Unreadable => return Ok(None),
+        };
+        let place = Place {
+            cursor: cursor.cloned(),
+            found: cursor.is_none(),
+            last: None,
+            generation: log.generation,
+            file: id,
+            seq,
+            offset: 0,
+            mode: Mode::Boundary,
+            anchor: None,
+        };
+        return Ok(Some((file, place)));
     }
     Ok(None)
 }
@@ -130,7 +147,7 @@ pub(super) fn resume(
     }
     let mut found = None;
     for seq in segments(log.path)? {
-        if let Some((file, id)) = open(log.path, seq)?
+        if let Segment::Opened(file, id) = open(log.path, seq)?
             && id == place.file
         {
             found = Some((file, seq));

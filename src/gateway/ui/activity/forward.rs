@@ -191,17 +191,18 @@ pub(in crate::gateway::ui) fn rows_after(
                         _ => break Outcome::Reset,
                     }
                 }
-                if mark.counter > stop.counter {
-                    break Outcome::Done;
-                }
                 // Counters run without gaps within a log, and retention removes
-                // only the oldest: a jump means rows between were lost.
+                // only the oldest: a jump means rows between were lost. Checked
+                // before the stop, since the stop itself may be among them.
                 if at
                     .last
                     .as_ref()
                     .is_some_and(|l| mark.counter != l.counter + 1)
                 {
                     break Outcome::Reset;
+                }
+                if mark.counter > stop.counter {
+                    break Outcome::Done;
                 }
                 let line = Line {
                     log: log.kind.log(),
@@ -303,21 +304,19 @@ pub(in crate::gateway::ui) fn head(log: &Log<'_>) -> io::Result<Option<Mark>> {
         bytes: 2 * WINDOW,
     };
     // Either log reads as the reader's first: only the counter and hash of
-    // its newest line are used here, never its log label. A budget spent on
-    // unreadable bytes is not an empty log: the read goes on from the page's
-    // continuation until it finds a record or reaches the log's start.
-    let mut cursor = None;
-    loop {
-        let page = read_page(log.path, None, cursor.as_ref(), one, |line| {
-            mark_of(&line.entry).is_some()
-        })?;
-        if let Some(mark) = page.lines.first().and_then(|l| mark_of(&l.entry)) {
-            return Ok(Some(mark));
-        }
-        match page.next {
-            Some(next) => cursor = Some(next),
-            None => return Ok(None),
-        }
+    // its newest line are used here, never its log label. One bounded read
+    // from the end: a budget spent on unreadable bytes is not an empty log,
+    // and reading on from the page's continuation could take the head of an
+    // over-cap line for a record, so it is an error instead.
+    let page = read_page(log.path, None, None, one, |line| {
+        mark_of(&line.entry).is_some()
+    })?;
+    match page.lines.first().and_then(|l| mark_of(&l.entry)) {
+        Some(mark) => Ok(Some(mark)),
+        None if page.scan_exhausted => Err(io::Error::other(
+            "no record within one read of the log's end",
+        )),
+        None => Ok(None),
     }
 }
 
