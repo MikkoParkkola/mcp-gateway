@@ -475,6 +475,8 @@ async fn a_redacted_field_is_no_steps_text() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

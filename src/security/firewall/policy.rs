@@ -28,7 +28,19 @@ impl FirewallPolicy {
     /// already refused it by key path (POLICY.2).
     pub(crate) fn compile(config: &FirewallConfig) -> Self {
         Self {
-            rules: config.rules.iter().map(compile_rule).collect(),
+            // Each rule with its folder check (allowed_root.rs): numbered,
+            // since a folder refusal names a rule with no `reason` `rules[i]`.
+            // Compiled per generation, so a reload's folder rules decide the
+            // next call like every other rule.
+            rules: config
+                .rules
+                .iter()
+                .enumerate()
+                .map(|(i, rule)| CompiledRule {
+                    root: super::allowed_root::compile(i, rule),
+                    ..compile_rule(rule)
+                })
+                .collect(),
             credential_redaction: config.credential_redaction,
         }
     }

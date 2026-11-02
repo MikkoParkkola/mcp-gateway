@@ -83,6 +83,10 @@ impl Source {
 pub(in crate::gateway) struct Outbound<'a> {
     pub(in crate::gateway) arguments: &'a Value,
     pub(in crate::gateway) answers: Option<&'a Value>,
+    /// The instance that sends: the folder check classifies it, never a
+    /// fresh lookup (a reload between the route scan and the send cannot
+    /// split the checked backend from the sending one).
+    pub(in crate::gateway) backend: Option<&'a crate::backend::Backend>,
 }
 
 /// Proof that one direct-route `tools/call` passed the chokepoint (MIK-8351).
@@ -133,7 +137,7 @@ impl MetaMcp {
         #[cfg(feature = "firewall")]
         self.rescan_outbound(scope, session_id, (server, tool), outbound, source)?;
         #[cfg(not(feature = "firewall"))]
-        let _ = (session_id, source, outbound.answers);
+        let _ = (session_id, source, outbound.answers, outbound.backend);
         Ok(Permit(()))
     }
 
@@ -293,6 +297,7 @@ impl MetaMcp {
             arguments,
             caller,
             control_identity,
+            None,
         );
         if verdict.action == crate::security::firewall::FirewallAction::Warn {
             tracing::warn!(
@@ -408,9 +413,21 @@ impl MetaMcp {
         };
         let published = self.current_generation();
         let policy = firewall.policy_under(scope.authorizer.generation().or(published.as_deref()));
-        let mut verdict = firewall.rescan(policy, target, outbound.arguments);
+        let mut verdict = firewall.rescan(
+            policy,
+            target,
+            outbound.arguments,
+            crate::security::firewall::ScanSubject::Arguments,
+            outbound.backend,
+        );
         if let Some(answers) = outbound.answers {
-            let answered = firewall.rescan(policy, target, answers);
+            let answered = firewall.rescan(
+                policy,
+                target,
+                answers,
+                crate::security::firewall::ScanSubject::Answers,
+                outbound.backend,
+            );
             if rank(answered.action) > rank(verdict.action) {
                 verdict.action = answered.action;
             }
