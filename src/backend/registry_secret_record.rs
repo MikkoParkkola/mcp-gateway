@@ -132,3 +132,7 @@ impl BackendRegistry {
             .swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 }
+
+#[cfg(test)]
+#[path = "registry_secret_record_tests.rs"]
+mod tests;

@@ -633,6 +633,7 @@ async fn answers_flow_again_once_the_refused_values_grace_has_passed() {
     }
     tokio::time::advance(Duration::from_secs(10)).await;
     needles.insert("b", "refused-token-x");
+    assert!(needles.overflowed(), "premise: the value was refused");
     tokio::time::advance(GRACE + Duration::from_secs(1)).await;
     for answer in ["an ordinary answer", "echo refused-token-x"] {
         let (outcome, text) = scrubbed(&needles, answer);
