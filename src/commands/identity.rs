@@ -397,7 +397,7 @@ fn grant_scope(scope: IdentityGrantScopeArg) -> GrantScope {
     }
 }
 
-fn expand_home_path(path: &Path) -> PathBuf {
+pub(super) fn expand_home_path(path: &Path) -> PathBuf {
     let Some(text) = path.to_str() else {
         return path.to_path_buf();
     };

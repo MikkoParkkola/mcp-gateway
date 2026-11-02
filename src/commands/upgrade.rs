@@ -90,7 +90,58 @@ static MIGRATIONS: &[Migration] = &[
         apply: migrate_4_0_0_release_notice,
         notice: true,
     },
+    Migration {
+        applies_below: "4.0.0",
+        description: "v4.0.0: remove identity-grant rows whose subject or owner names no one",
+        apply: migrate_4_0_0_nameless_grants,
+        notice: false,
+    },
 ];
+
+// ── 4.0.0 migration: grant rows that name no one ──────────────────────────────
+// 4.0.0 refuses a grants file whose subject or owner has an empty authority or
+// subject: such a row matches no caller, so it grants nothing. Removing it
+// changes no access decision, and the file loads again.
+
+/// The default grants path, as `IdentityGrantsConfig::default()` has it.
+const DEFAULT_GRANTS_PATH: &str = "~/.mcp-gateway/identity-grants.yaml";
+
+/// Remove the rows naming no one from the configured grants file, backed up
+/// first, reporting each by rule id and field. A file with none is untouched.
+fn migrate_4_0_0_nameless_grants(data_dir: &Path) -> std::io::Result<()> {
+    let configured = std::fs::read_to_string(data_dir.join("gateway.yaml"))
+        .ok()
+        .and_then(|text| crate::yaml::from_str::<crate::yaml::Value>(&text).ok())
+        .and_then(|yaml| {
+            yaml.get("security")?
+                .get("identity_grants")?
+                .get("path")?
+                .as_str()
+                .map(str::to_owned)
+        });
+    let path = super::identity::expand_home_path(Path::new(
+        configured.as_deref().unwrap_or(DEFAULT_GRANTS_PATH),
+    ));
+    let mut backup = path.clone().into_os_string();
+    backup.push(".bak.pre-4.0.0");
+    let removed = mcp_gateway::identity_grants::nameless_upgrade::remove_nameless_rows(
+        &path,
+        Path::new(&backup),
+        |target, text| {
+            mcp_gateway::config_persistence::write_text_atomic(target, text)
+                .map_err(std::io::Error::other)
+        },
+    )?;
+    for row in &removed {
+        eprintln!(
+            "migration v4.0.0: removed grant '{}' from {}: its {} names no one, so it granted nothing",
+            row.grant_id,
+            path.display(),
+            row.field
+        );
+    }
+    Ok(())
+}
 
 // ── 3.0.0 migration: multi-user-default posture notice ─────────────────────────
 //
@@ -576,6 +627,9 @@ mod upgrade_notice_tests;
 #[path = "upgrade_webhook_notice_tests.rs"]
 mod upgrade_webhook_notice_tests;
 
+#[cfg(test)]
+#[path = "upgrade_nameless_grants_tests.rs"]
+mod nameless_grants_tests;
 #[cfg(test)]
 #[path = "upgrade_prerelease_tests.rs"]
 mod prerelease_tests;
