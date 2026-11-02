@@ -194,3 +194,20 @@ fn a_backend_registers_only_at_startup_or_in_apply_patch() {
         "a new production registration must set its load's record first"
     );
 }
+
+/// A patch applied without its load's record would seed new instances from
+/// an older load: in a debug build `apply_patch` refuses to run.
+#[tokio::test]
+#[should_panic(expected = "apply_patch without its load's record")]
+async fn a_patch_applied_without_its_load_record_fails_in_a_debug_build() {
+    let registry = BackendRegistry::new();
+    let patch = compute_diff(&Config::default(), &Config::default());
+    let _ = apply_patch(
+        &patch,
+        &registry,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+        &crate::config::RuntimeConfig::default(),
+    )
+    .await;
+}
