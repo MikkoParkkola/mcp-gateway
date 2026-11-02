@@ -25,10 +25,24 @@ pub const DEFAULT_GRANT_LEASE_SECONDS: i64 = 60 * 60;
 /// Maximum recommendation lease duration for local grants.
 pub const MAX_GRANT_LEASE_SECONDS: i64 = 24 * 60 * 60;
 
+/// Which part of an identity names no one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum EmptyIdentity {
+    /// The authority is empty.
+    #[error("the identity's authority is empty")]
+    Authority,
+    /// The subject is empty.
+    #[error("the identity's subject is empty")]
+    Subject,
+}
+
 /// Stable subject identity used by grant evaluation.
 ///
 /// Equality is `(authority, subject)` only; see `identity_grants_matching.rs`.
+/// Read from bytes only through [`RawGrantSubject`], so a subject that names
+/// no one is refused wherever it is deserialized, whatever holds it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(try_from = "RawGrantSubject")]
 pub struct GrantSubject {
     /// Identity authority, such as an issuer URL or local authority name.
     pub authority: String,
@@ -37,6 +51,31 @@ pub struct GrantSubject {
     /// Optional operator-facing label. Display only: never part of identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// A grant subject as written, before its check.
+#[derive(Deserialize)]
+struct RawGrantSubject {
+    authority: String,
+    subject: String,
+    label: Option<String>,
+}
+
+impl TryFrom<RawGrantSubject> for GrantSubject {
+    type Error = EmptyIdentity;
+
+    fn try_from(raw: RawGrantSubject) -> Result<Self, Self::Error> {
+        // The one predicate every identity source applies; the error names
+        // the part that is empty.
+        if !names_someone(&raw.authority, &raw.subject) {
+            return Err(if raw.authority.is_empty() {
+                EmptyIdentity::Authority
+            } else {
+                EmptyIdentity::Subject
+            });
+        }
+        Ok(Self::new(raw.authority, raw.subject, raw.label))
+    }
 }
 
 impl GrantSubject {
