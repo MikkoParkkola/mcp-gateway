@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Shared fixture (test plan `2026-09-27-direct-route-guards-test-plan.md`
-//! "Shared fixture") for the direct-route guard cells (MIK-7597). Red-commit
-//! scaffolding only: no test module calls these yet.
+//! "Shared fixture") for the direct-route guard cells (MIK-7597).
 #![allow(dead_code)]
 
 use std::sync::Arc;
@@ -767,8 +766,7 @@ async fn fixture_inner(
         META_FIREWALL.with(|f| *f.borrow_mut() = Some(Arc::clone(&meta_firewall)));
         meta.set_firewall(Some(meta_firewall));
     }
-    // The Meta-MCP reads the router's live config, as startup wires it.
-    meta.set_live_config(Arc::clone(&state_mut.live_config));
+    meta.set_live_config(Arc::clone(&state_mut.live_config)); // as startup wires it
     state_mut.meta_mcp = Arc::new(build(meta));
     let router = create_router(Arc::clone(&state));
     Fx {
