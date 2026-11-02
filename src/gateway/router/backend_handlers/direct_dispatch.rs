@@ -195,6 +195,7 @@ pub(super) async fn admit<'a>(
         name,
         id: id.clone(),
         client,
+        generation: &caller.generation,
         identity: caller.verified_identity.as_ref(),
         managed: propagation.managed.as_ref(),
     };
@@ -315,7 +316,7 @@ async fn finish_response(
             &target,
             crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
         ),
-        client,
+        (client, admitted.auth.generation),
         &mut response,
     );
     if method == "tools/list" {

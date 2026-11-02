@@ -357,7 +357,9 @@ impl Services {
             // over every named key applies, which can only block more.
             key: crate::security::response_policy::KeyOf::NotKnown,
         };
+        let generation = self.live.generation();
         match firewall.check_response_artifact(
+            generation.firewall_policy(),
             data,
             &targets,
             &correlation,

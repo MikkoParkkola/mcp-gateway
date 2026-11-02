@@ -5,6 +5,7 @@
 //! It used to be replaced by `*` without a word, so a typo in an `allow` rule
 //! allowed every tool: the firewall failed open on a spelling mistake.
 
+use super::verdict::compile_rule;
 use super::*;
 use serde_json::json;
 

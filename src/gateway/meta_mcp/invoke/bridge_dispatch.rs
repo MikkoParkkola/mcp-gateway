@@ -189,7 +189,11 @@ impl crate::gateway::input_bridge::ChallengeGate for BridgeDispatcher<'_> {
             key: crate::security::response_policy::KeyOf::of_client(self.caller.api_key_identity()),
         };
         self.meta
-            .enforce_firewall_challenge(&delivered_challenge(challenge), &targets, &correlation)
+            .enforce_firewall_challenge(
+                &delivered_challenge(challenge),
+                (&targets, &correlation),
+                self.caller.authorizer.generation(),
+            )
             .map_err(
                 |_| crate::gateway::input_bridge::BridgeError::ChallengeRefused {
                     dispatched: false,
@@ -367,6 +371,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             }
             Err(error) => error,
         };
+        // The exchange's failure is this round's: counted with its origin
+        // when the bridge answers it with its own refusal.
+        crate::gateway::delivery_facts::folded(crate::gateway::health_metrics::RpcError {
+            code: error.to_rpc_code(),
+            origin: error.origin(),
+        });
         // A later round's send can be refused as the first one's can.
         super::audit::note_send_refusal(&error);
         // A11-c: a 401 on a managed credential forces at most one refresh.

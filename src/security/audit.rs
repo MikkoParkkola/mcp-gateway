@@ -83,10 +83,16 @@ impl AuditOutcome {
                 | Error::BackendNotFound(_)
                 | Error::ToolNotFound(_)),
             ) => Self::Invalid(e.to_rpc_code()),
-            Err(Error::JsonRpc {
-                code: INVALID_PARAMS,
-                ..
-            }) => Self::Invalid(INVALID_PARAMS),
+            Err(
+                Error::JsonRpc {
+                    code: INVALID_PARAMS,
+                    ..
+                }
+                | Error::BackendJsonRpc {
+                    code: INVALID_PARAMS,
+                    ..
+                },
+            ) => Self::Invalid(INVALID_PARAMS),
             Err(e) => Self::Error(e.to_rpc_code()),
         })
     }
