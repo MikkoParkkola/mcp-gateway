@@ -66,7 +66,7 @@ async fn route_stage<T>(
 
 /// [`route_stage`] judged by `authorizer`.
 async fn route_stage_as<T>(
-    authorizer: &dyn crate::gateway::authz::ToolAuthorizer,
+    authorizer: &(dyn crate::gateway::authz::ToolAuthorizer + Sync),
     targets: &[CallTarget<'_>],
     read: impl FnOnce() -> T,
 ) -> (Option<crate::protocol::JsonRpcResponse>, T) {
