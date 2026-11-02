@@ -749,6 +749,9 @@ fn production_files() -> Vec<(String, syn::File)> {
 #[path = "log_under_lock_scan_g0_tests.rs"]
 mod g0;
 
+#[path = "log_under_lock_scan_binding_tests.rs"]
+mod binding;
+
 #[path = "log_under_lock_allowed_tests.rs"]
 mod allowed;
 
