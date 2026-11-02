@@ -154,7 +154,8 @@ impl Gateway {
                     }
                     m @ ("tasks/get" | "tasks/update" | "tasks/cancel") => {
                         let retry = crate::protocol::mrtr::RetryFields::from_params(params);
-                        let live = meta_mcp.live_config().map(|live| live.generation());
+                        let mut current = None;
+                        let live = message_generation(meta_mcp, generation, &mut current);
                         let caller = Self::build_stdio_caller_context(
                             true,
                             None,
@@ -162,7 +163,7 @@ impl Gateway {
                             &retry,
                             &request_shape,
                             client,
-                            (meta_mcp.record_key(), live.as_deref()),
+                            (meta_mcp.record_key(), live),
                         );
                         let shape = &request_shape;
                         stdio_tasks::serve(client.tasks, m, id, params, shape, &caller, session_id)
@@ -617,9 +618,11 @@ impl Gateway {
             // X14's granted retry fields, when it grants: declared ahead of
             // the caller context that borrows them.
             let granted;
-            // Once per message: its budgets judge the call from admission to
-            // settlement, whatever a reload publishes meanwhile.
-            let live = meta_mcp.live_config().map(|live| live.generation());
+            // The message's own generation: its budgets judge the call from
+            // admission to settlement, whatever a reload publishes meanwhile,
+            // and they belong to the same config as the policy above.
+            let mut current = None;
+            let live = message_generation(meta_mcp, generation, &mut current);
             let mut caller = Self::build_stdio_caller_context(
                 is_modern,
                 protocol_revision_owned.as_deref(),
@@ -627,7 +630,7 @@ impl Gateway {
                 &retry,
                 request_shape,
                 client,
-                (meta_mcp.record_key(), live.as_deref()),
+                (meta_mcp.record_key(), live),
             );
             // The signing nonce is admitted before the route stage, so a bad
             // nonce is refused without paying for the payload
@@ -791,5 +794,22 @@ impl Gateway {
             .await
         };
         (response, execution)
+    }
+}
+
+/// The generation a stdio message is judged with: the one its line was
+/// pinned to when it was read, or, for a line that carries none, the live
+/// config's current one, read once into `current`.
+fn message_generation<'a>(
+    meta_mcp: &MetaMcp,
+    line: &'a dyn crate::gateway::authz::StdioLine,
+    current: &'a mut Option<Arc<crate::config_reload::Generation>>,
+) -> Option<&'a crate::config_reload::Generation> {
+    match line.generation() {
+        Some(pinned) => Some(pinned),
+        None => {
+            *current = meta_mcp.live_config().map(|live| live.generation());
+            current.as_deref()
+        }
     }
 }

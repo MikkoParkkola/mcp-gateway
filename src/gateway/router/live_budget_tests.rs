@@ -272,6 +272,21 @@ async fn t15_governance_turned_on_by_reload_judges_nothing() {
     }
 }
 
+/// T15b (regression control): turning governance off by reload is
+/// restart-only too. The running enforcer keeps judging with the budgets it
+/// started with, though the reloaded section is disabled and budgets nothing.
+#[tokio::test]
+async fn t15b_governance_turned_off_by_reload_keeps_judging() {
+    let fx = fixture(&governance(|c| Scope::Key.set(c, Some(0.5)))).await;
+    assert!(refused(&call(&fx).await), "premise: 1.0 > 0.5 at startup");
+    reload(&fx, |c| {
+        c.enabled = false;
+        c.budgets = Default::default();
+    });
+    let body = call(&fx).await;
+    assert!(refused(&body), "still judged by the startup budget: {body}");
+}
+
 /// A `Block` rule at `at_percent`, the only alert rule.
 fn block_at(at_percent: u32) -> Vec<AlertRule> {
     vec![AlertRule {

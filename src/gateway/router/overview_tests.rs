@@ -695,3 +695,53 @@ async fn o4b_a_reloaded_notify_threshold_changes_the_limit_rows() {
     state.live_config.edit(|c| c.cost_governance = reloaded);
     assert_eq!(rows(&overview(&state).await), 1, "70 % is over 60");
 }
+
+/// A reload of only the daily limit changes the overview's limit rows: the
+/// limits come from the response's generation, not the enforcer's startup
+/// copy. $0.70 is 70 % of the startup limit of $1, no row at the default
+/// threshold of 80, and 87.5 % of a reloaded limit of $0.80, a row.
+#[cfg(feature = "cost-governance")]
+#[tokio::test]
+async fn o4c_a_reloaded_daily_limit_changes_the_limit_rows() {
+    use crate::cost_accounting::config::CostGovernanceConfig;
+    use crate::cost_accounting::enforcer::BudgetEnforcer;
+    use crate::cost_accounting::registry::CostRegistry;
+
+    let (mut state, _dir) = fixture(1, false).await;
+    let mut cfg = CostGovernanceConfig {
+        enabled: true,
+        ..Default::default()
+    };
+    cfg.budgets.daily = Some(1.0);
+    let _clock = crate::clock::test_clock::at_secs(BUDGET_NOW);
+    let enforcer = Arc::new(BudgetEnforcer::new(
+        cfg.clone(),
+        Arc::new(CostRegistry::new(&cfg)),
+    ));
+    enforcer.record_spend("search", None, 0.70);
+    let inner = Arc::get_mut(&mut state).expect("state is unique");
+    let mut meta = crate::gateway::meta_mcp::MetaMcp::new(Arc::clone(&inner.backends));
+    meta.budget_enforcer = Some(enforcer);
+    inner.meta_mcp = Arc::new(meta);
+    let limits = |body: &Value| -> Vec<Value> {
+        body["needs_you"]["rows"]
+            .as_array()
+            .expect("needs-you rows")
+            .iter()
+            .filter(|row| row["kind"] == "limit_80")
+            .map(|row| row["detail"]["limit_usd"].clone())
+            .collect()
+    };
+    assert!(
+        limits(&overview(&state).await).is_empty(),
+        "70 % is under 80"
+    );
+    let mut reloaded = cfg;
+    reloaded.budgets.daily = Some(0.8);
+    state.live_config.edit(|c| c.cost_governance = reloaded);
+    assert_eq!(
+        limits(&overview(&state).await),
+        vec![json!(0.8)],
+        "87.5 % of 0.8"
+    );
+}
