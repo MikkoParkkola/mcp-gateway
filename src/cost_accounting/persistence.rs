@@ -19,7 +19,16 @@ fn lenient_figures<'de, D>(deserializer: D) -> Result<HashMap<String, f64>, D::E
 where
     D: serde::Deserializer<'de>,
 {
-    let raw: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+    // The map itself may be damaged too (`null`, or not an object): read it
+    // as no figures rather than fail the file.
+    let serde_json::Value::Object(raw) = serde_json::Value::deserialize(deserializer)? else {
+        tracing::warn!(
+            target: "mcp_gateway::cost_accounting::enforcer",
+            file = "costs.json",
+            "Saved starting figures are not a map; restoring none"
+        );
+        return Ok(HashMap::new());
+    };
     Ok(raw
         .into_iter()
         .filter_map(|(name, value)| {

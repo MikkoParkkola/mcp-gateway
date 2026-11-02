@@ -627,7 +627,8 @@ impl BudgetEnforcer {
 
         // Check 2: global daily limit
         if !blocked && let Some(limit) = governance.budgets.daily {
-            let current_usd = usd(self.global_daily.current_on(today) + pending.global);
+            let row = self.global_daily.current_on(today);
+            let current_usd = usd(row.saturating_add(pending.global));
             let projected = current_usd + cost;
 
             if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
