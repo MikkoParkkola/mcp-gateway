@@ -397,7 +397,8 @@ LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
 # A method-style `.timeout(D)`: on an HTTP client or request it bounds the
 # request on the real clock (MIK-9178).
 # Not the second dot of a range (`.. timeout(W, f)` is the free function).
-METHOD_TIMEOUT = re.compile(r"(?<!\.)\.\s*timeout\(")
+# Comments are blanked first, so `.timeout /* why */ (D)` reads as spacing.
+METHOD_TIMEOUT = re.compile(r"(?<!\.)\.\s*timeout\s*\(")
 # The receivers read as an HTTP client or request: anything built through
 # `reqwest::`, or an HTTP verb called on a value named `client`.
 REQUEST_RECEIVER = re.compile(r"reqwest::|\bclient\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\(")
@@ -522,7 +523,7 @@ def scan_timeouts(
         lets, _, _ = bindings(code[fn_start : m.start()])
         value = resolve(args, Scope(path, lets, file_consts, tree_consts, imports))
         seconds = None if value is None else value[0]
-        if REQUEST_RECEIVER.search(receiver(code, m.start())):
+        if REQUEST_RECEIVER.search(chain_only(receiver(code, m.start()))):
             if seconds is not None and seconds >= threshold:
                 continue
             rule = "unresolvable window" if seconds is None else "under 5 s"
@@ -530,7 +531,8 @@ def scan_timeouts(
             # Without types, what this `.timeout(` bounds is not known: it is
             # listed at any window, so a person judges it; never passed.
             rule = NOT_A_REQUEST
-        found.append(Finding(path, fn, " ".join(code[m.start() : end].split()), line, seconds, rule))
+        # One allowlist key whatever the spacing around the parenthesis.
+        found.append(Finding(path, fn, f".timeout({' '.join(args.split())})", line, seconds, rule))
     return found
 
 
@@ -554,6 +556,21 @@ def receiver(code: str, dot: int) -> str:
 
 TOKIO_INSTANT_IMPORT = re.compile(r"use\s+tokio::time::(?:Instant\b|\{[^}]*\bInstant\b)")
 STD_INSTANT_IMPORT = re.compile(r"use\s+std::time::(?:Instant\b|\{[^}]*\bInstant\b)")
+
+
+def chain_only(chain: str) -> str:
+    """`chain` with the insides of its brackets emptied: the evidence that a
+    receiver is an HTTP client is in the chain itself, never in an argument
+    (`iter([reqwest::Client::new()]).timeout(..)` is a stream)."""
+    out, depth = [], 0
+    for c in chain:
+        if c in ")]":
+            depth -= 1
+        if depth == 0:
+            out.append(c)
+        if c in "([":
+            depth += 1
+    return "".join(out)
 
 
 def tokio_measured(side: str, lets: dict[str, str], code: str) -> bool:
