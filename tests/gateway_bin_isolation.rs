@@ -22,7 +22,7 @@ fn a_cleared_environment_still_opens_the_store_under_the_fixture_home() {
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
+        .spawn() // spawn-check: waits for exit: the row reaps it before its fixture drops
         .expect("the gateway starts");
 
     // Bounded only as a hang guard: the store appears as the child starts.
@@ -96,7 +96,7 @@ while True:
         let mut child = command
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .spawn()
+            .spawn() // spawn-check: not the gateway: the rows' own child
             .expect("python3 starts");
         let pid = child.id().expect("a live child");
         let stdout = child.stdout.take().expect("piped stdout");
@@ -300,20 +300,21 @@ for line in sys.stdin:
         mcp_gateway::gateway::test_helpers::write_owner_only(&root.join("gateway.yaml"), config)
             .expect("config");
         let log = std::fs::File::create(root.join("gateway.log")).expect("log");
-        let child = tokio::process::Command::from(super::gateway_bin::command(
-            &root.join("home"),
-            super::gateway_bin::Inherit::Environment,
-        ))
-        .env("MCP_GATEWAY_CONFIG_DIR", root.join("state"))
-        .current_dir(&root)
-        .args(["-c", "gateway.yaml", "serve"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(log.try_clone().expect("log handle")))
-        .stderr(Stdio::from(log))
-        .spawn()
-        .expect("the gateway starts");
+        let mut reaped = Reaped::new(
+            tokio::process::Command::from(super::gateway_bin::command(
+                &root.join("home"),
+                super::gateway_bin::Inherit::Environment,
+            ))
+            .env("MCP_GATEWAY_CONFIG_DIR", root.join("state"))
+            .current_dir(&root)
+            .args(["-c", "gateway.yaml", "serve"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(log.try_clone().expect("log handle")))
+            .stderr(Stdio::from(log))
+            .spawn()
+            .expect("the gateway starts"),
+        );
         let logs = || std::fs::read_to_string(root.join("gateway.log")).unwrap_or_default();
-        let mut reaped = Reaped::new(child);
         reaped.owning(folder);
         let _kill_gateway = KillPid(reaped.child_mut().id().expect("a live gateway"));
 
