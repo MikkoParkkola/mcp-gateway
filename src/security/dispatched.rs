@@ -17,6 +17,10 @@ const LABEL: &[u8] = b"mcp-gateway/dispatched-secrets/v1";
 /// The stored form of a capture the dispatch slot held no value for.
 pub(crate) const MISSING: &str = "missing";
 
+/// The widest stored form, for the record-size reservation.
+pub(crate) const WIDEST: &str =
+    "hmac:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
 /// What one dispatch injected, as stored on its upstream record.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Dispatched {
@@ -65,6 +69,61 @@ impl Dispatched {
 /// [`MISSING`] never match.
 pub(crate) fn delivers(stored: Option<&str>, current: &Dispatched) -> bool {
     stored.is_some_and(|stored| stored != MISSING && stored == current.stored())
+}
+
+/// The slot one deferring dispatch writes what it injected into: armed for
+/// one `(server, tool)`, as the upstream handle's slot is, and keeping only
+/// the first value it is offered.
+pub(crate) struct Slot {
+    server: String,
+    tool: String,
+    value: parking_lot::Mutex<Option<Dispatched>>,
+}
+
+impl Slot {
+    pub(crate) fn armed_for(server: &str, tool: &str) -> Self {
+        Self {
+            server: server.to_owned(),
+            tool: tool.to_owned(),
+            value: parking_lot::Mutex::new(None),
+        }
+    }
+
+    /// What the dispatch injected; `None` when no send of the armed target
+    /// wrote here (stored as [`MISSING`]).
+    pub(crate) fn value(&self) -> Option<Dispatched> {
+        self.value.lock().clone()
+    }
+}
+
+tokio::task_local! {
+    /// The armed slot for the current deferring dispatch, if any.
+    static SLOT: std::sync::Arc<Slot>;
+}
+
+/// Run `future` with `slot` armed for this task and nothing else. Opened
+/// only beside the upstream handle's own slot (`with_upstream_submission`).
+pub(crate) async fn scope<F: std::future::Future>(
+    slot: std::sync::Arc<Slot>,
+    future: F,
+) -> F::Output {
+    SLOT.scope(slot, future).await
+}
+
+/// Record what a send of `(server, tool)` injects, if a slot armed for that
+/// target is open and holds nothing yet; otherwise a no-op. `value` runs only
+/// then, so a send outside a deferring dispatch hashes nothing; it gives
+/// `None` when the rules cannot resolve, a send that then fails before it
+/// leaves, so nothing is recorded for it.
+pub(crate) fn record(server: &str, tool: &str, value: impl FnOnce() -> Option<Dispatched>) {
+    let _ = SLOT.try_with(|slot| {
+        if slot.server == server && slot.tool == tool {
+            let mut held = slot.value.lock();
+            if held.is_none() {
+                *held = value();
+            }
+        }
+    });
 }
 
 /// This process's fingerprint key.

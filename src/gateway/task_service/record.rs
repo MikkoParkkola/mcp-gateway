@@ -192,6 +192,25 @@ pub(crate) struct UpstreamRecord {
     /// Checked on load: a descriptor that does not belong to the record it was
     /// read from is refused rather than authorized.
     pub(crate) operation_digest: String,
+    /// What the dispatch's secret rules injected, as a keyed fingerprint
+    /// (`security::dispatched`): `"none"`, `"hmac:<hex>"` or `"missing"`.
+    /// Absent only on a row written before this field existed, which is
+    /// withheld at every read. Always written, `None` as `"missing"`.
+    #[serde(default, serialize_with = "fingerprint_or_missing")]
+    pub(crate) secret_fingerprint: Option<String>,
+}
+
+/// A row this build writes always names its fingerprint: a legacy `None`
+/// rewritten is stored as missing, which still withholds.
+fn fingerprint_or_missing<S: serde::Serializer>(
+    value: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(
+        value
+            .as_deref()
+            .unwrap_or(crate::security::dispatched::MISSING),
+    )
 }
 
 /// A claimed upstream `tasks/cancel` the peer has not yet confirmed

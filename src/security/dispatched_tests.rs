@@ -57,3 +57,10 @@ fn only_an_exact_stored_value_delivers() {
         "rules removed"
     );
 }
+
+#[test]
+fn the_widest_reservation_is_the_widest_stored_form() {
+    let widest = Dispatched::of("b", &pairs(&[("a", "x")])).stored();
+    assert_eq!(WIDEST.len(), widest.len());
+    assert!(WIDEST.starts_with("hmac:"));
+}

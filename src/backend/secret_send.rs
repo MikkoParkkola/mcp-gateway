@@ -181,6 +181,27 @@ impl Backend {
                 owned_headers: Vec::new(),
             })
         };
+        // A deferring dispatch's slot learns what this send injects: the
+        // rules' resolved values, or that none applies.
+        if method == "tools/call"
+            && let Some(tool) = params
+                .as_ref()
+                .and_then(|p| p.get("name"))
+                .and_then(Value::as_str)
+        {
+            crate::security::dispatched::record(&self.name, tool, || {
+                if self.secret_rules_for(tool).is_empty() {
+                    return Some(crate::security::dispatched::Dispatched::None);
+                }
+                let resolver = self.secret_resolver.get()?;
+                let pairs =
+                    crate::secret_injection::resolved_rules(&self.config.secrets, resolver, tool)
+                        .ok()?;
+                Some(crate::security::dispatched::Dispatched::of(
+                    &self.name, &pairs,
+                ))
+            });
+        }
         if method != "tools/call" || self.config.secrets.is_empty() {
             return unchanged(params);
         }

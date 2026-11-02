@@ -392,6 +392,9 @@ pub(crate) struct UpstreamSubmission {
     /// The gateway task this submission belongs to.
     task_id: String,
     handle: parking_lot::Mutex<Option<String>>,
+    /// What the send injected, armed for the same target; opened by the
+    /// same scope function as this slot.
+    dispatched: std::sync::Arc<crate::security::dispatched::Slot>,
 }
 
 impl UpstreamSubmission {
@@ -401,6 +404,9 @@ impl UpstreamSubmission {
             tool: tool.to_owned(),
             task_id: task_id.to_owned(),
             handle: parking_lot::Mutex::new(None),
+            dispatched: std::sync::Arc::new(crate::security::dispatched::Slot::armed_for(
+                server, tool,
+            )),
         }
     }
 
@@ -427,6 +433,12 @@ impl UpstreamSubmission {
     pub(crate) fn handle(&self) -> Option<String> {
         self.handle.lock().clone()
     }
+
+    /// What the dispatch's send injected, `None` when no send of the armed
+    /// target wrote it (stored as missing, which withholds).
+    pub(crate) fn dispatched(&self) -> Option<crate::security::dispatched::Dispatched> {
+        self.dispatched.value()
+    }
 }
 
 tokio::task_local! {
@@ -434,12 +446,20 @@ tokio::task_local! {
     static UPSTREAM_SUBMISSION: std::sync::Arc<UpstreamSubmission>;
 }
 
-/// Run `future` with `submission` armed for this task and nothing else.
+/// Run `future` with `submission` armed for this task and nothing else: the
+/// handle's slot and the slot for what the send injected, together. The one
+/// place either is opened.
 pub(crate) async fn with_upstream_submission<F: std::future::Future>(
     submission: std::sync::Arc<UpstreamSubmission>,
     future: F,
 ) -> F::Output {
-    UPSTREAM_SUBMISSION.scope(submission, future).await
+    let dispatched = std::sync::Arc::clone(&submission.dispatched);
+    UPSTREAM_SUBMISSION
+        .scope(
+            submission,
+            crate::security::dispatched::scope(dispatched, future),
+        )
+        .await
 }
 
 /// The armed slot for THIS dispatch of `(server, tool)`, or `None`.

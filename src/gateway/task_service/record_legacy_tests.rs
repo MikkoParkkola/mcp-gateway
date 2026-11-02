@@ -24,6 +24,7 @@ fn upstream(operation_digest: &str) -> UpstreamRecord {
         tool: "slow_job".to_owned(),
         arguments: json!({}),
         operation_digest: operation_digest.to_owned(),
+        secret_fingerprint: None,
     }
 }
 
