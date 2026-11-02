@@ -220,6 +220,31 @@ while True:
         );
     }
 
+    /// A reap then a stop, as a restart helper does: the stop keeps the first
+    /// reap's drained exit and removes the folder.
+    #[tokio::test]
+    async fn a_stop_after_a_reap_keeps_its_drained_exit() {
+        let side = tempfile::tempdir().expect("a side folder");
+        std::fs::write(side.path().join("release"), "").expect("release");
+        let folder = tempfile::tempdir().expect("an owned folder");
+        let owned = folder.path().to_path_buf();
+        let (mut reaped, pid) = started(side.path(), folder, "term").await;
+        let _kill = KillPid(pid);
+        let first = tokio::time::timeout(BOUND, reaped.reap())
+            .await
+            .expect("the reap ends");
+        let status = tokio::time::timeout(BOUND, reaped.stop())
+            .await
+            .expect("the stop ends");
+        let left = owned.exists();
+        let _ = std::fs::remove_dir_all(&owned);
+        assert!(first.success() && status.success(), "{first} {status}");
+        assert!(
+            !left,
+            "a drained reap followed by a stop removes the folder"
+        );
+    }
+
     /// A child that exited by itself before the stop keeps its folder: what it
     /// started was never told to stop.
     #[tokio::test]
