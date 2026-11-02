@@ -274,3 +274,58 @@ async fn adding_a_record_before_registration_demotes_nothing() {
         "the superseded value never started its grace"
     );
 }
+
+/// A value overlapping a marker (`prefix[redact`) is completed by the
+/// marker written for its neighbour: the rescan refuses the answer, and the
+/// value never leaves.
+#[tokio::test(start_paused = true)]
+async fn a_marker_completing_a_held_value_refuses_the_answer() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.pin_configured(
+        "b",
+        &ConfiguredSecrets::of(vec![
+            explicit("headers.A", "prefix[redact"),
+            explicit("headers.B", "other-token-value"),
+        ]),
+    );
+    let (outcome, text) = scrubbed(&needles, "prefixother-token-value");
+    assert_eq!(outcome, Scrubbed::Refuse, "{text}");
+}
+
+/// A value learned at runtime (an injected one) that contains a marker is
+/// completed the same way: refused, never delivered.
+#[tokio::test(start_paused = true)]
+async fn a_runtime_value_holding_a_marker_refuses_an_answer_that_forms_it() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.insert("b", "abc[redacted]xyz-token");
+    needles.insert("b", "other-token-value");
+    let (outcome, text) = scrubbed(&needles, "abcother-token-valuexyz-token");
+    assert_eq!(outcome, Scrubbed::Refuse, "{text}");
+}
+
+/// Across sets: the first set finds nothing, the second's redaction forms
+/// the first's value; the stored scrub's rescan refuses the answer.
+#[tokio::test(start_paused = true)]
+async fn a_stored_answer_where_one_set_forms_anothers_value_is_refused() {
+    let first = Arc::new(NeedleSet::with_grace(GRACE));
+    first.pin_configured(
+        "a",
+        &ConfiguredSecrets::of(vec![explicit("headers.A", "prefix[redact")]),
+    );
+    let second = Arc::new(NeedleSet::with_grace(GRACE));
+    second.pin_configured(
+        "b",
+        &ConfiguredSecrets::of(vec![explicit("headers.B", "other-token-value")]),
+    );
+    let mut answer = crate::protocol::JsonRpcResponse::success(
+        crate::protocol::RequestId::Number(1),
+        serde_json::json!({"text": "prefixother-token-value"}),
+    );
+    let outcome = super::scrub_stored(&[first, second], &mut answer);
+    let wire = serde_json::to_string(&answer).expect("serializes");
+    assert_eq!(outcome, Scrubbed::Refuse, "{wire}");
+    assert!(
+        !wire.contains("prefix[redact"),
+        "the formed value left: {wire}"
+    );
+}

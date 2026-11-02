@@ -7,6 +7,8 @@ use std::sync::atomic::Ordering;
 
 use serde_json::Value;
 
+use crate::security::secret_redaction::holds_no_needle;
+
 use super::{
     ECHO_REFUSAL, JsonRpcResponse, Lifetime, MAX_NEEDLES, NeedleSet, REFUSAL_CODE,
     SHORT_VALUE_BYTES, Scrubbed, refusal, refusal_message, scrub_response_with, scrub_text,
@@ -153,9 +155,53 @@ pub(crate) fn scrub_stored(
         }
     }
     if outcome == Scrubbed::Redacted {
+        let formed = {
+            let message = response
+                .error
+                .as_ref()
+                .map(|error| Value::String(error.message.clone()));
+            let parts: Vec<&Value> = [
+                response.result.as_ref(),
+                message.as_ref(),
+                response
+                    .error
+                    .as_ref()
+                    .and_then(|error| error.data.as_ref()),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            formed_by_another(sets, &parts)
+        };
         echo_redacted();
+        if let Some(set) = formed {
+            *response =
+                JsonRpcResponse::error(response.id.clone(), REFUSAL_CODE, refusal_message(set));
+            echo_refusal_built();
+            return Scrubbed::Refuse;
+        }
     }
     outcome
+}
+
+/// The first set one of whose values the scrub formed in `parts`: each set
+/// ran on what the sets before it left, and a marker written next to other
+/// text can complete a value. Rescans only an answer something was removed
+/// from.
+fn formed_by_another<'a>(
+    sets: &'a [std::sync::Arc<NeedleSet>],
+    parts: &[&Value],
+) -> Option<&'a std::sync::Arc<NeedleSet>> {
+    let formed = sets.iter().find(|set| {
+        let compiled = set.snapshot();
+        parts.iter().any(|part| !holds_no_needle(part, &compiled))
+    });
+    if formed.is_some() {
+        tracing::warn!(
+            "a stored answer was refused: removing one held value from it formed another"
+        );
+    }
+    formed
 }
 
 /// [`scrub_stored`] for a stored tool result held as a bare value: it is
@@ -201,6 +247,10 @@ pub(crate) fn scrub_stored_text(
     }
     if outcome == Scrubbed::Redacted {
         crate::gateway::delivery_facts::echo_redacted();
+        if let Some(set) = formed_by_another(sets, &[&Value::String(text.clone())]) {
+            crate::gateway::delivery_facts::echo_refusal_built();
+            return Err(refusal(set));
+        }
     }
     Ok(outcome)
 }

@@ -243,6 +243,27 @@ impl Compiled {
     }
 }
 
+/// Whether `value` holds none of `compiled`'s needles in a string or a key.
+/// Run after a redaction: the renderer never rescans its output, so a marker
+/// written next to other text can complete a needle.
+pub(crate) fn holds_no_needle(value: &Value, compiled: &Compiled) -> bool {
+    fn clean(value: &Value, matcher: &AhoCorasick) -> bool {
+        match value {
+            Value::String(text) => !matcher.is_match(text),
+            Value::Array(items) => items.iter().all(|item| clean(item, matcher)),
+            Value::Object(fields) => fields
+                .iter()
+                .all(|(key, item)| !matcher.is_match(key) && clean(item, matcher)),
+            _ => true,
+        }
+    }
+    // No automaton: every value was replaced whole by a marker no needle is in.
+    compiled
+        .matcher
+        .as_ref()
+        .is_none_or(|matcher| clean(value, matcher))
+}
+
 /// [`redact_value`] with a list compiled beforehand.
 pub(crate) fn redact_value_with(value: &mut Value, compiled: &Compiled) -> bool {
     if compiled.needles.is_empty() {
