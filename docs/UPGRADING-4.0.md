@@ -963,6 +963,9 @@ backend, including one added later. It now reaches none: `"*"` is the only wildc
 `backends: ["*"]` for the old behaviour, or list the backends the key needs. The gateway starts
 either way, prints this item in the one-time 4.0.0 notice, and logs one warning per key with no
 backends, naming the key. An admin key that only manages the UI can ignore that warning.
+An admin key whose list names some backends, but not `"*"`, is a different case: the web UI
+shows it only those backends in Activity and status (see the item on a key's backend list
+bounding Activity and status in the web UI).
 
 The same applies to `key_server.policies[].scopes.backends`: a rule without it now grants no
 backend, and the key server refuses to issue the token (403 `no_backends_granted`) instead of

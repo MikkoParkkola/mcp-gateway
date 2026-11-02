@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 
 use super::super::status::{StatusView, status_body};
+use crate::gateway::authz::BackendGrant;
 use crate::gateway::router::AppState;
 
 /// Every change lands within 250 ms, well inside the 1 s the stream promises.
@@ -47,8 +48,8 @@ async fn run(state: Arc<AppState>) {
         hub.probe().park_point().await;
         let reloaded = hub.reloaded(&state.live_config.generation());
         hub.observe(
-            status_body(&state, StatusView::Full),
-            status_body(&state, StatusView::CountsOnly),
+            status_body(&state, StatusView::Full, BackendGrant::Unscoped),
+            status_body(&state, StatusView::CountsOnly, BackendGrant::Unscoped),
             reloaded,
         );
     }
