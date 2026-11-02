@@ -73,3 +73,39 @@ async fn a_removed_backends_value_is_scrubbed_from_stored_answers_through_its_gr
     tokio::time::advance(Duration::from_secs(2)).await;
     assert!(!served_redacted(&registry), "still held after its grace");
 }
+
+/// A replacement registered without the value its predecessor held starts
+/// that value's grace once it is in: still removed until then, not after.
+#[tokio::test(start_paused = true)]
+async fn a_replacement_lacking_a_value_retires_it_a_grace_after_it_registers() {
+    let registry = BackendRegistry::new().with_redaction_grace(GRACE);
+    let record = ConfiguredSecrets::of(vec![ConfiguredSecret {
+        field: "headers.X-Key".to_owned(),
+        value: VALUE.to_owned(),
+        origin: SecretOrigin::Explicit,
+    }]);
+    registry.set_load_record(ConfiguredByBackend::from([("b".to_owned(), record)]));
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Test: registers the instance the row replaces"
+    )]
+    let first = registry.register(backend("b"));
+    assert!(first, "premise: registered");
+    registry.set_load_record(ConfiguredByBackend::new());
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "Test: registers the replacement, whose record lacks the value"
+    )]
+    let second = registry.register(backend("b"));
+    assert!(second, "premise: the replacement registered");
+    tokio::time::advance(GRACE - Duration::from_secs(1)).await;
+    assert!(
+        served_redacted(&registry),
+        "the value retired before its grace"
+    );
+    tokio::time::advance(Duration::from_secs(2)).await;
+    assert!(
+        !served_redacted(&registry),
+        "the replaced instance's value never started its grace"
+    );
+}
