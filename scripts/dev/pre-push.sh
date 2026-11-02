@@ -47,6 +47,8 @@ if [[ -f Cargo.toml ]]; then
   # that is missing or out of date stops the push with the command to run.
   step "gate environment"
   GATE_PY="$(scripts/dev/gate-env-python.sh)"
+  # The CI-check runner below replays the gates on it too, in scratch clones.
+  export GATE_PY
   step "inventory rows"
   "$GATE_PY" scripts/release/check_inventory_rows.py "$base" HEAD
   step "timing asserts"
