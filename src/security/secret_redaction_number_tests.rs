@@ -109,6 +109,15 @@ const NEEDLES: &[&str] = &[
     "true",
     "false",
     "null",
+    "-0012.5",
+    "+1.2345e4",
+    ".5",
+    "5.",
+    "100.",
+    "1e+",
+    "1e-400",
+    "--5",
+    "+-5",
 ];
 
 /// Number forms: zero in each sign and form, small and large integers in
@@ -136,6 +145,9 @@ const NUMBERS: &[&str] = &[
     "1e23",
     "99999999999999991611392",
     "1e300",
+    "0.5",
+    "-0.5",
+    "7.0",
 ];
 
 /// Every value alone against every number form.
@@ -205,6 +217,18 @@ fn other_scalars_match_literals_as_the_oracle_does() {
         (true, true),
         "premise: a match"
     );
+}
+
+/// The lookup keys a number that is not a float by its exact integer
+/// magnitude, which holds only while `serde_json` reads every integer past
+/// u64 as a float (no `arbitrary_precision`): pinned here.
+#[test]
+fn an_integer_past_u64_reads_as_a_float() {
+    let past_u64: Value = serde_json::from_str("18446744073709551616").expect("a number");
+    let Value::Number(n) = past_u64 else {
+        panic!("premise: a number");
+    };
+    assert!(n.is_f64(), "serde_json now keeps big integers exact: {n}");
 }
 
 /// The grid's premise: it holds matches as well as misses, including the
