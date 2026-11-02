@@ -335,23 +335,57 @@ async fn no_refusal_message_contains_submitted_secret_bytes() {
     }
 }
 
-/// W20: with tracing captured at every level, a save that stands and the
-/// two refusals above leave the secret in no event, file or message.
-/// Limit: the capture is this thread's, so events from blocking-pool
-/// threads (the store calls) are not seen here.
+/// Captured log output, shared by every thread of the row's runtime.
+#[derive(Clone, Default)]
+struct Sink(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Sink {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("sink").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// W20: with tracing captured at every level on every thread the save
+/// touches (the row's own, the runtime's workers and its blocking pool,
+/// where the store runs), a save that stands and the two refusals above
+/// leave the secret in no event, file or message. No process-wide
+/// subscriber: each pool thread installs the capture as it starts.
 #[test]
 fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
+    crate::test_log_capture::keep_interest_open();
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let capture = tracing::Dispatch::new(
+        tracing_subscriber::fmt()
+            .json()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+    let on_start = capture.clone();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        // Each worker and blocking thread reports to the capture for its
+        // whole life; the guard is never dropped.
+        .on_thread_start(move || std::mem::forget(tracing::dispatcher::set_default(&on_start)))
+        .build()
+        .expect("runtime");
     let dir = tempfile::tempdir().expect("dir");
-    let mut messages = Vec::new();
-    let records = crate::test_log_capture::records(|| {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        messages = runtime.block_on(async {
+    let messages = tracing::dispatcher::with_default(&capture, || {
+        runtime.block_on(async {
             let mut seen = loud_refusals(dir.path()).await;
             let path = dir.path().join("gateway.yaml");
-            let stands = format!("{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      K: {{slot}}\n");
+            let stands = format!(
+                "{START}  b:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    env:\n      K: {{slot}}\n"
+            );
             let keys = ["backends", "b", "env", "K"];
             let saved = replace_detached(
                 context(&path),
@@ -361,14 +395,20 @@ fn a_recognisable_secret_appears_in_no_trace_file_or_record() {
             .await;
             seen.push(format!("{saved:?}"));
             seen
-        });
+        })
     });
-    for record in &records {
-        let text = record.to_string();
-        let leaked = loud_forms_in(&text);
+    // Settling discards on the blocking pool: wait for it before reading.
+    runtime.shutdown_timeout(WAIT);
+    let output = String::from_utf8(sink.0.lock().expect("sink").clone()).expect("utf-8 log");
+    assert!(
+        !output.is_empty(),
+        "premise: the capture saw the save's events"
+    );
+    for line in output.lines() {
+        let leaked = loud_forms_in(line);
         assert!(
             leaked.is_empty(),
-            "W20: a trace event carries the secret ({leaked:?}): {text}"
+            "W20: a trace event carries the secret ({leaked:?}): {line}"
         );
     }
     for message in &messages {
