@@ -28,6 +28,9 @@ pub(crate) enum Dispatched {
     None,
     /// The fingerprint of the applying rules' resolved values.
     Fingerprint(String),
+    /// Rules applied, but this process has no key to fingerprint them with:
+    /// stored as missing, so it never delivers.
+    Unkeyed,
 }
 
 impl Dispatched {
@@ -52,7 +55,11 @@ impl Dispatched {
         }
         let mut keyed = LABEL.to_vec();
         keyed.extend_from_slice(&message);
-        Self::Fingerprint(crate::hashing::hmac_sha256_hex(key(), &keyed))
+        match key() {
+            Some(key) => Self::Fingerprint(crate::hashing::hmac_sha256_hex(key, &keyed)),
+            // No key: a value that matches nothing, so the task is withheld.
+            None => Self::Unkeyed,
+        }
     }
 
     /// The form written to the record: `"none"` or `"hmac:<hex>"`.
@@ -60,6 +67,7 @@ impl Dispatched {
         match self {
             Self::None => "none".to_owned(),
             Self::Fingerprint(hex) => format!("hmac:{hex}"),
+            Self::Unkeyed => MISSING.to_owned(),
         }
     }
 }
@@ -127,19 +135,18 @@ pub(crate) fn record(server: &str, tool: &str, value: impl FnOnce() -> Option<Di
 }
 
 /// This process's fingerprint key.
-fn key() -> &'static [u8] {
-    static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+/// `None` when the system random source cannot fill one. A fixed fallback
+/// key would be shared by every process and let a fingerprint match across
+/// a restart, so without a key no fingerprint is made at all.
+fn key() -> Option<&'static [u8; 32]> {
+    static KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
     KEY.get_or_init(|| {
         use ring::rand::SecureRandom as _;
         let mut bytes = [0_u8; 32];
-        // invariant: the system random source does not fail on supported
-        // platforms; a key of zeros would only make every check withhold
-        // across processes, never deliver one.
-        ring::rand::SystemRandom::new()
-            .fill(&mut bytes)
-            .expect("the system random source fills a key");
-        bytes
+        ring::rand::SystemRandom::new().fill(&mut bytes).ok()?;
+        Some(bytes)
     })
+    .as_ref()
 }
 
 #[cfg(test)]
