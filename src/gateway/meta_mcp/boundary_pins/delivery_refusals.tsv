@@ -59,13 +59,13 @@ src/config_reload/generation.rs	prepare	refuse_multi_user_flip	1	no-record	confi
 src/config_reload/grant_reload.rs	read_grant_file	report_grants_refusal	1	no-record	identity grants file reload
 src/config_reload/refusals.rs	classify	is_posture_refusal	1	not-delivered	predicate (a reload refusal's classification)
 src/config_reload/refusals.rs	startup_refusals	startup_refusal	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
-src/config_reload/reload_context.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
-src/config_reload/reload_context.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/config_reload/reload_context.rs	reload_transaction	refuse_before_apply	1	feeds	the reload refusals gateway_reload_config answers, as the rows inside it say
 src/config_reload/reload_context.rs	reload_transaction	reload_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	reload_transaction	restart_only_refusal	1	feeds	a reload refusal gateway_reload_config answers; reload_config raises only for the posture refusal
 src/config_reload/reload_context.rs	with_pending_restart	next_start_refusal	1	not-delivered	restart advice inside a reload answer
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	refuse_capability_name_clash	1	no-record	config reload
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_binding_refusal	1	feeds	a reload refusal gateway_reload_config answers; not a posture refusal, so recorded as no policy decision
+src/config_reload/reload_context_refusals.rs	refuse_before_apply	reload_posture_refusal	1	feeds	the posture refusal reload_config raises refused for
 src/error_origin.rs	http_is_backend_refusal	is_deterministic_refusal	1	not-delivered	predicate
 src/error_origin.rs	origin	http_is_backend_refusal	1	not-delivered	predicate: names who refused, for the error-count metric
 src/error_origin.rs	to_rpc_code	http_is_backend_refusal	1	not-delivered	predicate: picks the JSON-RPC code for a backend's HTTP refusal
