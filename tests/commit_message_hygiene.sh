@@ -251,6 +251,27 @@ pr_body_case home_path fail 'Built in /Users/mikko/github/mcp-gateway.'
 pr_body_case agent_config fail 'See $HOME/.claude/rules for the gate.'
 pr_body_case private_address fail 'Measured against 100.64.1.2.'
 pr_body_case learning_rule_is_not_a_name pass 'Uses a Hebbian decay for ranking.'
+# Internal process references: a row of the findings register, a lead's or
+# operator's ruling. Ordinary uses of the words pass.
+pr_body_case register_row fail 'The remaining gap is register row 397.'
+pr_body_case register_rows fail 'Deferred as register rows 418-420.'
+pr_body_case row_of_the_register fail 'Recorded as row 397 of the register.'
+pr_body_case lead_ruling fail 'Per the lead ruling 2026-11-02, the route stays.'
+pr_body_case operators_ruling fail "Follows the operator's ruling on retention."
+pr_body_case cpu_register pass 'Reads the register of the CPU.'
+pr_body_case register_count pass 'The cache registers 3 entries per row.'
+pr_body_case ruling_in_prose pass 'A ruling on the wire format is still open.'
+# The refusal names its reason.
+pr_body_reason_case() {
+  local name="$1" body="$2" reason="$3" out
+  out="$(PR_BODY="$body" bash "$source_repo/scripts/dev/check-pr-body-hygiene.sh" 2>&1 >/dev/null || true)"
+  if [[ "$out" != *"$reason"* ]]; then
+    printf 'FAIL pr_body_%s: the refusal does not name %q: %s\n' "$name" "$reason" "$out" >&2
+    failures=$((failures + 1))
+  fi
+}
+pr_body_reason_case register_row_reason 'See register row 397.' 'register-row'
+pr_body_reason_case ruling_reason 'Lead ruling 2026-11-02.' 'ruling'
 # An explicitly empty body (PR_BODY set to "") passes: it cannot leak
 # anything, and CI always sets the variable. No body at all (PR_BODY unset,
 # no file) is a misused call, refused rather than read as empty and clean.
