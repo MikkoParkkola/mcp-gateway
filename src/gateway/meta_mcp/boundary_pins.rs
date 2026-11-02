@@ -24,6 +24,7 @@ mod live_config;
 mod live_generation;
 mod needle_attach_sites;
 mod packaged;
+mod pinned_role_mapping;
 mod presend_exits;
 mod response_funnels;
 mod scan;
