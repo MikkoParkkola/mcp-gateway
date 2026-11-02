@@ -105,7 +105,7 @@ impl GrantSubject {
         let (authority, subject) = (authority.into(), subject.into());
         // The one predicate every identity source applies.
         if !names_someone(&authority, &subject) {
-            return Err(if authority.is_empty() {
+            return Err(if authority.trim().is_empty() {
                 EmptyIdentity::Authority
             } else {
                 EmptyIdentity::Subject
@@ -131,13 +131,15 @@ impl GrantSubject {
     }
 }
 
-/// Whether an (authority, subject) pair names someone: both non-empty,
-/// compared raw (verified bytes are never trimmed). The one predicate every
-/// caller-identity source applies (MIK-8286). It does not judge names: a
-/// subject literally spelled like a placeholder still names someone, so the
-/// certificate refusal is its own check (`CertIdentity::subject_id`).
+/// Whether an (authority, subject) pair names someone: neither is empty or
+/// only whitespace. The one predicate every caller-identity source applies.
+/// Only this test looks past whitespace: a value that names someone is kept
+/// and compared exactly as written, so `" admin "` stays a different
+/// principal from `admin`. It does not judge names: a subject literally
+/// spelled like a placeholder still names someone, so the certificate
+/// refusal is its own check (`CertIdentity::subject_id`).
 pub(crate) fn names_someone(authority: &str, subject: &str) -> bool {
-    !authority.is_empty() && !subject.is_empty()
+    !authority.trim().is_empty() && !subject.trim().is_empty()
 }
 
 /// Grant authorities the gateway mints itself, so no external identity
