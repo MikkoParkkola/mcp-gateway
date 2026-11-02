@@ -86,6 +86,7 @@ impl Fake {
 
 impl LogSource for Fake {
     type Access = ();
+    type Search = ();
 
     fn subscribe(&self) -> broadcast::Receiver<Appended> {
         self.tx.subscribe()
@@ -103,8 +104,10 @@ impl LogSource for Fake {
     fn rows_after(
         &self,
         cursor: &LogCursor,
+        _stop: &LogCursor,
         (): &(),
         limit: usize,
+        (): &mut (),
     ) -> impl Future<Output = Page> + Send {
         std::future::ready(self.page(cursor, limit))
     }
@@ -156,6 +159,7 @@ impl Fake {
             },
             more: end < rows.len(),
             reset,
+            searching: false,
         }
     }
 }

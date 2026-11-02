@@ -61,22 +61,30 @@ pub(super) struct Page {
     pub(super) more: bool,
     /// A cursor half named a row that no longer exists.
     pub(super) reset: bool,
+    /// A log whose cursor row is not yet found: it is not at its head.
+    pub(super) searching: bool,
 }
 
 /// Where log rows come from.
 pub(super) trait LogSource: Send + Sync + 'static {
     /// What scopes a caller's rows.
     type Access: Send + Sync;
+    /// One connection's place in the source for one catch-up: never shared
+    /// and never sent to the client.
+    type Search: Default + Send;
     /// The append hook.
     fn subscribe(&self) -> broadcast::Receiver<Appended>;
     /// The newest position this caller can read.
     fn head(&self, access: &Self::Access) -> impl Future<Output = LogCursor> + Send;
-    /// Rows after `cursor`, oldest first, at most `limit`.
+    /// Rows after `cursor` up to and including `stop`, oldest first, at
+    /// most `limit`.
     fn rows_after(
         &self,
         cursor: &LogCursor,
+        stop: &LogCursor,
         access: &Self::Access,
         limit: usize,
+        search: &mut Self::Search,
     ) -> impl Future<Output = Page> + Send;
     /// The allowlisted row for an announced record, or `None` when the list
     /// would not show it to this caller.
@@ -137,6 +145,8 @@ pub(super) struct LogMerge<S: LogSource> {
     /// The head captured when the current scan began; rows past it arrive
     /// through the live receiver, so a scan never chases a moving boundary.
     stop: LogCursor,
+    /// The source's place for this catch-up.
+    search: S::Search,
 }
 
 impl<S: LogSource> LogMerge<S> {
@@ -166,6 +176,7 @@ impl<S: LogSource> LogMerge<S> {
             too_slow: false,
             scan: resume,
             stop: head,
+            search: S::Search::default(),
         }
     }
 
@@ -277,7 +288,10 @@ impl<S: LogSource> LogMerge<S> {
     /// One catch-up page from `from`, after yielding to the runtime.
     async fn page(&mut self, from: &LogCursor) -> Vec<Out> {
         tokio::task::yield_now().await;
-        let page = self.source.rows_after(from, &self.access, PAGE).await;
+        let page = self
+            .source
+            .rows_after(from, &self.stop, &self.access, PAGE, &mut self.search)
+            .await;
         let mut out = Vec::with_capacity(page.rows.len() + 1);
         if page.reset {
             tracing::debug!("ui stream: the position's row is gone, resetting");
