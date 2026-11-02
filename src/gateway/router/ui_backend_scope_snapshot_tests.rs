@@ -14,8 +14,9 @@ use crate::identity_grants::{
 
 /// The seeded audit events' targets. No production writer targets a backend
 /// (every written action is a grant or policy change, pinned in the store),
-/// so the two `backend:` targets are fixture-only: they show which events a
-/// scoped reader would be shown once one does.
+/// so the two `backend:` targets are fixture-only. A scoped reader is shown
+/// none of the three, not even the event about its own backend: store audit
+/// events are gateway-wide.
 const TARGETS: [&str; 3] = ["grant-seeded", "backend:alpha", "backend:beta"];
 
 /// One identity grant under a subject no caller holds, and an audit event per
@@ -114,8 +115,7 @@ async fn cell(who: Who, store: bool) -> String {
 
 /// What each caller is shown, without and with the seeded store. An
 /// unscoped caller keeps today's snapshot; a scoped one is shown no grant,
-/// no policy, no radar, and only audit events about its own backends, which
-/// its role still narrows to its own when it reads no other principal's.
+/// no policy, no store audit event and no radar, whatever its role.
 fn expected(who: Who) -> [String; 2] {
     let unscoped = |grants: usize, audit: &str| {
         [
@@ -130,24 +130,22 @@ fn expected(who: Who) -> [String; 2] {
             ),
         ]
     };
-    let scoped = |audit: &str| {
-        [
-            "200|grants:0|policies:0|audit:|radar:out_of_scope:0/0|counts:0/0/0|cov:false/false"
-                .to_string(),
-            format!(
-                "200|grants:0|policies:0|audit:{audit}|radar:out_of_scope:0/0|counts:0/{}/0|cov:false/false",
-                audit.split(';').filter(|t| !t.is_empty()).count()
-            ),
-        ]
+    let scoped = || {
+        let cell =
+            "200|grants:0|policies:0|audit:|radar:out_of_scope:0/0|counts:0/0/0|cov:false/false";
+        [cell.to_string(), cell.to_string()]
     };
     let all = "backend:alpha;backend:beta;grant-seeded";
     match who {
         Who::AdminKey | Who::Auditor | Who::UiAdminKey => unscoped(1, all),
         Who::Developer => unscoped(0, ""),
-        Who::ScopedAuditor | Who::ScopedRoleAdmin | Who::ScopedAdminKey => scoped("backend:alpha"),
-        Who::ScopedKey | Who::ScopedDeveloper | Who::EmptyAuditor | Who::EmptyRoleAdmin => {
-            scoped("")
-        }
+        Who::ScopedKey
+        | Who::ScopedAuditor
+        | Who::ScopedDeveloper
+        | Who::ScopedRoleAdmin
+        | Who::ScopedAdminKey
+        | Who::EmptyAuditor
+        | Who::EmptyRoleAdmin => scoped(),
     }
 }
 
