@@ -111,6 +111,9 @@ pub(in crate::gateway::ui) struct ForwardPage {
     pub(in crate::gateway::ui) anchor_bytes: u64,
     /// The offset in its segment where this call's first read began.
     pub(in crate::gateway::ui) first_read: Option<u64>,
+    /// The offset in its segment just past this call's last read: where a
+    /// resume continues.
+    pub(in crate::gateway::ui) read_end: Option<u64>,
 }
 
 /// Rows after `cursor` up to and including `stop`, oldest first. `None` for
