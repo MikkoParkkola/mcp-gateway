@@ -395,13 +395,16 @@ CONSUMED = r"(?:\.\s*(?:expect|unwrap)\s*\(|\?|\.\s*unwrap_or_else\(\s*\|[^|]*\|
 FAILS_ON_EXPIRY = re.compile(r"\s*\.await\s*" + CONSUMED)
 LET_BOUND = re.compile(r"let\s+(?:mut\s+)?(\w+)\s*(?::[^=;]+)?=\s*$")
 # A method-style `.timeout(D)`: on an HTTP client or request it bounds the
-# request on the real clock (MIK-9178).
+# request on the real clock.
 # Not the second dot of a range (`.. timeout(W, f)` is the free function).
 # Comments are blanked first, so `.timeout /* why */ (D)` reads as spacing.
 METHOD_TIMEOUT = re.compile(r"(?<!\.)\.\s*timeout\s*\(")
-# The receivers read as an HTTP client or request: anything built through
-# `reqwest::`, or an HTTP verb called on a value named `client`.
-REQUEST_RECEIVER = re.compile(r"reqwest::|\bclient\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\(")
+# The receivers read as an HTTP client or request: a chain built through
+# `reqwest::` or an imported `Client::builder()` / `Client::new()`, or an
+# HTTP verb called on a value named `client` or `*_client`.
+REQUEST_RECEIVER = re.compile(
+    r"reqwest::|\bClient::(?:builder|new)\s*\(|\b\w*client\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\("
+)
 NOT_A_REQUEST = "a .timeout( method not known as a request timeout"
 # Read as data from a base revision's copy of this file (never run): a
 # `.timeout(` allowlist row is new only when the base's gate judged them.
@@ -451,7 +454,7 @@ def scan_timeouts(
     """Every `timeout(W, f)` in test code whose expiry fails the test, when W is
     under 5 s or does not resolve (MIK-8247); and every HTTP client or request
     `.timeout(D)` in test code under 5 s or unresolved, with any other
-    `.timeout(D)` listed whatever its window (MIK-9178).
+    `.timeout(D)` listed whatever its window.
 
     Fails the test: the Result is consumed by `.expect`, `.unwrap`, `?` or
     `.unwrap_or_else(|_| panic!(..))`, straight after `.await` or through a

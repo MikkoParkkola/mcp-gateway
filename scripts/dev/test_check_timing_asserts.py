@@ -607,7 +607,7 @@ class BaseRef(unittest.TestCase):
 
 
 class MethodRowCutover(unittest.TestCase):
-    """MIK-9178: a `.timeout(` row is not NEW only while the base's gate does
+    """A `.timeout(` row is not NEW only while the base's gate does
     not judge `.timeout(` methods, read as data from the base's core, and a
     base the check cannot read that way counts the row as NEW."""
 
