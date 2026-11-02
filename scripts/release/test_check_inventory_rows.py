@@ -107,6 +107,18 @@ class CheckInventoryRows(unittest.TestCase):
         self.assertEqual(self.repo.missing(), [])
         self.assertEqual(self.repo.problems(), [])
 
+    def test_a_test_item_in_a_file_the_parser_cannot_read_needs_a_row(self) -> None:
+        # Unsure files resolve to this gate's safe side: it looks for product
+        # functions, so a test item there stays product (LEAN_SHORT).
+        self.repo.write(
+            "src/oauth/mod.rs",
+            "pub fn existing() {}\n"
+            "fn p(s: S) {\n    let S {\n        #[cfg(feature = \"x\")]\n        a,\n        b,\n    } = s;\n}\n"
+            "#[cfg(test)]\nfn helper() {}\n",
+        )
+        self.repo.commit("add")
+        self.assertEqual(sorted(self.repo.missing()), ["helper", "p"])
+
     def test_a_file_declared_only_for_tests_needs_no_row(self) -> None:
         # Declared by `#[path]` under cfg(test), and from a test file in turn.
         self.repo.write(
