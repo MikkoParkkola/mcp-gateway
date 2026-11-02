@@ -401,9 +401,10 @@ async fn a_truncated_fill_records_no_undeclared_effect() {
     assert_eq!(backend.declared_effect_for(None, "t2"), None);
 }
 
-/// A fill that stops after page 0 (page 1 has no list key but a cursor),
-/// every tool carrying `hints`.
-fn truncated_after_first_page(hints: &Value) -> Arc<Backend> {
+/// A fill marked truncated: page 1 has a cursor but no list key, so the fill
+/// reads all three pages yet cannot judge the listing complete. Every tool
+/// carries `hints`.
+fn truncated_by_a_keyless_page(hints: &Value) -> Arc<Backend> {
     backend_with(truncating_pager(hints), LONG_TTL)
 }
 
@@ -429,7 +430,7 @@ fn truncating_pager(hints: &Value) -> Arc<Pager> {
 /// the slot did not already admit, nor label it read-only.
 #[tokio::test]
 async fn a_truncated_fill_grants_no_cache_admission() {
-    let backend = truncated_after_first_page(&json!({ "readOnlyHint": true }));
+    let backend = truncated_by_a_keyless_page(&json!({ "readOnlyHint": true }));
     backend.get_tools_shared().await.expect("fill");
     assert!(truncated(&backend));
     assert!(
@@ -442,7 +443,7 @@ async fn a_truncated_fill_grants_no_cache_admission() {
 /// The same for resending: a partial list cannot make a name safe to resend.
 #[tokio::test]
 async fn a_truncated_fill_grants_no_resend() {
-    let backend = truncated_after_first_page(&json!({ "idempotentHint": true }));
+    let backend = truncated_by_a_keyless_page(&json!({ "idempotentHint": true }));
     backend.get_tools_shared().await.expect("fill");
     assert!(truncated(&backend));
     assert!(
@@ -474,7 +475,7 @@ async fn a_complete_fill_after_a_truncated_one_restores_admission() {
 /// still declare it, and one they do not declare leaves.
 #[tokio::test]
 async fn a_truncated_fill_keeps_only_what_it_still_declares() {
-    let backend = truncated_after_first_page(&json!({
+    let backend = truncated_by_a_keyless_page(&json!({
         "readOnlyHint": true,
         "idempotentHint": true,
     }));
@@ -485,9 +486,11 @@ async fn a_truncated_fill_keeps_only_what_it_still_declares() {
     assert!(truncated(&backend));
     assert!(backend.is_read_only_for(None, "t0"));
     assert!(!backend.is_read_only_for(None, "t9"));
+    // `t2`, read and declared but never held, gains neither grant.
+    assert!(!backend.is_read_only_for(None, "t2"));
     let resend = backend.resend_permitted_snapshot();
     assert!(
-        resend.contains("t0") && !resend.contains("t9"),
+        resend.contains("t0") && !resend.contains("t9") && !resend.contains("t2"),
         "{resend:?}"
     );
 }
