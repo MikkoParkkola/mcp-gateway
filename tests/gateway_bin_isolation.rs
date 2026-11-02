@@ -161,7 +161,7 @@ while True:
             async move {
                 loop {
                     ticks.fetch_add(1, Ordering::Relaxed);
-                    tokio::time::sleep(Duration::from_millis(5)).await;
+                    tokio::task::yield_now().await;
                 }
             }
         });
@@ -171,10 +171,15 @@ while True:
             appears(&side.path().join("term")).await,
             "the child got no SIGTERM"
         );
+        // A stop that blocked the runtime would let this row run again only
+        // after the child exited, so the ticker moving while `exit` is still
+        // absent shows the runtime kept serving.
         let before = ticks.load(Ordering::Relaxed);
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        while ticks.load(Ordering::Relaxed) <= before {
+            tokio::task::yield_now().await;
+        }
         assert!(
-            ticks.load(Ordering::Relaxed) > before && !side.path().join("exit").exists(),
+            !side.path().join("exit").exists(),
             "the runtime stalled while the stop waited"
         );
         assert!(owned.is_dir(), "the folder went before the child exited");
