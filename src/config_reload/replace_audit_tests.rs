@@ -419,24 +419,72 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
     }
 }
 
-/// Every production reload context is built on the gateway's reporting:
-/// the HTTP gateway's (run.rs, shared with its file watcher) and stdio's
-/// (stdio_loop.rs). Each carries the audit log, so all three sites audit
-/// their recoveries.
+/// The source text of `file` under `src/`, from the first `from` to the
+/// following `to`.
+fn source_span(file: &str, from: &str, to: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+    let text = std::fs::read_to_string(path).expect("read source");
+    let at = text
+        .find(from)
+        .unwrap_or_else(|| panic!("{file} has no `{from}`"));
+    let len = text[at..]
+        .find(to)
+        .unwrap_or_else(|| panic!("{file}: `{from}` has no following `{to}`"));
+    text[at..at + len].to_string()
+}
+
+/// The HTTP gateway's reload reporting carries the audit log, so its reload
+/// context audits its recoveries.
 #[test]
-fn every_production_reporting_carries_the_audit_log() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/server");
-    for file in ["run.rs", "stdio_loop.rs"] {
-        let text = std::fs::read_to_string(src.join(file)).expect("read source");
-        let at = text
-            .find("ReloadReporting::with_override_audit(")
-            .unwrap_or_else(|| panic!("{file} builds no reload reporting"));
-        let statement = &text[at..at + text[at..].find(';').expect("statement end")];
-        assert!(
-            statement.contains(".with_audit_log("),
-            "{file}'s reload reporting does not carry the audit log, so its recoveries go unaudited"
-        );
-    }
+fn the_http_gateway_reporting_carries_the_audit_log() {
+    let statement = source_span(
+        "gateway/server/run.rs",
+        "ReloadReporting::with_override_audit(",
+        ";",
+    );
+    assert!(
+        statement.contains(".with_audit_log("),
+        "run.rs's reload reporting does not carry the audit log, so the HTTP gateway's recoveries go unaudited"
+    );
+}
+
+/// Stdio's reload reporting carries the audit log, so its reload context
+/// audits its recoveries.
+#[test]
+fn the_stdio_reporting_carries_the_audit_log() {
+    let statement = source_span(
+        "gateway/server/stdio_loop.rs",
+        "ReloadReporting::with_override_audit(",
+        ";",
+    );
+    assert!(
+        statement.contains(".with_audit_log("),
+        "stdio_loop.rs's reload reporting does not carry the audit log, so stdio's recoveries go unaudited"
+    );
+}
+
+/// The file watcher's reload context is built on the HTTP gateway's audited
+/// reporting: run.rs hands `reload_reporting` to the watcher, which passes
+/// it on and builds its context on that parameter, not on fresh reporting.
+#[test]
+fn the_watcher_context_is_built_on_the_audited_reporting() {
+    let spawn = source_span("gateway/server/run.rs", "self.start_config_watcher(", ";");
+    let hand_on = source_span(
+        "gateway/server/run_steps.rs",
+        "ConfigWatcher::start_with_hook(",
+        ") {",
+    );
+    let context = source_span(
+        "config_reload/watcher.rs",
+        "let ctx = match ReloadContext::new(",
+        "match on_registered",
+    );
+    assert!(
+        spawn.contains("reload_reporting,")
+            && hand_on.contains("reporting,")
+            && context.contains(".with_reporting(reporting)"),
+        "the watcher's reload context is not built on the HTTP gateway's audited reporting, so the watcher's recoveries go unaudited"
+    );
 }
 
 /// A context built the production way, on reporting that carries an audit
