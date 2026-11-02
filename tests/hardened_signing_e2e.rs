@@ -106,7 +106,14 @@ fn outer_config(inner: &std::path::Path, inner_home: &std::path::Path) -> Value 
 struct Stack {
     backend: BackendFixture,
     gateway: HttpGateway,
-    _inner: tempfile::TempDir,
+}
+
+impl Stack {
+    /// Stops the gateway, its inner gateway first by its own shutdown, while
+    /// the backend still answers; the folders go only after both exited.
+    async fn stop(self) {
+        self.gateway.stop().await;
+    }
 }
 
 async fn stack() -> Stack {
@@ -120,12 +127,9 @@ async fn stack_with(edit: impl FnOnce(&mut Value)) -> Stack {
     let inner_path = inner_config(inner.path(), &backend.url);
     let mut config = outer_config(&inner_path, inner.path());
     edit(&mut config);
-    let gateway = HttpGateway::start(config).await;
-    Stack {
-        backend,
-        gateway,
-        _inner: inner,
-    }
+    let mut gateway = HttpGateway::start(config).await;
+    gateway.owning(inner);
+    Stack { backend, gateway }
 }
 
 /// A well-formed 2026-07-28 `tools/call` carrying `nonce` in `_meta`.
@@ -264,6 +268,7 @@ async fn hardened_signs_tools_call_on_both_routes() {
         oracle_accepts(&wire, &id, "direct-nonce").await,
         "direct MAC must verify: {wire}"
     );
+    stack.stop().await;
 }
 
 /// Row 7: a nonce is admitted once, before dispatch, in one store for both
@@ -295,6 +300,7 @@ async fn hardened_tool_call_nonce_replay_refused() {
         1,
         "cross-route replay dispatched"
     );
+    stack.stop().await;
 }
 
 /// Row 7: an empty or oversized nonce is refused `-32602` on each route, with
@@ -317,6 +323,7 @@ async fn malformed_signing_nonce_refused() {
         0,
         "a malformed nonce dispatched"
     );
+    stack.stop().await;
 }
 
 /// A surfaced tool the inner gateway never lists: the task gate cannot read
@@ -345,6 +352,7 @@ async fn malformed_signing_nonce_refused_before_the_task_gate() {
         0,
         "a malformed nonce dispatched"
     );
+    stack.stop().await;
 }
 
 /// Row 16: `standard` with signing explicitly on keeps today's scope: a
@@ -359,7 +367,6 @@ async fn standard_signing_keeps_invoke_only_scope() {
     let stack = Stack {
         gateway: HttpGateway::start(config).await,
         backend,
-        _inner: tempfile::tempdir().expect("unused directory"),
     };
 
     let wire = post(&stack, "/mcp", &meta_call(41, Some("standard-meta"))).await;
@@ -398,6 +405,7 @@ async fn standard_signing_keeps_invoke_only_scope() {
         oracle_accepts(&wire, &id, "standard-invoke").await,
         "the standard invoke MAC must verify: {wire}"
     );
+    stack.stop().await;
 }
 
 const IDEMPOTENCY_KEY_META: &str = "io.mcp-gateway/idempotency-key";
@@ -427,6 +435,7 @@ async fn hardened_direct_cached_result_is_signed() {
         oracle_accepts(&second, &id, "cached-second").await,
         "the replay's MAC must verify for its own nonce: {second}"
     );
+    stack.stop().await;
 }
 
 /// Row 7: a passthrough backend takes the direct route's other dispatch exit,
@@ -454,6 +463,7 @@ async fn hardened_passthrough_direct_call_is_signed() {
         1,
         "a replay reached the backend"
     );
+    stack.stop().await;
 }
 
 /// Row 7: on the meta route the nonce is admitted before dispatch, so a replay
@@ -486,6 +496,7 @@ async fn hardened_meta_replay_never_dispatches() {
         1,
         "a replayed or malformed nonce reached the backend"
     );
+    stack.stop().await;
 }
 
 /// The in-band confirmation question's key (`meta_mcp/confirmation.rs`).
@@ -546,6 +557,7 @@ async fn confirmation_follow_up_needs_a_fresh_nonce() {
         flat.contains("\"was_already_killed\":false"),
         "the replay must not have run the action: {done}"
     );
+    stack.stop().await;
 }
 
 /// 4c plan row 13: under hardened, a tool call to an HTTP backend on loopback
@@ -562,11 +574,9 @@ async fn listed_private_backend_tool_call_is_served() {
         if listed {
             config["security"]["hardened"] = json!({"private_backends": [BACKEND]});
         }
-        let stack = Stack {
-            gateway: HttpGateway::start(config).await,
-            backend,
-            _inner: home,
-        };
+        let mut gateway = HttpGateway::start(config).await;
+        gateway.owning(home);
+        let stack = Stack { gateway, backend };
         let nonce = if listed {
             "listed-call"
         } else {
@@ -594,6 +604,7 @@ async fn listed_private_backend_tool_call_is_served() {
                 "an unlisted loopback backend was reached: {wire}"
             );
         }
+        stack.stop().await;
     }
 }
 
@@ -627,6 +638,7 @@ async fn a_refused_meta_call_leaves_its_nonce_unspent() {
         "unspent-unsolicited",
         "a call after an unsolicited answer",
     );
+    stack.stop().await;
 }
 
 /// MIK-7698 (direct route): a call the idempotency guard refuses leaves its
@@ -653,6 +665,7 @@ async fn a_direct_call_refused_by_its_key_leaves_its_nonce_unspent() {
     assert_refused(&refused, "a key reused for a different request");
     let later = post(&stack, &path, &direct_call(97, Some("unspent-reused"))).await;
     assert_signed(&later, "unspent-reused", "a call after a key refusal");
+    stack.stop().await;
 }
 
 /// MIK-8381: an oracle that never exits is killed at the limit, and the

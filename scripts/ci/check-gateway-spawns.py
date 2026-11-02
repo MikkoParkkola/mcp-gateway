@@ -67,7 +67,6 @@ PENDING = frozenset({
     "tests/cli_writer_lock.rs",
     "tests/clock_before_epoch_startup.rs",
     "tests/common/journey.rs",
-    "tests/common/signing_gateway.rs",
     "tests/common/stdio_session.rs",
     "tests/cost_persistence_http.rs",
     "tests/d1_audit_required.rs",
@@ -104,7 +103,7 @@ PENDING = frozenset({
     "tests/u1_window_crash.rs",
 })
 # Written out, not derived: a file added to PENDING fails the self-test.
-PENDING_CEILING = 40
+PENDING_CEILING = 39
 
 
 def violations(root):
