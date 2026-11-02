@@ -105,6 +105,20 @@ impl Attribution {
 }
 
 impl super::BudgetEnforcer {
+    /// A settle's tool and key totals with each name's starting figure added,
+    /// so a crossing is judged on the figure `check` judges.
+    pub(super) fn judged_totals(
+        &self,
+        (tool_name, key_name): (&str, Option<&str>),
+        today: Option<u64>,
+        (tool, key): (u64, Option<u64>),
+    ) -> (u64, Option<u64>) {
+        let tool = tool + self.tool_attribution.estimate_on(tool_name, today);
+        let key =
+            key.map(|key| key + key_name.map_or(0, |n| self.key_attribution.estimate_on(n, today)));
+        (tool, key)
+    }
+
     /// A publication replacing `outgoing` budgets with `incoming` ones: each
     /// name `incoming` starts budgeting takes its starting figure, and every
     /// `incoming` name is owned from now on. One step under the ledger lock,

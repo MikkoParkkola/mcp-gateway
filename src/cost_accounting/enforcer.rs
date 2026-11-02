@@ -661,7 +661,6 @@ impl BudgetEnforcer {
                 .key_daily
                 .entry(key_name.to_string())
                 .or_insert_with(|| DailyAccumulator::on(today));
-            // The row, the figure a reload charged it with, and the pending.
             let current_usd = usd(acc.current_on(today)
                 + self.key_attribution.estimate_on(key_name, today)
                 + pending.key(key_name));
@@ -778,11 +777,7 @@ impl BudgetEnforcer {
         let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro, today);
         let key = api_key_name
             .map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro, today));
-        // Crossings are judged on the figure `check` judges: row + estimate.
-        let tool = tool + self.tool_attribution.estimate_on(tool_name, today);
-        let key = key.map(|key| {
-            key + api_key_name.map_or(0, |name| self.key_attribution.estimate_on(name, today))
-        });
+        let (tool, key) = self.judged_totals((tool_name, api_key_name), today, (tool, key));
         #[cfg(test)]
         fire(&AFTER_SPEND_ADDED);
         // A hold from another enforcer (replaced on reload) belongs to its
