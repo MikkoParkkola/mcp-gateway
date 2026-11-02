@@ -296,7 +296,9 @@ for line in sys.stdin:
             tasks = root.join("tasks").display(),
             root = root.display()
         );
-        std::fs::write(root.join("gateway.yaml"), config).expect("config");
+        // The gateway refuses a config other users can read.
+        mcp_gateway::gateway::test_helpers::write_owner_only(&root.join("gateway.yaml"), config)
+            .expect("config");
         let log = std::fs::File::create(root.join("gateway.log")).expect("log");
         let child = tokio::process::Command::from(super::gateway_bin::command(
             &root.join("home"),
