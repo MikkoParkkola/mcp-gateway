@@ -688,6 +688,9 @@ pub struct LocalIdentityGrantStore {
 }
 
 #[cfg(test)]
+#[path = "identity_grants_subject_tests.rs"]
+mod subject_tests;
+#[cfg(test)]
 #[path = "identity_grants_tests.rs"]
 mod tests;
 
