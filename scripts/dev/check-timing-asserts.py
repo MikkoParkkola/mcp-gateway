@@ -82,6 +82,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
@@ -89,6 +90,7 @@ from pathlib import Path
 
 from check_timing_asserts_core import (
     HANG_BOUND_HOME,
+    JUDGES_TIMEOUT_METHOD,
     NOT_A_REQUEST,
     PARSE_REPORT,
     THRESHOLD_S,
@@ -126,6 +128,7 @@ from check_timing_asserts_carry import carried_rows, make_revision
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path(__file__).with_name("timing-asserts-allowlist.tsv")
+CORE = "scripts/dev/check_timing_asserts_core.py"
 SCANNED = ("src", "tests", "crates")
 
 
@@ -156,11 +159,15 @@ def added_lines(base: str) -> dict[str, set[int]]:
     return {p: lines for p, lines in found.items() if lines}
 
 
-def judge(found: list[Finding], rows: list[Row], base: list[Row] | None, carried=frozenset()) -> list[str]:
+def judge(
+    found: list[Finding], rows: list[Row], base: list[Row] | None, carried=frozenset(), cutover=frozenset()
+) -> list[str]:
     """Errors: unlisted findings, stale or ambiguous rows, and rows not in `base`.
 
     `base` is the list at the base ref, or None when the base has none (the
     cutover), which is the one case the shrink-only comparison is skipped.
+    `cutover` holds the rows for a rule the base's gate did not judge yet
+    (`cutover_rows`): those are not new.
     """
     errors = []
     listed = set()
@@ -178,7 +185,7 @@ def judge(found: list[Finding], rows: list[Row], base: list[Row] | None, carried
         errors += [
             f"NEW ROW {r.path} ({r.fn}): the allowlist is shrink-only; wait on an event instead: {r.assertion}"
             for r in rows
-            if r[:3] not in known and r[:3] not in carried
+            if r[:3] not in known and r[:3] not in carried and r[:3] not in cutover
         ]
     return errors
 
@@ -197,6 +204,37 @@ def read_base(ref: str) -> list[Row] | None:
     if exists.returncode != 0:
         raise SystemExit(f"FAIL cannot read base {ref!r}; the shrink-only check is not skipped")
     return None
+
+
+def base_judges_timeout_method(ref: str) -> bool | None:
+    """Whether the gate at `ref` judges `.timeout(` methods: its core's
+    `JUDGES_TIMEOUT_METHOD` read as a literal, never run. False when the core
+    parses and has no marker (a gate from before the rule); None when this
+    cannot tell (no core, a parse error, a value that is not a plain bool)."""
+    shown = subprocess.run(["git", "show", f"{ref}:{CORE}"], cwd=ROOT, capture_output=True, text=True)
+    if shown.returncode != 0:
+        return None
+    try:
+        tree = ast.parse(shown.stdout)
+    except SyntaxError:
+        return None
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign) else []
+        if any(isinstance(t, ast.Name) and t.id == "JUDGES_TIMEOUT_METHOD" for t in targets):
+            try:
+                value = ast.literal_eval(node.value)
+            except (ValueError, TypeError, SyntaxError):
+                return None
+            return value if isinstance(value, bool) else None
+    return False
+
+
+def cutover_rows(rows: list[Row], base_judges: bool | None) -> frozenset:
+    """The `.timeout(` rows to treat as not new: all of them only when the
+    base's gate is known not to judge `.timeout(` methods; otherwise none."""
+    if base_judges is not False:
+        return frozenset()
+    return frozenset(r[:3] for r in rows if r.assertion.startswith(".timeout("))
 
 
 def judge_new(found, rows, texts, consts, includers, added, carried=frozenset()):
@@ -349,16 +387,18 @@ def main(argv: list[str] | None = None) -> int:
     new_errors: list[str] = []
     base_rows = None
     carried = frozenset()
+    cutover = frozenset()
     if args.base:
         # PR-C: new or changed spans only (judge_new).
         pin = _pinned_base(args.base)
         base_rows = read_base(pin)
         if base_rows is not None:
             carried = _compute_carried(pin, base_rows, rows)
+            cutover = cutover_rows(rows, base_judges_timeout_method(pin))
         found, new_errors = judge_new(found, rows, texts, consts, includers, added_lines(args.base), carried=carried)
     else:
         print("No --base: the new-code rules (10 s floor, sleep windows, poll budgets) were not run.")
-    errors = judge(found, rows, base_rows, carried=carried) + new_errors
+    errors = judge(found, rows, base_rows, carried=carried, cutover=cutover) + new_errors
     for line in errors:
         print(line)
     print(f"{len(found)} timing asserts or timeouts under {THRESHOLD_S:g} s or unresolvable, {len(rows)} allowlisted.")

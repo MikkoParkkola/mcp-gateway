@@ -3,3 +3,7 @@
 # path<TAB>enclosing fn<TAB>normalised assert<TAB>reason
 src/cost_accounting/enforcer_tests.rs	enforcer_check_performance_under_100us	assert!( elapsed.as_secs() < 1, "" )	perf AC, CPU-only
 tests/mik_5223_acs.rs	ac_5_forgery_detected_and_logged_within_100ms_over_100_cases	assert!( elapsed.as_millis() < 100, "" )	perf AC, CPU-only
+src/capability/executor_tests/body_content_type.rs	send_with_retry_recovers_from_transient_timeouts	.timeout(std::time::Duration::from_secs(1))	behaviour under test: the two held attempts must time out to be retried; the window also bounds the answered third attempt
+src/capability/executor_tests/body_content_type.rs	send_with_retry_does_not_retry_timeouts_when_not_idempotent	.timeout(std::time::Duration::from_millis(120))	behaviour under test: the server never answers, the expiry is the outcome asserted
+src/key_server/oidc_fallback_tests.rs	a_discovery_timeout_falls_back	.timeout(Duration::from_secs(2))	behaviour under test: the stalled discovery must time out to fall back; the window also bounds the fallback fetch
+src/security/http_diagnostics.rs	a_timeout_is_not_pre_dispatch	.timeout(std::time::Duration::from_millis(250))	behaviour under test: the server never answers, the expiry is the outcome asserted
