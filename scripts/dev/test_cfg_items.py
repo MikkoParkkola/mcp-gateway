@@ -69,6 +69,10 @@ class Owner(unittest.TestCase):
             with self.subTest(side=side):
                 self.assertEqual(lines(text, side), [], text)
 
+    def test_another_attribute_taking_test_as_its_argument_marks_nothing(self):
+        text = "#[my_attr(test)]\nfn product() {\n  x();\n}\n"
+        self.assertEqual(lines(text), [], text)
+
     def test_a_comment_between_a_tuple_fields_visibility_and_type(self):
         text = "struct S(\n #[cfg(test)]\n pub(crate) /* why */\n [u8; { 2 }],\n u16,\n);\n"
         self.assertEqual(lines(text), [(2, 4)], text)
@@ -121,6 +125,11 @@ class Unsure(unittest.TestCase):
         text = "fn p() {}\n#[cfg(test)]\nmod tests {\n  fn t() {\n"
         self.assertEqual(lines(text, LONG), [(1, 4)])
         self.assertEqual(lines(text, SHORT), [])
+
+    def test_a_macro_body_holding_only_a_non_test_cfg_is_read(self):
+        text = 'fn p() {}\nm! {\n #[cfg(feature = "x")] fn f() {}\n}\n#[cfg(test)]\nfn t() {}\n'
+        self.assertEqual(lines(text, LONG), [(5, 6)], text)
+        self.assertEqual(G.cfg_items(text, SHORT).unsure, ())
 
     def test_a_macro_body_holding_a_cfg_is_opaque(self):
         for body in ("#[cfg(test)] fn t() {}", "# [ cfg ( test ) ] fn t() {}", "mod m { #![cfg(test)] fn t() {} }"):
