@@ -455,6 +455,8 @@ impl Backend {
         let safe = prepared.resend_permitted;
         let read_only = prepared.read_only_declared;
         let hint_declared = prepared.hint_declared;
+        let write = prepared.write_declared;
+        let effect_listed = prepared.listed;
         let mut verdicts = prepared.verdicts;
         verdicts.add_unparseable(unparseable);
         let withheld = verdicts.withheld_names();
@@ -463,7 +465,7 @@ impl Backend {
         // own catalogue the page is (a blocked name is per backend).
         let credentialed_shared = matches!(key, PoolKey::Shared) && sent_caller_credential;
         if credentialed_shared || listing == super::descriptor_gate::Listing::Truncated {
-            self.revoke_from_page(&key, &listed, &read_only, &safe);
+            self.revoke_from_page(&key, &listed, (&read_only, &write, &hint_declared), &safe);
             let source = match &key {
                 PoolKey::PerUser { binding } => binding.as_str(),
                 PoolKey::Shared => identity_key.unwrap_or("credentialed"),
@@ -485,8 +487,14 @@ impl Backend {
         let mut logs = None;
         entry.tools_cache.replace(parsed, || {
             logs = Some(self.commit_verdicts(&source, listing, verdicts));
+            // Emptied first and published last: until then no name reads
+            // undeclared from a mix of the old and new sets.
+            entry.effect_listed.write().clear();
             // Display only, so replaced outright: it labels this list.
             *entry.hint_declared.write() = hint_declared;
+            // The declared effect's evidence, from this same list.
+            *entry.write_declared.write() = write;
+            *entry.effect_listed.write() = effect_listed;
             entry
                 .tools_truncated
                 .store(false, std::sync::atomic::Ordering::SeqCst);

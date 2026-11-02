@@ -159,6 +159,14 @@ pub struct FirewallRule {
     /// Calls this rule skips: a call matching every field an entry sets.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub except: Option<Vec<RuleException>>,
+    /// Folders a covered call's `path_args` must resolve inside; absent means
+    /// no folder check. Set with `path_args`, never alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_roots: Option<Vec<String>>,
+    /// The arguments that carry paths: `name`, `name[]`, `a.b`, with a
+    /// trailing `?` for one a call may omit. Set with `allowed_roots`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_args: Option<Vec<String>>,
 }
 
 /// One exception on a firewall rule. A call matches it when it matches every
@@ -189,8 +197,12 @@ pub enum FirewallAction {
 }
 
 /// Types of scans that can be applied.
+///
+/// `#[non_exhaustive]` from 4.0.0: a scan type may be added in a minor
+/// release, so a match outside this crate needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ScanType {
     /// Scan for credential patterns (AWS keys, API tokens, etc.)
     Credentials,
@@ -216,4 +228,11 @@ pub enum ScanType {
     /// Content delivered to one principal left through another's call
     /// (OWASP ASI10, COLLUDE.1).
     CollusionRelay,
+    /// A declared path argument resolves outside every allowed root of the
+    /// rule that covers the call. Output-only: no rule's `scan` may list it.
+    PathOutsideRoot,
+    /// A call a root rule covers was refused without a path judgement; the
+    /// description names the reason code, the rule and the argument, never a
+    /// value. Output-only: no rule's `scan` may list it.
+    RootRefused,
 }

@@ -136,6 +136,19 @@ impl Backend {
             .collect()
     }
 
+    /// The argument keys this backend's rules for `tool` own: its send drops
+    /// the caller's value for each, whatever the credential resolves to. The
+    /// folder check refuses a call whose declared path argument is one.
+    /// Key names only, never a value.
+    #[cfg(feature = "firewall")]
+    pub(crate) fn owned_argument_keys(&self, tool: &str) -> Vec<String> {
+        self.secret_rules_for(tool)
+            .into_iter()
+            .filter(|rule| rule.inject_as == InjectTarget::Argument)
+            .map(|rule| rule.inject_key.clone())
+            .collect()
+    }
+
     /// Drops what the relay check must not judge as the caller's: the keys
     /// this backend's rules overwrite for `tool`. The captured instance's
     /// rules, so the check and the send read the same ones across a reload.

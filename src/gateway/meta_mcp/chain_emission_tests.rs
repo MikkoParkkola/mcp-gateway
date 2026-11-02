@@ -306,6 +306,8 @@ async fn link_out_covers_firewall_redaction_stdio() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

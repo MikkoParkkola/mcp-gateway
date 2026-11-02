@@ -185,3 +185,44 @@ async fn a_chain_refusal_records_unrecorded() {
         all[0]
     );
 }
+
+/// A replayed stored failure may stand in for a write that committed, so it
+/// records `replayed` with the declared effect the slot holds now, as a
+/// replayed stored answer does.
+#[tokio::test]
+async fn a_replayed_stored_failure_records_replayed_with_the_live_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let meta = chained_meta(&dir);
+    let who = api_key_caller();
+    let retry = RetryFields {
+        idempotency_key: Some("key-8914-stored-failure-effect".into()),
+        ..RetryFields::default()
+    };
+    let mut caller = context(&AllowAll, &who);
+    caller.retry = &retry;
+    let args = json!({"server": "alpha", "tool": "read", "arguments": {}});
+    for _ in 0..2 {
+        let _ = meta
+            .invoke_tool(&args, None, &caller)
+            .await
+            .expect_err("premise: the chain check refuses, then its stored refusal replays");
+    }
+    let all = records(&dir);
+    assert_eq!(all.len(), 2, "{all:?}");
+    // The fixture lists `read` with no hint, so the live lookup reads undeclared.
+    assert_eq!(
+        all[0]["decision"]["declared_effect"],
+        json!("undeclared"),
+        "{}",
+        all[0]
+    );
+    let replay = &all[1]["decision"];
+    assert_eq!(replay["decided"], json!("replayed"), "{}", all[1]);
+    assert_eq!(replay["declared_effect"], json!("undeclared"), "{}", all[1]);
+    assert_eq!(
+        replay["declared_effect_source"],
+        json!("tool_annotation"),
+        "{}",
+        all[1]
+    );
+}
