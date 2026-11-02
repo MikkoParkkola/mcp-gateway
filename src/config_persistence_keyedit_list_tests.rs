@@ -458,3 +458,98 @@ fn an_explicit_key_refuses_under_every_value_shape() {
         );
     }
 }
+
+/// Every key-line form a list set meets, with its outcome: written in place
+/// (the expected file) or refused (the expected code). A form this table
+/// lacks is the gap to fill, here, before anywhere else.
+#[test]
+fn every_key_line_form_has_its_outcome() {
+    use std::result::Result::{Err as Refused, Ok as Written};
+    let scope = || list("auth.scope", &["x"]);
+    let rows: Vec<(&str, &str, (FieldPath, Change), Result<&str, GiveUp>)> = vec![
+        (
+            "plain",
+            "auth:\n  scope: [\"a\"]\n",
+            scope(),
+            Written("auth:\n  scope: [\"x\"]\n"),
+        ),
+        (
+            "spaces before the colon",
+            "auth:\n  scope  : [\"a\"]\n",
+            scope(),
+            Written("auth:\n  scope  : [\"x\"]\n"),
+        ),
+        (
+            "a tab before the colon",
+            "auth:\n  scope\t: [\"a\"]\n",
+            scope(),
+            Written("auth:\n  scope\t: [\"x\"]\n"),
+        ),
+        (
+            "on an element's dash line",
+            "auth:\n  api_keys:\n    - backends: [\"a\"]\n",
+            api_key_list(0, "backends", &["x"]),
+            Written("auth:\n  api_keys:\n    - backends: [\"x\"]\n"),
+        ),
+        (
+            "double-quoted key",
+            "auth:\n  \"scope\": [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "single-quoted key",
+            "auth:\n  'scope': [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "explicit `?` key",
+            "auth:\n  ? scope\n  : [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "anchor on the key",
+            "auth:\n  &k scope: [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "tag on the key",
+            "auth:\n  !!str scope: [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "anchor or tag above an explicit key",
+            "auth:\n  ? &k\n    scope\n  : [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::NotPlainKey),
+        ),
+        (
+            "anchor on the value",
+            "auth:\n  scope: &v [\"a\"]\n",
+            scope(),
+            Refused(GiveUp::Anchor),
+        ),
+        (
+            "inside a flow mapping",
+            "auth: {scope: [\"a\"]}\n",
+            scope(),
+            Refused(GiveUp::Flow),
+        ),
+    ];
+    for (form, original, change, want) in rows {
+        let got = edit_in_place(original, std::slice::from_ref(&change));
+        match (want, got) {
+            (Written(text), Ok(template)) => {
+                assert_eq!(String::from_utf8_lossy(template.bytes()), text, "{form}");
+            }
+            (Refused(code), Err(ComputeRefusal::Unprovable { code: got, .. })) => {
+                assert_eq!(got, code, "{form}");
+            }
+            (want, got) => panic!("{form}: expected {want:?}, got {got:?}"),
+        }
+    }
+}
