@@ -67,15 +67,19 @@ TOKEN = re.compile(
 
 
 def cfg_is_test(expr: str) -> bool:
-    """Whether a `#[cfg(<expr>)]` compiles only under test: `test`, or an
-    `all(..)` with `test` as a DIRECT operand. A nested `any(test, ..)` or a
-    `not(..)` still builds outside tests, and `test_mode` is not `test`
+    """Whether a `#[cfg(<expr>)]` compiles only under test: the predicate
+    is false whenever `test` is. `test` requires test; `all(..)` does when
+    any operand does; `any(..)` only when every operand does; `not(..)`, a
+    `key = ".."` pair and any other atom never do (they build outside tests),
+    and `test_mode` is not `test`. An unbalanced predicate reads as false
+    here; a caller that must fail closed checks the balance itself
     (MIK-8405.SPLIT.5; the one cfg judgement, shared with
-    scripts/release/check_inventory_rows.py)."""
+    scripts/release/check_inventory_rows.py, scripts/ci/check-request-panics.py
+    and the timing-asserts gate)."""
     expr = expr.strip()
     if expr == "test":
         return True
-    opener = re.match(r"all\s*\(", expr)
+    opener = re.match(r"(all|any)\s*\(", expr)
     if not (opener and expr.endswith(")")):
         return False
     operands, depth, start = [], 0, opener.end()
@@ -85,11 +89,19 @@ def cfg_is_test(expr: str) -> bool:
             depth += 1
         elif ch == ")":
             depth -= 1
+            if depth < 0:
+                return False
         elif ch == "," and depth == 0:
             operands.append(expr[start:i])
             start = i + 1
+    if depth:
+        return False
     operands.append(expr[start : len(expr) - 1])
-    return "test" in (o.strip() for o in operands)
+    operands = [o for o in operands if o.strip()]
+    if not operands:
+        return False
+    judged = [cfg_is_test(o) for o in operands]
+    return any(judged) if opener.group(1) == "all" else all(judged)
 
 
 def cfg_expression(code: str, start: int) -> str:
