@@ -193,6 +193,10 @@ pub struct MetaMcp {
     /// The web UI's open decisions; set by the HTTP server.
     #[cfg(feature = "webui")]
     pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
+    /// The client-config discovery cache the web UI's discovery route, the
+    /// radar and the decision set share; set by the HTTP server.
+    #[cfg(feature = "webui")]
+    pub(super) discovery_cache: std::sync::OnceLock<Arc<crate::discovery::listing::DiscoveryCache>>,
     /// Shared with the firewall's folder check, which classifies a call by
     /// the capability backend attached now, not the one at startup.
     pub(super) capabilities: Arc<RwLock<Option<Arc<CapabilityBackend>>>>,
