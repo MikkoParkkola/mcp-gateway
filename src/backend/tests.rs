@@ -135,6 +135,8 @@ fn sample_tool(name: &str) -> Tool {
     }
 }
 
+#[path = "declared_effect_tests.rs"]
+mod declared_effect_tests;
 #[path = "prepare_tool_metadata_tests.rs"]
 mod prepare_tool_metadata_tests;
 

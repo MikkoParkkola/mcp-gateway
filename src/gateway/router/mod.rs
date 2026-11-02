@@ -256,6 +256,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// The direct route records no declared effect yet (pinned absence).
+#[cfg(test)]
+mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
