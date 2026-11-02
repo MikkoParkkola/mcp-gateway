@@ -9,8 +9,8 @@ use std::path::Path;
 
 use super::scan::{Anchor, Mode, Scan, Step};
 use super::{Log, Mark, mark_of};
-use crate::security::transparency_log::identity::{FileId, file_id};
 use crate::security::transparency_log::pager::{ASSEMBLY_WINDOW, open_segment};
+use crate::security::transparency_log::rotation::{FileId, file_id};
 use crate::security::transparency_log::segments::listing;
 
 /// A saved place in one segment.

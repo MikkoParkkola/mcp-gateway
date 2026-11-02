@@ -86,17 +86,11 @@ mod bounded;
 #[path = "transparency_log_hwm_scan.rs"]
 mod hwm_scan;
 #[path = "transparency_log_rotation.rs"]
-mod rotation;
+pub(crate) mod rotation;
 /// Test seam for the write-fault injector, for tests outside this module.
 #[cfg(test)]
 pub(crate) mod rotation_fault {
     pub(crate) use super::rotation::WriteFault;
-}
-/// A log segment's file identity, read from an open handle. The Activity
-/// stream's forward reader proves a saved read position with it before it
-/// reads on.
-pub(crate) mod identity {
-    pub(crate) use super::rotation::{FileId, file_id};
 }
 #[path = "transparency_log_pager.rs"]
 pub(crate) mod pager;
