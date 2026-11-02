@@ -27,6 +27,8 @@ use super::registry::CostRegistry;
 #[cfg(feature = "cost-governance")]
 pub(crate) mod crossings;
 #[cfg(feature = "cost-governance")]
+mod estimate;
+#[cfg(feature = "cost-governance")]
 mod rows;
 mod snapshot;
 #[cfg(all(feature = "cost-governance", test))]
@@ -393,6 +395,11 @@ pub struct EnforcerSnapshot {
     /// Today's spend of unbudgeted keys past the per-key map's cap (USD).
     #[serde(default)]
     pub key_overflow_usd: f64,
+    /// The starting figure (USD) a reload charged each per-tool name it
+    /// started budgeting with today, zeros included (ADR-023).
+    pub tool_estimate: HashMap<String, f64>,
+    /// The same for per-key names.
+    pub key_estimate: HashMap<String, f64>,
 }
 
 // ── BudgetEnforcer ───────────────────────────────────────────────────────────
@@ -432,6 +439,9 @@ pub struct BudgetEnforcer {
     /// `utc_day + 1`; 0 is none (ADR-026). Set by `restore` before the
     /// enforcer is shared, and cleared on the first read after that day.
     legacy_utc_day: std::sync::atomic::AtomicU64,
+    /// Which earlier spend a name budgeted by reload is charged with.
+    tool_attribution: estimate::Attribution,
+    key_attribution: estimate::Attribution,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -439,7 +449,6 @@ impl BudgetEnforcer {
     /// Create a new `BudgetEnforcer` from config and a shared cost registry.
     pub fn new(config: CostGovernanceConfig, registry: Arc<CostRegistry>) -> Self {
         Self {
-            config,
             registry,
             tool_daily: DashMap::new(),
             global_daily: DailyAccumulator::new(),
@@ -453,6 +462,9 @@ impl BudgetEnforcer {
             tool_overflow_swept: std::sync::atomic::AtomicU64::new(0),
             key_overflow_swept: std::sync::atomic::AtomicU64::new(0),
             legacy_utc_day: std::sync::atomic::AtomicU64::new(0),
+            tool_attribution: estimate::Attribution::owning(config.budgets.per_tool.keys()),
+            key_attribution: estimate::Attribution::owning(config.budgets.per_key.keys()),
+            config,
         }
     }
 
@@ -586,7 +598,10 @@ impl BudgetEnforcer {
                 .tool_daily
                 .entry(tool_name.to_string())
                 .or_insert_with(|| DailyAccumulator::on(today));
-            let current_usd = usd(acc.current_on(today) + pending.tool(tool_name));
+            // The row, the figure a reload charged it with, and the pending.
+            let current_usd = usd(acc.current_on(today)
+                + self.tool_attribution.estimate_on(tool_name, today)
+                + pending.tool(tool_name));
             let projected = current_usd + cost;
 
             if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
@@ -646,7 +661,10 @@ impl BudgetEnforcer {
                 .key_daily
                 .entry(key_name.to_string())
                 .or_insert_with(|| DailyAccumulator::on(today));
-            let current_usd = usd(acc.current_on(today) + pending.key(key_name));
+            // The row, the figure a reload charged it with, and the pending.
+            let current_usd = usd(acc.current_on(today)
+                + self.key_attribution.estimate_on(key_name, today)
+                + pending.key(key_name));
             let projected = current_usd + cost;
 
             if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
@@ -749,6 +767,8 @@ impl BudgetEnforcer {
             ] {
                 rows::sweep_stale(map, limits, today);
             }
+            self.tool_attribution.sweep(today);
+            self.key_attribution.sweep(today);
             self.swept_day
                 .fetch_max(today.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
         }
@@ -758,6 +778,11 @@ impl BudgetEnforcer {
         let tool = add_capped(self.tool_maps(), tool_name, &budgets.per_tool, micro, today);
         let key = api_key_name
             .map(|key| add_capped(self.key_maps(), key, &budgets.per_key, micro, today));
+        // Crossings are judged on the figure `check` judges: row + estimate.
+        let tool = tool + self.tool_attribution.estimate_on(tool_name, today);
+        let key = key.map(|key| {
+            key + api_key_name.map_or(0, |name| self.key_attribution.estimate_on(name, today))
+        });
         #[cfg(test)]
         fire(&AFTER_SPEND_ADDED);
         // A hold from another enforcer (replaced on reload) belongs to its

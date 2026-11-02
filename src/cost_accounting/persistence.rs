@@ -37,6 +37,14 @@ pub struct PersistedCosts {
     /// value also counts a UTC day, with a warning, so its spend is kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub day_basis: Option<String>,
+    /// The starting figure (USD) a reload charged each per-tool name it
+    /// started budgeting with that day, zeros included: kept apart from
+    /// `tool_totals`, never added into them on restore (ADR-023).
+    #[serde(default)]
+    pub tool_estimate: HashMap<String, f64>,
+    /// The same for per-key names, apart from `key_totals`.
+    #[serde(default)]
+    pub key_estimate: HashMap<String, f64>,
 }
 
 /// Spend for a single tool on the day of `saved_at`.
@@ -86,6 +94,9 @@ pub(crate) struct EnforcerSaveSnapshot {
     pub(crate) key_overflow_usd: f64,
     /// Copied into `PersistedCosts.day_basis`.
     pub(crate) day_basis: Option<String>,
+    /// Copied into `PersistedCosts.tool_estimate` / `key_estimate`.
+    pub(crate) tool_estimate: HashMap<String, f64>,
+    pub(crate) key_estimate: HashMap<String, f64>,
 }
 
 #[cfg(feature = "cost-governance")]
@@ -104,6 +115,8 @@ impl EnforcerSaveSnapshot {
             tool_overflow_usd: snap.tool_overflow_usd,
             key_overflow_usd: snap.key_overflow_usd,
             day_basis,
+            tool_estimate: snap.tool_estimate,
+            key_estimate: snap.key_estimate,
         }
     }
 }

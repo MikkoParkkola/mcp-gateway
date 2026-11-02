@@ -472,6 +472,8 @@ mod cost_section_tests {
             taken_at: Some(0),
             tool_overflow_usd: 1.25,
             key_overflow_usd: 0.5,
+            tool_estimate: std::collections::HashMap::new(),
+            key_estimate: std::collections::HashMap::new(),
         };
         let section = cost_section(&snap);
         assert_eq!(section["tool_overflow_spend_usd"], 1.25);

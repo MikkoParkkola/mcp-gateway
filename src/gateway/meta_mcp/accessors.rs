@@ -54,6 +54,18 @@ impl MetaMcp {
 
     /// Startup's live config; a second call keeps the first.
     pub(crate) fn set_live_config(&self, live: Arc<crate::config_reload::LiveConfig>) {
+        // A name a publication starts budgeting takes its starting figure
+        // before any request can judge with the new budgets (ADR-023).
+        #[cfg(feature = "cost-governance")]
+        if let Some(enforcer) = &self.budget_enforcer {
+            let enforcer = Arc::clone(enforcer);
+            live.on_publish(Arc::new(move |(outgoing, incoming)| {
+                enforcer.seed_estimates(
+                    &enforcer.governance(Some(&outgoing)).budgets,
+                    &enforcer.governance(Some(&incoming)).budgets,
+                );
+            }));
+        }
         let _ = self.startup_live_config.set(live);
     }
 

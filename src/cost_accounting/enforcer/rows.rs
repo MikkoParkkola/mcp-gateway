@@ -14,12 +14,13 @@ use super::DailyAccumulator;
 /// `default_cost` the caller would otherwise choose how many entries exist.
 pub(super) const MAX_UNBUDGETED_ROWS: usize = 256;
 
-/// One scope's day rows, its overflow total, and the day an overflowing
-/// spend last swept the rows.
+/// One scope's day rows, its overflow total, the day an overflowing spend
+/// last swept the rows, and which names own a row whatever the budgets say.
 pub(super) type Rows<'a> = (
     &'a DashMap<String, DailyAccumulator>,
     &'a DailyAccumulator,
     &'a AtomicU64,
+    &'a super::estimate::Attribution,
 );
 
 /// Drop the unbudgeted rows of earlier days; budgeted rows always stay.
@@ -38,7 +39,7 @@ pub(super) fn sweep_stale(
 /// a budget whose name happens to be `(other)` keeps its own total.
 /// ponytail: a soft cap; racing first inserts can pass it by the caller count.
 pub(super) fn add_capped(
-    (map, overflow, swept): Rows<'_>,
+    (map, overflow, swept, attribution): Rows<'_>,
     name: &str,
     limits: &HashMap<String, f64>,
     micro: u64,
@@ -53,6 +54,7 @@ pub(super) fn add_capped(
     };
     let short = name.len() <= super::super::tally::MAX_ROW_NAME_BYTES;
     let mut own = limits.contains_key(name)
+        || attribution.owns(name)
         || map.contains_key(name)
         || (short && unbudgeted() < MAX_UNBUDGETED_ROWS);
     // A spend that read the day just before midnight skipped the day's sweep,
@@ -71,7 +73,10 @@ pub(super) fn add_capped(
     }
     if own {
         map.entry(name.to_string())
-            .or_insert_with(|| DailyAccumulator::on(day))
+            .or_insert_with(|| {
+                attribution.born(name, overflow.current_on(day), day);
+                DailyAccumulator::on(day)
+            })
             .add_on(day, micro)
     } else {
         overflow.add_on(day, micro)
