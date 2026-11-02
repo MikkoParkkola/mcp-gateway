@@ -59,12 +59,18 @@ fn seed(state: &AppState, store: bool) {
     }
 }
 
-/// `who`'s snapshot as one cell: status, then the grants, policies and audit
-/// targets it shows, the radar, the derived counts and the grants/policies
-/// coverage. The radar reads the host's real environment, so only whether it
-/// ran is pinned, and its summary when it did not.
+/// `who`'s snapshot as one cell: status; the grants, policies and audit
+/// targets it shows; the policy and grant items of its decision queue; the
+/// radar; the derived counts; the grants/policies coverage. Input
+/// sanitization is off, so an unscoped reader's queue holds that policy's
+/// item. The radar reads the host's real environment, so whether it ran is
+/// pinned, all its counts when it did not, and in every cell that the
+/// inventory counts are the radar's own.
 async fn cell(who: Who, store: bool) -> String {
     let mut fx = scoped_fixture().await;
+    let mut config = (*fx.state.live_config.get()).clone();
+    config.security.sanitize_input = false;
+    fx.state.live_config.set(config);
     if store {
         Arc::get_mut(&mut fx.state)
             .expect("state is unique")
@@ -78,34 +84,42 @@ async fn cell(who: Who, store: bool) -> String {
     let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
     let view = &body["view"];
     let len = |list: &str| view[list].as_array().map_or(0, Vec::len);
-    let mut targets: Vec<&str> = view["audit_events"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|event| event["target_id"].as_str())
-        .collect();
-    targets.sort_unstable();
+    let sorted = |list: &Value, field: &str, keep: &dyn Fn(&str) -> bool| {
+        let mut ids: Vec<&str> = list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item[field].as_str())
+            .filter(|id| keep(id))
+            .collect();
+        ids.sort_unstable();
+        ids.join(";")
+    };
+    let targets = sorted(&view["audit_events"], "target_id", &|_| true);
+    let queue = sorted(&body["decision_queue"]["items"], "item_id", &|id| {
+        id.starts_with("policy:") || id.starts_with("grant:")
+    });
     let radar = &body["shadow_radar"];
+    let counts = &body["inventory_counts"];
+    let consistent = counts["shadow_assets"] == radar["summary"]["unmanaged_total"]
+        && counts["shadow_high_or_critical_assets"] == radar["summary"]["high_or_critical_total"];
     let radar = if radar["scan_status"] == "out_of_scope" {
         format!(
-            "out_of_scope:{}/{}",
-            radar["summary"]["discovered_total"], radar["summary"]["unmanaged_total"]
+            "out_of_scope:{}/{}/{}/{}/{}",
+            radar["summary"]["discovered_total"],
+            radar["summary"]["unmanaged_total"],
+            radar["summary"]["high_or_critical_total"],
+            radar["trustcard_input_count"],
+            radar["doctor_finding_count"],
         )
     } else {
         "ran".to_string()
     };
-    let counts = &body["inventory_counts"];
-    let shadow = if radar == "ran" {
-        "-".to_string()
-    } else {
-        counts["shadow_assets"].to_string()
-    };
     format!(
-        "{}|grants:{}|policies:{}|audit:{}|radar:{radar}|counts:{}/{}/{shadow}|cov:{}/{}",
+        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}",
         code.as_u16(),
         len("grants"),
         len("policies"),
-        targets.join(";"),
         counts["policies"],
         counts["audit_events"],
         body["coverage"]["grants"],
@@ -113,26 +127,25 @@ async fn cell(who: Who, store: bool) -> String {
     )
 }
 
+/// The policy queue item an unscoped reader gets while sanitization is off.
+const SANITIZE_ITEM: &str = "policy:local:input_sanitization:not_enforced";
+
 /// What each caller is shown, without and with the seeded store. An
 /// unscoped caller keeps today's snapshot; a scoped one is shown no grant,
-/// no policy, no store audit event and no radar, whatever its role.
+/// no policy, no store audit event, no queue item for either and no radar,
+/// whatever its role.
 fn expected(who: Who) -> [String; 2] {
     let unscoped = |grants: usize, audit: &str| {
-        [
+        let events = audit.split(';').filter(|t| !t.is_empty()).count();
+        [("", 0), (audit, events)].map(|(audit, events)| {
             format!(
-                "200|grants:{grants}|policies:2|audit:|radar:ran|counts:2/0/-|cov:{}/true",
+                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true",
                 grants > 0
-            ),
-            format!(
-                "200|grants:{grants}|policies:2|audit:{audit}|radar:ran|counts:2/{}/-|cov:{}/true",
-                audit.split(';').filter(|t| !t.is_empty()).count(),
-                grants > 0
-            ),
-        ]
+            )
+        })
     };
     let scoped = || {
-        let cell =
-            "200|grants:0|policies:0|audit:|radar:out_of_scope:0/0|counts:0/0/0|cov:false/false";
+        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:0/0/0/0/0|counts:0/0/true|cov:false/false";
         [cell.to_string(), cell.to_string()]
     };
     let all = "backend:alpha;backend:beta;grant-seeded";
