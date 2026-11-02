@@ -399,20 +399,20 @@ pub(super) async fn adopt_discovery(
         replaced: Replaced::Discard,
         secrets,
     };
-    // Its own intent first on an audited gateway (`config_adopt_intent`);
-    // refused outright with auth on and no audit log.
-    let posture = AuditPosture::of(
-        state.transparency_log.clone(),
-        GatewayAuth::of(state.live_config.running().auth.enabled),
-    );
-    let audit = match posture.audit(IntentKind::Adopt) {
-        Ok(audit) => audit,
-        Err(refused) => return answer(&name, Err(refused)),
-    };
-    answer(
-        &name,
-        replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await,
-    )
+    answer(&name, write_audited(&state, context, replace).await)
+}
+
+/// Writes `replace` under this gateway's audit posture: its own intent first
+/// on an audited gateway (`config_adopt_intent`), refused outright with auth
+/// on and no audit log.
+async fn write_audited(
+    state: &AppState,
+    context: Arc<crate::config_reload::ReloadContext>,
+    replace: Replace,
+) -> Result<ReplaceOutcome, ReplaceError> {
+    let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
+    let audit = AuditPosture::of(state.transparency_log.clone(), auth).audit(IntentKind::Adopt)?;
+    replace_audited(context, replace, audit, RELOAD_LOCK_WAIT).await
 }
 
 #[cfg(test)]
