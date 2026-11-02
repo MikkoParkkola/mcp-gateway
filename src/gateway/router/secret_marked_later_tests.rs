@@ -13,7 +13,7 @@ use super::direct_guards_fixture::{
     fixture_with_secrets_over_http, initialize, post_direct, post_meta_invoke,
 };
 use super::secret_echo_tests::{Calls, Reply, echo_server};
-use super::secret_injection_direct_tests::{finished_task, submit_task};
+use super::secret_injection_direct_tests::{SECRET, argument_rule, finished_task, submit_task};
 
 /// The text every echo answer holds, marked secret after it was stored.
 const MARKED: &str = "received";
@@ -138,4 +138,31 @@ async fn a_fresh_keyed_task_is_acknowledged_while_a_value_set_refuses() {
         made.get("error").is_none() && !id.is_empty(),
         "the creation was answered with the refusal: {made}"
     );
+}
+
+/// A task whose backend echoes the value a `secrets:` rule injected: its
+/// stored result read by `tasks/get`, and the keyed repeat that serves it
+/// again, each carry the marker in the value's place. Tasks are served on
+/// `/mcp` only; `/mcp/{name}` refuses every task method.
+#[tokio::test]
+async fn an_injected_value_echoed_into_a_task_is_redacted_when_read_and_repeated() {
+    let calls = Calls::default();
+    let url = echo_server(Arc::clone(&calls), Reply::Echo).await;
+    let fx = fixture_with_secrets_over_http(vec![argument_rule()], url).await;
+    let (id, _) = submit_task(&fx, "idem-injected-task").await;
+    let finished = finished_task(&fx, &id).await;
+    assert!(
+        calls
+            .lock()
+            .iter()
+            .any(|params| params.pointer("/arguments/api_key") == Some(&json!(SECRET))),
+        "premise: the rule injected the value into the task's call"
+    );
+    let (again, repeated) = submit_task(&fx, "idem-injected-task").await;
+    assert_eq!(again, id, "premise: the keyed resubmit names the same task");
+    for (what, answer) in [("tasks/get", &finished), ("the keyed repeat", &repeated)] {
+        let text = answer.to_string();
+        assert!(!text.contains(SECRET), "{what} holds the value: {answer}");
+        assert!(text.contains(MARKER), "{what} lost the echo: {answer}");
+    }
 }

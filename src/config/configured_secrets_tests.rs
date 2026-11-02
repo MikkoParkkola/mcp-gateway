@@ -249,22 +249,34 @@ fn a_backend_configuring_too_many_secrets_is_refused_at_load() {
     );
 }
 
-/// A secret value holding a redaction marker could be completed by a
-/// redaction next to it, so load refuses it, naming the field, never the
-/// value; each of the markers counts.
+/// Load's refusal of a secret value holding `marker`: one message, naming
+/// the field and never the value. A redaction next to such a value could
+/// complete it.
+fn assert_marker_refused(marker: &str) {
+    let body = format!("MARKED=abc{marker}xyz-secret\n");
+    let refusals = refused(&[("X-Key", "env:MARKED")], &body);
+    assert_eq!(refusals.len(), 1, "{marker}: {refusals:?}");
+    assert!(
+        refusals[0].contains("backends.b.headers.X-Key"),
+        "{refusals:?}"
+    );
+    assert!(
+        !refusals[0].contains("xyz-secret"),
+        "a refusal printed the value: {refusals:?}"
+    );
+}
+
 #[test]
-fn a_secret_value_holding_a_redaction_marker_is_refused_at_load() {
-    for marker in ["[redacted]", "<removed>", "{hidden}"] {
-        let body = format!("MARKED=abc{marker}xyz-secret\n");
-        let refusals = refused(&[("X-Key", "env:MARKED")], &body);
-        assert_eq!(refusals.len(), 1, "{marker}: {refusals:?}");
-        assert!(
-            refusals[0].contains("backends.b.headers.X-Key"),
-            "{refusals:?}"
-        );
-        assert!(
-            !refusals[0].contains("xyz-secret"),
-            "a refusal printed the value: {refusals:?}"
-        );
-    }
+fn a_secret_value_holding_the_redacted_marker_is_refused_at_load() {
+    assert_marker_refused("[redacted]");
+}
+
+#[test]
+fn a_secret_value_holding_the_removed_marker_is_refused_at_load() {
+    assert_marker_refused("<removed>");
+}
+
+#[test]
+fn a_secret_value_holding_the_hidden_marker_is_refused_at_load() {
+    assert_marker_refused("{hidden}");
 }
