@@ -23,6 +23,18 @@ private_content_checks=(
   "tailnet-ip::-::(^|[^0-9.])100\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}([^0-9]|$)::is a private-network address"
 )
 
+# Internal process references a pull-request body may not carry: a row of the
+# release's register of unfixed findings, and a lead's or operator's ruling.
+# Same format as private_content_checks. Read by the pull-request-body check
+# only: the tracked tree still carries older ones, so the tree check would
+# need a debt list first. Plain prose passes: "the register of the CPU" names
+# no row, and "a ruling on X" names no lead or operator.
+# shellcheck disable=SC2034  # read by check-pr-body-hygiene.sh
+process_reference_checks=(
+  "register-row::i::(^|[^[:alpha:]])register[[:space:]]+rows?[[:space:]#]*[0-9]|(^|[^[:alpha:]])rows?[[:space:]#]*[0-9]+[[:space:]]+(of|in)[[:space:]]+the[[:space:]]+register([^[:alpha:]]|$)::cites a row of the internal findings register"
+  "ruling::i::(^|[^[:alpha:]])(lead|operator)('s)?[[:space:]]+rulings?([^[:alpha:]]|$)::cites an internal ruling"
+)
+
 # Fixed strings, matched case-insensitively, that every hit of a check above
 # contains. The tree check greps for these first and runs the regexes only on
 # the lines they find, so a new check needs its literal core added here.
