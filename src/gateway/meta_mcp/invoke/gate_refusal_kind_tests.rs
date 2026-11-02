@@ -38,6 +38,7 @@ fn decides(error: &Error) -> bool {
         | Error::AuthorizationPending { .. }
         | Error::Tls(_)
         | Error::JsonRpc { .. }
+        | Error::BackendJsonRpc { .. }
         | Error::GatewayRefused { .. }
         | Error::CliCredentialRefused { .. }
         | Error::JsonRpcRetryable { .. }
