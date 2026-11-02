@@ -95,16 +95,32 @@ fn f9e_a_resume_in_a_rotated_segment_crosses_into_the_next_without_restarting() 
 #[test]
 fn f11_two_connections_each_resume_their_own_search() {
     let mut a = suspended(calls(1));
-    // A second connection on the same log, its cursor one record further.
-    let mut b_search = Search::default();
-    let l = log(&a.path, StreamKind::Activity);
+    // A second connection on the same log and cursor, suspended at another
+    // offset by a smaller first budget.
+    let path = a.path.clone();
+    let l = log(&path, StreamKind::Activity);
     let stop = a.w.marks.last().unwrap().clone();
-    let b_cursor = a.w.marks[2].clone();
-    let b_first = suspend(&l, &b_cursor, &stop, &mut b_search);
+    let cursor = a.cursor();
+    let half = Budget {
+        rows: 200,
+        bytes: SMALL.bytes / 2,
+    };
+    let mut b_search = Search::default();
+    let b_first = rows_after(
+        &l,
+        Some(&cursor),
+        Some(&stop),
+        &Access::All,
+        half,
+        &mut b_search,
+    )
+    .unwrap();
+    assert!(b_first.searching, "b is suspended too");
+    assert_ne!(b_first.read_end, a.first.read_end, "at another offset");
     let a_next = a.resume();
     let b_next = rows_after(
         &l,
-        Some(&b_cursor),
+        Some(&cursor),
         Some(&stop),
         &Access::All,
         SMALL,
