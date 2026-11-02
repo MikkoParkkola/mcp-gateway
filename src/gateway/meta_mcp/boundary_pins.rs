@@ -4,12 +4,15 @@
 //! registry-ban lint cannot see, read from the crate's own source with `syn`.
 
 mod allow_pins;
+mod backend_json_rpc_builders;
+mod backend_json_rpc_patterns;
 mod caller_view;
 mod ci_wiring;
 mod creation_sites;
 mod delivery_framing;
 mod discarded_sends;
 mod echo_rows_real_transports;
+mod fold_sites;
 mod fragments;
 mod guard_tests;
 mod inbound_parse_sites;
