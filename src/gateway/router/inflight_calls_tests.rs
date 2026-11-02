@@ -142,3 +142,21 @@ async fn a_late_cancel_after_a_backend_echo_is_not_the_callers_cancel() {
     );
     assert!(!super::cancelled_by_caller(Some(&entry), Some(&answered)));
 }
+
+/// X1: a backend's own error that copies the client-cancel code and message
+/// exactly is not the caller's cancel; the gateway's own abort answer is.
+#[test]
+fn a_backends_look_alike_is_not_the_callers_cancel() {
+    let look_alike = crate::Error::backend_json_rpc(crate::protocol::JsonRpcError {
+        code: super::CLIENT_CANCELLED_CODE,
+        message: super::CLIENT_CANCELLED_MESSAGE.to_owned(),
+        data: None,
+    });
+    assert!(!super::is_client_cancelled(&look_alike));
+    let own = crate::Error::JsonRpc {
+        code: super::CLIENT_CANCELLED_CODE,
+        message: super::CLIENT_CANCELLED_MESSAGE.to_owned(),
+        data: None,
+    };
+    assert!(super::is_client_cancelled(&own), "control");
+}

@@ -136,7 +136,9 @@ pub(crate) fn register() {
          limits included, are not. This is the client-received view. mcp_backend_requests_total is the backend-side view: \
          it does not count circuit-open refusals before dispatch and counts forwarded JSON-RPC \
          errors as status=ok. mcp_jsonrpc_requests_total{status=error} counts JSON-RPC errors \
-         on /mcp only. A tool result with isError: true is not an error here."
+         on /mcp only. A tool's own isError: true result is not an error here; a failure \
+         the gateway answers as an isError result (a meta-route dispatch failure, a refusal, \
+         a playbook or chain ending on a failed step) counts once, by whose failure it is."
     );
     // Zero series, so a dashboard sees every kind before the first error.
     for kind in ErrorKind::ALL {

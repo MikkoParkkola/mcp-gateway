@@ -485,3 +485,59 @@ async fn an_open_breaker_still_reports_circuit_open_and_counts() {
         "an open breaker is still a failure sample"
     );
 }
+
+/// A backend's own JSON-RPC error and the same error the gateway built get the
+/// same budget class for every code: the budget reads neither variant by its
+/// code, only the gateway's throttles and a rate-limit message. Fails if one
+/// variant is given an arm the other lacks.
+#[test]
+fn a_backend_json_rpc_error_is_classed_as_its_gateway_twin() {
+    let cases = [
+        (-32602, "Invalid params", BudgetOutcome::Failure),
+        (-32001, "Not found", BudgetOutcome::Failure),
+        (
+            -32000,
+            "rate limit exceeded",
+            BudgetOutcome::IgnoredRateLimit,
+        ),
+    ];
+    for (code, message, expected) in cases {
+        let gateway = Error::json_rpc(code, message);
+        let backend = Error::backend_json_rpc(crate::protocol::JsonRpcError {
+            code,
+            message: message.to_owned(),
+            data: None,
+        });
+        assert_eq!(
+            BudgetOutcome::of_error(&gateway),
+            expected,
+            "{code} {message}"
+        );
+        assert_eq!(
+            BudgetOutcome::of_error(&backend),
+            BudgetOutcome::of_error(&gateway),
+            "{code} {message}: the backend's error is classed apart from its twin"
+        );
+    }
+}
+
+/// A2 (control): the budget probe rebuilds a frame a backend wrote as the
+/// backend's error, and a backend's -32001 there is a failure against the
+/// backend, never excused as a refusal of the caller.
+#[test]
+fn a_backend_written_frame_is_a_failure_through_the_budget_probe() {
+    let mut frame = crate::protocol::JsonRpcResponse::error(
+        Some(crate::protocol::RequestId::Number(1)),
+        -32001,
+        "backend says no",
+    );
+    frame.wire_meta.origin = crate::protocol::Origin::Backend;
+    let outcome = super::dispatch_guards::DirectOutcome::from_response(&Ok(frame));
+    assert!(
+        matches!(
+            outcome,
+            super::dispatch_guards::DirectOutcome::Failure { .. }
+        ),
+        "{outcome:?}"
+    );
+}

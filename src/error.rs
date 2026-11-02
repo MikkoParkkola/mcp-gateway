@@ -78,6 +78,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         | Error::AuthorizationPending { .. }
 ///         | Error::Tls(..)
 ///         | Error::JsonRpc { .. }
+///         | Error::BackendJsonRpc { .. }
 ///         | Error::CliCredentialRefused { .. }
 ///         | Error::JsonRpcRetryable { .. }
 ///         | Error::GatewayRefused { .. }
@@ -124,6 +125,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         | Error::AuthorizationPending { .. }
 ///         | Error::Tls(..)
 ///         | Error::JsonRpc { .. }
+///         | Error::BackendJsonRpc { .. }
 ///         | Error::CliCredentialRefused { .. }
 ///         | Error::JsonRpcRetryable { .. }
 ///         | Error::GatewayRefused { .. }
@@ -452,6 +454,26 @@ pub enum Error {
         data: Option<serde_json::Value>,
     },
 
+    /// A backend's own JSON-RPC error: the error member of an answer it sent.
+    ///
+    /// Backend-owned: only `Error::backend_json_rpc` builds it, from the
+    /// error member a backend sent (the HTTP transport's non-retry refusal,
+    /// the meta route's in-band answer, a list drain's page). It reads exactly
+    /// as the [`Error::JsonRpc`] it replaces (same code, same text), so the
+    /// wire is unchanged; the variant is what tells a consumer that the code
+    /// is the backend's, not the gateway's: it counts as the backend's error,
+    /// and it never reads as one of the gateway's own signals (an account
+    /// refusal, an audit denial, a recovery key).
+    #[error("JSON-RPC error {code}: {message}")]
+    BackendJsonRpc {
+        /// Error code the backend sent
+        code: i32,
+        /// Error message the backend sent
+        message: String,
+        /// Error data the backend sent
+        data: Option<serde_json::Value>,
+    },
+
     /// A gateway decision refused this call: the operator kill switch, a
     /// capability disable, attestation, a spend limit.
     ///
@@ -541,6 +563,15 @@ impl Error {
             code,
             message: message.into(),
             data: None,
+        }
+    }
+
+    /// A backend's own JSON-RPC error member: see [`Error::BackendJsonRpc`].
+    pub(crate) fn backend_json_rpc(error: crate::protocol::JsonRpcError) -> Self {
+        Self::BackendJsonRpc {
+            code: error.code,
+            message: error.message,
+            data: error.data,
         }
     }
 
@@ -640,6 +671,8 @@ impl Error {
             | Self::Tls(_)
             | Self::CliCredentialRefused { .. }
             | Self::JsonRpcRetryable { .. }
+            // A backend's own answer: its request reached the backend.
+            | Self::BackendJsonRpc { .. }
             | Self::Io(_)
             | Self::Json(_)
             | Self::Http(_)
@@ -697,41 +730,6 @@ impl Error {
                 | Self::AuthorizationRequired { .. }
                 | Self::AuthorizationPending { .. }
         )
-    }
-
-    /// Convert to JSON-RPC error code
-    #[must_use]
-    pub fn to_rpc_code(&self) -> i32 {
-        match self {
-            Self::JsonRpc { code, .. }
-            | Self::GatewayRefused { code, .. }
-            | Self::JsonRpcRetryable { code, .. }
-            | Self::Forbidden { code, .. } => *code,
-            Self::Json(_) => rpc_codes::PARSE_ERROR, // Parse error
-            Self::Protocol(_) | Self::ResponseFirewallRefused => rpc_codes::INVALID_REQUEST, // Invalid request
-            Self::BackendNotFound(_) | Self::ToolNotFound(_) | Self::AmbiguousBackend { .. } => {
-                -32001
-            }
-            Self::AuditUnavailable => -32005,
-            Self::CliCredentialRefused { .. } => {
-                crate::security::http_diagnostics::CLI_UNAUTHORIZED
-            }
-            Self::BackendUnavailable(_)
-            | Self::CircuitOpen { .. }
-            | Self::RateLimited(_)
-            | Self::IdentitySlotsExhausted { .. }
-            | Self::BackendTimeout(_)
-            | Self::Transport(_)
-            // A connect failure is the same class on the wire; the variant
-            // exists for settlement, not for the caller.
-            | Self::TransportConnect(_)
-            // Same class as `Transport` to a JSON-RPC caller: a backend-side
-            // failure, not a gateway fault. Omitting it reported a missing
-            // backend command as an internal error.
-            | Self::TransportPermanent(_) => -32000,
-            Self::Http(e) if origin::http_is_backend_refusal(e) => -32000,
-            _ => rpc_codes::INTERNAL_ERROR, // Internal error
-        }
     }
 }
 

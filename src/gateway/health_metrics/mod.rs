@@ -33,18 +33,30 @@ pub(crate) struct RpcError {
 }
 
 impl RpcError {
-    /// The error `frame` carries, with the origin its off-wire marker names.
+    /// The error `frame` carries, with the origin its off-wire marker names;
+    /// else the failure it carries folded into a tool result. Its own error
+    /// always wins over a fold.
     pub(crate) fn of_frame(frame: &crate::protocol::JsonRpcResponse) -> Option<Self> {
-        let error = frame.error.as_ref()?;
+        let Some(error) = frame.error.as_ref() else {
+            return frame.wire_meta.folded;
+        };
         Some(Self {
             code: error.code,
             origin: frame.wire_meta.origin,
         })
     }
 
-    /// The error in an answer rendered as a JSON value, written by `origin`.
-    pub(crate) fn of_value(answer: &serde_json::Value, origin: Origin) -> Option<Self> {
-        let code = answer.get("error")?.get("code")?.as_i64()?;
+    /// The error in an answer rendered as a JSON value, written by `origin`;
+    /// else `folded`, the failure it carries folded into a tool result.
+    pub(crate) fn of_value(
+        answer: &serde_json::Value,
+        origin: Origin,
+        folded: Option<Self>,
+    ) -> Option<Self> {
+        let Some(error) = answer.get("error") else {
+            return folded;
+        };
+        let code = error.get("code")?.as_i64()?;
         Some(Self {
             code: i32::try_from(code).ok()?,
             origin,
