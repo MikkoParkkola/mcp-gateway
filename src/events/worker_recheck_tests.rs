@@ -465,3 +465,74 @@ async fn a_subscription_expiring_during_the_second_verdict_is_not_sent() {
 mod admission;
 #[path = "worker_detect_gate_tests.rs"]
 mod detect_gate;
+
+/// A source that admits every ask at once.
+struct Open;
+
+#[async_trait::async_trait]
+impl crate::events::EventSource for Open {
+    fn kind(&self) -> SourceKind {
+        SourceKind::RestWatch
+    }
+    fn descriptors(&self) -> Vec<crate::events::types::EventDescriptor> {
+        vec![descriptor("probe.open", SourceKind::RestWatch)]
+    }
+    fn matches(
+        &self,
+        _principal: &str,
+        _arguments: &serde_json::Value,
+        _event: &crate::events::fanout::SourceEvent,
+        _now: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        true
+    }
+    async fn authorize(&self, _p: &str, _n: &str, _a: &serde_json::Value) -> Result<(), RpcError> {
+        Ok(())
+    }
+}
+
+/// A subscription stored before holders were bound to their secret names no
+/// secret. Its first check after the upgrade is terminal: nothing is sent,
+/// the attempt ends `access_revoked`, and the row is deleted, though its key
+/// is live. The control, bound to the key's current secret, is sent and kept.
+#[tokio::test]
+async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check() {
+    for tagged in [true, false] {
+        let dir = tempfile::tempdir().expect("dir");
+        let hub = open_hub(dir.path());
+        hub.register_source(Arc::new(Open) as Arc<dyn crate::events::EventSource>);
+        let services = logged_services(dir.path());
+        services.live.set(keyed());
+        let (port, accepted) = counting_callback().await;
+        let tag = crate::gateway::auth::principal_of(SECRET)
+            .storage_form()
+            .to_owned();
+        queued_with(&hub, port, "evt_key", "probe.open", |sub, _| {
+            sub.credential_kind = Some(crate::security::audit::CredentialKind::ApiKey);
+            sub.api_key = Some(ApiKeyRef {
+                name: "k".to_owned(),
+                principal: tag.clone(),
+                digest_tag: tagged.then(|| tag.clone()),
+            });
+        });
+        tokio::time::timeout(Duration::from_secs(20), hub.attempt(&services, "evt_key"))
+            .await
+            .expect("the attempt finished");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            accepted.load(Ordering::SeqCst) >= 1,
+            tagged,
+            "sent only when bound (tagged {tagged})"
+        );
+        assert_eq!(
+            hub.store.subscriptions().is_empty(),
+            !tagged,
+            "deleted only when unbound (tagged {tagged})"
+        );
+        if !tagged {
+            let ended = audit_actions(dir.path(), "events.delivery_outcome");
+            assert_eq!(ended.len(), 1, "{ended:?}");
+            assert_eq!(ended[0]["status"], "access_revoked");
+        }
+    }
+}
