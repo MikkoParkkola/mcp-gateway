@@ -86,7 +86,7 @@ mod decision;
 #[path = "audit_replay.rs"]
 mod replay;
 pub(crate) use decision::{
-    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal,
+    after_upstream_401, note_declared_effect, note_refused_by, note_send_refusal, take_refusal,
     take_refusal_kind, take_route_noted, with_route_scope,
 };
 

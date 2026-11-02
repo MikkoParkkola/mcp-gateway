@@ -87,6 +87,15 @@ pub(crate) fn take_refusal_kind() -> Option<crate::security::decision_record::De
         .or(route)
 }
 
+/// [`take_refusal_kind`] with the refusing rule's id: the pair a withheld
+/// refusal's memo keeps, so its record names both.
+pub(crate) fn take_refusal() -> Option<(
+    crate::security::decision_record::DecisionKind,
+    Option<crate::security::rule_id::RuleId>,
+)> {
+    take_refusal_kind().map(|kind| (kind, Some(crate::security::rule_id::stub_id().clone())))
+}
+
 /// Run a request's route stage with a decision scope of its own.
 ///
 /// A plain `fn`, not an `async fn`: an async wrapper's state holds `future`
