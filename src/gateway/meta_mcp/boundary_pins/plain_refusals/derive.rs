@@ -316,6 +316,7 @@ impl Collect {
                     value,
                     method: false,
                     combinator,
+                    ..
                 } => {
                     // Inside delivery_facts.rs a bare name is a raise only when
                     // called: a local such as `refused` in `step` is not one.
