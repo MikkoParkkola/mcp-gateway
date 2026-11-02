@@ -101,7 +101,19 @@ fn fill(covered: &mut Vec<bool>, len: usize, from: usize, to: usize) {
 /// One automaton over `needles`, or `None` when it cannot be built (a needle
 /// set past the automaton's size limits): the caller then fails closed.
 fn matcher(needles: &[&str]) -> Option<AhoCorasick> {
+    #[cfg(test)]
+    if FAIL_MATCHER_BUILD.with(std::cell::Cell::get) {
+        return None;
+    }
     AhoCorasick::new(needles).ok()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Fails every automaton build on this thread, as a needle set past the
+    /// automaton's size limits would (about 2^31 states or bytes, which no
+    /// test can build), so the fail-closed paths can be reached.
+    static FAIL_MATCHER_BUILD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Suffixed names tried for a renamed key before its entry is dropped.
@@ -557,3 +569,7 @@ pub(crate) fn credential_spans(text: &str) -> Vec<(usize, usize)> {
 #[cfg(test)]
 #[path = "secret_redaction_number_tests.rs"]
 mod number_tests;
+
+#[cfg(test)]
+#[path = "secret_redaction_fail_closed_tests.rs"]
+mod fail_closed_tests;
