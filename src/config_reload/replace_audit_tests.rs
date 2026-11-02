@@ -517,3 +517,66 @@ async fn a_context_reporting_into_the_audit_log_records_its_recovery() {
         "the recovery left no intent in the audit log: {audit}"
     );
 }
+
+/// A public URL over open tools: the loader's posture check refuses it.
+const EXPOSED: &str = concat!(
+    "server:\n  public_url: \"https://gw.public.test\"\n",
+    "# operator's note\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\" # first\n",
+);
+
+/// The operation's own intent follows the checks on the new bytes: an
+/// audited save the loader refuses is refused and records no intent.
+#[tokio::test]
+async fn a_save_the_loader_refuses_records_no_intent() {
+    let (_dir, path, ctx) = setup();
+    let recorder = Recorder::new(&path, false);
+
+    let result = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, EXPOSED, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await;
+
+    assert!(
+        matches!(result, Err(ReplaceError::ReloadRefused(_))),
+        "{result:?}"
+    );
+    assert_eq!(read(&path), START);
+    assert_eq!(
+        recorder.kinds(),
+        [],
+        "a save refused by its checks left an operation intent"
+    );
+}
+
+/// A save whose bytes are already the file's writes nothing, so it records
+/// no intent.
+#[tokio::test]
+async fn an_unchanged_save_records_no_intent() {
+    let (_dir, path, ctx) = setup();
+    let recorder = Recorder::new(&path, false);
+
+    let outcome = replace_audited(
+        Arc::clone(&ctx),
+        to(Expected::Any, START, Replaced::Discard),
+        Audit::Required {
+            sink: Box::new(recorder.clone()),
+            kind: IntentKind::Save,
+        },
+        WAIT,
+    )
+    .await
+    .expect("an unchanged save goes ahead");
+
+    assert_eq!(outcome.revision, None, "the unchanged save wrote");
+    assert_eq!(
+        recorder.kinds(),
+        [],
+        "an unchanged save left an operation intent"
+    );
+}
