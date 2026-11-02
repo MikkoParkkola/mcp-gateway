@@ -113,8 +113,22 @@ fn every_listing_field_is_escaped() {
     );
 }
 
+/// A report keyed by a fixed record key, so its ids are stable and it carries
+/// no note that they are for one run.
 fn report(servers: &[DiscoveredServer], config: &Path) -> ShadowScanReport {
-    ShadowScanReport::from_discovered(servers, &HashSet::new(), Some(config))
+    let data_dir = tempfile::tempdir().expect("data dir");
+    mcp_gateway::gateway::test_helpers::write_owner_only(
+        data_dir.path().join("record-principal.key"),
+        "ab".repeat(32),
+    )
+    .expect("key file");
+    ShadowScanReport::from_discovered(
+        servers,
+        &HashSet::new(),
+        Some(config),
+        None,
+        data_dir.path(),
+    )
 }
 
 /// The shadow report escapes the name, endpoint and executable, and keeps
@@ -133,13 +147,6 @@ fn every_shadow_field_is_escaped() {
             with_command("tool", &format!("np{TOKEN}x tool")),
             with_command("tool", "npx tool"),
         ),
-        (
-            "endpoint",
-            // Unparseable, so redaction's fallback echoes it: the row can
-            // go red.
-            http("tool", &format!("{PAYLOAD}not-a-url")),
-            http("tool", "not-a-url"),
-        ),
     ];
     for (field, hostile, plain) in rows {
         let text = render_shadow_report(&report(&[hostile], config));
@@ -156,6 +163,33 @@ fn every_shadow_field_is_escaped() {
             "{field}: a line was forged: {text:?}"
         );
     }
+}
+
+/// An endpoint the radar cannot parse to an origin is not shown at all, so a
+/// hostile one never reaches the report: no raw character, no forged line,
+/// and none of its text.
+#[test]
+fn an_unparseable_endpoint_is_not_shown() {
+    let config = Path::new("/home/me/gateway.yaml");
+    let hostile = render_shadow_report(&report(
+        &[http("tool", &format!("{PAYLOAD}not-a-url"))],
+        config,
+    ));
+    let plain = render_shadow_report(&report(&[http("tool", "not-a-url")], config));
+    assert_clean("endpoint", &hostile);
+    assert!(
+        !hostile.contains("not-a-url"),
+        "the endpoint was shown: {hostile}"
+    );
+    assert!(
+        !hostile.contains("Endpoint:"),
+        "an endpoint line was printed: {hostile}"
+    );
+    assert_eq!(
+        hostile.lines().count(),
+        plain.lines().count(),
+        "a line was forged: {hostile:?}"
+    );
 }
 
 /// A command holding a hidden character is withheld, never printed
