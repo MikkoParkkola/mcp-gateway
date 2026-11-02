@@ -35,11 +35,17 @@ fn with_maps_and(extra: &str, body: &str) -> usize {
     .len()
 }
 
-/// Each `(form, source, hits)` row, asserted alone.
+/// Each `(form, source, hits)` row, every one checked before any fails, so a
+/// red run names each row that is wrong.
 fn rows(cases: &[(&str, &str, usize)]) {
-    for (form, src, want) in cases {
-        assert_eq!(with_maps(src), *want, "{form}");
-    }
+    let wrong: Vec<String> = cases
+        .iter()
+        .filter_map(|(form, src, want)| {
+            let got = with_maps(src);
+            (got != *want).then(|| format!("{form}: {got} hits, want {want}"))
+        })
+        .collect();
+    assert!(wrong.is_empty(), "rows wrong:\n{}", wrong.join("\n"));
 }
 
 #[test]
