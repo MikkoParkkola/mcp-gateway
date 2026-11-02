@@ -393,6 +393,8 @@ fn the_challenge_gate_scans_a_prompt_as_it_is_delivered() {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

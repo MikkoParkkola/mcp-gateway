@@ -54,6 +54,17 @@ pub(crate) enum Effect {
     Undeclared,
 }
 
+/// Where a declared effect came from: always a claim, never a gateway
+/// guarantee.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum EffectSource {
+    /// The backend tool's own `readOnlyHint`.
+    ToolAnnotation,
+    /// The operator's capability definition.
+    CapabilityDefinition,
+}
+
 /// Whether the call was decided for itself, or carried an earlier decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -99,8 +110,15 @@ pub(crate) struct Decision {
     /// (`response_effect`), never this object's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub declared_effect: Option<Effect>,
+    /// Who declared `declared_effect`; present exactly when it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declared_effect_source: Option<EffectSource>,
     pub decided: Decided,
 }
+
+/// The decision object version this gateway writes: version 2 records carry
+/// the declared effect.
+pub(crate) const DECISION_VERSION: u8 = 2;
 
 /// Whether the record being written is of a refused call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,7 +140,8 @@ impl Refused {
 }
 
 /// Which check decided one call, as its gates noted it: the first refusal,
-/// else the earliest explicit allow.
+/// else the earliest explicit allow; plus the declared effect, which every
+/// decision carries whichever check won.
 ///
 /// One pointer wide, boxed only once a gate notes something: it rides in the
 /// task-local call and route scopes, which move it in and out on every poll,
@@ -134,6 +153,7 @@ pub(crate) struct Noted(Option<Box<NotedChecks>>);
 struct NotedChecks {
     refusal: Option<(DecisionKind, Option<String>)>,
     allow: Option<(DecisionKind, Option<String>)>,
+    effect: Option<(Effect, EffectSource)>,
 }
 
 impl Noted {
@@ -178,6 +198,22 @@ impl Noted {
         self.checks().allow.get_or_insert((kind, rule_id));
     }
 
+    /// What the tool declares the call could change, as this call read it.
+    pub(crate) fn note_effect(&mut self, effect: Effect, source: EffectSource) {
+        self.checks().effect = Some((effect, source));
+    }
+
+    /// The notes for a call answered without deciding it again (a cache hit):
+    /// no refusal and no allow of its own, but the declared effect this
+    /// call's admission established.
+    pub(crate) fn as_not_redecided(&self) -> Self {
+        let mut noted = Self::not_redecided();
+        if let Some(held) = self.0.as_deref() {
+            noted.checks().effect = held.effect;
+        }
+        noted
+    }
+
     /// The decision object for this call under the published config `live`.
     ///
     /// A refused call that noted no check records `unrecorded`, never an
@@ -219,7 +255,7 @@ impl Noted {
             .filter(|running| config_revision.as_deref() != Some(*running))
             .map(str::to_owned);
         Decision {
-            v: 1,
+            v: DECISION_VERSION,
             config_revision,
             running_revision,
             pending_restart: applied
@@ -230,7 +266,8 @@ impl Noted {
             grant_id: None,
             request_findings: None,
             request_findings_truncated: false,
-            declared_effect: None,
+            declared_effect: self.0.as_deref().and_then(|c| c.effect.map(|(e, _)| e)),
+            declared_effect_source: self.0.as_deref().and_then(|c| c.effect.map(|(_, s)| s)),
             decided,
         }
     }
@@ -239,3 +276,7 @@ impl Noted {
 #[cfg(test)]
 #[path = "decision_record_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "decision_record_writer_tests.rs"]
+mod writer_tests;

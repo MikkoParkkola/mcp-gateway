@@ -208,7 +208,11 @@ impl MetaMcp {
         }
         // MIK-8137 b1: the chokepoint, before anything marks this send.
         let answers = outbound_retry.input_responses.as_ref();
-        let outbound = chokepoint::Outbound { arguments, answers };
+        let outbound = chokepoint::Outbound {
+            arguments,
+            answers,
+            backend: call.backend.as_deref(),
+        };
         let source = chokepoint::Source::of_call(answers);
         let permit = match self.chokepoint(
             caller.scope(),
