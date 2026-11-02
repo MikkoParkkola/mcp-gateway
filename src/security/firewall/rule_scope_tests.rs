@@ -279,6 +279,7 @@ fn keyed(fw: &Firewall, key: KeyOf<'_>) -> FirewallAction {
         &injected(),
         "caller",
         "caller",
+        None,
     )
     .action
 }
@@ -308,6 +309,8 @@ fn a_keys_scoped_rule_applies_to_its_key_only_rescan() {
                 key,
             },
             &injected(),
+            super::ScanSubject::Arguments,
+            None,
         )
         .action
     };

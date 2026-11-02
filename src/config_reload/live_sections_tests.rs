@@ -544,6 +544,8 @@ fn a_policy_field_edit_alone_reports_no_restart() {
                 servers: None,
                 keys: None,
                 except: None,
+                allowed_roots: None,
+                path_args: None,
             }];
         }),
         ("firewall.credential_redaction", |c| {
