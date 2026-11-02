@@ -13,6 +13,14 @@
 
 mod admission_allocations;
 pub(crate) mod alloc_meter;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_capability_rows;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_route_rows;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_routes;
+#[cfg(all(unix, feature = "firewall"))]
+mod allowed_root_secret_rows;
 mod descriptor_copies;
 mod fresh_slot_verdict;
 mod input_key_allocations;
@@ -96,6 +104,8 @@ mod owner5_stdio_context;
 mod owner1_stdio_management;
 mod owner1_stdio_reload;
 mod owner4_stdio_policy;
+#[cfg(feature = "cost-governance")]
+mod stdio_live_budget;
 
 // MIK-7272.LIFE.1 (the sub4 stdio owner test plan, I3).
 mod life1_stdio_cancel;

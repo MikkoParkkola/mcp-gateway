@@ -268,6 +268,8 @@ async fn discovery_inspection_reads_the_unescaped_value() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     // Built at run time so no key-shaped literal sits in the source.
     let secret = "A".repeat(20);

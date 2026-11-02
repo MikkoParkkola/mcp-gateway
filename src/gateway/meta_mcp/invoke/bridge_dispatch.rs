@@ -238,6 +238,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 cost_key: self.caller.cost_key(),
                 trace_id: "",
                 caller_key: None,
+                generation: self.caller.generation,
             })
             .map_err(|e| {
                 // A spend refusal ends the exchange as the delivered refusal.
@@ -307,6 +308,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         let sent = super::chokepoint::Outbound {
             arguments: self.arguments,
             answers: outbound.input_responses.as_ref(),
+            backend: self.captured.as_deref(),
         };
         let at = (self.server, self.tool);
         let source = super::chokepoint::Source::Bridged;
@@ -343,7 +345,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
                 self.headers,
                 self.cache_binding,
                 self.account_credential.clone(),
-                self.caller.cost_key(),
+                (self.caller.cost_key(), self.caller.generation),
                 self.trace_id,
                 self.policy_epoch,
                 self.protocol_revision,

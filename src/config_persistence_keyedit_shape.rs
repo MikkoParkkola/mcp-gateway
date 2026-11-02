@@ -60,9 +60,10 @@ fn slot_mut<'v>(node: &'v mut Value, path: &[Segment]) -> Option<&'v mut Value> 
     slot_mut(child, rest)
 }
 
-/// Remove the key at `path`, if present, then every mapping on the way that
-/// this left empty. A missing key, or a path into a sequence element that
-/// does not exist, changes nothing.
+/// Remove the key or list element at `path`, if present (later elements
+/// shift down), then every mapping on the way that this left empty, and a
+/// list it emptied (only `auth.api_keys` gets here). A missing key, or a
+/// path into a sequence element that does not exist, changes nothing.
 fn remove(node: &mut Value, path: &[Segment]) -> bool {
     let Some((first, rest)) = path.split_first() else {
         return false;
@@ -79,15 +80,21 @@ fn remove(node: &mut Value, path: &[Segment]) -> bool {
                 return false;
             };
             let removed = remove(child, rest);
-            if removed && child.as_mapping().is_some_and(Mapping::is_empty) {
+            let emptied = child.as_mapping().is_some_and(Mapping::is_empty)
+                || child.as_sequence().is_some_and(Vec::is_empty);
+            if removed && emptied {
                 map.shift_remove(key.as_str());
             }
             removed
         }
-        Segment::Index(at) => node
-            .as_sequence_mut()
-            .and_then(|seq| seq.get_mut(*at))
-            .is_some_and(|child| remove(child, rest)),
+        Segment::Index(at) => match node.as_sequence_mut() {
+            Some(seq) if rest.is_empty() && *at < seq.len() => {
+                seq.remove(*at);
+                true
+            }
+            Some(seq) => seq.get_mut(*at).is_some_and(|child| remove(child, rest)),
+            None => false,
+        },
     }
 }
 
@@ -227,6 +234,17 @@ impl Lines {
             let kept = last.trim_end_matches(['\n', '\r']).len();
             last.truncate(kept);
         }
+    }
+
+    /// The original lines still in the text, kept or with a value replaced.
+    pub(super) fn surviving(&self) -> std::collections::BTreeSet<usize> {
+        self.lines
+            .iter()
+            .filter_map(|(_, origin)| match origin {
+                Origin::Kept(i) | Origin::Replaced { line: i, .. } => Some(*i),
+                Origin::Inserted => None,
+            })
+            .collect()
     }
 
     /// Proof 2: original lines appear in order; a kept line is byte-identical
@@ -492,11 +510,24 @@ fn attach_refusal(nodes: &[Node], node: &Node, next: &Segment) -> Option<Compute
     }
 }
 
+/// What a removal does with a comment on a line it deletes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommentRule {
+    /// Give up: the operator's text is never deleted silently.
+    Refuse,
+    /// Delete it; the caller reports it (a revocation and its cascade).
+    Drop,
+}
+
 /// Delete the entry at `path` and the lines under it. A missing entry is a
-/// no-op (`Ok(false)`). Gives up rather than delete operator text: a `#`
-/// anywhere in the deleted lines, or a comment line indented under the
-/// entry right after them.
-pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, ComputeRefusal> {
+/// no-op (`Ok(false)`). Under [`CommentRule::Refuse`] it gives up rather
+/// than delete operator text: a `#` anywhere in the deleted lines, or a
+/// comment line indented under the entry right after them.
+pub(super) fn remove_entry(
+    lines: &mut Lines,
+    path: &[Segment],
+    rule: CommentRule,
+) -> Result<bool, ComputeRefusal> {
     let text = lines.text();
     let nodes = nodes(&text)?;
     let Some(node) = find(&nodes, path) else {
@@ -528,7 +559,20 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
             "the key sits on its element's dash line",
         ));
     }
-    let mut last = lines.line_of(node.end.saturating_sub(1).max(key.start));
+    // The last line holding a non-space byte of the entry: a block scalar's
+    // span ends in the next line's indentation, or past trailing blank lines.
+    let span = &text[node.start..node.end.min(text.len())];
+    let last_byte = node.start + span.trim_end().len().saturating_sub(1);
+    let mut last = lines.line_of(last_byte.max(key.start));
+    // Blank lines wholly inside the span are the entry's (a block scalar's
+    // trailing lines, which a `|+` scalar above would otherwise take).
+    let end = node.end.min(text.len());
+    while last + 1 < lines.len()
+        && lines.content(last + 1).trim().is_empty()
+        && lines.line_start(last + 2) <= end
+    {
+        last += 1;
+    }
     // Comment and blank lines indented under the entry belong to it.
     // Blank lines between them do not end that.
     let mut next = last + 1;
@@ -545,7 +589,7 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
         last = next;
         next += 1;
     }
-    if (first..=last).any(|n| lines.content(n).contains('#')) {
+    if rule == CommentRule::Refuse && (first..=last).any(|n| lines.content(n).contains('#')) {
         return Err(give_up(GiveUp::Comment, "a deleted line carries a comment"));
     }
     lines.delete(first..last + 1);
@@ -553,11 +597,14 @@ pub(super) fn remove_entry(lines: &mut Lines, path: &[Segment]) -> Result<bool, 
 }
 
 /// After the removals: every mapping on a removed path's way that was a
-/// mapping in `before` and is now empty goes too, deepest first.
+/// mapping in `before` and is now empty goes too, deepest first; on a
+/// revocation's way (`revoked`) so does the list it emptied, and the
+/// comments on those lines are dropped, not refused.
 pub(super) fn drop_emptied(
     lines: &mut Lines,
     before: &[Node],
     removed: &[&[Segment]],
+    revoked: Option<&[Segment]>,
 ) -> Result<(), ComputeRefusal> {
     let mut parents: Vec<&[Segment]> = removed
         .iter()
@@ -567,11 +614,18 @@ pub(super) fn drop_emptied(
     parents.sort_by_key(|p| std::cmp::Reverse(p.len()));
     parents.dedup();
     for parent in parents {
-        let was_mapping = find(before, parent).is_some_and(|n| n.shape == Shape::Mapping);
+        let rule = if revoked.is_some_and(|r| r.starts_with(parent)) {
+            CommentRule::Drop
+        } else {
+            CommentRule::Refuse
+        };
+        let was_collection = find(before, parent).is_some_and(|n| {
+            n.shape == Shape::Mapping || (rule == CommentRule::Drop && n.shape == Shape::Sequence)
+        });
         let now = nodes(&lines.text())?;
         let emptied = find(&now, parent).is_some_and(|n| n.shape == Shape::Scalar { empty: true });
-        if was_mapping && emptied {
-            remove_entry(lines, parent)?;
+        if was_collection && emptied {
+            remove_entry(lines, parent, rule)?;
         }
     }
     Ok(())

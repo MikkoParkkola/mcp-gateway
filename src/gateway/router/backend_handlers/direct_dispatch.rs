@@ -218,6 +218,7 @@ pub(super) async fn admit<'a>(
         cost_key: client.and_then(|c| c.api_key_identity()),
         trace_id: "",
         caller_key,
+        generation: Some(&*caller.generation),
     };
     let auth = BackendAuthContext {
         generation: &caller.generation,
@@ -320,7 +321,7 @@ async fn finish_response(
     );
     if method == "tools/list" {
         if response.error.is_none() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
         super::normalize_tools_list_response(&route.backend, &mut response);
         // List = invoke: only what this route's `tools/call` admits.
@@ -338,7 +339,7 @@ async fn finish_response(
         );
     } else if method != "tools/call" {
         if !response.excludes_client_accounting() {
-            super::record_client_success(state, client);
+            super::client_outcome::record_client_success(state, client);
         }
     } else {
         super::stamp_direct_provenance(
@@ -538,6 +539,7 @@ pub(super) fn screen_target<'a>(call: &BackendCall<'a>, method: &'a str) -> Back
         cost_key: call.cost_key,
         trace_id: call.trace_id,
         caller_key: call.caller_key,
+        generation: call.generation,
     }
 }
 

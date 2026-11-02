@@ -164,11 +164,51 @@ pub enum BackendGrant<'a> {
 
 impl<'a> BackendGrant<'a> {
     pub(crate) fn of(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
-        match client {
-            None => Self::Unscoped,
-            Some(client) if client.backends.iter().any(|b| b == "*") => Self::Unscoped,
-            Some(client) if client.backends.is_empty() => Self::Empty,
-            Some(client) => Self::Scoped(&client.backends),
+        client.map_or(Self::Unscoped, |client| Self::of_list(&client.backends))
+    }
+
+    /// The grant a `backends` list makes, for a caller holding the list
+    /// apart from its client (an Activity read outlives the request).
+    pub(crate) fn of_list(backends: &'a [String]) -> Self {
+        if backends.iter().any(|b| b == "*") {
+            Self::Unscoped
+        } else if backends.is_empty() {
+            Self::Empty
+        } else {
+            Self::Scoped(backends)
+        }
+    }
+
+    /// The grant the web UI reads and administers by. An admin key with an
+    /// empty backend list is a UI-wide admin that calls no backend; a
+    /// non-empty list without `*` narrows the UI to those backends, admin or
+    /// not. Every other case is [`Self::of`].
+    #[cfg(feature = "webui")]
+    pub(crate) fn for_ui(client: Option<&'a super::auth::AuthenticatedClient>) -> Self {
+        client.map_or(Self::Unscoped, |client| {
+            Self::for_ui_list(client.admin, &client.backends)
+        })
+    }
+
+    /// `for_ui` for a key held apart from its client (the web UI's rule, used
+    /// also where a session is checked against the key that minted it).
+    pub(crate) fn for_ui_list(admin: bool, backends: &'a [String]) -> Self {
+        match Self::of_list(backends) {
+            Self::Empty if admin => Self::Unscoped,
+            grant => grant,
+        }
+    }
+
+    /// Whether this grant reaches backend `name`: the one membership test the
+    /// UI's scoped reads share, so no surface judges a scope its own way. It
+    /// agrees with `AuthenticatedClient::can_access_backend` for every grant
+    /// shape, a pinned row (MCP dispatch still reads that one).
+    #[cfg(feature = "webui")]
+    pub(crate) fn admits(self, name: &str) -> bool {
+        match self {
+            Self::Unscoped => true,
+            Self::Scoped(backends) => backends.iter().any(|b| b == name),
+            Self::Empty => false,
         }
     }
 }

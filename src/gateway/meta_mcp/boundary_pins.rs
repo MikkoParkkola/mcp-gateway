@@ -4,6 +4,7 @@
 //! registry-ban lint cannot see, read from the crate's own source with `syn`.
 
 mod allow_pins;
+mod allowed_root_pins;
 mod backend_json_rpc_builders;
 mod backend_json_rpc_patterns;
 mod caller_view;
@@ -27,6 +28,7 @@ mod live_config;
 mod live_generation;
 mod needle_attach_sites;
 mod packaged;
+mod pinned_generation;
 mod pinned_role_mapping;
 mod presend_exits;
 mod response_funnels;

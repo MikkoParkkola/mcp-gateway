@@ -16,6 +16,7 @@ fn decision(kind: DecisionKind, rule_id: Option<&str>) -> Decision {
         request_findings: Some(Vec::new()),
         request_findings_truncated: false,
         declared_effect: Some(Effect::Undeclared),
+        declared_effect_source: Some(super::EffectSource::ToolAnnotation),
         decided: Decided::Fresh,
     }
 }

@@ -204,8 +204,9 @@ impl OwnedCallerContext {
         &'a self,
         host: &LiveHost,
         authorizer: &'a HostAuthorizer<'a>,
+        generation: &'a crate::config_reload::Generation,
     ) -> MetaMcpCallerContext<'a> {
-        self.dispatch_context_retrying(host, authorizer, &self.retry)
+        self.dispatch_context_retrying(host, authorizer, (&self.retry, generation))
     }
 
     /// The retry fields of one input-round continuation: the gateway-sealed
@@ -224,12 +225,13 @@ impl OwnedCallerContext {
     }
 
     /// [`Self::dispatch_context`] carrying `retry` instead of this context's
-    /// own fields: the continuation of an input round.
+    /// own fields: the continuation of an input round. `generation` is the one
+    /// current at this dispatch; its budgets judge the spend (ADR-023).
     pub(crate) fn dispatch_context_retrying<'a>(
         &'a self,
         host: &LiveHost,
         authorizer: &'a HostAuthorizer<'a>,
-        retry: &'a RetryFields,
+        (retry, generation): (&'a RetryFields, &'a crate::config_reload::Generation),
     ) -> MetaMcpCallerContext<'a> {
         let authorizer: &'a (dyn ToolAuthorizer + Sync) = authorizer;
         MetaMcpCallerContext {
@@ -286,6 +288,7 @@ impl OwnedCallerContext {
             task: None,
             era: crate::protocol::meta::Era::Modern,
             channel: &crate::gateway::input_bridge::NoClientChannel,
+            generation: Some(generation),
         }
     }
 }

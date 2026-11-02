@@ -25,7 +25,7 @@ const ARRIVAL: Duration = Duration::from_secs(20);
 /// A capability the second step adds: a copy of
 /// `capabilities/entertainment/musicbrainz_search.yaml`, renamed. Inline
 /// because a packaged-crate build need not ship `capabilities/`.
-const CAPABILITY: &str = r#"fulcrum: "1.0"
+pub(super) const CAPABILITY: &str = r#"fulcrum: "1.0"
 name: owner1_probe
 description: Search music metadata from MusicBrainz - the open music encyclopedia. Find artists, albums, tracks, and recordings. Free, no API key required.
 
@@ -111,7 +111,7 @@ metadata:
   docs: https://musicbrainz.org/doc/MusicBrainz_API
 "#;
 
-struct Serve {
+pub(super) struct Serve {
     client: DuplexStream,
     replies: Lines<BufReader<DuplexStream>>,
     task: JoinHandle<()>,
@@ -119,15 +119,15 @@ struct Serve {
 }
 
 impl Serve {
-    fn config_path(&self) -> std::path::PathBuf {
+    pub(super) fn config_path(&self) -> std::path::PathBuf {
         self.dir.path().join("gateway.yaml")
     }
 
-    fn capabilities_dir(&self) -> std::path::PathBuf {
+    pub(super) fn capabilities_dir(&self) -> std::path::PathBuf {
         self.dir.path().join("caps")
     }
 
-    async fn send(&mut self, frame: &Value) {
+    pub(super) async fn send(&mut self, frame: &Value) {
         let mut line = serde_json::to_vec(frame).expect("a frame serialises");
         line.push(b'\n');
         self.client
@@ -137,7 +137,7 @@ impl Serve {
     }
 
     /// The next frame that answers `id`; anything else is skipped.
-    async fn reply(&mut self, id: u64) -> Value {
+    pub(super) async fn reply(&mut self, id: u64) -> Value {
         timeout(ARRIVAL, async {
             loop {
                 let line = self
@@ -156,7 +156,7 @@ impl Serve {
         .unwrap_or_else(|_| panic!("no reply for id {id} within {ARRIVAL:?}"))
     }
 
-    async fn call(&mut self, id: u64, tool: &str, key: Option<&str>) -> Value {
+    pub(super) async fn call(&mut self, id: u64, tool: &str, key: Option<&str>) -> Value {
         let mut frame = json!({"jsonrpc": "2.0", "id": id, "method": "tools/call",
             "params": {"name": tool, "arguments": {}}});
         if let Some(key) = key {
@@ -166,13 +166,13 @@ impl Serve {
         self.reply(id).await
     }
 
-    async fn close(self) {
+    pub(super) async fn close(self) {
         drop(self.client);
         drop(timeout(ARRIVAL, self.task).await);
     }
 }
 
-fn base_yaml(capabilities_dir: &std::path::Path) -> String {
+pub(super) fn base_yaml(capabilities_dir: &std::path::Path) -> String {
     // The task store beside the capabilities, never the default under $HOME.
     let tasks = capabilities_dir.with_file_name("tasks");
     format!(
@@ -185,11 +185,21 @@ fn base_yaml(capabilities_dir: &std::path::Path) -> String {
 /// A gateway serving stdio from a config file, as `run_stdio` would, after the
 /// `initialize` handshake.
 async fn serve() -> Serve {
+    serve_with("", None).await
+}
+
+/// [`serve`] over a config file with `extra` YAML after the base, and the
+/// capability `capability` already in the capabilities directory.
+pub(super) async fn serve_with(extra: &str, capability: Option<&str>) -> Serve {
     let dir = tempfile::tempdir().expect("tempdir");
     let caps = dir.path().join("caps");
     std::fs::create_dir(&caps).expect("capabilities directory");
+    if let Some(capability) = capability {
+        std::fs::write(caps.join("owner1_probe.yaml"), capability).expect("write capability");
+    }
     let path = dir.path().join("gateway.yaml");
-    crate::gateway::test_helpers::write_owner_only(&path, base_yaml(&caps)).expect("write config");
+    let yaml = format!("{}{extra}", base_yaml(&caps));
+    crate::gateway::test_helpers::write_owner_only(&path, yaml).expect("write config");
     let config = Config::load(Some(&path)).expect("config loads");
     let gateway = Gateway::new_with_path(config, Some(path))
         .await

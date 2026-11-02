@@ -223,6 +223,8 @@ async fn stdio_serves_allowed_responses_with_one_inspection() {
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }];
     let stdio = Stdio::new(&format!("uses {}", canary()), "fine", warn).await;
     let (body, inspected) = stdio

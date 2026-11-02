@@ -194,6 +194,7 @@ src/gateway/server/stdio_single.rs	dispatch_single_staged	stdio_invoke_tiny	on t
 src/gateway/server/stdio_single.rs	from_setting	-	read once at stdio start
 src/gateway/server/stdio_single.rs	observe_stdio_inbound	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_single.rs	run_stdio	-	starts the stdio loop once
+src/gateway/server/stdio_single.rs	message_generation	stdio_invoke_tiny	the generation a stdio message is judged with, on the stdio single-request path
 src/gateway/server/stdio_single.rs	stdio_caller_context	-	test-only fixture (cfg(test)); production builds build_stdio_caller_context
 src/gateway/server/stdio_single.rs	stdio_routing_keys_only	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_single.rs	stdio_take_merged_client_meta	-	on-path, untimed: only when params._meta must be merged into the arguments; the timed rows carry no _meta
