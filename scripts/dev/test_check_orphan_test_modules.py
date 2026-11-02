@@ -169,6 +169,39 @@ class TestOnlyFiles(unittest.TestCase):
         )
         self.assertEqual(found, ["src/a.rs"])
 
+class CfgIsTest(unittest.TestCase):
+    """A predicate is test-only when it is false whenever `test` is."""
+
+    def setUp(self):
+        self.judge = load_guard(Path(".")).cfg_is_test
+
+    def test_the_predicates_that_require_test(self):
+        for expr in (
+            "test",
+            "all(test, unix)",
+            'all(unix, all(test, feature = " "))',
+            "any(all(test, unix), all(test, windows))",
+            " all( test ,unix ) ",
+        ):
+            with self.subTest(expr=expr):
+                self.assertTrue(self.judge(expr))
+
+    def test_the_predicates_that_build_outside_tests(self):
+        for expr in (
+            "any(test, unix)",
+            "any(all(test, unix), windows)",
+            "all(not(test), unix)",
+            "not(test)",
+            'feature = " "',
+            "all(test_mode)",
+            "all(unix, any(test, windows))",
+            "all(test, unix",
+            "all()",
+        ):
+            with self.subTest(expr=expr):
+                self.assertFalse(self.judge(expr))
+
+
 class Blank(unittest.TestCase):
     def test_a_c_raw_string_with_an_inner_quote_blanks_only_itself(self):
         # MIK-8691: `cr#"…"#` read as a plain string ran to the end of the

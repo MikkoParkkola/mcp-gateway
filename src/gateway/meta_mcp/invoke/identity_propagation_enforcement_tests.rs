@@ -424,6 +424,7 @@ async fn legacy_caller_is_asked_in_band_and_the_backend_is_retried() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
     m.invoke_tool_traced(&args, Some("session-1"), &caller, "trace-1")
@@ -505,6 +506,7 @@ async fn a_failed_bridged_retry_does_not_free_the_idempotency_key() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
 
@@ -593,6 +595,7 @@ async fn a_bridged_retry_refused_before_dispatch_frees_the_idempotency_key() {
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &channel,
+        generation: None,
     };
     let args = json!({"server": "asks", "tool": "ask", "arguments": {}});
 

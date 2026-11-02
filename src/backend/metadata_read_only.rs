@@ -41,8 +41,9 @@ impl Backend {
         }))
     }
 
-    /// An accepted fill's own derived state: its resend and read-only sets,
-    /// and its descriptor verdicts. Written only from the store callback, so
+    /// An accepted fill's own derived state: its resend and read-only sets
+    /// (replaced by a complete fill, only narrowed by a truncated one), and
+    /// its descriptor verdicts. Written only from the store callback, so
     /// a fill voided by a mid-fill invalidation writes none of it (F13,
     /// #1441, MIK-8393).
     pub(super) fn store_prepared(
@@ -55,8 +56,23 @@ impl Backend {
         // Emptied first and published last: until then no name reads
         // undeclared from a mix of the old and new sets.
         entry.effect_listed.write().clear();
-        *entry.resend_permitted.write() = prepared.resend_permitted;
-        *entry.read_only_declared.write() = prepared.read_only_declared;
+        if truncated {
+            // A page the fill never reached may list a name again without
+            // the hint, so a truncated fill only narrows: a name keeps a
+            // grant it already held while the pages read still declare it.
+            // Only a complete fill grants.
+            entry
+                .resend_permitted
+                .write()
+                .retain(|tool| prepared.resend_permitted.contains(tool));
+            entry
+                .read_only_declared
+                .write()
+                .retain(|tool| prepared.read_only_declared.contains(tool));
+        } else {
+            *entry.resend_permitted.write() = prepared.resend_permitted;
+            *entry.read_only_declared.write() = prepared.read_only_declared;
+        }
         *entry.hint_declared.write() = prepared.hint_declared;
         *entry.write_declared.write() = prepared.write_declared;
         // A truncated fill may not have reached a name's other occurrences,
