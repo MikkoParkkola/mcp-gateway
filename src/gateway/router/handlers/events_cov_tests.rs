@@ -124,12 +124,15 @@ async fn an_api_key_subscription_needs_its_matched_secret() {
     let (state, _dir) = crate::gateway::router::tests::test_router_app_state().await;
     let caller = client(CredentialKind::ApiKey);
     let mut tagged = presented(None, None);
-    tagged.api_key_digest_tag = Some("a1b2c3d4e5f6".to_owned());
+    tagged.api_key_digest_tag = Some(crate::gateway::auth::secret_tag("secret"));
     let credential = tagged
         .credential(Some(&caller), &state)
         .expect("a tagged key subscribes");
     let api_key = credential.api_key.expect("the key is named");
-    assert_eq!(api_key.digest_tag.as_deref(), Some("a1b2c3d4e5f6"));
+    assert_eq!(
+        api_key.digest_tag,
+        Some(crate::gateway::auth::secret_tag("secret"))
+    );
     let refused = presented(None, None).credential(Some(&caller), &state);
     assert!(
         refused.is_err_and(|why| why.contains("matched secret")),

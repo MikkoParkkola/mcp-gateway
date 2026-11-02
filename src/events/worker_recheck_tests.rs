@@ -537,8 +537,34 @@ async fn a_subscription_stored_without_its_secret_is_deleted_at_its_first_check(
             // Refused before any send: the attempt's own record ends
             // `access_revoked`, and no `sending` record was written.
             let log = std::fs::read_to_string(dir.path().join("audit.jsonl")).unwrap_or_default();
-            assert!(log.contains("\"status\":\"access_revoked\""), "{log}");
-            assert!(!log.contains("\"status\":\"sending\""), "{log}");
+            let records: Vec<serde_json::Value> = log
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect();
+            let attempt = |status: &str| {
+                records
+                    .iter()
+                    .filter(|r| holds_attempt(r, "evt_key", status))
+                    .count()
+            };
+            assert_eq!(attempt("access_revoked"), 1, "{log}");
+            assert_eq!(attempt("sending"), 0, "{log}");
         }
+    }
+}
+
+/// Whether `record`, at any depth, holds one object naming attempt `status`
+/// of event `event_id` with an attempt number: the attempt's own record, not
+/// any line that merely mentions the status.
+fn holds_attempt(record: &serde_json::Value, event_id: &str, status: &str) -> bool {
+    match record {
+        serde_json::Value::Object(map) => {
+            (map.get("event_id").and_then(serde_json::Value::as_str) == Some(event_id)
+                && map.get("status").and_then(serde_json::Value::as_str) == Some(status)
+                && map.get("attempt").is_some_and(serde_json::Value::is_u64))
+                || map.values().any(|v| holds_attempt(v, event_id, status))
+        }
+        serde_json::Value::Array(items) => items.iter().any(|v| holds_attempt(v, event_id, status)),
+        _ => false,
     }
 }
