@@ -274,18 +274,21 @@ async fn barrier(route: Route) {
     let a = configured(&fx, key_admits_policy_denies);
     let b = configured(&fx, key_denies_policy_admits);
     let (under_a, under_b) = follows_the_pin(&fx, (route, json!({"cmd": "x"})), &a, &b).await;
-    // Each refuses for its own reason: the tool policy, then the key's scope.
+    // Each refuses before the backend, as a withheld tool: a tool the tool
+    // policy denies, or the key's scope excludes, is answered as one the
+    // backend does not list, so the refusal never names the rule.
     assert!(
-        under_a.refused && under_a.calls == 0 && says(&under_a, "is blocked by security policy"),
+        under_a.refused && under_a.calls == 0 && says(&under_a, WITHHELD),
         "{route:?}: {under_a:?}"
     );
     assert!(
-        under_b.refused
-            && under_b.calls == 0
-            && says(&under_b, "is blocked by client 'k-std' policy"),
+        under_b.refused && under_b.calls == 0 && says(&under_b, WITHHELD),
         "{route:?}: {under_b:?}"
     );
 }
+
+/// The refusal a withheld tool gets.
+const WITHHELD: &str = "the backend does not list a tool named `read`";
 
 /// Whether the outcome's refusal text holds `phrase`.
 fn says(outcome: &Outcome, phrase: &str) -> bool {
