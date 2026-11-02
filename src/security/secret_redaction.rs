@@ -198,7 +198,7 @@ pub(crate) struct Compiled {
     matcher: Option<AhoCorasick>,
     /// The needles that read as JSON scalars, keyed by [`literal_key`]: a
     /// scalar is matched by lookup, never by a pass over every literal.
-    literals: std::collections::HashSet<String>,
+    literals: std::collections::HashSet<LiteralKey>,
     /// The needles that name a number, parsed once: a JSON number is matched
     /// by lookup, never by a pass over every needle.
     numbers: NumberIndex,
@@ -254,10 +254,9 @@ pub(crate) fn redact_value_with(value: &mut Value, compiled: &Compiled) -> bool 
     if compiled.needles.is_empty() {
         return false;
     }
-    let needles: Vec<&str> = compiled.needles.iter().map(String::as_str).collect();
     let Some(matcher) = &compiled.matcher else {
         // Fail closed: no automaton, no value.
-        *value = Value::String(marker_for(&needles).to_owned());
+        *value = Value::String(compiled.marker.to_owned());
         return true;
     };
     let scan = Scan {
@@ -310,20 +309,40 @@ fn exact_integer(text: &str) -> Option<String> {
 /// What one scrub of a JSON value matches against.
 #[derive(Clone, Copy)]
 struct Scan<'a> {
-    literals: &'a std::collections::HashSet<String>,
+    literals: &'a std::collections::HashSet<LiteralKey>,
     numbers: &'a NumberIndex,
     marker: &'static str,
     matcher: &'a AhoCorasick,
 }
 
-/// The key a JSON scalar is compared by, for exact JSON equality: its text,
-/// with -0.0 written as 0.0, since two floats compare by value and -0.0
-/// equals 0.0. `None` for a string, an array or an object, which no literal
-/// matches.
-fn literal_key(value: &Value) -> Option<String> {
+/// The key a JSON scalar is compared by, for exact JSON equality, built
+/// without allocating. Two numbers are equal only in the same form, as
+/// `serde_json` compares them: 5 is not 5.0, and -5 is not 5. A float is
+/// keyed by its bits with -0.0 taken as 0.0, since floats compare by value
+/// and a JSON number is never NaN.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum LiteralKey {
+    Null,
+    Bool(bool),
+    PosInt(u64),
+    NegInt(i64),
+    Float(u64),
+}
+
+/// The [`LiteralKey`] of a JSON scalar. `None` for a string, an array or an
+/// object, which no literal matches, and for a number in no form above
+/// (none without `arbitrary_precision`).
+fn literal_key(value: &Value) -> Option<LiteralKey> {
     match value {
-        Value::Number(n) if n.is_f64() && n.as_f64() == Some(0.0) => Some("0.0".to_owned()),
-        Value::Null | Value::Bool(_) | Value::Number(_) => Some(value.to_string()),
+        Value::Null => Some(LiteralKey::Null),
+        Value::Bool(b) => Some(LiteralKey::Bool(*b)),
+        Value::Number(n) if n.is_f64() => n
+            .as_f64()
+            .map(|f| LiteralKey::Float(if f == 0.0 { 0.0_f64 } else { f }.to_bits())),
+        Value::Number(n) => n
+            .as_u64()
+            .map(LiteralKey::PosInt)
+            .or_else(|| n.as_i64().map(LiteralKey::NegInt)),
         Value::String(_) | Value::Array(_) | Value::Object(_) => None,
     }
 }
