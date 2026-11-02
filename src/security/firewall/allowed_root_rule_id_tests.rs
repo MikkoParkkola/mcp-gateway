@@ -30,7 +30,7 @@ fn decided(fx: &Fx, args: &Value) -> (bool, Option<RuleId>) {
     let (verdict, rule) =
         fx.fw
             .check_request_attributed(&policy, "s1", target, args, "c", "id-1", sender.as_deref());
-    (!verdict.allowed, rule.cloned())
+    (!verdict.allowed, rule)
 }
 
 #[test]

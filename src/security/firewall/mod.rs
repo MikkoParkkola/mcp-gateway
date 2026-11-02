@@ -69,9 +69,9 @@ mod response;
 mod stateful_guards;
 mod verdict;
 pub(crate) use policy::{AnswerPolicies, CollusionView, DetectorParams, FirewallPolicy};
+use verdict::decide_firewall_action;
 #[cfg(test)]
 use verdict::rule_matches;
-use verdict::{decide_firewall_action, first_matching_rule_action};
 pub mod tenant_guard;
 /// Re-exported here, where the guard that attributes reads lives.
 pub(crate) use crate::security::tenant_reads;
@@ -156,6 +156,8 @@ struct CompiledRule {
     /// The folder part of a rule carrying `allowed_roots`; such a rule
     /// decides only its own findings, never a content finding.
     root: Option<allowed_root::CompiledRoot>,
+    /// The configured rule's keyed id, on a policy compiled with a rule key.
+    id: Option<crate::security::rule_id::RuleId>,
 }
 
 /// Verdict from the firewall for a single tool invocation.
@@ -374,24 +376,40 @@ impl Firewall {
         subject: ScanSubject,
         backend: Option<&crate::backend::Backend>,
     ) -> FirewallVerdict {
+        self.rescan_attributed(policy, target, args, subject, backend)
+            .0
+    }
+
+    /// [`Self::rescan`], with the rule that decided the verdict when a
+    /// configured rule did; for the decision record only.
+    pub(crate) fn rescan_attributed(
+        &self,
+        policy: &FirewallPolicy,
+        target: RuleTarget<'_>,
+        args: &Value,
+        subject: ScanSubject,
+        backend: Option<&crate::backend::Backend>,
+    ) -> (FirewallVerdict, Option<crate::security::rule_id::RuleId>) {
         if !self.config.enabled {
-            return FirewallVerdict::allow();
+            return (FirewallVerdict::allow(), None);
         }
         let roots = match subject {
             ScanSubject::Arguments => allowed_root::root_check(self, policy, target, args, backend),
             ScanSubject::Answers => allowed_root::RootOutcome::default(),
         };
         let mut findings = self.content_findings(target.tool, args);
-        let (action, root_findings) =
-            allowed_root::apply_roots(roots, Self::resolve_action(policy, target, &findings));
+        let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
+        let ((action, rule), root_findings) =
+            allowed_root::apply_roots(roots, (content_action, content_rule.cloned()));
         // A root finding leads: the refusal's wire text is the first finding's.
         findings.splice(0..0, root_findings);
-        FirewallVerdict {
+        let verdict = FirewallVerdict {
             allowed: action != FirewallAction::Block,
             action,
             findings,
             anomaly_score: None,
-        }
+        };
+        (verdict, rule)
     }
 
     /// One audit row for a chokepoint decision that is not a plain allow
@@ -491,38 +509,7 @@ impl Firewall {
         clippy::too_many_arguments,
         reason = "the call's parts as each route holds them: the pinned policy, the backend for its folder check"
     )]
-    pub(crate) fn check_request_attributed<'p>(
-        &self,
-        policy: &'p FirewallPolicy,
-        session_id: &str,
-        target: RuleTarget<'_>,
-        args: &Value,
-        caller: &str,
-        control_identity: &str,
-        backend: Option<&crate::backend::Backend>,
-    ) -> (
-        FirewallVerdict,
-        Option<&'p crate::security::rule_id::RuleId>,
-    ) {
-        let verdict = self.check_request_keyed(
-            policy,
-            session_id,
-            target,
-            args,
-            caller,
-            control_identity,
-            backend,
-        );
-        (verdict, Some(crate::security::rule_id::stub_id()))
-    }
-
-    /// [`Self::check_request`] with the caller's proven key, for a rule's
-    /// `keys` scope; the entry point every gateway route uses (POLICY.2).
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the call's parts as each route holds them: the pinned policy, the backend for its folder check"
-    )]
-    pub(crate) fn check_request_keyed(
+    pub(crate) fn check_request_attributed(
         &self,
         policy: &FirewallPolicy,
         session_id: &str,
@@ -531,9 +518,9 @@ impl Firewall {
         caller: &str,
         control_identity: &str,
         backend: Option<&crate::backend::Backend>,
-    ) -> FirewallVerdict {
+    ) -> (FirewallVerdict, Option<crate::security::rule_id::RuleId>) {
         if !self.config.enabled {
-            return FirewallVerdict::allow();
+            return (FirewallVerdict::allow(), None);
         }
         let (server, tool) = (target.server.label(), target.tool);
 
@@ -565,14 +552,16 @@ impl Firewall {
 
         // The folder check (allowed_root.rs), the same helper `rescan` calls.
         let roots = allowed_root::root_check(self, policy, target, args, backend);
-        let content_action = Self::resolve_action(policy, target, &findings);
-        let (rooted_action, root_findings) = allowed_root::apply_roots(roots, content_action);
+        let (content_action, content_rule) = Self::resolve_attributed(policy, target, &findings);
+        let ((rooted_action, rooted_rule), root_findings) =
+            allowed_root::apply_roots(roots, (content_action, content_rule.cloned()));
         // A root finding leads: the refusal's wire text is the first finding's.
         findings.splice(0..0, root_findings);
-        let action = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
-            FirewallAction::Block
+        // A non-rule block (anomaly, forced, tenant, budget) names no rule.
+        let (action, rule) = if gate.blind || gate.forced_block || tenant_blind || budget_refuse {
+            (FirewallAction::Block, None)
         } else {
-            rooted_action
+            (rooted_action, rooted_rule)
         };
         let allowed = action != FirewallAction::Block;
         let anomaly_score = gate.score;
@@ -600,7 +589,35 @@ impl Firewall {
             audit.log_request_attributed(&labels, args, &verdict, &tenants);
         }
 
-        verdict
+        (verdict, rule)
+    }
+
+    /// [`Self::check_request`] with the caller's proven key, for a rule's
+    /// `keys` scope; the entry point every gateway route uses (POLICY.2).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the call's parts as each route holds them: the pinned policy, the backend for its folder check"
+    )]
+    pub(crate) fn check_request_keyed(
+        &self,
+        policy: &FirewallPolicy,
+        session_id: &str,
+        target: RuleTarget<'_>,
+        args: &Value,
+        caller: &str,
+        control_identity: &str,
+        backend: Option<&crate::backend::Backend>,
+    ) -> FirewallVerdict {
+        self.check_request_attributed(
+            policy,
+            session_id,
+            target,
+            args,
+            caller,
+            control_identity,
+            backend,
+        )
+        .0
     }
 
     /// The live backend registry and the capability slot shared with
@@ -671,6 +688,28 @@ impl Firewall {
         })
     }
 
+    /// [`Self::resolve_action`] with the rule that decided it: the first
+    /// rule-decided pair, in key then finding order, at the strongest action.
+    /// `None` when the severity fallback alone decided that action.
+    fn resolve_attributed<'p>(
+        policy: &'p FirewallPolicy,
+        target: RuleTarget<'_>,
+        findings: &[Finding],
+    ) -> (FirewallAction, Option<&'p crate::security::rule_id::RuleId>) {
+        verdict::candidate_keys(&policy.rules, target)
+            .into_iter()
+            .flat_map(|key| {
+                findings.iter().map(move |finding| {
+                    let rule =
+                        verdict::first_matching_rule(&policy.rules, target, key, finding.scan_type);
+                    let action =
+                        decide_firewall_action(rule.map(|r| r.action), Some(finding.severity));
+                    (action, rule.and_then(|r| r.id.as_ref()))
+                })
+            })
+            .fold((FirewallAction::Allow, None), merge_attributed)
+    }
+
     /// Resolve each finding on its own, then take the most restrictive result.
     ///
     /// A finding is decided by the first rule that applies to `target` and
@@ -679,33 +718,12 @@ impl Firewall {
     /// an `allow` scoped to one type from allowing another type beside it.
     /// A key that is not known is resolved under every key a rule names, and
     /// none, and the strongest outcome stands.
-    fn resolve_attributed<'p>(
-        policy: &'p FirewallPolicy,
-        target: RuleTarget<'_>,
-        findings: &[Finding],
-    ) -> (FirewallAction, Option<&'p crate::security::rule_id::RuleId>) {
-        let _ = policy;
-        (
-            Self::resolve_action(policy, target, findings),
-            Some(crate::security::rule_id::stub_id()),
-        )
-    }
-
     fn resolve_action(
         policy: &FirewallPolicy,
         target: RuleTarget<'_>,
         findings: &[Finding],
     ) -> FirewallAction {
-        verdict::candidate_keys(&policy.rules, target)
-            .into_iter()
-            .flat_map(|key| {
-                findings.iter().map(move |finding| {
-                    let rule =
-                        first_matching_rule_action(&policy.rules, target, key, finding.scan_type);
-                    decide_firewall_action(rule, Some(finding.severity))
-                })
-            })
-            .fold(FirewallAction::Allow, response::strongest_action)
+        Self::resolve_attributed(policy, target, findings).0
     }
 
     /// Clean up per-session state in the anomaly detector.
@@ -716,6 +734,23 @@ impl Firewall {
         if let Some(ref a) = self.anomaly {
             a.remove_session(session_id);
         }
+    }
+}
+
+/// Fold one decided outcome into the one held so far: a stronger action
+/// replaces it with its rule; at the same action, a held severity-only
+/// decision takes the first rule that decided that action. A recorded rule
+/// therefore always decided the action that stands.
+pub(super) fn merge_attributed<R>(
+    held: (FirewallAction, Option<R>),
+    next: (FirewallAction, Option<R>),
+) -> (FirewallAction, Option<R>) {
+    if next.0 == held.0 {
+        (held.0, held.1.or(next.1))
+    } else if response::strongest_action(held.0, next.0) == next.0 {
+        next
+    } else {
+        held
     }
 }
 

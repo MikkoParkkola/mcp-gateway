@@ -157,6 +157,8 @@ pub(crate) enum RootReason {
 pub(crate) struct RootRefusal {
     /// The rule's `reason`, else `rules[i]`.
     pub(crate) rule: String,
+    /// The covering rule's keyed id, when its policy was compiled with one.
+    pub(crate) rule_id: Option<crate::security::rule_id::RuleId>,
     /// The argument name, when the refusal concerns one.
     pub(crate) argument: Option<String>,
     pub(crate) reason: RootReason,
@@ -168,7 +170,11 @@ pub(crate) struct RootOutcome {
     /// A forced block; no rule action softens it.
     pub(crate) forced: Option<RootRefusal>,
     /// `PathOutsideRoot` findings, each already decided by its producing rule.
-    pub(crate) findings: Vec<(Finding, FirewallAction)>,
+    pub(crate) findings: Vec<(
+        Finding,
+        FirewallAction,
+        Option<crate::security::rule_id::RuleId>,
+    )>,
 }
 
 #[path = "allowed_root_check.rs"]
