@@ -405,10 +405,13 @@ fn one_revocation(changes: &[(FieldPath, Change)]) -> Result<Option<&[Segment]>,
         ));
     }
     let list = &path.0[..2];
+    // Counted by occurrence: the revocation is the one change under the list.
     let alone = elements.next().is_none()
         && changes
             .iter()
-            .all(|(p, _)| p == path || !p.0.starts_with(list));
+            .filter(|(p, _)| p.0.starts_with(list))
+            .count()
+            == 1;
     if !alone {
         return Err(give_up(
             GiveUp::SequenceShape,

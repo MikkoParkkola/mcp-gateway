@@ -12,7 +12,7 @@ use std::ops::Range;
 
 use super::shape::Lines;
 use super::{ComputeRefusal, GiveUp, Segment};
-use crate::yaml::{Node, Step};
+use crate::yaml::Node;
 
 /// `auth.api_keys[i]`: the one list whose element may be removed. Its
 /// loader default is an empty list, so absent and empty mean the same; for
@@ -24,18 +24,6 @@ pub(super) fn revoked_index(path: &[Segment]) -> Option<usize> {
         }
         _ => None,
     }
-}
-
-fn steps(path: &[&str], index: Option<usize>) -> Vec<Step> {
-    let mut out: Vec<Step> = path.iter().map(|k| Step::Key((*k).to_owned())).collect();
-    if let Some(i) = index {
-        out.push(Step::Index(i));
-    }
-    out
-}
-
-fn node<'n>(nodes: &'n [Node], path: &[Step]) -> Option<&'n Node> {
-    nodes.iter().find(|n| n.path == path)
 }
 
 /// Byte offsets where each line of `text` starts, and the line of a byte.
@@ -75,7 +63,8 @@ pub(super) fn element_lines(text: &str, element: &Node) -> Option<Range<usize>> 
     let starts = Starts::of(text);
     let mut dash = starts.line_of(element.start);
     // The element's first line is its dash line unless the dash stands
-    // above it, alone or with a comment, past comment and blank lines.
+    // above it, alone or with a comment, past comment, blank and
+    // decoration-only (`&k`, `!tag`) lines.
     if !content(text, &starts, dash).trim_start().starts_with('-') {
         loop {
             if dash == 0 {
@@ -87,7 +76,7 @@ pub(super) fn element_lines(text: &str, element: &Node) -> Option<Range<usize>> 
             if trimmed.starts_with('-') {
                 break;
             }
-            if !(trimmed.is_empty() || trimmed.starts_with('#')) {
+            if !(trimmed.is_empty() || trimmed.starts_with('#') || decoration_only(trimmed)) {
                 return None;
             }
         }
@@ -113,25 +102,67 @@ pub(super) fn element_lines(text: &str, element: &Node) -> Option<Range<usize>> 
     Some(dash..last + 1)
 }
 
+/// A line holding only node properties: anchors and tags, before the node
+/// they decorate.
+fn decoration_only(trimmed: &str) -> bool {
+    trimmed
+        .split_whitespace()
+        .all(|token| token.starts_with('&') || token.starts_with('!'))
+}
+
+/// Which hand deletion the instructions give.
+enum Deletion {
+    /// The entry's own lines, then the lines its removal empties.
+    Lines(Range<usize>, Emptied),
+    /// One entry on a line it shares with others (a flow list).
+    OnLine(usize),
+    /// Its lines could not be found: the entry, by name.
+    Entry,
+}
+
+/// The 1-based lines a hand deletion of the last entry must also take: the
+/// `api_keys:` line, and the `auth:` line when that empties it too (each
+/// would load as null and be refused).
+#[derive(Clone, Copy)]
+enum Emptied {
+    Nothing,
+    List(usize),
+    ListAndAuth(usize, usize),
+}
+
+/// Whether deleting the entry may leave an alias without its anchor.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Anchors {
+    None,
+    Defined,
+}
+
 /// What a refused revocation tells the operator (S9): expiry first, which a
 /// reload always applies since the number of keys stays the same, then the
 /// hand deletion. Names the key and lines, never a value.
-fn instructions(
-    name: &str,
-    lines: &Range<usize>,
-    shared: Option<usize>,
-    list_line: Option<usize>,
-) -> String {
-    let deletion = if let Some(line) = shared {
-        format!("on line {line}, remove the entry with `name: {name}`, keeping the others")
-    } else {
-        let mut d = format!("delete lines {} to {}", lines.start + 1, lines.end);
-        if let Some(list) = list_line {
-            std::fmt::Write::write_fmt(&mut d, format_args!(" and the `api_keys:` line {list}"))
-                .ok();
+fn instructions(name: &str, deletion: &Deletion, anchors: Anchors) -> String {
+    let mut deletion = match deletion {
+        Deletion::OnLine(line) => {
+            format!("on line {line}, remove the entry with `name: {name}`, keeping the others")
         }
-        d
+        Deletion::Lines(lines, emptied) => {
+            let also = match emptied {
+                Emptied::Nothing => String::new(),
+                Emptied::List(list) => format!(" and the `api_keys:` line {list}"),
+                Emptied::ListAndAuth(list, auth) => {
+                    format!(" and the `api_keys:` line {list} and the `auth:` line {auth}")
+                }
+            };
+            format!("delete lines {} to {}{also}", lines.start + 1, lines.end)
+        }
+        Deletion::Entry => format!("delete the whole entry with `name: {name}`"),
     };
+    if anchors == Anchors::Defined {
+        deletion = format!(
+            "replace each alias (`*`) elsewhere in the file that names an anchor (`&`) \
+             defined in this entry with the value it names, then {deletion}"
+        );
+    }
     format!(
         "to revoke key `{name}`: set its `expires_at` to now and reload the gateway; \
          else {deletion} and reload. A deletion that changes whether the gateway is \
@@ -143,14 +174,16 @@ fn instructions(
 /// a decorated element, a flow-style list, or an anchor anywhere inside the
 /// element (a surviving alias may name it).
 pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<ComputeRefusal> {
-    let element = node(nodes, &steps(&["auth", "api_keys"], Some(index)))?;
-    let list = node(nodes, &steps(&["auth", "api_keys"], None))?;
-    let name = node(nodes, &{
-        let mut p = steps(&["auth", "api_keys"], Some(index));
-        p.push(Step::Key("name".into()));
-        p
-    })
-    .map_or_else(
+    let list_path = [Segment::Key("auth".into()), Segment::Key("api_keys".into())];
+    let element_path = [
+        list_path[0].clone(),
+        list_path[1].clone(),
+        Segment::Index(index),
+    ];
+    let element = super::shape::find(nodes, &element_path)?;
+    let list = super::shape::find(nodes, &list_path)?;
+    let name_path = [&element_path[..], &[Segment::Key("name".into())][..]].concat();
+    let name = super::shape::find(nodes, &name_path).map_or_else(
         || format!("#{index}"),
         |n| {
             original[n.bytes.clone()]
@@ -159,15 +192,22 @@ pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<Co
         },
     );
     let starts = Starts::of(original);
-    let only = nodes
-        .iter()
-        .filter(|n| n.path.len() == 3 && n.path[..2] == steps(&["auth", "api_keys"], None)[..])
-        .count()
-        == 1;
-    let list_line = only.then(|| starts.line_of(list.start) + 1);
-    if element.flow || list.flow {
+    let auth = super::shape::find(nodes, &list_path[..1])?;
+    let emptied = if super::shape::child_count(nodes, list) != 1 {
+        Emptied::Nothing
+    } else if super::shape::child_count(nodes, auth) == 1 {
+        Emptied::ListAndAuth(
+            starts.line_of(list.start) + 1,
+            starts.line_of(auth.start) + 1,
+        )
+    } else {
+        Emptied::List(starts.line_of(list.start) + 1)
+    };
+    // A shared line only in a flow list: a flow element of a block list
+    // has its own lines, its dash among them.
+    if list.flow {
         let line = starts.line_of(element.start) + 1;
-        let reason = instructions(&name, &(line - 1..line), Some(line), None);
+        let reason = instructions(&name, &Deletion::OnLine(line), Anchors::None);
         return Some(ComputeRefusal::Unprovable {
             code: GiveUp::Flow,
             reason,
@@ -176,14 +216,26 @@ pub(super) fn refusal(original: &str, nodes: &[Node], index: usize) -> Option<Co
     let inner = nodes
         .iter()
         .any(|n| n.start >= element.start && n.start < element.end && n.decorated);
-    if element.decorated || inner {
-        let lines = element_lines(original, element)
-            .unwrap_or(starts.line_of(element.start)..starts.line_of(element.start) + 1);
-        let reason = instructions(&name, &lines, None, list_line);
-        return Some(ComputeRefusal::Unprovable {
-            code: GiveUp::Anchor,
-            reason,
-        });
+    // An anchor on the list or on `auth`: a surviving alias may name what
+    // the removal changes or its cascade deletes.
+    let above = list.decorated || auth.decorated;
+    if element.flow || element.decorated || inner || above {
+        let deletion = element_lines(original, element)
+            .map_or(Deletion::Entry, |lines| Deletion::Lines(lines, emptied));
+        // Any decoration may be an anchor a surviving alias names: the alias
+        // step goes first. For a tag it is one extra check, never harm.
+        let anchors = if element.decorated || inner || above {
+            Anchors::Defined
+        } else {
+            Anchors::None
+        };
+        let code = if element.flow {
+            GiveUp::Flow
+        } else {
+            GiveUp::Anchor
+        };
+        let reason = instructions(&name, &deletion, anchors);
+        return Some(ComputeRefusal::Unprovable { code, reason });
     }
     None
 }
@@ -224,7 +276,11 @@ pub(super) fn may_delete(original: &str, node: &Node, taken: Taken) -> BTreeSet<
         while first > 0 && !line(first).trim_start().starts_with('-') {
             let above = line(first - 1);
             let above = above.trim_start();
-            if !(above.is_empty() || above.starts_with('#') || above.starts_with('-')) {
+            if !(above.is_empty()
+                || above.starts_with('#')
+                || above.starts_with('-')
+                || decoration_only(above))
+            {
                 break;
             }
             first -= 1;

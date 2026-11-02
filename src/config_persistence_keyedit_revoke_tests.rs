@@ -246,6 +246,96 @@ fn r4e_an_anchor_inside_the_element_refuses() {
     let (code, reason) = refused(original, &[revoke(0)]);
     assert_eq!(code, GiveUp::Anchor);
     instructs(&reason, "ops");
+    assert!(reason.contains("lines 3 to 5"), "names its lines: {reason}");
+    let alias = reason.find("alias").expect("the alias step");
+    assert!(
+        alias < reason.find("delete").expect("deletion"),
+        "the alias is replaced before the deletion: {reason}"
+    );
+    // Following it: the alias takes the value it named, then the lines go.
+    let by_hand = drop_lines(
+        &original.replace("backends: *shared", "backends:\n        - fs"),
+        2..5,
+    );
+    let doc: crate::yaml::Value = crate::yaml::from_str(&by_hand).expect("loads");
+    let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
+    assert_eq!(keys.len(), 1, "{by_hand}");
+    assert_eq!(keys[0]["name"].as_str(), Some("ci"));
+    assert_eq!(keys[0]["backends"][0].as_str(), Some("fs"));
+}
+
+/// `text` without its 0-based `lines`.
+fn drop_lines(text: &str, lines: std::ops::Range<usize>) -> String {
+    let mut out = String::new();
+    for (_, line) in text.lines().enumerate().filter(|(i, _)| !lines.contains(i)) {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+// R4g: an anchor on its own line between the dash and the entry: the
+// deletion still names the dash through the entry's last line, and
+// following it loads.
+#[test]
+fn r4g_a_decoration_on_its_own_line_keeps_the_whole_entry() {
+    let original = "auth:\n  api_keys:\n    -\n      &k\n      name: ops\n      \
+                    key_sha256: \"sha256:aa\"\n    - name: ci\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    instructs(&reason, "ops");
+    assert!(reason.contains("lines 3 to 6"), "the whole entry: {reason}");
+    let doc: crate::yaml::Value =
+        crate::yaml::from_str(&drop_lines(original, 2..6)).expect("loads");
+    let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["name"].as_str(), Some("ci"));
+}
+
+// R4h: a decorated sole key where `api_keys` is all of `auth`: the
+// deletion names the `auth:` line too, and following it loads.
+#[test]
+fn r4h_deleting_the_only_key_by_hand_names_the_auth_line_it_empties() {
+    let original = "server:\n  port: 1\nauth:\n  api_keys:\n    - &k\n      name: ops\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    instructs(&reason, "ops");
+    assert!(
+        reason.contains("lines 5 to 6 and the `api_keys:` line 4 and the `auth:` line 3"),
+        "{reason}"
+    );
+    let by_hand = drop_lines(original, 2..6);
+    let doc: crate::yaml::Value = crate::yaml::from_str(&by_hand).expect("loads");
+    assert!(doc.get("auth").is_none(), "{by_hand}");
+}
+
+// R4i: a flow element in a block list has its own lines: delete them,
+// never "remove the entry on line N" (that leaves a bare dash).
+#[test]
+fn r4i_a_flow_element_in_a_block_list_deletes_its_own_lines() {
+    let original =
+        "auth:\n  api_keys:\n    - {name: ops, key_sha256: \"sha256:aa\"}\n    - name: ci\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Flow);
+    instructs(&reason, "ops");
+    assert!(reason.contains("delete lines 3 to 3"), "{reason}");
+    assert!(!reason.contains("on line"), "{reason}");
+    let doc: crate::yaml::Value =
+        crate::yaml::from_str(&drop_lines(original, 2..3)).expect("loads");
+    let keys = doc["auth"]["api_keys"].as_sequence().expect("a list");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0]["name"].as_str(), Some("ci"));
+}
+
+// R4j: an anchor on the list itself: an alias elsewhere may name it, so
+// the revocation refuses with the instructions, the alias step first.
+#[test]
+fn r4j_an_anchored_list_refuses_with_the_instructions() {
+    let original = "auth:\n  api_keys: &keys\n    - name: ops\n    - name: ci\nmirror: *keys\n";
+    let (code, reason) = refused(original, &[revoke(0)]);
+    assert_eq!(code, GiveUp::Anchor);
+    instructs(&reason, "ops");
+    assert!(reason.contains("alias"), "{reason}");
 }
 
 // R4c, R4f: a flow list refuses with an entry-specific edit, never a
@@ -335,6 +425,34 @@ fn r5_a_revocation_is_alone_in_its_list() {
     );
 }
 
+// R5c: a revocation plus a nested key removal is proven.
+#[test]
+fn r5c_a_revocation_and_a_nested_key_removal_prove_together() {
+    let original = format!("server:\n  port: 1\n  host: a\n{THREE}");
+    let port = (
+        FieldPath(vec![
+            Segment::Key("server".into()),
+            Segment::Key("port".into()),
+        ]),
+        Change::Remove,
+    );
+    let (out, _) = revoked(&original, &[revoke(1), port]);
+    assert!(out.starts_with("server:\n  host: a\nauth:\n"), "{out}");
+    assert!(!out.contains("name: b"), "{out}");
+}
+
+// R1d: the last element of a file without a final newline.
+#[test]
+fn r1d_the_last_element_without_a_final_newline() {
+    let original = THREE.trim_end_matches('\n');
+    let (out, _) = revoked(original, &[revoke(2)]);
+    assert_eq!(
+        out,
+        "auth:\n  api_keys:\n    - name: a\n      key_sha256: \"sha256:01\"\n    \
+         - name: b\n      key_sha256: \"sha256:02\""
+    );
+}
+
 // R5b: a revocation plus an unrelated key removal is proven.
 #[test]
 fn r5b_a_revocation_and_another_removal_prove_together() {
@@ -348,6 +466,23 @@ fn r5b_a_revocation_and_another_removal_prove_together() {
         !out.contains("environment") && !out.contains("name: b"),
         "{out}"
     );
+}
+
+// R13: a key removal whose block scalar ends past a blank line proves
+// beside a revocation: both removals end at their last non-space byte.
+#[test]
+fn r13_a_block_scalar_key_removed_beside_a_revocation_proves() {
+    let original = format!("environment: |-\n  staging\n\n{THREE}");
+    let environment = (
+        FieldPath(vec![Segment::Key("environment".into())]),
+        Change::Remove,
+    );
+    let (out, dropped) = revoked(&original, &[revoke(1), environment]);
+    assert!(
+        !out.contains("environment") && !out.contains("name: b"),
+        "{out}"
+    );
+    assert!(dropped.is_empty(), "{dropped:?}");
 }
 
 // R10, R10b: removing an element outside `auth.api_keys` gives up.

@@ -559,7 +559,11 @@ pub(super) fn remove_entry(
             "the key sits on its element's dash line",
         ));
     }
-    let mut last = lines.line_of(node.end.saturating_sub(1).max(key.start));
+    // The last line holding a non-space byte of the entry: a block scalar's
+    // span ends in the next line's indentation, or past trailing blank lines.
+    let span = &text[node.start..node.end.min(text.len())];
+    let last_byte = node.start + span.trim_end().len().saturating_sub(1);
+    let mut last = lines.line_of(last_byte.max(key.start));
     // Comment and blank lines indented under the entry belong to it.
     // Blank lines between them do not end that.
     let mut next = last + 1;
