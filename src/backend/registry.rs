@@ -239,6 +239,8 @@ pub struct BackendRegistry {
     /// backend registering under that name is seeded with. The pins belong to
     /// the instance: a later change to this map moves none of them.
     configured: parking_lot::RwLock<Arc<crate::config::configured_secrets::ConfiguredByBackend>>,
+    /// Set with each load's record, taken by the patch that applies it.
+    record_armed: std::sync::atomic::AtomicBool,
 }
 
 impl BackendRegistry {
@@ -259,6 +261,7 @@ impl BackendRegistry {
             needles: DashMap::new(),
             redaction_grace: std::time::Duration::from_secs(24 * 60 * 60),
             configured: parking_lot::RwLock::default(),
+            record_armed: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

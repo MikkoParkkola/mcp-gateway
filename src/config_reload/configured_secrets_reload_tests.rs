@@ -162,3 +162,35 @@ async fn a_reload_dropped_before_its_publish_leaves_the_new_instance_its_pins() 
     );
     assert!(holds_token(&after), "the next reload dropped its record");
 }
+
+/// After startup a backend registers only inside `apply_patch`, whose one
+/// caller sets that load's record just before it: a record left by a
+/// reload that never applied is replaced before any registration reads it.
+/// The registry ban's allows are the production registrations; a new one
+/// fails here until it, too, sets its load's record first.
+#[test]
+fn a_backend_registers_only_at_startup_or_in_apply_patch() {
+    let mut sites: Vec<String> = include_str!("../gateway/meta_mcp/boundary_pins/allows.tsv")
+        .lines()
+        .filter(|row| !row.starts_with('#'))
+        .map(|row| row.split('\t').collect::<Vec<_>>())
+        .filter(|cols| {
+            cols.last().is_some_and(|names| {
+                names
+                    .split([',', ' '])
+                    .any(|name| name.starts_with("registerx"))
+            })
+        })
+        .map(|cols| format!("{} {}", cols[0], cols[1]))
+        .collect();
+    sites.sort();
+    assert_eq!(
+        sites,
+        [
+            "src/config_reload/mod.rs apply_patch",
+            "src/config_reload/mod.rs apply_patch",
+            "src/gateway/server/construct.rs new_with_env",
+        ],
+        "a new production registration must set its load's record first"
+    );
+}

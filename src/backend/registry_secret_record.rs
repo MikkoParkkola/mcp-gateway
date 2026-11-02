@@ -114,5 +114,15 @@ impl BackendRegistry {
         configured: crate::config::configured_secrets::ConfiguredByBackend,
     ) {
         *self.configured.write() = Arc::new(configured);
+        self.record_armed
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether this load's record was set since the last patch took it:
+    /// `apply_patch` asserts it, so a patch applied without its load's record
+    /// (which would seed new instances from an older load) fails in tests.
+    pub(crate) fn take_load_record(&self) -> bool {
+        self.record_armed
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 }

@@ -623,6 +623,12 @@ pub async fn apply_patch(
     cache_ttl: Duration,
     runtime_config: &RuntimeConfig,
 ) -> bool {
+    // A backend registered here is seeded from the registry's load record:
+    // the caller sets this load's record first (reload_transaction).
+    debug_assert!(
+        registry.take_load_record(),
+        "apply_patch without its load's record: call set_load_record first"
+    );
     let mut fully_applied = true;
 
     if patch.restart_required() {
