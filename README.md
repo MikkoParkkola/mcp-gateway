@@ -214,7 +214,7 @@ backends:
     command: "npx -y tavily-mcp@0.2.22"
     description: "Web search"
     env:
-      TAVILY_API_KEY: "env:TAVILY_API_KEY"
+      TAVILY_API_KEY: "${TAVILY_API_KEY}"
 
   sentry:
     url: "https://mcp.sentry.dev/mcp"
