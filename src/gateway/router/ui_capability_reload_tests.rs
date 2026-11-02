@@ -7,7 +7,8 @@
 //! `not_run`, with nothing run.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -19,22 +20,12 @@ use super::ui_tool_call_cell_tests::assert_refused_delivery;
 use super::ui_tool_call_tests::{ADMIN, Fx, fixture};
 use crate::capability::{CapabilityBackend, CapabilityDefinition, CapabilityExecutor};
 
-/// `probe`, declared read-only or not; its REST provider is unreachable, so
-/// a call that gets past every gate fails later, for another reason.
-fn probe(read_only: bool) -> CapabilityDefinition {
+/// `probe`, declared read-only or not, reached at `base_url`'s `/probe`.
+fn probe(read_only: bool, base_url: &str) -> CapabilityDefinition {
     let yaml = format!(
-        r"
-name: probe
-description: Test capability
-metadata:
-  read_only: {read_only}
-providers:
-  primary:
-    service: rest
-    config:
-      base_url: https://example.invalid
-      path: /probe
-"
+        "name: probe\ndescription: Test capability\nmetadata:\n  read_only: {read_only}\n\
+         providers:\n  primary:\n    service: rest\n    config:\n      \
+         base_url: {base_url}\n      path: /probe\n      method: GET\n"
     );
     crate::capability::parse_capability(&yaml).expect("capability")
 }
@@ -63,37 +54,62 @@ async fn try_probe(fx: &Fx, server: &str) -> (StatusCode, Value) {
     )
 }
 
-/// The fixture with `probe` served as a read-only capability.
-async fn served() -> (Fx, Arc<CapabilityBackend>) {
+/// The fixture with `probe` served as a read-only capability whose provider
+/// counts every request it gets; returns the capability backend, the URL
+/// `probe` reaches, and the count.
+async fn served() -> (Fx, Arc<CapabilityBackend>, String, Arc<AtomicUsize>) {
     let fx = fixture().await;
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move {
+        let app = axum::Router::new().route(
+            "/probe",
+            axum::routing::get(move || {
+                let counter = Arc::clone(&counter);
+                async move {
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(json!({"ok": true}))
+                }
+            }),
+        );
+        axum::serve(listener, app).await.expect("serve");
+    });
+    let base_url = crate::test_fixture_host::fixture_url(port);
+    let client = crate::test_fixture_host::fixture_client(Duration::from_secs(5));
     let caps = Arc::new(CapabilityBackend::new(
         "caps",
-        Arc::new(CapabilityExecutor::new()),
+        Arc::new(CapabilityExecutor::new().with_test_http_client(client)),
     ));
-    caps.register_capability(probe(true)).expect("registered");
+    caps.register_capability(probe(true, &base_url))
+        .expect("registered");
     fx.state.meta_mcp.set_capabilities(Arc::clone(&caps));
-    (fx, caps)
+    (fx, caps, base_url, hits)
 }
 
 /// The reloaded write is refused by the executor's gate: 409 `not_run`,
-/// recorded refused. Mutant: the UI arm in the capability executor removed
-/// (the call then runs, and fails at the unreachable provider).
+/// recorded refused, and its provider never reached. Mutant: the UI arm in
+/// the capability executor removed (the call then runs).
 #[tokio::test]
 async fn t24b_a_capability_reloaded_as_a_write_after_the_gate_is_not_run() {
-    // Control: the read-only capability passes every gate and is run.
-    let (fx, _caps) = served().await;
+    // Control: the read-only capability passes every gate and runs once.
+    let (fx, _caps, _url, hits) = served().await;
     let (status, body) = try_probe(&fx, "caps").await;
-    assert_ne!(
-        status,
-        StatusCode::CONFLICT,
-        "premise: the UI gate admits a read-only capability: {body}"
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "premise: the UI gate admits a read-only capability and it runs: {status} {body}"
     );
 
-    let (fx, caps) = served().await;
+    let (fx, caps, base_url, hits) = served().await;
     let reloaded = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&reloaded);
     let _armed = crate::gateway::ui_call::gate_seam::after_gate(move || {
-        caps.register_capability(probe(false)).expect("reloaded");
+        caps.register_capability(probe(false, &base_url))
+            .expect("reloaded");
         flag.store(true, Ordering::SeqCst);
     });
     let (status, body) = try_probe(&fx, "caps").await;
@@ -103,5 +119,6 @@ async fn t24b_a_capability_reloaded_as_a_write_after_the_gate_is_not_run() {
     );
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["disposition"], "not_run", "{body}");
+    assert_eq!(hits.load(Ordering::SeqCst), 0, "the write never ran");
     assert_refused_delivery(&fx);
 }

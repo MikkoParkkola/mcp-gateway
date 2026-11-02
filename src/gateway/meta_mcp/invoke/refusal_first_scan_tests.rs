@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Source-scan pin: every site that folds a dispatch failure into
-//! a tool result (`dispatch_error_result`, `account_refused_fill`) first
-//! asks whether the failure is a refusal of the caller, which is answered as
-//! itself and never folded. A new fold site fails this row until it is
-//! reviewed and listed.
+//! Source-scan pin: every site that folds a dispatch failure into a tool
+//! result (`dispatch_error_result`, `account_refused_fill`) first asks, in
+//! code, whether the failure is a refusal of the caller, which is answered
+//! as itself and never folded. Comments are stripped before matching, so a
+//! predicate named only in a comment does not count. A new fold site fails
+//! this row until it is reviewed and listed. The behaviour itself is proved
+//! by the rows in `bridge_send_refusal_tests` and `lend_refusal_tests`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -27,6 +29,39 @@ const REVIEWED: [(&str, usize); 4] = [
 /// The function a fold inside it is exempt in, by its definition line.
 const EXEMPT_FN: &str = "fn account_refused_fill(";
 
+/// A line's code: what precedes a `//` comment.
+fn code(line: &str) -> &str {
+    line.split("//").next().unwrap_or_default()
+}
+
+/// The fold sites in one file's `text`, counted, and those whose function
+/// never asks the predicate in code above them (as `name:line`).
+fn fold_sites(name: &str, text: &str) -> (usize, Vec<String>) {
+    let lines: Vec<&str> = text.lines().map(code).collect();
+    let (mut sites, mut unchecked) = (0, Vec::new());
+    for (at, line) in lines.iter().enumerate() {
+        if line.contains("fn dispatch_error_result(")
+            || line.contains(EXEMPT_FN)
+            || !FOLDS.iter().any(|fold| line.contains(fold))
+        {
+            continue;
+        }
+        // The enclosing function: the nearest definition above the call.
+        let start = (0..at)
+            .rev()
+            .find(|&n| lines[n].trim_start().contains("fn "))
+            .unwrap_or(0);
+        if lines[start].contains(EXEMPT_FN) {
+            continue;
+        }
+        sites += 1;
+        if !lines[start..at].iter().any(|l| l.contains(PREDICATE)) {
+            unchecked.push(format!("{name}:{}", at + 1));
+        }
+    }
+    (sites, unchecked)
+}
+
 #[test]
 fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp/invoke");
@@ -44,28 +79,11 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
             continue;
         }
         let text = std::fs::read_to_string(&path).expect("a source file");
-        let lines: Vec<&str> = text.lines().collect();
-        for (at, line) in lines.iter().enumerate() {
-            let code = line.trim_start();
-            if code.starts_with("//") || code.contains("fn dispatch_error_result(") {
-                continue;
-            }
-            if !FOLDS.iter().any(|fold| code.contains(fold)) || code.contains(EXEMPT_FN) {
-                continue;
-            }
-            // The enclosing function: the nearest definition above the call.
-            let start = (0..at)
-                .rev()
-                .find(|&n| lines[n].trim_start().contains("fn "))
-                .unwrap_or(0);
-            if lines[start].contains(EXEMPT_FN) {
-                continue;
-            }
-            *found.entry(name.clone()).or_insert(0) += 1;
-            if !lines[start..at].iter().any(|l| l.contains(PREDICATE)) {
-                unchecked.push(format!("{name}:{}", at + 1));
-            }
+        let (sites, mut missing) = fold_sites(&name, &text);
+        if sites > 0 {
+            found.insert(name, sites);
         }
+        unchecked.append(&mut missing);
     }
     assert!(
         unchecked.is_empty(),
@@ -78,5 +96,27 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
     assert_eq!(
         found, reviewed,
         "the fold sites changed: review and list them"
+    );
+}
+
+/// The scan's own premise: a predicate named only in a comment is not a
+/// check (red), and one asked in code is (control).
+#[test]
+fn a_predicate_named_only_in_a_comment_is_not_a_check() {
+    let commented = "fn settle(e: Error) -> Value {\n    \
+                     // is_authorization_refusal(&e) is asked elsewhere\n    \
+                     dispatch_error_result(&e, tool, server, surface)\n}\n";
+    let (sites, unchecked) = fold_sites("commented.rs", commented);
+    assert_eq!(sites, 1, "premise: one fold site");
+    assert_eq!(unchecked, ["commented.rs:3"], "a comment is not a check");
+
+    let asked = "fn settle(e: Error) -> Result<Value> {\n    \
+                 if is_authorization_refusal(&e) {\n        return Err(e);\n    }\n    \
+                 Ok(dispatch_error_result(&e, tool, server, surface))\n}\n";
+    let (sites, unchecked) = fold_sites("asked.rs", asked);
+    assert_eq!(sites, 1, "premise: one fold site");
+    assert!(
+        unchecked.is_empty(),
+        "a check in code counts: {unchecked:?}"
     );
 }
