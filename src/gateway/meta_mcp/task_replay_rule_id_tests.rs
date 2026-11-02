@@ -44,7 +44,9 @@ fn alpha() -> Arc<Backend> {
     ))
 }
 
-fn scope(authorizer: &ToolPolicyAuthorizer<'_>) -> crate::gateway::meta_mcp::InvokeScope<'_> {
+fn scope<'a>(
+    authorizer: &'a ToolPolicyAuthorizer<'a>,
+) -> crate::gateway::meta_mcp::InvokeScope<'a> {
     crate::gateway::meta_mcp::InvokeScope {
         authorizer,
         is_admin: false,
