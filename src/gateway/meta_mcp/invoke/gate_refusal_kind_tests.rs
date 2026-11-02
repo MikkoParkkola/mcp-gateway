@@ -171,6 +171,7 @@ fn caller() -> crate::gateway::meta_mcp::MetaMcpCallerContext<'static> {
         task: None,
         era: crate::protocol::meta::Era::Legacy,
         channel: &crate::gateway::input_bridge::NoClientChannel,
+        generation: None,
     }
 }
 
