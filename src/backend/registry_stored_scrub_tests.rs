@@ -1,8 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A stored answer is scrubbed against every value set the registry keeps,
-//! including a removed backend's while its values are inside their grace
-//! (MIK-9105).
+//! including a removed backend's while its values are inside their grace.
 
 use std::sync::Arc;
 use std::time::Duration;

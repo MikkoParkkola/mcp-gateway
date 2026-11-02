@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A response-cache hit stored while a value was plain, served after the
 //! value is marked secret: the hit is scrubbed against the values current
-//! when it is sent (MIK-9105).
+//! when it is sent.
 
 use super::*;
 

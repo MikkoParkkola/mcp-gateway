@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Every way a stored answer leaves the gateway is scrubbed against the
-//! values current when it is sent (MIK-9105). The exits are enumerated: each
+//! values current when it is sent. The exits are enumerated: each
 //! store read in [`super::tests::STORED_READS`] is either a scrubbed exit or
 //! named here with why it serves nothing itself, and the stored task wire
 //! has a fixed set of callers. A new exit fails here until it is scrubbed

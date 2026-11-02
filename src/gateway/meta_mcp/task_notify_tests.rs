@@ -218,7 +218,7 @@ const MARKED: &str = "marked-after-storing-9105";
 
 /// A task notification carries stored output scrubbed against the values
 /// current when it is sent: a value marked after the task was stored is
-/// removed (MIK-9105).
+/// removed.
 #[tokio::test]
 async fn a_notification_removes_a_value_marked_after_the_task_was_stored() {
     let dir = tempfile::tempdir().expect("tempdir");

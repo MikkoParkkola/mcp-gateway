@@ -742,7 +742,7 @@ pub struct Evaluated {
     /// reduces it to keyed digests; empty for a literal load.
     pub(crate) inputs: crate::config_reload::revision::RawInputs,
     /// Each backend's configured credentials, for the registry to hold
-    /// redacted (MIK-9105). Crate-private and beside the config, never on
+    /// redacted. Crate-private and beside the config, never on
     /// it.
     pub(crate) configured: super::configured_secrets::ConfiguredByBackend,
 }

@@ -286,7 +286,7 @@ fn t1e_the_backend_registry_surface_is_pinned() {
         "remove",
         "is_stopping (test)",
         "stop_all",
-        // MIK-9105: none hands out a backend. The load's configured-credential
+        // None hands out a backend. The load's configured-credential
         // record is stored, compared by name (names only back) and scrubbed
         // against; the two hooks are test-only.
         "set_load_record",

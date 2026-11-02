@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! A value marked secret after answers holding it were stored: every stored
 //! answer is scrubbed against the values current when it is sent, so each
-//! comes back redacted whatever was current when it was kept (MIK-9105). The
+//! comes back redacted whatever was current when it was kept. The
 //! backend is a real HTTP MCP server whose answers say `received ...`, and the
 //! word `received` is the value marked.
 
