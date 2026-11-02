@@ -8,45 +8,68 @@
 
 use super::*;
 use crate::control_plane::{ControlPlaneAction, ControlPlaneAuditEvent, ControlPlaneRollbackPlan};
+use crate::discovery::shadow::{ShadowEnterpriseBoundary, ShadowScanSummary};
 use crate::identity_grants::{
     GrantAgent, GrantScope, GrantSubject, IdentityGrant, LocalIdentityGrantStore,
 };
 
-/// The seeded audit events' targets. No production writer targets a backend
-/// (every written action is a grant or policy change, pinned in the store),
-/// so the two `backend:` targets are fixture-only. A scoped reader is shown
-/// none of the three, not even the event about its own backend: store audit
-/// events are gateway-wide.
-const TARGETS: [&str; 3] = ["grant-seeded", "backend:alpha", "backend:beta"];
+/// The seeded audit events: (target, whether the Developer performed it).
+/// No production writer targets a backend (every written action is a grant
+/// or policy change, pinned in the store), so the two `backend:` targets are
+/// fixture-only. A scoped reader is shown none of them, not even the event
+/// about its own backend or one it performed itself: store audit events are
+/// gateway-wide.
+const EVENTS: [(&str, bool); 4] = [
+    ("grant-seeded", false),
+    ("backend:alpha", false),
+    ("backend:beta", false),
+    ("grant-dev", true),
+];
 
-/// One identity grant under a subject no caller holds, and an audit event per
-/// [`TARGETS`] entry by an actor no caller is.
+fn grant(grant_id: &str, subject: &str) -> IdentityGrant {
+    IdentityGrant {
+        grant_id: grant_id.to_string(),
+        subject: GrantSubject::new(ISSUER, subject, None),
+        agent: GrantAgent::Any,
+        capability: "matrix-capability".to_string(),
+        tool: None,
+        scope: GrantScope::Execute,
+        owner: None,
+        expires_at: None,
+        revoked_at: None,
+        provenance: "local-file".to_string(),
+        reason: "scope grid".to_string(),
+    }
+}
+
+/// Two identity grants, one under a subject no caller holds and one under
+/// the Developer's, and the [`EVENTS`], by the Developer or by an actor no
+/// caller is.
 fn seed(state: &AppState, store: bool) {
     state
         .meta_mcp
-        .set_identity_grants(LocalIdentityGrantStore::from_grants([IdentityGrant {
-            grant_id: "grant-seeded".to_string(),
-            subject: GrantSubject::new(ISSUER, "nobody-1", None),
-            agent: GrantAgent::Any,
-            capability: "matrix-capability".to_string(),
-            tool: None,
-            scope: GrantScope::Execute,
-            owner: None,
-            expires_at: None,
-            revoked_at: None,
-            provenance: "local-file".to_string(),
-            reason: "scope grid".to_string(),
-        }]));
+        .set_identity_grants(LocalIdentityGrantStore::from_grants([
+            grant("grant-seeded", "nobody-1"),
+            grant("grant-dev", DEV),
+        ]));
     if !store {
         return;
     }
+    let developer = Who::Developer
+        .identity()
+        .expect("the Developer signs in")
+        .stable_actor_id();
     let store = state.control_plane_store.as_ref().expect("a store");
-    for (n, target) in TARGETS.into_iter().enumerate() {
+    for (n, (target, by_developer)) in EVENTS.into_iter().enumerate() {
         store
             .append_audit(&ControlPlaneAuditEvent {
                 grant_change: None,
                 event_id: format!("scope-event-{n}"),
-                actor_id: "scope-grid-operator".to_string(),
+                actor_id: if by_developer {
+                    developer.clone()
+                } else {
+                    "scope-grid-operator".to_string()
+                },
                 action: ControlPlaneAction::MutateGrant,
                 target_id: target.to_string(),
                 reason: "scope grid seed".to_string(),
@@ -57,6 +80,28 @@ fn seed(state: &AppState, store: bool) {
             })
             .expect("the event is stored");
     }
+}
+
+/// Whether `radar` is a withheld scan: no asset, every summary total zero,
+/// and the boundary a zero summary makes.
+fn withheld(radar: &Value) -> bool {
+    let zero = ShadowScanSummary {
+        discovered_total: 0,
+        managed_total: 0,
+        unmanaged_total: 0,
+        high_or_critical_total: 0,
+        adoptable_total: 0,
+        network_exposed_total: 0,
+    };
+    radar["control_plane_assets"]
+        .as_array()
+        .is_some_and(Vec::is_empty)
+        && radar["summary"] == serde_json::to_value(&zero).expect("a summary")
+        && radar["enterprise_boundary"]
+            == serde_json::to_value(ShadowEnterpriseBoundary::local_passive(&zero))
+                .expect("a boundary")
+        && radar["trustcard_input_count"] == 0
+        && radar["doctor_finding_count"] == 0
 }
 
 /// `who`'s snapshot as one cell: status; the grants, policies and audit
@@ -104,19 +149,12 @@ async fn cell(who: Who, store: bool) -> String {
     let consistent = counts["shadow_assets"] == radar["summary"]["unmanaged_total"]
         && counts["shadow_high_or_critical_assets"] == radar["summary"]["high_or_critical_total"];
     let radar = if radar["scan_status"] == "out_of_scope" {
-        format!(
-            "out_of_scope:{}/{}/{}/{}/{}",
-            radar["summary"]["discovered_total"],
-            radar["summary"]["unmanaged_total"],
-            radar["summary"]["high_or_critical_total"],
-            radar["trustcard_input_count"],
-            radar["doctor_finding_count"],
-        )
+        format!("out_of_scope:withheld={}", withheld(radar))
     } else {
         "ran".to_string()
     };
     format!(
-        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}",
+        "{}|grants:{}|policies:{}|audit:{targets}|queue:{queue}|radar:{radar}|counts:{}/{}/{consistent}|cov:{}/{}/{}",
         code.as_u16(),
         len("grants"),
         len("policies"),
@@ -124,6 +162,7 @@ async fn cell(who: Who, store: bool) -> String {
         counts["audit_events"],
         body["coverage"]["grants"],
         body["coverage"]["policies"],
+        body["coverage"]["audit_events"],
     )
 }
 
@@ -131,27 +170,29 @@ async fn cell(who: Who, store: bool) -> String {
 const SANITIZE_ITEM: &str = "policy:local:input_sanitization:not_enforced";
 
 /// What each caller is shown, without and with the seeded store. An
-/// unscoped caller keeps today's snapshot; a scoped one is shown no grant,
-/// no policy, no store audit event, no queue item for either and no radar,
-/// whatever its role.
+/// unscoped caller keeps today's snapshot, its own rows only when it reads
+/// no other principal's; a scoped one is shown no grant, no policy, no store
+/// audit event, no queue item for either and no radar, whatever its role.
 fn expected(who: Who) -> [String; 2] {
     let unscoped = |grants: usize, audit: &str| {
         let events = audit.split(';').filter(|t| !t.is_empty()).count();
         [("", 0), (audit, events)].map(|(audit, events)| {
             format!(
-                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true",
-                grants > 0
+                "200|grants:{grants}|policies:2|audit:{audit}|queue:{SANITIZE_ITEM}|radar:ran|counts:2/{events}/true|cov:{}/true/{}",
+                grants > 0,
+                events > 0
             )
         })
     };
     let scoped = || {
-        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:0/0/0/0/0|counts:0/0/true|cov:false/false";
+        let cell = "200|grants:0|policies:0|audit:|queue:|radar:out_of_scope:withheld=true|counts:0/0/true|cov:false/false/false";
         [cell.to_string(), cell.to_string()]
     };
-    let all = "backend:alpha;backend:beta;grant-seeded";
     match who {
-        Who::AdminKey | Who::Auditor | Who::UiAdminKey => unscoped(1, all),
-        Who::Developer => unscoped(0, ""),
+        Who::AdminKey | Who::Auditor | Who::UiAdminKey => {
+            unscoped(2, "backend:alpha;backend:beta;grant-dev;grant-seeded")
+        }
+        Who::Developer => unscoped(1, "grant-dev"),
         Who::ScopedKey
         | Who::ScopedAuditor
         | Who::ScopedDeveloper
