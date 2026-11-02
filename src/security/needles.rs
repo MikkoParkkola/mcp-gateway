@@ -87,6 +87,9 @@ pub(crate) struct NeedleSet {
     values: RwLock<Vec<Held>>,
     grace: Duration,
     overflowed: AtomicBool,
+    /// When the last sent value refused at the bound leaves its grace: held
+    /// nowhere, it keeps the set refusing until then, room or not.
+    refuse_until: parking_lot::Mutex<Option<tokio::time::Instant>>,
     /// Rules already warned about a short value (ECHO.6), by name.
     short_warned: parking_lot::Mutex<std::collections::HashSet<String>>,
     /// Bumped whenever `values` gains or loses a value.
@@ -127,6 +130,7 @@ impl NeedleSet {
             values: RwLock::new(Vec::new()),
             grace,
             overflowed: AtomicBool::new(false),
+            refuse_until: parking_lot::Mutex::new(None),
             short_warned: parking_lot::Mutex::default(),
             version: std::sync::atomic::AtomicU64::new(0),
             compiled: RwLock::new(None),
@@ -183,6 +187,7 @@ impl NeedleSet {
     ) -> bool {
         self.settle(values, now);
         if lifetime == Lifetime::Grace && sent_count(values) >= MAX_NEEDLES {
+            *self.refuse_until.lock() = Some(now + self.grace);
             return !self.overflowed.swap(true, Ordering::SeqCst);
         }
         values.push(Held {
@@ -196,14 +201,19 @@ impl NeedleSet {
     }
 
     /// Drops retired values and lifts the refusal once the sent values have
-    /// room again. Whether the set still refuses.
+    /// room again and the last refused value's grace has passed (as
+    /// [`Self::retired`] counts it). Whether the set still refuses.
     fn settle(&self, values: &mut Vec<Held>, now: tokio::time::Instant) -> bool {
         let before = values.len();
         values.retain(|held| !self.retired(held, now));
         if values.len() != before {
             self.version.fetch_add(1, Ordering::SeqCst);
         }
-        if sent_count(values) < MAX_NEEDLES {
+        let mut refuse_until = self.refuse_until.lock();
+        if refuse_until.is_some_and(|until| now > until) {
+            *refuse_until = None;
+        }
+        if sent_count(values) < MAX_NEEDLES && refuse_until.is_none() {
             self.overflowed.store(false, Ordering::SeqCst);
         }
         self.overflowed.load(Ordering::SeqCst)
