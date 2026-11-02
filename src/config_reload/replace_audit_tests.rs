@@ -418,3 +418,54 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         );
     }
 }
+
+/// Every production reload context is built on the gateway's reporting:
+/// the HTTP gateway's (run.rs, shared with its file watcher) and stdio's
+/// (stdio_loop.rs). Each carries the audit log, so all three sites audit
+/// their recoveries.
+#[test]
+fn every_production_reporting_carries_the_audit_log() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/server");
+    for file in ["run.rs", "stdio_loop.rs"] {
+        let text = std::fs::read_to_string(src.join(file)).expect("read source");
+        let at = text
+            .find("ReloadReporting::with_override_audit(")
+            .unwrap_or_else(|| panic!("{file} builds no reload reporting"));
+        let statement = &text[at..at + text[at..].find(';').expect("statement end")];
+        assert!(
+            statement.contains(".with_audit_log("),
+            "{file}'s reload reporting does not carry the audit log, so its recoveries go unaudited"
+        );
+    }
+}
+
+/// A context built the production way, on reporting that carries an audit
+/// log, records a recovery intent there before it recovers a crashed write.
+#[tokio::test]
+async fn a_context_reporting_into_the_audit_log_records_its_recovery() {
+    use crate::security::{TransparencyLogConfig, TransparencyLogger};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, START).expect("write config");
+    let log_path = dir.path().join("audit.ndjson");
+    let log = Arc::new(
+        TransparencyLogger::open(Arc::new(TransparencyLogConfig {
+            enabled: true,
+            path: log_path.to_string_lossy().to_string(),
+            key_id: "test".to_string(),
+            ..TransparencyLogConfig::default()
+        }))
+        .expect("log opens"),
+    );
+    let reporting = super::refusals::ReloadReporting::default().with_audit_log(Some(log));
+    let ctx = Arc::new(unshared(&path).with_reporting(reporting));
+    crashed_after_rename(&path, NEXT);
+
+    ctx.reload_outcome().await.expect("the reload goes ahead");
+
+    let audit = std::fs::read_to_string(&log_path).unwrap_or_default();
+    assert!(
+        audit.contains("config_recovery_intent"),
+        "the recovery left no intent in the audit log: {audit}"
+    );
+}

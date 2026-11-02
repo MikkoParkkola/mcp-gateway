@@ -69,6 +69,10 @@ pub struct ReloadReporting {
     pub(crate) override_audit: Option<std::sync::Arc<super::override_audit::OverrideAuditor>>,
     /// Attempts and outcomes of every reload, whichever entry point made it.
     pub(crate) tally: std::sync::Arc<super::reload_tally::ReloadTally>,
+    /// The gateway's audit log, when it has one: every reload context built
+    /// on this reporting records a recovery intent there before it recovers
+    /// a crashed write or pays an owed reload.
+    pub(crate) audit_log: Option<std::sync::Arc<crate::security::TransparencyLogger>>,
 }
 
 impl ReloadReporting {
@@ -81,7 +85,19 @@ impl ReloadReporting {
             refusals: std::sync::Arc::default(),
             override_audit: Some(override_audit),
             tally: std::sync::Arc::default(),
+            audit_log: None,
         }
+    }
+
+    /// The same reporting, auditing recoveries into `log` (`None`: auth off
+    /// and no audit log, so recoveries are not audited).
+    #[must_use]
+    pub fn with_audit_log(
+        mut self,
+        log: Option<std::sync::Arc<crate::security::TransparencyLogger>>,
+    ) -> Self {
+        self.audit_log = log;
+        self
     }
 }
 

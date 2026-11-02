@@ -48,7 +48,7 @@ pub(super) fn setup_refusing_reload() -> (tempfile::TempDir, PathBuf, Arc<Reload
     (dir, path, ctx)
 }
 
-fn unshared(path: &Path) -> ReloadContext {
+pub(super) fn unshared(path: &Path) -> ReloadContext {
     let running = Config::load(Some(path)).expect("config loads");
     ReloadContext::new(
         path.to_path_buf(),
