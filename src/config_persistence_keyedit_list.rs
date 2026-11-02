@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A whole string list set at a path (MIK-9172), written as one inline list.
+//! A whole string list set at a path, written as one inline list.
 //! What the file holds there now picks the edit: absent, the key is inserted
 //! with the list; `key:` alone, the list goes after the colon; `~`, `null`,
 //! or a one-line inline list, its span is replaced; a block list, the item
