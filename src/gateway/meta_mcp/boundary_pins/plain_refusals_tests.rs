@@ -134,9 +134,14 @@ fn the_raise_helpers_are_listed() {
     let want: BTreeSet<String> = [
         "src/capability/executor/client.rs::note_redirect_refusal",
         "src/gateway/meta_mcp/invoke/gate.rs::withheld_for",
+        "src/gateway/meta_mcp/invoke/gateway_writes.rs::insert_noted",
         "src/gateway/meta_mcp/invoke/gateway_writes.rs::note",
+        "src/gateway/meta_mcp/invoke/gateway_writes.rs::note_task_envelope",
+        "src/gateway/meta_mcp/invoke/gateway_writes.rs::write_contract",
+        "src/gateway/meta_mcp/invoke/post_dispatch.rs::inject_cost_advice",
         "src/gateway/meta_mcp/invoke/post_dispatch.rs::settle_unsent",
         "src/gateway/meta_mcp/invoke/propagation.rs::raise",
+        "src/gateway/meta_mcp/support.rs::note_written",
     ]
     .iter()
     .map(ToString::to_string)
