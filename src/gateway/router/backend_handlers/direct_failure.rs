@@ -16,7 +16,8 @@ use tracing::error;
 
 use super::super::AppState;
 use super::super::helpers::{RpcHttp, build_http_response};
-use super::{record_client_failure, settle_direct_failure};
+use super::client_outcome::record_client_failure;
+use super::settle_direct_failure;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -59,6 +60,8 @@ impl DirectFailure<'_> {
             _ => error,
         };
         crate::gateway::meta_mcp::invoke::audit::note_send_refusal(&error);
+        // The delivered answer: the scrub's refusal of an echo records refused.
+        crate::gateway::delivery_facts::echo_refusal_delivered(&error);
         // A full slot table says nothing about this caller (#2300).
         if !matches!(error, crate::Error::IdentitySlotsExhausted { .. }) {
             record_client_failure(self.state, self.client);

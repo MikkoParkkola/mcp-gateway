@@ -307,6 +307,7 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
         let sent = super::chokepoint::Outbound {
             arguments: self.arguments,
             answers: outbound.input_responses.as_ref(),
+            backend: self.captured.as_deref(),
         };
         let at = (self.server, self.tool);
         let source = super::chokepoint::Source::Bridged;
@@ -370,6 +371,12 @@ impl crate::gateway::input_bridge::BackendInvoker for BridgeDispatcher<'_> {
             }
             Err(error) => error,
         };
+        // The exchange's failure is this round's: counted with its origin
+        // when the bridge answers it with its own refusal.
+        crate::gateway::delivery_facts::folded(crate::gateway::health_metrics::RpcError {
+            code: error.to_rpc_code(),
+            origin: error.origin(),
+        });
         // A later round's send can be refused as the first one's can.
         super::audit::note_send_refusal(&error);
         // A11-c: a 401 on a managed credential forces at most one refresh.

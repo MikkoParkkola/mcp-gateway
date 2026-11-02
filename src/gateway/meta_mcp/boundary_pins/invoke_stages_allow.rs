@@ -125,6 +125,7 @@ pub(super) const S5_PRE_SEND_ALLOW: &[&str] = &[
     "support::note_cache_bypass", // invoke.rs:361 canonical: `super::` stripped for the move
     "self.is_chained",            // invoke.rs:364
     "self.cache_admits",          // invoke.rs:370
+    "self.note_declared_effect", // keys.rs the declared effect, noted before the cache so a hit keeps it
     "crate::gateway::ui_call::gate", // U12: a web UI call's confirm and caller gate, before the cache
     "crate::gateway::ui_call_runs_live", // U12: a web UI call skips the response cache
     "self.serve_cached_response",    // invoke.rs:376

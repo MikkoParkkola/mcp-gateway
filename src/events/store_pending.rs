@@ -282,7 +282,9 @@ impl Store {
         state.outbox.insert(event_id.to_owned(), record.clone());
         // The claim is in place; an unsynced one can only mean one more
         // duplicate after a crash, so the attempt goes ahead (F1).
-        if let Err(error) = placed.durable() {
+        let synced = placed.durable();
+        drop(state);
+        if let Err(error) = synced {
             tracing::warn!(%error, "events store: claim not synced");
         }
         Ok(Claim::Ready(Box::new(Claimed {
@@ -319,6 +321,8 @@ impl Store {
         };
         let sub_id = record.subscription_id.clone();
         let mut settled = self.settle_record(&mut state, record, outcome, now, policy);
+        // Logged once `state` is released.
+        let mut burial_cleanup = None;
         if settled.is_err() {
             // The claimed occurrence's own stamp: a dead letter left under the
             // same id by an earlier occurrence is not this burial. Reached when
@@ -329,9 +333,7 @@ impl Store {
                 // burial happened, so its receipt stands: only the cleanup after
                 // it failed, and that is logged, not allowed to hide the burial.
                 state.outbox.remove(event_id);
-                if let Err(error) = &settled {
-                    tracing::warn!(%error, "events store: cleanup after a burial failed");
-                }
+                burial_cleanup = settled.err();
                 settled = Ok(Settled {
                     evicted: Vec::new(),
                     buried: true,
@@ -352,24 +354,31 @@ impl Store {
                 }
             }
         }
-        let (delivered, error) = match outcome {
-            Settle::Delivered => (true, None),
+        let status_line = match outcome {
+            Settle::Delivered => Some((true, None)),
             Settle::Retry { status, .. }
             | Settle::Unsent { status, .. }
             | Settle::Dead {
                 status: Some(status),
                 ..
-            } => (false, Some(status)),
-            Settle::Dead { status: None, .. } => return settled,
+            } => Some((false, Some(status))),
+            Settle::Dead { status: None, .. } => None,
         };
         // The subscription's delivery history is a status line: a failed
         // write of it never undoes the settlement.
-        if let Err(error) = self.touch(&mut state, &sub_id, |s| {
-            if delivered && now.is_some() {
-                s.last_delivery_at = now;
-            }
-            s.last_error = error.map(str::to_owned);
-        }) {
+        let touched = status_line.map(|(delivered, error)| {
+            self.touch(&mut state, &sub_id, |s| {
+                if delivered && now.is_some() {
+                    s.last_delivery_at = now;
+                }
+                s.last_error = error.map(str::to_owned);
+            })
+        });
+        drop(state);
+        if let Some(error) = burial_cleanup {
+            tracing::warn!(%error, "events store: cleanup after a burial failed");
+        }
+        if let Some(Err(error)) = touched {
             tracing::warn!(%error, "events store: subscription status not written");
         }
         settled

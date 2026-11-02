@@ -208,7 +208,11 @@ impl MetaMcp {
         }
         // MIK-8137 b1: the chokepoint, before anything marks this send.
         let answers = outbound_retry.input_responses.as_ref();
-        let outbound = chokepoint::Outbound { arguments, answers };
+        let outbound = chokepoint::Outbound {
+            arguments,
+            answers,
+            backend: call.backend.as_deref(),
+        };
         let source = chokepoint::Source::of_call(answers);
         let permit = match self.chokepoint(
             caller.scope(),
@@ -297,7 +301,9 @@ impl MetaMcp {
         let chain_slot = super::super::response_security::chain_receipt::ChainSlot::default();
         // A3 R1: only an MCP backend's own answer can be chain-eligible; a
         // capability's `Ok` also covers its local refusals and inner cache.
-        let mcp_backend = self.get_capabilities().is_none_or(|cap| server != cap.name);
+        let mcp_backend = self
+            .caller_capabilities()
+            .is_none_or(|cap| server != cap.name);
         let dispatch_result = Box::pin(self.accounted_dispatch(
             server,
             tool,

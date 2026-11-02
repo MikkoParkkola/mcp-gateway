@@ -103,6 +103,8 @@ owned_routes! {
     UI_REFUSALS = "/ui/api/refusals",
     /// The Gateway page's facts: process, reloads, TLS, upgrade, clients.
     UI_GATEWAY = "/ui/api/gateway",
+    /// The configured API keys, with their last use (no secret, no digest).
+    UI_KEYS = "/ui/api/keys",
     /// The UI's live event feed (server-sent events).
     UI_STREAM = "/ui/api/stream",
 }

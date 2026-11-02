@@ -70,6 +70,12 @@ impl crate::transport::Transport for Counted {
     fn is_connected(&self) -> bool {
         true
     }
+    /// These rows judge what is refused before a send, not an answer's echo,
+    /// so it stands in for a transport holding its set (DELTA-10 refuses an
+    /// injected call on one that does not).
+    fn redacts_injected_values(&self) -> bool {
+        true
+    }
     async fn close(&self) -> crate::Result<()> {
         Ok(())
     }

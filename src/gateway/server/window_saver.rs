@@ -284,11 +284,15 @@ pub(super) async fn start_window_saver(
                     let found = std::mem::replace(&mut *held, SinkState::Sealed);
                     let (SinkState::Open(mut sink), Ok(sealed_at_ms)) = (found, sealed_at_ms)
                     else {
+                        drop(held);
                         warn!("{NOT_DURABLE}: the window segment was not sealed");
                         return;
                     };
                     let now = sealed_at_ms / 1_000;
-                    if let Err(error) = sink.close(&sealed_counts, now, sealed_at_ms) {
+                    let sealed = sink.close(&sealed_counts, now, sealed_at_ms);
+                    drop(sink);
+                    drop(held);
+                    if let Err(error) = sealed {
                         warn!(%error, "{NOT_DURABLE}: the window segment seal did not land");
                     }
                 };
@@ -393,7 +397,9 @@ fn checkpoint_detached(
             let (SinkState::Open(sink), Ok(now_ms)) = (&mut *held, clock_ms()) else {
                 return;
             };
-            if let Err(error) = sink.checkpoint(&counts(false), now_ms / 1_000) {
+            let checkpointed = sink.checkpoint(&counts(false), now_ms / 1_000);
+            drop(held);
+            if let Err(error) = checkpointed {
                 warn!(%error, "failed to checkpoint the HTTP protocol-revision window segment");
             }
         };

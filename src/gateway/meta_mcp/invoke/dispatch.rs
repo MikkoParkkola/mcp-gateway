@@ -256,7 +256,7 @@ impl MetaMcp {
         // capability (resolve refuses that clash; this holds if a backend is
         // registered between resolve and here).
         if captured.is_none()
-            && let Some(cap) = self.get_capabilities()
+            && let Some(cap) = self.caller_capabilities()
             && server == cap.name
             && let Some(cap_def) = cap.get(tool)
         {
@@ -457,11 +457,12 @@ impl MetaMcp {
             } else {
                 error.message
             };
-            return Err(Error::JsonRpc {
-                code: error.code,
+            // The backend's own error, with the gateway's miss hint in its
+            // message: still the backend's answer, counted as the backend's.
+            return Err(Error::backend_json_rpc(crate::protocol::JsonRpcError {
                 message,
-                data: error.data,
-            });
+                ..error
+            }));
         }
 
         let withheld = response.ingress_withheld;

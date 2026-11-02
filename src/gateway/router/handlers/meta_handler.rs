@@ -58,12 +58,14 @@ pub(in crate::gateway) async fn meta_mcp_handler(
                         // frame polled through the dispatch holds a copy of it.
                         // The minted-receipt scope rides outside the memo.
                         crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-                            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
-                                // One delivery's facts: the dispatch and its record.
-                                Box::pin(crate::gateway::delivery_facts::scope(meta_mcp_dispatch(
-                                    state,
-                                    http_request,
-                                ))),
+                            // The caller's hiding judgment, filled at intake.
+                            crate::gateway::meta_mcp::hiding::with_caller_slot(
+                                crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
+                                    // One delivery's facts: the dispatch and its record.
+                                    Box::pin(crate::gateway::delivery_facts::scope(
+                                        meta_mcp_dispatch(state, http_request),
+                                    )),
+                                ),
                             ),
                         )),
                     )),

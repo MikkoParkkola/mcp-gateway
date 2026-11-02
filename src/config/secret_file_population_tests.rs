@@ -215,8 +215,24 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "cfg(test) source scanner reading the crate's own source for the MIK-8387 boundary pins; no secret",
     ),
     (
+        "src/gateway/meta_mcp/boundary_pins/caller_view.rs",
+        "cfg(test) source scanner reading the crate's own sources to count unfiltered capability-provider reads; no secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/invoke_stages.rs",
         "cfg(test) source scanner reading the invoke stage files for the MIK-8488 stage pin; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/backend_json_rpc_builders.rs",
+        "cfg(test) source scanner for the backend JSON-RPC builder pin; its self-tests write a one-file fixture crate into a tempdir; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/fold_sites.rs",
+        "cfg(test) source scanner for the fold and count site pin; its self-tests write a one-file fixture crate into a tempdir; no secret",
+    ),
+    (
+        "src/gateway/meta_mcp/boundary_pins/pinned_role_mapping.rs",
+        "cfg(test) source scanner for the role-mapping guard, reading the crate's own sources and writing a fixture crate to a temp dir for its own test; no secret",
     ),
     (
         "src/gateway/meta_mcp/sealed_hold_guards.rs",

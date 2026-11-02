@@ -284,6 +284,7 @@ fn paths() -> Vec<&'static str> {
         routes::UI_REFUSALS,
         routes::UI_DECISIONS,
         routes::UI_GATEWAY,
+        routes::UI_KEYS,
         routes::UI_CONFIG,
         routes::UI_RELOAD,
         routes::UI_DASHBOARD_LINK,
@@ -765,3 +766,8 @@ mod control_plane_scope;
 /// The status report against the guards, through the same fixture.
 #[path = "ui_access_report_tests.rs"]
 mod report;
+
+/// Each UI role check against the mapping pinned on the request, through the
+/// same fixture.
+#[path = "ui_pinned_mapping_tests.rs"]
+mod pinned_mapping;

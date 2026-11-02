@@ -107,11 +107,12 @@ pub(super) async fn start_stdio_backend(
             CheckResult::pass(&label, "initialize completed").with_category("backend_stdio")
         }
         Ok(Err(error)) => {
-            let mut detail = error.to_string();
+            let mut result =
+                CheckResult::fail(&label, error.to_string()).with_category("backend_stdio");
             if probe == StdioProbe::StartShowingStderr {
-                detail.push_str(&stderr_section(&transport.last_failure_stderr()));
+                result.stderr_tail = Some(transport.last_failure_stderr());
             }
-            CheckResult::fail(&label, detail).with_category("backend_stdio")
+            result
         }
         Err(_) => CheckResult::fail(
             &label,
@@ -119,21 +120,6 @@ pub(super) async fn start_stdio_backend(
         )
         .with_category("backend_stdio"),
     })
-}
-
-/// The `--show-stderr` lines, banner first: masking is best effort.
-fn stderr_section(lines: &[String]) -> String {
-    if lines.is_empty() {
-        return "\n  (no stderr captured)".to_string();
-    }
-    let mut section =
-        "\n  stderr tail (may contain secrets: masking is best effort, review before sharing):"
-            .to_string();
-    for line in lines {
-        section.push_str("\n    ");
-        section.push_str(line);
-    }
-    section
 }
 
 // Unix-only (W-L5): the probed backends are `sh -c` scripts, which Windows does not provide.
@@ -301,26 +287,36 @@ mod tests {
         let shown = start_stdio_backend("b", &backend, StdioProbe::StartShowingStderr)
             .await
             .expect("a stdio row");
-        assert_eq!(shown.status, CheckStatus::Fail, "{}", shown.detail);
+        assert_eq!(shown.status, CheckStatus::Fail, "{}", shown.full_detail());
         assert!(
-            shown.detail.contains("may contain secrets"),
+            shown.full_detail().contains("may contain secrets"),
             "{}",
-            shown.detail
+            shown.full_detail()
         );
         assert!(
-            shown.detail.contains("Error: Cannot find module tail-7978"),
+            shown
+                .full_detail()
+                .contains("Error: Cannot find module tail-7978"),
             "{}",
-            shown.detail
+            shown.full_detail()
         );
-        assert!(!shown.detail.contains("tok-7978"), "{}", shown.detail);
+        assert!(
+            !shown.full_detail().contains("tok-7978"),
+            "{}",
+            shown.full_detail()
+        );
         let hidden = start_stdio_backend("b", &backend, StdioProbe::Start)
             .await
             .expect("a stdio row");
-        assert!(!hidden.detail.contains("tail-7978"), "{}", hidden.detail);
         assert!(
-            !hidden.detail.contains("may contain secrets"),
+            !hidden.full_detail().contains("tail-7978"),
             "{}",
-            hidden.detail
+            hidden.full_detail()
+        );
+        assert!(
+            !hidden.full_detail().contains("may contain secrets"),
+            "{}",
+            hidden.full_detail()
         );
     }
 

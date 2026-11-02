@@ -85,7 +85,7 @@ impl MetaMcp {
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(&envelope);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
         let attribution = DispatchNotes {
-            cached: true,
+            cached: Some(super::Answered::Replay),
             ..DispatchNotes::default()
         }
         .attribution(self, tenants, delivered);

@@ -40,6 +40,7 @@ pub(crate) use authorization::{
     sanitize_exempt,
 };
 mod backend_handlers;
+pub(crate) mod caller_hiding;
 mod handlers;
 // The web UI's Try-a-tool route runs this one MCP path in process (U12).
 #[cfg(feature = "webui")]
@@ -79,6 +80,8 @@ mod direct_guards;
 
 #[cfg(test)]
 mod adapter_get_rollback_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod allowed_root_watch_tests;
 #[cfg(test)]
 mod audit_degraded_tests;
 /// MIK-8392.STORED.1 T10: a revoked account's stored task read.
@@ -154,6 +157,9 @@ mod dispatch_parity_tests;
 /// E5: dashboard session expiry, logout and re-entry (MIK-7570.SESSION.1).
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
+
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
@@ -179,10 +185,16 @@ mod hardened_identity_tests;
 #[cfg(test)]
 mod identity_parity_tests;
 mod judged_answer;
+/// Slice B T10: only an API-key match records a key's last use.
+#[cfg(all(test, feature = "webui"))]
+mod keys_last_used_callers_tests;
 #[cfg(all(test, feature = "webui"))]
 mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod live_keys_tests;
+/// LOG.1: requests that log complete while stderr never drains.
+#[cfg(test)]
+mod log_lossy_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -244,6 +256,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// The direct route records no declared effect yet (pinned absence).
+#[cfg(test)]
+mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
@@ -290,6 +305,9 @@ mod playbook_busy_tests;
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
+/// The key-by-policy barrier: one request, one generation.
+#[cfg(all(test, feature = "firewall"))]
+mod policy_barrier_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
@@ -355,6 +373,12 @@ mod r2_input_keys_tests;
 mod replay_policy_tests;
 #[cfg(test)]
 mod resource_prompt_scope_tests;
+/// An echoed injected secret is kept out of the idempotency cache, task
+/// answers and the task store.
+#[cfg(all(test, feature = "firewall"))]
+mod secret_echo_stored_tests;
+#[cfg(test)]
+mod secret_echo_tests;
 #[cfg(test)]
 mod session_fp_once_tests;
 /// MIK-7736: under standard, a gateway_invoke nonce is judged after policy.
@@ -855,6 +879,8 @@ async fn pin_generation(
     next: middleware::Next,
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::pinned();
     next.run(request).await
 }
 

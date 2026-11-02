@@ -67,6 +67,8 @@ impl MetaMcp {
             let cap_disabled = self
                 .kill_switch
                 .record_capability_failure(server, tool, &cap_cfg);
+            drop(cap_cfg);
+            drop(cfg);
             if auto_killed {
                 warn!(server, "Server auto-killed by error budget exhaustion");
             }
@@ -251,8 +253,12 @@ impl MetaMcp {
         )
     }
 
+    /// The read-only and destructive flags of `server`'s `tool` when it is a
+    /// capability the caller sees. A provider hidden from the caller has none,
+    /// as an unregistered name has none, so its answer's integrity audit
+    /// cannot tell the two apart.
     pub(super) fn capability_context_flags(&self, server: &str, tool: &str) -> (bool, bool) {
-        if let Some(capabilities) = self.get_capabilities()
+        if let Some(capabilities) = self.caller_capabilities()
             && server == capabilities.name
             && let Some(capability) = capabilities.get(tool)
         {
@@ -273,6 +279,10 @@ impl MetaMcp {
         original: &Value,
     ) -> (Value, Option<ResponseEffect>) {
         let Some(delivered) = evaluation.transformed.delivered.clone() else {
+            // The gateway's own withhold, answered as a tool result.
+            crate::gateway::delivery_facts::gateway_folded(
+                crate::error::rpc_codes::INVALID_REQUEST,
+            );
             let withheld = json!({
                 "isError": true,
                 "content": [{
@@ -317,6 +327,9 @@ impl MetaMcp {
         let malformed = result_type.is_some_and(|value| !value.is_string())
             || is_error.is_some_and(|value| !value.is_boolean());
         if malformed {
+            // The gateway's refusal of a malformed round, answered as a tool
+            // result.
+            crate::gateway::delivery_facts::gateway_folded(crate::error::rpc_codes::INTERNAL_ERROR);
             let refused = json!({
                 "content": [{
                     "type": "text",

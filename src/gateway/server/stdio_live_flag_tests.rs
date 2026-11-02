@@ -248,6 +248,74 @@ async fn g4_a_held_stdio_line_keeps_the_generation_it_was_read_under() {
     assert!(reached_resolution(&reply), "off then on: {reply}");
 }
 
+/// The config with the tool policy denying `absent:t`, or not, and the task
+/// store in the test's own directory.
+fn write_policy(path: &Path, deny: bool) {
+    let tasks = path.with_file_name("tasks");
+    let tasks = tasks.display().to_string().replace('\'', "''");
+    let denied = if deny { "['absent:t']" } else { "[]" };
+    write_owner_only(
+        path,
+        format!(
+            "security:\n  tool_policy:\n    enabled: true\n    deny: {denied}\n\
+             tasks:\n  store_dir: '{tasks}'\n"
+        ),
+    )
+    .expect("write");
+}
+
+/// Refused by the tool policy, as opposed to failing later for another reason.
+fn policy_refused(reply: &Value) -> bool {
+    !sanitised(reply) && reply.to_string().contains("policy")
+}
+
+/// Hold the next `gateway_invoke` of `absent:t`, reload the tool policy to
+/// `deny`, release, and return the held line's answer. The reload is checked
+/// to have landed, so a reload that never applied cannot pass the row.
+async fn held_across_a_policy_flip(s: &mut Session, path: &Path, deny: bool) -> Value {
+    let (reached, release) = s.hold.arm();
+    let held = s
+        .send(
+            "tools/call",
+            json!({"name": "gateway_invoke",
+                   "arguments": {"server": "absent", "tool": "t", "arguments": {"cmd": "x"}}}),
+        )
+        .await;
+    crate::test_pause::within("the held line reaches the pause", reached.notified()).await;
+    write_policy(path, deny);
+    s.reload().await;
+    assert_eq!(
+        s.live.get().security.tool_policy.deny.is_empty(),
+        !deny,
+        "the reload did not land"
+    );
+    release.notify_one();
+    s.answer(held).await
+}
+
+/// The key-by-policy barrier's stdio line (ADR-029, amended, item 1): a line
+/// read while the tool policy denies the call is refused, even when a reload
+/// lifts the deny before the line dispatches; and a line read while it is
+/// allowed goes on to resolve its server, even when a reload denies it.
+#[tokio::test]
+async fn a_held_stdio_line_keeps_the_tool_policy_it_was_read_under() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("gateway.yaml");
+    write_policy(&path, true);
+    let mut s = Session::start(dir.path(), path.clone(), Announce::No).await;
+
+    let reply = held_across_a_policy_flip(&mut s, &path, false).await;
+    assert!(policy_refused(&reply), "denied then allowed: {reply}");
+
+    let reply = held_across_a_policy_flip(&mut s, &path, true).await;
+    // Resolution's own failure, not the policy's: its refusal names the
+    // server too, so `reached_resolution` alone would accept a denial.
+    assert!(
+        reached_resolution(&reply) && !policy_refused(&reply),
+        "allowed then denied: {reply}"
+    );
+}
+
 #[cfg(feature = "firewall")]
 #[path = "stdio_live_collusion_tests.rs"]
 mod collusion;

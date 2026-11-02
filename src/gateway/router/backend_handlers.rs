@@ -176,6 +176,7 @@ async fn guard_tool_call(
         id,
         (backend_name, tool_name),
         (params, arguments),
+        backend,
     ) {
         return Err(rejection);
     }
@@ -222,6 +223,7 @@ fn firewall_refusal(
     id: &RequestId,
     (backend_name, tool_name): (&str, &str),
     (params, arguments): (&Value, &Value),
+    backend: &crate::backend::Backend,
 ) -> Option<BackendRejection> {
     let fw = state.firewall.as_ref()?;
     let caller_name = auth.client.map_or("anonymous", |c| c.name.as_str());
@@ -239,6 +241,7 @@ fn firewall_refusal(
         arguments,
         caller_name,
         &control_identity,
+        Some(backend),
     );
     if verdict.action == FirewallAction::Warn {
         warn!(
@@ -492,9 +495,12 @@ pub(super) async fn backend_handler(
     // instance the send compares), boxed so the scope wraps a pointer.
     // The minted-receipt scope rides outside the memo.
     crate::gateway::meta_mcp::invoke::with_minted_receipts(Box::pin(
-        crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
-            direct_audit::audited_call(Arc::clone(&state), name, request),
-        )),
+        // The caller's hiding judgment, filled once the caller is resolved.
+        crate::gateway::meta_mcp::hiding::with_caller_slot(
+            crate::gateway::meta_mcp::visible::memo::with_visibility_memo(Box::pin(
+                direct_audit::audited_call(Arc::clone(&state), name, request),
+            )),
+        ),
     ))
     .await
 }
@@ -514,17 +520,23 @@ async fn backend_handler_inner(
     call: &mut Option<direct_audit::DirectCall>,
     reads: &mut direct_audit::DirectReads,
 ) -> RpcHttp {
+    let shared = Arc::clone(&state);
     let state = &*state;
     let (caller, key, request) = match direct_caller::resolve_caller(state, request).await {
         Ok(resolved) => resolved,
         Err(response) => return response,
     };
+    // The owned session first: hiding is judged under the profile the call
+    // is routed under.
+    let session = direct_caller::owned_session(state, &caller, key);
+    // Before the absence stage and the backend lookup read the scoped view.
+    direct_caller::record_hiding_caller(shared, &caller, session);
     let mut envelope =
         match direct_caller::read_envelope(state, &name, request, &caller, (call, reads)).await {
             Ok(envelope) => envelope,
             Err(response) => return response,
         };
-    let route = match direct_caller::route(state, &name, &caller, key, &envelope) {
+    let route = match direct_caller::route(state, &name, &caller, session, &envelope) {
         Ok(route) => route,
         Err(response) => return response,
     };
@@ -729,16 +741,6 @@ fn cached_error_response(id: Option<RequestId>, error: &Value) -> JsonRpcRespons
     }
 }
 
-fn record_client_success(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_success(client);
-    }
-}
-
 /// Stamp a signed runtime-provenance receipt onto a direct-route `tools/call`
 /// result (MIK-6905 rung 3). The `/mcp/{name}` passthrough bypasses the meta
 /// chokepoint, so without this a client could route around provenance simply
@@ -770,16 +772,7 @@ fn stamp_direct_provenance(
     ));
 }
 
-fn record_client_failure(state: &AppState, client: Option<&AuthenticatedClient>) {
-    if let Some(client) = client {
-        state
-            .live_config
-            .generation()
-            .auth()
-            .record_client_failure(client);
-    }
-}
-
+mod client_outcome;
 mod costs;
 mod direct_audit;
 mod direct_caller;

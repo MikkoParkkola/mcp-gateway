@@ -35,6 +35,9 @@ impl Backend {
         if let Some(bytes) = self.config.max_frame_bytes {
             transport.set_max_frame_bytes(bytes);
         }
+        if let Some(needles) = self.needles.get() {
+            transport.attach_needles(std::sync::Arc::clone(needles));
+        }
         // Registered before anything is spawned, under the lock `stop` and
         // `retire_now` latch under: a retire either sees this transport or this
         // start sees `stopping` and spawns nothing (MIK-7923, design M1).

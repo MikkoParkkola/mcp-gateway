@@ -30,7 +30,7 @@ impl MetaMcp {
         // A name the capability provider answers runs there, outside any
         // backend instance and its send check, so it is never exempt.
         if self
-            .get_capabilities()
+            .caller_capabilities()
             .is_some_and(|caps| caps.name == server)
         {
             return None;
