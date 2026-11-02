@@ -217,3 +217,60 @@ async fn configured_values_past_the_free_slots_are_all_held() {
         "the bound on sent values no longer holds"
     );
 }
+
+/// Reloads that each replace a backend's configured values demote the old
+/// ones into the sent count: past the bound the set refuses, and it
+/// recovers once they retire.
+#[tokio::test(start_paused = true)]
+async fn reloads_that_supersede_past_the_bound_refuse_until_they_retire() {
+    let needles = NeedleSet::with_grace(GRACE);
+    // 18 loads of 64 distinct values: 17 superseded loads, 1,088 demoted.
+    for load in 0..18 {
+        let set = ConfiguredSecrets::of(
+            (0..64)
+                .map(|i| {
+                    explicit(
+                        &format!("headers.K{i}"),
+                        &format!("load-{load:02}-value-{i:02}"),
+                    )
+                })
+                .collect(),
+        );
+        needles.pin_configured("b", &set);
+    }
+    assert!(
+        needles.overflowed(),
+        "1,088 superseded values held past the bound without a refusal"
+    );
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert!(!needles.overflowed(), "the refusal outlived the grace");
+    assert!(
+        redacted(&needles, "load-17-value-00"),
+        "the current load lost its values"
+    );
+}
+
+/// Before a registration is decided only additions are made: the values the
+/// instance still registered holds stay configured until the new one is in.
+#[tokio::test(start_paused = true)]
+async fn adding_a_record_before_registration_demotes_nothing() {
+    let needles = NeedleSet::with_grace(GRACE);
+    needles.pin_configured(
+        "b",
+        &ConfiguredSecrets::of(vec![explicit("headers.A", "serving-instance-value")]),
+    );
+    let next = ConfiguredSecrets::of(vec![explicit("headers.A", "replacement-value")]);
+    needles.add_configured("b", &next);
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert!(
+        redacted(&needles, "serving-instance-value"),
+        "a refused registration let the serving instance's value retire"
+    );
+    assert!(redacted(&needles, "replacement-value"));
+    needles.pin_configured("b", &next);
+    tokio::time::advance(GRACE + Duration::from_secs(1)).await;
+    assert!(
+        !redacted(&needles, "serving-instance-value"),
+        "the superseded value never started its grace"
+    );
+}

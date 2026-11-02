@@ -402,6 +402,9 @@ impl BackendRegistry {
         self.membership
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         drop(stopping);
+        // Registered now: the values the replaced instance held and this one
+        // lacks start their grace (outside the guard: it may warn).
+        inserted.settle_superseded();
         // Before the insert, so no transition escapes; again after it, so an
         // observer attached meanwhile reaches it here or in the walk.
         if let Some(observer) = self.breaker_observer.get() {

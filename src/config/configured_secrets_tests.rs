@@ -178,9 +178,9 @@ fn the_record_never_prints_a_value() {
     assert!(!printed.contains(TOKEN), "{printed}");
 }
 
-/// The load refusals for one backend `b` whose headers are `env:` references
-/// to the given env-file variables.
-fn refused(headers: Pairs<'_>, env_body: &str) -> Vec<String> {
+/// The load refusals for one backend `b` with the given written `headers:`
+/// and `env:`, and `env_body` as its env file.
+fn refused(headers: Pairs<'_>, env: Pairs<'_>, env_body: &str) -> Vec<String> {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("gateway.env");
     crate::gateway::test_helpers::write_owner_only(&path, env_body).expect("write the env file");
@@ -189,6 +189,10 @@ fn refused(headers: Pairs<'_>, env_body: &str) -> Vec<String> {
         "b".to_owned(),
         BackendConfig {
             headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            env: env
                 .iter()
                 .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
                 .collect(),
@@ -230,7 +234,7 @@ fn a_backend_configuring_too_many_secrets_is_refused_at_load() {
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
     assert!(
-        refused(&pairs, &at_cap.1).is_empty(),
+        refused(&pairs, &[], &at_cap.1).is_empty(),
         "the cap itself was refused"
     );
     let over = many(super::MAX_CONFIGURED + 1);
@@ -239,7 +243,7 @@ fn a_backend_configuring_too_many_secrets_is_refused_at_load() {
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
-    let refusals = refused(&pairs, &over.1);
+    let refusals = refused(&pairs, &[], &over.1);
     assert_eq!(refusals.len(), 1, "{refusals:?}");
     assert!(
         refusals[0].contains("backends.b:") && refusals[0].contains("65"),
@@ -256,7 +260,7 @@ fn a_backend_configuring_too_many_secrets_is_refused_at_load() {
 /// complete it.
 fn assert_marker_refused(marker: &str) {
     let body = format!("MARKED=abc{marker}xyz-secret\n");
-    let refusals = refused(&[("X-Key", "env:MARKED")], &body);
+    let refusals = refused(&[("X-Key", "env:MARKED")], &[], &body);
     assert_eq!(refusals.len(), 1, "{marker}: {refusals:?}");
     assert!(
         refusals[0].contains("backends.b.headers.X-Key"),
@@ -281,4 +285,36 @@ fn a_secret_value_holding_the_removed_marker_is_refused_at_load() {
 #[test]
 fn a_secret_value_holding_the_hidden_marker_is_refused_at_load() {
     assert_marker_refused("{hidden}");
+}
+
+/// The cap counts values the set will hold, once each: 65 short `${VAR}`
+/// env values (never held) and 65 headers repeating one credential both
+/// load.
+#[test]
+fn the_cap_counts_only_distinct_held_values() {
+    let names: Vec<(String, String)> = (0..65)
+        .map(|i| (format!("FLAG_{i}"), format!("${{FLAG_{i}}}")))
+        .collect();
+    let env: Vec<(&str, &str)> = names
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    let mut body = String::new();
+    for i in 0..65 {
+        use std::fmt::Write as _;
+        let _ = writeln!(body, "FLAG_{i}=1");
+    }
+    let short = refused(&[], &env, &body);
+    assert!(
+        short.is_empty(),
+        "short values never held were counted: {short:?}"
+    );
+
+    let keys: Vec<String> = (0..65).map(|i| format!("X-Key-{i}")).collect();
+    let headers: Vec<(&str, &str)> = keys.iter().map(|k| (k.as_str(), "env:SHARED")).collect();
+    let repeated = refused(&headers, &[], "SHARED=one-shared-credential\n");
+    assert!(
+        repeated.is_empty(),
+        "one value counted 65 times: {repeated:?}"
+    );
 }

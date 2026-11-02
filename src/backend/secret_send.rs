@@ -111,6 +111,14 @@ impl Backend {
         Ok(())
     }
 
+    /// Once this instance is registered: configured values its name's set
+    /// holds that this instance's record lacks start their grace now.
+    pub(crate) fn settle_superseded(&self) {
+        if let (Some(needles), Some(configured)) = (self.needles.get(), self.configured.get()) {
+            needles.pin_configured(&self.name, configured);
+        }
+    }
+
     /// Adds every value this backend's rules resolve to now, so a value is
     /// removed from what the backend sends before any call injects it (a
     /// tool description, an initialize answer). A rule that does not resolve
@@ -129,7 +137,9 @@ impl Backend {
         // a value the instance it replaces held and it lacks counts its grace
         // from now.
         let _ = self.configured.set(configured.clone());
-        needles.pin_configured(&self.name, configured);
+        // Added only: until this instance is registered, the one it replaces
+        // may go on serving, so nothing it holds is demoted yet.
+        needles.add_configured(&self.name, configured);
         let Some(resolver) = self.secret_resolver.get() else {
             return;
         };

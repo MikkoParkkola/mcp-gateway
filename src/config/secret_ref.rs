@@ -399,7 +399,13 @@ fn configured_refusals(
             )
         })
         .collect();
-    let count = secrets.iter().count();
+    // Only what the set will hold, once per value.
+    let count = secrets
+        .iter()
+        .filter(|secret| crate::security::needles::holds(secret))
+        .map(|secret| secret.value.as_str())
+        .collect::<std::collections::HashSet<_>>()
+        .len();
     if count > MAX_CONFIGURED {
         refusals.push(format!(
             "backends.{name}: {count} secret values in headers: and env:, more than the \

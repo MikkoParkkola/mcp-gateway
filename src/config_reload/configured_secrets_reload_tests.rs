@@ -197,6 +197,7 @@ fn a_backend_registers_only_at_startup_or_in_apply_patch() {
 
 /// A patch applied without its load's record would seed new instances from
 /// an older load: in a debug build `apply_patch` refuses to run.
+#[cfg(debug_assertions)]
 #[tokio::test]
 #[should_panic(expected = "apply_patch without its load's record")]
 async fn a_patch_applied_without_its_load_record_fails_in_a_debug_build() {

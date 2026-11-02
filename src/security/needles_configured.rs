@@ -8,58 +8,95 @@ use std::sync::atomic::Ordering;
 use serde_json::Value;
 
 use super::{
-    ECHO_REFUSAL, JsonRpcResponse, Lifetime, NeedleSet, REFUSAL_CODE, SHORT_VALUE_BYTES, Scrubbed,
-    refusal, refusal_message, scrub_response_with, scrub_text,
+    ECHO_REFUSAL, JsonRpcResponse, Lifetime, MAX_NEEDLES, NeedleSet, REFUSAL_CODE,
+    SHORT_VALUE_BYTES, Scrubbed, refusal, refusal_message, scrub_response_with, scrub_text,
+    sent_count,
 };
 
+/// Whether a configured value is held: an explicit one at any length, an
+/// inferred one only when it is long enough to be safely treated as a
+/// secret. Load counts these against its cap.
+pub(crate) fn holds(secret: &crate::config::configured_secrets::ConfiguredSecret) -> bool {
+    secret.origin == crate::config::configured_secrets::SecretOrigin::Explicit
+        || secret.value.len() >= SHORT_VALUE_BYTES
+}
+
+/// What a pin does with values the set holds as configured that `secrets`
+/// lacks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Superseded {
+    /// Left configured: the instance holding them may still be the one
+    /// registered.
+    Kept,
+    /// Their grace starts now.
+    Demoted,
+}
+
 impl NeedleSet {
+    /// Adds `secrets` as configured values without demoting any: run before
+    /// an instance is published, when the registration can still be refused
+    /// and the instance it replaces may go on serving. [`Self::pin_configured`]
+    /// runs once the instance is registered.
+    pub(crate) fn add_configured(
+        &self,
+        backend: &str,
+        secrets: &crate::config::configured_secrets::ConfiguredSecrets,
+    ) {
+        self.pin(backend, secrets, Superseded::Kept);
+    }
+
     /// Makes `secrets` the backend's configured values, as one swap: each is
     /// held for as long as it stays configured, and a value configured before
     /// but not now counts from this moment, so an echo of a just-rotated
     /// credential is still removed until its grace has passed. An inferred
     /// value too short to be safely treated as a secret is left out and its
     /// field named once; an explicit one is held at any length and named once.
+    /// Superseded values past the bound on sent values make the set refuse
+    /// until enough of them retire, as a refused send does.
     pub(crate) fn pin_configured(
         &self,
         backend: &str,
         secrets: &crate::config::configured_secrets::ConfiguredSecrets,
     ) {
-        use crate::config::configured_secrets::SecretOrigin;
+        self.pin(backend, secrets, Superseded::Demoted);
+    }
+
+    fn pin(
+        &self,
+        backend: &str,
+        secrets: &crate::config::configured_secrets::ConfiguredSecrets,
+        superseded: Superseded,
+    ) {
+        for secret in secrets.iter() {
+            if !holds(secret) {
+                if self.short_warned.lock().insert(secret.field.clone()) {
+                    tracing::warn!(
+                        backend,
+                        field = %secret.field,
+                        bytes = secret.value.len(),
+                        "not redacted: too short to be treated as a secret; write it \
+                         as an env: reference to mark it secret"
+                    );
+                }
+            } else {
+                self.warn_if_short(backend, &secret.field, &secret.value);
+            }
+        }
         let wanted: Vec<&str> = secrets
             .iter()
-            .filter(|secret| {
-                if secret.value.len() >= SHORT_VALUE_BYTES {
-                    return true;
-                }
-                match secret.origin {
-                    SecretOrigin::Explicit => {
-                        self.warn_if_short(backend, &secret.field, &secret.value);
-                        true
-                    }
-                    SecretOrigin::Inferred => {
-                        if self.short_warned.lock().insert(secret.field.clone()) {
-                            tracing::warn!(
-                                backend,
-                                field = %secret.field,
-                                bytes = secret.value.len(),
-                                "not redacted: too short to be treated as a secret; write it \
-                                 as an env: reference to mark it secret"
-                            );
-                        }
-                        false
-                    }
-                }
-            })
+            .filter(|secret| holds(secret))
             .map(|secret| secret.value.as_str())
             .collect();
         let mut values = self.values.write();
         let now = tokio::time::Instant::now();
         let mut changed = false;
-        for held in values.iter_mut() {
-            if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
-                held.lifetime = Lifetime::Grace;
-                held.last_sent = now;
-                changed = true;
+        if superseded == Superseded::Demoted {
+            for held in values.iter_mut() {
+                if held.lifetime == Lifetime::Configured && !wanted.contains(&held.value.as_str()) {
+                    held.lifetime = Lifetime::Grace;
+                    held.last_sent = now;
+                    changed = true;
+                }
             }
         }
         for value in wanted {
@@ -78,6 +115,14 @@ impl NeedleSet {
         }
         if changed {
             self.version.fetch_add(1, Ordering::SeqCst);
+        }
+        // Reloads that each supersede values add to the sent count: past the
+        // bound the set refuses until they retire.
+        let first_refusal =
+            sent_count(&values) > MAX_NEEDLES && !self.overflowed.swap(true, Ordering::SeqCst);
+        drop(values);
+        if first_refusal {
+            self.warn_overflowed(backend);
         }
     }
 }

@@ -155,6 +155,9 @@ impl Gateway {
             );
             info!(backend = %name, transport = %backend_config.transport.transport_type(), "Registered backend");
         }
+        // Startup's registrations used the record: a later patch must set its
+        // own before it applies.
+        let _ = backends.take_load_record();
         if let Some(warning) = config.remote_provenance_warning() {
             warn!("{warning}");
         }
