@@ -46,9 +46,12 @@ Usage:
 
 from __future__ import annotations
 
+import enum
+import functools
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SKIP_DIRS = {".git", "target", "node_modules"}
@@ -310,6 +313,255 @@ def attribute_end(code: str, start: int) -> int:
         depth += {"[": 1, "]": -1}.get(code[i], 0)
         i += 1
     return i
+
+
+# ---------------------------------------------------------------------------
+# cfg item extents, by a parser. Shared with the timing-asserts,
+# request-panics and inventory gates. tree-sitter comes from the gates' own
+# environment (scripts/gate-env) and is imported only here, so the orphan gate
+# itself still runs on the system Python.
+
+
+class SafeSide(enum.Enum):
+    """Where a caller wants an unsure extent to land."""
+
+    # Looking for test code (the timing gate): an unsure item runs long.
+    LEAN_LONG = "lean_long"
+    # Looking for product code (request-panics, inventory): an unsure item is
+    # left as product code.
+    LEAN_SHORT = "lean_short"
+
+
+class CfgItem(NamedTuple):
+    """One item under a target cfg: character offsets [start, end) of the
+    attribute through its construct, and its 1-based first and last lines."""
+
+    start: int
+    end: int
+    first_line: int
+    last_line: int
+
+
+class CfgItems(NamedTuple):
+    items: tuple[CfgItem, ...]
+    # The tree has errors; `known_gap` when they are exactly a listed gap.
+    parse_errors: bool
+    known_gap: bool
+    # Why each unsure case was resolved by the caller's side, for its report.
+    unsure: tuple[str, ...]
+
+
+# Today's grammar gaps of the pinned tree-sitter-rust, each keyed on every
+# error and missing node in the file by (kind, stripped source line). A file
+# whose errors differ is unsure as a whole.
+KNOWN_GAPS: dict[str, frozenset[tuple[str, str]]] = {
+    "src/gateway/authz.rs": frozenset({("ERROR", "Some(raw @ Value::String(_)) => {")}),
+    "src/gateway/meta_mcp/invoke/send.rs": frozenset(
+        {
+            ("ERROR", '#[cfg(feature = "cost-governance")]'),
+            ("MISSING }", '#[cfg(feature = "cost-governance")]'),
+            ("ERROR", "permit,"),
+        }
+    ),
+    "src/gateway/meta_mcp/invoke/post_dispatch.rs": frozenset(
+        {
+            ("ERROR", '#[cfg(feature = "cost-governance")]'),
+            ("MISSING }", '#[cfg(feature = "cost-governance")]'),
+            ("ERROR", "cost_warnings,"),
+            ("ERROR", "} = dispatched;"),
+        }
+    ),
+}
+
+# The attribute is its construct's first child.
+PARENT_OWNED = frozenset({"field_initializer", "shorthand_field_initializer", "match_arm"})
+# The attribute precedes its construct in a list.
+LIST_OWNED = frozenset(
+    {
+        "source_file",
+        "declaration_list",
+        "block",
+        "field_declaration_list",
+        "ordered_field_declaration_list",
+        "enum_variant_list",
+        "parameters",
+        "array_expression",
+    }
+)
+NOT_A_CONSTRUCT = frozenset({"attribute_item", "inner_attribute_item", "line_comment", "block_comment"})
+CFG_IN_TEXT = re.compile(r"#!?\[cfg\(")
+CFG_ATTR = re.compile(r"#\s*!?\s*\[\s*cfg\s*\(")
+
+
+@functools.lru_cache(maxsize=1)
+def _rust_parser():
+    import tree_sitter_rust
+    from tree_sitter import Language, Parser
+
+    return Parser(Language(tree_sitter_rust.language()))
+
+
+def _owner(attr):
+    """The node an attribute marks, or None when the owner table does not
+    know its place (an unsure case, resolved by the caller's side)."""
+    parent = attr.parent
+    if parent is None:
+        return None
+    if attr.type == "inner_attribute_item":
+        if parent.type == "source_file":
+            return parent
+        holder = parent.parent
+        if parent.type == "declaration_list" and holder is not None and holder.type in ("mod_item", "impl_item", "trait_item"):
+            return holder
+        if parent.type == "block" and holder is not None and holder.type == "function_item":
+            return holder
+        return None
+    if parent.type in PARENT_OWNED:
+        return parent
+    if parent.type not in LIST_OWNED:
+        return None
+    node = attr.next_named_sibling
+    while node is not None and node.type in NOT_A_CONSTRUCT:
+        node = node.next_named_sibling
+    if node is not None and parent.type == "ordered_field_declaration_list" and node.type == "visibility_modifier":
+        node = node.next_named_sibling  # a `pub` tuple field spans through its type
+    return node
+
+
+def _cfg_predicates(attr_text: str) -> list[str]:
+    """The predicate of each `#[cfg(..)]` in `attr_text` (literals blanked)."""
+    code = blank(attr_text)[0]
+    return [cfg_expression(code, m.end()) for m in CFG_ATTR.finditer(code)]
+
+
+def _error_signatures(root, lines: list[bytes]) -> set[tuple[str, str]]:
+    found: set[tuple[str, str]] = set()
+
+    def walk(node) -> None:
+        if node.type == "ERROR" or node.is_missing:
+            kind = f"MISSING {node.type}" if node.is_missing else "ERROR"
+            found.add((kind, lines[node.start_point[0]].decode("utf-8", "replace").strip()))
+            if node.type == "ERROR":
+                return
+        for child in node.children:
+            walk(child)
+
+    walk(root)
+    return found
+
+
+def _error_ranges(root) -> list[tuple[int, int]]:
+    out: list[tuple[int, int]] = []
+
+    def walk(node) -> None:
+        if node.type == "ERROR" or node.is_missing:
+            out.append((node.start_byte, node.end_byte))
+            return
+        for child in node.children:
+            walk(child)
+
+    walk(root)
+    return out
+
+
+def _walk_cfg(root, src: bytes, is_target):
+    """(start byte, end byte or None, reason) for each outermost target cfg
+    attribute and for each macro body holding one. `end` is None for an
+    unsure case; its start and the end of its fallback node are reported."""
+    found = []
+
+    def target(text: str) -> bool:
+        return any(is_target(p) for p in _cfg_predicates(text))
+
+    def walk(node, inside_end: int) -> None:
+        for child in node.children:
+            if child.start_byte < inside_end:
+                continue
+            if child.type in ("attribute_item", "inner_attribute_item") and target(src[child.start_byte : child.end_byte].decode("utf-8", "replace")):
+                owner = _owner(child)
+                if owner is None:
+                    found.append((child.start_byte, None, node.end_byte, "owner not known"))
+                else:
+                    start = min(child.start_byte, owner.start_byte)
+                    found.append((start, max(owner.end_byte, child.end_byte), None, ""))
+                    inside_end = max(inside_end, owner.end_byte)
+                continue
+            if child.type in ("macro_invocation", "macro_definition"):
+                body = "".join(blank(src[child.start_byte : child.end_byte].decode("utf-8", "replace"))[0].split())
+                if any(target(m.group(0) + body[m.end() :]) for m in CFG_IN_TEXT.finditer(body)):
+                    found.append((child.start_byte, None, child.end_byte, "cfg inside a macro body"))
+                    inside_end = max(inside_end, child.end_byte)
+                    continue
+            walk(child, inside_end)
+
+    walk(root, -1)
+    return found
+
+
+def _char_offsets(text: str, src: bytes):
+    """A byte offset of `src` (the UTF-8 encoding of `text`) as a character
+    offset of `text`; the identity for an ASCII file."""
+    if len(src) == len(text):
+        return lambda b: b
+    starts = [0] * (len(src) + 1)
+    k = 0
+    for i, ch in enumerate(text):
+        for _ in range(len(ch.encode("utf-8"))):
+            starts[k] = i
+            k += 1
+    starts[len(src)] = len(text)
+    return lambda b: starts[b]
+
+
+def _item(text: str, start: int, end: int) -> CfgItem:
+    return CfgItem(start, end, text.count("\n", 0, start) + 1, text.count("\n", 0, max(start, end - 1)) + 1)
+
+
+def cfg_items(text: str, side: SafeSide, is_target=None, path: str = "") -> CfgItems:
+    """Each outermost item in `text` under a cfg that `is_target` accepts
+    (default `cfg_is_test`), by its own extent, with every unsure case
+    resolved by `side`: a file whose parse errors are not exactly a listed
+    gap (the whole file), an attribute whose place the owner table does not
+    know, an item touching a listed error, and a macro body holding a target
+    cfg. LEAN_LONG makes an unsure case test code to its fallback end;
+    LEAN_SHORT leaves it product code."""
+    is_target = is_target or cfg_is_test
+    src = text.encode("utf-8")
+    tree = _rust_parser().parse(src)
+    root = tree.root_node
+    to_char = _char_offsets(text, src)
+    errors = root.has_error
+    known = errors and _error_signatures(root, src.split(b"\n")) == KNOWN_GAPS.get(path)
+    if errors and not known:
+        whole = (_item(text, 0, len(text)),) if side is SafeSide.LEAN_LONG else ()
+        return CfgItems(whole, True, False, ("parse errors outside the known-gap list",))
+    error_ranges = _error_ranges(root) if errors else []
+    items: list[CfgItem] = []
+    unsure: list[str] = []
+    for start, end, fallback, reason in _walk_cfg(root, src, is_target):
+        if end is not None and any(a < end and start < b for a, b in error_ranges):
+            end, fallback, reason = None, end, "item touches a known parse error"
+        if end is None:
+            unsure.append(f"{reason} at line {text.count(chr(10), 0, to_char(start)) + 1}")
+            if side is SafeSide.LEAN_LONG:
+                items.append(_item(text, to_char(start), to_char(fallback)))
+            continue
+        items.append(_item(text, to_char(start), to_char(end)))
+    return CfgItems(tuple(items), bool(errors), bool(known), tuple(unsure))
+
+
+def item_extents_ignoring_errors(text: str, is_target=None) -> list[tuple[int, int]]:
+    """(first line, last line) of each target cfg item as the tree reads it,
+    errors or not: the locality check behind the known-gap list."""
+    src = text.encode("utf-8")
+    to_char = _char_offsets(text, src)
+    root = _rust_parser().parse(src).root_node
+    out = []
+    for start, end, _, _ in _walk_cfg(root, src, is_target or cfg_is_test):
+        if end is not None:
+            item = _item(text, to_char(start), to_char(end))
+            out.append((item.first_line, item.last_line))
+    return out
 
 
 def reachable() -> set[Path]:
