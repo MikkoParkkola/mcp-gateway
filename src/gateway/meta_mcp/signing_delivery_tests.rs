@@ -78,6 +78,7 @@ async fn finalize(
             signing,
             chain_source: super::super::response_security::ChainSource::NotEligible,
             chain_nonce: None,
+            generation: None,
         },
     )
     .await
@@ -521,6 +522,8 @@ fn install_firewall(
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },

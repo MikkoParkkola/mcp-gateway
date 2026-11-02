@@ -16,7 +16,8 @@ use tracing::error;
 
 use super::super::AppState;
 use super::super::helpers::{RpcHttp, build_http_response};
-use super::{record_client_failure, settle_direct_failure};
+use super::client_outcome::record_client_failure;
+use super::settle_direct_failure;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::meta_mcp::invoke::egress::EgressOutcome;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -32,6 +33,9 @@ pub(super) struct DirectFailure<'a> {
     pub(super) name: &'a str,
     pub(super) id: RequestId,
     pub(super) client: Option<&'a AuthenticatedClient>,
+    /// The call's pinned generation: its answer is judged under it and the
+    /// published one (ADR-029, amended, item 5).
+    pub(super) generation: &'a crate::config_reload::Generation,
     pub(super) identity: Option<&'a VerifiedIdentity>,
     /// The managed lease the dispatched headers were released under, if any.
     pub(super) managed: Option<&'a ManagedLease>,
@@ -81,7 +85,7 @@ impl DirectFailure<'_> {
                 call,
                 crate::gateway::meta_mcp::invoke::egress::ContentChecks::Here,
             ),
-            self.client,
+            (self.client, self.generation),
             &mut response,
         );
         // A reconnect refusal settles the key with `response`, not the refusal

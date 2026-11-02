@@ -389,6 +389,8 @@ fn g11_router(rig: &Rig, redact: bool) -> Arc<Firewall> {
                     servers: None,
                     keys: None,
                     except: None,
+                    allowed_roots: None,
+                    path_args: None,
                 }],
                 ..FirewallConfig::default()
             },
@@ -411,6 +413,7 @@ fn with_unredacted_router(rig: Rig) -> Rig {
         beta,
     } = rig;
     let mut app = Arc::try_unwrap(state).unwrap_or_else(|_| panic!("fixture state is exclusive"));
+    crate::gateway::router::firewall_publish_fixture::publish_firewall(&app, &router_fw);
     app.firewall = Some(router_fw);
     Rig {
         state: Arc::new(app),

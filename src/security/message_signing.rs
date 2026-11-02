@@ -344,6 +344,7 @@ impl NonceStore {
         self.reclaim_expired(&mut state, now);
         let count = before - state.seen.len();
         publish_nonce_occupancy(&state);
+        drop(state);
         if count > 0 {
             debug!(count, "Evicted expired nonce entries");
         }

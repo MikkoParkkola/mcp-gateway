@@ -238,7 +238,12 @@ pub(super) fn deliver_replay(
             crate::gateway::meta_mcp::invoke::audit::note_cached_failure(&error);
             crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
             let mut response = super::cached_error_response(Some(id.clone()), &error);
-            replay_scan(state, (&admitted.call, envelope), client, &mut response);
+            replay_scan(
+                state,
+                (&admitted.call, envelope),
+                (client, admitted.auth.generation),
+                &mut response,
+            );
             return Err(build_http_response(&Egressed::of(response), StatusCode::OK));
         }
         Some(GuardOutcome::Proceed(reservation)) => {
@@ -252,10 +257,17 @@ pub(super) fn deliver_replay(
         seams::note_replay(admitted.idem_reservation.is_some());
         // Either store's replay delivers an answer already counted.
         crate::gateway::meta_mcp::invoke::audit::counting::note_replay();
-        crate::gateway::meta_mcp::invoke::audit::note_cached();
+        crate::gateway::meta_mcp::invoke::audit::note_cached(
+            crate::gateway::meta_mcp::invoke::audit::Answered::Replay,
+        );
         // A replay is a delivery too: it renews this caller's own copy,
         // shaped for this request's era (MIK-8022).
-        replay_scan(state, (&admitted.call, envelope), client, &mut response);
+        replay_scan(
+            state,
+            (&admitted.call, envelope),
+            (client, admitted.auth.generation),
+            &mut response,
+        );
         let auth = (admitted.auth, admitted.call.tool);
         let response =
             super::direct_dispatch::finish_tail(scope, envelope, preflight, auth, response);
@@ -284,7 +296,10 @@ fn replay_scan(
         &crate::gateway::meta_mcp::invoke::dispatch_guards::BackendCall<'_>,
         &Envelope,
     ),
-    client: Option<&crate::gateway::auth::AuthenticatedClient>,
+    (client, generation): (
+        Option<&crate::gateway::auth::AuthenticatedClient>,
+        &crate::config_reload::Generation,
+    ),
     response: &mut JsonRpcResponse,
 ) {
     let method = envelope.method.as_str();
@@ -295,7 +310,7 @@ fn replay_scan(
             &target,
             crate::gateway::meta_mcp::invoke::egress::ContentChecks::for_method(method),
         ),
-        client,
+        (client, generation),
         response,
     );
 }

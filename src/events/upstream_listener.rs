@@ -330,11 +330,17 @@ impl UpstreamListeners {
             .filter(|(key, shared)| only(key) && self.revivable(key, shared, &refused))
             .map(|(key, _)| key.clone())
             .collect();
+        // Logged once `map` is released.
+        let mut revived = Vec::with_capacity(due.len());
         for key in due {
             let carried = take_ended(&mut map, &key);
-            tracing::debug!(backend = %key.backend, "upstream listener: revived");
+            revived.push(key.backend.clone());
             let shared = self.start(&key, carried, self.ledger(&key));
             map.insert(key, shared);
+        }
+        drop(map);
+        for backend in revived {
+            tracing::debug!(backend = %backend, "upstream listener: revived");
         }
     }
 

@@ -170,20 +170,22 @@ impl StdioTransport {
         // Vacant-only. A colliding live key must fail closed: overwriting the
         // incumbent reroutes one call's progress onto another call's channel,
         // which is worse than losing it. The third defect ADR-014 §2 names.
-        match self.progress_destinations.entry(token.to_string()) {
+        let registered = match self.progress_destinations.entry(token.to_string()) {
             dashmap::mapref::entry::Entry::Vacant(slot) => {
                 slot.insert(DeliveryHandle::capture(token));
                 true
             }
-            dashmap::mapref::entry::Entry::Occupied(_) => {
-                // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
-                warn!(
-                    token = %token,
-                    "progress token is already registered to a live call; refusing to reroute it"
-                );
-                false
-            }
+            dashmap::mapref::entry::Entry::Occupied(_) => false,
+        };
+        // Logged once the entry's shard lock is released.
+        if !registered {
+            // ci-allow-secret-log: a minted progress token is a correlation id, not a credential
+            warn!(
+                token = %token,
+                "progress token is already registered to a live call; refusing to reroute it"
+            );
         }
+        registered
     }
 
     /// End a token's registration, dropping the sender it held.

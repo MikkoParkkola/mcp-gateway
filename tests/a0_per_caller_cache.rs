@@ -41,7 +41,6 @@ use mcp_gateway::gateway::test_helpers::{
 use mcp_gateway::mtls::{CertIdentity, MtlsConfig, MtlsPolicy};
 use mcp_gateway::protocol::mrtr::IDEMPOTENCY_KEY_META;
 use mcp_gateway::security::caller_identity::{CallerIdentityConfig, CallerIdentityMode};
-use mcp_gateway::security::{ToolPolicy, ToolPolicyConfig};
 use serde_json::{Value, json};
 use telemetry_metrics::{
     Counter, CounterFn, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit,
@@ -229,7 +228,6 @@ async fn gateway(setup: Setup, calls: &Arc<AtomicUsize>) -> (Arc<AppState>, temp
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),

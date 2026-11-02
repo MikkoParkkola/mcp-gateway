@@ -565,6 +565,9 @@ impl From<InvokeScope<'_>> for crate::gateway::router::CallerStanding {
 struct Operator;
 
 impl ToolAuthorizer for Operator {
+    fn generation(&self) -> Option<&crate::config_reload::Generation> {
+        None
+    }
     fn decide<'a>(&'a self, _target: ToolTarget<'a>) -> crate::gateway::authz::Decision<'a> {
         crate::gateway::authz::Decision::of(Ok(()))
     }

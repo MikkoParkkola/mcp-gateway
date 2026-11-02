@@ -60,6 +60,8 @@ async fn stdio_on(backend: Arc<Planted>, setup: Setup) -> (Arc<MetaMcp>, Option<
             servers: None,
             keys: None,
             except: None,
+            allowed_roots: None,
+            path_args: None,
         }],
         _ => Vec::new(),
     };
@@ -176,7 +178,7 @@ async fn send(meta: &Arc<MetaMcp>, method: &'static str, part: Part) -> String {
         )),
         &writer,
         &reads,
-        Some(meta.notification_screen("stdio", "stdio-egress")),
+        Some(meta.notification_screen(("stdio", "stdio-egress"), None)),
     ))
     .await;
     drop(writer);

@@ -25,7 +25,6 @@ use crate::config::{AgentIdentityConfig, StreamingConfig};
 use crate::control_plane::ControlPlaneStore;
 use crate::key_server::{KeyServer, handler::key_server_routes};
 use crate::mtls::MtlsPolicy;
-use crate::security::ToolPolicy;
 #[cfg(feature = "firewall")]
 use crate::security::firewall::Firewall;
 
@@ -81,6 +80,8 @@ mod direct_guards;
 
 #[cfg(test)]
 mod adapter_get_rollback_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod allowed_root_watch_tests;
 #[cfg(test)]
 mod audit_degraded_tests;
 /// MIK-8392.STORED.1 T10: a revoked account's stored task read.
@@ -157,6 +158,8 @@ mod dispatch_parity_tests;
 #[cfg(all(test, feature = "webui"))]
 mod e5_dashboard_session_tests;
 
+#[cfg(all(test, feature = "metrics"))]
+mod backend_origin_count_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod egress_matrix_tests;
 #[cfg(test)]
@@ -169,6 +172,8 @@ mod errscan_a2a_tests;
 mod f13_fetch_on_miss_tests;
 #[cfg(test)]
 mod f13_text_a_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod firewall_publish_fixture;
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
 /// GH1942.HARDEN.1 rows 10 and 11: hardened requires declared elicitation.
@@ -187,6 +192,9 @@ mod keys_last_used_callers_tests;
 mod live_keys_dashboard_tests;
 #[cfg(test)]
 mod live_keys_tests;
+/// LOG.1: requests that log complete while stderr never drains.
+#[cfg(test)]
+mod log_lossy_tests;
 #[cfg(test)]
 mod mcp_nonce_admission_tests;
 #[cfg(test)]
@@ -248,6 +256,9 @@ mod delivery_effect_tests;
 /// A delivery record joins its invocation by trace, on both routes.
 #[cfg(all(test, feature = "firewall"))]
 mod delivery_trace_join_tests;
+/// The direct route records no declared effect yet (pinned absence).
+#[cfg(test)]
+mod direct_effect_absent_tests;
 /// A late refusal keeps its own code, and its run keeps the key.
 #[cfg(all(test, feature = "firewall"))]
 mod late_refusal_lease_tests;
@@ -260,6 +271,8 @@ mod live_flags_tests;
 /// ADR-023: a request keeps the generation it arrived with.
 #[cfg(all(test, feature = "firewall"))]
 mod live_pin_tests;
+#[cfg(all(test, feature = "firewall"))]
+mod live_policy_tests;
 /// ADR-023: the UI view reads the flags and environment name on each response.
 #[cfg(all(test, feature = "webui"))]
 mod live_ui_view_tests;
@@ -292,6 +305,9 @@ mod playbook_busy_tests;
 mod playbook_envelope_tests;
 #[cfg(test)]
 mod playbook_key_tests;
+/// The key-by-policy barrier: one request, one generation.
+#[cfg(all(test, feature = "firewall"))]
+mod policy_barrier_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
 /// MIK-8058: a failed reload's status says whose fault it is.
@@ -435,8 +451,6 @@ pub struct AppState {
     pub task_executor: Arc<crate::gateway::task_service::TaskExecutor>,
     /// Key server for OIDC-issued temporary tokens (optional)
     pub key_server: Option<Arc<KeyServer>>,
-    /// Tool access policy
-    pub tool_policy: Arc<ToolPolicy>,
     /// Certificate-based mTLS tool access policy
     pub mtls_policy: Arc<MtlsPolicy>,
     /// Whether URLs declared in `backends:` config are pre-authorised
@@ -855,14 +869,18 @@ pub(crate) fn compression() -> CompressionLayer {
 }
 
 /// Pin the published generation on a request before anything else runs. Every
-/// later judgement on the request reads this one, so a reload that publishes
-/// mid-request never mixes two configurations into one answer.
+/// later request-side judgement reads this one, so a reload that publishes
+/// mid-request never mixes two configurations into the request's checks; the
+/// answer side judges under this one and the published one (ADR-029, amended,
+/// item 5).
 async fn pin_generation(
     axum::extract::State(live): axum::extract::State<Arc<crate::config_reload::LiveConfig>>,
     mut request: axum::extract::Request,
     next: middleware::Next,
 ) -> axum::response::Response {
     request.extensions_mut().insert(live.generation());
+    #[cfg(test)]
+    crate::gateway::meta_mcp::visible::seams::pinned();
     next.run(request).await
 }
 

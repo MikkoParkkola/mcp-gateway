@@ -203,11 +203,13 @@ impl<'a> RouteStage<'a> {
                     lifecycle.renew(control_identity.clone());
                 }
                 let verdict = fw.check_request_keyed(
+                    intake.generation.firewall_policy(),
                     session_id,
                     RuleTarget::routed(target.server, target.tool, client.as_ref()),
                     target.arguments,
                     caller_name,
                     &control_identity,
+                    None,
                 );
                 if verdict.action == FirewallAction::Warn {
                     warn!(

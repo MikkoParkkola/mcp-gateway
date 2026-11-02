@@ -137,13 +137,6 @@ impl ToolIntegrityChecker {
                     previous_description: old_fp.description.clone(),
                     new_description: new_fp.description.clone(),
                 };
-                warn!(
-                    backend = backend,
-                    tool = name.as_str(),
-                    previous_hash = old_fp.schema_hash.as_str(),
-                    new_hash = new_fp.schema_hash.as_str(),
-                    "SECURITY: Tool definition mutated (possible rug pull)"
-                );
                 mutations.push(mutation);
             }
             // New tools added after baseline are not mutations — they're additions.
@@ -151,6 +144,16 @@ impl ToolIntegrityChecker {
 
         // Update stored fingerprints to latest
         *entry = new_fps;
+        drop(store);
+        for mutation in &mutations {
+            warn!(
+                backend = backend,
+                tool = mutation.tool_name.as_str(),
+                previous_hash = mutation.previous_hash.as_str(),
+                new_hash = mutation.new_hash.as_str(),
+                "SECURITY: Tool definition mutated (possible rug pull)"
+            );
+        }
 
         mutations
     }

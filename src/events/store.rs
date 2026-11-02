@@ -536,6 +536,7 @@ impl Store {
                         state.verified.remove(&key);
                     })
                 };
+                drop(state);
                 if let Err(restore) = restored {
                     tracing::warn!(%restore, "events store: verification rollback failed");
                 }

@@ -5,8 +5,8 @@
 use super::{
     AgentAuthState, AgentRegistry, AppState, Arc, BackendRegistry, Body, Config, GatewayKeyPair,
     MetaMcp, MtlsConfig, MtlsPolicy, NotificationMultiplexer, ProxyManager, Request,
-    ResolvedAuthConfig, ServiceExt, StatusCode, StoreLimits, SubscriptionRegistry, ToolPolicy,
-    ToolPolicyConfig, Value, auth_state, create_router, json, open_runtime,
+    ResolvedAuthConfig, ServiceExt, StatusCode, StoreLimits, SubscriptionRegistry, Value,
+    auth_state, create_router, json, open_runtime,
 };
 
 /// The gateway state, plus the directory its task store leases.
@@ -54,7 +54,6 @@ pub(crate) async fn state(modern: bool) -> (Arc<AppState>, tempfile::TempDir) {
         proxy_manager,
         streaming_config: config.streaming.clone(),
         key_server: None,
-        tool_policy: Arc::new(ToolPolicy::from_config(&ToolPolicyConfig::default())),
         mtls_policy: Arc::new(MtlsPolicy::from_config(&MtlsConfig::default())),
         trust_configured_backends: false,
         inflight: Arc::new(tokio::sync::Semaphore::new(100)),
