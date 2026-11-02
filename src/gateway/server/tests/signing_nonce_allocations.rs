@@ -141,10 +141,9 @@ async fn dispatch_as_served(fixture: &Fixture, request: Value) -> Value {
     .await;
     let answer = answer.expect("a request carrying an id must produce a response");
     let frame = answer.delivered_unjudged(&fixture.meta, SESSION).await;
-    staged.commit(
-        frame.delivers_result(),
-        &fixture.meta.paired_generation_for_test(),
-    );
+    // As `judge_and_commit` commits (`stdio_delivery.rs`): under the
+    // generation published now, which is an `Arc` clone, never a new one.
+    fixture.meta.commit_staged(staged, frame.delivers_result());
     frame
         .stdio_value()
         .map(std::borrow::Cow::into_owned)
