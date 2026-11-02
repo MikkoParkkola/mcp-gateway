@@ -779,14 +779,9 @@ async fn detach_token_step(
             .bounded(since, &cohort, &backend, deadline, oauth.lock_owned())
             .await?;
         // Bounded as the wait for the client is: a re-discovery is a fetch.
-        gate.bounded(
-            since,
-            &cohort,
-            &backend,
-            deadline,
-            client.rediscover_if_moved(),
-        )
-        .await??;
+        let rediscover = client.rediscover_if_moved();
+        gate.bounded(since, &cohort, &backend, deadline, rediscover)
+            .await??;
         client
             .get_token_detached(true, since, &cohort, deadline)
             .await
