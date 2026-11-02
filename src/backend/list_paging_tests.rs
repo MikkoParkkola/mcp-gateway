@@ -403,11 +403,11 @@ async fn a_truncated_fill_records_no_undeclared_effect() {
 
 /// A fill that stops after page 0 (page 1 has no list key but a cursor),
 /// every tool carrying `hints`.
-fn truncated_after_first_page(hints: Value) -> Arc<Backend> {
+fn truncated_after_first_page(hints: &Value) -> Arc<Backend> {
     backend_with(truncating_pager(hints), LONG_TTL)
 }
 
-fn truncating_pager(hints: Value) -> Arc<Pager> {
+fn truncating_pager(hints: &Value) -> Arc<Pager> {
     let pager = Arc::new(Pager {
         method: "tools/list",
         key: "tools",
@@ -429,7 +429,7 @@ fn truncating_pager(hints: Value) -> Arc<Pager> {
 /// the slot did not already admit, nor label it read-only.
 #[tokio::test]
 async fn a_truncated_fill_grants_no_cache_admission() {
-    let backend = truncated_after_first_page(json!({ "readOnlyHint": true }));
+    let backend = truncated_after_first_page(&json!({ "readOnlyHint": true }));
     backend.get_tools_shared().await.expect("fill");
     assert!(truncated(&backend));
     assert!(
@@ -442,7 +442,7 @@ async fn a_truncated_fill_grants_no_cache_admission() {
 /// The same for resending: a partial list cannot make a name safe to resend.
 #[tokio::test]
 async fn a_truncated_fill_grants_no_resend() {
-    let backend = truncated_after_first_page(json!({ "idempotentHint": true }));
+    let backend = truncated_after_first_page(&json!({ "idempotentHint": true }));
     backend.get_tools_shared().await.expect("fill");
     assert!(truncated(&backend));
     assert!(
@@ -455,7 +455,7 @@ async fn a_truncated_fill_grants_no_resend() {
 /// next complete list grants it again.
 #[tokio::test]
 async fn a_complete_fill_after_a_truncated_one_restores_admission() {
-    let pager = truncating_pager(json!({
+    let pager = truncating_pager(&json!({
         "readOnlyHint": true,
         "idempotentHint": true,
     }));
@@ -474,7 +474,7 @@ async fn a_complete_fill_after_a_truncated_one_restores_admission() {
 /// still declare it, and one they do not declare leaves.
 #[tokio::test]
 async fn a_truncated_fill_keeps_only_what_it_still_declares() {
-    let backend = truncated_after_first_page(json!({
+    let backend = truncated_after_first_page(&json!({
         "readOnlyHint": true,
         "idempotentHint": true,
     }));
