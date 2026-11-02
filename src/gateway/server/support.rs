@@ -668,3 +668,6 @@ pub fn replica_state_refusal(config: &Config) -> Option<String> {
 #[cfg(test)]
 #[path = "support_network_bind_tests.rs"]
 mod network_bind_tests;
+#[cfg(test)]
+#[path = "support_peer_identity_tests.rs"]
+mod peer_identity_tests;
