@@ -72,15 +72,10 @@ async fn a_rotation_to_a_digest_sharing_the_old_prefix_still_ends_the_holder() {
         "failed_since": null, "last_delivery_at": null, "last_error": null
     }))
     .expect("loads");
-    // The tag is the whole hash of the digest, computed here on its own: a
-    // later truncation fails this line even where the pair above would not.
-    let whole = <sha2::Sha256 as sha2::Digest>::digest(digest(&old))
-        .iter()
-        .fold(String::new(), |mut hex, byte| {
-            std::fmt::Write::write_fmt(&mut hex, format_args!("{byte:02x}"))
-                .expect("writing to a String cannot fail");
-            hex
-        });
+    // The tag is the whole hash of the digest. `digest_tag_of` hashes through
+    // `hashing::sha256_hex`; this hashes the digest on its own, so a later
+    // truncation fails here even where the pair above would not.
+    let whole = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(digest(&old)));
     assert_eq!(whole.len(), 64);
     assert_eq!(crate::gateway::auth::digest_tag_of(&digest(&old)), whole);
     assert_eq!(
