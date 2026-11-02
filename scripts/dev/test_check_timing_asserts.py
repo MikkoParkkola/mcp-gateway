@@ -268,6 +268,51 @@ class Timeouts(unittest.TestCase):
 HANG = {"HANG_BOUND": [("src/gateway/mod.rs", "Duration::from_secs(30)")]}
 
 
+class RequestTimeouts(unittest.TestCase):
+    """An HTTP client's `.timeout(D)` bounds the request on the real clock:
+    a slow answer under load fails the test, as `timeout(W, f)` does."""
+
+    scan, assertRefused, assertPasses = Timeouts.scan, Timeouts.assertRefused, Timeouts.assertPasses
+
+    BUILDER = 'let c = reqwest::Client::builder().timeout({w}).build().expect("client");'
+    REQUEST = 'let r = client.get(&url).timeout({w}).send().await.expect("answers");'
+
+    def test_a_short_request_timeout_is_judged(self):
+        for shape in (self.BUILDER, self.REQUEST, 'let r = gateway\n    .client\n    .post(&url)\n    .timeout({w})\n    .send();'):
+            with self.subTest(shape=shape):
+                self.assertRefused(shape.format(w="Duration::from_millis(500)"))
+                self.assertPasses(shape.format(w="Duration::from_secs(5)"))
+
+    def test_a_named_window_resolves_as_for_timeout(self):
+        prelude = "const PROBE: Duration = Duration::from_secs(2);"
+        (found,) = self.scan(self.BUILDER.format(w="PROBE"), prelude=prelude)
+        self.assertEqual((found.rule, found.window), ("under 5 s", 2.0))
+
+    def test_an_unresolved_request_window_fails_closed(self):
+        self.assertRefused(self.BUILDER.format(w="window()"), rule="unresolvable window")
+
+    def test_a_timeout_method_not_known_as_a_request_is_listed_at_any_window(self):
+        for w in ("Duration::from_millis(500)", "Duration::from_secs(60)"):
+            with self.subTest(w=w):
+                self.assertRefused(f"let s = events.timeout({w});", rule=guard.NOT_A_REQUEST)
+
+    def test_a_timeout_getter_is_not_a_bound(self):
+        self.assertPasses("let d = config.timeout();")
+
+    def test_a_request_timeout_in_product_code_is_not_judged(self):
+        text = "fn product() {\n" + self.BUILDER.format(w="Duration::from_millis(500)") + "\n}\n"
+        self.assertEqual(guard.scan_timeouts("src/x.rs", text, {}, {}), [])
+
+    def test_a_paused_clock_is_not_judged(self):
+        text = "#[tokio::test(start_paused = true)]\nasync fn paused() {\n" + self.BUILDER.format(w="Duration::from_millis(1)") + "\n}\n"
+        self.assertEqual(guard.scan_timeouts("src/x_tests.rs", text, {}, {}), [])
+
+    def test_a_new_request_timeout_meets_the_floor(self):
+        text = "#[tokio::test]\nasync fn case() {\n" + self.BUILDER.format(w="Duration::from_secs(5)") + "\n}\n"
+        found = guard.scan_new("src/x_tests.rs", text, HANG, {}, set(range(1, 6)))
+        self.assertEqual([f.rule for f in found], [guard.FLOOR], found)
+
+
 class NewCode(unittest.TestCase):
     """The 10 s floor and the PR-C rules judge only new or changed spans (MIK-8247, MIK-8288)."""
 
