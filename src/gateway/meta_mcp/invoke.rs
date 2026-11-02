@@ -188,7 +188,7 @@ impl MetaMcp {
         // `Drop` releases the key, so an early return after dispatch cannot
         // strand the entry as in-flight until the guard times out.
         let mut idem_reservation: Option<IdempotencyReservation> = None;
-        let keyed = match self.admit_keys(
+        let admitted = self.admit_keys(
             keys::KeysIn {
                 caller,
                 session_id,
@@ -205,7 +205,18 @@ impl MetaMcp {
                 unproven: resolve_out.unproven,
             },
             &mut idem_reservation,
-        )? {
+        );
+        // A replay, of a stored answer or a stored failure, may stand in for
+        // a stored write, so it records what the slot declares now, as a
+        // fresh call would. Before the `?`: a stored failure returns as `Err`.
+        if audit::answered_by(audit::Answered::Replay) {
+            let (be, bind) = (
+                resolve_out.backend.as_deref(),
+                resolve_out.dispatch_binding.as_deref(),
+            );
+            self.note_declared_effect((intake.step.server, intake.step.tool), be, bind);
+        }
+        let keyed = match admitted? {
             std::ops::ControlFlow::Break(outcome) => return Ok(outcome),
             std::ops::ControlFlow::Continue(keyed) => keyed,
         };

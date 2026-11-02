@@ -22,6 +22,8 @@ fn rule(tool_match: &str, scan: &[ScanType], action: FirewallAction) -> Firewall
         servers: None,
         keys: None,
         except: None,
+        allowed_roots: None,
+        path_args: None,
     }
 }
 
