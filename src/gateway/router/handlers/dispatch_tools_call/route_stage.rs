@@ -209,6 +209,7 @@ impl<'a> RouteStage<'a> {
                     target.arguments,
                     caller_name,
                     &control_identity,
+                    None,
                 );
                 if verdict.action == FirewallAction::Warn {
                     warn!(

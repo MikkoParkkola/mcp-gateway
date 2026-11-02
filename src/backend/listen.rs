@@ -228,6 +228,10 @@ impl Backend {
         // permitting a resend for a tool that is no longer read-only. Cleared
         // under the cache's guard, so a fill stored after keeps its own set.
         entry.tools_cache.invalidate_then(|| {
+            // The effect's listed names first, so a reader between these
+            // clears never sees a listed name whose hints are already gone.
+            entry.effect_listed.write().clear();
+            entry.write_declared.write().clear();
             entry.resend_permitted.write().clear();
             // MIK-8393: the cache's admission set is derived from the same list.
             entry.read_only_declared.write().clear();

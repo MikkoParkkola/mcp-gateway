@@ -148,6 +148,8 @@ impl Config {
         self.auth.validate_api_key_names()?;
         #[cfg(feature = "firewall")]
         self.validate_firewall_rule_keys()?;
+        #[cfg(feature = "firewall")]
+        crate::security::firewall::warn_folder_rules_at_load(self);
         self.auth.validate_distinct_principals(overlay)?;
         self.security.validate_sections(self.auth.enabled)?;
         self.security.message_signing.resolve_with_env(overlay)?;

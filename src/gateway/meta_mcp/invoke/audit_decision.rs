@@ -51,6 +51,15 @@ pub(crate) fn note_send_refusal(error: &crate::Error) {
     }
 }
 
+/// What the called tool declares the call could change, as this call's
+/// admission read it, and who declared it.
+pub(crate) fn note_declared_effect(
+    effect: crate::security::decision_record::Effect,
+    source: crate::security::decision_record::EffectSource,
+) {
+    note_decision(|noted| noted.note_effect(effect, source));
+}
+
 fn note_decision(f: impl FnOnce(&mut crate::security::decision_record::Noted)) {
     if super::NOTES.try_with(|_| ()).is_ok() {
         super::note(|notes| f(&mut notes.decision));
@@ -108,18 +117,23 @@ impl DispatchNotes {
         self.decision.refused_by_memo(kind);
     }
 
-    /// The decision object for this call's record: a cache hit ran no gate,
-    /// so it was not decided again.
+    /// The decision object for this call's record: a cache hit or a replay
+    /// ran no gate, so it was not decided again, and says which it was.
     pub(crate) fn decided(
         &self,
         meta: &MetaMcp,
         outcome: crate::security::audit::AuditOutcome,
     ) -> crate::security::decision_record::Decision {
-        use crate::security::decision_record::{Decided, Noted};
+        use crate::security::decision_record::Decided;
         let live = meta.live_config();
-        if self.cached {
-            Noted::not_redecided().decision(
-                Decided::CacheHitNotRedecided,
+        if let Some(answered) = self.cached {
+            let decided = match answered {
+                super::Answered::CacheHit => Decided::CacheHitNotRedecided,
+                super::Answered::Replay => Decided::Replayed,
+            };
+            // Not decided again, but it keeps what its admission read.
+            self.decision.as_not_redecided().decision(
+                decided,
                 crate::security::decision_record::Refused::No,
                 live.as_deref(),
             )
