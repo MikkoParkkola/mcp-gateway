@@ -150,8 +150,35 @@ fn t8b_a_corrupt_saved_estimate_restores_nothing() {
             };
             cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
             let (_, restored) = boot_cost_governance(&governed(scope, Some(1.6)), dir.path());
+            let restored = restored.expect("armed");
+            // The file loaded: every saved dollar is back, the bad figure
+            // only is dropped.
+            let snap = restored.snapshot();
+            let saved_global = saved
+                .tool_totals
+                .values()
+                .map(|t| t.total_cost_usd)
+                .sum::<f64>()
+                + saved.tool_overflow_usd;
             assert!(
-                scope.admits(&restored.expect("armed"), "target"),
+                (snap.global_daily_usd - saved_global).abs() < 1e-9,
+                "{scope:?} {bad}: the whole file was dropped: {snap:?}"
+            );
+            let (rows, figures) = match scope {
+                Scope::Tool => (&snap.tool_daily, &snap.tool_estimate),
+                Scope::Key => (&snap.key_daily, &snap.key_estimate),
+            };
+            assert_eq!(
+                rows.get("target").copied(),
+                Some(0.5),
+                "{scope:?} {bad}: real spend"
+            );
+            assert!(
+                !figures.contains_key("target"),
+                "{scope:?} {bad}: no figure"
+            );
+            assert!(
+                scope.admits(&restored, "target"),
                 "{scope:?} {bad}: 0.5 + 1 < 1.6 with no estimate"
             );
         }
@@ -254,6 +281,68 @@ fn t8d_a_zero_estimate_survives_a_restart() {
                 )
                 .allowed,
             "{scope:?}: 1 + 0 + 1 < 2.5; a re-taken figure reads 2 more"
+        );
+    }
+}
+
+/// T8e: a row restored after a non-zero overflow records that overflow as
+/// its creation figure, so a name budgeted by reload after the restart is
+/// charged the restored overflow, not the overflow that grew since.
+#[test]
+fn t8e_a_restored_row_keeps_the_restored_overflow_as_its_figure() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        {
+            let (_, first) = boot_cost_governance(&governed(scope, None), dir.path());
+            let first = first.expect("armed");
+            for i in 0..CAP {
+                scope.spend(&first, &format!("filler-{i}"), 0.01);
+            }
+            scope.spend(&first, "other", 3.0);
+            let persisted =
+                build_persisted_costs(&first.snapshot_for_save().expect("a readable clock"));
+            cost_persistence::save(&dir.path().join("costs.json"), &persisted).expect("save");
+        }
+        let (_, second) = boot_cost_governance(&governed(scope, None), dir.path());
+        let second = second.expect("armed");
+        // Overflow grows after the restart: $3 restored, $5 now.
+        scope.spend(&second, "later", 2.0);
+        let mut budgets = BudgetLimits::default();
+        scope
+            .limits(&mut budgets)
+            .insert("filler-7".to_owned(), 50.0);
+        second.seed_estimates(&budgets);
+        let snap = second.snapshot();
+        let figure = match scope {
+            Scope::Tool => snap.tool_estimate.get("filler-7").copied(),
+            Scope::Key => snap.key_estimate.get("filler-7").copied(),
+        };
+        assert_eq!(figure, Some(3.0), "{scope:?}: the restored overflow, not 5");
+    }
+}
+
+/// T8f: a restored figure at the edge of what a file may hold, added to the
+/// row and the call, saturates instead of wrapping or panicking: the call is
+/// refused.
+#[test]
+fn t8f_a_huge_restored_figure_saturates_and_refuses() {
+    for scope in [Scope::Tool, Scope::Key] {
+        let _clock = at_secs(T);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut saved = first_process(scope, dir.path());
+        // The largest figure a saved file may hold: u64::MAX micro-USD.
+        #[allow(clippy::cast_precision_loss)]
+        let huge = u64::MAX as f64 / 1_000_000.0;
+        match scope {
+            Scope::Tool => saved.tool_estimate.insert("target".to_owned(), huge),
+            Scope::Key => saved.key_estimate.insert("target".to_owned(), huge),
+        };
+        cost_persistence::save(&dir.path().join("costs.json"), &saved).expect("save");
+        let (_, restored) = boot_cost_governance(&governed(scope, Some(5.0)), dir.path());
+        assert!(
+            !scope.admits(&restored.expect("armed"), "target"),
+            "{scope:?}: a saturated figure refuses"
         );
     }
 }

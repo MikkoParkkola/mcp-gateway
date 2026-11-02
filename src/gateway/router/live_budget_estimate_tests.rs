@@ -228,6 +228,8 @@ async fn t7b_a_row_created_after_the_overflow_began_keeps_that_overflow() {
             Some(1.0),
             "{scope:?}: the freed place"
         );
+        // The overflow grows after the row exists: $3 at its creation, $5 now.
+        spend(&fx, scope, "unrelated", 2.0);
         reload(&fx, |c| budget(scope, c, "target", 4.5));
         assert!(
             !admitted(&fx, scope, "target"),
