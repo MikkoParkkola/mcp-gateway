@@ -49,6 +49,18 @@ fn file_text(keys: &[ApiKeyConfig]) -> String {
         if let Some(at) = k.expires_at {
             let _ = writeln!(text, "      expires_at: \"{}\"", at.to_rfc3339());
         }
+        if let Some(principal) = &k.principal {
+            let _ = writeln!(text, "      principal: \"{principal}\"");
+        }
+        if k.kind == crate::config::ApiKeyKind::Personal {
+            let _ = writeln!(text, "      kind: personal");
+        }
+        if let Some(previous) = &k.previous_key_sha256 {
+            let _ = writeln!(text, "      previous_key_sha256: \"{previous}\"");
+        }
+        if let Some(at) = k.previous_expires_at {
+            let _ = writeln!(text, "      previous_expires_at: \"{}\"", at.to_rfc3339());
+        }
     }
     text
 }
@@ -214,4 +226,115 @@ async fn no_request_through_the_router_reaches_the_no_pin_refusal() {
             }
         }
     }
+}
+
+const ROTATED: &str = "live-keys-rotated-secret";
+
+/// K5 `key_sha256` (MIK-9255.IDENT.1): a kept key whose digest a reload
+/// changes accepts the new secret and refuses the old one on the next call.
+#[tokio::test]
+async fn k5_a_key_digest_changed_by_reload_applies_on_the_next_call() {
+    let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert_ne!(
+        status(&state, "/mcp", KEPT).await,
+        StatusCode::UNAUTHORIZED,
+        "precondition: the key works before the reload"
+    );
+
+    let rotated = ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(ROTATED.as_bytes())),
+        ..key(KEPT, None)
+    };
+    reload_keys(&state, dir.path(), &[rotated]).await;
+
+    let got = status(&state, "/mcp", ROTATED).await;
+    assert!(
+        got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+        "the new digest was not accepted: {got}"
+    );
+    assert_eq!(
+        status(&state, "/mcp", KEPT).await,
+        StatusCode::UNAUTHORIZED,
+        "the old digest still works after the reload"
+    );
+}
+
+/// K5 `previous_key_sha256` with `previous_expires_at` (MIK-9255.IDENT.3): a
+/// rotation written by reload accepts the previous secret while its grace
+/// runs, and a second reload that ends the grace refuses it.
+#[tokio::test]
+async fn k5_a_rotation_written_by_reload_honours_its_grace() {
+    let (state, _store) = test_router_app_state_with_auth(&auth(vec![key(KEPT, None)])).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rotation = |previous_expires_at: &str| ApiKeyConfig {
+        key_sha256: Some(crate::config::api_key_digest_spec(ROTATED.as_bytes())),
+        previous_key_sha256: Some(crate::config::api_key_digest_spec(KEPT.as_bytes())),
+        previous_expires_at: Some(previous_expires_at.parse().expect("an RFC 3339 instant")),
+        ..key(KEPT, None)
+    };
+
+    reload_keys(&state, dir.path(), &[rotation("2999-01-01T00:00:00Z")]).await;
+    for (secret, what) in [
+        (ROTATED, "the new secret"),
+        (KEPT, "the previous secret in its grace"),
+    ] {
+        let got = status(&state, "/mcp", secret).await;
+        assert!(
+            got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+            "{what} was not accepted: {got}"
+        );
+    }
+
+    reload_keys(&state, dir.path(), &[rotation("2000-01-01T00:00:00Z")]).await;
+    assert_eq!(
+        status(&state, "/mcp", KEPT).await,
+        StatusCode::UNAUTHORIZED,
+        "the previous secret still works after its grace ended"
+    );
+    let got = status(&state, "/mcp", ROTATED).await;
+    assert!(
+        got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+        "the new secret stopped working: {got}"
+    );
+}
+
+/// K5 `kind` (MIK-9255.IDENT.6), observed through the one behaviour that
+/// reads it: under `security.posture: hardened` a shared key is refused for
+/// want of a per-caller identity and a personal one is not
+/// (`hardened_identity.rs`). A reload that makes the key personal admits it
+/// on the next call, and one that makes it shared again refuses it.
+#[tokio::test]
+async fn k5_a_key_kind_changed_by_reload_applies_on_the_next_call() {
+    let mut config = crate::config::Config::default();
+    config.security.posture = crate::security::SecurityPosture::Hardened;
+    let (state, _store) = super::tests::test_router_app_state_with_auth_and_config(
+        &auth(vec![key(KEPT, None)]),
+        config,
+    )
+    .await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    assert_eq!(
+        status(&state, "/mcp", KEPT).await,
+        StatusCode::FORBIDDEN,
+        "precondition: a shared key is refused under hardened"
+    );
+
+    let personal = ApiKeyConfig {
+        kind: crate::config::ApiKeyKind::Personal,
+        ..key(KEPT, None)
+    };
+    reload_keys(&state, dir.path(), &[personal]).await;
+    let got = status(&state, "/mcp", KEPT).await;
+    assert!(
+        got != StatusCode::FORBIDDEN && got != StatusCode::UNAUTHORIZED && !got.is_server_error(),
+        "the key made personal by reload is still refused: {got}"
+    );
+
+    reload_keys(&state, dir.path(), &[key(KEPT, None)]).await;
+    assert_eq!(
+        status(&state, "/mcp", KEPT).await,
+        StatusCode::FORBIDDEN,
+        "the key made shared again by reload is still admitted"
+    );
 }
