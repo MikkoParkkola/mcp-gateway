@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::reload_context::replace::{Expected, Replace, Replaced, SecretStep, replace_detached};
-use super::replace_test_support::{START, WAIT, context, read, setup};
+use super::replace_test_support::{START, WAIT, context, read, setup, to};
 use crate::config_persistence::keyedit::{Segment, SlotId, Template};
 use crate::gateway::test_helpers::write_owner_only;
 use crate::secret_store::{FilesStore, NewSecretOwned, SecretStore, StoreError, StoreKind, Vault};
@@ -488,4 +488,50 @@ async fn distinct_valid_secrets_pass_with_per_slot_sentinels() {
         .expect("W28: two distinct valid key digests are saved");
 
     assert_eq!(store.creates(), 2);
+}
+
+/// A config with a comment that only mentions the reserved prefix, and the
+/// reference that really collides on line 5.
+const COMMENTED: &str = "# MCPGW_PENDING_SLOT_1 is reserved\nbackends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+const REFERENCING: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n    headers:\n      Authorization: \"env:MCPGW_PENDING_SLOT_3\"\n";
+
+/// The refusal names the reserved name the operator wrote and its line, so
+/// they know what to rename.
+#[test]
+fn a_config_naming_a_reserved_slot_says_which_name_and_line() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, REFERENCING).expect("write config");
+    let refused = crate::config::Config::load(Some(&path))
+        .expect_err("a reference to a reserved name is refused")
+        .to_string();
+    assert!(
+        refused.contains("MCPGW_PENDING_SLOT_3") && refused.contains("line 5"),
+        "the refusal names the reference and its line: {refused}"
+    );
+    assert!(
+        refused.contains("rename"),
+        "the refusal says to rename it: {refused}"
+    );
+}
+
+/// A comment is not a reference: mentioning the prefix in one never stops a
+/// start.
+#[test]
+fn a_comment_mentioning_the_reserved_prefix_still_loads() {
+    let dir = tempfile::tempdir().expect("dir");
+    let path = dir.path().join("gateway.yaml");
+    write_owner_only(&path, COMMENTED).expect("write config");
+    crate::config::Config::load(Some(&path)).expect("a comment that mentions the prefix loads");
+}
+
+/// The writer applies the same rule: a comment that mentions the prefix does
+/// not refuse a save.
+#[tokio::test]
+async fn a_comment_mentioning_the_reserved_prefix_does_not_refuse_a_save() {
+    let (_dir, path, ctx) = setup();
+    replace_detached(ctx, to(Expected::Any, COMMENTED, Replaced::Discard), WAIT)
+        .await
+        .expect("a comment that mentions the prefix does not refuse the save");
+    assert_eq!(read(&path), COMMENTED);
 }
