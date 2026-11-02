@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::super::*;
 use super::tree::{Fx, root_rule};
 use crate::gateway::record_principal::test_record_key;
-use crate::security::firewall::{FirewallRule, ScanType};
+use crate::security::firewall::{FirewallPolicy, FirewallRule, ScanType};
 use crate::security::response_policy::{KeyOf, RuleTarget, ServerOf};
 use crate::security::rule_id::RuleId;
 
