@@ -379,11 +379,9 @@ pub(super) fn message_generation<'a>(
     line: &'a dyn crate::gateway::authz::StdioLine,
     current: &'a mut Option<Arc<crate::config_reload::Generation>>,
 ) -> Option<&'a crate::config_reload::Generation> {
-    match line.generation() {
-        Some(pinned) => Some(pinned),
-        None => {
-            *current = meta_mcp.live_config().map(|live| live.generation());
-            current.as_deref()
-        }
+    if let Some(pinned) = line.generation() {
+        return Some(pinned);
     }
+    *current = meta_mcp.live_config().map(|live| live.generation());
+    current.as_deref()
 }

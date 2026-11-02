@@ -281,7 +281,7 @@ async fn t15b_governance_turned_off_by_reload_keeps_judging() {
     assert!(refused(&call(&fx).await), "premise: 1.0 > 0.5 at startup");
     reload(&fx, |c| {
         c.enabled = false;
-        c.budgets = Default::default();
+        c.budgets = crate::cost_accounting::config::BudgetLimits::default();
     });
     let body = call(&fx).await;
     assert!(refused(&body), "still judged by the startup budget: {body}");
