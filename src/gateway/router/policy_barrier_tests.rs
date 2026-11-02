@@ -26,24 +26,35 @@ use crate::security::firewall::FirewallAction;
 
 /// The key's scope admits `read` and the tool policy denies it.
 fn key_admits_policy_denies(c: &mut Config) {
-    key_std(c).denied_tools = None;
+    c.auth = std_key(None);
     c.security.tool_policy.enabled = true;
     c.security.tool_policy.deny = vec!["alpha:read".to_string()];
 }
 
 /// The key's scope denies `read` and the tool policy admits it.
 fn key_denies_policy_admits(c: &mut Config) {
-    key_std(c).denied_tools = Some(vec!["read".to_string()]);
+    c.auth = std_key(Some(vec!["read".to_string()]));
     c.security.tool_policy.enabled = true;
     c.security.tool_policy.deny.clear();
 }
 
-fn key_std(c: &mut Config) -> &mut crate::config::ApiKeyConfig {
-    c.auth
-        .api_keys
-        .iter_mut()
-        .find(|k| k.name == "k-std")
-        .expect("the fixture's k-std key")
+/// Auth on with the fixture's `k-std` key, its scope denying `denied`. The
+/// fixture seeds its key table apart from the config's `auth`, and a reload
+/// that changes `auth` rebuilds the table from it, so the key is stated here.
+fn std_key(denied: Option<Vec<String>>) -> crate::config::AuthConfig {
+    crate::config::AuthConfig {
+        enabled: true,
+        api_keys: vec![crate::config::ApiKeyConfig {
+            key: None,
+            key_sha256: Some(crate::config::api_key_digest_spec(b"k-std")),
+            name: "k-std".to_string(),
+            backends: vec!["*".to_string()],
+            denied_tools: denied,
+            kind: crate::config::ApiKeyKind::Shared,
+            ..Default::default()
+        }],
+        ..crate::config::AuthConfig::default()
+    }
 }
 
 /// Every firewall rule blocks.
@@ -104,12 +115,27 @@ fn outcome(body: &Value, calls: usize) -> Outcome {
         .pointer("/error/message")
         .or_else(|| body.pointer("/result/content/0/text"))
         .cloned()
-        .unwrap_or(Value::Null);
+        .map_or(Value::Null, without_trace);
     Outcome {
         refused,
         code,
         message,
         calls,
+    }
+}
+
+/// `text` without the per-call `_trace_id` an answer's JSON text carries, so
+/// two answers compare by what they say.
+fn without_trace(text: Value) -> Value {
+    let parsed = text
+        .as_str()
+        .and_then(|s| serde_json::from_str::<Value>(s).ok());
+    match parsed {
+        Some(Value::Object(mut answer)) => {
+            answer.remove("_trace_id");
+            Value::Object(answer)
+        }
+        _ => text,
     }
 }
 
