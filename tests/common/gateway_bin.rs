@@ -206,7 +206,7 @@ pub struct Reaped {
     /// Set by a reap that saw the gateway exit by itself after its SIGTERM.
     drained: bool,
     /// The first reap's exit status; a later reap returns it unchanged.
-    reaped: Option<std::process::ExitStatus>,
+    first_exit: Option<std::process::ExitStatus>,
 }
 
 /// How long a gateway may drain after SIGTERM: above its own serial
@@ -221,7 +221,7 @@ impl Reaped {
             child,
             folders: Vec::new(),
             drained: false,
-            reaped: None,
+            first_exit: None,
         }
     }
 
@@ -245,7 +245,7 @@ impl Reaped {
 
     /// [`Self::reap`] with its own bound, for a row that tests the bound.
     pub async fn reap_within(&mut self, bound: std::time::Duration) -> std::process::ExitStatus {
-        if let Some(status) = self.reaped {
+        if let Some(status) = self.first_exit {
             return status;
         }
         let started = std::time::Instant::now();
@@ -269,7 +269,7 @@ impl Reaped {
         };
         let status = waited.expect("the gateway's exit status");
         self.drained = signalled && exited_by_itself(status);
-        self.reaped = Some(status);
+        self.first_exit = Some(status);
         let elapsed = started.elapsed();
         if elapsed > std::time::Duration::from_secs(1) {
             eprintln!("gateway_bin: the gateway (pid {pid:?}) took {elapsed:?} to stop ({status})");
