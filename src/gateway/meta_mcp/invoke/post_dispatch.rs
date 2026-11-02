@@ -121,9 +121,10 @@ impl MetaMcp {
         // Sent nothing (no counted send, and a pre-dispatch error or a refusal
         // the backend's own send recorded): the one rule for releasing a key.
         let unsent = crate::gateway::delivery_facts::unsent(&e);
-        // MIK-8139: the account marker rides on the backend's own error, so
-        // it is honoured only when the shared screen passes that error clean;
-        // otherwise the error becomes the result the gates and firewall read.
+        // The account-marked refusal is honoured only when the shared screen
+        // passes its body clean; otherwise it becomes the result the gates and
+        // firewall read. A backend's own error is never marked: it is folded
+        // below and screened by the result gates.
         if let Error::JsonRpc {
             code,
             message,
