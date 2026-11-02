@@ -166,12 +166,59 @@ class KnownGaps(unittest.TestCase):
         self.assertEqual(first, 1)
         self.assertGreaterEqual(last, 9)
 
+    def test_an_item_in_the_same_function_as_a_listed_error_is_unsure(self):
+        # Recovery can move extents anywhere inside the broken function.
+        text = (
+            "fn p(v: Value) {\n match v {\n Some(raw @ Value::String(_)) => {\n f()\n }\n _ => {}\n }\n"
+            " #[cfg(test)]\n probe();\n}\nfn q() {}\n"
+        )
+        found = G.cfg_items(text, SHORT, path=self.LISTED)
+        self.assertTrue(found.known_gap, found)
+        self.assertEqual(found.items, ())
+        self.assertTrue(found.unsure)
+
+    def test_a_listed_error_repeated_is_not_the_known_gap(self):
+        text = self.GAP + self.GAP.replace("fn p(", "fn p2(")
+        self.assertFalse(G.cfg_items(text, SHORT, path=self.LISTED).known_gap)
+
+    def test_each_real_listed_file_still_matches_its_entry(self):
+        root = SCRIPT.parent.parent.parent
+        for path in sorted(G.KNOWN_GAPS):
+            with self.subTest(path=path):
+                text = (root / path).read_text(encoding="utf-8")
+                found = G.cfg_items(text, SHORT, path=path)
+                self.assertTrue(found.parse_errors and found.known_gap, f"{path}: the listed gap no longer matches")
+
     def test_an_item_right_after_each_gap_keeps_its_extent(self):
         for name, gap in self.SHAPES.items():
             text = gap + "#[cfg(test)]\nfn t() {\n  x();\n}\nfn q() {}\n"
             start = gap.count("\n") + 1
             with self.subTest(gap=name):
                 self.assertEqual(G.item_extents_ignoring_errors(text), [(start, start + 3)], text)
+
+
+class Robust(unittest.TestCase):
+    def test_a_deeply_nested_file_does_not_exhaust_the_stack(self):
+        depth = 3000
+        text = "fn p() " + "{ " * depth + "}" * depth + "\n#[cfg(test)]\nfn t() {}\n"
+        self.assertEqual(lines(text, LONG), [(2, 3)])
+
+    def test_a_missing_tree_sitter_names_the_sync_command(self):
+        import sys as _sys
+        saved = {k: _sys.modules.get(k) for k in ("tree_sitter", "tree_sitter_rust")}
+        module = load()
+        try:
+            _sys.modules["tree_sitter"] = None
+            _sys.modules["tree_sitter_rust"] = None
+            with self.assertRaises(SystemExit) as raised:
+                module.cfg_items("fn a() {}\n", LONG)
+            self.assertIn("uv sync --locked --project scripts/gate-env", str(raised.exception))
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    _sys.modules.pop(k, None)
+                else:
+                    _sys.modules[k] = v
 
 
 class Report(unittest.TestCase):
