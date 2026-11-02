@@ -219,6 +219,26 @@ fn other_scalars_match_literals_as_the_oracle_does() {
     );
 }
 
+/// A value that reads as a JSON number is matched by the number rules alone,
+/// with no literal check: a result equal to it by exact JSON equality is
+/// still redacted, in each form, past u64 included.
+#[test]
+fn a_literal_number_value_is_redacted_by_the_number_rules() {
+    for (needle, scalar) in [
+        ("5", "5"),
+        ("-5", "-5"),
+        ("5.0", "5.0"),
+        ("-0.0", "-0.0"),
+        ("18446744073709551616", "18446744073709551616"),
+    ] {
+        assert_eq!(
+            verdicts(&[needle], scalar),
+            (true, true),
+            "{needle:?} vs {scalar}"
+        );
+    }
+}
+
 /// The lookup keys a number that is not a float by its exact integer
 /// magnitude, which holds only while `serde_json` reads every integer past
 /// u64 as a float (no `arbitrary_precision`): pinned here.

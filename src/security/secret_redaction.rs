@@ -196,9 +196,8 @@ pub(crate) struct Compiled {
     /// `None` when the automaton could not be built: every value is then
     /// replaced whole (fail closed).
     matcher: Option<AhoCorasick>,
-    /// The needles that read as JSON scalars, keyed by [`literal_key`]: a
-    /// scalar is matched by lookup, never by a pass over every literal.
-    literals: std::collections::HashSet<LiteralKey>,
+    /// Which of `null`, `true` and `false` the needles name.
+    literals: Literals,
     /// The needles that name a number, parsed once: a JSON number is matched
     /// by lookup, never by a pass over every needle.
     numbers: NumberIndex,
@@ -218,16 +217,7 @@ impl Compiled {
         } else {
             matcher(&borrowed)
         };
-        // A secret that reads as a JSON number or as `true`, `false` or
-        // `null`: a result scalar equal to it by exact JSON equality is
-        // redacted whatever the secret's length, before any by-value
-        // comparison. "007" and "TRUE" are not JSON: no match here, and
-        // "007" is then compared by value below.
-        let literals = borrowed
-            .iter()
-            .filter_map(|n| serde_json::from_str::<Value>(n).ok())
-            .filter_map(|v| literal_key(&v))
-            .collect();
+        let literals = Literals::new(&borrowed);
         let numbers = NumberIndex::new(&borrowed);
         let marker = marker_for(&borrowed);
         Self {
@@ -260,7 +250,7 @@ pub(crate) fn redact_value_with(value: &mut Value, compiled: &Compiled) -> bool 
         return true;
     };
     let scan = Scan {
-        literals: &compiled.literals,
+        literals: compiled.literals,
         numbers: &compiled.numbers,
         marker: compiled.marker,
         matcher,
@@ -309,41 +299,52 @@ fn exact_integer(text: &str) -> Option<String> {
 /// What one scrub of a JSON value matches against.
 #[derive(Clone, Copy)]
 struct Scan<'a> {
-    literals: &'a std::collections::HashSet<LiteralKey>,
+    literals: Literals,
     numbers: &'a NumberIndex,
     marker: &'static str,
     matcher: &'a AhoCorasick,
 }
 
-/// The key a JSON scalar is compared by, for exact JSON equality, built
-/// without allocating. Two numbers are equal only in the same form, as
-/// `serde_json` compares them: 5 is not 5.0, and -5 is not 5. A float is
-/// keyed by its bits with -0.0 taken as 0.0, since floats compare by value
-/// and a JSON number is never NaN.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum LiteralKey {
-    Null,
-    Bool(bool),
-    PosInt(u64),
-    NegInt(i64),
-    Float(u64),
+/// The needles that read as the JSON literal `null`, `true` or `false`: a
+/// result scalar equal to one is redacted whatever the needle's length.
+/// "TRUE" is not JSON and names none.
+///
+/// A needle that reads as a JSON number is not kept here: every number equal
+/// to it by exact JSON equality (5, -5, 5.0, a value past u64) is equal to it
+/// by value too, so [`NumberIndex`] redacts it. That holds only while
+/// `serde_json`'s `arbitrary_precision` feature is off, which
+/// `an_integer_past_u64_reads_as_a_float` (secret_redaction_number_tests.rs)
+/// and `g5_numbers_read_without_arbitrary_precision`
+/// (firewall/redactor_gate_tests.rs) pin. Turning it on means re-checking
+/// this.
+#[derive(Clone, Copy, Default)]
+struct Literals {
+    null: bool,
+    true_value: bool,
+    false_value: bool,
 }
 
-/// The [`LiteralKey`] of a JSON scalar. `None` for a string, an array or an
-/// object, which no literal matches, and for a number in no form above
-/// (none without `arbitrary_precision`).
-fn literal_key(value: &Value) -> Option<LiteralKey> {
-    match value {
-        Value::Null => Some(LiteralKey::Null),
-        Value::Bool(b) => Some(LiteralKey::Bool(*b)),
-        Value::Number(n) if n.is_f64() => n
-            .as_f64()
-            .map(|f| LiteralKey::Float(if f == 0.0 { 0.0_f64 } else { f }.to_bits())),
-        Value::Number(n) => n
-            .as_u64()
-            .map(LiteralKey::PosInt)
-            .or_else(|| n.as_i64().map(LiteralKey::NegInt)),
-        Value::String(_) | Value::Array(_) | Value::Object(_) => None,
+impl Literals {
+    fn new(needles: &[&str]) -> Self {
+        let mut literals = Self::default();
+        for needle in needles {
+            match serde_json::from_str::<Value>(needle) {
+                Ok(Value::Null) => literals.null = true,
+                Ok(Value::Bool(true)) => literals.true_value = true,
+                Ok(Value::Bool(false)) => literals.false_value = true,
+                _ => {}
+            }
+        }
+        literals
+    }
+
+    fn matches(self, value: &Value) -> bool {
+        match value {
+            Value::Null => self.null,
+            Value::Bool(true) => self.true_value,
+            Value::Bool(false) => self.false_value,
+            Value::Number(_) | Value::String(_) | Value::Array(_) | Value::Object(_) => false,
+        }
     }
 }
 
@@ -471,7 +472,7 @@ fn scrub_value(value: &mut Value, scan: &Scan<'_>) -> bool {
         marker,
         matcher,
     } = *scan;
-    if literal_key(value).is_some_and(|key| literals.contains(&key)) {
+    if literals.matches(value) {
         *value = Value::String(marker.to_owned());
         return true;
     }
