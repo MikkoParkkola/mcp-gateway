@@ -11,6 +11,32 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+/// A name-to-USD map read entry by entry: an entry that is not a number
+/// (a NaN or infinity is saved as `null`, or a hand edit) is dropped with a
+/// warning, so one bad figure never costs the whole file and its spend.
+#[cfg(feature = "cost-governance")]
+fn lenient_figures<'de, D>(deserializer: D) -> Result<HashMap<String, f64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw: HashMap<String, serde_json::Value> = HashMap::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(name, value)| {
+            let figure = value.as_f64();
+            if figure.is_none() {
+                tracing::warn!(
+                    target: "mcp_gateway::cost_accounting::enforcer",
+                    file = "costs.json",
+                    name,
+                    "Saved starting figure is not a number; restoring it as none"
+                );
+            }
+            figure.map(|usd| (name, usd))
+        })
+        .collect())
+}
+
 // ── PersistedCosts ────────────────────────────────────────────────────────────
 
 /// Today's spend as of `saved_at`, persisted so a restart keeps the daily
@@ -40,10 +66,10 @@ pub struct PersistedCosts {
     /// The starting figure (USD) a reload charged each per-tool name it
     /// started budgeting with that day, zeros included: kept apart from
     /// `tool_totals`, never added into them on restore (ADR-023).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_figures")]
     pub tool_estimate: HashMap<String, f64>,
     /// The same for per-key names, apart from `key_totals`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_figures")]
     pub key_estimate: HashMap<String, f64>,
 }
 

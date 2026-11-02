@@ -51,6 +51,14 @@ impl Attribution {
             .map_or(0, |acc| acc.current_on(today))
     }
 
+    /// The figure a check judges `name` by: its row, its starting figure and
+    /// its pending reservations, saturating, since a restored figure may sit
+    /// at the top of the range.
+    pub(super) fn judged(&self, name: &str, row: u64, pending: u64, today: Option<u64>) -> u64 {
+        row.saturating_add(self.estimate_on(name, today))
+            .saturating_add(pending)
+    }
+
     /// Every figure taken on `today`, zeros included, in micro-USD.
     pub(super) fn estimates_on(&self, today: Option<u64>) -> Vec<(String, u64)> {
         self.estimate
@@ -111,9 +119,10 @@ impl super::BudgetEnforcer {
         today: Option<u64>,
         (tool, key): (u64, Option<u64>),
     ) -> (u64, Option<u64>) {
-        let tool = tool + self.tool_attribution.estimate_on(tool_name, today);
-        let key =
-            key.map(|key| key + key_name.map_or(0, |n| self.key_attribution.estimate_on(n, today)));
+        let tool = tool.saturating_add(self.tool_attribution.estimate_on(tool_name, today));
+        let key = key.map(|key| {
+            key.saturating_add(key_name.map_or(0, |n| self.key_attribution.estimate_on(n, today)))
+        });
         (tool, key)
     }
 
@@ -124,8 +133,10 @@ impl super::BudgetEnforcer {
     /// first, so no settle lands between a name's classification and its
     /// owning.
     pub(crate) fn seed_estimates(&self, incoming: &crate::cost_accounting::config::BudgetLimits) {
-        let today = self.today().ok();
+        // The day is read under the lock, so a seed that waited across
+        // midnight takes the new day's overflow with the new day's stamp.
         let _pending = super::locked(&self.ledger);
+        let today = self.today().ok();
         let scopes = [
             (
                 &self.tool_daily,

@@ -599,9 +599,8 @@ impl BudgetEnforcer {
                 .entry(tool_name.to_string())
                 .or_insert_with(|| DailyAccumulator::on(today));
             // The row, the figure a reload charged it with, and the pending.
-            let current_usd = usd(acc.current_on(today)
-                + self.tool_attribution.estimate_on(tool_name, today)
-                + pending.tool(tool_name));
+            let (row, held) = (acc.current_on(today), pending.tool(tool_name));
+            let current_usd = usd(self.tool_attribution.judged(tool_name, row, held, today));
             let projected = current_usd + cost;
 
             if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
@@ -661,9 +660,8 @@ impl BudgetEnforcer {
                 .key_daily
                 .entry(key_name.to_string())
                 .or_insert_with(|| DailyAccumulator::on(today));
-            let current_usd = usd(acc.current_on(today)
-                + self.key_attribution.estimate_on(key_name, today)
-                + pending.key(key_name));
+            let (row, held) = (acc.current_on(today), pending.key(key_name));
+            let current_usd = usd(self.key_attribution.judged(key_name, row, held, today));
             let projected = current_usd + cost;
 
             if let Some(action) = evaluate_alerts(&governance.alerts, projected, limit) {
