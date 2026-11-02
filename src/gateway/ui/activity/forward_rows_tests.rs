@@ -14,8 +14,8 @@ fn f1_rows_arrive_in_counter_order_across_segments_none_lost_or_repeated() {
     let path = d.path().join("inv.jsonl");
     let w = write(&path, &[calls(3), calls(4), calls(5)]);
     let l = log(&path, StreamKind::Activity);
-    let tight = Budget {
-        rows: 2,
+    let tight = Limits {
+        matches: 2,
         bytes: 8 << 20,
     };
     let pages = drain(
@@ -171,8 +171,8 @@ fn f4_the_row_limit_ends_a_page_with_more_and_the_next_resumes() {
     let path = d.path().join("inv.jsonl");
     let w = write(&path, &[calls(5)]);
     let l = log(&path, StreamKind::Activity);
-    let two = Budget {
-        rows: 2,
+    let two = Limits {
+        matches: 2,
         bytes: 8 << 20,
     };
     let first = rows_after(
@@ -209,8 +209,8 @@ fn f4_the_byte_budget_ends_a_page_with_no_visible_rows_with_more() {
         subject: "s".into(),
     };
     let l = log(&path, StreamKind::Activity);
-    let small = Budget {
-        rows: 200,
+    let small = Limits {
+        matches: 200,
         bytes: 1024,
     };
     let first = rows_after(
@@ -247,8 +247,8 @@ fn f5_an_unreadable_run_longer_than_the_budget_is_crossed_and_never_served() {
     recs.extend(calls(1));
     let w = write(&path, &[recs]);
     let l = log(&path, StreamKind::Activity);
-    let small = Budget {
-        rows: 200,
+    let small = Limits {
+        matches: 200,
         bytes: 2048,
     };
     let mut search = Search::default();

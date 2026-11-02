@@ -93,8 +93,8 @@ fn f11_two_connections_each_resume_their_own_search() {
     let l = log(&path, StreamKind::Activity);
     let stop = a.w.marks.last().unwrap().clone();
     let cursor = a.cursor();
-    let half = Budget {
-        rows: 200,
+    let half = Limits {
+        matches: 200,
         bytes: SMALL.bytes / 2,
     };
     let mut b_search = Search::default();

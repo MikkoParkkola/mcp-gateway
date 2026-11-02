@@ -69,13 +69,6 @@ pub(in crate::gateway::ui) struct Log<'a> {
     pub(in crate::gateway::ui) secret: Option<&'a [u8]>,
 }
 
-/// What bounds one call.
-#[derive(Clone, Copy, Debug)]
-pub(in crate::gateway::ui) struct Budget {
-    pub(in crate::gateway::ui) rows: usize,
-    pub(in crate::gateway::ui) bytes: u64,
-}
-
 /// One connection's place in one log. Held by the connection for one
 /// catch-up and dropped with it.
 #[derive(Debug, Default)]
@@ -135,7 +128,7 @@ pub(in crate::gateway::ui) fn rows_after(
     cursor: Option<&Mark>,
     stop: Option<&Mark>,
     access: &Access,
-    budget: Budget,
+    budget: Limits,
     search: &mut Search,
 ) -> io::Result<ForwardPage> {
     let mut page = ForwardPage::default();
@@ -213,7 +206,7 @@ pub(in crate::gateway::ui) fn rows_after(
                 if mark == *stop {
                     break Outcome::Done;
                 }
-                if page.rows.len() >= budget.rows {
+                if page.rows.len() >= budget.matches {
                     break Outcome::More;
                 }
             }
@@ -301,11 +294,22 @@ pub(in crate::gateway::ui) fn head(log: &Log<'_>) -> io::Result<Option<Mark>> {
         bytes: 2 * WINDOW,
     };
     // Either log reads as the reader's first: only the counter and hash of
-    // its newest line are used here, never its log label.
-    let page = read_page(log.path, None, None, one, |line| {
-        mark_of(&line.entry).is_some()
-    })?;
-    Ok(page.lines.first().and_then(|l| mark_of(&l.entry)))
+    // its newest line are used here, never its log label. A budget spent on
+    // unreadable bytes is not an empty log: the read goes on from the page's
+    // continuation until it finds a record or reaches the log's start.
+    let mut cursor = None;
+    loop {
+        let page = read_page(log.path, None, cursor.as_ref(), one, |line| {
+            mark_of(&line.entry).is_some()
+        })?;
+        if let Some(mark) = page.lines.first().and_then(|l| mark_of(&l.entry)) {
+            return Ok(Some(mark));
+        }
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return Ok(None),
+        }
+    }
 }
 
 /// The row for an announced record, as a read back gives it, or `None` when

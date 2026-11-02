@@ -10,8 +10,8 @@ mod moves;
 
 /// The cap on one record, as the logger enforces it.
 const CAP: usize = 4 * 1024 * 1024;
-const SMALL: Budget = Budget {
-    rows: 200,
+const SMALL: Limits = Limits {
+    matches: 200,
     bytes: 4096,
 };
 
@@ -37,7 +37,7 @@ fn junk(bytes: usize) -> Rec {
 
 /// The per-call bound: the budget, one record within the cap, and the
 /// anchor's re-read, which is itself within the cap.
-fn bound(b: Budget) -> u64 {
+fn bound(b: Limits) -> u64 {
     b.bytes + 2 * (CAP as u64 + 1)
 }
 
@@ -189,8 +189,8 @@ fn f5d_the_cursor_record_straddling_the_budget_or_a_segment_is_found() {
             ],
         );
         let l = log(&path, StreamKind::Activity);
-        let b = Budget {
-            rows: 200,
+        let b = Limits {
+            matches: 200,
             bytes: budget,
         };
         let mut search = Search::default();

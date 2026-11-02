@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
-use super::{Budget, ForwardPage, Log, MAX_RESTARTS, Mark, Search, StreamKind, rows_after};
+use super::super::reader::Limits;
+use super::{ForwardPage, Log, MAX_RESTARTS, Mark, Search, StreamKind, rows_after};
 use crate::gateway::ui::activity::access::Access;
 use crate::security::transparency_log::recompute_entry_hash;
 use crate::security::transparency_log::segments::sealed_path;
@@ -168,8 +169,8 @@ fn log(path: &Path, kind: StreamKind) -> Log<'_> {
     }
 }
 
-const WIDE: Budget = Budget {
-    rows: 200,
+const WIDE: Limits = Limits {
+    matches: 200,
     bytes: 8 << 20,
 };
 
@@ -179,7 +180,7 @@ fn drain(
     cursor: Option<&Mark>,
     stop: Option<&Mark>,
     access: &Access,
-    budget: Budget,
+    budget: Limits,
     search: &mut Search,
 ) -> Vec<ForwardPage> {
     let mut pages = Vec::new();

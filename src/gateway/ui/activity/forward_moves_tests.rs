@@ -50,7 +50,7 @@ impl Suspended {
         self.resume_with(SMALL)
     }
 
-    fn resume_with(&mut self, budget: Budget) -> ForwardPage {
+    fn resume_with(&mut self, budget: Limits) -> ForwardPage {
         let (cursor, stop) = (self.cursor(), self.w.marks.last().unwrap().clone());
         rows_after(
             &log(&self.path, StreamKind::Activity),
