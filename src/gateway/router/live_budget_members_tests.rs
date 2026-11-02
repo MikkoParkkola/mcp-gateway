@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Which names are budgeted decides which have a day row of their own
-//! (ADR-023, U19 PR3a): settlement reads that membership from the budgets the
+//! (ADR-023): settlement reads that membership from the budgets the
 //! call was admitted under, so a reload that budgets a name gives it a row
 //! even when 256 unbudgeted rows already fill the map.
 
@@ -133,13 +133,12 @@ async fn t18b_a_name_budgeted_by_reload_frees_a_place_in_the_cap() {
     }
 }
 
-/// The interim gap: a name budgeted by reload whose earlier spend went to
-/// the overflow starts from zero, in a row of its own. The budget of 3.5
-/// admits a $1 call although $3 of its earlier spend sits in the overflow.
-/// A later change (the overflow estimate) starts it from that overflow
-/// instead, and this row flips with it.
+/// A name budgeted by reload whose earlier spend went to the overflow starts
+/// from zero on reload, in a row of its own: the budget of 3.5 admits a $1
+/// call although $3 of its earlier spend sits in the overflow. A later change
+/// seeds it from the overflow total, and this row flips with it.
 #[tokio::test]
-async fn a_name_budgeted_by_reload_starts_from_zero_until_the_estimate_lands() {
+async fn a_name_budgeted_by_reload_starts_from_zero() {
     crate::test_day::same_utc_day_async(|| async move {
         let fx = full_fixture(Scope::Tool).await;
         let enforcer = fx.state.meta_mcp.budget_enforcer.as_ref().expect("armed");

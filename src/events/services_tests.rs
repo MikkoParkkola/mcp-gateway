@@ -705,7 +705,7 @@ fn a_watch_survives_its_keys_rotation() {
     );
 }
 
-/// T13 (U19 PR3a): an event charge is judged by the budgets current when it
+/// An event charge is judged by the budgets current when it
 /// is charged, not by the enforcer's startup copy: a reload that lowers the
 /// budget refuses a charge the old one admitted.
 #[cfg(feature = "cost-governance")]

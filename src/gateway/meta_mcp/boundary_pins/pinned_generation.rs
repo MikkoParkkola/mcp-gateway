@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! U19 PR3a (ADR-023): cost governance judges a call with the generation its
+//! Cost governance (ADR-023) judges a call with the generation its
 //! caller context is pinned to, and a context with none judges with the live
 //! config's current one. So no production construction of a
 //! `MetaMcpCallerContext` may write `generation: None`: every site names the
@@ -44,7 +44,7 @@ impl Sink for Sites {
     }
 }
 
-/// PR3a: no production context is built without a pinned generation.
+/// No production caller context is built without a pinned generation.
 #[test]
 fn g1_no_production_caller_context_is_unpinned() {
     let mut sites = Sites::default();

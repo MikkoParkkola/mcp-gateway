@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! U19 PR3a T14: a budget lowered by a reload over stdio refuses the next
+//! A budget lowered by a reload over stdio refuses the next
 //! stdio call. Driven through `Gateway::run_stdio_on` over in-memory pipes
 //! and the `gateway_reload_config` meta-tool, so the reload and the call
 //! share the live config the serve loop built.

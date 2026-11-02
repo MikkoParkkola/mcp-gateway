@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! U19 PR3a T19: a queued task is judged by the budget current when it
+//! A queued task is judged by the budget current when it
 //! dispatches, and keeps that budget across a later reload (ADR-023). Only
 //! the budget differs between N and N+1.
 

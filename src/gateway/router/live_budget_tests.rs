@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Cost-governance budgets and alerts apply on reload (ADR-023, U19 PR3a):
+//! Cost-governance budgets and alerts apply on reload (ADR-023):
 //! the next call is judged by the published budgets, today's spend survives
 //! the swap, and a request keeps the budgets it arrived with.
 

@@ -446,7 +446,7 @@ async fn g7_the_meta_tool_and_the_watcher_both_publish_the_flag() {
     .await;
 }
 
-// T20 (U19 PR3a): a budget-and-alert edit reaches the live generation through
+// A budget-and-alert edit reaches the live generation through
 // both entry points.
 #[cfg(feature = "cost-governance")]
 #[tokio::test]
@@ -510,7 +510,7 @@ fn governed() -> Config {
     config
 }
 
-// T16a (U19 PR3a): with governance on both sides, an edit to only the
+// With governance on both sides, an edit to only the
 // budgets or the alerts applies on reload: not restart-pending, but still a
 // change.
 #[cfg(feature = "cost-governance")]

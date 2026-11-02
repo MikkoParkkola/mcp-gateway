@@ -652,7 +652,7 @@ async fn o4d_needs_you_folds_past_its_cap() {
 #[path = "overview_actions_tests.rs"]
 mod actions_tests;
 
-/// T18c (U19 PR3a): a reload of only the Notify threshold changes the
+/// A reload of only the Notify threshold changes the
 /// overview's limit rows: 70 % of the daily limit is no row at the startup
 /// threshold of 80, and a row once a reload lowers it to 60.
 #[cfg(feature = "cost-governance")]
