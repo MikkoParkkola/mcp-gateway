@@ -19,7 +19,7 @@ use super::delivery_framing::call_args;
 use super::scan::{Place, Sink};
 
 /// The plain `crate::Error` variants a gateway decision returns as a refusal
-/// without a `*refusal` function or a seal (lead ruling B).
+/// without a `*refusal` function or a seal.
 pub(super) const TWELVE: [&str; 12] = [
     "Config",
     "Protocol",
