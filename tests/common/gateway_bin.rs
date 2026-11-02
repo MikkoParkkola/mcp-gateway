@@ -192,3 +192,52 @@ pub fn answers_livez(port: u16) -> bool {
         && stream.read_to_string(&mut answer).is_ok()
         && answer.starts_with("HTTP/1.1 200")
 }
+
+/// A spawned gateway together with every folder it, or a backend it started,
+/// writes into.
+// STUB: the red rows run against this; it kills without a drain and always
+// deletes the folders.
+pub struct Reaped {
+    child: tokio::process::Child,
+    folders: Vec<tempfile::TempDir>,
+}
+
+impl Reaped {
+    pub fn new(child: tokio::process::Child) -> Self {
+        Self {
+            child,
+            folders: Vec::new(),
+        }
+    }
+
+    /// Hands `folder` to the gateway's owner; it outlives the gateway.
+    pub fn owning(&mut self, folder: tempfile::TempDir) -> &Path {
+        self.folders.push(folder);
+        self.folders.last().expect("just pushed").path()
+    }
+
+    pub fn child_mut(&mut self) -> &mut tokio::process::Child {
+        &mut self.child
+    }
+
+    pub async fn reap(&mut self) -> std::process::ExitStatus {
+        self.reap_within(std::time::Duration::from_secs(90)).await
+    }
+
+    pub async fn reap_within(&mut self, _bound: std::time::Duration) -> std::process::ExitStatus {
+        let _ = self.child.start_kill();
+        self.child.wait().await.expect("the gateway's exit status")
+    }
+
+    pub async fn stop(mut self) -> std::process::ExitStatus {
+        let status = self.reap().await;
+        self.folders.clear();
+        status
+    }
+}
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        let _ = self.child.start_kill();
+    }
+}
