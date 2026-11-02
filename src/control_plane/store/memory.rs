@@ -87,6 +87,8 @@ impl ControlPlaneStore for InMemoryControlPlaneStore {
     }
 
     fn append_audit(&self, event: &ControlPlaneAuditEvent) -> StoreResult<()> {
+        #[cfg(test)]
+        super::audit::pin_written_action(event.action);
         Self::lock(&self.audit)?.push(event.clone());
         Ok(())
     }
