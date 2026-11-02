@@ -109,3 +109,45 @@ async fn a_replacement_lacking_a_value_retires_it_a_grace_after_it_registers() {
         "the replaced instance's value never started its grace"
     );
 }
+
+/// Where one backend's redaction would form another's value, the stored
+/// answer's outcome does not depend on the map's order. Each registry hashes
+/// its names with its own seed, so the 16 below iterate in varying orders.
+/// The sets are taken by backend name, so every one refuses: the first set
+/// finds nothing, the second's marker forms its value, and the rescan refuses.
+#[tokio::test(start_paused = true)]
+async fn a_cross_set_answer_gets_one_outcome_in_any_map_order() {
+    for round in 0..16 {
+        let registry = BackendRegistry::new().with_redaction_grace(GRACE);
+        let order = if round % 2 == 0 {
+            ["a", "b"]
+        } else {
+            ["b", "a"]
+        };
+        for name in order {
+            #[allow(
+                clippy::disallowed_methods,
+                reason = "Test: registers the two backends whose sets interact"
+            )]
+            let registered = registry.register(backend(name));
+            assert!(registered, "premise: {name} registered");
+        }
+        registry.mark_for_test("a", "prefix[redact");
+        registry.mark_for_test("b", "other-token-value");
+        let mut answer = JsonRpcResponse::success(
+            RequestId::Number(1),
+            serde_json::json!({"text": "prefixother-token-value"}),
+        );
+        let outcome = registry.scrub_stored(&mut answer);
+        let wire = serde_json::to_string(&answer).expect("serializes");
+        assert_eq!(
+            outcome,
+            crate::security::needles::Scrubbed::Refuse,
+            "round {round}: {wire}"
+        );
+        assert!(
+            !wire.contains("prefix[redact"),
+            "round {round}: the formed value left: {wire}"
+        );
+    }
+}
