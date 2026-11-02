@@ -5,8 +5,8 @@
 //! judges under the generation the request pinned at admission, never one
 //! read again later.
 //!
-//! The hook runs immediately before the caller evaluates the generation it
-//! hands the witness. Each row asserts the hook ran and that its reload was
+//! The hook runs on each route before the first generation read in its
+//! handler (`hook_order` pins that). Each row asserts the hook ran and that its reload was
 //! the only publish since admission, so the reload is visible only to a read
 //! made after the hook.
 

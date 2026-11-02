@@ -180,6 +180,7 @@ impl MetaMcp {
             caller.api_key_name.unwrap_or("anonymous"),
         );
         let who = caller.relay_caller(session_id);
+        // Test builds: the witness hook runs before the first generation read on this route.
         #[cfg(all(test, feature = "firewall"))]
         crate::security::firewall::relay_witness_hook::run();
         let pinned = caller.authorizer.generation();
@@ -235,6 +236,7 @@ impl super::BridgeDispatcher<'_> {
             self.api_key_name.unwrap_or("anonymous"),
         );
         let target = (self.server, self.tool);
+        // Test builds: the witness hook runs before the first generation read on this route.
         #[cfg(all(test, feature = "firewall"))]
         crate::security::firewall::relay_witness_hook::run();
         let Some(refused) = self

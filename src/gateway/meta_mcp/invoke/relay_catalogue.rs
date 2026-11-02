@@ -56,6 +56,7 @@ impl MetaMcp {
         let caller = CATALOGUE_CALLER.try_with(Clone::clone).ok();
         #[cfg(feature = "firewall")]
         {
+            // Test builds: the witness hook runs before the first generation read on this route.
             #[cfg(test)]
             crate::security::firewall::relay_witness_hook::run();
             if let Some(refusal) =

@@ -47,15 +47,6 @@ fn direct_caller(auth: BackendAuthContext<'_>, per_backend: &str) -> (String, bo
     }
 }
 
-/// Passes `value` through. Test builds reach the witness hook here, before
-/// the arguments after `value` are evaluated: a caller that read the
-/// generation again would read it after the hook.
-pub(super) fn witness_seam<T>(value: T) -> T {
-    #[cfg(test)]
-    crate::security::firewall::relay_witness_hook::run();
-    value
-}
-
 /// The relay check on everything the backend will receive, `_meta`
 /// included. Runs before idempotency admission, so a refusal reserves
 /// nothing. `Some` is the refusal to answer with.

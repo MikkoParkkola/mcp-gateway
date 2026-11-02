@@ -165,6 +165,10 @@ async fn guard_tool_call(
         warn!(backend = %backend_name, tool = %tool_name, "Tool withheld by authorization; answered as absent");
     }
 
+    // Test builds: the witness hook runs before the first generation read on this route
+    // (`firewall_refusal` and the relay check under it read it).
+    #[cfg(all(test, feature = "firewall"))]
+    crate::security::firewall::relay_witness_hook::run();
     #[cfg(feature = "firewall")]
     if let Some(rejection) = firewall_refusal(
         state,
@@ -261,7 +265,7 @@ fn firewall_refusal(
     }
     let target = (backend_name, tool_name);
     let audit = (session_id.as_str(), caller_name);
-    relay_refusal(relay::witness_seam(fw), auth, id, target, params, audit)
+    relay_refusal(fw, auth, id, target, params, audit)
 }
 
 /// What a direct-route call's token must grant (MIK-7570.ATTEST.1 part 3).

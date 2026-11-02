@@ -33,8 +33,9 @@ use crate::security::Severity;
 const PLAN_STAGED_CAP: usize = 4 * DELIVERED_SET_CAP;
 
 /// The seam a config-timing row arms (patterned on `refuse_hook`): reached
-/// immediately before a witness site evaluates the generation it judges
-/// under, after the request's own generation is pinned.
+/// on each route before the first generation read in its handler, after the
+/// request's own generation is pinned, so any read the handler makes, a
+/// re-read included, sees the row's reload. `hook_order` pins every site.
 #[cfg(test)]
 pub(crate) mod relay_witness_hook {
     use super::super::collusion_live_rig::Hook;
