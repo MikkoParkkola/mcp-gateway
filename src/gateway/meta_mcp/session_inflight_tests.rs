@@ -132,6 +132,7 @@ pub(super) fn context(retry: &crate::protocol::mrtr::RetryFields) -> MetaMcpCall
         confirmation: crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
         era: crate::protocol::meta::Era::Legacy,
         channel: &Silent,
+        generation: None,
     }
 }
 

@@ -521,6 +521,7 @@ impl MetaMcp {
             cost_key: caller.cost_key(),
             trace_id,
             caller_key: None,
+            generation: caller.generation,
         };
         let (gated, effect) = self.gate_payload(&call, result)?;
         if effect == super::super::response_security::GateEffect::Withheld {

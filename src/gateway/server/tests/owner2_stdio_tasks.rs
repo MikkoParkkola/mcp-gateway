@@ -212,7 +212,9 @@ async fn a_stdio_task_dispatch_keeps_its_owner_mark() {
     let live = intent.owned.host().upgrade().expect("the host is alive");
     let generation = live.generation();
     let authorizer = live.authorizer(intent.owned.authorizer(), &generation);
-    let caller = intent.owned.dispatch_context(&live, &authorizer);
+    let caller = intent
+        .owned
+        .dispatch_context(&live, &authorizer, &generation);
     assert_eq!(caller.owner_principal(), Some(LOCAL_OPERATOR_PRINCIPAL));
     assert_eq!(
         caller.provenance(),
@@ -526,7 +528,7 @@ async fn an_unnamed_tasks_method_fails_closed() {
             discover: crate::gateway::server::stdio_single::DiscoverListing::Configured,
             sanitize: crate::gateway::server::stdio_single::InputSanitizing::Off,
         },
-        &crate::gateway::record_principal::test_record_key(),
+        (&crate::gateway::record_principal::test_record_key(), None),
     );
     let answer = fixture
         .tasks

@@ -30,8 +30,9 @@ from check_timing_asserts_core import (
     scan_text,
     scan_timeouts,
     split_top,
-    test_start,
+    test_lines,
 )
+from check_timing_asserts_source import _signature_body
 
 # PR-C (MIK-8247, MIK-8288): rules for new or changed code only, read against
 # `--base`. Existing sites are judged by the 5 s rule above and by MIK-8266's
@@ -165,9 +166,16 @@ def fn_spans(code: str) -> list[tuple[int, str, int, int]]:
     """(attribute start, name, body start, body end) for each fn with a body."""
     spans = []
     for m in FN.finditer(code):
-        brace = code.find("{", m.end())
-        semi = code.find(";", m.end())
-        if brace < 0 or 0 <= semi < brace:
+        # The signature's own body finder, so a braced const generic
+        # (`-> Probe<{ 1 + 1 }>`) is not the body; a signature it does not
+        # support falls back to the first `{`, as before.
+        brace = _signature_body(code, m.end())
+        if brace is None:
+            brace = code.find("{", m.end())
+            semi = code.find(";", m.end())
+            if brace < 0 or 0 <= semi < brace:
+                continue
+        elif brace < 0:
             continue
         spans.append((m.start(), m.group(1), brace, block_end(code, brace)))
     return spans
@@ -183,8 +191,8 @@ def scan_new(
 ) -> list[Finding]:
     """PR-C's rules on the spans of `text` that touch an `added` line."""
     code = blank_strings_and_comments(text)
-    start = test_start(path, code)
-    if start is None or not added:
+    tested = test_lines(path, text)
+    if not tested or not added:
         return []
     raw = text.splitlines()
     line_of = lambda at: code.count("\n", 0, at) + 1  # noqa: E731
@@ -214,7 +222,7 @@ def scan_new(
     for n in sorted(added | {n - 1 for n in added}):
         if not 1 <= n <= len(raw):
             continue
-        if (m := TAG_LINE.search(raw[n - 1])) and line_of(start) <= n:
+        if (m := TAG_LINE.search(raw[n - 1])) and n in tested:
             token = m.group(1).strip()
             if token not in REASONS:
                 if n in added:
@@ -229,22 +237,26 @@ def scan_new(
     # A. The floor on the windows the 5 s rule already reads.
     windows = scan_text(path, text, consts, FLOOR_S) + scan_timeouts(path, text, consts, includers, FLOOR_S)
     for f in windows:
+        # The floor judges test code only, as the shapes below do; full mode
+        # keeps judging an elapsed assert anywhere in a file.
+        if f.line not in tested:
+            continue
         # New when any line of the statement changed, or the binding of a name
         # its window uses (#3746 review).
         span = range(f.line, statement_end(code, f.line) + 1)
         new = any(n in added for n in span) or any(n in added for n in binding_lines(code, f.assertion))
         if new and (f.path, f.fn, f.assertion) not in carried and not HANG_BOUND.search(f.assertion) and not oracle_ok(f.line, f.assertion):
             found.append(f._replace(rule=FLOOR))
-    return found + scan_new_shapes(path, code, raw, start, added, Scope(path, {}, file_consts, consts, imports), oracle_ok, tag_ok)
+    return found + scan_new_shapes(path, code, raw, tested, added, Scope(path, {}, file_consts, consts, imports), oracle_ok, tag_ok)
 
 
-def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> list[Finding]:
+def scan_new_shapes(path, code, raw, tested, added, scope, oracle_ok, tag_ok) -> list[Finding]:
     """v2's sleep and expected-elapse shapes, B's loops, G's poll budget, D's timer."""
     found: list[Finding] = []
     line_of = lambda at: code.count("\n", 0, at) + 1  # noqa: E731
     touches = lambda a, b: any(n in added for n in range(a, b + 1))  # noqa: E731
     for attr_at, fn, body_open, body_end in fn_spans(code):
-        if body_end <= start or paused_clock(code, attr_at, body_end):
+        if tested.isdisjoint(range(line_of(attr_at), line_of(body_end) + 1)) or paused_clock(code, attr_at, body_end):
             continue
         fn_scope = scope._replace(lets=bindings(code[body_open:body_end])[0])
 
@@ -321,7 +333,8 @@ def scan_new_shapes(path, code, raw, start, added, scope, oracle_ok, tag_ok) -> 
                     break
 
         found += timeout_shapes(path, fn, code, (body_open, body_end), touches, seconds, exempt)
-    return found
+    # A product fn can hold a test-only statement: only its sites are judged.
+    return [f for f in found if f.line in tested]
 
 
 def timeout_shapes(path, fn, code, span, touches, seconds, exempt) -> list[Finding]:
