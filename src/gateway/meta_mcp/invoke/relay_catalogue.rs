@@ -137,3 +137,7 @@ impl MetaMcp {
         self.stage_relay_receipt(RelayKey::new(&caller.key, caller.keyed), target, &recorded);
     }
 }
+
+#[cfg(all(test, feature = "firewall"))]
+#[path = "relay_catalogue_unpublished_tests.rs"]
+mod unpublished_tests;
