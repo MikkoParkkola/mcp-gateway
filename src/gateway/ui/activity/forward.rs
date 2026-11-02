@@ -274,6 +274,7 @@ fn settle(
 }
 
 /// How a call ended.
+#[derive(Clone, Copy)]
 enum Outcome {
     /// The stop was reached, or the log ended.
     Done,
