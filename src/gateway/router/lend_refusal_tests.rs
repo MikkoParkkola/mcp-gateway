@@ -560,24 +560,31 @@ async fn a_task_workers_cold_fill_refused_by_the_lender_is_recorded_refused() {
         created.pointer("/result/taskId").is_some(),
         "premise: a task handle: {status} {created}"
     );
-    // The worker's records, once its dispatch settles; bounded by attempts,
-    // not by a clock.
-    let mut worker: Vec<Value> = Vec::new();
-    for _ in 0..100_000 {
-        let raw = std::fs::read_to_string(dirs.0.path().join("audit.jsonl")).unwrap_or_default();
-        worker = raw
+    // The worker's records, once its dispatch settles: polled, under a hang
+    // guard well past any settle time.
+    let audit = dirs.0.path().join("audit.jsonl");
+    let worker_records = || -> Vec<Value> {
+        std::fs::read_to_string(&audit)
+            .unwrap_or_default()
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
             .filter(|entry| entry["tool"] == TOOL)
-            .collect();
-        if worker
-            .iter()
-            .any(|entry| entry.get("response_effect").is_some())
-        {
-            break;
+            .collect()
+    };
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let worker = worker_records();
+            if worker
+                .iter()
+                .any(|entry| entry.get("response_effect").is_some())
+            {
+                return worker;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
-        tokio::task::yield_now().await;
-    }
+    })
+    .await;
+    let worker = settled.unwrap_or_else(|_| worker_records());
     let [invocation, delivery] = worker.as_slice() else {
         panic!(
             "the worker's dispatch is recorded as a refusal, an invocation and a delivery: {worker:?}"

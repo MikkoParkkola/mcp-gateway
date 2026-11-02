@@ -5,8 +5,11 @@
 //! code, whether the failure is a refusal of the caller, which is answered
 //! as itself and never folded. Comments are stripped before matching, so a
 //! predicate named only in a comment does not count. A new fold site fails
-//! this row until it is reviewed and listed. The behaviour itself is proved
-//! by the rows in `bridge_send_refusal_tests` and `lend_refusal_tests`.
+//! this row until it is reviewed and listed; the scan covers the module's
+//! child directories too. It checks that the predicate is asked in the
+//! fold's function, not that it guards the same error: the behaviour itself
+//! is proved by the rows in `bridge_send_refusal_tests` and
+//! `lend_refusal_tests`.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -67,23 +70,31 @@ fn every_fold_site_asks_whether_the_failure_refused_the_caller() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gateway/meta_mcp/invoke");
     let mut found = BTreeMap::new();
     let mut unchecked = Vec::new();
-    let entries = std::fs::read_dir(&dir).expect("the invoke directory");
-    for entry in entries {
-        let path = entry.expect("an entry").path();
-        let name = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default()
-            .to_owned();
-        if path.extension().is_none_or(|ext| ext != "rs") || name.contains("tests") {
-            continue;
+    // The module's files, its child directories included (`audit/`, `gate/`),
+    // each named by its path under `invoke/`.
+    let mut pending = vec![dir.clone()];
+    while let Some(at) = pending.pop() {
+        for entry in std::fs::read_dir(&at).expect("an invoke directory") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                pending.push(path);
+                continue;
+            }
+            let name = path
+                .strip_prefix(&dir)
+                .expect("under invoke")
+                .to_string_lossy()
+                .into_owned();
+            if path.extension().is_none_or(|ext| ext != "rs") || name.contains("tests") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("a source file");
+            let (sites, mut missing) = fold_sites(&name, &text);
+            if sites > 0 {
+                found.insert(name, sites);
+            }
+            unchecked.append(&mut missing);
         }
-        let text = std::fs::read_to_string(&path).expect("a source file");
-        let (sites, mut missing) = fold_sites(&name, &text);
-        if sites > 0 {
-            found.insert(name, sites);
-        }
-        unchecked.append(&mut missing);
     }
     assert!(
         unchecked.is_empty(),
